@@ -298,12 +298,12 @@
             };
 
           wolfi.aarch64 = pullWolfi {
-            imageDigest = "sha256:e8c9aae5f4f1cddf9ed0449f626772a55a1a45e86155698c9d6e34c862b79736";
-            sha256 = "0wjpvlnashghp5d9vxj9s6685rvahxvd7ygndsjmq3nr9h1xbw2x";
+            imageDigest = "sha256:1126b3b5c0926eb9fb7c631e1b305de550c8de629c5cdbdb72a9b332ab457ef9";
+            sha256 = "1la34v1b5amvyiv9kcdiyarxz35gd6x5ynjkngjynqr5f2nkilwz";
           };
           wolfi.x86_64 = pullWolfi {
-            imageDigest = "sha256:4e00b653d9ad1cc7c82856d827ec003e496747d608fd842196fc888f39ddc59d";
-            sha256 = "1rbm5afznmbhrx8xhkx7pbxkjmw1aqxfh3wwm7sdf9w9n1qbjbw7";
+            imageDigest = "sha256:1126b3b5c0926eb9fb7c631e1b305de550c8de629c5cdbdb72a9b332ab457ef9";
+            sha256 = "1y2rndisj8fprggb4ljrkknh95p3x4pfi2sssamw1wg5dd23958k";
           };
 
           buildImage = {
