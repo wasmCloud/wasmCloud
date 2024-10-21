@@ -57,7 +57,7 @@ pub fn wadm_pid_file() -> Result<PathBuf> {
     Ok(downloads_dir()?.join(WADM_PID_FILE))
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 /// Connection options for a Wash instance
 pub struct WashConnectionOptions {
     /// CTL Host for connection, defaults to 127.0.0.1 for local nats
