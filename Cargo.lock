@@ -7157,8 +7157,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-postgres-rustls"
-version = "0.12.0"
-source = "git+https://github.com/wasmCloud/tokio-postgres-rustls.git?branch=master#e0e97e31ecb65967a590239202172158acc9294e"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27d684bad428a0f2481f42241f821db42c54e2dc81d8c00db8536c506b0a0144"
 dependencies = [
  "const-oid",
  "ring",
