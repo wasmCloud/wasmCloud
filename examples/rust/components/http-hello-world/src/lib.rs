@@ -1,25 +1,56 @@
-wit_bindgen::generate!({
-    generate_all
-});
+use wasi::http::types::ErrorCode;
+use wasmcloud_component::http::{HttpServer, Request, Response};
 
-use exports::wasi::http::incoming_handler::Guest;
-use wasi::http::types::*;
+struct Component;
 
-struct HttpServer;
+wasmcloud_component::http::export!(Component);
 
-impl Guest for HttpServer {
-    fn handle(_request: IncomingRequest, response_out: ResponseOutparam) {
-        let response = OutgoingResponse::new(Fields::new());
-        response.set_status_code(200).unwrap();
-        let response_body = response.body().unwrap();
-        ResponseOutparam::set(response_out, Ok(response));
-        response_body
-            .write()
-            .unwrap()
-            .blocking_write_and_flush(b"Hello from Rust!\n")
-            .unwrap();
-        OutgoingBody::finish(response_body, None).expect("failed to finish response body");
+// Implementing the [`HttpServer`] trait for a component
+impl HttpServer for Component {
+    fn handle(_request: Request) -> Result<Response, ErrorCode> {
+        Ok(Response::ok("Hello from Rust!".into()))
     }
 }
 
-export!(HttpServer);
+// Error example
+// impl HttpServer for Component {
+//     fn handle(_request: Request) -> Result<ResponseBuilder, ErrorCode> {
+//         Err(ErrorCode::InternalError(Some(
+//             "Oopsie woopsie! We made an ewwow.".to_string(),
+//         )))
+//     }
+// }
+
+// Streaming example
+// impl HttpServer for Component {
+//     fn handle(request: Request) -> Result<ResponseBuilder, ErrorCode> {
+//         let (stream, body) = request.into_body_stream()?;
+//         Ok(ResponseBuilder::stream_body(stream, Some(body)).status_code(200))
+//     }
+// }
+
+// Outgoing request example
+// impl HttpServer for Component {
+//     fn handle(_request: Request) -> Result<ResponseBuilder, ErrorCode> {
+//         let response: reqwest::Response = reqwest::get("https://example.com").map_err(|e| {
+//             ErrorCode::InternalError(Some(format!("failed to send outbound request {e:?}")))
+//         })?;
+//         let example_dot_com = response.bytes().map_err(|e| {
+//             ErrorCode::InternalError(Some(format!("failed to read response body {e:?}")))
+//         })?;
+//         Ok(ResponseBuilder::ok(example_dot_com))
+//     }
+// }
+
+// Outgoing request streaming body back example
+// impl HttpServer for Component {
+//     fn handle(_request: Request) -> Result<ResponseBuilder, ErrorCode> {
+//         let mut response: reqwest::Response = reqwest::get("https://example.com").map_err(|e| {
+//             ErrorCode::InternalError(Some(format!("failed to send outbound request {e:?}")))
+//         })?;
+//         let (stream, body) = response.bytes_stream().map_err(|e| {
+//             ErrorCode::InternalError(Some(format!("failed to read response body {e:?}")))
+//         })?;
+//         Ok(ResponseBuilder::stream_body(stream, Some(body)).status_code(200))
+//     }
+// }
