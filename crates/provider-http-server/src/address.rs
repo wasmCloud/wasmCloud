@@ -15,6 +15,7 @@ use axum::handler::Handler;
 use axum_server::tls_rustls::RustlsConfig;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument};
+use wasmcloud_provider_sdk::core::{ComponentId, LinkName};
 use wasmcloud_provider_sdk::{HostData, LinkConfig, LinkDeleteInfo, Provider};
 
 use crate::settings::default_listen_address;
@@ -23,20 +24,32 @@ use crate::{
     ServiceSettings,
 };
 
+/// Lookup for handlers by socket
+///
+/// Indexed first by socket address to more easily detect duplicates,
+/// with the http server stored, along with a list (order matters) of components that were registered
+type HandlerLookup = HashMap<SocketAddr, (Arc<HttpServerCore>, Vec<(ComponentId, LinkName)>)>;
+
 /// `wrpc:http/incoming-handler` provider implementation in address mode
 #[derive(Clone)]
 pub struct HttpServerProvider {
     default_address: SocketAddr,
-    // Map from (component_id, link_name) to HttpServerCore
-    /// Stores http_server handlers for each linked component
-    component_handlers: Arc<RwLock<HashMap<(String, String), HttpServerCore>>>,
+
+    /// Lookup of components that handle requests {addr -> (server, (component id, link name))}
+    handlers_by_socket: Arc<RwLock<HandlerLookup>>,
+
+    /// Sockets that are relevant to a given link name
+    ///
+    /// This structure is generally used as a look up into `handlers_by_socket`
+    sockets_by_link_name: Arc<RwLock<HashMap<LinkName, SocketAddr>>>,
 }
 
 impl Default for HttpServerProvider {
     fn default() -> Self {
         Self {
             default_address: default_listen_address(),
-            component_handlers: Default::default(),
+            handlers_by_socket: Default::default(),
+            sockets_by_link_name: Default::default(),
         }
     }
 }
@@ -54,7 +67,8 @@ impl HttpServerProvider {
 
         Ok(Self {
             default_address,
-            component_handlers: Default::default(),
+            handlers_by_socket: Default::default(),
+            sockets_by_link_name: Default::default(),
         })
     }
 }
@@ -80,19 +94,45 @@ impl Provider for HttpServerProvider {
             }
         };
 
-        // Start a server instance that calls the given component
-        let http_server = HttpServerCore::new(Arc::new(settings), link_config.target_id)
-            .await
-            .context("httpserver failed to start listener for component")?;
-
-        // Save the component and server instance locally
-        self.component_handlers.write().await.insert(
-            (
-                link_config.target_id.to_string(),
-                link_config.link_name.to_string(),
-            ),
-            http_server,
+        let component_meta = (
+            link_config.target_id.to_string(),
+            link_config.link_name.to_string(),
         );
+        let mut sockets_by_link_name = self.sockets_by_link_name.write().await;
+        let mut handlers_by_socket = self.handlers_by_socket.write().await;
+
+        match sockets_by_link_name.entry(link_config.link_name.to_string()) {
+            // If a mapping already exists, and the stored address is different, disallow overwriting
+            std::collections::hash_map::Entry::Occupied(_) => {
+                bail!("overwriting links is not currently supported")
+            }
+            // If a mapping does exist, we can create a new mapping for the address
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert(settings.address);
+            }
+        }
+
+        match handlers_by_socket.entry(settings.address) {
+            // If handlers already exist for the address, add the newly linked component
+            //
+            // NOTE: only components at the head of the list are served requests
+            std::collections::hash_map::Entry::Occupied(mut v) => {
+                v.get_mut().1.push(component_meta)
+            }
+            // If a handler does not already exist, make a new server and insert
+            std::collections::hash_map::Entry::Vacant(v) => {
+                // Start a server instance that calls the given component
+                let http_server = HttpServerCore::new(
+                    Arc::new(settings),
+                    link_config.target_id,
+                    self.handlers_by_socket.clone(),
+                )
+                .await
+                .context("httpserver failed to start listener for component")?;
+                v.insert((Arc::new(http_server), vec![component_meta]));
+            }
+        }
+
         Ok(())
     }
 
@@ -101,51 +141,86 @@ impl Provider for HttpServerProvider {
     async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
         let component_id = info.get_target_id();
         let link_name = info.get_link_name();
-        if let Some(server) = self
-            .component_handlers
-            .write()
-            .await
-            .remove(&(component_id.to_string(), link_name.to_string()))
-        {
-            info!(
-                component_id,
-                link_name, "httpserver stopping listener for component"
-            );
-            server.handle.shutdown();
+        let existing_meta = (component_id.into(), link_name.into());
+
+        // Retrieve the thing by link name
+        let sockets_by_link_name = self.sockets_by_link_name.read().await;
+        if let Some(addr) = sockets_by_link_name.get(link_name) {
+            let mut handlers_by_socket = self.handlers_by_socket.write().await;
+            if let Some((server, component_metas)) = handlers_by_socket.get_mut(addr) {
+                // If the component id & link name pair is present, remove it
+                if let Some(idx) = component_metas.iter().position(|v| v == &existing_meta) {
+                    component_metas.remove(idx);
+                }
+
+                // If the component was the last one, we can remove the server
+                if component_metas.is_empty() {
+                    info!(
+                        address = addr.to_string(),
+                        "last component removed for address, shutting down server"
+                    );
+                    server.handle.shutdown();
+                    handlers_by_socket.remove(addr);
+                }
+            }
         }
+
         Ok(())
     }
 
     /// Handle shutdown request by shutting down all the http server threads
     async fn shutdown(&self) -> anyhow::Result<()> {
-        // empty the component link data and stop all servers
-        self.component_handlers.write().await.clear();
+        // Empty the component link data and stop all servers
+        self.sockets_by_link_name.write().await.clear();
+        self.handlers_by_socket.write().await.clear();
         Ok(())
     }
 }
 
 #[derive(Clone, Debug)]
 struct RequestContext {
-    target: String,
+    /// Address of the server, used for handler lookup
+    server_address: SocketAddr,
+    /// Settings that can be
     settings: Arc<ServiceSettings>,
+    /// HTTP scheme
     scheme: http::uri::Scheme,
+    /// Handlers for components
+    handlers_by_socket: Arc<RwLock<HandlerLookup>>,
 }
 
 /// Handle an HTTP request by invoking the target component as configured in the listener
 #[instrument(level = "debug", skip(settings))]
 async fn handle_request(
     extract::State(RequestContext {
-        target,
+        server_address,
         settings,
         scheme,
+        handlers_by_socket,
     }): extract::State<RequestContext>,
     extract::Host(authority): extract::Host,
     request: extract::Request,
 ) -> impl axum::response::IntoResponse {
+    let component_id = {
+        let Some(component_id) = handlers_by_socket
+            .read()
+            .await
+            .get(&server_address)
+            .and_then(|v| v.1.first())
+            .map(|(component_id, _)| component_id.to_string())
+        else {
+            return Err((
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                "no targets for HTTP request".into(),
+            ));
+        };
+        component_id
+    };
+
     let timeout = settings.timeout_ms.map(Duration::from_millis);
     let req = build_request(request, scheme, authority, settings.clone())?;
     Ok::<_, (http::StatusCode, String)>(
-        invoke_component(target, req, timeout, settings.cache_control.as_ref()).await,
+        invoke_component(component_id, req, timeout, settings.cache_control.as_ref()).await,
     )
 }
 
@@ -160,7 +235,11 @@ pub struct HttpServerCore {
 
 impl HttpServerCore {
     #[instrument]
-    pub async fn new(settings: Arc<ServiceSettings>, target: &str) -> anyhow::Result<Self> {
+    pub async fn new(
+        settings: Arc<ServiceSettings>,
+        target: &str,
+        handlers_by_socket: Arc<RwLock<HandlerLookup>>,
+    ) -> anyhow::Result<Self> {
         let addr = settings.address;
         info!(
             %addr,
@@ -170,7 +249,8 @@ impl HttpServerCore {
         let cors = get_cors_layer(settings.clone())?;
         let service = handle_request.layer(cors);
         let handle = axum_server::Handle::new();
-        let listener = get_tcp_listener(settings.clone())?;
+        let listener = get_tcp_listener(settings.clone())
+            .with_context(|| format!("failed to create listener (is [{addr}] already in use?)"))?;
 
         let target = target.to_owned();
         let task_handle = handle.clone();
@@ -188,9 +268,10 @@ impl HttpServerCore {
                     .serve(
                         service
                             .with_state(RequestContext {
-                                target: target.clone(),
+                                server_address: settings.address,
                                 settings,
                                 scheme: http::uri::Scheme::HTTPS,
+                                handlers_by_socket,
                             })
                             .into_make_service(),
                     )
@@ -208,9 +289,10 @@ impl HttpServerCore {
                     .serve(
                         service
                             .with_state(RequestContext {
-                                target: target.clone(),
+                                server_address: settings.address,
                                 settings,
                                 scheme: http::uri::Scheme::HTTP,
+                                handlers_by_socket,
                             })
                             .into_make_service(),
                     )
