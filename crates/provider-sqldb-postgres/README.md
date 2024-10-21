@@ -16,7 +16,7 @@ Note that connections are local to a single provider, so multiple providers runn
 To get this provider started quickly, you can start with:
 
 ```console
-wash start provider ghcr.io/wasmcloud/sqldb-postgres:0.7.1
+wash start provider ghcr.io/wasmcloud/sqldb-postgres:0.7.2
 ```
 
 The easiest way to start a Postgres provider with configuration specified, and a component that uses it is with [wasmCloud Application Deployment Manager][wadm].
