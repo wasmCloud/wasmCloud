@@ -8136,7 +8136,7 @@ dependencies = [
  "which",
  "wit-bindgen-wrpc",
  "wit-component 0.217.0",
- "wit-parser 0.217.0",
+ "wit-parser 0.219.0",
  "wrpc-interface-http",
  "wrpc-transport",
  "wrpc-transport-nats",
@@ -8214,7 +8214,7 @@ dependencies = [
  "wat",
  "weld-codegen",
  "wit-component 0.217.0",
- "wit-parser 0.217.0",
+ "wit-parser 0.219.0",
 ]
 
 [[package]]
@@ -9082,7 +9082,7 @@ dependencies = [
  "wasmtime-wasi-http",
  "wit-bindgen-wrpc",
  "wit-component 0.217.0",
- "wit-parser 0.217.0",
+ "wit-parser 0.219.0",
  "wrpc-interface-blobstore",
  "wrpc-interface-http",
  "wrpc-runtime-wasmtime",
