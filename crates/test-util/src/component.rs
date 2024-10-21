@@ -11,7 +11,6 @@ use std::time::Duration;
 use tokio::fs;
 
 use wascap::{jwt, wasm::extract_claims};
-use wasmcloud_control_interface::Client as WasmCloudCtlClient;
 
 /// This is a *partial* struct for the `ComponentScaled` event, which normally consists of more fields
 #[derive(Deserialize)]
@@ -32,7 +31,7 @@ pub async fn extract_component_claims(
 
 /// Start an component, ensuring that the component starts properly
 pub async fn assert_start_component(
-    ctl_client: impl Into<&WasmCloudCtlClient>,
+    ctl_client: impl Into<&wasmcloud_control_interface::Client>,
     host_key: impl AsRef<KeyPair>,
     url: impl AsRef<str>,
     component_id: impl AsRef<str>,
@@ -72,18 +71,33 @@ pub async fn assert_start_component(
 }
 
 /// Scale an component, ensuring that the scale up/down was successful
+///
+/// # Arguments
+///
+/// * `ctl_client` - The [`wasmcloud_control_interface::Client`] to use when scaling the component
+/// * `host_id` - ID of the host
+/// * `component_ref` - Image ref of the component that should be scaled
+/// * `component_id` - ID of the component to be scaled
+/// * `annotations` - Annotations to put on the component (if any)
+/// * `count` - Number of components to scale to
+/// * `config` - named configs to be associated with the component, if any
+/// * `scale_timeout` - amount of time to allow for scale to complete
+///
 #[allow(clippy::too_many_arguments)]
 pub async fn assert_scale_component(
-    ctl_client: impl Into<&WasmCloudCtlClient>,
-    host_key: impl AsRef<KeyPair>,
-    url: impl AsRef<str>,
+    ctl_client: impl Into<&wasmcloud_control_interface::Client>,
+    host_id: impl AsRef<str>,
+    component_ref: impl AsRef<str>,
     component_id: impl AsRef<str>,
     annotations: Option<BTreeMap<String, String>>,
     count: u32,
     config: Vec<String>,
+    scale_timeout: Duration,
 ) -> anyhow::Result<()> {
-    let host_key = host_key.as_ref();
     let ctl_client = ctl_client.into();
+    let host_id = host_id.as_ref();
+    let component_ref = component_ref.as_ref();
+    let component_id = component_id.as_ref();
 
     let mut receiver = ctl_client
         .events_receiver(vec!["component_scaled".into()])
@@ -95,9 +109,9 @@ pub async fn assert_scale_component(
             .context("failed to convert nonzero u32 to nonzero usize")?;
     let resp = ctl_client
         .scale_component(
-            &host_key.public_key(),
-            url.as_ref(),
-            component_id.as_ref(),
+            host_id,
+            component_ref,
+            component_id,
             count,
             annotations,
             config,
@@ -114,10 +128,41 @@ pub async fn assert_scale_component(
                 let ase: ComponentScaledEvent = serde_json::from_value(TryInto::<serde_json::Value>::try_into(event_data).context("failed to parse event into JSON value")?).context("failed to convert value to")?;
                 assert_eq!(ase.max_instances, expected_count);
         }
-        () = tokio::time::sleep(Duration::from_secs(10)) => {
+        () = tokio::time::sleep(scale_timeout) => {
             bail!("timed out waiting for component scale event");
         },
     }
+
+    Ok(())
+}
+
+/// Wait for a component to be in a host's inventory (signaling start completion)
+pub async fn wait_for_component_in_inventory(
+    ctl_client: impl Into<&wasmcloud_control_interface::Client>,
+    host_id: impl AsRef<str>,
+    component_id: impl AsRef<str>,
+    timeout: Duration,
+) -> Result<()> {
+    let ctl_client = ctl_client.into();
+    let host_id = host_id.as_ref();
+    let component_id = component_id.as_ref();
+
+    tokio::time::timeout(timeout, async {
+        loop {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let Ok(resp) = ctl_client.get_host_inventory(host_id).await else {
+                continue;
+            };
+            let Some(inv) = resp.data() else {
+                continue;
+            };
+            // If the component is in the host inventory we can consider it started
+            if inv.components().iter().any(|c| c.id() == component_id) {
+                return;
+            }
+        }
+    })
+    .await?;
 
     Ok(())
 }

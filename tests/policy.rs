@@ -56,27 +56,25 @@ async fn policy_always_deny() -> anyhow::Result<()> {
     assert!(
         assert_start_provider(StartProviderArgs {
             client: &ctl_client,
-            lattice: LATTICE,
-            host_key: &host_key,
-            provider_key: &rust_http_client.subject,
+            host_id: &host_key.public_key(),
             provider_id: &rust_http_client_id,
-            url: &rust_http_client_url,
+            provider_ref: rust_http_client_url.as_str(),
             config: vec![],
         })
         .await
         .is_err(),
         "starting providers should fail"
     );
-
     assert!(
         assert_scale_component(
             &ctl_client,
-            &host.host_key(),
+            &host.host_key().public_key(),
             format!("file://{RUST_INTERFACES_REACTOR}"),
             "test-component",
             None,
             5,
             Vec::new(),
+            Duration::from_secs(10),
         )
         .await
         .is_err(),
