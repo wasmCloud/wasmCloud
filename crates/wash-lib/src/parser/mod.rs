@@ -13,6 +13,7 @@ use config::Config;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer};
 use wadm_types::{Component, Properties, SecretSourceProperty};
+use wasm_pkg_core::config::Config as PackageConfig;
 use wasmcloud_control_interface::RegistryCredential;
 use wasmcloud_core::{parse_wit_package_name, WitFunction, WitInterface, WitNamespace, WitPackage};
 
@@ -690,7 +691,10 @@ pub struct DevConfig {
 /// # Arguments
 /// * `opt_path` - The path to the config file. If None, it will look for a wasmcloud.toml file in the current directory.
 /// * `use_env` - Whether to use the environment variables or not. If false, it will not attempt to use environment variables. Defaults to true.
-pub fn load_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<ProjectConfig> {
+pub async fn load_config(
+    opt_path: Option<PathBuf>,
+    use_env: Option<bool>,
+) -> Result<ProjectConfig> {
     let mut path = opt_path
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
@@ -737,7 +741,41 @@ pub fn load_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<P
         })?
         .try_deserialize::<serde_json::Value>()?;
 
-    let toml_project_config: WasmcloudDotToml = serde_json::from_value(json_value)?;
+    let mut toml_project_config: WasmcloudDotToml = serde_json::from_value(json_value)?;
+    // NOTE(thomastaylor312): Because the package config fields have serde default, they get set,
+    // even if nothing was set in the toml file. So, if the config is equal to the default, we set
+    // things to None.
+    let current_config = toml_project_config
+        .package_config
+        .take()
+        .unwrap_or_default();
+    if current_config != PackageConfig::default() {
+        toml_project_config.package_config = Some(current_config);
+    }
+    if toml_project_config.package_config.is_none() {
+        // Attempt to load the package config from wkg.toml if it wasn't set in wasmcloud.toml
+        let wkg_toml_path = wasmcloud_toml_dir.join(wasm_pkg_core::config::CONFIG_FILE_NAME);
+        // If the file exists, we attempt to load it. We don't want to warn if it doesn't exist.
+        // If it does exist, we want to warn if it's invalid.
+        match tokio::fs::metadata(&wkg_toml_path).await {
+            Ok(meta) if meta.is_file() => {
+                match PackageConfig::load_from_path(wkg_toml_path).await {
+                    Ok(wkg_config) => {
+                        toml_project_config.package_config = Some(wkg_config);
+                    }
+                    Err(e) => {
+                        tracing::warn!(err = %e, "failed to load wkg.toml");
+                    }
+                }
+            }
+            Ok(_) => (),
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(err = %e, "IO error when trying to fallback to wkg.toml");
+                }
+            }
+        };
+    }
 
     toml_project_config
         .convert(wasmcloud_toml_dir)
@@ -823,6 +861,10 @@ pub struct WasmcloudDotToml {
     /// Configuration for development environments and/or DX related plugins
     #[serde(default)]
     pub dev: DevConfig,
+
+    /// Overrides for interface dependencies. This is often used to point to local wit files
+    #[serde(flatten)]
+    pub package_config: Option<PackageConfig>,
 }
 
 impl WasmcloudDotToml {
@@ -908,7 +950,7 @@ impl WasmcloudDotToml {
                     wasmcloud_toml_dir.join(p)
                 }
             })
-            .unwrap_or(wasmcloud_toml_dir);
+            .unwrap_or_else(|| wasmcloud_toml_dir.clone());
         let project_path = project_path.canonicalize().with_context(|| {
             format!(
                 "failed to canonicalize project path: [{}]",
@@ -973,6 +1015,8 @@ impl WasmcloudDotToml {
             project_type: project_type_config,
             language: language_config,
             common: common_config,
+            package_config: self.package_config.unwrap_or_default(),
+            wasmcloud_toml_dir,
         })
     }
 }
@@ -990,6 +1034,11 @@ pub struct ProjectConfig {
     pub common: CommonConfig,
     /// Configuration for development environments and/or DX related plugins
     pub dev: DevConfig,
+    /// Configuration for package tooling
+    pub package_config: PackageConfig,
+    /// The directory where the project wasmcloud.toml file is located
+    #[serde(skip)]
+    pub wasmcloud_toml_dir: PathBuf,
 }
 
 impl ProjectConfig {

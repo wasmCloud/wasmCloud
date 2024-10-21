@@ -1,17 +1,15 @@
 // This is pretty much a copy of the wkg wit subcommand adapted for wash
 use std::path::PathBuf;
 
-use anyhow::Ok;
+use anyhow::Context;
 use clap::{Args, Subcommand};
 use wash_lib::{
-    build::monkey_patch_fetch_logging,
+    build::{load_lock_file, monkey_patch_fetch_logging},
     cli::{CommandOutput, CommonPackageArgs},
+    parser::load_config,
 };
 use wasm_pkg_client::{PublishOpts, Registry};
-use wasm_pkg_core::{
-    lock::LockFile,
-    wit::{self, OutputType},
-};
+use wasm_pkg_core::wit::{self, OutputType};
 
 /// Commands for interacting with wit
 #[derive(Debug, Subcommand, Clone)]
@@ -25,7 +23,7 @@ pub enum WitCommand {
     /// dependencies and write them to the `deps` directory along with a lock file. If no lock file
     /// exists, it will fetch all dependencies. If a lock file exists, it will fetch any
     /// dependencies that are not in the lock file and update the lock file.
-    Fetch(FetchArgs),
+    Deps(DepsArgs),
     /// Publish a WIT package to a registry. This will automatically infer the package name from the
     /// WIT package.
     Publish(PublishArgs),
@@ -35,7 +33,7 @@ impl WitCommand {
     pub async fn run(self) -> anyhow::Result<CommandOutput> {
         match self {
             WitCommand::Build(args) => args.run().await,
-            WitCommand::Fetch(args) => args.run().await,
+            WitCommand::Deps(args) => args.run().await,
             WitCommand::Publish(args) => args.run().await,
         }
     }
@@ -54,10 +52,14 @@ pub struct BuildArgs {
 
     #[clap(flatten)]
     pub common: CommonPackageArgs,
+
+    /// Path to the wasmcloud.toml file or parent folder to use for building
+    #[clap(short = 'p', long = "config-path")]
+    config_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Args, Clone)]
-pub struct FetchArgs {
+pub struct DepsArgs {
     /// The directory containing the WIT files to fetch dependencies for.
     #[clap(short = 'd', long = "wit-dir", default_value = "wit")]
     pub dir: PathBuf,
@@ -69,6 +71,10 @@ pub struct FetchArgs {
 
     #[clap(flatten)]
     pub common: CommonPackageArgs,
+
+    /// Path to the wasmcloud.toml file or parent folder to use for building
+    #[clap(short = 'p', long = "config-path")]
+    config_path: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -87,8 +93,15 @@ pub struct PublishArgs {
 impl BuildArgs {
     pub async fn run(self) -> anyhow::Result<CommandOutput> {
         let client = self.common.get_client().await?;
-        let wkg_config = wasm_pkg_core::config::Config::load().await?;
-        let mut lock_file = LockFile::load(false).await?;
+        // Attempt to load wasmcloud.toml. If it doesn't work, attempt to load wkg.toml
+        let wkg_config = if let Ok(proj) = load_config(self.config_path, Some(true)).await {
+            proj.package_config
+        } else {
+            wasm_pkg_core::config::Config::load().await?
+        };
+        let mut lock_file =
+            load_lock_file(std::env::current_dir().context("failed to get current directory")?)
+                .await?;
         let (pkg_ref, version, bytes) =
             wit::build_package(&wkg_config, self.dir, &mut lock_file, client).await?;
         let output_path = if let Some(path) = self.output_file {
@@ -118,11 +131,18 @@ impl BuildArgs {
     }
 }
 
-impl FetchArgs {
+impl DepsArgs {
     pub async fn run(self) -> anyhow::Result<CommandOutput> {
         let client = self.common.get_client().await?;
-        let wkg_config = wasm_pkg_core::config::Config::load().await?;
-        let mut lock_file = LockFile::load(false).await?;
+        // Attempt to load wasmcloud.toml. If it doesn't work, attempt to load wkg.toml
+        let wkg_config = if let Ok(proj) = load_config(self.config_path, Some(true)).await {
+            proj.package_config
+        } else {
+            wasm_pkg_core::config::Config::load().await?
+        };
+        let mut lock_file =
+            load_lock_file(std::env::current_dir().context("failed to get current directory")?)
+                .await?;
         monkey_patch_fetch_logging(wkg_config, self.dir, &mut lock_file, client).await?;
         // Now write out the lock file since everything else succeeded
         lock_file.write().await?;

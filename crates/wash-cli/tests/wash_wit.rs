@@ -34,13 +34,13 @@ async fn test_wash_wit_build() {
 
 #[tokio::test]
 #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
-async fn test_wash_wit_fetch_and_build() {
+async fn test_wash_wit_deps_and_build() {
     let test_setup = load_fixture("dog-fetcher").await.unwrap();
 
-    // Run `wit fetch`
+    // Run `wit deps`
     let fetch_status = test_setup
         .base_command()
-        .args(["wit", "fetch"])
+        .args(["wit", "deps"])
         .status()
         .await
         .expect("Failed to fetch dependencies");
@@ -60,4 +60,34 @@ async fn test_wash_wit_fetch_and_build() {
         build_status.success(),
         "Failed to build project after fetching dependencies"
     );
+}
+
+#[tokio::test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+async fn test_wash_wit_wasmcloud_toml_override() {
+    let test_setup = load_fixture("integrated-wkg").await.unwrap();
+
+    // Run `wit deps`
+    let fetch_status = test_setup
+        .base_command()
+        .args(["wit", "deps"])
+        .status()
+        .await
+        .expect("Failed to fetch dependencies");
+    assert!(fetch_status.success(), "Failed to fetch dependencies");
+}
+
+#[tokio::test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+async fn test_wash_wit_wkg_override() {
+    let test_setup = load_fixture("separate-wkg").await.unwrap();
+
+    // Run `wit deps`
+    let fetch_status = test_setup
+        .base_command()
+        .args(["wit", "deps"])
+        .status()
+        .await
+        .expect("Failed to fetch dependencies");
+    assert!(fetch_status.success(), "Failed to fetch dependencies");
 }

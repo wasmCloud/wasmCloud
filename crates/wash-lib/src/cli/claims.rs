@@ -350,7 +350,7 @@ pub async fn handle_command(
     command: ClaimsCliCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
-    let project_config = load_config(None, Some(true)).ok();
+    let project_config = load_config(None, Some(true)).await.ok();
     match command {
         ClaimsCliCommand::Inspect(inspectcmd) => {
             warn!("claims inspect will be deprecated in future versions. Use inspect instead.");
@@ -1199,14 +1199,15 @@ mod test {
         }
     }
 
-    #[test]
-    fn rust_component_metadata_with_project_config_overrides() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn rust_component_metadata_with_project_config_overrides() -> anyhow::Result<()> {
         let result = load_config(
             Some(PathBuf::from(
                 "./tests/parser/files/rust_component_claims_metadata.toml",
             )),
             None,
-        );
+        )
+        .await;
 
         let project_config = assert_ok!(result);
 
@@ -1337,14 +1338,15 @@ mod test {
         Ok(())
     }
 
-    #[test]
-    fn rust_provider_metadata_with_project_config_overrides() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn rust_provider_metadata_with_project_config_overrides() -> anyhow::Result<()> {
         let result = load_config(
             Some(PathBuf::from(
                 "./tests/parser/files/rust_provider_claims_metadata.toml",
             )),
             None,
-        );
+        )
+        .await;
 
         let project_config = assert_ok!(result);
 
