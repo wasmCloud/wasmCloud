@@ -272,6 +272,7 @@ jobs:
           - fmt
           - clippy
           - nextest
+          - doctest
 
     name: cargo ${{ matrix.check }}
     runs-on: ubuntu-22.04
