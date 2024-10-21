@@ -624,7 +624,7 @@ dependencies = [
  "http 0.2.12",
  "http-body 0.4.6",
  "once_cell",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "tracing",
  "uuid 1.11.0",
@@ -658,7 +658,7 @@ dependencies = [
  "http-body 0.4.6",
  "lru",
  "once_cell",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex-lite",
  "sha2",
  "tracing",
@@ -706,7 +706,7 @@ dependencies = [
  "http 0.2.12",
  "http 1.1.0",
  "once_cell",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "sha2",
  "time",
  "tracing",
@@ -770,7 +770,7 @@ dependencies = [
  "http 0.2.12",
  "http-body 0.4.6",
  "once_cell",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "pin-utils",
  "tracing",
@@ -906,7 +906,7 @@ dependencies = [
  "matchit",
  "memchr",
  "mime",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "rustversion",
  "serde 1.0.210",
@@ -935,7 +935,7 @@ dependencies = [
  "matchit",
  "memchr",
  "mime",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "rustversion",
  "serde 1.0.210",
@@ -2753,10 +2753,9 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 [[package]]
 name = "form_urlencoded"
 version = "1.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
+source = "git+https://github.com/brooksmtownsend/rust-url/?branch=fix/wasm32-wasip2-stable-support#fc447cce1d2c06ef0bec3dbadce56b83e46ca1ff"
 dependencies = [
- "percent-encoding",
+ "percent-encoding 2.3.1 (git+https://github.com/brooksmtownsend/rust-url/?branch=fix/wasm32-wasip2-stable-support)",
 ]
 
 [[package]]
@@ -3500,8 +3499,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "idna"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "634d9b1461af396cad843f47fdba5597a4f9e6ddd4bfb6ff5d85028c25cb12f6"
+source = "git+https://github.com/brooksmtownsend/rust-url/?branch=fix/wasm32-wasip2-stable-support#fc447cce1d2c06ef0bec3dbadce56b83e46ca1ff"
 dependencies = [
  "unicode-bidi",
  "unicode-normalization",
@@ -3726,7 +3724,7 @@ dependencies = [
  "num-cmp",
  "once_cell",
  "parking_lot",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex",
  "reqwest 0.11.27",
  "serde 1.0.210",
@@ -4592,7 +4590,7 @@ dependencies = [
  "once_cell",
  "opentelemetry",
  "ordered-float 4.3.0",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.8.5",
  "serde_json",
  "thiserror",
@@ -4808,6 +4806,11 @@ name = "percent-encoding"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
+
+[[package]]
+name = "percent-encoding"
+version = "2.3.1"
+source = "git+https://github.com/brooksmtownsend/rust-url/?branch=fix/wasm32-wasip2-stable-support#fc447cce1d2c06ef0bec3dbadce56b83e46ca1ff"
 
 [[package]]
 name = "pest"
@@ -5494,7 +5497,7 @@ dependencies = [
  "futures",
  "futures-util",
  "itoa",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "rustls 0.22.4",
  "rustls-native-certs 0.7.3",
@@ -5628,7 +5631,7 @@ dependencies = [
  "log",
  "mime",
  "once_cell",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "rustls 0.21.12",
  "rustls-pemfile 1.0.4",
@@ -5671,7 +5674,7 @@ dependencies = [
  "log",
  "mime",
  "once_cell",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "quinn",
  "rustls 0.23.13",
@@ -6301,7 +6304,7 @@ version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7715380eec75f029a4ef7de39a9200e0a63823176b759d055b613f5a87df6a6"
 dependencies = [
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.210",
  "thiserror",
 ]
@@ -7120,7 +7123,7 @@ dependencies = [
  "futures-util",
  "log",
  "parking_lot",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "phf",
  "pin-project-lite",
  "postgres-protocol",
@@ -7326,7 +7329,7 @@ dependencies = [
  "http-body 0.4.6",
  "hyper 0.14.30",
  "hyper-timeout",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project",
  "prost",
  "tokio",
@@ -7650,12 +7653,11 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 [[package]]
 name = "url"
 version = "2.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22784dbdf76fdde8af1aeda5622b546b422b6fc585325248a2bf9f5e41e94d6c"
+source = "git+https://github.com/brooksmtownsend/rust-url/?branch=fix/wasm32-wasip2-stable-support#fc447cce1d2c06ef0bec3dbadce56b83e46ca1ff"
 dependencies = [
  "form_urlencoded",
  "idna",
- "percent-encoding",
+ "percent-encoding 2.3.1 (git+https://github.com/brooksmtownsend/rust-url/?branch=fix/wasm32-wasip2-stable-support)",
  "serde 1.0.210",
 ]
 
@@ -7993,7 +7995,7 @@ dependencies = [
  "log",
  "mime",
  "mime_guess",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project",
  "scoped-tls",
  "serde 1.0.210",
@@ -8562,6 +8564,7 @@ version = "0.2.0"
 dependencies = [
  "futures",
  "rand 0.8.5",
+ "reqwest 0.12.8",
  "tokio",
  "uuid 1.11.0",
  "wasi 0.13.3+wasi-0.2.2",

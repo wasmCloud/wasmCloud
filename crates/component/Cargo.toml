@@ -25,3 +25,4 @@ tokio = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
 wasi = { workspace = true, features = ["std"] }
 wit-bindgen = { workspace = true, features = ["macros"] }
+reqwest = { workspace = true, package = "reqwest-component", features = ["stream"]}
