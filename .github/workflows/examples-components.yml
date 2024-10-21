@@ -17,6 +17,7 @@ on:
       - component-keyvalue-messaging-v[0-9]+.[0-9]+.[0-9]+*
       - component-sqldb-postgres-query-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-task-manager-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-password-checker-typescript-v[0-9]+.[0-9]+.[0-9]+*
   pull_request:
     branches: [main]
     paths:
@@ -151,6 +152,10 @@ jobs:
           - name: 'http-hello-world'
             lang: 'typescript'
             lang_version: '20.x'
+            test_deploy: wadm.yaml
+          - name: "http-password-checker"
+            lang: "typescript"
+            lang_version: "22.x"
             test_deploy: wadm.yaml
     steps:
       - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
