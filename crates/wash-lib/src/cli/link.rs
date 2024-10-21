@@ -98,8 +98,13 @@ pub enum LinkCommand {
 /// # Examples
 ///
 /// ```no_run
-/// let ack = query_links(WashConnectionOptions::default()).await?;
-/// assert_eq!(ack.accepted, true);
+/// # use wash_lib::cli::link::get_links;
+/// use wash_lib::config::WashConnectionOptions;
+/// # async fn doc() -> anyhow::Result<()> {
+/// let links = get_links(WashConnectionOptions::default()).await?;
+/// println!("{links:?}");
+/// # anyhow::Ok(())
+/// # }
 /// ```
 pub async fn get_links(wco: WashConnectionOptions) -> Result<Vec<Link>> {
     wco.into_ctl_client(None)
@@ -123,6 +128,9 @@ pub async fn get_links(wco: WashConnectionOptions) -> Result<Vec<Link>> {
 /// # Examples
 ///
 /// ```no_run
+/// # use wash_lib::cli::link::delete_link;
+/// use wash_lib::config::WashConnectionOptions;
+/// # async fn doc() -> anyhow::Result<()> {
 /// let ack = delete_link(
 ///   WashConnectionOptions::default(),
 ///   "httpserver",
@@ -130,7 +138,9 @@ pub async fn get_links(wco: WashConnectionOptions) -> Result<Vec<Link>> {
 ///   "wasi",
 ///   "http",
 /// ).await?;
-/// assert_eq!(ack.accepted, true);
+/// assert!(ack.succeeded());
+/// # anyhow::Ok(())
+/// # }
 /// ```
 pub async fn delete_link(
     wco: WashConnectionOptions,
@@ -156,25 +166,31 @@ pub async fn delete_link(
 /// # Arguments
 ///
 /// * `wco` - Options for connecting to wash
-/// * `link` - The [`wasmcloud_control_interface::InterfaceLinkDefinition`] to create
+/// * `link` - The [`wasmcloud_control_interface::Link`] to create
 ///
 /// # Examples
 ///
 /// ```no_run
-/// let ack = delete_link(
-///   WashConnectionOptions::default(),
-///   InterfaceLinkDefinition {
-///    source_id: "httpserver".to_string(),
-///    target: "echo".to_string(), // wasmcloud.azurecr.io/echo:0.3.8
-///    wit_namespace: "wasi".to_string(),
-///    wit_package: "http".to_string(),
-///    link_name: "default".to_string(),
-///    interfaces: vec!["incoming-handler".to_string()],
-///    source_config: vec![],
-///    target_config: vec![],
-///   }
-/// ).await?;
-/// assert_eq!(ack.accepted, true);
+/// # use wash_lib::cli::link::put_link;
+/// use wash_lib::config::WashConnectionOptions;
+/// use wasmcloud_control_interface::Link;
+/// # async fn doc() -> anyhow::Result<()> {
+/// let ack = put_link(
+///     WashConnectionOptions::default(),
+///     Link::builder()
+///         .source_id("httpserver")
+///         .target("echo")
+///         .wit_namespace("wasi")
+///         .wit_package("http")
+///         .name("default")
+///         .interfaces(vec!["incoming-handler".to_string()])
+///         .build()
+///         .unwrap(),
+/// )
+/// .await?;
+/// assert!(ack.succeeded());
+/// # anyhow::Ok(())
+/// # }
 /// ```
 pub async fn put_link(wco: WashConnectionOptions, link: Link) -> Result<CtlResponse<()>> {
     let ctl_client = wco.into_ctl_client(None).await?;

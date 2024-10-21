@@ -84,11 +84,20 @@ pub struct SignConfig {
 /// This function returns the path to the compiled artifact, a signed Wasm component or signed provider archive.
 ///
 /// # Usage
-/// ```no_run
-/// use wash_lib::{build::build_project, parser::get_config};
-/// let config = get_config(None, Some(true))?;
-/// let artifact_path = build_project(&config, None)?;
-/// println!("Here is the signed artifact: {}", artifact_path.to_string_lossy());
+/// ```
+/// # async fn doc(
+/// #     config: &wash_lib::parser::ProjectConfig,
+/// #     package_args: &wash_lib::cli::CommonPackageArgs,
+/// #     skip_fetch: bool,
+/// # ) -> anyhow::Result<()> {
+/// # use wash_lib::build::build_project;
+///   let artifact_path = build_project(config, None, package_args, skip_fetch).await?;
+///   println!(
+///       "Here is the signed artifact: {}",
+///       artifact_path.to_string_lossy()
+///   );
+/// # anyhow::Ok(())
+/// }
 /// ```
 /// # Arguments
 /// * `config`: [`ProjectConfig`] for required information to find, build, and sign a component
