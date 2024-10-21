@@ -91,7 +91,7 @@ pub async fn registry_push(
     cmd: RegistryPushCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
-    let project_config = load_config(cmd.project_config, Some(true)).ok();
+    let project_config = load_config(cmd.project_config, Some(true)).await.ok();
     let image: Reference = resolve_artifact_ref(
         &cmd.url,
         &cmd.registry.unwrap_or_default(),
@@ -199,6 +199,7 @@ fn resolve_artifact_ref(
 
 async fn resolve_registry_credentials(registry: &str) -> Result<RegistryCredential> {
     let credentials = if let Ok(credentials) = load_config(None, Some(true))
+        .await
         .and_then(|config| config.resolve_registry_credentials(registry))
     {
         credentials

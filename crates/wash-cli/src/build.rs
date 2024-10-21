@@ -62,7 +62,7 @@ pub struct BuildCommand {
 }
 
 pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
-    let config = load_config(command.config_path, Some(true))?;
+    let config = load_config(command.config_path, Some(true)).await?;
 
     match config.project_type {
         TypeConfig::Component(ref component_config) => {

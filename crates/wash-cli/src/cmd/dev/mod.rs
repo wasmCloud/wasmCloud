@@ -122,7 +122,7 @@ pub async fn handle_command(
 ) -> Result<CommandOutput> {
     let current_dir = std::env::current_dir()?;
     let project_path = cmd.code_dir.unwrap_or(current_dir);
-    let project_cfg = load_config(Some(project_path.clone()), Some(true))?;
+    let project_cfg = load_config(Some(project_path.clone()), Some(true)).await?;
 
     let mut wash_dev_session = WashDevSession::from_sessions_file(&project_path)
         .await

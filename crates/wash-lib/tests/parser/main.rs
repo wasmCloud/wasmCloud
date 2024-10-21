@@ -7,12 +7,13 @@ use wash_lib::parser::{
     TinyGoConfig, TinyGoGarbageCollector, TinyGoScheduler, TypeConfig, WasmTarget,
 };
 
-#[test]
-fn rust_component() {
+#[tokio::test]
+async fn rust_component() {
     let result = load_config(
         Some(PathBuf::from("./tests/parser/files/rust_component.toml")),
         None,
-    );
+    )
+    .await;
 
     let config = assert_ok!(result);
 
@@ -59,15 +60,16 @@ fn rust_component() {
     );
 }
 
-#[test]
+#[tokio::test]
 /// When given a specific toml file's path, it should parse the file and return a `ProjectConfig`.
-fn rust_component_with_revision() {
+async fn rust_component_with_revision() {
     let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/rust_component_with_revision.toml",
         )),
         None,
-    );
+    )
+    .await;
 
     let config = assert_ok!(result);
 
@@ -115,14 +117,15 @@ fn rust_component_with_revision() {
     );
 }
 
-#[test]
-fn tinygo_component_module_scheduler_gc() {
+#[tokio::test]
+async fn tinygo_component_module_scheduler_gc() {
     let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/tinygo_component_scheduler_gc.toml",
         )),
         None,
-    );
+    )
+    .await;
 
     let config = assert_ok!(result);
 
@@ -137,14 +140,15 @@ fn tinygo_component_module_scheduler_gc() {
     );
 }
 
-#[test]
-fn tinygo_component_module() {
+#[tokio::test]
+async fn tinygo_component_module() {
     let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/tinygo_component_module.toml",
         )),
         None,
-    );
+    )
+    .await;
 
     let config = assert_ok!(result);
 
@@ -192,12 +196,13 @@ fn tinygo_component_module() {
     );
 }
 
-#[test]
-fn tinygo_component() {
+#[tokio::test]
+async fn tinygo_component() {
     let result = load_config(
         Some(PathBuf::from("./tests/parser/files/tinygo_component.toml")),
         None,
-    );
+    )
+    .await;
 
     let config = assert_ok!(result);
 
@@ -213,10 +218,10 @@ fn tinygo_component() {
     );
 }
 
-#[test]
+#[tokio::test]
 /// When given a folder, should automatically grab a wasmcloud.toml file inside it and parse it.
-fn folder_path() {
-    let result = load_config(Some(PathBuf::from("./tests/parser/files/folder")), None);
+async fn folder_path() {
+    let result = load_config(Some(PathBuf::from("./tests/parser/files/folder")), None).await;
 
     let config = assert_ok!(result);
 
@@ -238,10 +243,10 @@ fn get_full_path(path: &str) -> String {
     }
 }
 
-#[test]
+#[tokio::test]
 /// When given a folder with no wasmcloud.toml file, should return an error.
-fn folder_path_with_no_config() {
-    let result = load_config(Some(PathBuf::from("./tests/parser/files/noconfig")), None);
+async fn folder_path_with_no_config() {
+    let result = load_config(Some(PathBuf::from("./tests/parser/files/noconfig")), None).await;
 
     let err = assert_err!(result);
     assert_eq!(
@@ -253,10 +258,10 @@ fn folder_path_with_no_config() {
     );
 }
 
-#[test]
+#[tokio::test]
 /// When given a random file, should return an error.
-fn random_file() {
-    let result = load_config(Some(PathBuf::from("./tests/parser/files/random.txt")), None);
+async fn random_file() {
+    let result = load_config(Some(PathBuf::from("./tests/parser/files/random.txt")), None).await;
 
     let err = assert_err!(result);
     assert_eq!(
@@ -268,13 +273,14 @@ fn random_file() {
     );
 }
 
-#[test]
+#[tokio::test]
 /// When given a nonexistent file or path, should return an error.
-fn nonexistent_file() {
+async fn nonexistent_file() {
     let result = load_config(
         Some(PathBuf::from("./tests/parser/files/nonexistent.toml")),
         None,
-    );
+    )
+    .await;
 
     let err = assert_err!(result);
     assert_eq!(
@@ -283,12 +289,13 @@ fn nonexistent_file() {
     );
 }
 
-#[test]
-fn nonexistent_folder() {
+#[tokio::test]
+async fn nonexistent_folder() {
     let result = load_config(
         Some(PathBuf::from("./tests/parser/files/nonexistent/")),
         None,
-    );
+    )
+    .await;
 
     let err = assert_err!(result);
     assert_eq!(
@@ -297,14 +304,15 @@ fn nonexistent_folder() {
     );
 }
 
-#[test]
-fn minimal_rust_component() {
+#[tokio::test]
+async fn minimal_rust_component() {
     let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/minimal_rust_component.toml",
         )),
         None,
-    );
+    )
+    .await;
 
     let config = assert_ok!(result);
 
@@ -355,14 +363,15 @@ fn minimal_rust_component() {
     );
 }
 
-#[test]
-fn cargo_toml_component() {
+#[tokio::test]
+async fn cargo_toml_component() {
     let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/withcargotoml/minimal_rust_component_with_cargo.toml",
         )),
         None,
-    );
+    )
+    .await;
 
     let config = assert_ok!(result);
 
@@ -415,14 +424,15 @@ fn cargo_toml_component() {
 
 /// wasm_target=wasm32-wasip2 is properly parsed
 /// see: https://github.com/wasmCloud/wash/issues/640
-#[test]
-fn minimal_rust_component_p2() {
+#[tokio::test]
+async fn minimal_rust_component_p2() {
     let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/minimal_rust_component_wasip2.toml",
         )),
         None,
-    );
+    )
+    .await;
 
     let config = assert_ok!(result);
 
@@ -443,14 +453,15 @@ fn minimal_rust_component_p2() {
 
 /// wasm_target=wasm32-wasip1 is properly parsed
 /// see: https://github.com/wasmCloud/wash/issues/640
-#[test]
-fn minimal_rust_component_wasip1() {
+#[tokio::test]
+async fn minimal_rust_component_wasip1() {
     let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/minimal_rust_component_wasip1.toml",
         )),
         None,
-    );
+    )
+    .await;
 
     let config = assert_ok!(result);
     assert!(matches!(
@@ -464,14 +475,15 @@ fn minimal_rust_component_wasip1() {
 
 /// wasm_target=wasm32-unknown-unknown is properly parsed
 /// see: https://github.com/wasmCloud/wash/issues/640
-#[test]
-fn minimal_rust_component_core_module() {
+#[tokio::test]
+async fn minimal_rust_component_core_module() {
     let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/minimal_rust_component_core_module.toml",
         )),
         None,
-    );
+    )
+    .await;
 
     let config = assert_ok!(result);
     assert!(matches!(
@@ -485,9 +497,9 @@ fn minimal_rust_component_core_module() {
 
 /// Tags are properly handled (duplicates, pre-existing experimental tag)
 /// see: https://github.com/wasmCloud/wash/pull/951
-#[test]
-fn tags() {
-    let result = load_config(Some(PathBuf::from("./tests/parser/files/tags.toml")), None);
+#[tokio::test]
+async fn tags() {
+    let result = load_config(Some(PathBuf::from("./tests/parser/files/tags.toml")), None).await;
 
     let config = assert_ok!(result);
     assert!(matches!(
@@ -500,14 +512,15 @@ fn tags() {
 }
 
 /// Projects with overridden paths should be properly handled
-#[test]
-fn separate_project_paths() {
+#[tokio::test]
+async fn separate_project_paths() {
     let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/separate_project_paths.toml",
         )),
         None,
-    );
+    )
+    .await;
     let config = assert_ok!(result);
     // Different project path handled
     assert_eq!(

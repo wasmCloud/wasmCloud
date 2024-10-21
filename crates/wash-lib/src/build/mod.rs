@@ -31,6 +31,35 @@ use provider::build_provider;
 /// This tag is normally embedded in a Wasm module as a custom section
 const WASMCLOUD_WASM_TAG_EXPERIMENTAL: &str = "wasmcloud.com/experimental";
 
+/// The default name of the package locking file for wasmcloud
+pub const PACKAGE_LOCK_FILE_NAME: &str = "wasmcloud.lock";
+
+/// A helper function for loading a lockfile in a given directory, using the existing wkg.lock if it
+/// exists. Returns an exclusively locked lockfile.
+pub async fn load_lock_file(dir: impl AsRef<Path>) -> Result<LockFile> {
+    // First check if a wkg.lock exists in the directory. If it does, load it instead
+    let maybe_wkg_path = dir.as_ref().join(wasm_pkg_core::lock::LOCK_FILE_NAME);
+    if tokio::fs::try_exists(&maybe_wkg_path).await? {
+        return LockFile::load_from_path(&maybe_wkg_path, false)
+            .await
+            .context("failed to load lock file");
+    }
+    // Now try to load the wasmcloud one. If it exists, load, otherwise return an empty lock file
+    let lock_file_path = dir.as_ref().join(PACKAGE_LOCK_FILE_NAME);
+    if tokio::fs::try_exists(&lock_file_path)
+        .await
+        .context("failed to check if lock file exists")?
+    {
+        LockFile::load_from_path(lock_file_path, false)
+            .await
+            .context("failed to load lock file")
+    } else {
+        LockFile::new_with_path([], lock_file_path)
+            .await
+            .context("failed to create lock file")
+    }
+}
+
 /// Configuration for signing an artifact (component or provider) including issuer and subject key, the path to where keys can be found, and an option to
 /// disable automatic key generation if keys cannot be found.
 #[derive(Debug, Clone, Default)]
@@ -73,31 +102,16 @@ pub async fn build_project(
     if !skip_fetch {
         // Fetch dependencies for the component before building
         let client = package_args.get_client().await?;
-        let lock_path = &config
-            .common
-            .project_dir
-            .join(wasm_pkg_core::lock::LOCK_FILE_NAME);
-        let mut lock = if tokio::fs::try_exists(&lock_path).await? {
-            LockFile::load_from_path(lock_path, false).await?
-        } else {
-            let mut lock = LockFile::new_with_path([], lock_path).await?;
-            // If it is a new file, write the empty file now in case the next step fails
-            lock.write().await?;
-            lock
-        };
-        let conf_path = &config
-            .common
-            .project_dir
-            .join(wasm_pkg_core::config::CONFIG_FILE_NAME);
-        let wkg_conf = if tokio::fs::try_exists(&conf_path).await? {
-            wasm_pkg_core::config::Config::load_from_path(conf_path).await?
-        } else {
-            wasm_pkg_core::config::Config::default()
-        };
+        let mut lock = load_lock_file(&config.wasmcloud_toml_dir).await?;
 
-        monkey_patch_fetch_logging(wkg_conf, &config.common.wit_dir, &mut lock, client)
-            .await
-            .context("Failed to patch logging dependency")?;
+        monkey_patch_fetch_logging(
+            config.package_config.clone(),
+            &config.common.wit_dir,
+            &mut lock,
+            client,
+        )
+        .await
+        .context("Failed to update dependencies")?;
 
         // Write out the lock file
         lock.write()

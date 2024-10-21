@@ -1,12 +1,10 @@
 mod common;
 
-use common::{init, init_path, init_workspace, load_fixture};
+use common::{init, init_path, init_provider, init_workspace, load_fixture};
 
-use anyhow::{Context, Ok, Result};
-use std::env;
-use std::fs::File;
-use tokio::process::Command;
-use wasm_pkg_core::lock::LOCK_FILE_NAME;
+use anyhow::{Context, Result};
+use tokio::{fs::File, process::Command};
+use wash_lib::build::PACKAGE_LOCK_FILE_NAME;
 
 #[tokio::test]
 #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
@@ -27,14 +25,15 @@ async fn integration_build_rust_component_unsigned() -> Result<()> {
 
     assert!(status.success());
     let unsigned_file = project_dir.join("build/http_hello_world.wasm");
-    assert!(unsigned_file.exists(), "unsigned file not found!");
+    assert!(
+        tokio::fs::try_exists(unsigned_file).await.unwrap(),
+        "unsigned file not found!"
+    );
     let signed_file = project_dir.join("build/http_hello_world_s.wasm");
     assert!(
-        !signed_file.exists(),
+        !tokio::fs::try_exists(signed_file).await.unwrap(),
         "signed file should not exist when using --build-only!"
     );
-    let lock_file = project_dir.join(LOCK_FILE_NAME);
-    assert!(lock_file.exists(), "lock file not found!");
     Ok(())
 }
 
@@ -59,11 +58,72 @@ async fn integration_build_rust_component_signed() -> Result<()> {
 
     assert!(status.success());
     let unsigned_file = project_dir.join("build/dog_fetcher.wasm");
-    assert!(unsigned_file.exists(), "unsigned file not found!");
+    assert!(
+        tokio::fs::try_exists(unsigned_file).await.unwrap(),
+        "unsigned file not found!"
+    );
     let signed_file = project_dir.join("build/dog_fetcher_s.wasm");
-    assert!(signed_file.exists(), "signed file not found!");
-    let lock_file = project_dir.join(LOCK_FILE_NAME);
-    assert!(lock_file.exists(), "lock file not found!");
+    assert!(
+        tokio::fs::try_exists(signed_file).await.unwrap(),
+        "signed file not found!"
+    );
+    let lock_file = project_dir.join(PACKAGE_LOCK_FILE_NAME);
+    assert!(
+        tokio::fs::try_exists(lock_file).await.unwrap(),
+        "lock file not found!"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+async fn integration_build_uses_wkg_lock() -> Result<()> {
+    let test_setup = init_path(
+        /* component_name= */ "hello",
+        /* template_name= */ "examples/rust/components/dog-fetcher",
+    )
+    .await?;
+    let project_dir = test_setup.project_dir.clone();
+
+    // Move the wasmcloud.lock to be wkg.lock
+    tokio::fs::rename(
+        project_dir.join("wasmcloud.lock"),
+        project_dir.join("wkg.lock"),
+    )
+    .await
+    .unwrap();
+
+    let status = test_setup
+        .base_command()
+        .args(["build"])
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to build project")?;
+
+    assert!(status.success());
+    let unsigned_file = project_dir.join("build/dog_fetcher.wasm");
+    assert!(
+        tokio::fs::try_exists(unsigned_file).await.unwrap(),
+        "unsigned file not found!"
+    );
+    let signed_file = project_dir.join("build/dog_fetcher_s.wasm");
+    assert!(
+        tokio::fs::try_exists(signed_file).await.unwrap(),
+        "signed file not found!"
+    );
+    let lock_file = project_dir.join(wasm_pkg_core::lock::LOCK_FILE_NAME);
+    assert!(
+        tokio::fs::try_exists(lock_file).await.unwrap(),
+        "lock file not found!"
+    );
+    // Make sure wasmcloud.lock is not present
+    assert!(
+        !tokio::fs::try_exists(project_dir.join("wasmcloud.lock"))
+            .await
+            .unwrap(),
+        "wasmcloud.lock should not exist!"
+    );
     Ok(())
 }
 
@@ -88,11 +148,78 @@ async fn integration_build_rust_component_with_existing_deps_signed() -> Result<
 
     assert!(status.success());
     let unsigned_file = project_dir.join("build/http_hello_world.wasm");
-    assert!(unsigned_file.exists(), "unsigned file not found!");
+    assert!(
+        tokio::fs::try_exists(unsigned_file).await.unwrap(),
+        "unsigned file not found!"
+    );
     let signed_file = project_dir.join("build/http_hello_world_s.wasm");
-    assert!(signed_file.exists(), "signed file not found!");
-    let lock_file = project_dir.join(LOCK_FILE_NAME);
-    assert!(lock_file.exists(), "lock file not found!");
+    assert!(
+        tokio::fs::try_exists(signed_file).await.unwrap(),
+        "signed file not found!"
+    );
+    let lock_file = project_dir.join(PACKAGE_LOCK_FILE_NAME);
+    assert!(
+        tokio::fs::try_exists(lock_file).await.unwrap(),
+        "lock file not found!"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+async fn integration_build_with_wasmcloud_toml_overrides() -> Result<()> {
+    // We test a dep from git above, so this tests with a local path so we can test local changes
+    let test_setup = load_fixture("integrated-wkg").await?;
+    let project_dir = test_setup.project_dir.clone();
+
+    let status = test_setup
+        .base_command()
+        .args(["build"])
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to build project")?;
+
+    assert!(status.success());
+    let unsigned_file = project_dir.join("build/ponger_config_component.wasm");
+    assert!(
+        tokio::fs::try_exists(unsigned_file).await.unwrap(),
+        "unsigned file not found!"
+    );
+    let signed_file = project_dir.join("build/ponger_config_component_s.wasm");
+    assert!(
+        tokio::fs::try_exists(signed_file).await.unwrap(),
+        "signed file not found!"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+async fn integration_build_with_wkg_toml_overrides() -> Result<()> {
+    // We test a dep from git above, so this tests with a local path so we can test local changes
+    let test_setup = load_fixture("separate-wkg").await?;
+    let project_dir = test_setup.project_dir.clone();
+
+    let status = test_setup
+        .base_command()
+        .args(["build"])
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to build project")?;
+
+    assert!(status.success());
+    let unsigned_file = project_dir.join("build/ponger_config_component.wasm");
+    assert!(
+        tokio::fs::try_exists(unsigned_file).await.unwrap(),
+        "unsigned file not found!"
+    );
+    let signed_file = project_dir.join("build/ponger_config_component_s.wasm");
+    assert!(
+        tokio::fs::try_exists(signed_file).await.unwrap(),
+        "signed file not found!"
+    );
     Ok(())
 }
 
@@ -113,11 +240,20 @@ async fn integration_build_with_logging_interface() -> Result<()> {
 
     assert!(status.success());
     let unsigned_file = project_dir.join("build/blobby.wasm");
-    assert!(unsigned_file.exists(), "unsigned file not found!");
+    assert!(
+        tokio::fs::try_exists(unsigned_file).await.unwrap(),
+        "unsigned file not found!"
+    );
     let signed_file = project_dir.join("build/blobby_s.wasm");
-    assert!(signed_file.exists(), "signed file not found!");
-    let lock_file = project_dir.join(LOCK_FILE_NAME);
-    assert!(lock_file.exists(), "lock file not found!");
+    assert!(
+        tokio::fs::try_exists(signed_file).await.unwrap(),
+        "signed file not found!"
+    );
+    let lock_file = project_dir.join(PACKAGE_LOCK_FILE_NAME);
+    assert!(
+        tokio::fs::try_exists(lock_file).await.unwrap(),
+        "lock file not found!"
+    );
     Ok(())
 }
 
@@ -141,12 +277,18 @@ async fn integration_build_rust_component_with_no_fetch() -> Result<()> {
 
     assert!(status.success());
     let unsigned_file = project_dir.join("build/http_hello_world.wasm");
-    assert!(unsigned_file.exists(), "unsigned file not found!");
-    let signed_file = project_dir.join("build/http_hello_world_s.wasm");
-    assert!(signed_file.exists(), "signed file not found!");
-    let lock_file = project_dir.join(LOCK_FILE_NAME);
     assert!(
-        !lock_file.exists(),
+        tokio::fs::try_exists(unsigned_file).await.unwrap(),
+        "unsigned file not found!"
+    );
+    let signed_file = project_dir.join("build/http_hello_world_s.wasm");
+    assert!(
+        tokio::fs::try_exists(signed_file).await.unwrap(),
+        "signed file not found!"
+    );
+    let lock_file = project_dir.join(PACKAGE_LOCK_FILE_NAME);
+    assert!(
+        !tokio::fs::try_exists(lock_file).await.unwrap(),
         "lock file should not have been generated!"
     );
     Ok(())
@@ -400,10 +542,13 @@ async fn integration_build_rust_component_in_workspace_unsigned() -> Result<()> 
 
     assert!(status.success());
     let unsigned_file = project_dir.join("build/http_hello_world.wasm");
-    assert!(unsigned_file.exists(), "unsigned file not found!");
+    assert!(
+        tokio::fs::try_exists(unsigned_file).await.unwrap(),
+        "unsigned file not found!"
+    );
     let signed_file = project_dir.join("build/http_hello_world_s.wasm");
     assert!(
-        !signed_file.exists(),
+        !tokio::fs::try_exists(signed_file).await.unwrap(),
         "signed file should not exist when using --build-only!"
     );
     Ok(())
@@ -429,14 +574,15 @@ async fn integration_build_tinygo_component_unsigned() -> Result<()> {
 
     assert!(status.success());
     let unsigned_file = project_dir.join("build/http-hello-world.wasm");
-    assert!(unsigned_file.exists(), "unsigned file not found!");
+    assert!(
+        tokio::fs::try_exists(unsigned_file).await.unwrap(),
+        "unsigned file not found!"
+    );
     let signed_file = project_dir.join("build/http_hello_world_s.wasm");
     assert!(
-        !signed_file.exists(),
+        !tokio::fs::try_exists(signed_file).await.unwrap(),
         "signed file should not exist when using --build-only!"
     );
-    let lock_file = project_dir.join(LOCK_FILE_NAME);
-    assert!(lock_file.exists(), "lock file not found!");
     Ok(())
 }
 
@@ -460,11 +606,20 @@ async fn integration_build_tinygo_component_signed() -> Result<()> {
 
     assert!(status.success());
     let unsigned_file = project_dir.join("build/http-client-tinygo.wasm");
-    assert!(unsigned_file.exists(), "unsigned file not found!");
+    assert!(
+        tokio::fs::try_exists(unsigned_file).await.unwrap(),
+        "unsigned file not found!"
+    );
     let signed_file = project_dir.join("build/http_client_tinygo_s.wasm");
-    assert!(signed_file.exists(), "signed file not found!");
-    let lock_file = project_dir.join(LOCK_FILE_NAME);
-    assert!(lock_file.exists(), "lock file not found!");
+    assert!(
+        tokio::fs::try_exists(signed_file).await.unwrap(),
+        "signed file not found!"
+    );
+    let lock_file = project_dir.join(PACKAGE_LOCK_FILE_NAME);
+    assert!(
+        tokio::fs::try_exists(lock_file).await.unwrap(),
+        "lock file not found!"
+    );
     Ok(())
 }
 
@@ -489,11 +644,20 @@ async fn integration_build_tinygo_component_with_existing_deps_signed() -> Resul
 
     assert!(status.success());
     let unsigned_file = project_dir.join("build/http-hello-world.wasm");
-    assert!(unsigned_file.exists(), "unsigned file not found!");
+    assert!(
+        tokio::fs::try_exists(unsigned_file).await.unwrap(),
+        "unsigned file not found!"
+    );
     let signed_file = project_dir.join("build/http_hello_world_s.wasm");
-    assert!(signed_file.exists(), "signed file not found!");
-    let lock_file = project_dir.join(LOCK_FILE_NAME);
-    assert!(lock_file.exists(), "lock file not found!");
+    assert!(
+        tokio::fs::try_exists(signed_file).await.unwrap(),
+        "signed file not found!"
+    );
+    let lock_file = project_dir.join(PACKAGE_LOCK_FILE_NAME);
+    assert!(
+        tokio::fs::try_exists(lock_file).await.unwrap(),
+        "lock file not found!"
+    );
     Ok(())
 }
 
@@ -508,7 +672,7 @@ async fn integration_build_handles_dashed_names() -> Result<()> {
     let stdout_path = root_dir
         .path()
         .join(format!("wash-test.{component_name}.stdout.log"));
-    let stdout = File::create(stdout_path)?;
+    let stdout = File::create(stdout_path).await?.into_std().await;
 
     // Execute wash new to create an component with the given name
     let mut new_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
@@ -526,7 +690,7 @@ async fn integration_build_handles_dashed_names() -> Result<()> {
     assert!(new_cmd.wait().await?.success());
 
     // Ensure that the component dir was created as expected
-    assert!(component_dir.exists());
+    assert!(tokio::fs::try_exists(&component_dir).await?);
 
     let mut build_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(["build"])
@@ -552,22 +716,19 @@ async fn integration_build_tinygo_component_separate_paths() -> Result<()> {
     .await?;
     let project_dir = test_setup.project_dir.clone();
 
-    // Change directory into the project directory
-    std::env::set_current_dir(&project_dir).context("failed to change to project dir")?;
-
     // Rename the WIT directory
-    tokio::fs::rename("wit", "wow")
+    tokio::fs::rename(project_dir.join("wit"), project_dir.join("wow"))
         .await
         .context("failed to rename wit directory")?;
     // Move the wasmcloud.toml to a different directory
-    tokio::fs::remove_file("wasmcloud.toml")
+    tokio::fs::remove_file(project_dir.join("wasmcloud.toml"))
         .await
         .context("failed to remove wasmcloud.toml")?;
-    tokio::fs::create_dir("config")
+    tokio::fs::create_dir(project_dir.join("config"))
         .await
         .context("failed to create config directory")?;
     tokio::fs::write(
-        "config/wasmcloud.toml",
+        project_dir.join("config").join("wasmcloud.toml"),
         r#"
     name = "tinygo-moved"
     version = "0.1.0"
@@ -586,12 +747,12 @@ async fn integration_build_tinygo_component_separate_paths() -> Result<()> {
     .context("failed to update wasmcloud.toml file content for test case")?;
 
     // Make sure the go generate command uses the `wow` WIT directory
-    let tiny_go_main_dot_go = tokio::fs::read_to_string("hello.go")
+    let tiny_go_main_dot_go = tokio::fs::read_to_string(project_dir.join("hello.go"))
         .await
         .context("failed to read tinygo hello.go")?;
     let new_main_dot_go =
         tiny_go_main_dot_go.replace("wit-bindgen tiny-go wit", "wit-bindgen tiny-go wow");
-    tokio::fs::write("hello.go", new_main_dot_go)
+    tokio::fs::write(project_dir.join("hello.go"), new_main_dot_go)
         .await
         .context("failed to write new main.go")?;
 
@@ -605,53 +766,60 @@ async fn integration_build_tinygo_component_separate_paths() -> Result<()> {
 
     assert!(status.success());
     let unsigned_file = project_dir.join("artifacts/tinygo-moved.wasm");
-    assert!(unsigned_file.exists(), "unsigned file not found!");
+    assert!(
+        tokio::fs::try_exists(unsigned_file).await.unwrap(),
+        "unsigned file not found!"
+    );
     let signed_file = project_dir.join("artifacts/tinygo-moved_s.wasm");
-    assert!(signed_file.exists(), "signed file not found!");
-    let lock_file = project_dir.join(LOCK_FILE_NAME);
-    assert!(lock_file.exists(), "lock file not found!");
+    assert!(
+        tokio::fs::try_exists(signed_file).await.unwrap(),
+        "signed file not found!"
+    );
+    let lock_file = project_dir.join(PACKAGE_LOCK_FILE_NAME);
+    assert!(
+        tokio::fs::try_exists(lock_file).await.unwrap(),
+        "lock file not found!"
+    );
     Ok(())
 }
 
-// TODO(thomastaylor312): Reenable this test once we have pushed all wit to OCI
+#[tokio::test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+async fn integration_build_provider_debug_mode() -> Result<()> {
+    let test_setup = init_provider(
+        /* provider_name= */ "hello-world",
+        /* template_name= */ "messaging-nats",
+    )
+    .await?;
 
-// #[tokio::test]
-// #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
-// async fn integration_build_provider_debug_mode() -> Result<()> {
-//     let test_setup = init_provider(
-//         /* provider_name= */ "hello-world",
-//         /* template_name= */ "messaging-nats",
-//     )
-//     .await?;
+    let project_dir = test_setup.project_dir.clone();
 
-//     let project_dir = test_setup.project_dir.clone();
+    tokio::fs::write(
+        &project_dir.join("wasmcloud.toml"),
+        r#"
+    name = "Messaging NATS"
+    language = "rust"
+    type = "provider"
 
-//     tokio::fs::write(
-//         &project_dir.join("wasmcloud.toml"),
-//         r#"
-//     name = "Messaging NATS"
-//     language = "rust"
-//     type = "provider"
+    [provider]
+    vendor = "wasmcloud"
 
-//     [provider]
-//     vendor = "wasmcloud"
+    [rust]
+    debug = true
+    "#,
+    )
+    .await
+    .context("failed to update wasmcloud.toml file content for test case")?;
 
-//     [rust]
-//     debug = true
-//     "#,
-//     )
-//     .await
-//     .context("failed to update wasmcloud.toml file content for test case")?;
+    let status = test_setup
+        .base_command()
+        .args(["build"])
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to build project")?;
 
-//     let status = test_setup
-//         .base_command()
-//         .args(["build"])
-//         .kill_on_drop(true)
-//         .status()
-//         .await
-//         .context("Failed to build project")?;
+    assert!(status.success());
 
-//     assert!(status.success());
-
-//     Ok(())
-// }
+    Ok(())
+}
