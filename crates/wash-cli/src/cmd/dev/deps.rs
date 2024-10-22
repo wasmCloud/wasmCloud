@@ -1004,7 +1004,13 @@ impl ProjectDeps {
             kind: "Application".into(),
             metadata: Metadata {
                 name: app_name,
-                annotations: BTreeMap::from([("version".into(), "v0.0.0".into())]),
+                // NOTE(brooksmtownsend): We don't include the version annotation here to ensure that
+                // subsequent put/deploys of the application won't conflict.
+                // NOTE(wadm#466): Don't leave this empty for now.
+                annotations: BTreeMap::from([(
+                    "wasmcloud.dev/session-id".into(),
+                    session_id.into(),
+                )]),
                 labels: BTreeMap::from([(
                     "wasmcloud.dev/generated-by".into(),
                     format!(

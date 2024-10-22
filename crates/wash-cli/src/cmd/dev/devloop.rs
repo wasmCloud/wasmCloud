@@ -87,11 +87,8 @@ pub(crate) async fn generate_manifests(
     )
     .context("failed to build key for project")?;
 
-    let mut current_project_deps = match previous_deps {
-        Some(deps) => deps.clone(),
-        None => ProjectDeps::from_known_deps(pkey.clone(), wit_implied_deps)
-            .context("failed to build project dependencies")?,
-    };
+    let mut current_project_deps = ProjectDeps::from_known_deps(pkey.clone(), wit_implied_deps)
+        .context("failed to build project dependencies")?;
 
     // Pull and merge in overrides from project-level wasmcloud.toml
     let project_override_deps = ProjectDeps::from_project_config_overrides(pkey, project_cfg)
