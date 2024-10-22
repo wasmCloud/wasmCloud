@@ -4,7 +4,6 @@ use anyhow::{Context as _, Result};
 use tokio::time::Duration;
 use tokio::try_join;
 
-use wasmcloud_test_util::component::wait_for_component_in_inventory;
 use wasmcloud_test_util::control_interface::ClientBuilder;
 use wasmcloud_test_util::lattice::link::{assert_advertise_link, assert_remove_link};
 use wasmcloud_test_util::nats::wait_for_nats_connection;
