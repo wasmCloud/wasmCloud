@@ -204,6 +204,8 @@
           interpreters.riscv64gc-unknown-linux-gnu = "/lib/ld-linux-riscv64-lp64d.so.1";
           interpreters.x86_64-unknown-linux-gnu = "/lib64/ld-linux-x86-64.so.2";
 
+          images = mapAttrs (_: pkgs.dockerTools.pullImage) (import ./nix/images);
+
           mkFHS = {
             name,
             src,
@@ -256,54 +258,6 @@
             name = "wasmcloud-x86_64-unknown-linux-gnu-fhs";
             src = packages.wasmcloud-x86_64-unknown-linux-gnu;
             interpreter = interpreters.x86_64-unknown-linux-gnu;
-          };
-
-          pullDebian = {
-            imageDigest,
-            sha256,
-          }:
-            pkgs.dockerTools.pullImage {
-              inherit
-                imageDigest
-                sha256
-                ;
-
-              imageName = "debian";
-              finalImageTag = "12.2-slim";
-              finalImageName = "debian";
-            };
-
-          debian.aarch64 = pullDebian {
-            imageDigest = "sha256:9ccb91746bf0b2e3e82b2dd37069ef9b358cb7d813217ea3fa430b940fc5dac3";
-            sha256 = "sha256-cb2lPuBXaQGMrVmvp/Gq0/PtNuTtlZzUmF3S+4jHVtQ=";
-          };
-          debian.x86_64 = pullDebian {
-            imageDigest = "sha256:ea5ad531efe1ac11ff69395d032909baf423b8b88e9aade07e11b40b2e5a1338";
-            sha256 = "sha256-k+x4aUW10YAQ7X20xxJxqW57y2k20sc4e7unh/kqQZQ=";
-          };
-
-          pullWolfi = {
-            imageDigest,
-            sha256,
-          }:
-            pkgs.dockerTools.pullImage {
-              inherit
-                imageDigest
-                sha256
-                ;
-
-              imageName = "cgr.dev/chainguard/wolfi-base";
-              finalImageTag = "latest";
-              finalImageName = "cgr.dev/chainguard/wolfi-base";
-            };
-
-          wolfi.aarch64 = pullWolfi {
-            imageDigest = "sha256:4857dbc65f7dbf22dd662370a6b211621eba5550d276a9b2ad2596b666cbbdfe";
-            sha256 = "sha256-fIxLRqjZpo1An3nBWLZoaYzFJ6qCOereN93/rflEGl4=";
-          };
-          wolfi.x86_64 = pullWolfi {
-            imageDigest = "sha256:4857dbc65f7dbf22dd662370a6b211621eba5550d276a9b2ad2596b666cbbdfe";
-            sha256 = "sha256-OFpWnJj7J2qMEEubZ3dFHbqd08Pqmg4qajztkk9WRkE=";
           };
 
           buildImage = {
@@ -372,22 +326,22 @@
             };
           wash-aarch64-unknown-linux-musl-oci-debian = buildWashImage {
             pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
-            fromImage = debian.aarch64;
+            fromImage = images.debian-arm64;
             architecture = "arm64";
           };
           wash-x86_64-unknown-linux-musl-oci-debian = buildWashImage {
             pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
-            fromImage = debian.x86_64;
+            fromImage = images.debian-amd64;
             architecture = "amd64";
           };
           wash-aarch64-unknown-linux-musl-oci-wolfi = buildWashImage {
             pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
-            fromImage = wolfi.aarch64;
+            fromImage = images.wolfi-arm64;
             architecture = "arm64";
           };
           wash-x86_64-unknown-linux-musl-oci-wolfi = buildWashImage {
             pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
-            fromImage = wolfi.x86_64;
+            fromImage = images.wolfi-amd64;
             architecture = "amd64";
           };
 
@@ -407,22 +361,22 @@
             };
           wasmcloud-aarch64-unknown-linux-musl-oci-debian = buildWasmcloudImage {
             pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
-            fromImage = debian.aarch64;
+            fromImage = images.debian-arm64;
             architecture = "arm64";
           };
           wasmcloud-x86_64-unknown-linux-musl-oci-debian = buildWasmcloudImage {
             pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
-            fromImage = debian.x86_64;
+            fromImage = images.debian-amd64;
             architecture = "amd64";
           };
           wasmcloud-aarch64-unknown-linux-musl-oci-wolfi = buildWasmcloudImage {
             pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
-            fromImage = wolfi.aarch64;
+            fromImage = images.wolfi-arm64;
             architecture = "arm64";
           };
           wasmcloud-x86_64-unknown-linux-musl-oci-wolfi = buildWasmcloudImage {
             pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
-            fromImage = wolfi.x86_64;
+            fromImage = images.wolfi-amd64;
             architecture = "amd64";
           };
 
@@ -518,6 +472,7 @@
               pkgs.minio
               pkgs.nats-server
               pkgs.redis
+              pkgs.skopeo
               pkgs.tinygo
               pkgs.vault
               pkgs.wit-deps
