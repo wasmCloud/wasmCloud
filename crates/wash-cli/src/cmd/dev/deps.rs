@@ -864,7 +864,7 @@ impl ProjectDeps {
                     // Build the relevant app->dep link trait
                     let mut link_property = LinkProperty {
                         namespace: namespace.clone(),
-                        package: namespace.clone(),
+                        package: package.clone(),
                         interfaces: interface
                             .as_ref()
                             .map(|iface| vec![iface.into()])
