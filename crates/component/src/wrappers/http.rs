@@ -2,6 +2,8 @@
 //!
 //! It's inspired by the WASI 0.3 proposal for <https://github.com/WebAssembly/wasi-http> and will
 //! be supported until the release of wasi:http@0.3.0. After that, this module will be deprecated.
+// Required until <https://github.com/seanmonstar/reqwest/pull/2453> merges
+use reqwest_wasmcloud as reqwest;
 
 use std::{
     io::{Read, Write},

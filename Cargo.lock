@@ -2751,11 +2751,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
+name = "foreign-types"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6f339eb8adc052cd2ca78910fda869aefa38d22d5cb648e6485e4d3fc06f3b1"
+dependencies = [
+ "foreign-types-shared",
+]
+
+[[package]]
+name = "foreign-types-shared"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
+
+[[package]]
 name = "form_urlencoded"
 version = "1.2.1"
-source = "git+https://github.com/brooksmtownsend/rust-url/?branch=fix/wasm32-wasip2-stable-support#fc447cce1d2c06ef0bec3dbadce56b83e46ca1ff"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
 dependencies = [
- "percent-encoding 2.3.1 (git+https://github.com/brooksmtownsend/rust-url/?branch=fix/wasm32-wasip2-stable-support)",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "form_urlencoded-wasmcloud"
+version = "1.2.1"
+source = "git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main#1b9d84de09780b0e43838dfa1623754a243842e0"
+dependencies = [
+ "percent-encoding 2.3.1 (git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main)",
 ]
 
 [[package]]
@@ -3428,6 +3452,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper-tls"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70206fc6890eaca9fde8a0bf71caa2ddfc9fe045ac9e5c70df101a7dbde866e0"
+dependencies = [
+ "bytes",
+ "http-body-util",
+ "hyper 1.5.0",
+ "hyper-util",
+ "native-tls",
+ "tokio",
+ "tokio-native-tls",
+ "tower-service",
+]
+
+[[package]]
 name = "hyper-util"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3499,7 +3539,17 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "idna"
 version = "0.5.0"
-source = "git+https://github.com/brooksmtownsend/rust-url/?branch=fix/wasm32-wasip2-stable-support#fc447cce1d2c06ef0bec3dbadce56b83e46ca1ff"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "634d9b1461af396cad843f47fdba5597a4f9e6ddd4bfb6ff5d85028c25cb12f6"
+dependencies = [
+ "unicode-bidi",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "idna"
+version = "0.5.0"
+source = "git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main#1b9d84de09780b0e43838dfa1623754a243842e0"
 dependencies = [
  "unicode-bidi",
  "unicode-normalization",
@@ -4132,6 +4182,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "native-tls"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8614eb2c83d59d1c8cc974dd3f920198647674a0a035e1af1fa58707e317466"
+dependencies = [
+ "libc",
+ "log",
+ "openssl",
+ "openssl-probe",
+ "openssl-sys",
+ "schannel",
+ "security-framework",
+ "security-framework-sys",
+ "tempfile",
+]
+
+[[package]]
 name = "nix"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4487,10 +4554,48 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "openssl"
+version = "0.10.68"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6174bc48f102d208783c2c84bf931bb75927a617866870de8a4ea85597f871f5"
+dependencies = [
+ "bitflags 2.6.0",
+ "cfg-if",
+ "foreign-types",
+ "libc",
+ "once_cell",
+ "openssl-macros",
+ "openssl-sys",
+]
+
+[[package]]
+name = "openssl-macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.79",
+]
+
+[[package]]
 name = "openssl-probe"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff011a302c396a5197692431fc1948019154afc178baf7d8e37367442a4601cf"
+
+[[package]]
+name = "openssl-sys"
+version = "0.9.104"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45abf306cbf99debc8195b66b7346498d7b10c210de50418b5ccd7ceba08c741"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+ "vcpkg",
+]
 
 [[package]]
 name = "opentelemetry"
@@ -4810,7 +4915,7 @@ checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
 [[package]]
 name = "percent-encoding"
 version = "2.3.1"
-source = "git+https://github.com/brooksmtownsend/rust-url/?branch=fix/wasm32-wasip2-stable-support#fc447cce1d2c06ef0bec3dbadce56b83e46ca1ff"
+source = "git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main#1b9d84de09780b0e43838dfa1623754a243842e0"
 
 [[package]]
 name = "pest"
@@ -5700,6 +5805,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "reqwest-wasmcloud"
+version = "0.12.8"
+source = "git+https://github.com/wasmCloud/reqwest-wasmcloud/?branch=master#6d894fbab4de46366ae600e5a06da3839cdf2623"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "encoding_rs",
+ "futures-core",
+ "futures-util",
+ "h2 0.4.6",
+ "http 1.1.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "hyper 1.5.0",
+ "hyper-rustls 0.27.3",
+ "hyper-tls",
+ "hyper-util",
+ "ipnet",
+ "js-sys",
+ "log",
+ "mime",
+ "native-tls",
+ "once_cell",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "pin-project-lite",
+ "rustls-pemfile 2.2.0",
+ "serde 1.0.210",
+ "serde_json",
+ "serde_urlencoded-wasmcloud",
+ "sync_wrapper 1.0.1",
+ "system-configuration 0.6.1",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-util",
+ "tower-service",
+ "url-wasmcloud",
+ "wasi 0.13.3+wasi-0.2.2",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-streams",
+ "web-sys",
+ "windows-registry",
+]
+
+[[package]]
 name = "rfc6979"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6336,6 +6486,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3491c14715ca2294c4d6a88f15e84739788c1d030eed8c110436aafdaa2f3fd"
 dependencies = [
  "form_urlencoded",
+ "itoa",
+ "ryu",
+ "serde 1.0.210",
+]
+
+[[package]]
+name = "serde_urlencoded-wasmcloud"
+version = "0.7.1"
+source = "git+https://github.com/wasmCloud/serde_urlencoded-wasmcloud?branch=master#45f6d06567b446fb12f6a87bff2ca1d4f416a7ab"
+dependencies = [
+ "form_urlencoded-wasmcloud",
  "itoa",
  "ryu",
  "serde 1.0.210",
@@ -7110,6 +7271,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-native-tls"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
+dependencies = [
+ "native-tls",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-postgres"
 version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7653,12 +7824,23 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 [[package]]
 name = "url"
 version = "2.5.2"
-source = "git+https://github.com/brooksmtownsend/rust-url/?branch=fix/wasm32-wasip2-stable-support#fc447cce1d2c06ef0bec3dbadce56b83e46ca1ff"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22784dbdf76fdde8af1aeda5622b546b422b6fc585325248a2bf9f5e41e94d6c"
 dependencies = [
  "form_urlencoded",
- "idna",
- "percent-encoding 2.3.1 (git+https://github.com/brooksmtownsend/rust-url/?branch=fix/wasm32-wasip2-stable-support)",
+ "idna 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.210",
+]
+
+[[package]]
+name = "url-wasmcloud"
+version = "2.5.2"
+source = "git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main#1b9d84de09780b0e43838dfa1623754a243842e0"
+dependencies = [
+ "form_urlencoded-wasmcloud",
+ "idna 0.5.0 (git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main)",
+ "percent-encoding 2.3.1 (git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main)",
 ]
 
 [[package]]
@@ -7748,6 +7930,12 @@ dependencies = [
  "tracing",
  "url",
 ]
+
+[[package]]
+name = "vcpkg"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "version_check"
@@ -8564,7 +8752,7 @@ version = "0.2.0"
 dependencies = [
  "futures",
  "rand 0.8.5",
- "reqwest 0.12.8",
+ "reqwest-wasmcloud",
  "tokio",
  "uuid 1.11.0",
  "wasi 0.13.3+wasi-0.2.2",

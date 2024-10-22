@@ -170,12 +170,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
-name = "form_urlencoded"
+name = "form_urlencoded-wasmcloud"
 version = "1.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
+source = "git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main#1b9d84de09780b0e43838dfa1623754a243842e0"
 dependencies = [
- "percent-encoding",
+ "percent-encoding 2.3.1 (git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main)",
 ]
 
 [[package]]
@@ -417,8 +416,7 @@ checksum = "25a2bc672d1148e28034f176e01fffebb08b35768468cc954630da77a1449005"
 [[package]]
 name = "idna"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "634d9b1461af396cad843f47fdba5597a4f9e6ddd4bfb6ff5d85028c25cb12f6"
+source = "git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main#1b9d84de09780b0e43838dfa1623754a243842e0"
 dependencies = [
  "unicode-bidi",
  "unicode-normalization",
@@ -615,6 +613,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
 
 [[package]]
+name = "percent-encoding"
+version = "2.3.1"
+source = "git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main#1b9d84de09780b0e43838dfa1623754a243842e0"
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -694,8 +697,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 
 [[package]]
-name = "reqwest"
-version = "0.12.5"
+name = "reqwest-wasmcloud"
+version = "0.12.8"
+source = "git+https://github.com/wasmCloud/reqwest-wasmcloud/?branch=master#6d894fbab4de46366ae600e5a06da3839cdf2623"
 dependencies = [
  "base64",
  "bytes",
@@ -716,19 +720,19 @@ dependencies = [
  "mime",
  "native-tls",
  "once_cell",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "rustls-pemfile",
  "serde",
  "serde_json",
- "serde_urlencoded",
+ "serde_urlencoded-wasmcloud",
  "sync_wrapper",
  "system-configuration",
  "tokio",
  "tokio-native-tls",
  "tokio-util",
  "tower-service",
- "url",
+ "url-wasmcloud",
  "wasi 0.13.3+wasi-0.2.2",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -887,12 +891,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_urlencoded"
+name = "serde_urlencoded-wasmcloud"
 version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3491c14715ca2294c4d6a88f15e84739788c1d030eed8c110436aafdaa2f3fd"
+source = "git+https://github.com/wasmCloud/serde_urlencoded-wasmcloud?branch=master#45f6d06567b446fb12f6a87bff2ca1d4f416a7ab"
 dependencies = [
- "form_urlencoded",
+ "form_urlencoded-wasmcloud",
  "itoa",
  "ryu",
  "serde",
@@ -1133,14 +1136,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
-name = "url"
+name = "url-wasmcloud"
 version = "2.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22784dbdf76fdde8af1aeda5622b546b422b6fc585325248a2bf9f5e41e94d6c"
+source = "git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main#1b9d84de09780b0e43838dfa1623754a243842e0"
 dependencies = [
- "form_urlencoded",
+ "form_urlencoded-wasmcloud",
  "idna",
- "percent-encoding",
+ "percent-encoding 2.3.1 (git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main)",
 ]
 
 [[package]]
@@ -1299,7 +1301,7 @@ name = "wasmcloud-component"
 version = "0.2.0"
 dependencies = [
  "rand",
- "reqwest",
+ "reqwest-wasmcloud",
  "uuid",
  "wasi 0.13.3+wasi-0.2.2",
  "wit-bindgen",
