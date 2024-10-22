@@ -46,7 +46,10 @@ jobs:
     strategy:
       matrix:
         wash-version:
-          - 0.34.1
+          # NOTE(2024/10/23): we need to use the current version of wash *only*
+          # due to all the new WIT package retrieval goodness
+          #
+          # Once a new version of wash is out we can use prebuilt versions again (>= 35.0)
           - current
     steps:
       - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
@@ -83,7 +86,10 @@ jobs:
       fail-fast: false
       matrix:
         wash-version:
-          - 0.34.1
+          # NOTE(2024/10/23): we need to use the current version of wash *only*
+          # due to all the new WIT package retrieval goodness
+          #
+          # Once a new version of wash is out we can use prebuilt versions again (>= 35.0)
           - current
         project:
           # Golang example components
@@ -152,15 +158,11 @@ jobs:
           - name: 'http-hello-world'
             lang: 'typescript'
             lang_version: '20.x'
-            test_deploy: wadm.yaml
+            test_deploy: local.wadm.yaml
           - name: "http-password-checker"
             lang: "typescript"
             lang_version: "22.x"
-            test_deploy: wadm.yaml
-          - name: "http-password-checker"
-            lang: "typescript"
-            lang_version: "22.x"
-            test_deploy: wadm.yaml
+            test_deploy: local.wadm.yaml
     steps:
       - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
       # Download wash binary & install to path
@@ -267,7 +269,11 @@ jobs:
       fail-fast: false
       matrix:
         wash-version:
-          - 0.34.1
+          # NOTE(2024/10/23): we need to use the current version of wash *only*
+          # due to all the new WIT package retrieval goodness
+          #
+          # Once a new version of wash is out we can use prebuilt versions again (>= 35.0)
+          - current
         project:
           # Go example components (to publish)
           - lang: 'golang'
