@@ -9,6 +9,7 @@ use nkeys::KeyPair;
 use serde::Deserialize;
 use std::time::Duration;
 use tokio::fs;
+use wasmcloud_control_interface::ComponentDescription;
 
 use wascap::{jwt, wasm::extract_claims};
 
@@ -142,7 +143,7 @@ pub async fn wait_for_component_in_inventory(
     host_id: impl AsRef<str>,
     component_id: impl AsRef<str>,
     timeout: Duration,
-) -> Result<()> {
+) -> Result<ComponentDescription> {
     let ctl_client = ctl_client.into();
     let host_id = host_id.as_ref();
     let component_id = component_id.as_ref();
@@ -157,12 +158,11 @@ pub async fn wait_for_component_in_inventory(
                 continue;
             };
             // If the component is in the host inventory we can consider it started
-            if inv.components().iter().any(|c| c.id() == component_id) {
-                return;
+            if let Some(c) = inv.components().iter().find(|c| c.id() == component_id) {
+                return c.clone();
             }
         }
     })
-    .await?;
-
-    Ok(())
+    .await
+    .context("failed to find component in given host")
 }
