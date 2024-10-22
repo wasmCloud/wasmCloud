@@ -76,6 +76,7 @@
             "GOVERNANCE.md"
             "LICENSE"
             "MAINTAINERS.md"
+            "nix"
             "OWNERS"
             "performance.md"
             "README.md"
