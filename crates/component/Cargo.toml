@@ -21,7 +21,7 @@ default = [
 [dependencies]
 futures = { workspace = true, optional = true, features = ["std"] }
 rand = { workspace = true, optional = true }
-reqwest-wasmcloud = { workspace = true, features = ["stream"]}
+reqwest-wasmcloud = { workspace = true, features = ["stream", "rustls-tls"]}
 tokio = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
 wasi = { workspace = true, features = ["std"] }
