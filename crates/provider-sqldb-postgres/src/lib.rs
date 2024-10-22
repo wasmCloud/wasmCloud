@@ -1,3 +1,5 @@
+#![cfg(not(doctest))]
+
 //! SQL-powered database access provider implementing `wasmcloud:postgres` for connecting
 //! to Postgres clusters.
 //!

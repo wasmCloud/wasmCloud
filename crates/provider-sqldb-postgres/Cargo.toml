@@ -11,9 +11,6 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[lib]
-doctest = false
-
 [dependencies]
 anyhow = { workspace = true }
 bigdecimal = { workspace = true }
