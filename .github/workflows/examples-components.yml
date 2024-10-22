@@ -91,7 +91,7 @@ jobs:
             name: 'http-echo-tinygo'
             test_deploy: wadm.yaml
           - lang: 'golang'
-            lang_version: '1.21'
+            lang_version: '1.23'
             name: 'http-hello-world'
             test_deploy: wadm.yaml
           - name: 'sqldb-postgres-query'
