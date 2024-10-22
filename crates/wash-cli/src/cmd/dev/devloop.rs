@@ -243,7 +243,7 @@ async fn augment_existing_manifests(
 
             // Update the ID and image ref
             *id = Some(generated_component_id.into());
-            *image_ref = generated_component_ref.into();
+            *image_ref = Some(generated_component_ref.into());
 
             // Apply config specs
             for spec in &project_config.dev.config {

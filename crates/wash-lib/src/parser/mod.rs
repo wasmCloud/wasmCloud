@@ -370,7 +370,7 @@ impl DevManifestComponentTarget {
         if self
             .component_ref
             .as_ref()
-            .is_some_and(|v| v == component_ref)
+            .is_some_and(|v| component_ref.as_ref().is_some_and(|c| c == v))
         {
             return true;
         }

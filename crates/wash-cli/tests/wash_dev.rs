@@ -482,7 +482,7 @@ link_name = "default"
         .find(|c| {
             matches!(
                 c.properties,
-                Properties::Capability { ref properties } if properties.image == "ghcr.io/wasmcloud/http-server:0.23.0")
+                Properties::Capability { ref properties } if properties.image.as_ref().is_some_and(|i| i == "ghcr.io/wasmcloud/http-server:0.23.0"))
         })
         .context("missing http provider component in manifest w/ updated image_ref")?;
 

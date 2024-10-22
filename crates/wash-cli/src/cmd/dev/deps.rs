@@ -436,15 +436,17 @@ impl DependencySpec {
                 | DEFAULT_KEYVALUE_PROVIDER_IMAGE,
             ) => Properties::Capability {
                 properties: CapabilityProperties {
-                    image: self
-                        .image_ref()
-                        .with_context(|| {
-                            format!(
+                    image: Some(
+                        self.image_ref()
+                            .with_context(|| {
+                                format!(
                                 "missing image ref for generated (known) component dependency [{}]",
                                 name,
                             )
-                        })?
-                        .into(),
+                            })?
+                            .into(),
+                    ),
+                    application: None,
                     id: None,
                     config: self.configs().clone(),
                     secrets: self.secrets().clone(),
@@ -456,15 +458,17 @@ impl DependencySpec {
                 if self.is_component() {
                     Properties::Component {
                         properties: ComponentProperties {
-                            image: self
-                                .image_ref()
-                                .with_context(|| {
-                                    format!(
+                            image: Some(
+                                self.image_ref()
+                                    .with_context(|| {
+                                        format!(
                                         "missing image ref for generated component dependency [{}]",
                                         self.name()
                                     )
-                                })?
-                                .into(),
+                                    })?
+                                    .into(),
+                            ),
+                            application: None,
                             id: None,
                             config: self.configs().clone(),
                             secrets: self.secrets().clone(),
@@ -473,15 +477,17 @@ impl DependencySpec {
                 } else {
                     Properties::Capability {
                         properties: CapabilityProperties {
-                            image: self
-                                .image_ref()
-                                .with_context(|| {
-                                    format!(
+                            image: Some(
+                                self.image_ref()
+                                    .with_context(|| {
+                                        format!(
                                         "missing image ref for generated provider dependency [{}]",
                                         self.name()
                                     )
-                                })?
-                                .into(),
+                                    })?
+                                    .into(),
+                            ),
+                            application: None,
                             id: None,
                             config: self.configs().clone(),
                             secrets: self.secrets().clone(),
