@@ -16,6 +16,7 @@
 .github/workflows/nix.yml @wasmCloud/ci-maintainers
 flake.* @wasmCloud/ci-maintainers
 garnix.yaml @wasmCloud/ci-maintainers
+nix @wasmCloud/ci-maintainers
 
 ## host-related code
 
