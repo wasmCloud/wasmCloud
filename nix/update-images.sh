@@ -8,11 +8,27 @@ update() {
 
     local amd64
     amd64=$(skopeo inspect --format '{{ .Digest }}' --override-os linux --override-arch amd64 "docker://${1}:${2}")
-    skopeo --override-os linux --override-arch amd64 --insecure-policy copy "docker://${1}@${amd64}" "docker-archive://${dir}/${3}-amd64.tar:${1}:${2}" >&2
+    skopeo \
+        --override-os linux \
+        --override-arch amd64 \
+        --insecure-policy \
+        copy \
+        --src-tls-verify \
+        "docker://${1}@${amd64}" \
+        "docker-archive://${dir}/${3}-amd64.tar:${1}:${2}" \
+        >&2
 
     local arm64
     arm64=$(skopeo inspect --format '{{ .Digest }}' --override-os linux --override-arch arm64 "docker://${1}:${2}")
-    skopeo --override-os linux --override-arch arm64 --insecure-policy copy "docker://${1}@${arm64}" "docker-archive://${dir}/${3}-arm64.tar:${1}:${2}" >&2
+    skopeo \
+        --override-os linux \
+        --override-arch arm64 \
+        --insecure-policy \
+        copy \
+        --src-tls-verify \
+        "docker://${1}@${arm64}" \
+        "docker-archive://${dir}/${3}-arm64.tar:${1}:${2}" \
+        >&2
 
     echo "   ${3}-amd64.arch = \"amd64\";"
     echo "   ${3}-amd64.finalImageName = \"${1}\";"
