@@ -5,7 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.31.0 (2024-10-23)
+
 ## v0.30.0 (2024-10-23)
+
+<csr-id-3a139923993699fee4fb5fa21d3945d4b4935832/>
+<csr-id-c5ba85cfe6ad63227445b0a5e21d58a8f3e15e33/>
+<csr-id-343c0d7509d3e7ef88ec45798d16bca105831611/>
+<csr-id-44bf4c8793b3989aebbbc28c2f2ce3ebbd4d6a0a/>
+<csr-id-81281b490d9df214e60281a05db35f781656d64f/>
+<csr-id-e5b75f416b4f17d29d5939f25b211a466c842788/>
+<csr-id-9df2bb1754fbffc36ed03a00098831eca49f3171/>
+<csr-id-bff14fac85ce4673a1abe432e152067f506fb994/>
+<csr-id-da7b2cd26cdc4c929e45dc4aee4e5b092c3b26f9/>
+<csr-id-30a7dacf19254c7e0e0762f5c6b007cfc27ad1f0/>
+<csr-id-b3e79caf381e53172fb61cf4c7668816efd65b09/>
+<csr-id-a4a9e365095270bd97b59634699b3790b990bc73/>
+<csr-id-d23f3ef01c8fdb980462aca3f7f37237e531bc4b/>
+<csr-id-25e7bb204023277d651fc3550d6a7c15a540c934/>
+<csr-id-de73278b2730f19e71d3d08996d00f205d9559cf/>
 
 ### Chore
 
@@ -18,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-81281b490d9df214e60281a05db35f781656d64f/> tests
  - <csr-id-e5b75f416b4f17d29d5939f25b211a466c842788/> remove async-nats v0.33
  - <csr-id-9df2bb1754fbffc36ed03a00098831eca49f3171/> standardize emoji usage
+
+### Other
+
+ - <csr-id-4db28d960533a68c2597656a6cc6dacd65118e19/> wash-lib v0.30.0
 
 ### New Features
 
@@ -100,9 +122,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 40 commits contributed to the release over the course of 21 calendar days.
+ - 41 commits contributed to the release over the course of 21 calendar days.
  - 23 days passed between releases.
- - 40 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 41 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -112,6 +134,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Wash-lib v0.30.0 ([`4db28d9`](https://github.com/wasmCloud/wasmCloud/commit/4db28d960533a68c2597656a6cc6dacd65118e19))
     - Eprintln instead of info ([`3a13992`](https://github.com/wasmCloud/wasmCloud/commit/3a139923993699fee4fb5fa21d3945d4b4935832))
     - Only run wkg if 'deps.toml' is not present ([`6217719`](https://github.com/wasmCloud/wasmCloud/commit/62177190f09d905173a67db6627f1ef3a315e56e))
     - Try to write the newly created LockFile before using it ([`48a26a3`](https://github.com/wasmCloud/wasmCloud/commit/48a26a3304096ab1eb0684aadbc84d35e4672c71))
@@ -386,9 +409,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Stop returning default credentials from project config if none can be resolved ([`31b21c2`](https://github.com/wasmCloud/wasmCloud/commit/31b21c2baae4dbf16434bca4ddd70938f769618f))
     - Replace dirs dependency with home ([`6903979`](https://github.com/wasmCloud/wasmCloud/commit/69039793fe275c35ebf647d52f117c0bbf3bf675))
 </details>
-
-<csr-unknown>
-Improved terminal handling while watching application latticewatch interval for ‘app list’ is now configurable with a default interval of 1000ms.Added Short flag of -w as an alternative to –watch<csr-unknown/>
 
 ## v0.26.0 (2024-09-18)
 
@@ -980,8 +1000,10 @@ Improved terminal handling while watching application latticewatch interval for 
 <csr-unknown>
 <csr-unknown>
 <csr-unknown>
+<csr-unknown>
 dangling providers/components which aren’t linked to anything<csr-unknown>
  add support for wash up --wadm-manifestThis commit adds support for wash up --wadm-manifest, which deploysa WADM manifest after running wash up. If the manifest existsalready, it is not re-deployed, but it is deployed once. Support configuring proxy credentials for HTTP(S)_PROXY when downloading artifacts add support for specifying multiple labelsThis commit adds support for specifying multiple labels to wash label.Users can use wash label <host-id> key1=value1,key2=value2 to setmultiple labels on the host at the same time, in a best-effort manner Adds an http-client exampleWe’ve been missing an example of the http-client (outgoing-response)interface for a while. This adds one that fetches you a random pictureof a dog<csr-unknown/>
+<csr-unknown/>
 <csr-unknown/>
 <csr-unknown/>
 <csr-unknown/>
