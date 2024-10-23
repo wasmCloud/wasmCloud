@@ -12,6 +12,10 @@ inputs:
     description: |
       Language to perform setup for
     required: true
+  language-version:
+    description: |
+      Version of the target language toolchain to install
+    required: true
   wash-version:
     description: |
       Version of wash to install (ex 'v0.36.0', 'current')
@@ -24,7 +28,7 @@ runs:
     - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
       if: ${{ inputs.language == 'golang' || inputs.language == 'tinygo' }}
       with:
-        go-version: ${{ inputs.language_version }}
+        go-version: ${{ inputs.language-version }}
     - uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
       if: ${{ inputs.language == 'golang' || inputs.language == 'tinygo' }}
       with:
@@ -37,7 +41,7 @@ runs:
     - uses: actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3
       if: ${{ inputs.language == 'python' }}
       with:
-        python-version: ${{ inputs.language_version }}
+        python-version: ${{ inputs.language-version }}
     - name: install python reqs
       if: ${{ inputs.language == 'python' }}
       shell: bash
@@ -46,7 +50,7 @@ runs:
     - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6
       if: ${{ inputs.language == 'typescript' }}
       with:
-        node-version: ${{ inputs.language_version }}
+        node-version: ${{ inputs.language-version }}
     - name: install node reqs
       if: ${{ inputs.language == 'typescript' }}
       shell: bash

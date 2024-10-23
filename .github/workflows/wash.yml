@@ -104,10 +104,13 @@ jobs:
             lang: rust
           - name: hello-world-tinygo
             lang: tinygo
+            lang-version: '1.21'
           - name: hello-world-typescript
             lang: typescript
+            lang-version: "22.x"
           - name: hello-world-python
             lang: python
+            lang-version: '3.10'
     steps:
       - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
 
