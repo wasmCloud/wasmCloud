@@ -315,6 +315,33 @@ async fn build_tinygo_component(
             ".",
         ],
         WasmTarget::WasiP2 => {
+            // If we are using tinygo without a custom path, check the tinygo
+            // version to make sure that it can support WasiP2, aka we're using
+            // 0.33.0+
+            if tinygo_config.tinygo_path.is_none() {
+                // Run `tinygo version` and parse the output for version
+                let output = tokio::process::Command::new("tinygo")
+                    .arg("version")
+                    .output()
+                    .await
+                    .context("failed to get tinygo version")?
+                    .stdout;
+
+                let version = std::str::from_utf8(&output)
+                    .context("failed to parse tinygo version")?
+                    .split(' ')
+                    .filter_map(|s| semver::Version::parse(s).ok())
+                    .next()
+                    .unwrap_or_else(|| semver::Version::new(0, 0, 0));
+
+                let req = semver::VersionReq::parse(">=0.33.0")
+                    .context("failed to generate tinygo version requirement")?;
+
+                // Check whether we have an appropriate version of tinygo, bail if we do not.
+                if !req.matches(&version) {
+                    bail!("tinygo version needs to be 0.33.0 or above in order to build wasm32-wasip2 components.");
+                }
+            }
             let mut args = vec![
                 "build",
                 "-o",
