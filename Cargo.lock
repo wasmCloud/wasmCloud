@@ -5261,21 +5261,6 @@ dependencies = [
 [[package]]
 name = "provider-archive"
 version = "0.12.0"
-dependencies = [
- "async-compression",
- "data-encoding",
- "ring",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-stream",
- "tokio-tar",
- "wascap 0.15.1",
-]
-
-[[package]]
-name = "provider-archive"
-version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa80f73229dbe31f2fc248064b699d37f5edd7a28b5377f06617ce83a8364014"
 dependencies = [
@@ -5286,7 +5271,22 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tar",
- "wascap 0.15.0",
+ "wascap 0.15.1 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "provider-archive"
+version = "0.12.1"
+dependencies = [
+ "async-compression",
+ "data-encoding",
+ "ring",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tokio-tar",
+ "wascap 0.15.1",
 ]
 
 [[package]]
@@ -7535,7 +7535,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.8.5",
+ "rand 0.7.3",
  "static_assertions",
 ]
 
@@ -8007,9 +8007,7 @@ dependencies = [
 
 [[package]]
 name = "wascap"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d394c2c59661bff13bea8bd7c8bf30618bafa671ef9f408ae9c3aa71ede5bb0"
+version = "0.15.1"
 dependencies = [
  "data-encoding",
  "humantime",
@@ -8018,14 +8016,16 @@ dependencies = [
  "ring",
  "serde 1.0.210",
  "serde_json",
- "wasm-encoder 0.208.1",
+ "wasm-encoder 0.219.1",
  "wasm-gen",
- "wasmparser 0.202.0",
+ "wasmparser 0.219.1",
 ]
 
 [[package]]
 name = "wascap"
 version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87b61e0374306fb5a764a701780c267aefa9eda984e012285308f7d86355b704"
 dependencies = [
  "data-encoding",
  "humantime",
@@ -8069,7 +8069,7 @@ dependencies = [
  "oci-client",
  "oci-wasm",
  "once_cell",
- "provider-archive 0.12.0",
+ "provider-archive 0.12.1",
  "rand 0.8.5",
  "regex",
  "reqwest 0.12.8",
@@ -8148,7 +8148,7 @@ dependencies = [
  "oci-client",
  "oci-wasm",
  "path-absolutize",
- "provider-archive 0.12.0",
+ "provider-archive 0.12.1",
  "regex",
  "reqwest 0.12.8",
  "rmp-serde",
@@ -8324,15 +8324,6 @@ checksum = "972f97a5d8318f908dded23594188a90bcd09365986b1163e66d70170e5287ae"
 dependencies = [
  "leb128",
  "wasmparser 0.121.2",
-]
-
-[[package]]
-name = "wasm-encoder"
-version = "0.208.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6425e84e42f7f558478e40ecc2287912cb319f2ca68e5c0bb93c61d4fc63fa17"
-dependencies = [
- "leb128",
 ]
 
 [[package]]
@@ -8520,7 +8511,7 @@ dependencies = [
  "hyper-util",
  "nkeys",
  "once_cell",
- "provider-archive 0.12.0",
+ "provider-archive 0.12.1",
  "rand 0.8.5",
  "redis",
  "regex",
@@ -8635,7 +8626,7 @@ dependencies = [
  "hex",
  "nkeys",
  "once_cell",
- "provider-archive 0.12.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "provider-archive 0.12.0",
  "rustls 0.23.13",
  "rustls-pemfile 2.2.0",
  "secrecy",
@@ -8647,7 +8638,7 @@ dependencies = [
  "ulid",
  "url",
  "uuid 1.11.0",
- "wascap 0.15.0",
+ "wascap 0.15.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -8666,7 +8657,7 @@ dependencies = [
  "oci-client",
  "oci-wasm",
  "once_cell",
- "provider-archive 0.12.0",
+ "provider-archive 0.12.1",
  "reqwest 0.12.8",
  "rustls 0.23.13",
  "rustls-native-certs 0.8.0",
@@ -8704,7 +8695,7 @@ dependencies = [
  "nkeys",
  "oci-client",
  "opentelemetry-nats",
- "provider-archive 0.12.0",
+ "provider-archive 0.12.1",
  "rmp-serde",
  "secrecy",
  "serde 1.0.210",
@@ -9091,7 +9082,7 @@ dependencies = [
  "serde 1.0.210",
  "serde_json",
  "thiserror",
- "wascap 0.15.0",
+ "wascap 0.15.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -9159,17 +9150,6 @@ name = "wasmparser"
 version = "0.121.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9dbe55c8f9d0dbd25d9447a5a889ff90c0cc3feaa7395310d3d826b2c703eaab"
-dependencies = [
- "bitflags 2.6.0",
- "indexmap 2.6.0",
- "semver",
-]
-
-[[package]]
-name = "wasmparser"
-version = "0.202.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6998515d3cf3f8b980ef7c11b29a9b1017d4cf86b99ae93b546992df9931413"
 dependencies = [
  "bitflags 2.6.0",
  "indexmap 2.6.0",
