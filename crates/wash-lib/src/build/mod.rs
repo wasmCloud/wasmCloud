@@ -30,6 +30,7 @@ use provider::build_provider;
 ///
 /// This tag is normally embedded in a Wasm module as a custom section
 const WASMCLOUD_WASM_TAG_EXPERIMENTAL: &str = "wasmcloud.com/experimental";
+const WIT_DEPS_TOML: &str = "deps.toml";
 
 /// The default name of the package locking file for wasmcloud
 pub const PACKAGE_LOCK_FILE_NAME: &str = "wasmcloud.lock";
@@ -115,10 +116,10 @@ pub async fn build_project(
 ) -> Result<PathBuf> {
     // NOTE(lxf): Check if deps.toml is in config.common.wit_dir, if it is, we skip fetching.
     // This means the project hasn't been converted to wkg yet.
-    let wit_deps_exists = tokio::fs::try_exists(config.common.wit_dir.join("deps.toml")).await?;
+    let wit_deps_exists = tokio::fs::try_exists(config.common.wit_dir.join(WIT_DEPS_TOML)).await?;
 
     if wit_deps_exists {
-        info!("Skipping fetching dependencies because deps.toml exists in the wit directory. Use 'wit-deps' to fetch dependencies.");
+        eprintln!("Skipping fetching dependencies because deps.toml exists in the wit directory. Use 'wit-deps' to fetch dependencies.");
     }
 
     if !skip_fetch && !wit_deps_exists {
