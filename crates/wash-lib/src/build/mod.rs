@@ -30,6 +30,7 @@ use provider::build_provider;
 ///
 /// This tag is normally embedded in a Wasm module as a custom section
 const WASMCLOUD_WASM_TAG_EXPERIMENTAL: &str = "wasmcloud.com/experimental";
+const WIT_DEPS_TOML: &str = "deps.toml";
 
 /// The default name of the package locking file for wasmcloud
 pub const PACKAGE_LOCK_FILE_NAME: &str = "wasmcloud.lock";
@@ -54,9 +55,14 @@ pub async fn load_lock_file(dir: impl AsRef<Path>) -> Result<LockFile> {
             .await
             .context("failed to load lock file")
     } else {
-        LockFile::new_with_path([], lock_file_path)
+        let mut lock_file = LockFile::new_with_path([], lock_file_path)
             .await
-            .context("failed to create lock file")
+            .context("failed to create lock file")?;
+        lock_file
+            .write()
+            .await
+            .context("failed to write newly created lock file")?;
+        Ok(lock_file)
     }
 }
 
@@ -108,7 +114,15 @@ pub async fn build_project(
     package_args: &CommonPackageArgs,
     skip_fetch: bool,
 ) -> Result<PathBuf> {
-    if !skip_fetch {
+    // NOTE(lxf): Check if deps.toml is in config.common.wit_dir, if it is, we skip fetching.
+    // This means the project hasn't been converted to wkg yet.
+    let wit_deps_exists = tokio::fs::try_exists(config.common.wit_dir.join(WIT_DEPS_TOML)).await?;
+
+    if wit_deps_exists {
+        eprintln!("Skipping fetching dependencies because deps.toml exists in the wit directory. Use 'wit-deps' to fetch dependencies.");
+    }
+
+    if !skip_fetch && !wit_deps_exists {
         // Fetch dependencies for the component before building
         let client = package_args.get_client().await?;
         let mut lock = load_lock_file(&config.wasmcloud_toml_dir).await?;
