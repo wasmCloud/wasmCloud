@@ -113,7 +113,15 @@ pub async fn build_project(
     package_args: &CommonPackageArgs,
     skip_fetch: bool,
 ) -> Result<PathBuf> {
-    if !skip_fetch {
+    // NOTE(lxf): Check if deps.toml is in config.common.wit_dir, if it is, we skip fetching.
+    // This means the project hasn't been converted to wkg yet.
+    let wit_deps_exists = tokio::fs::try_exists(config.common.wit_dir.join("deps.toml")).await?;
+
+    if wit_deps_exists {
+        info!("Skipping fetching dependencies because deps.toml exists in the wit directory. Use 'wit-deps' to fetch dependencies.");
+    }
+
+    if !skip_fetch && !wit_deps_exists {
         // Fetch dependencies for the component before building
         let client = package_args.get_client().await?;
         let mut lock = load_lock_file(&config.wasmcloud_toml_dir).await?;
