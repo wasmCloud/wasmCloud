@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use regex::Regex;
+use semver::Version;
 use serial_test::serial;
 use tempfile::NamedTempFile;
 use tokio::{process::Command, time::Duration};
@@ -12,6 +13,7 @@ use common::{
     find_open_port, start_nats, test_dir_with_subfolder, wait_for_nats_to_start, wait_for_no_hosts,
     wait_for_single_host, TestWashInstance, HELLO_OCI_REF,
 };
+use wash_cli::config::WASMCLOUD_HOST_VERSION;
 
 const RGX_COMPONENT_START_MSG: &str = r"Component \[(?P<component_id>[^]]+)\] \(ref: \[(?P<component_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
 
@@ -271,6 +273,118 @@ async fn integration_up_works_with_labels() -> Result<()> {
         "a host is present which has the created label",
     );
 
+    Ok(())
+}
+
+/// Ensure that wash up can start a new host with the new version of wasmcloud if a new patch is available
+#[tokio::test]
+#[serial]
+async fn integration_up_works_with_new_patch_version_if_possible() -> Result<()> {
+    // 1.0.2 is a sufficient version to test the latest is 1.0.4
+    let a_previous_version = WASMCLOUD_HOST_VERSION.trim_start_matches("v");
+    let instance: TestWashInstance = TestWashInstance::create().await?;
+
+    let default_version = semver::Version::parse(a_previous_version)?;
+
+    // Get host data, ensure we find the host with the right label
+    let cmd_output = instance.get_hosts().await.context("failed to call hosts")?;
+
+    assert!(cmd_output.success, "call command succeeded");
+    let host = cmd_output.hosts.first();
+    assert!(host.is_some(), "host is present");
+    if let Some(host) = host {
+        if let Some(version) = host.version() {
+            let new_patched_version = semver::Version::parse(version)?;
+            assert!(
+                new_patched_version.major == default_version.major,
+                "major version of host should not change"
+            );
+            assert!(
+                new_patched_version.minor == default_version.minor,
+                "minor version of host should not change"
+            );
+            assert!(
+                new_patched_version.patch >= default_version.patch,
+                "patch version cannot be smaller"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Ensure that wash up is starting a secific version
+///  of wasmcloud host if wasmcloud parameter is specified
+#[tokio::test]
+#[serial]
+async fn integration_up_works_with_specific_wasmcloud_host_version() -> Result<()> {
+    let instance: TestWashInstance =
+        TestWashInstance::create_with_extra_args(["--wasmcloud-version", "v1.0.4"]).await?;
+    // Get host data, ensure we find the host with the right label
+    let cmd_output = instance.get_hosts().await.context("failed to call hosts")?;
+
+    assert!(cmd_output.success, "call command succeeded");
+    let host = cmd_output.hosts.first();
+    assert!(host.is_some(), "host is present");
+    if let Some(host) = host {
+        if let Some(version) = host.version() {
+            assert_eq!(version, "1.0.4", "specified version is overwritten")
+        }
+    }
+
+    Ok(())
+}
+
+/// Ensure that wash up can start a new host with a provided version of wadm
+#[tokio::test]
+#[serial]
+async fn integration_up_works_with_specified_wadm_version() -> Result<()> {
+    use wash_lib::config::{DOWNLOADS_DIR, WASH_DIR};
+    use wash_lib::start::WADM_BINARY;
+    // 0.12.0 is a sufficient version to test the latest is 0.12.2
+    let previous_wadm_version = "v0.12.0";
+    let home = etcetera::home_dir().context("no home directory found. Please set $HOME")?;
+
+    let wadm_path = home
+        .join(WASH_DIR)
+        .join(DOWNLOADS_DIR)
+        .join(WADM_BINARY)
+        .canonicalize()
+        .context("failed to canonicalize wadm binary path")?;
+    let instance =
+        TestWashInstance::create_with_extra_args(["--wadm-version", previous_wadm_version]).await?;
+    let cmd_output = instance.get_hosts().await.context("failed to call hosts")?;
+    assert!(cmd_output.success, "call command succeeded");
+    let host = cmd_output.hosts.first();
+    assert!(host.is_some(), "host is present");
+    // NOTE: this assumes serial execution, otherwise the binary might be removed before the test
+    let wadm_output = Command::new(wadm_path.clone())
+        .args(["--version"])
+        .output()
+        .await
+        .context("failed to run wadm --version")?;
+    let wadm_version = String::from_utf8_lossy(&wadm_output.stdout);
+    let wadm_version = wadm_version.trim_start_matches("wadm-cli ").trim();
+    let Version {
+        major,
+        minor,
+        patch,
+        ..
+    } = semver::Version::parse(wadm_version)?;
+    let previous_version = semver::Version::parse(previous_wadm_version.trim_start_matches("v"))?;
+    assert_eq!(
+        major, previous_version.major,
+        "major version should not change"
+    );
+    assert_eq!(
+        minor, previous_version.minor,
+        "minor version should not change"
+    );
+    assert_eq!(
+        patch, previous_version.patch,
+        "patch version should not change"
+    );
+    tokio::fs::remove_file(wadm_path.as_path()).await?;
     Ok(())
 }
 

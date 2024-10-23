@@ -78,7 +78,7 @@ pub async fn wait_for_server(url: &str, service: &str) -> Result<()> {
 }
 
 mod github;
-pub(crate) use github::*;
+pub use github::*;
 mod nats;
 pub use nats::*;
 mod wadm;
