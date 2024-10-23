@@ -34,7 +34,7 @@ jobs:
           - 0.34.1
           - current
     steps:
-      - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         if: ${{ matrix.wash-version == 'current' }}
       - run: rustup show
       - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
@@ -85,7 +85,7 @@ jobs:
             lang: "rust"
             test_deploy: local.wadm.yaml
     steps:
-      - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       # Download wash binary & install to path
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
