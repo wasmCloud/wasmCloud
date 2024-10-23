@@ -56,7 +56,7 @@ jobs:
           shared-key: 'ubuntu-22.04-shared-cache'
       - name: install wash (previous version)
         if: ${{ matrix.wash-version != 'current' }}
-        uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
+        uses: taiki-e/install-action@5a168576eaffe28a939e2b765e9cbea2d65f3f70
         with:
           tool: wash-cli@${{ matrix.wash-version }}
       - name: build wash (current)
@@ -91,7 +91,7 @@ jobs:
             name: 'http-echo-tinygo'
             test_deploy: wadm.yaml
           - lang: 'golang'
-            lang_version: '1.21'
+            lang_version: '1.23'
             name: 'http-hello-world'
             test_deploy: wadm.yaml
           - name: 'sqldb-postgres-query'
@@ -174,10 +174,14 @@ jobs:
         with:
           tinygo-version: '0.33.0'
           install-binaryen: 'false'
-      - uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
+      - uses: taiki-e/install-action@5a168576eaffe28a939e2b765e9cbea2d65f3f70
         if: ${{ matrix.project.lang == 'golang' }}
         with:
           tool: wit-bindgen-cli
+      - uses: taiki-e/install-action@5a168576eaffe28a939e2b765e9cbea2d65f3f70
+        if: ${{ matrix.project.lang == 'golang' }}
+        with:
+          tool: wasm-tools
       - uses: actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3
         if: ${{ matrix.project.lang == 'python' }}
         with:

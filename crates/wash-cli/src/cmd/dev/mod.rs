@@ -230,6 +230,8 @@ pub async fn handle_command(
                         .is_ok_and(|p| {
                             // Ignore Rust target directories
                             p.starts_with("target")
+                                // Ignore Go interface directories
+                                || p.starts_with("gen")
                                 // Ignore wasmCloud build directories
                                 || p.starts_with("build")
                                 // Ignore user specifieddirectories

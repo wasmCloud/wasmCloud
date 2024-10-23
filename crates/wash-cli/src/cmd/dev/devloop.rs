@@ -87,11 +87,8 @@ pub(crate) async fn generate_manifests(
     )
     .context("failed to build key for project")?;
 
-    let mut current_project_deps = match previous_deps {
-        Some(deps) => deps.clone(),
-        None => ProjectDeps::from_known_deps(pkey.clone(), wit_implied_deps)
-            .context("failed to build project dependencies")?,
-    };
+    let mut current_project_deps = ProjectDeps::from_known_deps(pkey.clone(), wit_implied_deps)
+        .context("failed to build project dependencies")?;
 
     // Pull and merge in overrides from project-level wasmcloud.toml
     let project_override_deps = ProjectDeps::from_project_config_overrides(pkey, project_cfg)
@@ -243,7 +240,7 @@ async fn augment_existing_manifests(
 
             // Update the ID and image ref
             *id = Some(generated_component_id.into());
-            *image_ref = generated_component_ref.into();
+            *image_ref = Some(generated_component_ref.into());
 
             // Apply config specs
             for spec in &project_config.dev.config {

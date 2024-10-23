@@ -52,11 +52,12 @@ pub(crate) fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String
     for component in manifest.spec.components.iter() {
         match &component.properties {
             // Add help text for HTTP server
-            Properties::Capability { properties }
-                if properties
-                    .image
-                    .starts_with("ghcr.io/wasmcloud/http-server") =>
-            {
+            Properties::Capability {
+                properties:
+                    CapabilityProperties {
+                        image: Some(image), ..
+                    },
+            } if image.starts_with("ghcr.io/wasmcloud/http-server") => {
                 if let Some(address) = find_provider_source_trait_config_value(
                     component,
                     &config_name("wasi", "http"),
@@ -78,11 +79,12 @@ pub(crate) fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String
                 }
             }
             // Add help text for Messaging server
-            Properties::Capability { properties }
-                if properties
-                    .image
-                    .starts_with("ghcr.io/wasmcloud/messaging-nats") =>
-            {
+            Properties::Capability {
+                properties:
+                    CapabilityProperties {
+                        image: Some(image), ..
+                    },
+            } if image.starts_with("ghcr.io/wasmcloud/messaging-nats") => {
                 if let Some(subscriptions) = find_provider_source_trait_config_value(
                     component,
                     &config_name("wasmcloud", "messaging"),
@@ -117,7 +119,8 @@ pub(crate) fn generate_component_from_project_cfg(
         properties: match &cfg.project_type {
             wash_lib::parser::TypeConfig::Component(_c) => Properties::Component {
                 properties: ComponentProperties {
-                    image: image_ref.into(),
+                    image: Some(image_ref.into()),
+                    application: None,
                     id: Some(component_id.into()),
                     config: Vec::with_capacity(0),
                     secrets: Vec::with_capacity(0),
@@ -125,7 +128,8 @@ pub(crate) fn generate_component_from_project_cfg(
             },
             wash_lib::parser::TypeConfig::Provider(_p) => Properties::Capability {
                 properties: CapabilityProperties {
-                    image: image_ref.into(),
+                    image: Some(image_ref.into()),
+                    application: None,
                     id: Some(component_id.into()),
                     config: Vec::with_capacity(0),
                     secrets: Vec::with_capacity(0),

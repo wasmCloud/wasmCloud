@@ -15,7 +15,7 @@ use url::Url;
 use wadm_client::Result;
 use wadm_types::api::{ModelSummary, Status, VersionInfo};
 use wadm_types::validation::{validate_manifest, ValidationFailure, ValidationFailureLevel};
-use wadm_types::{Manifest, Properties};
+use wadm_types::{CapabilityProperties, ComponentProperties, Manifest, Properties};
 use wasmcloud_core::tls;
 use wasmcloud_core::OciFetcher;
 
@@ -472,12 +472,23 @@ pub fn extract_image_references(manifest: &Manifest) -> Vec<String> {
     let mut image_refs = Vec::new();
     for component in &manifest.spec.components {
         match &component.properties {
-            Properties::Component { properties } => {
-                image_refs.push(properties.image.clone());
+            Properties::Component {
+                properties:
+                    ComponentProperties {
+                        image: Some(image), ..
+                    },
+            } => {
+                image_refs.push(image.clone());
             }
-            Properties::Capability { properties } => {
-                image_refs.push(properties.image.clone());
+            Properties::Capability {
+                properties:
+                    CapabilityProperties {
+                        image: Some(image), ..
+                    },
+            } => {
+                image_refs.push(image.clone());
             }
+            _ => {}
         }
     }
     image_refs

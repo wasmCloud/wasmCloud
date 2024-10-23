@@ -38,13 +38,9 @@ jobs:
         with:
           shared-key: '${{ matrix.os }}-shared-cache'
       - name: Install nextest
-        uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
+        uses: taiki-e/install-action@5a168576eaffe28a939e2b765e9cbea2d65f3f70
         with:
-          tool: nextest
-      - name: Install wit-bindgen
-        uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
-        with:
-          tool: wit-bindgen-cli
+          tool: nextest,wit-bindgen-cli
       - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
         with:
           go-version: '1.22'
@@ -85,13 +81,9 @@ jobs:
         with:
           cli-args: '-f ./crates/wash-cli/tools/docker-compose.yml up --detach'
       - name: Install nextest
-        uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
+        uses: taiki-e/install-action@5a168576eaffe28a939e2b765e9cbea2d65f3f70
         with:
-          tool: nextest
-      - name: Install wit-bindgen
-        uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
-        with:
-          tool: wit-bindgen-cli
+          tool: nextest,wit-bindgen-cli,wasm-tools
       - name: Run integration tests
         run: make test-integration-ci
         working-directory: ./crates/wash-cli
@@ -116,7 +108,7 @@ jobs:
           shared-key: 'ubuntu-22.04-shared-cache'
       - name: install wash (previous version)
         if: ${{ matrix.wash-version != 'current' }}
-        uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
+        uses: taiki-e/install-action@5a168576eaffe28a939e2b765e9cbea2d65f3f70
         with:
           tool: wash-cli@${{ matrix.wash-version }}
       - name: install wash (current)

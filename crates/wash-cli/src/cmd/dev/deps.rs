@@ -436,15 +436,17 @@ impl DependencySpec {
                 | DEFAULT_KEYVALUE_PROVIDER_IMAGE,
             ) => Properties::Capability {
                 properties: CapabilityProperties {
-                    image: self
-                        .image_ref()
-                        .with_context(|| {
-                            format!(
+                    image: Some(
+                        self.image_ref()
+                            .with_context(|| {
+                                format!(
                                 "missing image ref for generated (known) component dependency [{}]",
                                 name,
                             )
-                        })?
-                        .into(),
+                            })?
+                            .into(),
+                    ),
+                    application: None,
                     id: None,
                     config: self.configs().clone(),
                     secrets: self.secrets().clone(),
@@ -456,15 +458,17 @@ impl DependencySpec {
                 if self.is_component() {
                     Properties::Component {
                         properties: ComponentProperties {
-                            image: self
-                                .image_ref()
-                                .with_context(|| {
-                                    format!(
+                            image: Some(
+                                self.image_ref()
+                                    .with_context(|| {
+                                        format!(
                                         "missing image ref for generated component dependency [{}]",
                                         self.name()
                                     )
-                                })?
-                                .into(),
+                                    })?
+                                    .into(),
+                            ),
+                            application: None,
                             id: None,
                             config: self.configs().clone(),
                             secrets: self.secrets().clone(),
@@ -473,15 +477,17 @@ impl DependencySpec {
                 } else {
                     Properties::Capability {
                         properties: CapabilityProperties {
-                            image: self
-                                .image_ref()
-                                .with_context(|| {
-                                    format!(
+                            image: Some(
+                                self.image_ref()
+                                    .with_context(|| {
+                                        format!(
                                         "missing image ref for generated provider dependency [{}]",
                                         self.name()
                                     )
-                                })?
-                                .into(),
+                                    })?
+                                    .into(),
+                            ),
+                            application: None,
                             id: None,
                             config: self.configs().clone(),
                             secrets: self.secrets().clone(),
@@ -858,7 +864,7 @@ impl ProjectDeps {
                     // Build the relevant app->dep link trait
                     let mut link_property = LinkProperty {
                         namespace: namespace.clone(),
-                        package: namespace.clone(),
+                        package: package.clone(),
                         interfaces: interface
                             .as_ref()
                             .map(|iface| vec![iface.into()])
@@ -998,7 +1004,13 @@ impl ProjectDeps {
             kind: "Application".into(),
             metadata: Metadata {
                 name: app_name,
-                annotations: BTreeMap::from([("version".into(), "v0.0.0".into())]),
+                // NOTE(brooksmtownsend): We don't include the version annotation here to ensure that
+                // subsequent put/deploys of the application won't conflict.
+                // NOTE(wadm#466): Don't leave this empty for now.
+                annotations: BTreeMap::from([(
+                    "wasmcloud.dev/session-id".into(),
+                    session_id.into(),
+                )]),
                 labels: BTreeMap::from([(
                     "wasmcloud.dev/generated-by".into(),
                     format!(
