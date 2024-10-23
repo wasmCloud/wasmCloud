@@ -12,24 +12,30 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: typescript/packages/lattice-client-core
+
     steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
+
       - name: Extract Tag Info
         id: extract
-        uses: ./.github/actions/extract-tag-info
+        uses: release-kit/semver@97491c46500b6e758ced599794164a234b8aa08c
         with:
-          tag: ${{ github.ref }}
+          # Matches the following patterns:
+          # - path pattern: `path/to/project/v1.2.3`
+          # - package pattern: `refs/tags/package-name-v1.2.3`
+          # - tag only pattern: `refs/tags/v1.2.3`
+          pattern: '^refs\/tags\/(?:.*\/|[a-z-]*)?v?(.*)$'
 
-      - name: Download Asset
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - name: Setup
+        uses: ./.github/actions/ts-setup
         with:
-          name: build-assets
-          path: lattice-client-core
-          pattern: lattice-client-core/dist
+          working-directory: ./typescript
 
-      - name: Create Release
-        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191
-        with:
-          draft: false
-          prerelease: ${{ steps.extract.outputs.prerelease != '' }}
-          make_latest: false
-          files: lattice-client-core/
+      - name: Publish package
+        run: yarn npm publish --provenance --access public --tag ${{ steps.extract.outputs.prerelease == '' && 'latest' || 'next' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
