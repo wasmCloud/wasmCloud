@@ -53,7 +53,7 @@ jobs:
           # Once a new version of wash is out we can use prebuilt versions again (>= 35.0)
           - current
     steps:
-      - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         if: ${{ matrix.wash-version == 'current' }}
       - run: rustup show
       - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
@@ -165,7 +165,7 @@ jobs:
             lang_version: "22.x"
             test_deploy: local.wadm.yaml
     steps:
-      - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       # Set up language toolchain
       - name: Setup WebAssembly toolchains for language
@@ -280,7 +280,7 @@ jobs:
             lang: 'rust'
             wasm-bin: 'http_task_manager_s.wasm'
     steps:
-      - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       # Determine tag version (if this is a release tag), without the 'v'
       - name: Determine version
         id: meta
