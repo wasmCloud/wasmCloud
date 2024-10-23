@@ -19,6 +19,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  GO_VERSION: '1.23'
+  TINYGO_VERSION: '0.33.0'
 
 jobs:
   unit_tests:
@@ -43,10 +45,10 @@ jobs:
           tool: nextest,wit-bindgen-cli
       - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
         with:
-          go-version: '1.22'
+          go-version: ${{ env.GO_VERSION }}
       - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
         with:
-          tinygo-version: '0.31.0'
+          tinygo-version: ${{ env.TINYGO_VERSION }}
           install-binaryen: 'false'
 
       # Run builds and tests only on Linux and macOS for PRs, Windows on `main`
@@ -71,10 +73,10 @@ jobs:
           shared-key: 'ubuntu-22.04-shared-cache'
       - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
         with:
-          go-version: '1.23'
+          go-version: ${{ env.GO_VERSION }}
       - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
         with:
-          tinygo-version: '0.33.0'
+          tinygo-version: ${{ env.TINYGO_VERSION }}
           install-binaryen: 'false'
       - name: Launch integration test services
         uses: sudo-bot/action-docker-compose@ef4c4da08a9673f93d4eb8a5da1e942bf24a37ea
