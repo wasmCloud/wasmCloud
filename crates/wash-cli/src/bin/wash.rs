@@ -386,7 +386,7 @@ async fn main() {
 
     let output_kind = cli.output;
 
-    // Implements clap_markdown for markdown generation of command line documentation. Most straightforward way to invoke is probably `wash app list --help-markdown > help.md`
+    // Implements clap_markdown for markdown generation of command line documentation. Most straightforward way to invoke is probably `wash app get --help-markdown > help.md`
     if cli.markdown_help {
         clap_markdown::print_help_markdown::<Cli>();
         std::process::exit(0);

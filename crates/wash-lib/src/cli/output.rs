@@ -132,6 +132,13 @@ pub struct AppListCommandOutput {
     pub applications: Vec<ModelSummary>,
 }
 
+/// JSON Output representation of the `wash app get` command
+#[derive(Debug, Deserialize)]
+pub struct AppGetCommandOutput {
+    pub success: bool,
+    pub applications: Vec<ModelSummary>,
+}
+
 /// JSON Output representation of the `wash app undeploy` command
 #[derive(Debug, Deserialize)]
 pub struct AppUndeployCommandOutput {
