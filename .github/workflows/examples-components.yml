@@ -61,7 +61,7 @@ jobs:
           shared-key: 'ubuntu-22.04-shared-cache'
       - name: install wash (previous version)
         if: ${{ matrix.wash-version != 'current' }}
-        uses: taiki-e/install-action@5a168576eaffe28a939e2b765e9cbea2d65f3f70
+        uses: taiki-e/install-action@d2347103f7c028229cc9c9c440e90b572dd50592
         with:
           tool: wash-cli@${{ matrix.wash-version }}
       - name: build wash (current)
