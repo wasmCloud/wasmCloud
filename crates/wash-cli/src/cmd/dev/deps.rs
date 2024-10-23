@@ -1045,7 +1045,7 @@ impl ProjectDeps {
                 client,
                 Some(lattice.into()),
                 &manifest.metadata.name,
-                Some(manifest.version().into()),
+                None,
             )
             .await
             .with_context(|| {
