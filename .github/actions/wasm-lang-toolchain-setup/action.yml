@@ -1,0 +1,67 @@
+name: Wasm / Language Toolchain Setup
+
+description: |
+  Setup WebAssembly toolchain for a given langauge
+
+branding:
+  icon: settings
+  color: purple
+
+inputs:
+  language:
+    description: |
+      Language to perform setup for
+    required: true
+  wash-version:
+    description: |
+      Version of wash to install (ex 'v0.36.0', 'current')
+    required: false
+
+runs:
+  using: composite
+
+  steps:
+    - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
+      if: ${{ inputs.language == 'golang' || inputs.language == 'tinygo' }}
+      with:
+        go-version: ${{ inputs.language_version }}
+    - uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
+      if: ${{ inputs.language == 'golang' || inputs.language == 'tinygo' }}
+      with:
+        tool: wit-bindgen-cli,wasm-tools
+    - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
+      if: ${{ inputs.language == 'tinygo' }}
+      with:
+        tinygo-version: '0.33.0'
+        install-binaryen: 'false'
+    - uses: actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3
+      if: ${{ inputs.language == 'python' }}
+      with:
+        python-version: ${{ inputs.language_version }}
+    - name: install python reqs
+      if: ${{ inputs.language == 'python' }}
+      shell: bash
+      run: |
+        pip install componentize-py
+    - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6
+      if: ${{ inputs.language == 'typescript' }}
+      with:
+        node-version: ${{ inputs.language_version }}
+    - name: install node reqs
+      if: ${{ inputs.language == 'typescript' }}
+      shell: bash
+      run: |
+        npm install -g @bytecodealliance/jco
+        npm install -g @bytecodealliance/componentize-js
+
+    # Install wash
+    - name: install wash (previous version)
+      if: ${{ inputs.wash-version && inputs.wash-version != 'current' }}
+      uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
+      with:
+        tool: wash-cli@${{ inputs.wash-version }}
+
+    - name: install wash (current)
+      if: ${{ inputs.wash-version && inputs.wash-version == 'current' }}
+      shell: bash
+      run: cargo install --path ./crates/wash-cli
