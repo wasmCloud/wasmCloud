@@ -14,6 +14,10 @@ use wasmcloud_core::tls::NativeRootsExt;
 const DOWNLOAD_CLIENT_USER_AGENT: &str =
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
+pub const GITHUB_WASMCLOUD_ORG: &str = "wasmCloud";
+pub const GITHUB_WASMCLOUD_WASMCLOUD_REPO: &str = "wasmCloud";
+pub const GITHUB_WASMCLOUD_WADM_REPO: &str = "wadm";
+
 /// Reusable function to download a release tarball from GitHub and extract an embedded binary to a specified directory
 ///
 /// # Arguments
@@ -119,6 +123,9 @@ pub(crate) fn get_download_client() -> Result<reqwest::Client> {
 
     Ok(builder.build()?)
 }
+
+mod api;
+pub use api::*;
 
 #[cfg(test)]
 #[cfg(target_os = "linux")]
