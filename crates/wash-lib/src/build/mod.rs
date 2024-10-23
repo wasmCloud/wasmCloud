@@ -54,9 +54,14 @@ pub async fn load_lock_file(dir: impl AsRef<Path>) -> Result<LockFile> {
             .await
             .context("failed to load lock file")
     } else {
-        LockFile::new_with_path([], lock_file_path)
+        let mut lock_file = LockFile::new_with_path([], lock_file_path)
             .await
-            .context("failed to create lock file")
+            .context("failed to create lock file")?;
+        lock_file
+            .write()
+            .await
+            .context("failed to write newly created lock file")?;
+        Ok(lock_file)
     }
 }
 
