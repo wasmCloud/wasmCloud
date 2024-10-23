@@ -50,7 +50,7 @@ nats kv add WASMLAND
 
 # Deply the example
 wash app deploy ./wadm.yaml
-wash app list
+wash app get
 
 # Watch the newly created NATS buckets for changes:
 nats kv watch WASMCLOUD &

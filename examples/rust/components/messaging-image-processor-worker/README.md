@@ -78,7 +78,7 @@ wash app deploy ./local.wadm.yaml
 Confirm that the application was deployed successfully:
 
 ```console
-wash app list
+wash app get
 ```
 
 [wasmcloud-docs-host]: https://wasmcloud.com/docs/concepts/hosts

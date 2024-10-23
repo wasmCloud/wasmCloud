@@ -147,7 +147,7 @@ async fn test_undeploy_all_and_delete_undeployed() -> Result<()> {
     assert_eq!(model_name, "sample");
     assert_eq!(model_version, "v0.0.1");
 
-    // Wait until the app is deployed via wash app list
+    // Wait until the app is deployed via wash app get
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if instance.list_apps().await.is_ok_and(|output| {
@@ -166,7 +166,7 @@ async fn test_undeploy_all_and_delete_undeployed() -> Result<()> {
     // Perform an undeploy all
     instance.undeploy_all_apps().await?;
 
-    // Wait until the app is deployed via wash app list
+    // Wait until the app is deployed via wash app get
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             eprintln!("resp: {:#?}", instance.list_apps().await);
@@ -187,7 +187,7 @@ async fn test_undeploy_all_and_delete_undeployed() -> Result<()> {
     // Perform delete all
     instance.delete_all_undeployed_apps().await?;
 
-    // Wait until the app is deployed via wash app list
+    // Wait until the app is deployed via wash app get
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if instance
@@ -202,6 +202,69 @@ async fn test_undeploy_all_and_delete_undeployed() -> Result<()> {
     })
     .await
     .context("timed out waiting for app to be deleted")?;
+
+    Ok(())
+}
+
+/// Ensure that `wash app undeploy --all` and `wash app --delete-undeployed` work
+// Should break when we deprecate the `wash app list` command
+#[tokio::test]
+#[serial]
+async fn test_app_without_name_is_same_as_wash_app_list() -> Result<()> {
+    let instance = TestWashInstance::create().await?;
+    // Deploy the application
+    let AppDeployCommandOutput {
+        success,
+        deployed,
+        model_name,
+        model_version,
+    } = instance
+        .deploy_app("./tests/fixtures/wadm/manifests/simple.wadm.yaml")
+        .await?;
+    assert!(success && deployed);
+    assert_eq!(model_name, "sample");
+    assert_eq!(model_version, "v0.0.1");
+
+    // Wait until the app is deployed via wash app get
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if instance.list_apps().await.is_ok_and(|output| {
+                output.applications.iter().any(|a| {
+                    a.name == "sample" && a.detailed_status.info.status_type == StatusType::Deployed
+                })
+            }) {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .context("timed out waiting for app to be deployed")?;
+
+    // Get all the apps with wash app get without specifying the app name
+    let listed_apps = instance.list_apps().await?;
+    assert_eq!(listed_apps.applications.len(), 1);
+
+    let only_app_from_list = listed_apps.applications.first();
+    assert!(only_app_from_list.is_some());
+    let only_app_from_list = only_app_from_list.unwrap();
+
+    // Get all apps with wash app list
+    let listed_apps_with_get = instance.get_apps().await?;
+    assert_eq!(listed_apps_with_get.applications.len(), 1);
+
+    let app_with_get = listed_apps_with_get.applications.first();
+    assert!(app_with_get.is_some());
+    let app_with_get = app_with_get.unwrap();
+
+    // The two response the same (maybe &ModelSummary should impl Eq, PartialEq)
+    assert_eq!(only_app_from_list.name, app_with_get.name);
+    assert_eq!(only_app_from_list.description, app_with_get.description);
+    assert_eq!(
+        only_app_from_list.detailed_status,
+        app_with_get.detailed_status
+    );
+    assert_eq!(only_app_from_list.version, app_with_get.version);
 
     Ok(())
 }

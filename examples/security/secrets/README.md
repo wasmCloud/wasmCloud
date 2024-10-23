@@ -64,7 +64,7 @@ WASMCLOUD_SECRETS_TOPIC=wasmcloud.secrets \
 wash app deploy ./wadm.yaml
 ```
 
-You can check the status of your application by running `wash app list`. Once it's deployed, you can make requests to the application.
+You can check the status of your application by running `wash app get`. Once it's deployed, you can make requests to the application.
 
 ## Making authenticated requests
 

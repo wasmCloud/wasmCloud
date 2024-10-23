@@ -103,7 +103,7 @@ wash app deploy ./local.wadm.yaml
 We can confirm that the application was deployed successfully:
 
 ```console
-wash app list
+wash app get
 ```
 
 Once the application reports as **Deployed** in the application list, you can use `curl` to send a request to the running HTTP server.

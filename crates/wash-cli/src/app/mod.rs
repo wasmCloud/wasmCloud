@@ -123,15 +123,24 @@ pub struct PutCommand {
     opts: CliConnectionOpts,
 }
 
+/// Command to get the application manifest(s)
 #[derive(Args, Debug, Clone)]
 pub struct GetCommand {
-    /// The name of the application to retrieve
+    /// The name of the application to retrieve.
+    ///
+    /// If left empty retrieves all the applications, same as `wash app list`
     #[clap(name = "name")]
-    app_name: String,
+    app_name: Option<String>,
 
     /// The version of the application to retrieve. If left empty, retrieves the latest version
     #[clap(name = "version")]
     version: Option<String>,
+
+    /// Enables real-time updates.
+    ///
+    /// Duration can be specified in ms (as number) or in [humantime](https://docs.rs/humantime) (eg: 5s, 2m, 15ms). Defaults to 1s.
+    #[clap(long,short, num_args = 0..=1, default_missing_value = "1s", value_parser = parse_watch_interval)]
+    pub watch: Option<std::time::Duration>,
 
     #[clap(flatten)]
     opts: CliConnectionOpts,
@@ -176,11 +185,16 @@ pub async fn handle_command(
     let command_output: wadm_client::Result<CommandOutput> = match command {
         List(cmd) => {
             sp.update_spinner_message("Listing applications ...".to_string());
-            get_applications(cmd, &sp).await
+            get_application_list(cmd, &sp).await
         }
         Get(cmd) => {
-            sp.update_spinner_message("Getting application manifest ... ".to_string());
-            get_manifest(cmd).await
+            if let Some(app_name) = cmd.clone().app_name {
+                sp.update_spinner_message("Getting application... ".to_string());
+                get_manifest(cmd, &app_name).await
+            } else {
+                sp.update_spinner_message("Getting application manifests... ".to_string());
+                get_applications(cmd, &sp).await
+            }
         }
         Status(cmd) => {
             sp.update_spinner_message("Getting application status ... ".to_string());
@@ -429,7 +443,7 @@ async fn get_model_status(cmd: StatusCommand) -> Result<CommandOutput> {
     ))
 }
 
-async fn get_manifest(cmd: GetCommand) -> Result<CommandOutput> {
+async fn get_manifest(cmd: GetCommand, app_name: &str) -> Result<CommandOutput> {
     let connection_opts =
         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
     let lattice = Some(connection_opts.get_lattice());
@@ -437,7 +451,7 @@ async fn get_manifest(cmd: GetCommand) -> Result<CommandOutput> {
     let client = connection_opts.into_nats_client().await?;
 
     let manifest =
-        wash_lib::app::get_model_details(&client, lattice, &cmd.app_name, cmd.version).await?;
+        wash_lib::app::get_model_details(&client, lattice, app_name, cmd.version).await?;
 
     let mut map = HashMap::new();
     map.insert("application".to_string(), json!(manifest));
@@ -542,7 +556,29 @@ async fn delete_application_version(cmd: DeleteCommand) -> Result<CommandOutput>
     Ok(CommandOutput::new(output_msg, output_map))
 }
 
-async fn get_applications(cmd: ListCommand, sp: &Spinner) -> Result<CommandOutput> {
+async fn get_application_list(cmd: ListCommand, sp: &Spinner) -> Result<CommandOutput> {
+    let connection_opts =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
+    let lattice = Some(connection_opts.get_lattice());
+
+    let client = connection_opts.into_nats_client().await?;
+
+    if cmd.watch.is_some() {
+        sp.finish_and_clear();
+        watch_applications(&client, lattice, cmd.watch).await?;
+        Ok(CommandOutput::new(
+            "Completed Watching Applications".to_string(),
+            HashMap::new(),
+        ))
+    } else {
+        let models = wash_lib::app::get_models(&client, lattice).await?;
+        let mut map = HashMap::new();
+        map.insert("applications".to_string(), json!(models));
+        Ok(CommandOutput::new(output::list_models_table(models), map))
+    }
+}
+
+async fn get_applications(cmd: GetCommand, sp: &Spinner) -> Result<CommandOutput> {
     let connection_opts =
         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
     let lattice = Some(connection_opts.get_lattice());

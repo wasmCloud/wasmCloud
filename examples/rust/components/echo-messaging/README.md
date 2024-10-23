@@ -20,7 +20,7 @@ Ensuring you've built your component with `wash build`, you can launch wasmCloud
 ```shell
 wash up -d
 wash app deploy ./wadm.yaml
-wash app list
+wash app get
 nats req "wasmcloud.echo" "HELLLLOOOOOO"
 ```
 

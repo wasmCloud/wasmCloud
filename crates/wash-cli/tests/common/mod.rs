@@ -20,9 +20,9 @@ use tokio::{
 };
 
 use wash_lib::cli::output::{
-    AppDeleteCommandOutput, AppDeployCommandOutput, AppListCommandOutput, AppUndeployCommandOutput,
-    CallCommandOutput, GetHostsCommandOutput, PullCommandOutput, StartCommandOutput,
-    StopCommandOutput, UpCommandOutput,
+    AppDeleteCommandOutput, AppDeployCommandOutput, AppGetCommandOutput, AppListCommandOutput,
+    AppUndeployCommandOutput, CallCommandOutput, GetHostsCommandOutput, PullCommandOutput,
+    StartCommandOutput, StopCommandOutput, UpCommandOutput,
 };
 use wash_lib::common::CommandGroupUsage;
 use wash_lib::config::{host_pid_file, wadm_pid_file};
@@ -616,7 +616,25 @@ impl TestWashInstance {
             .output()
             .await
             .context("failed to list apps")?;
-        serde_json::from_slice(&output.stdout).context("failed to parse output of `wash app list`")
+        serde_json::from_slice(&output.stdout).context("failed to parse output of `wash app get`")
+    }
+
+    /// Trigger the equivalent of `wash app get` on a [`TestWashInstance`]
+    pub(crate) async fn get_apps(&self) -> Result<AppGetCommandOutput> {
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+            .args([
+                "app",
+                "get",
+                "--output",
+                "json",
+                "--ctl-port",
+                self.nats_port.to_string().as_ref(),
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("failed to list apps")?;
+        serde_json::from_slice(&output.stdout).context("failed to parse output of `wash app get`")
     }
 
     /// Trigger the equivalent of `wash app undeploy --all` on a [`TestWashInstance`]
