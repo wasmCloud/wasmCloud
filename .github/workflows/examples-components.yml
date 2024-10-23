@@ -26,6 +26,7 @@ on:
       - crates/wash-cli/**
       - examples/rust/components/**
       - examples/golang/components/**
+      - examples/tinygo/components/**
       - examples/python/components/**
       - examples/typescript/components/**
 
@@ -93,16 +94,16 @@ jobs:
           - current
         project:
           # Golang example components
-          - lang: 'golang'
+          - lang: 'tinygo'
             lang_version: '1.21'
             name: 'http-echo-tinygo'
             test_deploy: wadm.yaml
-          - lang: 'golang'
+          - lang: 'tinygo'
             lang_version: '1.23'
             name: 'http-hello-world'
             test_deploy: wadm.yaml
           - name: 'sqldb-postgres-query'
-            lang: 'golang'
+            lang: 'tinygo'
             lang_version: '1.21'
             wasm-bin: 'sqldb_postgres_query_s.wasm'
             test_deploy: local.wadm.yaml
@@ -165,51 +166,13 @@ jobs:
             test_deploy: local.wadm.yaml
     steps:
       - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
-      # Download wash binary & install to path
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+
+      # Set up language toolchain
+      - name: Setup WebAssembly toolchains for language
+        uses: ./.github/actions/wasm-lang-toolchain-setup
         with:
-          name: wash-${{ matrix.wash-version }}
-          path: artifacts
-      - name: install wash binary to PATH # Some build tools expect wash to be on the PATH
-        shell: bash
-        run: |
-          chmod +x ./artifacts/wash;
-          echo "$(realpath ./artifacts)" >> "$GITHUB_PATH";
-      # Language specific setup
-      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
-        if: ${{ matrix.project.lang == 'golang' }}
-        with:
-          go-version: ${{ matrix.project.lang_version }}
-      - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
-        if: ${{ matrix.project.lang == 'golang' }}
-        with:
-          tinygo-version: '0.33.0'
-          install-binaryen: 'false'
-      - uses: taiki-e/install-action@5a168576eaffe28a939e2b765e9cbea2d65f3f70
-        if: ${{ matrix.project.lang == 'golang' }}
-        with:
-          tool: wit-bindgen-cli
-      - uses: taiki-e/install-action@5a168576eaffe28a939e2b765e9cbea2d65f3f70
-        if: ${{ matrix.project.lang == 'golang' }}
-        with:
-          tool: wasm-tools
-      - uses: actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3
-        if: ${{ matrix.project.lang == 'python' }}
-        with:
-          python-version: ${{ matrix.project.lang_version }}
-      - name: install python reqs
-        if: ${{ matrix.project.lang == 'python' }}
-        run: |
-          pip install componentize-py
-      - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6
-        if: ${{ matrix.project.lang == 'typescript' }}
-        with:
-          node-version: ${{ matrix.project.lang_version }}
-      - name: install node reqs
-        if: ${{ matrix.project.lang == 'typescript' }}
-        run: |
-          npm install -g @bytecodealliance/jco
-          npm install -g @bytecodealliance/componentize-js
+          language: ${{ matrix.project.lang }}
+          wash-version: ${{ matrix.wash-version }}
 
       # Validate example [local.]wadm.yaml if present
       - name: validate wadm.yaml
@@ -276,10 +239,10 @@ jobs:
           - current
         project:
           # Go example components (to publish)
-          - lang: 'golang'
+          - lang: 'tinygo'
             lang_version: '1.20'
             name: 'http-echo-tinygo'
-          - lang: 'golang'
+          - lang: 'tinygo'
             lang_version: '1.20'
             name: 'http-hello-world'
           # Rust example components (to publish)
