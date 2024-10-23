@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v0.15.0 (2024-06-11)
+## v0.15.1 (2024-10-23)
 
 ### Chore
 
@@ -31,13 +31,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    with. For now this only includes host labels, but this could change in
    the future.
 
+### Bug Fixes
+
+ - <csr-id-eb9621bddd9febe38b70fae4372ddd74f9031295/> enable new component model feature
+
+### Other
+
+ - <csr-id-f128cec29f07ae84e37822c5bba1c91eeb9d82fd/> release and update CHANGELOG
+
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 4 commits contributed to the release over the course of 12 calendar days.
- - 54 days passed between releases.
- - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 6 commits contributed to the release over the course of 145 calendar days.
+ - 188 days passed between releases.
+ - 5 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -47,13 +55,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Enable new component model feature ([`eb9621b`](https://github.com/wasmCloud/wasmCloud/commit/eb9621bddd9febe38b70fae4372ddd74f9031295))
+    - Release and update CHANGELOG ([`f128cec`](https://github.com/wasmCloud/wasmCloud/commit/f128cec29f07ae84e37822c5bba1c91eeb9d82fd))
     - Add Host entity type ([`0b164fd`](https://github.com/wasmCloud/wasmCloud/commit/0b164fde352a782a1b3c8a451e5b5bb791505556))
     - Revert "feat(wascap): add Host entity type" ([`a8de756`](https://github.com/wasmCloud/wasmCloud/commit/a8de756cc71eed8e49b4c6dfcbc7d8234020bb66))
     - Add Host entity type ([`add7bb1`](https://github.com/wasmCloud/wasmCloud/commit/add7bb1e11bf76eb235f7aa7b7c6ef7db93bae5e))
     - Replace actor references by component in crates ([`20c72ce`](https://github.com/wasmCloud/wasmCloud/commit/20c72ce0ed423561ae6dbd5a91959bec24ff7cf3))
 </details>
 
+## v0.15.0 (2024-06-11)
+
+<csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/>
+
+### Chore
+
+ - <csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/> Replace actor references by component in crates
+   Rename wash-cli wash-build tests name and references
+   
+   Fix nix flake path to Cargo.lock file
+   
+   Fix format
+   
+   Rename in wash-cli tests
+
+### New Features
+
+ - <csr-id-0b164fde352a782a1b3c8a451e5b5bb791505556/> add Host entity type
+   Add a `Host` entity type to wascap. This allows us to generate JWTs for
+   hosts that contains assertions about the metadata they were started
+   with. For now this only includes host labels, but this could change in
+   the future.
+ - <csr-id-add7bb1e11bf76eb235f7aa7b7c6ef7db93bae5e/> add Host entity type
+   Add a `Host` entity type to wascap. This allows us to generate JWTs for
+   hosts that contains assertions about the metadata they were started
+   with. For now this only includes host labels, but this could change in
+   the future.
+
 ## v0.14.0 (2024-04-17)
+
+<csr-id-857c9757ebaa5b835a564be5c70ac3466c01c0ca/>
+<csr-id-1bad246d9e174384c1a09bdff7e2dc88d911792e/>
 
 ### Chore
 
@@ -93,6 +134,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.13.0 (2024-03-17)
+
+<csr-id-36f0b18737f244d3f946faf8a14626dba619b931/>
+<csr-id-f5459155f3b96aa67742a8c62eb286cc06885855/>
 
 ### Chore
 
@@ -173,6 +217,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.12.0 (2023-11-09)
+
+<csr-id-9c8abf3dd1a942f01a70432abb2fb9cfc4d48914/>
+<csr-id-ee9d552c7ea1c017d8aa646f64002a85ffebefb8/>
+<csr-id-9de9ae3de8799661525b2458303e72cd24cd666f/>
+<csr-id-0b59721367d138709b58fa241cdadd4f585203ac/>
+<csr-id-171214d4bcffddb9a2a37c2a13fcbed1ec43fd31/>
 
 ### Chore
 
