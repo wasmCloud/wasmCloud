@@ -95,16 +95,16 @@ jobs:
         project:
           # Golang example components
           - lang: 'tinygo'
-            lang_version: '1.21'
+            lang-version: '1.21'
             name: 'http-echo-tinygo'
             test_deploy: wadm.yaml
           - lang: 'tinygo'
-            lang_version: '1.23'
+            lang-version: '1.23'
             name: 'http-hello-world'
             test_deploy: wadm.yaml
           - name: 'sqldb-postgres-query'
             lang: 'tinygo'
-            lang_version: '1.21'
+            lang-version: '1.21'
             wasm-bin: 'sqldb_postgres_query_s.wasm'
             test_deploy: local.wadm.yaml
           # Rust example components
@@ -154,15 +154,15 @@ jobs:
           # Python example components
           - name: 'http-hello-world'
             lang: 'python'
-            lang_version: '3.10'
+            lang-version: '3.10'
           # Typescript example components
           - name: 'http-hello-world'
             lang: 'typescript'
-            lang_version: '20.x'
+            lang-version: '20.x'
             test_deploy: local.wadm.yaml
           - name: "http-password-checker"
             lang: "typescript"
-            lang_version: "22.x"
+            lang-version: "22.x"
             test_deploy: local.wadm.yaml
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -172,6 +172,7 @@ jobs:
         uses: ./.github/actions/wasm-lang-toolchain-setup
         with:
           language: ${{ matrix.project.lang }}
+          language-version: ${{ matrix.project.lang-version }}
           wash-version: ${{ matrix.wash-version }}
 
       # Validate example [local.]wadm.yaml if present
@@ -240,10 +241,10 @@ jobs:
         project:
           # Go example components (to publish)
           - lang: 'tinygo'
-            lang_version: '1.20'
+            lang-version: '1.20'
             name: 'http-echo-tinygo'
           - lang: 'tinygo'
-            lang_version: '1.20'
+            lang-version: '1.20'
             name: 'http-hello-world'
           # Rust example components (to publish)
           - name: 'blobby'
