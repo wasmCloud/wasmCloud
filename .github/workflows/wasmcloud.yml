@@ -620,25 +620,6 @@ jobs:
           client-payload: |
             {"wash_version": "${{ env.wash_version }}"}
 
-  snapcraft:
-    if: startsWith(github.ref, 'refs/tags/wash-cli-v')
-    needs: cargo
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-
-      - uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79
-        id: build
-        with:
-          path: ./crates/wash-cli
-      - uses: snapcore/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40
-        continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
-        env:
-          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAP_STORE_LOGIN }}
-        with:
-          snap: ${{ steps.build.outputs.snap }}
-          release: edge
-
   nfpm:
     if: startsWith(github.ref, 'refs/tags/wash-cli-v')
     env:
