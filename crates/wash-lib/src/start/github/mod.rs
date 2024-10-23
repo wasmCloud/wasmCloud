@@ -120,6 +120,9 @@ pub(crate) fn get_download_client() -> Result<reqwest::Client> {
     Ok(builder.build()?)
 }
 
+mod api;
+pub use api::*;
+
 #[cfg(test)]
 #[cfg(target_os = "linux")]
 // NOTE: These are only run on linux for CI purposes, because they rely on the docker client being
