@@ -376,7 +376,7 @@ jobs:
         id: deployment
 
   docker:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest-4-cores
     env:
       DOCKER_BUILD_RECORD_UPLOAD: false
     needs:
@@ -401,6 +401,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
 
   oci:
+    runs-on: ubuntu-latest-4-cores
     strategy:
       matrix:
         include:
@@ -408,8 +409,6 @@ jobs:
 
           - bin: wash
             prefix: wash-cli-
-
-    runs-on: ubuntu-22.04
     permissions:
       contents: read
       packages: write
