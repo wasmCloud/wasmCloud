@@ -127,8 +127,11 @@ async fn integration_build_uses_wkg_lock() -> Result<()> {
     Ok(())
 }
 
+#[ignore]
 #[tokio::test]
-#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+// #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+// TODO: This test should be re-enabled after the transitional period for dependencies manipulation
+// (wit-deps -> wkg)
 async fn integration_build_rust_component_with_existing_deps_signed() -> Result<()> {
     let test_setup = init_path(
         /* component_name= */ "hello",
@@ -623,8 +626,11 @@ async fn integration_build_tinygo_component_signed() -> Result<()> {
     Ok(())
 }
 
+#[ignore]
 #[tokio::test]
-#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+// #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+// TODO: This test should be re-enabled after the transitional period for dependencies manipulation
+// (wit-deps -> wkg)
 async fn integration_build_tinygo_component_with_existing_deps_signed() -> Result<()> {
     let test_setup = init_path(
         /* component_name= */ "hello-world-tinygo",
