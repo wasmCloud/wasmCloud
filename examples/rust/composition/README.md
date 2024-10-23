@@ -16,8 +16,8 @@ This demo is designed to demonstrate multiple ecosystem tools, including:
 
 * **wasmCloud Shell (`wash`)**: The wasmCloud command-line interface (CLI) tool.
 * **Wasmtime**: The standalone WebAssembly runtime.
-* **WebAssembly Compositions (WAC)**: A CLI tool for declaratively composing components. 
-* **WASI Virt**: A CLI tool for virtualizing components within a composition. 
+* **WebAssembly Compositions (WAC)**: A CLI tool for declaratively composing components.
+* **WASI Virt**: A CLI tool for virtualizing components within a composition.
 
 Below are instructions for installing the required tooling for this example. Note that multiple tools require Cargo, and WASI Virt requires the [nightly release channel for Rust](https://github.com/bytecodealliance/WASI-Virt/blob/main/rust-toolchain.toml), so you may wish to install that up front:
 
@@ -27,13 +27,21 @@ rustup toolchain install nightly
 
 ## wasmCloud Shell (`wash`)
 
-Follow the instructions for your OS on the [Installation page](https://wasmcloud.com/docs/installation). Since several of the following tools use [Cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html), you may wish to use `wash` through Cargo as well. 
+Follow the instructions for your OS on the [Installation page](https://wasmcloud.com/docs/installation). Since several of the following tools use [Cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html), you may wish to use `wash` through Cargo as well.
 
 ```shell
-cargo install wash-cli
+cargo install --locked wash-cli
 ```
 
-## Wasmtime 
+If you have [`cargo-binstall`][cargo-binstall] installed, you can install even faster:
+
+```bash
+cargo binstall wash-cli
+```
+
+[cargo-binstall]: https://crates.io/crates/cargo-binstall
+
+## Wasmtime
 
 On Linux or macOS, you can install Wasmtime locally with an install script:
 
@@ -77,7 +85,7 @@ cd examples/rust/composition
 
 # Step 0: Run a component in wasmCloud and Wasmtime
 
-First, we'll build our standard HTTP "hello world" example to set a baseline. From the project directory: 
+First, we'll build our standard HTTP "hello world" example to set a baseline. From the project directory:
 
 ```shell
 cd http-hello
@@ -120,16 +128,16 @@ Once we see that everything is running as expected in wasmCloud, we can undeploy
 ```shell
 wash app undeploy http-hello-world
 ```
-Now let's see how we can run the same `http-hello-world` component in the standalone Wasmtime runtime. 
+Now let's see how we can run the same `http-hello-world` component in the standalone Wasmtime runtime.
 
 ```shell
 wasmtime serve -S cli=y build/http_hello_world.wasm
 ```
-The component works exactly the same way. We can stop `wasmtime serve` with CTRL+C. 
+The component works exactly the same way. We can stop `wasmtime serve` with CTRL+C.
 
 # Step 1: Virtualize a component
 
-Now we'll move over to the `pong` directory. Here we have a component with a custom interface called `pong` that will return a string "ping" on its exported `pingpong` interface. Go ahead and build the component. 
+Now we'll move over to the `pong` directory. Here we have a component with a custom interface called `pong` that will return a string "ping" on its exported `pingpong` interface. Go ahead and build the component.
 ```shell
 cd ../pong
 wash build
@@ -157,7 +165,7 @@ world root {
   export example:pong/pingpong;
 }
 ```
-You can see the `pingpong` interface listed as an export and `wasi:cli/environment` as one of many imports. 
+You can see the `pingpong` interface listed as an export and `wasi:cli/environment` as one of many imports.
 
 Now it's time to perform our first composition in the form of a virtualization with WASI Virt. Using WASI Virt, we're going to compose `pong_s.wasm` into an encapsulating component with an environment variable `PONG` set to `demo`. The resulting component will be named `virt.wasm`.
 ```shell
@@ -166,7 +174,7 @@ wasi-virt build/pong_s.wasm --allow-random -e PONG=demo -o virt.wasm
 Now let's view the WIT for our virtualized component:
 
 ```shell
-wash inspect --wit virt.wasm 
+wash inspect --wit virt.wasm
 ```
 ```wit
 package root:component;
@@ -177,7 +185,7 @@ world root {
   export example:pong/pingpong;
 }
 ```
-The virtualized component still exports `pingpong` but no longer requires `wasi:cli/environment`&mdash;that import (and all of the others except the new `wasi:random/random`, which we added via a WASI Virt argument) is satisfied by the encapsulating component. If we run this component on wasmCloud or with Wasmtime, the host will be able to satisfy the `random` import. But we still need another component to invoke this one via the exposed `pingpong` interface. 
+The virtualized component still exports `pingpong` but no longer requires `wasi:cli/environment`&mdash;that import (and all of the others except the new `wasi:random/random`, which we added via a WASI Virt argument) is satisfied by the encapsulating component. If we run this component on wasmCloud or with Wasmtime, the host will be able to satisfy the `random` import. But we still need another component to invoke this one via the exposed `pingpong` interface.
 
 # Step 2: Linking at runtime
 
@@ -187,7 +195,7 @@ In the `http-hello2` directory, we have a modified `http-hello-world` component 
 cd ../http-hello2
 wash build
 ```
-The `wadm.yaml` deployment manifest in this directory will launch both the `pong` component from Step 1 and the new `http-hello-world` we just built. When we deploy with this manifest, wasmCloud will automatically **link the components at runtime**, so that `pong` can satisfy the import of `http-hello-world`. 
+The `wadm.yaml` deployment manifest in this directory will launch both the `pong` component from Step 1 and the new `http-hello-world` we just built. When we deploy with this manifest, wasmCloud will automatically **link the components at runtime**, so that `pong` can satisfy the import of `http-hello-world`.
 
 ```shell
 wash app deploy wadm.yaml
@@ -207,11 +215,11 @@ wash app undeploy http-hello-world
 wash app delete http-hello-world --delete-all
 ```
 
-For the purposes of demonstration, let's see how we can compose these components into a single component at build-time. 
+For the purposes of demonstration, let's see how we can compose these components into a single component at build-time.
 
 # Step 3: Composing the component
 
-For context, let's try running `wasmtime serve` *without* composing `pong` and `http-hello-world` together. 
+For context, let's try running `wasmtime serve` *without* composing `pong` and `http-hello-world` together.
 
 ```shell
 wasmtime serve -S cli=y build/http_hello_world.wasm
@@ -271,7 +279,7 @@ We can run the composed component in wasmCloud as well:
 ```shell
 wash app deploy wadm.yaml
 ```
-Congratulations! You've composed a component that runs anywhere supporting WASI P2. 
+Congratulations! You've composed a component that runs anywhere supporting WASI P2.
 For more information on linking components at runtime or at build via composition, including when you might want to use each approach, see [Linking Components](https://wasmcloud.com/docs/concepts/linking-components/) in the wasmCloud documentation.
 
 ## Advanced WAC
@@ -287,7 +295,7 @@ let hello = new hello:there { "example:pong/pingpong": pong.pingpong, ... };
 export hello...;
 ```
 
-This is a pretty simple composition, but the the design of WAC facilitates much more complex compositions of many components. You can learn more about WAC usage in the tool's [readme](https://github.com/bytecodealliance/wac/blob/main/README.md) and [language guide](https://github.com/bytecodealliance/wac/blob/main/LANGUAGE.md). 
+This is a pretty simple composition, but the the design of WAC facilitates much more complex compositions of many components. You can learn more about WAC usage in the tool's [readme](https://github.com/bytecodealliance/wac/blob/main/README.md) and [language guide](https://github.com/bytecodealliance/wac/blob/main/LANGUAGE.md).
 
 For this demo's purposes, we simply need to run `wac encode` while indicating the components we wish to compose with the `--dep` argument, naming our output file with `-o`, and specifying our `.wac` instructions:
 

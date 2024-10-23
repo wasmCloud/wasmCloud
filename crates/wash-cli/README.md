@@ -14,7 +14,7 @@
    \_/\_/ \__,_|___/_| |_| |_|\_____|_|\___/ \__,_|\__,_| |_____/|_| |_|\___|_|_|
 ```
 
-> [!WARNING]  
+> [!WARNING]
 > This crate is being deprecated in favor of [wash](https://crates.io/crates/wash), where the wash CLI will be published from now on.
 
 - [Why wash](#why-wash)
@@ -40,10 +40,10 @@
 ### Cargo
 
 ```bash
-cargo install wash-cli
+cargo install --locked wash-cli
 ```
 
-or if you have [cargo-binstall](https://github.com/cargo-bins/cargo-binstall?tab=readme-ov-file#installation):
+If you have [cargo-binstall](https://github.com/cargo-bins/cargo-binstall?tab=readme-ov-file#installation):
 
 ```bash
 cargo binstall wash-cli
@@ -97,7 +97,7 @@ And if your proxy requires authentication, you can set the `WASH_PROXY_USERNAME`
 For example, in a unix environment:
 
 ```console
-export WASH_PROXY_USERNAME='username' 
+export WASH_PROXY_USERNAME='username'
 export WASH_PROXY_PASSWORD='p@ssw0rd'
 ```
 
