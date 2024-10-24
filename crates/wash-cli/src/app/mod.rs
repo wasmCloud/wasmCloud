@@ -10,7 +10,6 @@ use wadm_client::Result;
 use wadm_types::api::ModelSummary;
 use wadm_types::validation::{ValidationFailure, ValidationOutput};
 use wash_lib::app::{load_app_manifest, validate_manifest_file, AppManifest};
-use wash_lib::cli::get::parse_watch_interval;
 use wash_lib::cli::{CliConnectionOpts, CommandOutput, OutputKind};
 use wash_lib::config::WashConnectionOptions;
 
@@ -25,10 +24,7 @@ mod output;
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum AppCliCommand {
-    /// List all applications available within the lattice
-    #[clap(name = "list")]
-    List(ListCommand),
-    /// Get the application manifest for a specific version of an application
+    /// Get the application manifest for applications
     #[clap(name = "get")]
     Get(GetCommand),
     /// Get the current status of a given application
@@ -52,16 +48,6 @@ pub enum AppCliCommand {
     /// Validate an application manifest
     #[clap(name = "validate")]
     Validate(ValidateCommand),
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct ListCommand {
-    #[clap(flatten)]
-    opts: CliConnectionOpts,
-
-    /// Enables Real-time updates, duration can be specified in ms or in humantime (eg: 5s, 2m, 15ms). Defaults to 1000 milliseconds.
-    #[clap(long,short, num_args = 0..=1, default_missing_value = "1000", value_parser = parse_watch_interval)]
-    pub watch: Option<std::time::Duration>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -125,9 +111,9 @@ pub struct PutCommand {
 
 #[derive(Args, Debug, Clone)]
 pub struct GetCommand {
-    /// The name of the application to retrieve
+    /// The name of the application to retrieve. If left empty, retrieves the list of applications
     #[clap(name = "name")]
-    app_name: String,
+    app_name: Option<String>,
 
     /// The version of the application to retrieve. If left empty, retrieves the latest version
     #[clap(name = "version")]
@@ -174,12 +160,8 @@ pub async fn handle_command(
     use AppCliCommand::*;
     let sp: Spinner = Spinner::new(&output_kind)?;
     let command_output: wadm_client::Result<CommandOutput> = match command {
-        List(cmd) => {
-            sp.update_spinner_message("Listing applications ...".to_string());
-            get_applications(cmd, &sp).await
-        }
         Get(cmd) => {
-            sp.update_spinner_message("Getting application manifest ... ".to_string());
+            sp.update_spinner_message("Getting application manifest(s) ... ".to_string());
             get_manifest(cmd).await
         }
         Status(cmd) => {
@@ -436,12 +418,21 @@ async fn get_manifest(cmd: GetCommand) -> Result<CommandOutput> {
 
     let client = connection_opts.into_nats_client().await?;
 
-    let manifest =
-        wash_lib::app::get_model_details(&client, lattice, &cmd.app_name, cmd.version).await?;
-
     let mut map = HashMap::new();
-    map.insert("application".to_string(), json!(manifest));
-    let yaml = serde_yaml::to_string(&manifest).unwrap();
+    let yaml = match cmd.app_name {
+        Some(app_name) => {
+            let manifest =
+                wash_lib::app::get_model_details(&client, lattice, &app_name, cmd.version).await?;
+            map.insert("application".to_string(), json!(manifest));
+            serde_yaml::to_string(&manifest).unwrap()
+        }
+        None => {
+            let mainifests = wash_lib::app::get_models(&client, lattice).await?;
+            map.insert("applications".to_string(), json!(mainifests));
+            serde_yaml::to_string(&mainifests).unwrap()
+        }
+    };
+
     Ok(CommandOutput::new(yaml, map))
 }
 
@@ -542,28 +533,7 @@ async fn delete_application_version(cmd: DeleteCommand) -> Result<CommandOutput>
     Ok(CommandOutput::new(output_msg, output_map))
 }
 
-async fn get_applications(cmd: ListCommand, sp: &Spinner) -> Result<CommandOutput> {
-    let connection_opts =
-        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
-    let lattice = Some(connection_opts.get_lattice());
-
-    let client = connection_opts.into_nats_client().await?;
-
-    if cmd.watch.is_some() {
-        sp.finish_and_clear();
-        watch_applications(&client, lattice, cmd.watch).await?;
-        Ok(CommandOutput::new(
-            "Completed Watching Applications".to_string(),
-            HashMap::new(),
-        ))
-    } else {
-        let models = wash_lib::app::get_models(&client, lattice).await?;
-        let mut map = HashMap::new();
-        map.insert("applications".to_string(), json!(models));
-        Ok(CommandOutput::new(output::list_models_table(models), map))
-    }
-}
-
+#[allow(dead_code)]
 async fn watch_applications(
     client: &async_nats::Client,
     lattice: Option<String>,
