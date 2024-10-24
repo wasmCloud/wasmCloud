@@ -143,7 +143,7 @@ jobs:
 
           - folder: 'sqldb-postgres-query'
             tag-prefix: 'component-sqldb-postgres-query-tinygo-v'
-            lang: 'golang'
+            lang: 'tinygo'
             lang-version: '1.21'
             wasm-bin: 'sqldb_postgres_query_s.wasm'
             test-deploy: local.wadm.yaml
@@ -310,13 +310,13 @@ jobs:
           # Go example components (to publish)
           - folder: 'http-echo-tinygo'
             tag-prefix: 'component-http-echo-tinygo-v'
-            lang: 'golang'
+            lang: 'tinygo'
             lang-version: '1.21'
             wasm-bin: 'http_echo_s.wasm'
 
           - folder: 'http-hello-world'
             tag-prefix: 'component-http-hello-world-tinygo-v'
-            lang: 'golang'
+            lang: 'tinygo'
             lang-version: '1.21'
             wasm-bin: 'http_hello_world_s.wasm'
 

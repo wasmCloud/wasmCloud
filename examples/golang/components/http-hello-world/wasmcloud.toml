@@ -1,4 +1,4 @@
-name = "tinygo-http-hello-world"
+name = "http-hello-world"
 language = "tinygo"
 type = "component"
 version = "0.1.0"
