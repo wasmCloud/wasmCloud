@@ -316,6 +316,7 @@ dependencies = [
 name = "wasmcloud-component"
 version = "0.2.0"
 dependencies = [
+ "anyhow",
  "rand",
  "uuid",
  "wasi",
