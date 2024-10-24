@@ -1,4 +1,5 @@
 use anyhow::{Context as _, Result};
+use std::sync::Arc;
 
 use wasmcloud_test_util::control_interface::ClientBuilder;
 use wasmcloud_test_util::{assert_config_put, assert_scale_component, WasmCloudTestHost};
@@ -15,12 +16,12 @@ async fn test_quickstart() -> Result<()> {
     let (nats_server, nats_url, nats_client) = start_nats().await?;
 
     let lattice = "default";
-    let host = WasmCloudTestHost::start(nats_url, lattice)
+    let host = WasmCloudTestHost::start(nats_url, Arc::from(vec![Box::from(lattice)]))
         .await
         .context("failed to start host")?;
 
     let ctl_client = ClientBuilder::new(nats_client)
-        .lattice(host.lattice_name().to_string())
+        .lattice(lattice.to_string())
         .build();
 
     assert_config_put(
