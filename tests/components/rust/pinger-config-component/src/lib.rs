@@ -6,38 +6,29 @@ wit_bindgen::generate!({
     generate_all,
 });
 
-use std::collections::HashMap;
-use std::io::{Read, Write};
-
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 use test_components::testing::*;
-use wasmcloud_component::wasi::{config, http};
-use wasmcloud_component::{InputStreamReader, OutputStreamWriter};
+use wasmcloud_component::http;
+use wasmcloud_component::wasi::config;
 
 struct Actor;
 
-impl exports::wasi::http::incoming_handler::Guest for Actor {
-    fn handle(request: http::types::IncomingRequest, response_out: http::types::ResponseOutparam) {
+impl http::Server for Actor {
+    fn handle(
+        request: http::IncomingRequest,
+    ) -> http::Result<http::Response<impl http::OutgoingBody>> {
         #[derive(Deserialize)]
         struct Request {
             config_key: String,
         }
 
-        let request_body = request
-            .consume()
-            .expect("failed to get incoming request body");
-        let Request { config_key } = {
-            let mut buf = vec![];
-            let mut stream = request_body
-                .stream()
-                .expect("failed to get incoming request stream");
-            InputStreamReader::from(&mut stream)
-                .read_to_end(&mut buf)
-                .expect("failed to read value from incoming request stream");
-            serde_json::from_slice(&buf).expect("failed to decode request body")
-        };
-        let _trailers = http::types::IncomingBody::finish(request_body);
+        let mut body = request.into_body();
+        let Request { config_key } =
+            serde_json::from_reader(&mut body).expect("failed to decode request body");
+        let trailers = body.into_trailers().expect("failed to get trailers");
+        assert!(trailers.is_none());
 
         // No args, return string
         let pong = pingpong::ping();
@@ -50,23 +41,8 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             "pong_secret": pong_secret,
         });
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");
-        let response = http::types::OutgoingResponse::new(http::types::Fields::new());
-        let response_body = response
-            .body()
-            .expect("failed to get outgoing response body");
-        {
-            let mut stream = response_body
-                .write()
-                .expect("failed to get outgoing response stream");
-            let mut w = OutputStreamWriter::from(&mut stream);
-            w.write_all(&body)
-                .expect("failed to write body to outgoing response stream");
-            w.flush().expect("failed to flush outgoing response stream");
-        }
-        http::types::OutgoingBody::finish(response_body, None)
-            .expect("failed to finish response body");
-        http::types::ResponseOutparam::set(response_out, Ok(response));
+        Ok(http::Response::new(body))
     }
 }
 
-export!(Actor);
+http::export!(Actor);
