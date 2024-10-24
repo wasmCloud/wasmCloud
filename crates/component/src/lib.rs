@@ -34,6 +34,51 @@ pub use bindings::wasmcloud;
 mod wrappers;
 pub use wrappers::*;
 
+pub trait From<T> {
+    fn from(v: T) -> Self;
+}
+
+pub trait Into<T> {
+    fn into(v: Self) -> T;
+}
+
+impl<T, U: From<T>> Into<U> for T {
+    fn into(v: Self) -> U {
+        U::from(v)
+    }
+}
+
+impl<T, U: From<T>> TryFrom<T> for U {
+    type Error = core::convert::Infallible;
+
+    fn try_from(v: T) -> Result<Self, Self::Error> {
+        Ok(U::from(v))
+    }
+}
+
+pub trait TryFrom<T>
+where
+    Self: Sized,
+{
+    type Error;
+
+    fn try_from(v: T) -> Result<Self, Self::Error>;
+}
+
+pub trait TryInto<T> {
+    type Error;
+
+    fn try_into(v: Self) -> Result<T, Self::Error>;
+}
+
+impl<T, U: TryFrom<T>> TryInto<U> for T {
+    type Error = U::Error;
+
+    fn try_into(v: Self) -> Result<U, Self::Error> {
+        U::try_from(v)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
