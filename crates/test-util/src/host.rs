@@ -67,7 +67,7 @@ impl WasmCloudTestHost {
     /// * `nats_url` - URL of the NATS instance to which we should connect (ex. "nats://localhost:4222")
     /// * `lattice_name` - Name of the wasmCloud lattice to which we should connect (ex. "default")
     pub async fn start(nats_url: impl AsRef<str>, lattice_name: impl AsRef<str>) -> Result<Self> {
-        Self::start_custom(nats_url, lattice_name, None, None, None, None).await
+        Self::start_custom(nats_url, lattice_name, None, None, None, None, None).await
     }
 
     /// Start a test wasmCloud [`Host`], with customization for the host that is started
@@ -87,6 +87,7 @@ impl WasmCloudTestHost {
         host_key: Option<KeyPair>,
         policy_service_config: Option<PolicyService>,
         secrets_topic_prefix: Option<String>,
+        max_execution_time: Option<Duration>,
     ) -> Result<Self> {
         let nats_url = Url::try_from(nats_url.as_ref()).context("failed to parse NATS URL")?;
         let lattice_name = lattice_name.as_ref();
@@ -101,6 +102,7 @@ impl WasmCloudTestHost {
             provider_shutdown_delay: Some(Duration::from_millis(300)),
             allow_file_load: true,
             secrets_topic_prefix,
+            max_execution_time: max_execution_time.unwrap_or(Duration::from_secs(5)),
             ..Default::default()
         };
         if let Some(psc) = policy_service_config {
