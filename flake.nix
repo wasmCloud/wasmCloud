@@ -103,6 +103,10 @@
           "wash-cli"
           "wasmcloud"
         ];
+        build.bins = [
+          "wash"
+          "wasmcloud"
+        ];
 
         clippy.allTargets = true;
         clippy.deny = ["warnings"];

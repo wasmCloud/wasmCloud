@@ -88,6 +88,9 @@ required-features = ["providers"]
 name = "sqldb-postgres-provider"
 required-features = ["providers"]
 
+[[bin]]
+name = "wasmcloud"
+
 [profile.release]
 strip = true
 opt-level = "z"
