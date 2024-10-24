@@ -1,17 +1,37 @@
-use super::{Ctx, Handler, ReplacedInstanceTarget};
+use super::{new_store, Ctx, Handler, Instance, ReplacedInstanceTarget};
 
-use crate::capability::keyvalue::{atomics, batch, store};
+use crate::capability::keyvalue::{atomics, batch, store, watcher};
 use crate::capability::wrpc;
 
-use std::sync::Arc;
-
-use anyhow::Context;
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 use bytes::Bytes;
+use std::sync::Arc;
+use tokio::spawn;
 use tracing::instrument;
+use tracing::{debug, trace, warn};
 use wasmtime::component::Resource;
+use wrpc_transport::ResourceOwn;
 
 type Result<T, E = store::Error> = core::result::Result<T, E>;
+
+pub mod keyvalue_watcher_bindings {
+    wasmtime::component::bindgen!({
+        world: "watcher",
+        async: true,
+        trappable_imports: true,
+    });
+}
+
+pub mod wrpc_keyvalue_bindings {
+    wit_bindgen_wrpc::generate!({
+        world: "watcher",
+        with:{
+            "wasi:keyvalue/store@0.2.0-draft": generate,
+            "wasi:keyvalue/watcher@0.2.0-draft": generate
+        }
+    });
+}
 
 impl From<wrpc::wrpc::keyvalue::store::Error> for store::Error {
     fn from(value: wrpc::wrpc::keyvalue::store::Error) -> Self {
@@ -262,6 +282,114 @@ where
         self.table
             .delete(bucket)
             .context("failed to delete bucket")?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl<H> watcher::Host for Ctx<H>
+where
+    H: Handler,
+{
+    #[instrument]
+    async fn on_set(
+        &mut self,
+        bucket: Resource<store::Bucket>,
+        key: String,
+        value: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        let bucket = self.table.get(&bucket).context("failed to get bucket")?;
+        wrpc::wrpc::keyvalue::watcher::on_set(
+            &self.handler,
+            Some(ReplacedInstanceTarget::KeyvalueWatch),
+            bucket,
+            &key,
+            &Bytes::copy_from_slice(&value.as_slice()),
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn on_delete(
+        &mut self,
+        bucket: Resource<store::Bucket>,
+        key: String,
+    ) -> anyhow::Result<()> {
+        let bucket = self.table.get(&bucket).context("failed to get bucket")?;
+        wrpc::wrpc::keyvalue::watcher::on_delete(
+            &self.handler,
+            Some(ReplacedInstanceTarget::KeyvalueWatch),
+            bucket,
+            &key,
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+impl<H, C> wrpc_keyvalue_bindings::exports::wasi::keyvalue::watcher::Handler<C> for Instance<H, C>
+where
+    H: Handler,
+    C: Send,
+{
+    #[instrument(level = "debug", skip_all)]
+    async fn on_set(
+        &self,
+        cx: C,
+        bucket: ResourceOwn<wrpc_keyvalue_bindings::wasi::keyvalue::store::Bucket>,
+        key: String,
+        value: bytes::Bytes,
+    ) -> anyhow::Result<()> {
+        let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
+        let pre = keyvalue_watcher_bindings::WatcherPre::new(self.pre.clone())
+            .context("failed to pre-instantiate `wasi:keyvalue/watcher`")?;
+        trace!("instantiating `wasi:keyvalue/watcher`");
+        let bindings = pre
+            .instantiate_async(&mut store)
+            .await
+            .context("failed to instantiate `wasi:keyvalue/watcher.on_set`")?;
+        let handle = spawn(async move {
+            debug!("invoking `wasi:keyvalue/watcher.on_set`");
+            if let Err(err) = bindings
+                .wasi_keyvalue_watcher()
+                .call_on_set(store, bucket.into(), &key, &value)
+                .await
+            {
+                warn!(?err, "failed to call `wasi:keyvalue/watcher.on_set`");
+                bail!(err.context("failed to call `wasi:keyvalue/watcher.on_set`"));
+            }
+            Ok(())
+        });
+        Ok(())
+    }
+
+    async fn on_delete(
+        &self,
+        cx: C,
+        bucket: ResourceOwn<wrpc_keyvalue_bindings::wasi::keyvalue::store::Bucket>,
+        key: String,
+    ) -> anyhow::Result<()> {
+        let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
+        let pre = keyvalue_watcher_bindings::WatcherPre::new(self.pre.clone())
+            .context("failed to pre-instantiate `wasi:keyvalue/watcher`")?;
+        trace!("instantiating `wasi:keyvalue/watcher`");
+        let bindings = pre
+            .instantiate_async(&mut store)
+            .await
+            .context("failed to instantiate `wasi:keyvalue/watcher.on_delete`")?;
+        let handle = spawn(async move {
+            debug!("invoking `wasi:keyvalue/watcher.on_delete`");
+            if let Err(err) = bindings
+                .wasi_keyvalue_watcher()
+                .call_on_delete(store, bucket.into(), &key)
+                .await
+            {
+                warn!(?err, "failed to call `wasi:keyvalue/watcher.on_delete`");
+                bail!(err.context("failed to call `wasi:keyvalue/watcher.on_delete`"));
+            }
+            Ok(())
+        });
         Ok(())
     }
 }

@@ -30,10 +30,13 @@ mod bindings {
             "wrpc:keyvalue/atomics@0.2.0-draft": generate,
             "wrpc:keyvalue/batch@0.2.0-draft": generate,
             "wrpc:keyvalue/store@0.2.0-draft": generate,
+            "wrpc:keyvalue/watcher@0.2.0-draft": generate,
         }
     });
 }
 use bindings::exports::wrpc::keyvalue;
+use wit_bindgen_wrpc::futures::StreamExt;
+use wit_bindgen_wrpc::wrpc_transport::InvokeExt;
 
 /// Default URL to use to connect to Redis
 const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
@@ -139,6 +142,48 @@ impl KvRedisProvider {
         };
 
         Ok(conn.clone())
+    }
+
+    async fn invoke_on_set(&self, target: impl AsRef<str>, key: &str, value: &str) {
+        let mut cx: async_nats::HeaderMap = async_nats::HeaderMap::new();
+        for (k, v) in
+        wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector::default_with_span(
+        )
+        .iter()
+    {
+        cx.insert(k.as_str(), v.as_str())
+    }
+        // send wrpc event to invoke the component exported code using wrpc.invoke
+        let wrpc = get_connection().get_wrpc_client_custom(target.as_ref(), None);
+        let func = "on_set";
+        let _ = wrpc
+            .invoke_values::<_, (&str, &str), ((),)>(
+                Some(cx),
+                target.as_ref(),
+                func,
+                (key, value),
+                &[[]; 0],
+            )
+            .await;
+        info!("Key set: {}", key);
+    }
+
+    async fn invoke_on_delete(&self, target: impl AsRef<str>, key: &str) {
+        let mut cx: async_nats::HeaderMap = async_nats::HeaderMap::new();
+        for (k, v) in
+        wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector::default_with_span(
+        )
+        .iter()
+    {
+        cx.insert(k.as_str(), v.as_str())
+    }
+        // send wrpc event to invoke the component exported code using wrpc.invoke
+        let wrpc = get_connection().get_wrpc_client_custom(target.as_ref(), None);
+        let func = "on_delete";
+        let _ = wrpc
+            .invoke_values::<_, (&str,), ((),)>(Some(cx), target.as_ref(), func, (key,), &[[]; 0])
+            .await;
+        info!("Key deleted: {}", key);
     }
 
     /// Execute Redis async command
@@ -317,6 +362,42 @@ impl keyvalue::batch::Handler<Option<Context>> for KvRedisProvider {
     }
 }
 
+impl keyvalue::watcher::Handler<Option<Context>> for KvRedisProvider {
+    async fn on_set(
+        &self,
+        cx: Option<Context>,
+        bucket: String,
+        key: String,
+        value: wit_bindgen_wrpc::bytes::Bytes,
+    ) -> wit_bindgen_wrpc::anyhow::Result<()> {
+        check_bucket_name(&bucket);
+        let mut noti_cmd = redis::cmd("PSUBSCRIBE");
+        noti_cmd
+            .arg("__keyevent@0__:set")
+            .arg(key)
+            .arg(String::from_utf8(value.to_vec()).unwrap());
+        match self.exec_cmd::<()>(cx, &mut noti_cmd).await {
+            Ok(_) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn on_delete(
+        &self,
+        cx: Option<Context>,
+        bucket: String,
+        key: String,
+    ) -> wit_bindgen_wrpc::anyhow::Result<()> {
+        check_bucket_name(&bucket);
+        let mut noti_cmd = redis::cmd("PSUBSCRIBE");
+        noti_cmd.arg("__keyevent@0__:del").arg(key);
+        match self.exec_cmd::<()>(cx, &mut noti_cmd).await {
+            Ok(_) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+}
+
 /// Handle provider control commands
 impl Provider for KvRedisProvider {
     /// Provider should perform any operations needed for a new link,
@@ -377,6 +458,90 @@ impl Provider for KvRedisProvider {
         };
         let mut sources = self.sources.write().await;
         sources.insert((source_id.to_string(), link_name.to_string()), conn);
+
+        Ok(())
+    }
+
+    async fn receive_link_config_as_source(
+        &self,
+        LinkConfig {
+            target_id,
+            config,
+            secrets,
+            link_name,
+            ..
+        }: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
+        let url = secrets
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+            .and_then(|url_key| config.get(url_key))
+            .or_else(|| {
+                warn!("Redis connection URLs can be sensitive. Consider using secrets to pass this value.");
+                config.keys()
+                    .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+                    .and_then(|url_key| config.get(url_key))
+            })
+            .map_or(DEFAULT_CONNECT_URL, |v| v);
+
+        let client = match redis::Client::open(url.to_string()) {
+            Ok(client) => {
+                info!(url, "Established link");
+                client
+            }
+            Err(err) => {
+                warn!(?err, "Failed to create Redis client for target [{target_id}]. Key-value operations will fail.");
+                bail!("Failed to create Redis client");
+            }
+        };
+
+        let mut conn = client.get_connection_manager().await.map_err(|e| {
+            error!("Failed to get async connection: {e}");
+            anyhow::anyhow!("Failed to get async connection: {}", e)
+        })?;
+
+        // Set keyspace notifications
+        redis::cmd("CONFIG")
+            .arg("SET")
+            .arg("notify-keyspace-events")
+            .arg("KE")
+            .query_async::<_, ()>(&mut conn)
+            .await
+            .map_err(|e| {
+                error!("Failed to set keyspace notifications: {e}");
+                anyhow::anyhow!("Failed to set keyspace notifications: {}", e)
+            })?;
+
+        let mut sources = self.sources.write().await;
+        sources.insert((target_id.to_string(), link_name.to_string()), conn);
+
+        // Start watching for keyspace events
+        let client_clone = client.clone();
+        let self_clone = self.clone();
+        let target_id_clone = target_id.to_string();
+        tokio::spawn(async move {
+            let mut pubsub = client_clone.get_async_pubsub().await.unwrap();
+            let mut stream = pubsub.on_message();
+
+            while let Some(msg) = stream.next().await {
+                let channel: String = msg.get_channel_name().to_string();
+                let event: String = msg.get_payload().unwrap();
+
+                if event == "set" || event == "del" {
+                    let key = channel.split(':').last().unwrap();
+                    if event == "set" {
+                        let value = "extract the value from the notification payload here";
+                        self_clone
+                            .invoke_on_set(target_id_clone.clone(), key, value)
+                            .await;
+                    } else {
+                        self_clone
+                            .invoke_on_delete(target_id_clone.clone(), key)
+                            .await;
+                    }
+                }
+            }
+        });
 
         Ok(())
     }

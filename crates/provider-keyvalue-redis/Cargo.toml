@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
 bytes = { workspace = true }
 redis = { workspace = true, features = [
     "aio",
