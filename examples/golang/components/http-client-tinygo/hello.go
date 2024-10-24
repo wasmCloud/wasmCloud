@@ -66,5 +66,5 @@ func splice(input http.WasiIo0_2_0_StreamsInputStream, output http.WasiIo0_2_0_S
 	}
 }
 
-//go:generate wit-bindgen tiny-go wit --out-dir=gen --gofmt
+//go:generate go run github.com/bytecodealliance/wasm-tools-go/cmd/wit-bindgen-go generate --world hello --out gen ./wit
 func main() {}

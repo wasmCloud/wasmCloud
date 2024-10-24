@@ -165,5 +165,5 @@ func init() {
 // NOTE: the below go-generate line is not strictly necessary when using `wash build`,
 // but it enables use with the `go` and Bytecode Alliance `wit-bindgen` tooling
 //
-//go:generate wit-bindgen tiny-go wit --out-dir=gen --gofmt
+//go:generate go run github.com/bytecodealliance/wasm-tools-go/cmd/wit-bindgen-go generate --world echo --out gen ./wit
 func main() {}
