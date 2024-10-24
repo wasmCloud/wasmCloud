@@ -32,7 +32,7 @@ runs:
     - uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
       if: ${{ inputs.language == 'golang' || inputs.language == 'tinygo' }}
       with:
-        tool: wit-bindgen-cli,wasm-tools
+        tool: wasm-tools
     - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
       if: ${{ inputs.language == 'tinygo' }}
       with:
