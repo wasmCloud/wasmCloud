@@ -8,7 +8,7 @@
 //!
 //! ```rust
 //! use wasi::http::types::ErrorCode;
-//! use wasmcloud_component::http::{HttpServer, Request, ResponseBuilder};
+//! use wasmcloud_component::http::{HttpServer, Request, Response};
 //!
 //! struct Component;
 //!
@@ -16,8 +16,8 @@
 //!
 //! // Implementing the [`HttpServer`] trait for a component
 //! impl HttpServer for Component {
-//!     fn handle(_request: Request) -> Result<ResponseBuilder, ErrorCode> {
-//!         Ok(ResponseBuilder::ok("Hello from Rust!"))
+//!     fn handle(_request: Request) -> Result<Response, ErrorCode> {
+//!         Ok(Response::ok("Hello from Rust!".into()))
 //!     }
 //! }
 //! ```
@@ -35,17 +35,16 @@ use wasi::{
     http::{
         outgoing_handler::ErrorCode,
         types::{
-            Fields, IncomingBody, InputStream, Method, OutgoingBody, OutgoingResponse,
-            ResponseOutparam, Scheme,
+            Fields, IncomingBody, Method, OutgoingBody, OutgoingResponse, ResponseOutparam, Scheme,
         },
     },
-    io::streams::StreamError,
+    io::streams::{InputStream, StreamError},
 };
 
 /// Trait for implementing an HTTP server WebAssembly component that receives a
 /// [`Request`] and returns a [`ResponseBuilder`].
 pub trait HttpServer {
-    fn handle(request: Request) -> Result<ResponseBuilder, ErrorCode>;
+    fn handle(request: Request) -> Result<Response, ErrorCode>;
 }
 
 /// Wrapper for incoming requests from the WASI HTTP API. This type includes methods
@@ -53,7 +52,7 @@ pub trait HttpServer {
 /// with properly handling the request body.
 ///
 /// This can be converted into the inner [`wasi::http::types::IncomingRequest`] using
-/// [`Request::into_inner`], or into a [`reqwest::Request`] using [`TryInto<reqwest::Request>`].
+/// the `Into` impl, or into a [`reqwest::Request`] using [`TryInto<reqwest::Request>`].
 pub struct Request {
     inner: wasi::http::types::IncomingRequest,
 }
@@ -126,8 +125,8 @@ impl TryInto<reqwest::Request> for Request {
         let mut headers = HeaderMap::new();
         for (name, value) in self.headers().entries() {
             headers.append(
-                HeaderName::from_str(&name).map_err(|e| error_code(e))?,
-                HeaderValue::from_bytes(&value).map_err(|e| error_code(e))?,
+                HeaderName::from_str(&name).map_err(error_code)?,
+                HeaderValue::from_bytes(&value).map_err(error_code)?,
             );
         }
         let method = match self.method() {
@@ -157,7 +156,7 @@ impl TryInto<reqwest::Request> for Request {
         };
         let path_with_query = self.path_with_query().unwrap_or_default();
         let url = reqwest::Url::from_str(&format!("{}://{}{}", scheme, authority, path_with_query))
-            .map_err(|e| error_code(e))?;
+            .map_err(error_code)?;
 
         // Using reqwest::Request instead of reqwest::RequestBuilder to avoid constructing
         // a reqwest::Client for each request.
@@ -179,12 +178,8 @@ impl TryInto<reqwest::Request> for Request {
 ///
 /// This type is used to construct a response with a status code, body, and headers.
 /// The response body can either be a byte slice or a [`wasi::io::streams::InputStream`].
-///
-/// This type differs from other builders in that it doesn't have a `build` method. Instead,
-/// it is converted into an [`wasi::http::types::OutgoingResponse`] and set as the response
-/// when returned from an [`HttpServer`].
 pub struct ResponseBuilder {
-    pub(crate) status_code: Option<u16>,
+    pub(crate) status_code: u16,
     pub(crate) body: Option<Vec<u8>>,
     pub(crate) body_stream: Option<(
         wasi::io::streams::InputStream,
@@ -198,7 +193,7 @@ impl ResponseBuilder {
     /// Return a new [`ResponseBuilder`] with the provided status code and body
     pub fn new(status_code: u16, body: Vec<u8>) -> Self {
         Self {
-            status_code: Some(status_code),
+            status_code,
             body: Some(body),
             body_stream: None,
             headers: HeaderMap::new(),
@@ -214,14 +209,14 @@ impl ResponseBuilder {
     /// ```rust
     /// // Example that streams the incoming body to the outgoing body
     /// use wasi::http::types::ErrorCode;
-    /// use wasmcloud_component::http::{HttpServer, Request, ResponseBuilder};
+    /// use wasmcloud_component::http::{HttpServer, Request, Response, ResponseBuilder};
     /// struct Component;
     /// wasmcloud_component::http::export!(Component);
     ///
     /// impl HttpServer for Component {
-    ///     fn handle(request: Request) -> Result<ResponseBuilder, ErrorCode> {
+    ///     fn handle(request: Request) -> Result<Response, ErrorCode> {
     ///         let (stream, body) = request.into_body_stream()?;
-    ///         Ok(ResponseBuilder::new_stream(200, stream, Some(body)))
+    ///         Ok(ResponseBuilder::new_stream(200, stream, Some(body)).build())
     ///     }
     /// }
     /// ```
@@ -229,21 +224,21 @@ impl ResponseBuilder {
     /// ```rust
     /// // Example that streams a response body to the client
     /// use wasi::http::types::ErrorCode;
-    /// use wasmcloud_component::http::{HttpServer, Request, ResponseBuilder};
+    /// use wasmcloud_component::http::{HttpServer, Request, Response, ResponseBuilder};
     /// use reqwest_wasmcloud as reqwest;
     ///
     /// struct Component;
     /// wasmcloud_component::http::export!(Component);
     ///
     /// impl HttpServer for Component {
-    ///     fn handle(_request: Request) -> Result<ResponseBuilder, ErrorCode> {
+    ///     fn handle(_request: Request) -> Result<Response, ErrorCode> {
     ///         let mut response: reqwest::Response = reqwest::get("https://example.com").map_err(|e| {
     ///             ErrorCode::InternalError(Some(format!("failed to send outbound request {e:?}")))
     ///         })?;
     ///         let (stream, body) = response.bytes_stream().map_err(|e| {
     ///             ErrorCode::InternalError(Some(format!("failed to read response body {e:?}")))
     ///         })?;
-    ///         Ok(ResponseBuilder::new_stream(200, stream, Some(body)))
+    ///         Ok(ResponseBuilder::new_stream(200, stream, Some(body)).build())
     ///     }
     /// }
     /// ```
@@ -253,31 +248,53 @@ impl ResponseBuilder {
         body: Option<wasi::http::types::IncomingBody>,
     ) -> Self {
         Self {
-            status_code: Some(status_code),
+            status_code,
             body: None,
             body_stream: Some((stream, body)),
             headers: HeaderMap::new(),
         }
     }
 
-    /// Helper method to return a new [`ResponseBuilder`] with a 200 status code and the provided body.
-    pub fn ok(body: Vec<u8>) -> Self {
-        Self {
-            status_code: Some(200),
-            body: Some(body),
-            body_stream: None,
-            headers: HeaderMap::new(),
-        }
-    }
-
     pub fn status_code(mut self, status_code: u16) -> Self {
-        self.status_code = Some(status_code);
+        self.status_code = status_code;
         self
     }
 
     pub fn headers(mut self, headers: HeaderMap) -> Self {
         self.headers = headers;
         self
+    }
+
+    pub fn build(self) -> Response {
+        Response {
+            status_code: self.status_code,
+            headers: self.headers,
+            body: self.body,
+            body_stream: self.body_stream,
+        }
+    }
+}
+
+/// An HTTP response to be returned from an [`HttpServer`] trait implementation.
+///
+/// Unless using a helper function like [`Response::ok`], you should construct this
+/// using a [`ResponseBuilder`].
+pub struct Response {
+    pub(crate) status_code: u16,
+    pub(crate) headers: HeaderMap,
+    pub(crate) body: Option<Vec<u8>>,
+    pub(crate) body_stream: Option<(InputStream, Option<IncomingBody>)>,
+}
+
+impl Response {
+    /// Helper function to return an OK response with a body.
+    pub fn ok(body: Vec<u8>) -> Self {
+        Self {
+            status_code: 200,
+            headers: HeaderMap::new(),
+            body: Some(body),
+            body_stream: None,
+        }
     }
 }
 
@@ -320,14 +337,18 @@ pub use export;
 ///
 /// This is primarily public for the [`export`] macro and should only be used directly with care.
 #[doc(hidden)]
-pub fn set_outgoing_response(user_response: ResponseBuilder, response_out: ResponseOutparam) {
+pub fn set_outgoing_response(user_response: Response, response_out: ResponseOutparam) {
     // Construct response, returning server errors if possible
-    let response = OutgoingResponse::new(Fields::new());
-    if let Some(status_code) = user_response.status_code {
-        if response.set_status_code(status_code).is_err() {
-            ResponseOutparam::set(response_out, Err(error_code("failed to set status code")));
-            return;
-        }
+    let headers = Fields::new();
+    user_response.headers.into_iter().for_each(|(name, value)| {
+        headers
+            .set(&name.unwrap().to_string(), &[value.as_bytes().to_vec()])
+            .expect("failed to set header");
+    });
+    let response = OutgoingResponse::new(headers);
+    if response.set_status_code(user_response.status_code).is_err() {
+        ResponseOutparam::set(response_out, Err(error_code("failed to set status code")));
+        return;
     }
 
     match (user_response.body, user_response.body_stream) {
