@@ -9,4 +9,6 @@ version = "0.1.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.32"
+wasi = { version = "0.13.3", features = ["std"] }
+wasmcloud-component = { path = "../../../../crates/component" }
+reqwest = { package = "reqwest-wasmcloud", git = "https://github.com/wasmCloud/reqwest-wasmcloud/", branch = "master"}

@@ -624,7 +624,7 @@ dependencies = [
  "http 0.2.12",
  "http-body 0.4.6",
  "once_cell",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "tracing",
  "uuid 1.11.0",
@@ -658,7 +658,7 @@ dependencies = [
  "http-body 0.4.6",
  "lru",
  "once_cell",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex-lite",
  "sha2",
  "tracing",
@@ -706,7 +706,7 @@ dependencies = [
  "http 0.2.12",
  "http 1.1.0",
  "once_cell",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "sha2",
  "time",
  "tracing",
@@ -770,7 +770,7 @@ dependencies = [
  "http 0.2.12",
  "http-body 0.4.6",
  "once_cell",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "pin-utils",
  "tracing",
@@ -906,7 +906,7 @@ dependencies = [
  "matchit",
  "memchr",
  "mime",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "rustversion",
  "serde 1.0.210",
@@ -935,7 +935,7 @@ dependencies = [
  "matchit",
  "memchr",
  "mime",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "rustversion",
  "serde 1.0.210",
@@ -2756,7 +2756,15 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
 dependencies = [
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "form_urlencoded-wasmcloud"
+version = "1.2.1"
+source = "git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main#1b9d84de09780b0e43838dfa1623754a243842e0"
+dependencies = [
+ "percent-encoding 2.3.1 (git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main)",
 ]
 
 [[package]]
@@ -3508,6 +3516,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "idna"
+version = "0.5.0"
+source = "git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main#1b9d84de09780b0e43838dfa1623754a243842e0"
+dependencies = [
+ "unicode-bidi",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "ignore"
 version = "0.4.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3726,7 +3743,7 @@ dependencies = [
  "num-cmp",
  "once_cell",
  "parking_lot",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex",
  "reqwest 0.11.27",
  "serde 1.0.210",
@@ -4592,7 +4609,7 @@ dependencies = [
  "once_cell",
  "opentelemetry",
  "ordered-float 4.3.0",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.8.5",
  "serde_json",
  "thiserror",
@@ -4808,6 +4825,11 @@ name = "percent-encoding"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
+
+[[package]]
+name = "percent-encoding"
+version = "2.3.1"
+source = "git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main#1b9d84de09780b0e43838dfa1623754a243842e0"
 
 [[package]]
 name = "pest"
@@ -5494,7 +5516,7 @@ dependencies = [
  "futures",
  "futures-util",
  "itoa",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "rustls 0.22.4",
  "rustls-native-certs 0.7.3",
@@ -5628,7 +5650,7 @@ dependencies = [
  "log",
  "mime",
  "once_cell",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "rustls 0.21.12",
  "rustls-pemfile 1.0.4",
@@ -5671,7 +5693,7 @@ dependencies = [
  "log",
  "mime",
  "once_cell",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",
  "quinn",
  "rustls 0.23.13",
@@ -5688,6 +5710,50 @@ dependencies = [
  "tokio-util",
  "tower-service",
  "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-streams",
+ "web-sys",
+ "webpki-roots 0.26.6",
+ "windows-registry",
+]
+
+[[package]]
+name = "reqwest-wasmcloud"
+version = "0.12.8"
+source = "git+https://github.com/wasmCloud/reqwest-wasmcloud/?branch=master#6d894fbab4de46366ae600e5a06da3839cdf2623"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "http 1.1.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "hyper 1.5.0",
+ "hyper-rustls 0.27.3",
+ "hyper-util",
+ "ipnet",
+ "js-sys",
+ "log",
+ "mime",
+ "once_cell",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "pin-project-lite",
+ "quinn",
+ "rustls 0.23.13",
+ "rustls-pemfile 2.2.0",
+ "rustls-pki-types",
+ "serde 1.0.210",
+ "serde_json",
+ "serde_urlencoded-wasmcloud",
+ "sync_wrapper 1.0.1",
+ "tokio",
+ "tokio-rustls 0.26.0",
+ "tokio-util",
+ "tower-service",
+ "url-wasmcloud",
+ "wasi 0.13.3+wasi-0.2.2",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-streams",
@@ -6301,7 +6367,7 @@ version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7715380eec75f029a4ef7de39a9200e0a63823176b759d055b613f5a87df6a6"
 dependencies = [
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.210",
  "thiserror",
 ]
@@ -6333,6 +6399,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3491c14715ca2294c4d6a88f15e84739788c1d030eed8c110436aafdaa2f3fd"
 dependencies = [
  "form_urlencoded",
+ "itoa",
+ "ryu",
+ "serde 1.0.210",
+]
+
+[[package]]
+name = "serde_urlencoded-wasmcloud"
+version = "0.7.1"
+source = "git+https://github.com/wasmCloud/serde_urlencoded-wasmcloud?branch=master#45f6d06567b446fb12f6a87bff2ca1d4f416a7ab"
+dependencies = [
+ "form_urlencoded-wasmcloud",
  "itoa",
  "ryu",
  "serde 1.0.210",
@@ -7120,7 +7197,7 @@ dependencies = [
  "futures-util",
  "log",
  "parking_lot",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "phf",
  "pin-project-lite",
  "postgres-protocol",
@@ -7326,7 +7403,7 @@ dependencies = [
  "http-body 0.4.6",
  "hyper 0.14.30",
  "hyper-timeout",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project",
  "prost",
  "tokio",
@@ -7654,9 +7731,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22784dbdf76fdde8af1aeda5622b546b422b6fc585325248a2bf9f5e41e94d6c"
 dependencies = [
  "form_urlencoded",
- "idna",
- "percent-encoding",
+ "idna 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.210",
+]
+
+[[package]]
+name = "url-wasmcloud"
+version = "2.5.2"
+source = "git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main#1b9d84de09780b0e43838dfa1623754a243842e0"
+dependencies = [
+ "form_urlencoded-wasmcloud",
+ "idna 0.5.0 (git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main)",
+ "percent-encoding 2.3.1 (git+https://github.com/wasmCloud/rust-url-wasmcloud?branch=main)",
 ]
 
 [[package]]
@@ -7993,7 +8080,7 @@ dependencies = [
  "log",
  "mime",
  "mime_guess",
- "percent-encoding",
+ "percent-encoding 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project",
  "scoped-tls",
  "serde 1.0.210",
@@ -8561,7 +8648,9 @@ name = "wasmcloud-component"
 version = "0.2.0"
 dependencies = [
  "futures",
+ "http 1.1.0",
  "rand 0.8.5",
+ "reqwest-wasmcloud",
  "tokio",
  "uuid 1.11.0",
  "wasi 0.13.3+wasi-0.2.2",
