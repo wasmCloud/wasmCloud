@@ -19,6 +19,7 @@ default = [
 ]
 
 [dependencies]
+http = { workspace = true }
 futures = { workspace = true, optional = true, features = ["std"] }
 rand = { workspace = true, optional = true }
 reqwest-wasmcloud = { workspace = true, features = ["stream", "rustls-tls"]}

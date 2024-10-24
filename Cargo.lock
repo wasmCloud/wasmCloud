@@ -8648,6 +8648,7 @@ name = "wasmcloud-component"
 version = "0.2.0"
 dependencies = [
  "futures",
+ "http 1.1.0",
  "rand 0.8.5",
  "reqwest-wasmcloud",
  "tokio",

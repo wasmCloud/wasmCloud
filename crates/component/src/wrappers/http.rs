@@ -26,6 +26,7 @@ use reqwest_wasmcloud as reqwest;
 
 use std::{
     io::{Read, Write},
+    ops::Deref,
     str::FromStr,
 };
 
@@ -40,9 +41,6 @@ use wasi::{
     },
     io::streams::StreamError,
 };
-
-const HTTP_SCHEME: &str = "http";
-const HTTPS_SCHEME: &str = "https";
 
 /// Trait for implementing an HTTP server WebAssembly component that receives a
 /// [`Request`] and returns a [`ResponseBuilder`].
@@ -67,26 +65,6 @@ impl From<wasi::http::types::IncomingRequest> for Request {
 }
 
 impl Request {
-    pub fn method(&self) -> Method {
-        self.inner.method()
-    }
-
-    pub fn headers(&self) -> Fields {
-        self.inner.headers()
-    }
-
-    pub fn scheme(&self) -> Option<Scheme> {
-        self.inner.scheme()
-    }
-
-    pub fn authority(&self) -> Option<String> {
-        self.inner.authority()
-    }
-
-    pub fn path_with_query(&self) -> Option<String> {
-        self.inner.path_with_query()
-    }
-
     /// Read the entire body of the [`Request`] into a buffer and return it.
     /// This consumes the request and finishes the body.
     ///
@@ -112,12 +90,6 @@ impl Request {
         self.consume_request()
     }
 
-    /// Helper function to convert the wrapper [`Request`] into the inner
-    /// [`wasi::http::types::IncomingRequest`].
-    pub fn into_inner(self) -> wasi::http::types::IncomingRequest {
-        self.inner
-    }
-
     /// Consume the request and return the inner input stream and incoming body.
     fn consume_request(self) -> Result<(InputStream, IncomingBody), ErrorCode> {
         let incoming_body = self
@@ -128,6 +100,22 @@ impl Request {
             .stream()
             .map_err(|_| error_code("failed to get incoming body stream from incoming request"))?;
         Ok((input_stream, incoming_body))
+    }
+}
+
+/// Allows for calling methods on the inner [`wasi::http::types::IncomingRequest`] directly.
+impl Deref for Request {
+    type Target = wasi::http::types::IncomingRequest;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+/// Convert a [`Request`] into the inner [`wasi::http::types::IncomingRequest`].
+impl From<Request> for wasi::http::types::IncomingRequest {
+    fn from(request: Request) -> Self {
+        request.inner
     }
 }
 
@@ -158,8 +146,8 @@ impl TryInto<reqwest::Request> for Request {
         };
 
         let scheme = match self.scheme() {
-            Some(Scheme::Http) => HTTP_SCHEME.to_string(),
-            Some(Scheme::Https) => HTTPS_SCHEME.to_string(),
+            Some(Scheme::Http) => http::uri::Scheme::HTTP.to_string(),
+            Some(Scheme::Https) => http::uri::Scheme::HTTPS.to_string(),
             Some(Scheme::Other(s)) => s,
             None => return Err(error_code("missing scheme in incoming request")),
         };
@@ -208,10 +196,10 @@ pub struct ResponseBuilder {
 
 impl ResponseBuilder {
     /// Return a new [`ResponseBuilder`] with the provided status code and body
-    pub fn new(status_code: u16, body: impl AsRef<[u8]>) -> Self {
+    pub fn new(status_code: u16, body: Vec<u8>) -> Self {
         Self {
             status_code: Some(status_code),
-            body: Some(body.as_ref().to_vec()),
+            body: Some(body),
             body_stream: None,
             headers: HeaderMap::new(),
         }
@@ -273,10 +261,10 @@ impl ResponseBuilder {
     }
 
     /// Helper method to return a new [`ResponseBuilder`] with a 200 status code and the provided body.
-    pub fn ok(body: impl AsRef<[u8]>) -> Self {
+    pub fn ok(body: Vec<u8>) -> Self {
         Self {
             status_code: Some(200),
-            body: Some(body.as_ref().to_vec()),
+            body: Some(body),
             body_stream: None,
             headers: HeaderMap::new(),
         }
