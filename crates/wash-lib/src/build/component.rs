@@ -646,7 +646,7 @@ module example
     ";
 
     const COMPONENT_GO_GENERATE: &str = r"
-//go:generate wit-bindgen tiny-go wit --out-dir=generated --gofmt
+//go:generate go run github.com/bytecodealliance/wasm-tools-go/cmd/wit-bindgen-go generate --world test-world --out gen ./wit
 
 package main
 
