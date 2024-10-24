@@ -19,6 +19,7 @@ use tokio::{
     time::Duration,
 };
 
+use wash_cli::config::{WADM_VERSION, WASMCLOUD_HOST_VERSION};
 use wash_lib::cli::output::{
     AppDeleteCommandOutput, AppDeployCommandOutput, AppListCommandOutput, AppUndeployCommandOutput,
     CallCommandOutput, GetHostsCommandOutput, PullCommandOutput, StartCommandOutput,
@@ -228,10 +229,25 @@ impl Drop for TestWashInstance {
 }
 
 /// Arguments for creating a new `TestWashInstance`
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct TestWashInstanceNewArgs {
     /// Extra arguments to feed to `wash up`
     pub extra_args: Vec<String>,
+}
+
+impl Default for TestWashInstanceNewArgs {
+    fn default() -> Self {
+        Self {
+            // we pin the optional wadm and wascloudhost versions
+            // to the current release, to avoid undefined behaviour in tests
+            extra_args: vec![
+                "--wadm-version".to_string(),
+                WADM_VERSION.to_string(),
+                "--wasmcloud-version".to_string(),
+                WASMCLOUD_HOST_VERSION.to_string(),
+            ],
+        }
+    }
 }
 
 #[allow(unused)]
@@ -245,13 +261,21 @@ impl TestWashInstance {
     pub async fn create_with_extra_args(
         args: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Result<Self> {
-        Self::new(TestWashInstanceNewArgs {
-            extra_args: args
-                .into_iter()
-                .map(|v| v.as_ref().to_string())
-                .collect::<Vec<String>>(),
-        })
-        .await
+        let mut extra_args = args
+            .into_iter()
+            .map(|v| v.as_ref().to_string())
+            .collect::<Vec<String>>();
+        // we pin the optional wadm and wascloudhost versions
+        // to the current release, to avoid undefined behaviour in tests
+        if !extra_args.contains(&"--wadm-version".to_string()) {
+            extra_args.push("--wadm-version".to_string());
+            extra_args.push(WADM_VERSION.to_string());
+        }
+        if !extra_args.contains(&"--wasmcloud-version".to_string()) {
+            extra_args.push("--wasmcloud-version".to_string());
+            extra_args.push(WASMCLOUD_HOST_VERSION.to_string());
+        }
+        Self::new(TestWashInstanceNewArgs { extra_args }).await
     }
 
     async fn new(args: TestWashInstanceNewArgs) -> Result<Self> {
