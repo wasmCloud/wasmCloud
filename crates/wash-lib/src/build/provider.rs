@@ -189,7 +189,11 @@ fn build_go_provider(
     if !go_config.disable_go_generate {
         let result = generate_command
             .args(["generate", "./..."])
-            .status()
+            // NOTE: this can be removed once upstream merges verbose flag
+            // https://github.com/bytecodealliance/wasm-tools-go/pull/214
+            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .output()
             .map_err(|e| {
                 if e.kind() == ErrorKind::NotFound {
                     anyhow!("{:?} command is not found", generate_command.get_program())
@@ -198,8 +202,14 @@ fn build_go_provider(
                 }
             })?;
 
-        if !result.success() {
-            bail!("Generating interfaces failed: {result}")
+        if !result.status.success() {
+            let stdout_output = String::from_utf8_lossy(&result.stdout);
+            let stderr_output = String::from_utf8_lossy(&result.stderr);
+            eprintln!("STDOUT:\n{stdout_output}\nSTDERR:\n{stderr_output}");
+            bail!(
+                "Generating interfaces failed: {}",
+                result.status.to_string()
+            )
         }
     }
 

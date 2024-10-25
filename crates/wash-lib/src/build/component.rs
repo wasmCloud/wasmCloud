@@ -434,7 +434,11 @@ async fn generate_tinygo_bindgen(project_dir: impl AsRef<Path>) -> Result<()> {
     let mut command = tokio::process::Command::new("go");
     let result = command
         .args(vec!["generate", "./..."])
-        .status()
+        // NOTE: this can be removed once upstream merges verbose flag
+        // https://github.com/bytecodealliance/wasm-tools-go/pull/214
+        .stderr(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .output()
         .await
         .map_err(|e| {
             if e.kind() == ErrorKind::NotFound {
@@ -444,8 +448,11 @@ async fn generate_tinygo_bindgen(project_dir: impl AsRef<Path>) -> Result<()> {
             }
         })?;
 
-    if !result.success() {
-        bail!("go generate failed: {}", result.to_string())
+    if !result.status.success() {
+        let stdout_output = String::from_utf8_lossy(&result.stdout);
+        let stderr_output = String::from_utf8_lossy(&result.stderr);
+        eprintln!("STDOUT:\n{stdout_output}\nSTDERR:\n{stderr_output}");
+        bail!("go generate failed: {}", result.status.to_string())
     }
 
     Ok(())
