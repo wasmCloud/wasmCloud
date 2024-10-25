@@ -12,8 +12,8 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use wascap::jwt;
 
-use crate::tls;
 use crate::RegistryConfig;
+use crate::{tls, UseParFileCache};
 
 const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wasmcloud.provider.archive.layer.v1+par";
 const WASM_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm";
@@ -126,15 +126,23 @@ fn prune_filepath(img: &str) -> String {
     img
 }
 
+/// A type to indicate whether there was a cache hit or miss when loading artifacts
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CacheResult {
+    Hit,
+    Miss,
+}
+
 impl OciFetcher {
-    /// Fetch an OCI path
+    /// Fetch an OCI artifact to a path and return that path. Returns the path and whether or not
+    /// there was a cache hit/miss
     pub async fn fetch_path(
         &self,
         output_dir: impl AsRef<Path>,
         img: impl AsRef<str>,
         accepted_media_types: Vec<&str>,
         cache: OciArtifactCacheUpdate,
-    ) -> anyhow::Result<PathBuf> {
+    ) -> anyhow::Result<(PathBuf, CacheResult)> {
         let output_dir = output_dir.as_ref();
         let img = img.as_ref().to_lowercase(); // the OCI spec does not allow for capital letters in references
         if !self.allow_latest && img.ends_with(":latest") {
@@ -179,7 +187,7 @@ impl OciFetcher {
             // If the digest file doesn't exist that is ok, we just unwrap to an empty string
             let file_digest = fs::read_to_string(&digest_file).await.unwrap_or_default();
             if !oci_digest.is_empty() && !file_digest.is_empty() && file_digest == oci_digest {
-                return Ok(cache_file);
+                return Ok((cache_file, CacheResult::Hit));
             }
         }
 
@@ -207,7 +215,7 @@ impl OciFetcher {
                 .context("failed to cache OCI bytes")?;
         }
 
-        Ok(cache_file)
+        Ok((cache_file, CacheResult::Miss))
     }
 
     /// Fetch component from OCI
@@ -216,7 +224,7 @@ impl OciFetcher {
     ///
     /// Returns an error if either fetching fails or reading the fetched OCI path fails
     pub async fn fetch_component(&self, oci_ref: impl AsRef<str>) -> anyhow::Result<Vec<u8>> {
-        let path = self
+        let (path, _) = self
             .fetch_path(
                 oci_cache_dir().await?,
                 oci_ref,
@@ -240,7 +248,7 @@ impl OciFetcher {
         oci_ref: impl AsRef<str>,
         host_id: impl AsRef<str>,
     ) -> anyhow::Result<(PathBuf, Option<jwt::Token<jwt::CapabilityProvider>>)> {
-        let path = self
+        let (path, cache) = self
             .fetch_path(
                 oci_cache_dir().await?,
                 oci_ref.as_ref(),
@@ -249,7 +257,11 @@ impl OciFetcher {
             )
             .await
             .context("failed to fetch OCI path")?;
-        crate::par::read(&path, host_id, oci_ref, crate::par::UseParFileCache::Use)
+        let should_cache = match cache {
+            CacheResult::Miss => UseParFileCache::Ignore,
+            CacheResult::Hit => UseParFileCache::Use,
+        };
+        crate::par::read(&path, host_id, oci_ref, should_cache)
             .await
             .with_context(|| format!("failed to read `{}`", path.display()))
     }
