@@ -4,7 +4,6 @@ type = "component"
 version = "0.1.0"
 
 [component]
-build_command = "tinygo build -target=wasip2 --wit-package ./wit --wit-world hello -o build/http-client-tinygo.wasm hello.go"
 wit_world = "hello"
 wasm_target = "wasm32-wasip2"
 destination = "build/http_client_tinygo_s.wasm"
