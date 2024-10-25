@@ -99,4 +99,8 @@ pub struct RegistryPushCommand {
 
     #[clap(flatten)]
     pub opts: AuthOpts,
+
+    /// Push the artifact monolithically instead of chunked
+    #[clap(long = "monolithic-push", env = "WASH_MONOLITHIC_PUSH")]
+    pub monolithic_push: bool,
 }

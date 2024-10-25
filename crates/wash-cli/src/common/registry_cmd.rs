@@ -133,6 +133,7 @@ pub async fn registry_push(
                 || project_config.is_some_and(|c| c.common.registry.push_insecure),
             insecure_skip_tls_verify: cmd.opts.insecure_skip_tls_verify,
             annotations,
+            monolithic_push: cmd.monolithic_push,
         },
     )
     .await?;

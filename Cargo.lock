@@ -4383,9 +4383,9 @@ dependencies = [
 
 [[package]]
 name = "oci-client"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53e050f8bab3f561aa5ab537e1a6ed24006d58b4ee93cd6bb2c0cb822726f306"
+checksum = "474675fdc023fbcc9dcf4782e938a3a1ae5fd469c728d8db40599bd25c77e1ba"
 dependencies = [
  "bytes",
  "chrono",
@@ -4450,9 +4450,9 @@ dependencies = [
 
 [[package]]
 name = "oci-wasm"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8403a1f0598a12452babb25a7bdf815269c4d83b064862a560879e66e3e85ee"
+checksum = "f147e207436277483c23cb8e55ccd039ee1657c6a8d19471a6de187da6973ef8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5182,7 +5182,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22505a5c94da8e3b7c2996394d1c933236c4d743e81a410bcca4e6989fc066a4"
 dependencies = [
  "bytes",
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools 0.12.1",
  "log",
  "multimap",
@@ -7535,7 +7535,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.8.5",
+ "rand 0.7.3",
  "static_assertions",
 ]
 
@@ -8390,9 +8390,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-pkg-client"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ff3e17576a2a2170f5ec4c2834c3a05504b3c38f1cdd669e48c4b570e47bfb4"
+checksum = "4a3d87dcebf18466cbbd926980e5460bb808a0112bb1dc5cc799fe470c3f8c16"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8424,9 +8424,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-pkg-common"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da50c3adeef70b9ffbef0000eedff727ea050148a42cfc8a27f25f1e3bb100ae"
+checksum = "8ca6fb1d9c267809e4e9db5cfea0907dd818bf88b682b3ef609fa104b68c305f"
 dependencies = [
  "anyhow",
  "bytes",

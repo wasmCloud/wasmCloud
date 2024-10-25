@@ -59,6 +59,8 @@ pub struct OciPushOptions {
     pub insecure_skip_tls_verify: bool,
     /// Optional annotations you'd like to add to the pushed artifact
     pub annotations: Option<BTreeMap<String, String>>,
+    /// Whether to use monolithic push instead of chunked push
+    pub monolithic_push: bool,
 }
 
 /// The types of artifacts that wash supports
@@ -228,6 +230,7 @@ pub async fn push_oci_artifact(
         },
         extra_root_certificates: tls::NATIVE_ROOTS_OCI.to_vec(),
         accept_invalid_certificates: options.insecure_skip_tls_verify,
+        use_monolithic_push: options.monolithic_push,
         ..Default::default()
     });
 
