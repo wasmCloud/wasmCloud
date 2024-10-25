@@ -7,6 +7,7 @@
 //! When building integration tests, you can start the wasmCloud host without `wash` and directly from Rust code to test it:
 //!
 //! ```rust,ignore
+//! use tokio::time::Duration;
 //! use wasmcloud_test_util::{assert_config_put, assert_scale_component, WasmCloudTestHost};
 //! use wasmcloud_test_util::control_interface::ClientBuilder;
 //!
@@ -40,6 +41,7 @@
 //!     None,
 //!     1,
 //!     Vec::new(),
+//!     Duration::from_secs(10),
 //! )
 //! .await?;
 //!
@@ -60,9 +62,17 @@
 pub mod component;
 pub mod host;
 pub mod lattice;
+pub mod nats;
 pub mod provider;
+
 #[cfg(feature = "testcontainers")]
 pub mod testcontainers;
+
+#[cfg(feature = "http")]
+pub mod http;
+
+#[cfg(feature = "os")]
+pub mod os;
 
 /// Re-export of control interface fo ruse
 pub use wasmcloud_control_interface as control_interface;

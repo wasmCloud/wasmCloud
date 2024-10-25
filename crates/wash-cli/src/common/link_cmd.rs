@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use serde_json::json;
 use wash_lib::cli::link::{
     delete_link, get_links, put_link, LinkCommand, LinkDelCommand, LinkPutCommand, LinkQueryCommand,
 };
 use wash_lib::cli::{CommandOutput, OutputKind};
+use wash_lib::config::WashConnectionOptions;
 use wasmcloud_control_interface::Link;
 
 use crate::appearance::spinner::Spinner;
@@ -53,21 +54,40 @@ pub async fn handle_command(
             wit_package: package,
             opts,
         }) => {
+            let wco: WashConnectionOptions = opts.try_into()?;
+
+            // If the link name is not specified, and multiple links are similar in other ways
+            // make deleting the link an error, as the user should likely be explicitly choosing
+            // which they'd like to delete
+            if link_name.is_none() {
+                let similar_link_count = get_links(wco.clone())
+                    .await
+                    .map_err(|e| {
+                        anyhow!(e).context("failed to retrieve links while checking for multiple")
+                    })?
+                    .into_iter()
+                    .filter(|l| {
+                        l.source_id() == source_id
+                            && l.wit_namespace() == namespace
+                            && l.wit_package() == package
+                    })
+                    .collect::<Vec<_>>()
+                    .len();
+                ensure!(
+                    similar_link_count <= 1,
+                    "More than one similar link found, please specify link name explicitly"
+                );
+            };
+
             let link_name = link_name.clone().unwrap_or_else(|| "default".to_string());
 
             sp.update_spinner_message(format!(
                 "Deleting link for {source_id} on {namespace}:{package} ({link_name}) ... ",
             ));
 
-            let failure = delete_link(
-                opts.try_into()?,
-                &source_id,
-                &link_name,
-                &namespace,
-                &package,
-            )
-            .await
-            .map_or_else(|e| Some(format!("{e}")), |_| None);
+            let failure = delete_link(wco, &source_id, &link_name, &namespace, &package)
+                .await
+                .map_or_else(|e| Some(format!("{e}")), |_| None);
 
             link_del_output(&source_id, &link_name, &namespace, &package, failure)?
         }

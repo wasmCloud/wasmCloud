@@ -4,13 +4,11 @@ use std::pin::pin;
 use std::time::Duration;
 
 use anyhow::{anyhow, ensure, Context as _, Result};
-use nkeys::KeyPair;
 use serde::Deserialize;
 use tokio::time::interval;
 use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 use tracing::warn;
-use url::Url;
 use wasmcloud_core::health_subject;
 
 /// Helper method for deserializing content, so that we can easily switch out implementations
@@ -20,12 +18,15 @@ pub fn deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> Result<T> {
 
 /// Arguments to [`assert_start_provider`]
 pub struct StartProviderArgs<'a> {
+    /// [`wasmcloud_control_interface::Client`] to use when starting the provider
     pub client: &'a wasmcloud_control_interface::Client,
-    pub lattice: &'a str,
-    pub host_key: &'a KeyPair,
-    pub provider_key: &'a KeyPair,
+    /// ID of the host on which the provider should be started
+    pub host_id: &'a str,
+    /// ID of the provider that should be started
     pub provider_id: &'a str,
-    pub url: &'a Url,
+    /// Image ref of the provider to start
+    pub provider_ref: &'a str,
+    /// Named configuration to provide attach to the provider
     pub config: Vec<String>,
 }
 
@@ -47,33 +48,23 @@ struct ProviderHealthCheckResponse {
 pub async fn assert_start_provider(
     StartProviderArgs {
         client,
-        lattice,
-        host_key,
-        provider_key,
+        host_id,
         provider_id,
-        url,
+        provider_ref,
         config,
     }: StartProviderArgs<'_>,
 ) -> Result<()> {
+    let lattice = client.lattice();
     let rpc_client = client.nats_client();
     let resp = client
-        .start_provider(
-            &host_key.public_key(),
-            url.as_ref(),
-            provider_id,
-            None,
-            config,
-        )
+        .start_provider(host_id, provider_ref, provider_id, None, config)
         .await
         .map_err(|e| anyhow!(e).context("failed to start provider"))?;
     ensure!(resp.succeeded());
 
     let res = pin!(IntervalStream::new(interval(Duration::from_secs(1)))
         .take(30)
-        .then(|_| rpc_client.request(
-            health_subject(lattice, &provider_key.public_key()),
-            "".into(),
-        ))
+        .then(|_| rpc_client.request(health_subject(lattice, provider_id), "".into(),))
         .filter_map(|res| {
             match res {
                 Err(error) => {

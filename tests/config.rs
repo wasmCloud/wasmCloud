@@ -163,6 +163,7 @@ async fn config_e2e() -> anyhow::Result<()> {
     )
     .await
     .context("failed to start test host")?;
+    let host_id = host.host_key().public_key();
 
     let nats_kv_secrets_backend = NatsKvSecretsBackend::new(
         "wasmcloud.secrets".to_string(),
@@ -216,12 +217,13 @@ async fn config_e2e() -> anyhow::Result<()> {
     // Scale pinger
     assert_scale_component(
         &ctl_client,
-        &host.host_key(),
+        &host_id,
         format!("file://{RUST_PINGER_CONFIG_COMPONENT_PREVIEW2_SIGNED}"),
         PINGER_COMPONENT_ID,
         None,
         5,
         vec!["pinger".to_string(), "pinger_override".to_string()],
+        Duration::from_secs(10),
     )
     .await
     .expect("should've scaled pinger component");
@@ -247,12 +249,13 @@ async fn config_e2e() -> anyhow::Result<()> {
     // Scale ponger
     assert_scale_component(
         &ctl_client,
-        &host.host_key(),
+        &host_id,
         format!("file://{RUST_PONGER_CONFIG_COMPONENT_PREVIEW2_SIGNED}"),
         PONGER_COMPONENT_ID,
         None,
         5,
         vec!["ponger".to_string(), "SECRET_ponger".to_string()],
+        Duration::from_secs(10),
     )
     .await
     .expect("should've scaled component");

@@ -195,68 +195,55 @@ async fn interfaces() -> anyhow::Result<()> {
             let rust_keyvalue_redis_url = rust_keyvalue_redis.url();
             let rust_keyvalue_vault_url = rust_keyvalue_vault.url();
             let rust_messaging_nats_url = rust_messaging_nats.url();
+            let host_id = host_key.public_key();
             try_join!(
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_blobstore_fs.subject,
+                    host_id: &host_id,
                     provider_id: &rust_blobstore_fs_id,
-                    url: &rust_blobstore_fs_url,
+                    provider_ref: rust_blobstore_fs_url.as_str(),
                     config: vec![],
                 }),
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_blobstore_s3.subject,
+                    host_id: &host_id,
                     provider_id: &rust_blobstore_s3_id,
-                    url: &rust_blobstore_s3_url,
+                    provider_ref: rust_blobstore_s3_url.as_str(),
                     config: vec![],
                 }),
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_http_client.subject,
+                    host_id: &host_id,
                     provider_id: &rust_http_client_id,
-                    url: &rust_http_client_url,
+                    provider_ref: rust_http_client_url.as_str(),
                     config: vec![],
                 }),
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_http_server.subject,
+                    host_id: &host_id,
                     provider_id: &rust_http_server_id,
-                    url: &rust_http_server_url,
+                    provider_ref: rust_http_server_url.as_str(),
                     config: vec![],
                 }),
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_keyvalue_redis.subject,
+                    host_id: &host_id,
                     provider_id: &rust_keyvalue_redis_id,
-                    url: &rust_keyvalue_redis_url,
+                    provider_ref: rust_keyvalue_redis_url.as_str(),
                     config: vec![],
                 }),
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_keyvalue_vault.subject,
+                    host_id: &host_id,
                     provider_id: &rust_keyvalue_vault_id,
-                    url: &rust_keyvalue_vault_url,
+                    provider_ref: rust_keyvalue_vault_url.as_str(),
                     config: vec![],
                 }),
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_messaging_nats.subject,
+                    host_id: &host_id,
                     provider_id: &rust_messaging_nats_id,
-                    url: &rust_messaging_nats_url,
+                    provider_ref: rust_messaging_nats_url.as_str(),
                     config: vec![],
                 }),
             )
@@ -267,12 +254,13 @@ async fn interfaces() -> anyhow::Result<()> {
                 async {
                     assert_scale_component(
                         &ctl_client,
-                        &host.host_key(),
+                        &host.host_key().public_key(),
                         format!("file://{RUST_INTERFACES_REACTOR}"),
                         INTERFACES_REACTOR_ID,
                         None,
                         5,
                         Vec::new(),
+                        Duration::from_secs(10),
                     )
                     .await
                     .context("failed to scale `interface_reactor` component")
@@ -280,12 +268,13 @@ async fn interfaces() -> anyhow::Result<()> {
                 async {
                     assert_scale_component(
                         &ctl_client,
-                        &host.host_key(),
+                        &host.host_key().public_key(),
                         format!("file://{RUST_INTERFACES_HANDLER_REACTOR_PREVIEW2}"),
                         INTERFACES_HANDLER_REACTOR_ID,
                         None,
                         5,
                         Vec::new(),
+                        Duration::from_secs(10),
                     )
                     .await
                     .context("failed to scale `interface_handler_reactor` component")

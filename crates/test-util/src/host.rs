@@ -162,4 +162,10 @@ impl WasmCloudTestHost {
     pub fn lattice_name(&self) -> &str {
         self.lattice_name.as_ref()
     }
+
+    /// Get the host ID
+    #[must_use]
+    pub fn host_id(&self) -> String {
+        self.host_key().public_key()
+    }
 }

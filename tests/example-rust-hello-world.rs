@@ -58,7 +58,8 @@ async fn example_rust_http_hello_world() -> anyhow::Result<()> {
 
     let rust_http_server = providers::rust_http_server().await;
     let rust_http_server_id = rust_http_server.subject.public_key();
-
+    let host_key = host.host_key();
+    let host_id = host_key.public_key();
     try_join!(
         async {
             assert_config_put(
@@ -73,15 +74,12 @@ async fn example_rust_http_hello_world() -> anyhow::Result<()> {
             .context("failed to put configuration")
         },
         async {
-            let host_key = host.host_key();
             let rust_http_server_url = rust_http_server.url();
             assert_start_provider(StartProviderArgs {
                 client: &ctl_client,
-                lattice: LATTICE,
-                host_key: &host_key,
-                provider_key: &rust_http_server.subject,
+                host_id: &host_id,
                 provider_id: &rust_http_server_id,
-                url: &rust_http_server_url,
+                provider_ref: rust_http_server_url.as_str(),
                 config: vec![],
             })
             .await
@@ -90,12 +88,13 @@ async fn example_rust_http_hello_world() -> anyhow::Result<()> {
         async {
             assert_scale_component(
                 &ctl_client,
-                &host.host_key(),
+                &host_id,
                 format!("file://{RUST_HTTP_HELLO_WORLD}"),
                 COMPONENT_ID,
                 None,
                 5,
                 Vec::new(),
+                Duration::from_secs(10),
             )
             .await
             .context("failed to scale `rust-http-hello-world` component")
