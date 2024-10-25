@@ -68,5 +68,6 @@ func Query(query string, params []PgValue) interfaces.Result[[]ResultRow, QueryE
 	return interfaces.WasmcloudPostgres0_1_1_draft_QueryQuery(query, params)
 }
 
+//go:generate wit-bindgen-wrpc go --out-dir gen --package github.com/wasmCloud/wasmCloud/examples/go/providers/custom-template/bindings wit
 //go:generate wit-bindgen tiny-go wit --out-dir=gen --gofmt
 func main() {}
