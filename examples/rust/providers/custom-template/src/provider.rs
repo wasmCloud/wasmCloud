@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
+use wasmcloud_provider_sdk::initialize_observability;
 use wasmcloud_provider_sdk::{
     run_provider, serve_provider_exports, Context, LinkConfig, LinkDeleteInfo, Provider,
     ProviderInitConfig,
@@ -48,6 +49,10 @@ impl CustomTemplateProvider {
     ///
     /// This step is essentially the same for every provider, and you shouldn't need to modify this function.
     pub async fn run() -> anyhow::Result<()> {
+        initialize_observability!(
+            Self::name(),
+            std::env::var_os("PROVIDER_CUSTOM_TEMPLATE_FLAMEGRAPH_PATH")
+        );
         let provider = Self::default();
         let shutdown = run_provider(provider.clone(), CustomTemplateProvider::name())
             .await
