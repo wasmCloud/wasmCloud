@@ -8105,7 +8105,7 @@ dependencies = [
  "wasm-pkg-client",
  "wasm-pkg-core",
  "wasmcloud-control-interface 2.2.0",
- "wasmcloud-core 0.13.0",
+ "wasmcloud-core 0.14.0",
  "wasmcloud-provider-sdk",
  "wasmcloud-secrets-types 0.4.0",
  "wat",
@@ -8183,7 +8183,7 @@ dependencies = [
  "wasm-pkg-client",
  "wasm-pkg-core",
  "wasmcloud-control-interface 2.2.0",
- "wasmcloud-core 0.13.0",
+ "wasmcloud-core 0.14.0",
  "wasmcloud-test-util",
  "wasmparser 0.219.1",
  "wasmtime",
@@ -8533,7 +8533,7 @@ dependencies = [
  "vaultrs",
  "wascap 0.15.1",
  "wasmcloud-control-interface 2.2.0",
- "wasmcloud-core 0.13.0",
+ "wasmcloud-core 0.14.0",
  "wasmcloud-host",
  "wasmcloud-provider-blobstore-azure",
  "wasmcloud-provider-blobstore-fs",
@@ -8588,7 +8588,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-opentelemetry",
- "wasmcloud-core 0.13.0",
+ "wasmcloud-core 0.14.0",
 ]
 
 [[package]]
@@ -8645,7 +8645,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-core"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8713,7 +8713,7 @@ dependencies = [
  "uuid 1.11.0",
  "wascap 0.15.1",
  "wasmcloud-control-interface 2.2.0",
- "wasmcloud-core 0.13.0",
+ "wasmcloud-core 0.14.0",
  "wasmcloud-runtime",
  "wasmcloud-secrets-client",
  "wasmcloud-secrets-types 0.4.0",
@@ -8984,7 +8984,7 @@ dependencies = [
  "tracing-subscriber",
  "ulid",
  "uuid 1.11.0",
- "wasmcloud-core 0.13.0",
+ "wasmcloud-core 0.14.0",
  "wasmcloud-tracing",
  "wrpc-interface-http",
  "wrpc-transport",
@@ -9046,7 +9046,7 @@ dependencies = [
  "wascap 0.15.1",
  "wasi-preview1-component-adapter-provider",
  "wasmcloud-component",
- "wasmcloud-core 0.13.0",
+ "wasmcloud-core 0.14.0",
  "wasmparser 0.219.1",
  "wasmtime",
  "wasmtime-wasi",
@@ -9120,7 +9120,7 @@ dependencies = [
  "url",
  "wascap 0.15.1",
  "wasmcloud-control-interface 2.2.0",
- "wasmcloud-core 0.13.0",
+ "wasmcloud-core 0.14.0",
  "wasmcloud-host",
  "wasmcloud-secrets-types 0.4.0",
 ]
@@ -9144,7 +9144,7 @@ dependencies = [
  "tracing-futures",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "wasmcloud-core 0.13.0",
+ "wasmcloud-core 0.14.0",
 ]
 
 [[package]]
