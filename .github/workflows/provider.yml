@@ -152,3 +152,37 @@ jobs:
         env:
           WASH_REG_USER: ${{ secrets.azurecr_username }}
           WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}
+
+  # Ensure that `wash build` and `wash app validate` works for all providers
+  wash-build:
+    name: build
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        provider:
+          - bin-path: src/bin/blobstore-azure-provider
+          - bin-path: src/bin/blobstore-fs-provider
+          - bin-path: src/bin/blobstore-s3-provider
+          - bin-path: src/bin/http-client-provider
+          - bin-path: src/bin/http-server-provider
+          - bin-path: src/bin/keyvalue-nats-provider
+          - bin-path: src/bin/keyvalue-redis-provider
+          - bin-path: src/bin/keyvalue-vault-provider
+          - bin-path: src/bin/lattice-controller-provider
+          - bin-path: src/bin/messaging-kafka-provider
+          - bin-path: src/bin/messaging-nats-provider
+          - bin-path: src/bin/sqldb-postgres-provider
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # Set up wash
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          path: artifacts
+      - run: mv "./artifacts/wasmcloud-x86_64-unknown-linux-musl/bin/wash" wash
+      - run: chmod +x wash
+
+      - name: build provider
+        run: |
+          wash build -p ${{ matrix.provider.bin-path }}
