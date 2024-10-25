@@ -375,31 +375,6 @@ jobs:
       - uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
         id: deployment
 
-  docker:
-    runs-on: ubuntu-latest-4-cores
-    env:
-      DOCKER_BUILD_RECORD_UPLOAD: false
-    needs:
-      - build-bin
-      - test-linux
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
-      - name: Build wasmCloud
-        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75
-        with:
-          context: .
-          push: false
-          platforms: linux/amd64,linux/arm64
-      - name: Build wash
-        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75
-        with:
-          context: .
-          file: ./crates/wash-cli/Dockerfile
-          push: false
-          platforms: linux/amd64,linux/arm64
-
   oci:
     runs-on: ubuntu-latest-4-cores
     strategy:
