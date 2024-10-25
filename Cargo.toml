@@ -248,8 +248,8 @@ normpath = { version = "1", default-features = false }
 notify = { version = "6", default-features = false }
 nuid = { version = "0.4", default-features = false }
 num = { version = "0.4", default-features = false }
-oci-client = { version = "0.13", default-features = false }
-oci-wasm = { version = "0.1.0", default-features = false }
+oci-client = { version = "0.14", default-features = false }
+oci-wasm = { version = "0.2.0", default-features = false }
 once_cell = { version = "1", default-features = false }
 opentelemetry = { version = "0.23", default-features = false }
 opentelemetry-appender-tracing = { version = "0.4", default-features = false }
