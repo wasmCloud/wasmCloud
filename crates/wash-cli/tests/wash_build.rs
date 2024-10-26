@@ -593,7 +593,7 @@ async fn integration_build_tinygo_component_unsigned() -> Result<()> {
 #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 async fn integration_build_tinygo_component_signed() -> Result<()> {
     let test_setup = init_path(
-        /* component_name= */ "hello-world-tinygo",
+        /* component_name= */ "http-client-tinygo",
         /* template_name= */ "examples/golang/components/http-client-tinygo",
     )
     .await?;
@@ -716,7 +716,7 @@ async fn integration_build_handles_dashed_names() -> Result<()> {
 #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 async fn integration_build_tinygo_component_separate_paths() -> Result<()> {
     let test_setup = init_path(
-        /* component_name= */ "hello-world-tinygo",
+        /* component_name= */ "http-client-tinygo",
         /* template_name= */ "examples/golang/components/http-client-tinygo",
     )
     .await?;
@@ -746,7 +746,7 @@ async fn integration_build_tinygo_component_separate_paths() -> Result<()> {
     
     [component]
     wit_world = "hello"
-    wasm_target = "wasm32-wasi"
+    wasm_target = "wasm32-wasip2"
     "#,
     )
     .await
@@ -756,8 +756,10 @@ async fn integration_build_tinygo_component_separate_paths() -> Result<()> {
     let tiny_go_main_dot_go = tokio::fs::read_to_string(project_dir.join("hello.go"))
         .await
         .context("failed to read tinygo hello.go")?;
-    let new_main_dot_go =
-        tiny_go_main_dot_go.replace("wit-bindgen tiny-go wit", "wit-bindgen tiny-go wow");
+    let new_main_dot_go = tiny_go_main_dot_go.replace(
+        "generate --world hello --out gen ./wit",
+        "generate --world hello --out gen ./wow",
+    );
     tokio::fs::write(project_dir.join("hello.go"), new_main_dot_go)
         .await
         .context("failed to write new main.go")?;
