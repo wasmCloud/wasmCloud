@@ -1,6 +1,6 @@
 # wasmCloud Component
 
-wasmCloud is an open source Cloud Native Computing Foundation (CNCF) project that enables teams to build, manage, and scale polyglot Wasm apps across any cloud, K8s, or edge.
+wasmCloud is an open source Cloud Native Computing Foundation (CNCF) project that enables teams to build, manage, and scale polyglot Wasm apps across any cloud, K8s, or edge. This crate provides pre-generated interfaces and idiomatic wrappers that aid in building [WebAssembly components](https://component-model.bytecodealliance.org/introduction.html) via the `wasm32-wasip2` target.
 
 ⚠️ This crate is highly experimental and likely to experience breaking changes frequently. The host itself is relatively stable, but the APIs and public members of this crate are not guaranteed to be stable and may change in a backwards-incompatible way.
 
@@ -9,75 +9,84 @@ wasmCloud is an open source Cloud Native Computing Foundation (CNCF) project tha
 This crate is a collection of `wasi` and `wasmcloud` interfaces that can be used at runtime in a Wasm component running in wasmCloud. It can be imported in a Rust application and used directly rather than generating bindings manually in code.
 
 ```rust
-wit_bindgen::generate!({
-    with: {
-        "wasi:http/types@0.2.1": wasmcloud_component::wasi::http::types,
-        "wasi:io/streams@0.2.1": wasmcloud_component::wasi::io::streams,
-    }
-});
+// This crate can be used with `wit_bindgen` for interoperability with WIT types
+// wit_bindgen::generate!({
+//     with: {
+//         "wasi:http/types@0.2.1": wasmcloud_component::wasi::http::types,
+//         "wasi:io/streams@0.2.1": wasmcloud_component::wasi::io::streams,
+//     },
+//     generate_all
+// });
 
-use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Read;
 
 use serde::Deserialize;
 use serde_json::json;
-use test_components::testing::*;
-use wasmcloud_component::wasi::{config, http};
-use wasmcloud_component::{InputStreamReader, OutputStreamWriter};
+use wasmcloud_component::debug;
+use wasmcloud_component::http::{self, ErrorCode};
+use wasmcloud_component::wasi::{config, keyvalue};
 
 struct Component;
 
-impl exports::wasi::http::incoming_handler::Guest for Component {
-    fn handle(request: http::types::IncomingRequest, response_out: http::types::ResponseOutparam) {
+// The `http::Server` trait is a wrapper around `wasi:http/incoming-handler` that implements
+// the `handle` function with the standard `http` crate.
+impl http::Server for Component {
+    fn handle(
+        request: http::IncomingRequest,
+    ) -> http::Result<http::Response<impl http::OutgoingBody>> {
+        // Use macros for leveled `wasi:logging` logging
+        debug!("handling request");
+
+        let (parts, mut body) = request.into_parts();
+
         #[derive(Deserialize)]
-        struct Request {
+        struct UserRequest {
             config_key: String,
         }
 
-        let request_body = request
-            .consume()
-            .expect("failed to get incoming request body");
-        let Request { config_key } = {
+        // Use `http` and `serde_json` like a normal Rust HTTP server
+        let UserRequest { config_key } = {
             let mut buf = vec![];
-            let mut stream = request_body
-                .stream()
-                .expect("failed to get incoming request stream");
-            InputStreamReader::from(&mut stream)
-                .read_to_end(&mut buf)
-                .expect("failed to read value from incoming request stream");
-            serde_json::from_slice(&buf).expect("failed to decode request body")
+            body.read_to_end(&mut buf).map_err(|_| {
+                ErrorCode::InternalError(Some("failed to read request body".to_string()))
+            })?;
+            serde_json::from_slice(&buf).map_err(|_| {
+                ErrorCode::InternalError(Some("failed to decode request body".to_string()))
+            })?
         };
-        let _trailers = http::types::IncomingBody::finish(request_body);
 
-        // No args, return string
+        // Use `wit_bindgen` generated interfaces to call other components or
+        // capability providers.
         let pong = pingpong::ping();
-        let pong_secret = pingpong::ping_secret();
+
+        // Use the `wasi` crate for wasi-cloud interfaces
+        // like `keyvalue` and `blobstore`
+        let kv_key = parts.uri.path();
+        let cache = keyvalue::store::open("default").expect("open bucket");
+        let count = keyvalue::atomics::increment(&cache, kv_key, 1).map_err(|_| {
+            ErrorCode::InternalError(Some("failed to increment counter in store".to_string()))
+        })?;
+
+        // Use `wasi:config/store` to configure at runtime
+        let single_val = config::store::get(&config_key).map_err(|_| {
+            ErrorCode::InternalError(Some("failed to get config value".to_string()))
+        })?;
+        let multi_val = config::store::get_all().map_err(|_| {
+            ErrorCode::InternalError(Some("failed to get config value".to_string()))
+        })?;
 
         let res = json!({
-            "single_val": config::runtime::get(&config_key).expect("failed to get config value"),
-            "multi_val": config::runtime::get_all().expect("failed to get config value").into_iter().collect::<HashMap<String, String>>(),
+            "single_val": single_val,
+            "multi_val": multi_val,
+            "count": count,
             "pong": pong,
-            "pong_secret": pong_secret,
         });
+
+        // Encode and send response
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");
-        let response = http::types::OutgoingResponse::new(http::types::Fields::new());
-        let response_body = response
-            .body()
-            .expect("failed to get outgoing response body");
-        {
-            let mut stream = response_body
-                .write()
-                .expect("failed to get outgoing response stream");
-            let mut w = OutputStreamWriter::from(&mut stream);
-            w.write_all(&body)
-                .expect("failed to write body to outgoing response stream");
-            w.flush().expect("failed to flush outgoing response stream");
-        }
-        http::types::OutgoingBody::finish(response_body, None)
-            .expect("failed to finish response body");
-        http::types::ResponseOutparam::set(response_out, Ok(response));
+        Ok(http::Response::new(body))
     }
 }
 
-export!(Component);
+http::export!(Component);
 ```
