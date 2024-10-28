@@ -8446,9 +8446,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-pkg-core"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e725c69e07fe449134fa6d2c0d6659ea6be4104bf024534ae802ac15cc86dd5"
+checksum = "c2f2f779377701d6b94b50ce25ab8b8f5400c6cbf9dc3a78ce2dfa6407b1b48f"
 dependencies = [
  "anyhow",
  "futures-util",
