@@ -1,0 +1,11 @@
+services:
+  nats:
+    image: nats:2.10-alpine
+    network_mode: "host"
+    command: ["-js"]
+
+  wadm:
+    depends_on:
+      - "nats"
+    image: ghcr.io/wasmcloud/wadm:v0.18.0
+    network_mode: "host"

@@ -1,0 +1,74 @@
+name: run-benchmarks
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'SHA of the commit to benchmark'
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  http-benchmark:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install k6
+
+      - name: Start services
+        run: |
+          sudo docker compose -f benches/http-loadtesting/docker-compose.yml up -d
+      - name:  Install wash
+        run: |
+          curl -s https://packagecloud.io/install/repositories/wasmcloud/core/script.deb.sh | sudo bash
+          sudo apt-get install wash
+
+      - name: Benchmark
+        run: |
+          wash get hosts
+          wash app deploy benches/http-loadtesting/wadm.yaml
+          wash app status rust-hello-world -o json
+          #./artifacts/1/wasmcloud-x86_64-unknown-linux-musl --log-level error &
+          sudo docker run -d --name wasmcloud --network=host ghcr.io/wasmcloud/wasmcloud:${{ github.event.inputs.sha }} wasmcloud --log-level error
+          timeout=30
+          while :; do
+            if [ $timeout -eq 0 ]; then
+              echo "Timeout waiting for app to deploy"
+              exit 1
+            fi
+            wash get hosts -o json
+            res=$(wash app status rust-hello-world -o json | jq -r '.status.status.type')
+            if [ "$res" == "deployed" ]; then
+              break
+            fi
+
+            timeout=$((timeout - 1))
+            sleep 1
+          done
+
+          k6 run benches/http-loadtesting/script.js --summary-export summary.json --summary-trend-stats="med,p(95),p(99.9)"
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary.json
+          path: summary.json
+
+      - name: Stop workload
+        if: always()
+        run: |
+          sudo docker compose -f benches/http-loadtesting/docker-compose.yml down
+          sudo docker kill wasmcloud && sudo docker rm wasmcloud
+
