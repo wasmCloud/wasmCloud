@@ -1,4 +1,4 @@
-name = "typescript-http-password-checker"
+name = "http-password-checker"
 language = "typescript"
 type = "component"
 version = "0.1.0"
