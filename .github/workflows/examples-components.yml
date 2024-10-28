@@ -382,6 +382,11 @@ jobs:
             lang: 'typescript'
             wasm-bin: 'http_hello_world_s.wasm'
 
+          - folder: 'http-password-checker'
+            tag-prefix: 'component-http-password-checker-typescript-v'
+            lang: 'typescript'
+            wasm-bin: 'http_password_checker_s.wasm'
+
           # Python
           - folder: 'http-hello-world'
             tag-prefix: 'component-http-hello-world-python-v'
