@@ -19,7 +19,8 @@ use wash_lib::start::{nats_pid_path, NATS_SERVER_BINARY, WADM_PID};
 use crate::appearance::spinner::Spinner;
 use crate::config::{
     DEFAULT_LATTICE, WASMCLOUD_CTL_CREDSFILE, WASMCLOUD_CTL_HOST, WASMCLOUD_CTL_JWT,
-    WASMCLOUD_CTL_PORT, WASMCLOUD_CTL_SEED, WASMCLOUD_CTL_TLS_CA_FILE, WASMCLOUD_LATTICE,
+    WASMCLOUD_CTL_PORT, WASMCLOUD_CTL_SEED, WASMCLOUD_CTL_TLS_CA_FILE, WASMCLOUD_CTL_TLS_FIRST,
+    WASMCLOUD_LATTICE,
 };
 
 #[derive(Parser, Debug, Clone, Default, clap::ValueEnum, Eq, PartialEq)]
@@ -70,6 +71,10 @@ pub struct DownCommand {
     #[clap(long = "ctl-tls-ca-file", env = WASMCLOUD_CTL_TLS_CA_FILE)]
     pub ctl_tls_ca_file: Option<PathBuf>,
 
+    /// Perform TLS handshake before expecting the server greeting
+    #[clap(long = "ctl-tls-first", env = WASMCLOUD_CTL_TLS_FIRST)]
+    pub ctl_tls_first: Option<bool>,
+
     #[clap(long = "host-id")]
     pub host_id: Option<ServerId>,
 
@@ -111,6 +116,7 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
         cmd.ctl_seed,
         cmd.ctl_credsfile,
         cmd.ctl_tls_ca_file,
+        cmd.ctl_tls_first.unwrap_or_default(),
     )
     .await;
 

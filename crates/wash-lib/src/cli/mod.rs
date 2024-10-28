@@ -164,6 +164,14 @@ pub struct CliConnectionOpts {
     )]
     pub ctl_tls_ca_file: Option<PathBuf>,
 
+    /// Perform TLS handshake before expecting the server greeting.
+    #[clap(
+        long = "ctl-tls-first",
+        env = "WASH_CTL_TLS_FIRST",
+        hide_env_values = true
+    )]
+    pub ctl_tls_first: Option<bool>,
+
     /// JS domain for wasmcloud control interface. Defaults to None
     #[clap(
         long = "js-domain",
@@ -200,6 +208,7 @@ impl Default for CliConnectionOpts {
             ctl_seed: None,
             ctl_credsfile: None,
             ctl_tls_ca_file: None,
+            ctl_tls_first: None,
             js_domain: None,
             lattice: Some(DEFAULT_LATTICE.to_string()),
             timeout_ms: DEFAULT_NATS_TIMEOUT_MS,
@@ -219,6 +228,7 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
             ctl_seed,
             ctl_credsfile,
             ctl_tls_ca_file,
+            ctl_tls_first,
             js_domain,
             lattice,
             timeout_ms,
@@ -244,6 +254,7 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
             ctl_seed,
             ctl_credsfile,
             ctl_tls_ca_file,
+            ctl_tls_first,
             js_domain,
             lattice,
             timeout_ms,

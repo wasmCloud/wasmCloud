@@ -43,13 +43,14 @@ use crate::config::{
     NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_ALLOW_FILE_LOAD, WASMCLOUD_CLUSTER_ISSUERS,
     WASMCLOUD_CLUSTER_SEED, WASMCLOUD_CONFIG_SERVICE, WASMCLOUD_CTL_CREDSFILE, WASMCLOUD_CTL_HOST,
     WASMCLOUD_CTL_JWT, WASMCLOUD_CTL_PORT, WASMCLOUD_CTL_SEED, WASMCLOUD_CTL_TLS,
-    WASMCLOUD_CTL_TLS_CA_FILE, WASMCLOUD_ENABLE_IPV6, WASMCLOUD_HOST_LOG_PATH, WASMCLOUD_HOST_PATH,
-    WASMCLOUD_HOST_SEED, WASMCLOUD_HOST_VERSION, WASMCLOUD_JS_DOMAIN, WASMCLOUD_LATTICE,
-    WASMCLOUD_LOG_LEVEL, WASMCLOUD_MAX_EXECUTION_TIME_MS, WASMCLOUD_OCI_ALLOWED_INSECURE,
-    WASMCLOUD_OCI_ALLOW_LATEST, WASMCLOUD_POLICY_TOPIC, WASMCLOUD_PROV_SHUTDOWN_DELAY_MS,
-    WASMCLOUD_RPC_CREDSFILE, WASMCLOUD_RPC_HOST, WASMCLOUD_RPC_JWT, WASMCLOUD_RPC_PORT,
-    WASMCLOUD_RPC_SEED, WASMCLOUD_RPC_TIMEOUT_MS, WASMCLOUD_RPC_TLS, WASMCLOUD_RPC_TLS_CA_FILE,
-    WASMCLOUD_SECRETS_TOPIC, WASMCLOUD_STRUCTURED_LOGGING_ENABLED,
+    WASMCLOUD_CTL_TLS_CA_FILE, WASMCLOUD_CTL_TLS_FIRST, WASMCLOUD_ENABLE_IPV6,
+    WASMCLOUD_HOST_LOG_PATH, WASMCLOUD_HOST_PATH, WASMCLOUD_HOST_SEED, WASMCLOUD_HOST_VERSION,
+    WASMCLOUD_JS_DOMAIN, WASMCLOUD_LATTICE, WASMCLOUD_LOG_LEVEL, WASMCLOUD_MAX_EXECUTION_TIME_MS,
+    WASMCLOUD_OCI_ALLOWED_INSECURE, WASMCLOUD_OCI_ALLOW_LATEST, WASMCLOUD_POLICY_TOPIC,
+    WASMCLOUD_PROV_SHUTDOWN_DELAY_MS, WASMCLOUD_RPC_CREDSFILE, WASMCLOUD_RPC_HOST,
+    WASMCLOUD_RPC_JWT, WASMCLOUD_RPC_PORT, WASMCLOUD_RPC_SEED, WASMCLOUD_RPC_TIMEOUT_MS,
+    WASMCLOUD_RPC_TLS, WASMCLOUD_RPC_TLS_CA_FILE, WASMCLOUD_RPC_TLS_FIRST, WASMCLOUD_SECRETS_TOPIC,
+    WASMCLOUD_STRUCTURED_LOGGING_ENABLED,
 };
 
 use crate::down::stop_nats;
@@ -191,6 +192,10 @@ pub struct WasmcloudOpts {
     #[clap(long = "rpc-tls", env = WASMCLOUD_RPC_TLS)]
     pub rpc_tls: bool,
 
+    /// Optional flag to enable performing TLS handshake before expecting the server greeting for RPC messages
+    #[clap(long = "rpc-tls-first", env = WASMCLOUD_RPC_TLS_FIRST, requires = "rpc_tls")]
+    pub rpc_tls_first: bool,
+
     /// A TLS CA file to use to authenticate to NATS for RPC messages
     #[clap(long = "rpc-tls-ca-file", env = WASMCLOUD_RPC_TLS_CA_FILE)]
     pub rpc_tls_ca_file: Option<PathBuf>,
@@ -222,6 +227,10 @@ pub struct WasmcloudOpts {
     /// Optional flag to enable host communication with a NATS server over TLS for CTL messages
     #[clap(long = "ctl-tls", env = WASMCLOUD_CTL_TLS)]
     pub ctl_tls: bool,
+
+    /// Optional flag to enable performing TLS handshake before expecting the server greeting for CTL messages
+    #[clap(long = "ctl-tls-first", env = WASMCLOUD_CTL_TLS_FIRST, requires = "ctl_tls")]
+    pub ctl_tls_first: bool,
 
     /// A TLS CA file to use to authenticate to NATS for CTL messages
     #[clap(long = "ctl-tls-ca-file", env = WASMCLOUD_CTL_TLS_CA_FILE)]
@@ -327,6 +336,7 @@ impl WasmcloudOpts {
             self.ctl_seed,
             self.ctl_credsfile,
             self.ctl_tls_ca_file,
+            self.ctl_tls_first,
         )
         .await
         .context("Failed to create NATS client")?;
@@ -865,6 +875,7 @@ pub(crate) async fn start_nats(
             None,
             Some(creds.to_owned()),
             None,
+            false,
         )
         .await
         {
@@ -1002,6 +1013,7 @@ async fn is_wadm_running(
         None,
         credsfile,
         None,
+        false,
     )
     .await?;
 
@@ -1049,6 +1061,7 @@ pub(crate) async fn nats_client_from_wasmcloud_opts(
         wasmcloud_opts.ctl_seed.clone(),
         wasmcloud_opts.ctl_credsfile.clone(),
         wasmcloud_opts.ctl_tls_ca_file.clone(),
+        wasmcloud_opts.ctl_tls_first.clone(),
     )
     .await
 }

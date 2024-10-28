@@ -79,6 +79,9 @@ pub struct WashConnectionOptions {
     /// Path to a file containing a CA certificate to use for TLS connections
     pub ctl_tls_ca_file: Option<PathBuf>,
 
+    /// Perform TLS handshake before expecting the server greeting.
+    pub ctl_tls_first: Option<bool>,
+
     /// JS domain for wasmcloud control interface. Defaults to None
     pub js_domain: Option<String>,
 
@@ -109,7 +112,9 @@ impl WashConnectionOptions {
         let ctl_tls_ca_file = self
             .ctl_tls_ca_file
             .or_else(|| self.ctx.ctl_tls_ca_file.clone());
-
+        let ctl_tls_first = self
+            .ctl_tls_first
+            .unwrap_or_else(|| self.ctx.ctl_tls_first.unwrap_or(false));
         let auction_timeout_ms = auction_timeout_ms.unwrap_or(self.timeout_ms);
 
         let nc = create_nats_client_from_opts(
@@ -119,6 +124,7 @@ impl WashConnectionOptions {
             ctl_seed,
             ctl_credsfile,
             ctl_tls_ca_file,
+            ctl_tls_first,
         )
         .await
         .context("Failed to create NATS client")?;
@@ -151,7 +157,9 @@ impl WashConnectionOptions {
         let ctl_tls_ca_file = self
             .ctl_tls_ca_file
             .or_else(|| self.ctx.ctl_tls_ca_file.clone());
-
+        let ctl_tls_first = self
+            .ctl_tls_first
+            .unwrap_or_else(|| self.ctx.ctl_tls_first.unwrap_or(false));
         let nc = create_nats_client_from_opts(
             &ctl_host,
             &ctl_port,
@@ -159,6 +167,7 @@ impl WashConnectionOptions {
             ctl_seed,
             ctl_credsfile,
             ctl_tls_ca_file,
+            ctl_tls_first,
         )
         .await?;
 
@@ -196,6 +205,7 @@ pub async fn create_nats_client_from_opts(
     seed: Option<String>,
     credsfile: Option<PathBuf>,
     tls_ca_file: Option<PathBuf>,
+    tls_first: bool,
 ) -> Result<Client> {
     let nats_url = format!("{host}:{port}");
     use async_nats::ConnectOptions;
@@ -225,6 +235,10 @@ pub async fn create_nats_client_from_opts(
             opts = opts.add_root_certificates(ca_file).require_tls(true);
         }
 
+        if tls_first {
+            opts = opts.tls_first();
+        }
+
         opts.connect(&nats_url).await.with_context(|| {
             format!(
                 "Failed to connect to NATS server {}:{} while creating client",
@@ -245,6 +259,10 @@ pub async fn create_nats_client_from_opts(
             opts = opts.add_root_certificates(ca_file).require_tls(true);
         }
 
+        if tls_first {
+            opts = opts.tls_first();
+        }
+
         opts.connect(&nats_url).await.with_context(|| {
             format!(
                 "Failed to connect to NATS {} with credentials file {:?}",
@@ -256,6 +274,10 @@ pub async fn create_nats_client_from_opts(
 
         if let Some(ca_file) = tls_ca_file {
             opts = opts.add_root_certificates(ca_file).require_tls(true);
+        }
+
+        if tls_first {
+            opts = opts.tls_first();
         }
 
         opts.connect(&nats_url)
