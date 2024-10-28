@@ -376,7 +376,7 @@ jobs:
         id: deployment
 
   oci:
-    runs-on: ubuntu-latest-4-cores
+    runs-on: ubuntu-latest-8-cores
     strategy:
       matrix:
         include:
