@@ -20,7 +20,7 @@ use wash_lib::start::{
     NatsConfig, WadmConfig, NATS_SERVER_BINARY,
 };
 
-use crate::cmd::dev::NATS_KV_SECRETS_VERSION;
+use crate::cmd::dev::{DEFAULT_SECRETS_TOPIC, NATS_KV_SECRETS_VERSION};
 use crate::cmd::up::{remove_wadm_pidfile, start_nats, NatsOpts, WadmOpts, WasmcloudOpts};
 use crate::config::{configure_host_env, DEFAULT_NATS_HOST};
 use crate::down::stop_nats;
@@ -328,9 +328,10 @@ impl WashDevSession {
         };
 
         // Start NATS KV secrets provider
-        let nats_kv_secrets_log_path = session_dir.join("nats-kv-secrets.log");
-        let nats_kv_secrets_log_file =
-            tokio::fs::File::create(&wadm_log_path)
+        let mut nats_kv_secrets_child = None;
+        if !secrets_nats_kv_opts.secrets_nats_kv_connect_only {
+            let nats_kv_secrets_log_path = session_dir.join("nats-kv-secrets.log");
+            let nats_kv_secrets_log_file = tokio::fs::File::create(&wadm_log_path)
                 .await
                 .with_context(|| {
                     format!(
@@ -338,25 +339,28 @@ impl WashDevSession {
                         nats_kv_secrets_log_path.display()
                     )
                 })?;
-        let nats_kv_secrets_binary =
-            wash_lib::start::secrets_nats_kv::ensure_binary(NATS_KV_SECRETS_VERSION, &install_dir)
-                .await?;
-        let nats_kv_secrets_child = match wash_lib::start::secrets_nats_kv::start_binary(
-            &install_dir,
-            &nats_kv_secrets_binary,
-            nats_kv_secrets_log_file.into_std().await,
-            secrets_nats_kv_opts
-                .try_into()
-                .map(Some)
-                .context("failed to convert opts into secrets-nats-kv config")?,
-            CommandGroupUsage::CreateNew,
-        )
-        .await
-        {
-            Ok(c) => Some(c),
-            Err(e) if e.to_string().contains("already listening") => None,
-            Err(e) => bail!("failed to start nats-kv-secrets for wash dev: {e}"),
-        };
+            let nats_kv_secrets_binary = wash_lib::start::secrets_nats_kv::ensure_binary(
+                NATS_KV_SECRETS_VERSION,
+                &install_dir,
+            )
+            .await?;
+            nats_kv_secrets_child = match wash_lib::start::secrets_nats_kv::start_binary(
+                &install_dir,
+                &nats_kv_secrets_binary,
+                nats_kv_secrets_log_file.into_std().await,
+                secrets_nats_kv_opts
+                    .try_into()
+                    .map(Some)
+                    .context("failed to convert opts into secrets-nats-kv config")?,
+                CommandGroupUsage::CreateNew,
+            )
+            .await
+            {
+                Ok(c) => Some(c),
+                Err(e) if e.to_string().contains("already listening") => None,
+                Err(e) => bail!("failed to start nats-kv-secrets for wash dev: {e}"),
+            };
+        }
 
         // Start the host in detached mode, w/ custom log file
         let wasmcloud_log_path = session_dir.join("wasmcloud.log");
@@ -373,7 +377,13 @@ impl WashDevSession {
             .into_std()
             .await
             .into();
+        // Ensure that a secrets topic is present if one isn't there
+        if wasmcloud_opts.secrets_topic.is_none() {
+            wasmcloud_opts.secrets_topic = Some(DEFAULT_SECRETS_TOPIC.into());
+        }
+
         let host_env = configure_host_env(wasmcloud_opts.clone()).await?;
+
         let wasmcloud_child = match start_wasmcloud_host(
             &wasmcloud_binary,
             std::process::Stdio::null(),
@@ -423,7 +433,6 @@ impl WashDevSession {
                     .await
                     .context("failed to read line from file")?
                 {
-                    eprintln!("LINE: {line}");
                     if let Some(host_id) = line
                         .split_once("host_id=\"")
                         .map(|(_, rhs)| &rhs[0..rhs.len() - 1])

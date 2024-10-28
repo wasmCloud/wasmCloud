@@ -14,9 +14,7 @@ use wash_lib::generate::emoji;
 use wash_lib::parser::{
     DevConfigSpec, DevSecretSpec, InterfaceComponentOverride, ProjectConfig, WitInterfaceSpec,
 };
-use wasmcloud_core::{
-    parse_wit_meta_from_operation, LinkName, WitInterface, WitNamespace, WitPackage,
-};
+use wasmcloud_core::{parse_wit_package_name, LinkName, WitInterface, WitNamespace, WitPackage};
 
 use super::manifest::config_name;
 use super::{
@@ -30,18 +28,18 @@ use super::{
 ///
 /// Dependencies are ignored normally if they are known-internal packages or interfaces that
 /// are built into the host.
-fn is_ignored_iface_dep(ns: &str, pkg: &str, iface: &str) -> bool {
+fn is_ignored_iface_dep(ns: &str, pkg: &str, iface: Option<&str>) -> bool {
     matches!(
         (ns, pkg, iface),
-        ("wasi", "blobstore", "container" | "types")
-            | ("wasi", "http", "types")
-            | ("wasi", "runtime", "config")
+        ("wasi", "blobstore", Some("container" | "types"))
+            | ("wasi", "http", Some("types"))
+            | ("wasi", "runtime", Some("config"))
             | (
                 "wasi",
                 "cli" | "clocks" | "filesystem" | "io" | "logging" | "random" | "sockets",
                 _
             )
-            | ("wasmcloud", "messaging", "types")
+            | ("wasmcloud", "messaging", Some("types"))
             | ("wasmcloud", "secrets" | "bus", _)
     )
 }
@@ -262,22 +260,31 @@ impl DependencySpec {
     /// let v = from_wit_import_face("wasi:keyvalue/atomics");
     /// # assert!(v.is_some())
     /// ```
-    pub(crate) fn from_wit_import_iface(iface: &str) -> Option<Self> {
-        let (iface, version) = match iface.split_once('@') {
-            None => (iface, None),
-            Some((iface, version)) => (iface, semver::Version::parse(version).ok()),
+    pub(crate) fn from_wit_import_iface(qualified_iface: &str) -> Result<Option<Self>> {
+        let (ns, packages, maybe_interfaces, _maybe_fn, version) =
+            parse_wit_package_name(qualified_iface).with_context(|| {
+                format!("failed to parse imported WIT interface [{qualified_iface}]")
+            })?;
+        let package = match packages[..] {
+            [] => bail!("no packages specified"),
+            [ref p] => p.as_str(),
+            _ => bail!("nested packages are not yet supported"),
         };
-        let (ns, pkg, iface, _) = parse_wit_meta_from_operation(format!("{iface}.none")).ok()?;
-        match (ns.as_str(), pkg.as_str(), iface.as_str()) {
+        let iface = match maybe_interfaces {
+            Some(ref ifaces) if ifaces.len() == 1 => ifaces.first().map(|s| s.as_ref()),
+            Some(ifaces) if ifaces.len() > 1 => bail!("multiple interfaces are not yet supported"),
+            _ => None,
+        };
+        match (ns.as_str(), package, iface.as_deref()) {
             // Skip explicitly ignored (normally internal) interfaces
-            (ns, pkg, iface) if is_ignored_iface_dep(ns, pkg, iface) => None,
+            (ns, pkg, iface) if is_ignored_iface_dep(ns, pkg, iface) => Ok(None),
             // Deal with known prefixes
-            ("wasi", "keyvalue", "atomics" | "store" | "batch") => {
-                Some(Self::Exports(DependencySpecInner {
+            ("wasi", "keyvalue", Some("atomics" | "store" | "batch")) => {
+                Ok(Some(Self::Exports(DependencySpecInner {
                     wit: WitInterfaceSpec {
                         namespace: ns,
-                        package: pkg,
-                        interface: Some(iface),
+                        package: package.into(),
+                        interface: iface.map(String::from),
                         function: None,
                         version,
                     },
@@ -287,29 +294,31 @@ impl DependencySpec {
                     is_component: false,
                     configs: Default::default(),
                     secrets: Default::default(),
-                }))
+                })))
             }
-            ("wasi", "http", "outgoing-handler") => Some(Self::Exports(DependencySpecInner {
-                wit: WitInterfaceSpec {
-                    namespace: ns,
-                    package: pkg,
-                    interface: Some(iface),
-                    function: None,
-                    version,
-                },
-                delegated_to_workspace: false,
-                link_name: "default".into(),
-                image_ref: Some(DEFAULT_HTTP_CLIENT_PROVIDER_IMAGE.into()),
-                is_component: false,
-                configs: Default::default(),
-                secrets: Default::default(),
-            })),
-            ("wasi", "blobstore", "blobstore") | ("wrpc", "blobstore", "blobstore") => {
-                Some(Self::Exports(DependencySpecInner {
+            ("wasi", "http", Some("outgoing-handler")) => {
+                Ok(Some(Self::Exports(DependencySpecInner {
                     wit: WitInterfaceSpec {
                         namespace: ns,
-                        package: pkg,
-                        interface: Some(iface),
+                        package: package.into(),
+                        interface: iface.map(String::from),
+                        function: None,
+                        version,
+                    },
+                    delegated_to_workspace: false,
+                    link_name: "default".into(),
+                    image_ref: Some(DEFAULT_HTTP_CLIENT_PROVIDER_IMAGE.into()),
+                    is_component: false,
+                    configs: Default::default(),
+                    secrets: Default::default(),
+                })))
+            }
+            ("wasi" | "wrpc", "blobstore", Some("blobstore")) => {
+                Ok(Some(Self::Exports(DependencySpecInner {
+                    wit: WitInterfaceSpec {
+                        namespace: ns,
+                        package: package.into(),
+                        interface: iface.map(String::from),
                         function: None,
                         version,
                     },
@@ -319,31 +328,33 @@ impl DependencySpec {
                     is_component: false,
                     configs: Default::default(),
                     secrets: Default::default(),
-                }))
+                })))
             }
-            ("wasmcloud", "messaging", "consumer") => Some(Self::Exports(DependencySpecInner {
-                wit: WitInterfaceSpec {
-                    namespace: ns,
-                    package: pkg,
-                    interface: Some(iface),
-                    function: None,
-                    version,
-                },
-                delegated_to_workspace: false,
-                link_name: "default".into(),
-                image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
-                is_component: false,
-                configs: Default::default(),
-                secrets: Default::default(),
-            })),
+            ("wasmcloud", "messaging", Some("consumer")) => {
+                Ok(Some(Self::Exports(DependencySpecInner {
+                    wit: WitInterfaceSpec {
+                        namespace: ns,
+                        package: package.into(),
+                        interface: iface.map(String::from),
+                        function: None,
+                        version,
+                    },
+                    delegated_to_workspace: false,
+                    link_name: "default".into(),
+                    image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
+                    is_component: false,
+                    configs: Default::default(),
+                    secrets: Default::default(),
+                })))
+            }
             // Treat all other dependencies as custom, and track them as dependencies,
             // though they cannot be resolved to a proper dependency without an explicit override/
             // other configuration method
-            _ => Some(Self::Exports(DependencySpecInner {
+            _ => Ok(Some(Self::Exports(DependencySpecInner {
                 wit: WitInterfaceSpec {
                     namespace: ns,
-                    package: pkg,
-                    interface: Some(iface),
+                    package: package.into(),
+                    interface: iface.map(String::from),
                     function: None,
                     version,
                 },
@@ -353,7 +364,7 @@ impl DependencySpec {
                 is_component: false,
                 configs: Default::default(),
                 secrets: Default::default(),
-            })),
+            }))),
         }
     }
 
@@ -365,54 +376,67 @@ impl DependencySpec {
     /// let v = from_wit_export_face("wasi:http/incoming-handler");
     /// # assert!(v.is_some())
     /// ```
-    pub(crate) fn from_wit_export_iface(iface: &str) -> Option<Self> {
-        let (iface, version) = match iface.split_once('@') {
-            None => (iface, None),
-            Some((iface, version)) => (iface, semver::Version::parse(version).ok()),
+    pub(crate) fn from_wit_export_iface(qualified_iface: &str) -> Result<Option<Self>> {
+        let (ns, packages, maybe_interfaces, _maybe_fn, version) =
+            parse_wit_package_name(qualified_iface).with_context(|| {
+                format!("failed to parse imported WIT interface [{qualified_iface}]")
+            })?;
+        let package = match packages[..] {
+            [] => bail!("no packages specified"),
+            [ref p] => p.as_str(),
+            _ => bail!("nested packages are not yet supported"),
         };
-        let (ns, pkg, iface, _) = parse_wit_meta_from_operation(format!("{iface}.none")).ok()?;
-        match (ns.as_ref(), pkg.as_ref(), iface.as_ref()) {
+        let iface = match maybe_interfaces {
+            Some(ref ifaces) if ifaces.len() == 1 => ifaces.first().map(|s| s.as_ref()),
+            Some(ifaces) if ifaces.len() > 1 => bail!("multiple interfaces are not yet supported"),
+            _ => None,
+        };
+        match (ns.as_ref(), package, iface) {
             // Skip explicitly ignored (normally internal) interfaces
-            (ns, pkg, iface) if is_ignored_iface_dep(ns, pkg, iface) => None,
+            (ns, pkg, iface) if is_ignored_iface_dep(ns, pkg, iface) => Ok(None),
             // Handle known interfaces
-            ("wasi", "http", "incoming-handler") => Some(Self::Imports(DependencySpecInner {
-                wit: WitInterfaceSpec {
-                    namespace: ns,
-                    package: pkg,
-                    interface: Some(iface),
-                    function: None,
-                    version,
-                },
-                delegated_to_workspace: false,
-                link_name: "default".into(),
-                image_ref: Some(DEFAULT_HTTP_SERVER_PROVIDER_IMAGE.into()),
-                is_component: false,
-                configs: Default::default(),
-                secrets: Default::default(),
-            })),
-            ("wasmcloud", "messaging", "handler") => Some(Self::Imports(DependencySpecInner {
-                wit: WitInterfaceSpec {
-                    namespace: ns,
-                    package: pkg,
-                    interface: Some(iface),
-                    function: None,
-                    version,
-                },
-                delegated_to_workspace: false,
-                link_name: "default".into(),
-                image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
-                is_component: false,
-                configs: Default::default(),
-                secrets: Default::default(),
-            })),
+            ("wasi", "http", Some("incoming-handler")) => {
+                Ok(Some(Self::Imports(DependencySpecInner {
+                    wit: WitInterfaceSpec {
+                        namespace: ns,
+                        package: package.into(),
+                        interface: iface.map(String::from),
+                        function: None,
+                        version,
+                    },
+                    delegated_to_workspace: false,
+                    link_name: "default".into(),
+                    image_ref: Some(DEFAULT_HTTP_SERVER_PROVIDER_IMAGE.into()),
+                    is_component: false,
+                    configs: Default::default(),
+                    secrets: Default::default(),
+                })))
+            }
+            ("wasmcloud", "messaging", Some("handler")) => {
+                Ok(Some(Self::Imports(DependencySpecInner {
+                    wit: WitInterfaceSpec {
+                        namespace: ns,
+                        package: package.into(),
+                        interface: iface.map(String::from),
+                        function: None,
+                        version,
+                    },
+                    delegated_to_workspace: false,
+                    link_name: "default".into(),
+                    image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
+                    is_component: false,
+                    configs: Default::default(),
+                    secrets: Default::default(),
+                })))
+            }
             // Treat all other dependencies as custom, and track them as dependencies,
             // though they cannot be resolved to a proper dependency without an explicit override/
             // other configuration method
-            _ => Some(Self::Imports(DependencySpecInner {
+            _ => Ok(Some(Self::Imports(DependencySpecInner {
                 wit: WitInterfaceSpec {
                     namespace: ns,
-                    package: pkg,
-                    interface: Some(iface),
+                    package: package.into(),
+                    interface: iface.map(String::from),
                     function: None,
                     version,
                 },
@@ -422,7 +446,7 @@ impl DependencySpec {
                 is_component: false,
                 configs: Default::default(),
                 secrets: Default::default(),
-            })),
+            }))),
         }
     }
 
@@ -649,27 +673,32 @@ impl ProjectDeps {
         }
 
         // Build full list of overrides with generated dep specs
-        let mut overrides_with_deps = Vec::with_capacity(imports.len() + exports.len());
-        overrides_with_deps.append(
-            &mut imports
-                .iter()
-                .map(|v| {
-                    DependencySpec::from_wit_import_iface(&v.interface_spec)
-                        .context("failed to build image ref from interface")
-                        .map(|dep| (v, dep))
-                })
-                .collect::<Result<Vec<_>>>()?,
-        );
-        overrides_with_deps.append(
-            &mut exports
-                .iter()
-                .map(|v| {
-                    DependencySpec::from_wit_export_iface(&v.interface_spec)
-                        .context("failed to build image ref from interface")
-                        .map(|dep| (v, dep))
-                })
-                .collect::<Result<Vec<_>>>()?,
-        );
+        let mut overrides_with_deps: Vec<(&InterfaceComponentOverride, DependencySpec)> =
+            Vec::with_capacity(imports.len() + exports.len());
+        for v in &mut imports.iter() {
+            if let Some(dep) = DependencySpec::from_wit_import_iface(&v.interface_spec)
+                .with_context(|| {
+                    format!(
+                        "failed to build image ref from imported interface [{}]",
+                        v.interface_spec
+                    )
+                })?
+            {
+                overrides_with_deps.push((v, dep));
+            }
+        }
+        for v in &mut exports.iter() {
+            if let Some(dep) = DependencySpec::from_wit_export_iface(&v.interface_spec)
+                .with_context(|| {
+                    format!(
+                        "failed to build image ref from exported interface [{}]",
+                        v.interface_spec
+                    )
+                })?
+            {
+                overrides_with_deps.push((v, dep));
+            }
+        }
 
         // Build a list of the final modified dep specs
         let mut deps = Vec::new();

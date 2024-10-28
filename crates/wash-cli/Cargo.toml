@@ -110,7 +110,7 @@ notify = { workspace = true, features = ["macos_fsevent"] }
 
 [dev-dependencies]
 assert-json-diff = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = [ "json" ] }
 serial_test = { workspace = true }
 sysinfo = { workspace = true }
 wat = { workspace = true }

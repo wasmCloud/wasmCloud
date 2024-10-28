@@ -223,9 +223,10 @@ where
 
     // Build configuration with bin path
     let mut cmd = Command::new(bin_path.as_ref());
+    cmd.arg("run");
     cmd.stderr(stderr).stdin(Stdio::null());
 
-    // apply config options for secrets-nats-kv
+    // Apply config options for secrets-nats-kv
     if let Some(Config {
         secrets_backend_name,
         secrets_bucket,

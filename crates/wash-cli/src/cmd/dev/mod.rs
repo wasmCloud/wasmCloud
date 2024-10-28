@@ -47,16 +47,23 @@ const DEFAULT_PROVIDER_STOP_TIMEOUT_MS: u64 = 3000;
 
 /// The version of `nats-kv-secrets` to use with `wash dev` environments by default
 const NATS_KV_SECRETS_VERSION: &str = "v0.1.1-rc.0";
+const DEFAULT_SECRETS_TOPIC: &str = "wasmcloud.secrets";
 
 /// Options for secrets-nats-kv
 #[derive(Debug, Clone, Parser)]
 pub struct SecretsNatsKvOpts {
+    /// Avoid starting the NATS KV secret backend
+    #[clap(long, env = "SECRETS_NATS_KV_CONNECT_ONLY")]
+    secrets_nats_kv_connect_only: bool,
     /// Seed for the transit XKey
-    #[clap(short, long, env = "SECRETS_NATS_KV_TRANSIT_XKEY_SEED")]
+    #[clap(long, env = "SECRETS_NATS_KV_TRANSIT_XKEY_SEED")]
     secrets_nats_kv_transit_xkey_seed: Option<String>,
     /// Seed for the encryption XKey
-    #[clap(short, long, env = "SECRETS_NATS_KV_ENCRYPTION_XKEY_SEED")]
+    #[clap(long, env = "SECRETS_NATS_KV_ENCRYPTION_XKEY_SEED")]
     secrets_nats_kv_encryption_xkey_seed: Option<String>,
+    /// NATS address to use for NATS KV secrets
+    #[clap(long, env = "SECRETS_NATS_KV_NATS_ADDRESS")]
+    secrets_nats_kv_address: Option<String>,
 }
 
 impl TryInto<wash_lib::start::secrets_nats_kv::Config> for SecretsNatsKvOpts {
@@ -66,6 +73,7 @@ impl TryInto<wash_lib::start::secrets_nats_kv::Config> for SecretsNatsKvOpts {
         let mut cfg = wash_lib::start::secrets_nats_kv::Config::default();
         cfg.transit_xkey_seed = self.secrets_nats_kv_transit_xkey_seed;
         cfg.encryption_xkey_seed = self.secrets_nats_kv_encryption_xkey_seed;
+        cfg.nats_address = self.secrets_nats_kv_address;
         Ok(cfg)
     }
 }
@@ -317,7 +325,7 @@ pub async fn handle_command(
     let mut run_loop_state = devloop::RunLoopState {
         dev_session: &mut wash_dev_session,
         nats_client: &nats_client,
-        secrets_subject_base: "wasmcloud.secrets".into(),
+        secrets_subject_base: DEFAULT_SECRETS_TOPIC.into(),
         secrets_transit_xkey,
         ctl_client: &ctl_client,
         project_cfg: &project_cfg,

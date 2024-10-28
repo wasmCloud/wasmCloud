@@ -66,7 +66,7 @@ pub(crate) fn discover_dependencies_from_wit(
                 pkg.name.name,
                 iface.name.as_ref().context("interface missing name")?,
             );
-            if let Some(dep) = DependencySpec::from_wit_import_iface(iface_name) {
+            if let Ok(Some(dep)) = DependencySpec::from_wit_import_iface(iface_name) {
                 deps.push(dep);
             }
         }
@@ -88,7 +88,7 @@ pub(crate) fn discover_dependencies_from_wit(
                 pkg.name.name,
                 iface.name.as_ref().context("interface missing name")?,
             );
-            if let Some(dep) = DependencySpec::from_wit_export_iface(iface_name) {
+            if let Ok(Some(dep)) = DependencySpec::from_wit_export_iface(iface_name) {
                 deps.push(dep);
             }
         }
