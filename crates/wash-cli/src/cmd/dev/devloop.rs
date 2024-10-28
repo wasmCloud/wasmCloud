@@ -93,17 +93,15 @@ pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
     // Generate the manifests that we need to deploy/update
     //
     // If the project configuration specified an *existing* manifest, we must merge, not generate
-    let manifests = match state.project_cfg.dev.as_ref().map(|rdc| &rdc.manifests) {
-        // If manifest targets were present, use them and generate targets
-        Some(targets) if !targets.is_empty() => {
-            augment_existing_manifests(state, targets, state.project_cfg)
-                .await
-                .context("failed to create manifest from existing [{}]")?
-        }
+    let manifests = match &state.project_cfg.dev.manifests[..] {
         // If no manifest exists, we must generate one or more manifests
-        None => generate_manifests(state)
+        [] => generate_manifests(state)
             .await
             .context("failed to generate manifests")?,
+        // If manifest targets were present, use them and generate targets
+        targets => augment_existing_manifests(state, targets, state.project_cfg)
+            .await
+            .context("failed to create manifest from existing [{}]")?,
     };
 
     let component_id = state
