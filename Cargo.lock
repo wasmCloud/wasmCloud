@@ -1027,7 +1027,7 @@ dependencies = [
  "pin-project",
  "quick-xml",
  "rand 0.8.5",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "rustc_version",
  "serde 1.0.210",
  "serde_json",
@@ -2434,7 +2434,7 @@ checksum = "9ac1e888d6830712d565b2f3a974be3200be9296bc1b03db8251a4cbf18a4a34"
 dependencies = [
  "futures",
  "rand 0.8.5",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "thiserror",
  "tokio",
 ]
@@ -4397,7 +4397,7 @@ dependencies = [
  "oci-spec",
  "olpc-cjson",
  "regex",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "serde 1.0.210",
  "serde_json",
  "sha2",
@@ -4422,7 +4422,7 @@ dependencies = [
  "lazy_static 1.5.0",
  "olpc-cjson",
  "regex",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "serde 1.0.210",
  "serde_json",
  "sha2",
@@ -5650,9 +5650,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.12.8"
+version = "0.12.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f713147fbe92361e52392c73b8c9e48c04c6625bce969ef54dc901e58e042a7b"
+checksum = "a77c62af46e79de0a562e1a9849205ffcb7fc1238876e9bd743357570e04046f"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -7877,7 +7877,7 @@ dependencies = [
  "once_cell",
  "pathdiff",
  "ptree",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "secrecy",
  "semver",
  "serde 1.0.210",
@@ -8072,7 +8072,7 @@ dependencies = [
  "provider-archive 0.12.1",
  "rand 0.8.5",
  "regex",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "rmp-serde",
  "rmpv",
  "sanitize-filename",
@@ -8150,7 +8150,7 @@ dependencies = [
  "path-absolutize",
  "provider-archive 0.12.1",
  "regex",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "rmp-serde",
  "semver",
  "serde 1.0.210",
@@ -8433,7 +8433,7 @@ dependencies = [
  "etcetera",
  "futures-util",
  "http 1.1.0",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "semver",
  "serde 1.0.210",
  "serde_json",
@@ -8515,7 +8515,7 @@ dependencies = [
  "rand 0.8.5",
  "redis",
  "regex",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "rmp-serde",
  "rustversion",
  "secrets-nats-kv",
@@ -8660,7 +8660,7 @@ dependencies = [
  "oci-wasm",
  "once_cell",
  "provider-archive 0.12.1",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "rustls 0.23.13",
  "rustls-native-certs 0.8.0",
  "rustls-pemfile 2.2.0",
@@ -8842,7 +8842,7 @@ dependencies = [
  "http 1.1.0",
  "http-body 1.0.1",
  "pin-project-lite",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "serde 1.0.210",
  "serde_json",
  "thiserror",
@@ -9629,7 +9629,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
