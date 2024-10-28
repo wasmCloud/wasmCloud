@@ -147,6 +147,32 @@ impl crate::TryFrom<HeaderMap> for wasi::http::types::Fields {
     }
 }
 
+/// Trait for implementing a type that can be written to an outgoing HTTP response body.
+///
+/// When implementing this trait, you should write your type to the provided `OutputStream` and then
+/// drop the stream. Finally, you should call `wasi::http::types::OutgoingBody::finish` to finish
+/// the body and return the result.
+///
+/// This trait is already implemented for common Rust types, and it's implemented for
+/// `wasi::http::types::IncomingBody` and `wasi::io::streams::InputStream` as well. This enables
+/// using any stream from a Wasm interface as an outgoing body.
+///
+/// ```ignore
+/// use std::io::Write;
+///
+/// impl wasmcloud_component::http::OutgoingBody for Vec<u8> {
+///    fn write(
+///        self,
+///        body: wasi::http::types::OutgoingBody,
+///        mut stream: wasi::io::streams::OutputStream,
+///    ) -> std::io::Result<()> {
+///        stream.write_all(&self)?;
+///        drop(stream);
+///        wasi::http::types::OutgoingBody::finish(body, None)
+///            .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
+///     }
+/// }
+/// ```
 pub trait OutgoingBody {
     fn write(
         self,
@@ -327,6 +353,11 @@ impl<T: Read> OutgoingBody for ReadBody<T> {
     }
 }
 
+/// Wraps the incoming body of a request which just contains
+/// the stream and the body of the request itself. The bytes of the body
+/// are only read into memory explicitly. The implementation of [`OutgoingBody`]
+/// for this type will read the bytes from the stream and write them to the
+/// output stream.
 pub struct IncomingBody {
     stream: InputStream,
     body: wasi::http::types::IncomingBody,
