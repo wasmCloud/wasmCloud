@@ -51,4 +51,4 @@ spec:
             source_config:
               - name: default-http
                 properties:
-                  port: '8080'
+                  address: '0.0.0.0:8080'

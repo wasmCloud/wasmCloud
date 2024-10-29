@@ -1,4 +1,3 @@
----
 apiVersion: core.oam.dev/v1beta1
 kind: Application
 metadata:
@@ -16,13 +15,19 @@ spec:
         - type: spreadscaler
           properties:
             instances: 1
-        - type: linkdef
-          properties:
-            target: httpserver
-            values:
-              ADDRESS: {{.HttpServerHost}}:{{.HttpServerPort}}
+
     - name: httpserver
       type: capability
       properties:
-        image: wasmcloud.azurecr.io/httpserver:0.19.1
-        contract: wasmcloud:httpserver
+        image: ghcr.io/wasmcloud/http-server:0.23.1
+      traits:
+        - type: link
+          properties:
+            target: test-http-echo-tinygo
+            namespace: wasi
+            package: http
+            interfaces: [incoming-handler]
+            source_config:
+              - name: default-http
+                properties:
+                  address: '{{.HttpServerHost}}:{{.HttpServerPort}}'

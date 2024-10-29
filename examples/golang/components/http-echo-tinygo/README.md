@@ -45,7 +45,7 @@ build
 Start wasmCloud, in a separate terminal:
 
 ```console
-wash up --nats-websocket-port 4001
+wash up --nats-websocket-port 4223
 ```
 
 > **Warning**
@@ -54,10 +54,10 @@ wash up --nats-websocket-port 4001
 Optionally, you can also start the UI by running (in a separate terminal):
 
 ```console
-wash ui --experimental
+wash ui
 ```
 
-[host-v0.81.0]: https://github.com/wasmCloud/wasmCloud/releases/tag/v0.81.0
+[host-v1.4.0]: https://github.com/wasmCloud/wasmCloud/releases/tag/v1.4.0
 
 ## Deploy this application
 
@@ -81,7 +81,7 @@ First, edit `wadm.yaml` to include the absolute path to the signed WebAssembly m
 Then, deploy using `wash`:
 
 ```console
-wash app deploy wadm.yaml
+wash app deploy --replace wadm.yaml
 ```
 
 You can use `wash app` subcommand to do much more -- checking the list of applications, delete applications, and more.
