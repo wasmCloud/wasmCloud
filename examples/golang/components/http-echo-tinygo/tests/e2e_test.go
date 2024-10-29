@@ -21,10 +21,10 @@ import (
 
 // Template to be used for wadm in tests (see fixtures/wadm.template.yaml)
 type WadmTemplate struct {
-	AppName           string
-	AppVersion        string
-	ComponentImage    string
-	HttpServerPort    int
+	AppName        string
+	AppVersion     string
+	ComponentImage string
+	HttpServerPort int
 	HttpServerHost string
 }
 
@@ -114,10 +114,10 @@ func TestBuild(t *testing.T) {
 	// Render the WADM YAML template
 	var renderedTemplate bytes.Buffer
 	templateArgs := WadmTemplate{
-		AppName:           "test-http-echo-tinygo-component",
-		AppVersion:        "v0.0.1",
-		ComponentImage:    componentImage,
-		HttpServerPort:    8081,
+		AppName:        "test-http-echo-tinygo-component",
+		AppVersion:     "v0.0.1",
+		ComponentImage: componentImage,
+		HttpServerPort: 8081,
 		HttpServerHost: "127.0.0.1",
 	}
 	err = tmpl.Execute(&renderedTemplate, templateArgs)
@@ -153,9 +153,11 @@ func TestBuild(t *testing.T) {
 	// Wait until we can reach the echo component
 	echoComponentUrl := fmt.Sprintf("http://%s:%v", templateArgs.HttpServerHost, templateArgs.HttpServerPort)
 	// This can take a while because providers must be downloaded
-	waitForTimeout(t, fmt.Sprintf("reached echo component via HTTP @ %v", echoComponentUrl), 3*time.Minute, func() bool {
+	waitForTimeout(t, fmt.Sprintf("reached echo component via HTTP @ %v", echoComponentUrl), 30*time.Second, func() bool {
+		fmt.Printf("Attempting to query component: %s\n", echoComponentUrl)
 		resp, err := http.Get(echoComponentUrl)
 		if err != nil {
+			fmt.Println(err)
 			return false
 		}
 		defer resp.Body.Close()

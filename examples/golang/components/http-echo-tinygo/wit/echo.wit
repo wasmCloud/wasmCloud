@@ -1,6 +1,8 @@
 package wasmcloud:echo;
 
 world echo {
+    include wasmcloud:component-go/imports@0.1.0;
+
     import wasi:logging/logging@0.1.0-draft;
     export wasi:http/incoming-handler@0.2.0;
 }

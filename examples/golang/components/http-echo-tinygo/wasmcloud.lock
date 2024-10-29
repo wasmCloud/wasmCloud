@@ -19,3 +19,12 @@ registry = "wasi.dev"
 requirement = "=0.1.0-draft"
 version = "0.1.0-draft"
 digest = "sha256:09621a45b12b0a9cddc798517f778aac0e5ae4bd234077b3d70758d6cf625580"
+
+[[packages]]
+name = "wasmcloud:component-go"
+registry = "wasmcloud.com"
+
+[[packages.versions]]
+requirement = "=0.1.0"
+version = "0.1.0"
+digest = "sha256:de3e9af7dedd0d9e882f68f1bee533c7af9c6a1947eb40cbf1ef6163b7d41784"
