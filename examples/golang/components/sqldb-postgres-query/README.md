@@ -10,8 +10,8 @@ This folder contains a WebAssembly component that makes use of:
 
 ## 📦 Dependencies
 
-- `go` 1.21.1
-- `tinygo` 0.30
+- `go` 1.23+
+- `tinygo` 0.33+
 - [`docker`][docker] for easily running instances of [`postgres`]
 - [`wash`][wash] for building and running the components and [wasmCloud][wasmcloud] hosts
 
@@ -84,10 +84,10 @@ wash app deploy --replace local.wadm.yaml
 >
 > In this case, `wash app delete rust-sqldb-postgres` should work.
 
-To ensure that the application is deployed you can use `wadm app list`:
+To ensure that the application is deployed you can use `wash app list`:
 
 ```console
-wadm app list
+wash app list
 ```
 
 If you want to see everything running in the lattice at once:

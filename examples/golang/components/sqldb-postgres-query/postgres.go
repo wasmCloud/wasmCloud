@@ -1,9 +1,15 @@
+//go:generate go run github.com/bytecodealliance/wasm-tools-go/cmd/wit-bindgen-go generate --world component --out gen ./wit
 package main
 
 import (
 	"fmt"
 
-	interfaces "github.com/wasmcloud/wasmcloud/examples/golang/components/sqldb-postgres-query/gen"
+	"github.com/wasmcloud/wasmcloud/examples/golang/components/sqldb-postgres-query/gen/wasmcloud/examples/invoke"
+	"github.com/wasmcloud/wasmcloud/examples/golang/components/sqldb-postgres-query/gen/wasmcloud/postgres/query"
+	"github.com/wasmcloud/wasmcloud/examples/golang/components/sqldb-postgres-query/gen/wasmcloud/postgres/types"
+
+	"github.com/bytecodealliance/wasm-tools-go/cm"
+	"go.wasmcloud.dev/component/log/wasilog"
 )
 
 const CREATE_TABLE_QUERY = `
@@ -21,52 +27,59 @@ INSERT INTO example (description) VALUES ($1) RETURNING *;
 `
 
 const SELECT_QUERY = `
-SELECT * FROM example WHERE description = 'inserted example go row!';
+SELECT * FROM example WHERE description = $1;
 `
 
-// type aliases for more readable code
-type PgValue = interfaces.WasmcloudPostgres0_1_1_draft_QueryPgValue
-type RowEntry = interfaces.WasmcloudPostgres0_1_1_draft_TypesResultRowEntry
-
-type Component struct{}
-
 func init() {
-	component := Component{}
-	// Set the incoming handler struct to HttpServer
-	interfaces.SetExportsWasmcloudExamplesInvoke(component)
+	invoke.Exports.Call = call
 }
 
-func (c Component) Call() string {
-	query := Query(CREATE_TABLE_QUERY, make([]PgValue, 0))
+func call() string {
+	logger := wasilog.ContextLogger("call")
+
+	query := Query(CREATE_TABLE_QUERY)
 	if query.IsErr() {
-		return fmt.Sprintf("ERROR: failed to create table: %v", query.UnwrapErr())
+		logger.Error("failed to create table", "err", query.Err())
+		return fmt.Sprintf("ERROR: failed to create table: %v", query.Err())
 	}
 
-	val := interfaces.WasmcloudPostgres0_1_1_draft_TypesPgValueText("inserted example go row!")
-	insertResult := Query(INSERT_QUERY, []PgValue{val})
+	val := "inserted example go row!"
+	insertResult := Query(INSERT_QUERY, types.PgValueText(val))
 	if insertResult.IsErr() {
-		return fmt.Sprintf("ERROR: failed to insert row: %v", insertResult.UnwrapErr())
+		logger.Error("failed to insert row", "err", insertResult.Err())
+		return fmt.Sprintf("ERROR: failed to insert row: %v", insertResult.Err())
 	}
 
-	selectResult := Query(SELECT_QUERY, make([]PgValue, 0))
+	selectResult := Query(SELECT_QUERY, types.PgValueText(val))
 	if selectResult.IsErr() {
-		return fmt.Sprintf("ERROR: failed to select rows: %v", selectResult.UnwrapErr())
+		logger.Error("failed to select rows", "err", selectResult.Err())
+		return fmt.Sprintf("ERROR: failed to select rows: %v", selectResult.Err())
 	}
-	selectedRows := selectResult.Unwrap()
-	if len(selectedRows) > 0 {
-		firstRow := selectedRows[0]
-		return fmt.Sprintf("SUCCESS: we selected a row! %v", firstRow)
+	selectedRows := selectResult.OK().Slice()
+	if len(selectedRows) == 0 {
+		logger.Error("failed to retrieve inserted row")
+		return "ERROR: failed to retrieve inserted row"
 	}
-	return "ERROR: failed to retrieve inserted row"
-}
 
-type ResultRow = interfaces.WasmcloudPostgres0_1_1_draft_QueryResultRow
-type QueryError = interfaces.WasmcloudPostgres0_1_1_draft_QueryQueryError
+	firstRow := selectedRows[0]
+	fields := firstRow.Slice()
+	logger.Info("first row", "id", *fields[0].Value.Int8(), "description", string(*fields[1].Value.Text()), "created_at", formatTimestamp(fields[2].Value))
+	return fmt.Sprintf("SUCCESS: we selected a row! %v", firstRow)
+}
 
 // Helper function to assist with readability in the example when querying the database
-func Query(query string, params []PgValue) interfaces.Result[[]ResultRow, QueryError] {
-	return interfaces.WasmcloudPostgres0_1_1_draft_QueryQuery(query, params)
+func Query(stmt string, params ...types.PgValue) cm.Result[query.QueryErrorShape, cm.List[types.ResultRow], types.QueryError] {
+	return query.Query(stmt, cm.ToList(params))
 }
 
-//go:generate wit-bindgen tiny-go wit --out-dir=gen --gofmt
+func formatTimestamp(t types.PgValue) string {
+	if t.TimestampTz_() != nil {
+		ts := t.TimestampTz_()
+		date := ts.Timestamp.Date.Ymd()
+		time := ts.Timestamp.Time
+		return fmt.Sprintf("%02d-%02d-%02dT%02d:%02d:%02dZ", date.F0, date.F1, date.F2, time.Hour, time.Min, time.Sec)
+	}
+	return ""
+}
+
 func main() {}
