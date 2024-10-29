@@ -5,7 +5,7 @@ This is a simple Rust Wasm example that increments a key in a keyvalue store in 
 ## Prerequisites
 
 - `cargo` 1.75
-- [`wash`](https://wasmcloud.com/docs/installation) 0.27.0
+- [`wash`](https://wasmcloud.com/docs/installation) 0.36.1
 
 ## Building
 
@@ -15,16 +15,16 @@ wash build
 
 ## Running with wasmCloud
 
-Ensuring you've built your component with `wash build`, you can launch wasmCloud and deploy the full hello world application with the following commands. Once the application reports as **Deployed** in the application list, you can use `curl` to send a request to the running HTTP server.
+You can build and deploy your component with all dependencies and a hot reload loop with `wash dev`.
 
 ```shell
-# Start redis locally
-redis-server &
-# Start wasmCloud
-wash up -d
-wash app deploy ./wadm.yaml
-wash app get
-curl http://127.0.0.1:8080/counter
+wash dev
+```
+
+Then, you can `curl` your HTTP handler.
+
+```shell
+curl http://127.0.0.1:8000/counter
 ```
 
 ## Adding Capabilities
