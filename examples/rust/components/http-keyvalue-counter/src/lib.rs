@@ -1,22 +1,30 @@
-wit_bindgen::generate!({ generate_all });
+use wasmcloud_component::http;
+use wasmcloud_component::http::ErrorCode;
+use wasmcloud_component::wasi::keyvalue::*;
+use wasmcloud_component::wasmcloud::bus::lattice;
 
-use exports::wasi::http::incoming_handler::Guest;
-use wasi::http::types::*;
+struct Component;
 
-use wasmcloud::bus::lattice;
+http::export!(Component);
 
-struct HttpServer;
-
-impl Guest for HttpServer {
-    fn handle(request: IncomingRequest, response_out: ResponseOutparam) {
-        // Get the path & query to the incoming request
-        let path_with_query = request
-            .path_with_query()
-            .expect("failed to get path with query");
+impl http::Server for Component {
+    fn handle(
+        request: http::IncomingRequest,
+    ) -> http::Result<http::Response<impl http::OutgoingBody>> {
+        let (parts, _) = request.into_parts();
+        // Get the path of the incoming request
+        let Some(path_with_query) = parts.uri.path_and_query() else {
+            return http::Response::builder()
+                .status(400)
+                .body("Bad request, did not contain path and query".into())
+                .map_err(|e| {
+                    ErrorCode::InternalError(Some(format!("failed to build response {e:?}")))
+                });
+        };
 
         // At first, we can assume the object name will be the path with query
         // (ex. simple paths like '/some-key-here')
-        let mut object_name = path_with_query.clone();
+        let object_name = path_with_query.path();
 
         // Let's assume we want to connect to & invoke the default keyvalue provider
         // that is linked with this component
@@ -24,9 +32,7 @@ impl Guest for HttpServer {
 
         // If query parameters were supplied, then we need to recalculate the object_name
         // and take special actions if some parameters (like `link_name`) are present (and ignore the rest)
-        if let Some((path, query)) = path_with_query.split_once('?') {
-            object_name = path.to_string();
-
+        if let Some(query) = path_with_query.query() {
             let query_params = query
                 .split('&')
                 .filter_map(|v| v.split_once('='))
@@ -51,30 +57,22 @@ impl Guest for HttpServer {
         lattice::set_link_name(
             link_name,
             vec![
-                wasmcloud::bus::lattice::CallTargetInterface::new("wasi", "keyvalue", "store"),
-                wasmcloud::bus::lattice::CallTargetInterface::new("wasi", "keyvalue", "atomics"),
+                lattice::CallTargetInterface::new("wasi", "keyvalue", "store"),
+                lattice::CallTargetInterface::new("wasi", "keyvalue", "atomics"),
             ],
-        );
+        )
+        .map_err(|e| ErrorCode::InternalError(Some(format!("failed to set link name {e:?}"))))?;
 
-        // Note that the keyvalue-redis provider used with this example creates a single global bucket.
-        // While the wasi-keyvalue interface supports multiple named buckets, the keyvalue-redis provider
-        // does not, so we refer to our new bucket in the line below with an empty string.
-        let bucket = wasi::keyvalue::store::open("").expect("failed to open empty bucket");
-        let count = wasi::keyvalue::atomics::increment(&bucket, &object_name, 1)
-            .expect("failed to increment count");
+        // Increment the counter in the keyvalue store
+        let bucket = store::open("default")
+            .map_err(|e| ErrorCode::InternalError(Some(format!("failed to open bucket {e:?}"))))?;
+        let count = atomics::increment(&bucket, object_name, 1).map_err(|e| {
+            ErrorCode::InternalError(Some(format!("failed to increment counter {e:?}")))
+        })?;
 
         // Build & send HTTP response
-        let response = OutgoingResponse::new(Fields::new());
-        response.set_status_code(200).unwrap();
-        let response_body = response.body().unwrap();
-        response_body
-            .write()
-            .unwrap()
-            .blocking_write_and_flush(format!("Counter {object_name}: {count}\n").as_bytes())
-            .unwrap();
-        OutgoingBody::finish(response_body, None).expect("failed to finish response body");
-        ResponseOutparam::set(response_out, Ok(response));
+        Ok(http::Response::new(format!(
+            "Counter {object_name}: {count}\n"
+        )))
     }
 }
-
-export!(HttpServer);

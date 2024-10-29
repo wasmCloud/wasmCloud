@@ -7,24 +7,6 @@ name = "wasi:http"
 registry = "wasi.dev"
 
 [[packages.versions]]
-requirement = "=0.2.0"
-version = "0.2.0"
-digest = "sha256:5a568e6e2d60c1ce51220e1833cdd5b88db9f615720edc762a9b4a6f36b383bd"
-
-[[packages]]
-name = "wasi:keyvalue"
-registry = "wasi.dev"
-
-[[packages.versions]]
-requirement = "=0.2.0-draft"
-version = "0.2.0-draft"
-digest = "sha256:f5afa14646d3f32cee23106add8d7da53774083fef32f5648176aee7be61d36b"
-
-[[packages]]
-name = "wasmcloud:bus"
-registry = "wasmcloud.com"
-
-[[packages.versions]]
-requirement = "=1.0.0"
-version = "1.0.0"
-digest = "sha256:ea6561dee15f57a8365dc83725ec5dababcaec4cc6352a263bb66546b4b4d827"
+requirement = "=0.2.2"
+version = "0.2.2"
+digest = "sha256:a1f129cdf1fde55ec2d4ae8d998c39a7e5cf7544a8bd84a831054ac0d2ac64dd"

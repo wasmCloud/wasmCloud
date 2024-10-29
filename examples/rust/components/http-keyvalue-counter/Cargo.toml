@@ -9,4 +9,4 @@ version = "0.1.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.32"
+wasmcloud-component = "0.2.0"
