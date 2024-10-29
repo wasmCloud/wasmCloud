@@ -1077,6 +1077,43 @@ impl Host {
         }))
     }
 
+    /// Get the host's ed25519 nkey public key
+    pub fn id(&self) -> String {
+        self.host_key.public_key()
+    }
+
+    /// Stops all components and capability providers running on the host.
+    pub async fn clear_inventory(&self) -> anyhow::Result<()> {
+        // TODO: should follow the real process to stop all the things
+        self.components.write().await.clear();
+        // let component = entry.remove();
+        // self.stop_component(&component, host_id)
+        //     .await
+        //     .context("failed to stop component in response to scale to zero")?;
+        // info!(?component_ref, "component stopped");
+        // event::component_scaled(
+        //     claims.as_ref(),
+        //     &component.annotations,
+        //     host_id,
+        //     0_usize,
+        //     &component.image_reference,
+        //     &component.id,
+        // )
+        self.providers.write().await.clear();
+        Ok(())
+    }
+
+    /// Shutdown the host tasks and send a stop event
+    pub fn shutdown(&self, timeout_ms: Option<u64>) {
+        self.heartbeat.abort();
+        self.data_watch.abort();
+        self.queue.abort();
+        self.policy_manager.policy_changes.abort();
+        let deadline = timeout_ms
+            .and_then(|timeout| Instant::now().checked_add(Duration::from_millis(timeout)));
+        self.stop_tx.send_replace(deadline);
+    }
+
     /// Waits for host to be stopped via lattice commands and returns the shutdown deadline on
     /// success
     ///
@@ -1093,8 +1130,10 @@ impl Host {
         Ok(*self.stop_rx.borrow())
     }
 
+    /// Retrieves all running resources on the host as well as host labels, uptime, and version,
+    /// summarized in a `HostInventory` struct
     #[instrument(level = "debug", skip_all)]
-    async fn inventory(&self) -> HostInventory {
+    pub async fn inventory(&self) -> HostInventory {
         trace!("generating host inventory");
         let components = self.components.read().await;
         let components: Vec<_> = stream::iter(components.iter())
@@ -1554,20 +1593,19 @@ impl Host {
 
         info!(?timeout, "handling stop host");
 
-        self.heartbeat.abort();
-        self.data_watch.abort();
-        self.queue.abort();
-        self.policy_manager.policy_changes.abort();
-        let deadline =
-            timeout.and_then(|timeout| Instant::now().checked_add(Duration::from_millis(timeout)));
-        self.stop_tx.send_replace(deadline);
+        self.shutdown(timeout);
         Ok(CtlResponse::<()>::success(
             "successfully handled stop host".into(),
         ))
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_scale_component(
+    /// Scale a component to a specified number of instances
+    ///
+    /// # Arguments
+    /// - `payload` - serialized payload containing a [`ScaleComponentCommand`]
+    /// - `host_id` - the host ID of the host that should scale the component
+    pub async fn handle_scale_component(
         self: Arc<Self>,
         payload: impl AsRef<[u8]>,
         host_id: &str,
@@ -1724,7 +1762,7 @@ impl Host {
     /// Handles scaling an component to a supplied number of `max` concurrently executing instances.
     /// Supplying `0` will result in stopping that component instance.
     #[allow(clippy::too_many_arguments)]
-    async fn handle_scale_component_task(
+    pub async fn handle_scale_component_task(
         &self,
         component_ref: Arc<str>,
         component_id: Arc<str>,
