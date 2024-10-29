@@ -103,8 +103,12 @@ impl Provider for HttpServerProvider {
 
         match sockets_by_link_name.entry(link_config.link_name.to_string()) {
             // If a mapping already exists, and the stored address is different, disallow overwriting
-            std::collections::hash_map::Entry::Occupied(_) => {
-                bail!("overwriting links is not currently supported")
+            std::collections::hash_map::Entry::Occupied(v) => {
+                bail!(
+                    "an address mapping for address [{}] the link [{}] already exists, overwriting links is not currently supported",
+                    v.get().ip().to_string(),
+                    link_config.link_name,
+                )
             }
             // If a mapping does exist, we can create a new mapping for the address
             std::collections::hash_map::Entry::Vacant(v) => {
