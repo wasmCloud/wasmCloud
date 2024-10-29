@@ -1611,6 +1611,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07a13ab5b8cb13dbe35e68b83f6c12f9293b2f601797b71bc9f23befdb329feb"
 dependencies = [
  "clap",
+ "clap_lex",
+ "is_executable",
+ "shlex",
 ]
 
 [[package]]
@@ -3648,6 +3651,15 @@ name = "ipnet"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "187674a687eed5fe42285b40c6291f9a01517d415fad1c3cbc6a9f778af7fcd4"
+
+[[package]]
+name = "is_executable"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4a1b5bad6f9072935961dfbf1cced2f3d129963d091b6f69f007fe04e758ae2"
+dependencies = [
+ "winapi",
+]
 
 [[package]]
 name = "is_terminal_polyfill"
@@ -9109,7 +9121,7 @@ dependencies = [
  "async-nats",
  "cloudevents-sdk",
  "nkeys",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "rmp-serde",
  "serde 1.0.210",
  "serde_json",
