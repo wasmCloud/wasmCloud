@@ -28,7 +28,7 @@ clap = { workspace = true, features = [
     "std",
     "string",
 ] }
-clap_complete = { workspace = true }
+clap_complete = { workspace = true, features = ["unstable-dynamic"] }
 clap-markdown = { workspace = true }
 console = { workspace = true }
 crossterm = { workspace = true, features = ["events", "windows"] }

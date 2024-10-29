@@ -1,13 +1,17 @@
 use std::collections::HashMap;
+use std::env;
 use std::fmt::{Display, Formatter};
 use std::io::{stdout, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::bail;
-use clap::{self, Arg, Command, FromArgMatches, Parser, Subcommand};
+use anyhow::{anyhow, bail};
+use clap::{self, Arg, Command, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap_complete::engine::{ArgValueCandidates, CompletionCandidate};
 use console::style;
 use crossterm::style::Stylize;
 use serde_json::json;
+use tokio::runtime::Handle;
+use tokio::task;
 use tracing_subscriber::EnvFilter;
 use wash_lib::cli::capture::{CaptureCommand, CaptureSubcommand};
 use wash_lib::cli::claims::ClaimsCliCommand;
@@ -22,6 +26,7 @@ use wash_lib::cli::start::StartCommand;
 use wash_lib::cli::stop::StopCommand;
 use wash_lib::cli::update::UpdateCommand;
 use wash_lib::cli::{CommandOutput, OutputKind};
+use wash_lib::config::WashConnectionOptions;
 use wash_lib::drain::Drain as DrainSelection;
 use wash_lib::plugin::subcommand::{DirMapping, SubcommandRunner};
 
@@ -46,6 +51,7 @@ use wash_cli::secrets::{self, SecretsCliCommand};
 use wash_cli::style::WASH_CLI_STYLE;
 use wash_cli::ui::{self, UiCommand};
 use wash_cli::util::ensure_plugin_dir;
+use wash_lib::cli::CliConnectionOpts;
 
 #[derive(Clone)]
 struct HelpTopic {
@@ -437,7 +443,11 @@ async fn main() {
         None
     };
 
+    command = add_dynamic_candidates(command);
+
     command.build();
+
+    clap_complete::CompleteEnv::with_factory(|| command.clone()).complete();
 
     let matches = command.get_matches();
 
@@ -698,4 +708,49 @@ async fn ensure_plugin_scratch_dir_exists(
         }
     }
     Ok(dir)
+}
+
+fn add_dynamic_candidates(mut command: clap::builder::Command) -> clap::builder::Command {
+    command = command.mut_subcommand("app", |c1| {
+        c1.mut_subcommand("undeploy", |c2| {
+            c2.mut_arg("app_name", |a| {
+                a.add(ArgValueCandidates::new(make_candidates))
+            })
+        })
+        .mut_subcommand("history", |c2| {
+            c2.mut_arg("app_name", |a| {
+                a.add(ArgValueCandidates::new(make_candidates))
+            })
+        })
+    });
+    command
+}
+
+fn get_connection_opts() -> anyhow::Result<CliConnectionOpts> {
+    let mut args: Vec<String> = env::args().collect();
+    args.drain(0..2);
+    let matches = Cli::command().get_matches_from(args);
+    let cli = Cli::from_arg_matches(&matches).unwrap();
+    match cli.command {
+        CliCommand::App(AppCliCommand::Undeploy(cmd)) => Ok(cmd.opts),
+        CliCommand::App(AppCliCommand::History(cmd)) => Ok(cmd.opts),
+        _ => Err(anyhow!("Command did not match any expected patterns")),
+    }
+}
+
+async fn get_app_lists() -> anyhow::Result<Vec<CompletionCandidate>> {
+    let connection_opts =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(get_connection_opts()?)?;
+    let lattice = Some(connection_opts.get_lattice());
+    let client = connection_opts.into_nats_client().await?;
+    let models = wash_lib::app::get_models(&client, lattice).await?;
+    let candidates: Vec<CompletionCandidate> = models
+        .iter()
+        .map(|model| CompletionCandidate::new(&model.name))
+        .collect();
+    Ok(candidates)
+}
+
+pub fn make_candidates() -> Vec<CompletionCandidate> {
+    task::block_in_place(|| Handle::current().block_on(get_app_lists())).unwrap_or(vec![])
 }
