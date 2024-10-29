@@ -1,0 +1,13 @@
+package wasi:config@0.2.0-draft;
+
+interface runtime {
+  variant config-error {
+    upstream(string),
+    io(string),
+  }
+
+  get: func(key: string) -> result<option<string>, config-error>;
+
+  get-all: func() -> result<list<tuple<string, string>>, config-error>;
+}
+

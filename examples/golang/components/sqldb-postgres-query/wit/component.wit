@@ -9,6 +9,8 @@ interface invoke {
 }
 
 world component {
+  include wasmcloud:component-go/imports@0.1.0;
+
   import wasmcloud:postgres/query@0.1.1-draft;
   export invoke;
 }
