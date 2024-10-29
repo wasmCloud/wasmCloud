@@ -710,8 +710,8 @@ async fn ensure_plugin_scratch_dir_exists(
     Ok(dir)
 }
 
-fn add_dynamic_candidates(mut command: clap::builder::Command) -> clap::builder::Command {
-    command = command.mut_subcommand("app", |c1| {
+fn add_dynamic_candidates(command: clap::builder::Command) -> clap::builder::Command {
+    command.mut_subcommand("app", |c1| {
         c1.mut_subcommand("undeploy", |c2| {
             c2.mut_arg("app_name", |a| {
                 a.add(ArgValueCandidates::new(make_candidates))
@@ -722,8 +722,7 @@ fn add_dynamic_candidates(mut command: clap::builder::Command) -> clap::builder:
                 a.add(ArgValueCandidates::new(make_candidates))
             })
         })
-    });
-    command
+    })
 }
 
 fn get_connection_opts() -> anyhow::Result<CliConnectionOpts> {
