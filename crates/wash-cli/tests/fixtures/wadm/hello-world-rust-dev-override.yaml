@@ -36,7 +36,7 @@ spec:
     - name: httpserver
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.23.1
+        image: ghcr.io/wasmcloud/http-server:0.23.2
       traits:
         # Establish a unidirectional link from this http server provider (the "source")
         # to the `http-handler` component (the "target") so the component can handle incoming HTTP requests,
