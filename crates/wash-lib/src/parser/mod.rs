@@ -959,7 +959,7 @@ impl WasmcloudDotToml {
             .unwrap_or_else(|| wasmcloud_toml_dir.clone());
         let project_path = project_path.canonicalize().with_context(|| {
             format!(
-                "failed to canonicalize project path: [{}]",
+                "failed to canonicalize project path, ensure it exists: [{}]",
                 project_path.display()
             )
         })?;
@@ -970,10 +970,7 @@ impl WasmcloudDotToml {
                     Ok(build_dir)
                 } else {
                     // The build_dir is relative to the wasmcloud.toml file, so we need to join it with the wasmcloud_toml_dir
-                    wasmcloud_toml_dir
-                        .join(build_dir)
-                        .canonicalize()
-                        .context("failed to canonicalize build directory")
+                    canonicalize_or_create(wasmcloud_toml_dir.join(build_dir.as_path()))
                 }
             })
             .unwrap_or_else(|| Ok(project_path.join("build")))?;
@@ -985,9 +982,14 @@ impl WasmcloudDotToml {
                 } else {
                     // The wit_dir is relative to the wasmcloud.toml file, so we need to join it with the wasmcloud_toml_dir
                     wasmcloud_toml_dir
-                        .join(wit_dir)
+                        .join(wit_dir.as_path())
                         .canonicalize()
-                        .context("failed to canonicalize wit directory")
+                        .with_context(|| {
+                            format!(
+                                "failed to canonicalize wit directory, ensure it exists: [{}]",
+                                wit_dir.display()
+                            )
+                        })
                 }
             })
             .unwrap_or_else(|| Ok(project_path.join("wit")))?;
@@ -1149,6 +1151,32 @@ impl ProjectConfig {
         };
 
         Ok(credentials.clone())
+    }
+}
+
+/// Helper function to canonicalize a path or create it if it doesn't exist before
+/// attempting to canonicalize it. This is a nice helper to ensure that we can attempt
+/// to precreate directories like `build` before we start writing to them.
+fn canonicalize_or_create(path: PathBuf) -> Result<PathBuf> {
+    match path.canonicalize() {
+        Ok(path) => Ok(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(&path).with_context(|| {
+                format!(
+                    "failed to create directory [{}] before canonicalizing",
+                    path.display()
+                )
+            })?;
+            path.canonicalize().with_context(|| {
+                format!(
+                    "failed to canonicalize directory [{}] after creating it",
+                    path.display()
+                )
+            })
+        }
+        Err(e) => {
+            Err(e).with_context(|| format!("failed to canonicalize directory [{}]", path.display()))
+        }
     }
 }
 
