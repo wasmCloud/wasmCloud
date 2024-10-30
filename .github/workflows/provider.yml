@@ -185,4 +185,4 @@ jobs:
 
       - name: build provider
         run: |
-          wash build -p ${{ matrix.provider.bin-path }}
+          ./wash build -p ${{ matrix.provider.bin-path }}
