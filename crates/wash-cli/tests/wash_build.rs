@@ -741,7 +741,7 @@ async fn integration_build_tinygo_component_separate_paths() -> Result<()> {
     language = "tinygo"
     type = "component"
     path = "../"
-    wit = "wow"
+    wit = "../wow"
     build = "artifacts"
     
     [component]
@@ -773,12 +773,12 @@ async fn integration_build_tinygo_component_separate_paths() -> Result<()> {
         .context("Failed to build project")?;
 
     assert!(status.success());
-    let unsigned_file = project_dir.join("artifacts/tinygo-moved.wasm");
+    let unsigned_file = project_dir.join("config/artifacts/tinygo-moved.wasm");
     assert!(
         tokio::fs::try_exists(unsigned_file).await.unwrap(),
         "unsigned file not found!"
     );
-    let signed_file = project_dir.join("artifacts/tinygo-moved_s.wasm");
+    let signed_file = project_dir.join("config/artifacts/tinygo-moved_s.wasm");
     assert!(
         tokio::fs::try_exists(signed_file).await.unwrap(),
         "signed file not found!"
