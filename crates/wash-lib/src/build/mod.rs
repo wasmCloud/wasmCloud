@@ -119,10 +119,16 @@ pub async fn build_project(
     let wit_deps_exists = tokio::fs::try_exists(config.common.wit_dir.join(WIT_DEPS_TOML)).await?;
 
     if wit_deps_exists {
-        eprintln!("Skipping fetching dependencies because deps.toml exists in the wit directory. Use 'wit-deps' to fetch dependencies.");
+        info!("Skipping fetching dependencies because deps.toml exists in the wit directory. Use 'wit-deps' to fetch dependencies.");
     }
 
-    if !skip_fetch && !wit_deps_exists {
+    let wit_dir_exists = tokio::fs::metadata(&config.common.wit_dir).await.is_ok();
+    if !wit_dir_exists {
+        info!("Skipping fetching dependencies because the wit directory does not exist.");
+        info!("Assuming that dependencies are included in the project.");
+    }
+
+    if !skip_fetch && !wit_deps_exists && wit_dir_exists {
         // Fetch dependencies for the component before building
         let client = package_args.get_client().await?;
         let mut lock = load_lock_file(&config.wasmcloud_toml_dir).await?;
