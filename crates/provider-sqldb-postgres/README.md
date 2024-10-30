@@ -44,7 +44,7 @@ spec:
     - name: http-server
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.23.1
+        image: ghcr.io/wasmcloud/http-server:0.23.2
 
     # A component that uses both capability providers above (HTTP server and sqldb-postgres)
     # to provide a TODO app on http://localhost:8080
