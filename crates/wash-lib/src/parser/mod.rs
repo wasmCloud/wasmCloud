@@ -12,9 +12,9 @@ use cargo_toml::{Manifest, Product};
 use config::Config;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer};
-use tracing::warn;
+use tracing::{trace, warn};
 use wadm_types::{Component, Properties, SecretSourceProperty};
-use wasm_pkg_core::config::Config as PackageConfig;
+use wasm_pkg_core::config::{Config as PackageConfig, Override};
 use wasmcloud_control_interface::RegistryCredential;
 use wasmcloud_core::{parse_wit_package_name, WitFunction, WitInterface, WitNamespace, WitPackage};
 
@@ -709,7 +709,7 @@ pub async fn load_config(
         bail!("path {} does not exist", path.display());
     }
 
-    path = fs::canonicalize(path)?;
+    path = fs::canonicalize(path).context("failed to canonicalize project path")?;
     let (wasmcloud_toml_dir, wasmcloud_toml_path) = if path.is_dir() {
         let wasmcloud_path = path.join("wasmcloud.toml");
         if !wasmcloud_path.is_file() {
@@ -963,8 +963,34 @@ impl WasmcloudDotToml {
                 project_path.display()
             )
         })?;
-        let build_dir = self.build.unwrap_or_else(|| project_path.join("build"));
-        let wit_dir = self.wit.unwrap_or_else(|| project_path.join("wit"));
+        let build_dir = self
+            .build
+            .map(|build_dir| {
+                if build_dir.is_absolute() {
+                    Ok(build_dir)
+                } else {
+                    // The build_dir is relative to the wasmcloud.toml file, so we need to join it with the wasmcloud_toml_dir
+                    wasmcloud_toml_dir
+                        .join(build_dir)
+                        .canonicalize()
+                        .context("failed to canonicalize build directory")
+                }
+            })
+            .unwrap_or_else(|| Ok(project_path.join("build")))?;
+        let wit_dir = self
+            .wit
+            .map(|wit_dir| {
+                if wit_dir.is_absolute() {
+                    Ok(wit_dir)
+                } else {
+                    // The wit_dir is relative to the wasmcloud.toml file, so we need to join it with the wasmcloud_toml_dir
+                    wasmcloud_toml_dir
+                        .join(wit_dir)
+                        .canonicalize()
+                        .context("failed to canonicalize wit directory")
+                }
+            })
+            .unwrap_or_else(|| Ok(project_path.join("wit")))?;
 
         let common_config = match language_config {
             LanguageConfig::Rust(_) => {
@@ -1016,12 +1042,47 @@ impl WasmcloudDotToml {
             }
         };
 
+        let package_config = self
+            .package_config
+            .map(|mut package_config| {
+                package_config.overrides = package_config.overrides.map(|overrides| {
+                    // Each override can contain an absolute path or a relative (to the wasmcloud.toml) path to a local
+                    // set of WIT dependencies. To support running the build process from anywhere, we need to canonicalize
+                    // these paths.
+                    overrides
+                        .into_iter()
+                        .map(|(k, mut v)| {
+                            if let Some(path) = v.path.as_ref() {
+                                trace!("canonicalizing override path: [{}]", path.display());
+                                let path = if path.is_absolute() {
+                                    path.clone()
+                                } else {
+                                    let override_path = wasmcloud_toml_dir.join(path);
+                                    override_path.canonicalize().unwrap_or_else(|e| {
+                                        warn!(
+                                            ?e,
+                                            "failed to canonicalize override path, falling back to: [{}]",
+                                            override_path.display()
+                                        );
+                                        override_path
+                                    })
+                                };
+                                v.path = Some(path);
+                            }
+                            (k, v)
+                        })
+                        .collect::<HashMap<String, Override>>()
+                });
+                package_config
+            })
+            .unwrap_or_default();
+
         Ok(ProjectConfig {
             dev: self.dev,
             project_type: project_type_config,
             language: language_config,
             common: common_config,
-            package_config: self.package_config.unwrap_or_default(),
+            package_config,
             wasmcloud_toml_dir,
         })
     }
