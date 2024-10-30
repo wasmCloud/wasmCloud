@@ -175,22 +175,41 @@ pub async fn monkey_patch_fetch_logging(
     let wasi_logging_name: PackageRef = "wasi:logging".parse().unwrap();
     // This is inefficient since we have to load this again when we fetch deps, but we need to do
     // this to get the list of packages from the package
-    let (_, packages) = wasm_pkg_core::wit::get_packages(&wit_dir)?;
+    let (_, packages) = wasm_pkg_core::wit::get_packages(&wit_dir)
+        .context("failed to get packages from wit dir")?;
     // If there is a depenency on unversioned wasi:logging, add an override (if not present)
     let patch_dir = if packages.contains(&(wasi_logging_name.clone(), VersionReq::STAR)) {
         // copy all top level wit files to a temp dir. All the stuff people should be doing at the top
         // level so this is fine
-        let wit_dir_temp = tokio::task::spawn_blocking(tempfile::tempdir).await??;
-        let mut readdir = tokio::fs::read_dir(&wit_dir).await?;
-        while let Some(entry) = readdir.next_entry().await? {
+        let wit_dir_temp = tokio::task::spawn_blocking(tempfile::tempdir)
+            .await
+            .context("failed to create temporary wit patch directory")?
+            .context("failed to create temporary wit patch directory")?;
+        let mut readdir = tokio::fs::read_dir(&wit_dir)
+            .await
+            .context("failed to read temporary wit patch directory")?;
+        while let Some(entry) = readdir
+            .next_entry()
+            .await
+            .context("failed to read entry in temporary wit patch directory")?
+        {
             let path = entry.path();
-            let meta = entry.metadata().await?;
+            let meta = entry
+                .metadata()
+                .await
+                .context("failed to get metadata for entry in temporary wit patch directory")?;
 
             if meta.is_file() && path.extension().unwrap_or_default() == "wit" {
                 // Read all data as a string and replace
-                let data = tokio::fs::read_to_string(&path).await?;
+                let data = tokio::fs::read_to_string(&path).await.context(
+                    "failed to read interface for entry in temporary wit patch directory",
+                )?;
                 let data = data.replace("wasi:logging/logging", "wasi:logging/logging@0.1.0-draft");
-                tokio::fs::write(wit_dir_temp.path().join(path.file_name().unwrap()), data).await?;
+                tokio::fs::write(wit_dir_temp.path().join(path.file_name().unwrap()), data)
+                    .await
+                    .context(
+                        "failed to write interface for entry in temporary wit patch directory",
+                    )?;
             }
         }
         // set the overrides
