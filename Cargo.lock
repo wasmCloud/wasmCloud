@@ -8830,7 +8830,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-http-server"
-version = "0.23.1"
+version = "0.23.2"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9109,7 +9109,7 @@ dependencies = [
  "async-nats",
  "cloudevents-sdk",
  "nkeys",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "rmp-serde",
  "serde 1.0.210",
  "serde_json",
