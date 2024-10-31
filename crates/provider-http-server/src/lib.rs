@@ -40,9 +40,8 @@ use tokio::task::JoinHandle;
 use tokio::{spawn, time};
 use tower_http::cors::{self, CorsLayer};
 use tracing::{debug, trace};
-use wasmcloud_provider_sdk::{
-    get_connection, initialize_observability, load_host_data, run_provider,
-};
+use wasmcloud_provider_sdk::provider::WrpcClient;
+use wasmcloud_provider_sdk::{initialize_observability, load_host_data, run_provider};
 use wrpc_interface_http::InvokeIncomingHandler as _;
 
 mod address;
@@ -141,7 +140,8 @@ pub(crate) fn build_request(
 
 /// Invoke a component with the given request
 pub(crate) async fn invoke_component(
-    target: impl AsRef<str>,
+    wrpc: &WrpcClient,
+    target: &str,
     req: http::Request<axum::body::Body>,
     timeout: Option<Duration>,
     cache_control: Option<&String>,
@@ -156,18 +156,7 @@ pub(crate) async fn invoke_component(
         cx.insert(k.as_str(), v.as_str())
     }
 
-    let wrpc = match get_connection()
-        .get_wrpc_client_custom(target.as_ref(), None)
-        .await
-    {
-        Ok(wrpc) => wrpc,
-        Err(err) => Err((http::StatusCode::INTERNAL_SERVER_ERROR, format!("{err:?}")))?,
-    };
-    trace!(
-        ?req,
-        component_id = target.as_ref(),
-        "httpserver calling component"
-    );
+    trace!(?req, component_id = target, "httpserver calling component");
     let fut = wrpc.invoke_handle_http(Some(cx), req);
     let res = if let Some(timeout) = timeout {
         let Ok(res) = time::timeout(timeout, fut).await else {

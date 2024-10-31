@@ -15,8 +15,9 @@ use axum::handler::Handler;
 use axum_server::tls_rustls::RustlsConfig;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument};
-use wasmcloud_provider_sdk::core::{ComponentId, LinkName};
-use wasmcloud_provider_sdk::{HostData, LinkConfig, LinkDeleteInfo, Provider};
+use wasmcloud_provider_sdk::core::LinkName;
+use wasmcloud_provider_sdk::provider::WrpcClient;
+use wasmcloud_provider_sdk::{get_connection, HostData, LinkConfig, LinkDeleteInfo, Provider};
 
 use crate::settings::default_listen_address;
 use crate::{
@@ -28,7 +29,8 @@ use crate::{
 ///
 /// Indexed first by socket address to more easily detect duplicates,
 /// with the http server stored, along with a list (order matters) of components that were registered
-type HandlerLookup = HashMap<SocketAddr, (Arc<HttpServerCore>, Vec<(ComponentId, LinkName)>)>;
+type HandlerLookup =
+    HashMap<SocketAddr, (Arc<HttpServerCore>, Vec<(Arc<str>, Arc<str>, WrpcClient)>)>;
 
 /// `wrpc:http/incoming-handler` provider implementation in address mode
 #[derive(Clone)]
@@ -94,9 +96,14 @@ impl Provider for HttpServerProvider {
             }
         };
 
+        let wrpc = get_connection()
+            .get_wrpc_client(link_config.target_id)
+            .await
+            .context("failed to construct wRPC client")?;
         let component_meta = (
-            link_config.target_id.to_string(),
-            link_config.link_name.to_string(),
+            Arc::from(link_config.target_id),
+            Arc::from(link_config.link_name),
+            wrpc,
         );
         let mut sockets_by_link_name = self.sockets_by_link_name.write().await;
         let mut handlers_by_socket = self.handlers_by_socket.write().await;
@@ -145,7 +152,6 @@ impl Provider for HttpServerProvider {
     async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
         let component_id = info.get_target_id();
         let link_name = info.get_link_name();
-        let existing_meta = (component_id.into(), link_name.into());
 
         // Retrieve the thing by link name
         let sockets_by_link_name = self.sockets_by_link_name.read().await;
@@ -153,7 +159,10 @@ impl Provider for HttpServerProvider {
             let mut handlers_by_socket = self.handlers_by_socket.write().await;
             if let Some((server, component_metas)) = handlers_by_socket.get_mut(addr) {
                 // If the component id & link name pair is present, remove it
-                if let Some(idx) = component_metas.iter().position(|v| v == &existing_meta) {
+                if let Some(idx) = component_metas
+                    .iter()
+                    .position(|(c, l, ..)| c.as_ref() == component_id && l.as_ref() == link_name)
+                {
                     component_metas.remove(idx);
                 }
 
@@ -181,7 +190,7 @@ impl Provider for HttpServerProvider {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct RequestContext {
     /// Address of the server, used for handler lookup
     server_address: SocketAddr,
@@ -194,7 +203,7 @@ struct RequestContext {
 }
 
 /// Handle an HTTP request by invoking the target component as configured in the listener
-#[instrument(level = "debug", skip(settings))]
+#[instrument(level = "debug", skip(settings, handlers_by_socket))]
 async fn handle_request(
     extract::State(RequestContext {
         server_address,
@@ -205,26 +214,33 @@ async fn handle_request(
     extract::Host(authority): extract::Host,
     request: extract::Request,
 ) -> impl axum::response::IntoResponse {
-    let component_id = {
-        let Some(component_id) = handlers_by_socket
+    let (component_id, wrpc) = {
+        let Some((component_id, wrpc)) = handlers_by_socket
             .read()
             .await
             .get(&server_address)
             .and_then(|v| v.1.first())
-            .map(|(component_id, _)| component_id.to_string())
+            .map(|(component_id, _, wrpc)| (Arc::clone(component_id), wrpc.clone()))
         else {
             return Err((
                 http::StatusCode::INTERNAL_SERVER_ERROR,
                 "no targets for HTTP request".into(),
             ));
         };
-        component_id
+        (component_id, wrpc)
     };
 
     let timeout = settings.timeout_ms.map(Duration::from_millis);
     let req = build_request(request, scheme, authority, settings.clone())?;
     Ok::<_, (http::StatusCode, String)>(
-        invoke_component(component_id, req, timeout, settings.cache_control.as_ref()).await,
+        invoke_component(
+            &wrpc,
+            &component_id,
+            req,
+            timeout,
+            settings.cache_control.as_ref(),
+        )
+        .await,
     )
 }
 
@@ -238,7 +254,7 @@ pub struct HttpServerCore {
 }
 
 impl HttpServerCore {
-    #[instrument]
+    #[instrument(skip(handlers_by_socket))]
     pub async fn new(
         settings: Arc<ServiceSettings>,
         target: &str,
