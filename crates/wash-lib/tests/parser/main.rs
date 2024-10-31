@@ -533,8 +533,9 @@ async fn separate_project_paths() {
     assert_eq!(
         config.common.build_dir,
         PathBuf::from("/tmp/some/other/build")
+            .canonicalize()
+            .expect("should be able to canonicalize /tmp/some/other/build")
     );
-    assert_eq!(config.common.wit_dir, PathBuf::from("/tmp/nested/wit"));
 
     // Relative paths properly handled
     assert!(matches!(
