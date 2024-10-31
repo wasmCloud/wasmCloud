@@ -48,9 +48,12 @@ pub async fn run() -> anyhow::Result<()> {
         .await
         .context("failed to run provider")?;
     let connection = get_connection();
+    let wrpc = connection
+        .get_wrpc_client(connection.provider_key())
+        .await?;
     let [(_, _, mut invocations)] =
         wrpc_interface_http::bindings::exports::wrpc::http::outgoing_handler::serve_interface(
-            &connection.get_wrpc_client(connection.provider_key()),
+            &wrpc,
             ServeHttp(provider),
         )
         .await

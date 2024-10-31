@@ -1218,14 +1218,16 @@ impl Host {
                 .clamp(MIN_INVOCATION_CHANNEL_SIZE, MAX_INVOCATION_CHANNEL_SIZE),
         );
         let prefix = Arc::from(format!("{}.{id}", &self.host_config.lattice));
+        let nats = wrpc_transport_nats::Client::new(
+            Arc::clone(&self.rpc_nats),
+            Arc::clone(&prefix),
+            Some(prefix),
+        )
+        .await?;
         let exports = component
             .serve_wrpc(
                 &WrpcServer {
-                    nats: wrpc_transport_nats::Client::new(
-                        Arc::clone(&self.rpc_nats),
-                        Arc::clone(&prefix),
-                        Some(prefix),
-                    ),
+                    nats,
                     claims: component.claims().cloned().map(Arc::new),
                     id: Arc::clone(&id),
                     image_reference: Arc::clone(&image_reference),

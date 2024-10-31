@@ -150,7 +150,8 @@ async fn config_e2e() -> anyhow::Result<()> {
         nats_client.clone(),
         format!("{LATTICE}.{PINGER_COMPONENT_ID}"),
         None,
-    );
+    )
+    .await?;
     let wrpc_client = Arc::new(wrpc_client);
     // Build the host
     let host = WasmCloudTestHost::start_custom(

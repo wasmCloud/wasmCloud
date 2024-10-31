@@ -74,14 +74,12 @@ impl NatsMessagingProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        serve_provider_exports(
-            &connection.get_wrpc_client(connection.provider_key()),
-            provider,
-            shutdown,
-            bindings::serve,
-        )
-        .await
-        .context("failed to serve provider exports")
+        let wrpc = connection
+            .get_wrpc_client(connection.provider_key())
+            .await?;
+        serve_provider_exports(&wrpc, provider, shutdown, bindings::serve)
+            .await
+            .context("failed to serve provider exports")
     }
 
     /// Build a [`NatsMessagingProvider`] from [`HostData`]
@@ -250,12 +248,18 @@ async fn dispatch_msg(
     for (k, v) in TraceContextInjector::default_with_span().iter() {
         cx.insert(k.as_str(), v.as_str())
     }
-    if let Err(e) = bindings::wasmcloud::messaging::handler::handle_message(
-        &get_connection().get_wrpc_client_custom(component_id, None),
-        Some(cx),
-        &msg,
-    )
-    .await
+    let wrpc = match get_connection()
+        .get_wrpc_client_custom(component_id, None)
+        .await
+    {
+        Ok(wrpc) => wrpc,
+        Err(err) => {
+            error!(?err, "failed to construct wRPC client");
+            return;
+        }
+    };
+    if let Err(e) =
+        bindings::wasmcloud::messaging::handler::handle_message(&wrpc, Some(cx), &msg).await
     {
         error!(
             error = %e,
