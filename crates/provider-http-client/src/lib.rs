@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use anyhow::Context as _;
 use bytes::Bytes;
-use futures::{StreamExt as _};
+use futures::StreamExt as _;
 use http_body::Frame;
 use http_body_util::{BodyExt as _, StreamBody};
 use hyper_util::rt::TokioExecutor;
