@@ -372,7 +372,7 @@ webpki-roots = { version = "0.26", default-features = false }
 weld-codegen = { version = "0.7", default-features = false }
 which = { version = "4", default-features = false }
 wit-bindgen = { version = "0.32", default-features = false }
-wit-bindgen-core = { version = "0.32", default-features = false }
+wit-bindgen-core = { version = "0.33", default-features = false }
 wit-bindgen-go = { version = "0.32", default-features = false }
 wit-bindgen-wrpc = { version = "0.8", default-features = false }
 wit-component = { version = "0.219", default-features = false }
