@@ -61,13 +61,10 @@ impl NatsMessagingProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        serve_provider_exports(
-            &connection.get_wrpc_client(connection.provider_key()),
-            provider,
-            shutdown,
-            bindings::serve,
-        )
-        .await
+        let wrpc = connection
+            .get_wrpc_client(connection.provider_key())
+            .await?;
+        serve_provider_exports(&wrpc, provider, shutdown, bindings::serve).await
     }
 
     /// Build a [`NatsMessagingProvider`] from [`HostData`]

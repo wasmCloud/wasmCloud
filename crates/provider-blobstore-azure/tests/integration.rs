@@ -133,15 +133,13 @@ impl TestEnv {
                 .await
                 .context("should've been able to run provider")?;
             let connection = get_connection();
+            let wrpc = connection
+                .get_wrpc_client(connection.provider_key())
+                .await?;
             tokio::spawn(async move {
-                serve_provider_exports(
-                    &connection.get_wrpc_client(connection.provider_key()),
-                    provider,
-                    shutdown,
-                    serve,
-                )
-                .await
-                .context("failed to serve provider exports")
+                serve_provider_exports(&wrpc, provider, shutdown, serve)
+                    .await
+                    .context("failed to serve provider exports")
             })
         } else {
             tokio::spawn(async move {
@@ -156,7 +154,7 @@ impl TestEnv {
     pub async fn wrpc_client(&self) -> Result<wrpc_transport_nats::Client> {
         let nats = self.nats_client().await?;
         let prefix = format!("{}.{}", self.lattice, self.test_suite);
-        Ok(wrpc_transport_nats::Client::new(nats, prefix, None))
+        wrpc_transport_nats::Client::new(nats, prefix, None).await
     }
 
     pub fn wrpc_context(&self) -> Option<async_nats::HeaderMap> {

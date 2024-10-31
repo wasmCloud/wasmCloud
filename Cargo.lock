@@ -7210,6 +7210,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -10194,15 +10195,17 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport-nats"
-version = "0.26.0"
+version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93ceaa64afa9f6a13252909214bd2b7750db3303873dab094abb9ec8c82367ea"
+checksum = "a226edc7f6fd721b10260aa7fe083c71ccb29d464eb8f7121d634afc5e8c355b"
 dependencies = [
  "anyhow",
  "async-nats",
  "bytes",
  "futures",
+ "nuid 0.5.0",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
  "wasm-tokio",

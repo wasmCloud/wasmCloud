@@ -221,14 +221,15 @@ impl wrpc_transport::Invoke for Handler {
         let mut headers = injector_to_headers(&TraceContextInjector::default_with_span());
         headers.insert("source-id", &*self.component_id);
         headers.insert("link-name", link_name);
-        wrpc_transport_nats::Client::new(
+        let nats = wrpc_transport_nats::Client::new(
             Arc::clone(&self.nats),
             format!("{}.{id}", &self.lattice),
             None,
         )
-        .timeout(self.invocation_timeout)
-        .invoke(Some(headers), instance, func, params, paths)
-        .await
+        .await?;
+        nats.timeout(self.invocation_timeout)
+            .invoke(Some(headers), instance, func, params, paths)
+            .await
     }
 }
 

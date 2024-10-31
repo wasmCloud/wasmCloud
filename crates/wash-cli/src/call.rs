@@ -133,7 +133,7 @@ pub async fn handle_command(
         .await
         .context("failed to create async nats client")?;
     let wrpc_client =
-        wrpc_transport_nats::Client::new(nc, format!("{}.{component_id}", &lattice), None);
+        wrpc_transport_nats::Client::new(nc, format!("{}.{component_id}", &lattice), None).await?;
 
     let (namespace, package, interface, name) = parse_wit_meta_from_operation(&function).context(
         "Invalid function supplied. Must be in the form of `namespace:package/interface.function`",

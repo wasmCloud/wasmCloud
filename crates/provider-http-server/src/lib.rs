@@ -156,7 +156,13 @@ pub(crate) async fn invoke_component(
         cx.insert(k.as_str(), v.as_str())
     }
 
-    let wrpc = get_connection().get_wrpc_client_custom(target.as_ref(), None);
+    let wrpc = match get_connection()
+        .get_wrpc_client_custom(target.as_ref(), None)
+        .await
+    {
+        Ok(wrpc) => wrpc,
+        Err(err) => Err((http::StatusCode::INTERNAL_SERVER_ERROR, format!("{err:?}")))?,
+    };
     trace!(
         ?req,
         component_id = target.as_ref(),

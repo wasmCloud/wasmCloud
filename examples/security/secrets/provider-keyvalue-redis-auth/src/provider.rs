@@ -63,13 +63,10 @@ impl SecretsExampleProvider {
             .await
             .context("failed to run provider")?;
         let connection = wasmcloud_provider_sdk::get_connection();
-        serve_provider_exports(
-            &connection.get_wrpc_client(connection.provider_key()),
-            provider,
-            shutdown,
-            bindings::serve,
-        )
-        .await
+        let wrpc = connection
+            .get_wrpc_client(connection.provider_key())
+            .await?;
+        serve_provider_exports(&wrpc, provider, shutdown, bindings::serve).await
     }
 }
 

@@ -102,14 +102,12 @@ impl KafkaMessagingProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        serve_provider_exports(
-            &connection.get_wrpc_client(connection.provider_key()),
-            provider,
-            shutdown,
-            bindings::serve,
-        )
-        .await
-        .context("failed to serve provider exports")
+        let wrpc = connection
+            .get_wrpc_client(connection.provider_key())
+            .await?;
+        serve_provider_exports(&wrpc, provider, shutdown, bindings::serve)
+            .await
+            .context("failed to serve provider exports")
     }
 }
 
@@ -267,7 +265,7 @@ impl Provider for KafkaMessagingProvider {
         // StartOffset::Latest only processes new messages, but Earliest will send every message.
         // This could be a linkdef tunable value in the future
         let task = spawn(async move {
-            let wrpc = get_connection().get_wrpc_client(&component_id);
+            let wrpc = get_connection().get_wrpc_client(&component_id).await?;
 
             // Listen to messages forever until we're instructed to stop
             loop {

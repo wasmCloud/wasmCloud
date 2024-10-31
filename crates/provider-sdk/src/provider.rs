@@ -1042,9 +1042,8 @@ impl ProviderConnection {
     /// # Arguments
     ///
     /// * `target` - Target ID to which invocations will be sent
-    #[must_use]
-    pub fn get_wrpc_client(&self, target: &str) -> WrpcClient {
-        self.get_wrpc_client_custom(target, None)
+    pub async fn get_wrpc_client(&self, target: &str) -> anyhow::Result<WrpcClient> {
+        self.get_wrpc_client_custom(target, None).await
     }
 
     /// Retrieve a wRPC client that can be used based on the NATS client of this connection,
@@ -1054,19 +1053,24 @@ impl ProviderConnection {
     ///
     /// * `target` - Target ID to which invocations will be sent
     /// * `timeout` - Timeout to be set on the client (by default if this is unset it will be 10 seconds)
-    #[must_use]
-    pub fn get_wrpc_client_custom(&self, target: &str, timeout: Option<Duration>) -> WrpcClient {
+    pub async fn get_wrpc_client_custom(
+        &self,
+        target: &str,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<WrpcClient> {
         let prefix = Arc::from(format!("{}.{target}", &self.lattice));
-        WrpcClient {
-            nats: wrpc_transport_nats::Client::new(
-                Arc::clone(&self.nats),
-                Arc::clone(&prefix),
-                Some(prefix),
-            ),
+        let nats = wrpc_transport_nats::Client::new(
+            Arc::clone(&self.nats),
+            Arc::clone(&prefix),
+            Some(prefix),
+        )
+        .await?;
+        Ok(WrpcClient {
+            nats,
             provider_id: Arc::clone(&self.provider_id),
             target: Arc::from(target),
             timeout: timeout.unwrap_or_else(|| Duration::from_secs(10)),
-        }
+        })
     }
 
     /// Get the provider key that was assigned to this host at startup

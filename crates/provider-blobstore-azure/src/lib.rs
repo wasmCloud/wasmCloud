@@ -103,14 +103,12 @@ impl BlobstoreAzblobProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        serve_provider_exports(
-            &connection.get_wrpc_client(connection.provider_key()),
-            provider,
-            shutdown,
-            serve,
-        )
-        .await
-        .context("failed to serve provider exports")
+        let wrpc = connection
+            .get_wrpc_client(connection.provider_key())
+            .await?;
+        serve_provider_exports(&wrpc, provider, shutdown, serve)
+            .await
+            .context("failed to serve provider exports")
     }
 
     async fn get_config(&self, context: Option<&Context>) -> anyhow::Result<BlobServiceClient> {
