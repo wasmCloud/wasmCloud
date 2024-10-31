@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, ensure, Context as _, Result};
 use console::style;
+use tracing::{debug, warn};
 use wash_lib::app::AppManifest;
 use wash_lib::cli::stop::stop_provider;
 use wash_lib::component::{scale_component, ScaleComponentArgs};
@@ -405,7 +406,7 @@ pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
                 .context("missing component id")?,
         )
         .await
-        .context("failed to create manifest from existing [{}]")?
+        .context("failed to create manifest from existing")?
     } else {
         // If no manifest exists, we must generate one or more manifests
         generate_manifests(state)
@@ -438,10 +439,23 @@ pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
         )
         .await
         {
-            Ok(_) => {}
-            Err(e) if e.to_string().contains("already exists") => {}
+            Ok(_) => {
+                debug!(
+                    name = manifest.metadata.name.as_str(),
+                    "successfully put application",
+                );
+            }
+            Err(e) if e.to_string().contains("already exists") => {
+                warn!(
+                    name = manifest.metadata.name.as_str(),
+                    "application already exists, skipping put",
+                );
+            }
             Err(e) => {
-                bail!("failed to put model [{}]: {e}", manifest.metadata.name);
+                bail!(
+                    "failed to put application [{}]: {e}",
+                    manifest.metadata.name
+                );
             }
         }
 

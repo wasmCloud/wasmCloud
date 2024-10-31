@@ -282,6 +282,8 @@ pub async fn handle_command(
     }
     // Enable file watching
     pause_watch.store(false, Ordering::SeqCst);
+    // Make sure the reload channel is empty before starting the loop
+    let _ = reload_rx.try_recv();
 
     // Watch FS for changes and listen for Ctrl + C in tandem
     eprintln!(
@@ -296,8 +298,12 @@ pub async fn handle_command(
                 devloop::run(&mut run_loop_state)
                     .await
                     .context("failed to run dev loop iteration")?;
-                pause_watch.store(false, Ordering::SeqCst);
                 eprintln!("\n{} Watching for file changes (press Ctrl+c to stop)...", emoji::EYES);
+                // Avoid jitter with reloads by pausing the watcher for a short time
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                // Make sure that the reload channel is empty before unpausing the watcher
+                let _ = reload_rx.try_recv();
+                pause_watch.store(false, Ordering::SeqCst);
             },
 
             // Process a stop
