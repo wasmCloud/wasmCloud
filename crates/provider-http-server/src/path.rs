@@ -18,7 +18,8 @@ use axum_server::Handle;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument};
-use wasmcloud_provider_sdk::{HostData, LinkConfig, LinkDeleteInfo, Provider};
+use wasmcloud_provider_sdk::provider::WrpcClient;
+use wasmcloud_provider_sdk::{get_connection, HostData, LinkConfig, LinkDeleteInfo, Provider};
 
 use crate::{
     build_request, get_cors_layer, get_tcp_listener, invoke_component, load_settings,
@@ -27,12 +28,12 @@ use crate::{
 
 /// This struct holds both the forward and reverse mappings for path-based routing
 /// so that they can be modified by just acquiring a single lock in the [`HttpServerProvider`]
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Router {
     /// Lookup from a path to the component ID that is handling that path
-    paths: HashMap<String, String>,
+    paths: HashMap<Arc<str>, (Arc<str>, WrpcClient)>,
     /// Reverse lookup to find the path for a (component,link_name) pair
-    components: HashMap<(String, String), String>,
+    components: HashMap<(Arc<str>, Arc<str>), Arc<str>>,
 }
 
 /// `wrpc:http/incoming-handler` provider implementation with path-based routing
@@ -152,34 +153,30 @@ impl Provider for HttpServerProvider {
             );
         };
 
+        let target = Arc::from(link_config.target_id);
+        let name = Arc::from(link_config.link_name);
+
+        let key = (Arc::clone(&target), Arc::clone(&name));
+
         let mut path_router = self.path_router.write().await;
-        if path_router.components.contains_key(&(
-            link_config.target_id.to_string(),
-            link_config.link_name.to_string(),
-        )) {
+        if path_router.components.contains_key(&key) {
             // When we can return errors from links, tell the host this was invalid
-            bail!(
-                "Component {} already has a path registered with link name {}",
-                link_config.target_id,
-                link_config.link_name
-            );
+            bail!("Component {target} already has a path registered with link name {name}");
         }
         if path_router.paths.contains_key(path.as_str()) {
             // When we can return errors from links, tell the host this was invalid
             bail!("Path {path} already in use by a different component");
         }
 
+        let wrpc = get_connection()
+            .get_wrpc_client(link_config.target_id)
+            .await
+            .context("failed to construct wRPC client")?;
+
+        let path = Arc::from(path.clone());
         // Insert the path into the paths map for future lookups
-        path_router.components.insert(
-            (
-                link_config.target_id.to_string(),
-                link_config.link_name.to_string(),
-            ),
-            path.to_string(),
-        );
-        path_router
-            .paths
-            .insert(path.to_string(), link_config.target_id.to_string());
+        path_router.components.insert(key, Arc::clone(&path));
+        path_router.paths.insert(path, (target, wrpc));
 
         Ok(())
     }
@@ -199,7 +196,7 @@ impl Provider for HttpServerProvider {
         let mut path_router = self.path_router.write().await;
         let path = path_router
             .components
-            .remove(&(component_id.to_string(), link_name.to_string()));
+            .remove(&(Arc::from(component_id), Arc::from(link_name)));
         if let Some(path) = path {
             path_router.paths.remove(&path);
         }
@@ -216,7 +213,7 @@ impl Provider for HttpServerProvider {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct RequestContext {
     router: Arc<RwLock<Router>>,
     scheme: http::uri::Scheme,
@@ -237,11 +234,12 @@ async fn handle_request(
     let timeout = settings.timeout_ms.map(Duration::from_millis);
     let req = build_request(request, scheme, authority, settings.clone())?;
     let path = req.uri().path();
-    let Some(target_component) = router.read().await.paths.get(path).cloned() else {
+    let Some((target_component, wrpc)) = router.read().await.paths.get(path).cloned() else {
         return Err((http::StatusCode::NOT_FOUND, "path not found".to_string()));
     };
     Ok(invoke_component(
-        target_component,
+        &wrpc,
+        &target_component,
         req,
         timeout,
         settings.cache_control.as_ref(),
