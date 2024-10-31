@@ -84,8 +84,8 @@ pub struct SignConfig {
 }
 
 /// Using a [`ProjectConfig`], usually parsed from a `wasmcloud.toml` file, build the project
-/// with the installed language toolchain. This will delegate to [`build_component`] when the project is an component,
-/// or [`build_provider`] when the project is a provider.
+/// with the installed language toolchain. This will delegate to [`build_component`] when the project is a component,
+/// builds a provider otherwise.
 ///
 /// This function returns the path to the compiled artifact, a signed Wasm component or signed provider archive.
 ///
