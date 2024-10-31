@@ -266,8 +266,10 @@ impl HttpServerCore {
                 .await
                 .context("failed to construct TLS config")?;
 
+            let mut srv = axum_server::from_tcp_rustls(listener, tls);
+            srv.http_builder().http1().keep_alive(false);
             tokio::spawn(async move {
-                if let Err(e) = axum_server::from_tcp_rustls(listener, tls)
+                if let Err(e) = srv
                     .handle(task_handle)
                     .serve(
                         service
@@ -287,8 +289,10 @@ impl HttpServerCore {
         } else {
             debug!(?addr, "bind HTTP listener");
 
+            let mut srv = axum_server::from_tcp(listener);
+            srv.http_builder().http1().keep_alive(false);
             tokio::spawn(async move {
-                if let Err(e) = axum_server::from_tcp(listener)
+                if let Err(e) = srv
                     .handle(task_handle)
                     .serve(
                         service
