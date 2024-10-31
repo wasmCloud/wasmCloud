@@ -37,7 +37,7 @@ jobs:
         run: tar -czf washboard.tar.gz washboard-ui
 
       - name: Create Release
-        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191
+        uses: softprops/action-gh-release@e7a8f85e1c67a31e6ed99a94b41bd0b71bbee6b8
         with:
           draft: false
           prerelease: ${{ steps.extract.outputs.prerelease != '' }}
