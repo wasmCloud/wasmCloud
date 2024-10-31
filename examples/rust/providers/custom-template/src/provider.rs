@@ -61,10 +61,13 @@ impl CustomTemplateProvider {
         // The [`serve`] function will set up RPC topics for your provider's exports and await invocations.
         // This is a generated function based on the contents in your `wit/world.wit` file.
         let connection = wasmcloud_provider_sdk::get_connection();
-        let wrpc = connection
-            .get_wrpc_client(connection.provider_key())
-            .await?;
-        serve_provider_exports(&wrpc, provider, shutdown, bindings::serve).await
+        serve_provider_exports(
+            &connection.get_wrpc_client(connection.provider_key()),
+            provider,
+            shutdown,
+            bindings::serve,
+        )
+        .await
 
         // If your provider has no exports, simply await the shutdown to keep the provider running
         // shutdown.await;

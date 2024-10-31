@@ -13,12 +13,12 @@ status = "actively-developed"
 
 [dependencies]
 anyhow = "1.0.86"
-async-nats = "0.36"
-bytes = "1"
-futures = "0.3"
-serde = { version = "1.0.203", features = ["derive"] }
+async-nats = "0.35.1"
+bytes = "1.6.0"
+futures = "0.3.30"
+serde = { version = "1.0.203" , features = ["derive"] }
 serde_json = "1.0.119"
-tokio = { version = "1.37.0", features = ["full"] }
+tokio = { version = "1.37.0", features = [ "full" ] }
 tracing = "0.1.40"
 wasmcloud-provider-sdk = "0.9.1"
-wit-bindgen-wrpc = "0.8"
+wit-bindgen-wrpc = "0.6.3"
