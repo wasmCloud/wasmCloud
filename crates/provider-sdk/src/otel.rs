@@ -1,10 +1,11 @@
-/// Instrument a given [`provider_sdk::Context`], injecting current `tracing`-generated metadata
+/// Instrument a given [`tracing_core::Dispatch`](https://docs.rs/tracing-core/latest/tracing_core/struct.Dispatch.html),
+/// injecting current `tracing`-generated metadata
 /// if one isn't present.
 ///
 /// This functionality is exposed as a macro since the context for trace injection
 /// should be at the *call site* of this macro (ex. inside some method annotated with `#[instrument]`)
 ///
-/// This macro requires `provider_sdk` and `wasmcloud_tracing` to be imported
+/// This macro requires [`wasmcloud_provider_sdk`](crate) and [`wasmcloud_tracing`] to be imported
 #[macro_export]
 macro_rules! propagate_trace_for_ctx {
     ($ctx:ident) => {{
@@ -30,8 +31,9 @@ macro_rules! propagate_trace_for_ctx {
 /// This functionality exists as a macro due to the requirement that `tracing` be initialized
 /// from *binary* code, rather than library code.
 ///
-/// This macro loads host data and uses the provider-sdk to build a [`tracing_core::Dispatch`] and
-/// relevant guards/internal structures to configure it with information relevant to the host
+/// This macro loads host data and uses the [`wasmcloud_provider_sdk`](crate) to build a
+/// [`tracing_core::Dispatch`](https://docs.rs/tracing-core/latest/tracing_core/struct.Dispatch.html)
+/// and relevant guards/internal structures to configure it with information relevant to the host
 ///
 /// This macro introduces the following variables into scope:
 /// - `__observability__guard`
