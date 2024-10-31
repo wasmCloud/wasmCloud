@@ -5,10 +5,11 @@ use std::collections::HashMap;
 
 use anyhow::Context as _;
 use bytes::Bytes;
-use futures::{StreamExt as _, TryStreamExt as _};
+use futures::{StreamExt as _};
 use http_body::Frame;
 use http_body_util::{BodyExt as _, StreamBody};
 use hyper_util::rt::TokioExecutor;
+use tokio::task::JoinSet;
 use tokio::{select, spawn};
 use tracing::{debug, error, instrument, trace, warn, Instrument};
 
@@ -47,22 +48,29 @@ pub async fn run() -> anyhow::Result<()> {
         .await
         .context("failed to run provider")?;
     let connection = get_connection();
-    let [(_, _, invocations)] =
+    let [(_, _, mut invocations)] =
         wrpc_interface_http::bindings::exports::wrpc::http::outgoing_handler::serve_interface(
             &connection.get_wrpc_client(connection.provider_key()),
             ServeHttp(provider),
         )
         .await
         .context("failed to serve exports")?;
-    let mut invocations = invocations.try_buffer_unordered(256);
     let mut shutdown = pin!(shutdown);
+    let mut tasks = JoinSet::new();
     loop {
         select! {
             Some(res) = invocations.next() => {
-                if let Err(err) = res {
-                    warn!(?err, "failed to serve invocation");
-                } else {
-                    trace!("successfully served invocation");
+                match res {
+                    Ok(fut) => {
+                        tasks.spawn(async move {
+                            if let Err(err) = fut.await {
+                                warn!(?err, "failed to serve invocation");
+                            }
+                        });
+                    },
+                    Err(err) => {
+                        warn!(?err, "failed to accept invocation");
+                    }
                 }
             },
             () = &mut shutdown => {
