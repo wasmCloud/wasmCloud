@@ -18,7 +18,7 @@ use nkeys::XKey;
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
-use tokio::task::spawn_blocking;
+use tokio::task::{spawn_blocking, JoinSet};
 use tokio::{select, spawn, try_join};
 use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
 use wasmcloud_core::nats::convert_header_map_to_hashmap;
@@ -869,21 +869,28 @@ where
     let invocations = serve(client, provider)
         .await
         .context("failed to serve exports")?;
-    let mut invocations = stream::select_all(invocations.into_iter().map(
-        |(instance, name, invocations)| {
-            invocations
-                .try_buffer_unordered(256)
-                .map(move |res| (instance, name, res))
-        },
-    ));
+    let mut invocations = stream::select_all(
+        invocations
+            .into_iter()
+            .map(|(instance, name, invocations)| invocations.map(move |res| (instance, name, res))),
+    );
     let mut shutdown = pin!(shutdown);
+    let mut tasks = JoinSet::new();
     loop {
         select! {
             Some((instance, name, res)) = invocations.next() => {
-                if let Err(err) = res {
-                    warn!(?err, instance, name, "failed to serve invocation");
-                } else {
-                    trace!(instance, name, "successfully served invocation");
+                match res {
+                    Ok(fut) => {
+                        tasks.spawn(async move {
+                            if let Err(err) = fut.await {
+                                warn!(?err, instance, name, "failed to serve invocation");
+                            }
+                            trace!(instance, name, "successfully served invocation");
+                        });
+                    },
+                    Err(err) => {
+                        warn!(?err, instance, name, "failed to accept invocation");
+                    }
                 }
             },
             () = &mut shutdown => {
