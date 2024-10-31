@@ -290,6 +290,12 @@ pub(crate) fn get_tcp_listener(settings: Arc<ServiceSettings>) -> anyhow::Result
         .set_reuseaddr(!cfg!(windows))
         .context("Error when setting socket to reuseaddr")?;
     socket
+        .set_nodelay(true)
+        .context("failed to set `TCP_NODELAY`")?;
+    socket
+        .set_keepalive(false)
+        .context("failed to disable TCP keepalive")?;
+    socket
         .bind(settings.address)
         .context("Unable to bind to address")?;
     let listener = socket.listen(1024).context("unable to listen on socket")?;
