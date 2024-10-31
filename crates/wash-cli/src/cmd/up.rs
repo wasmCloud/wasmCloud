@@ -1061,7 +1061,7 @@ pub(crate) async fn nats_client_from_wasmcloud_opts(
         wasmcloud_opts.ctl_seed.clone(),
         wasmcloud_opts.ctl_credsfile.clone(),
         wasmcloud_opts.ctl_tls_ca_file.clone(),
-        wasmcloud_opts.ctl_tls_first.clone(),
+        wasmcloud_opts.ctl_tls_first,
     )
     .await
 }
