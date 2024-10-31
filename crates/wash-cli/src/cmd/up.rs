@@ -102,7 +102,7 @@ pub struct NatsOpts {
     )]
     pub connect_only: bool,
 
-    /// NATS server version to download, e.g. `v2.10.7`. See https://github.com/nats-io/nats-server/releases/ for releases
+    /// NATS server version to download, e.g. `v2.10.7`. See <https://github.com/nats-io/nats-server/releases/> for releases
     #[clap(long = "nats-version", default_value = NATS_SERVER_VERSION, env = "NATS_VERSION")]
     pub nats_version: String,
 
@@ -152,7 +152,7 @@ impl From<NatsOpts> for NatsConfig {
 
 #[derive(Parser, Debug, Clone)]
 pub struct WasmcloudOpts {
-    /// wasmCloud host version to download, e.g. `v0.55.0`. See https://github.com/wasmCloud/wasmcloud/releases for releases
+    /// wasmCloud host version to download, e.g. `v0.55.0`. See <https://github.com/wasmCloud/wasmcloud/releases> for releases
     #[clap(long = "wasmcloud-version", default_value = WASMCLOUD_HOST_VERSION, env = "WASMCLOUD_VERSION")]
     pub wasmcloud_version: String,
 
@@ -361,7 +361,7 @@ impl WasmcloudOpts {
 
 #[derive(Parser, Debug, Clone)]
 pub struct WadmOpts {
-    /// wadm version to download, e.g. `v0.4.0`. See https://github.com/wasmCloud/wadm/releases for releases
+    /// wadm version to download, e.g. `v0.4.0`. See <https://github.com/wasmCloud/wadm/releases> for releases
     #[clap(long = "wadm-version", default_value = WADM_VERSION, env = "WADM_VERSION")]
     pub wadm_version: String,
 
