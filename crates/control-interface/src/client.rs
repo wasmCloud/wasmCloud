@@ -582,10 +582,10 @@ impl Client {
     ///
     /// The host will acknowledge this request as soon as it verifies that the target component is running.
     ///
-    /// Note that acknowledgement occurs **before** the new bytes are downloaded. Live-updating an component can take a long time
+    /// Note that acknowledgement occurs **before** the new bytes are downloaded. Live-updating a component can take a long time
     /// and control clients cannot block waiting for a reply that could come several seconds later.
     ///
-    /// To properly verify that a component has been updated, create  listener for the appropriate [`PublishedEvent`] on the
+    /// To properly verify that a component has been updated, create a listener for the appropriate [`PublishedEvent`] on the
     /// control events channel
     ///
     /// # Arguments
