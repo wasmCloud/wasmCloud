@@ -62,25 +62,24 @@ impl HttpServerProvider {
             .map(|s| SocketAddr::from_str(s))
             .transpose()
             .context("failed to parse default_address")?;
-        let settings = Arc::new(
-            load_settings(default_address, &host_data.config)
-                .context("failed to load settings in path mode")?,
-        );
+        let settings = load_settings(default_address, &host_data.config)
+            .context("failed to load settings in path mode")?;
+        let settings = Arc::new(settings);
 
-        let path_router = Arc::new(RwLock::new(Router::default()));
+        let path_router = Arc::default();
 
         let addr = settings.address;
         info!(
             %addr,
             "httpserver starting listener in path-based mode",
         );
-        let cors = get_cors_layer(settings.clone())?;
-        let listener = get_tcp_listener(settings.clone())?;
+        let cors = get_cors_layer(&settings)?;
+        let listener = get_tcp_listener(&settings)?;
         let service = handle_request.layer(cors);
 
         let handle = axum_server::Handle::new();
         let task_handle = handle.clone();
-        let task_router = path_router.clone();
+        let task_router = Arc::clone(&path_router);
         let task = if let (Some(crt), Some(key)) =
             (&settings.tls_cert_file, &settings.tls_priv_key_file)
         {
@@ -97,7 +96,7 @@ impl HttpServerProvider {
                             .with_state(RequestContext {
                                 router: task_router,
                                 scheme: http::uri::Scheme::HTTPS,
-                                settings: settings.clone(),
+                                settings: Arc::clone(&settings),
                             })
                             .into_make_service(),
                     )
@@ -117,7 +116,7 @@ impl HttpServerProvider {
                             .with_state(RequestContext {
                                 router: task_router,
                                 scheme: http::uri::Scheme::HTTP,
-                                settings: settings.clone(),
+                                settings: Arc::clone(&settings),
                             })
                             .into_make_service(),
                     )
@@ -232,17 +231,19 @@ async fn handle_request(
     request: extract::Request,
 ) -> impl axum::response::IntoResponse {
     let timeout = settings.timeout_ms.map(Duration::from_millis);
-    let req = build_request(request, scheme, authority, settings.clone())?;
+    let req = build_request(request, scheme, authority, &settings)?;
     let path = req.uri().path();
     let Some((target_component, wrpc)) = router.read().await.paths.get(path).cloned() else {
-        return Err((http::StatusCode::NOT_FOUND, "path not found".to_string()));
+        Err((http::StatusCode::NOT_FOUND, "path not found"))?
     };
-    Ok(invoke_component(
-        &wrpc,
-        &target_component,
-        req,
-        timeout,
-        settings.cache_control.as_ref(),
+    axum::response::Result::<_, axum::response::ErrorResponse>::Ok(
+        invoke_component(
+            &wrpc,
+            &target_component,
+            req,
+            timeout,
+            settings.cache_control.as_ref(),
+        )
+        .await,
     )
-    .await)
 }
