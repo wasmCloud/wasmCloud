@@ -1,0 +1,8 @@
+name = "http-password-checker"
+version = "0.1.0"
+language = "rust"
+type = "component"
+
+[component]
+wit_world = "component"
+wasm_target = "wasm32-wasip2"
