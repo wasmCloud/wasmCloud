@@ -375,7 +375,7 @@ link_name = "default"
             .as_bytes(),
         )
         .await
-        .context("failed tow write dev configuration content to file")?;
+        .context("failed to write dev configuration content to file")?;
     wasmcloud_toml.flush().await?;
 
     // Run wash dev
@@ -467,7 +467,6 @@ link_name = "default"
             let entry = dir_entries
                 .next_entry()
                 .await
-                // .map_err(|e| anyhow!(e).context("failed to get dir entry"))?
                 .context("failed to get dir entry")?
                 .context("no more dir entries")?;
             if entry.path().extension().is_some_and(|v| v == "yaml") {

@@ -8,7 +8,7 @@ use tracing::{debug, trace};
 
 use wadm_types::{
     CapabilityProperties, Component, ComponentProperties, ConfigProperty, LinkProperty, Manifest,
-    Metadata, Properties, SecretProperty, Specification, TargetConfig, TraitProperty,
+    Metadata, Policy, Properties, SecretProperty, Specification, TargetConfig, TraitProperty,
 };
 use wash_lib::generate::emoji;
 use wash_lib::parser::{
@@ -863,6 +863,8 @@ impl ProjectDeps {
         // to remove duplicates
         let mut components = HashMap::new();
 
+        let mut contains_secrets = false;
+
         // For each dependency, go through and generate the component along with necessary links
         for dep in self.dependencies.values().flatten() {
             let dep = dep.clone();
@@ -879,7 +881,22 @@ impl ProjectDeps {
                 continue;
             };
 
+            // If there are any secrets present, configure the NATS KV policy
+            match &dep_component.properties {
+                wadm_types::Properties::Capability {
+                    properties: CapabilityProperties { secrets, .. },
+                    ..
+                }
+                | wadm_types::Properties::Component {
+                    properties: ComponentProperties { secrets, .. },
+                    ..
+                } => {
+                    contains_secrets |= !secrets.is_empty();
+                }
+            }
+
             // Generate links for the given component and its spec, for known interfaces
+            // TODO(#3524): When secrets are supported on links, ensure we update the `contains_secrets` var
             match dep {
                 DependencySpec::Exports(DependencySpecInner {
                     wit:
@@ -1070,6 +1087,15 @@ impl ProjectDeps {
             debug!("replacing duplicate component [{}]", c.name);
         }
 
+        let policies = if contains_secrets {
+            vec![Policy {
+                name: "nats-kv".into(),
+                policy_type: "policy.secret.wasmcloud.dev/v1alpha1".to_string(),
+                properties: BTreeMap::from([("backend".to_string(), "nats-kv".to_string())]),
+            }]
+        } else {
+            vec![]
+        };
         manifests.push(Manifest {
             api_version: "core.oam.dev/v1beta1".into(),
             kind: "Application".into(),
@@ -1094,7 +1120,7 @@ impl ProjectDeps {
             },
             spec: Specification {
                 components: components.into_values().collect(),
-                policies: Vec::with_capacity(0),
+                policies,
             },
         });
 
