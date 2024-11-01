@@ -116,6 +116,7 @@ tracing-subscriber = { workspace = true }
 wascap = { workspace = true }
 wasmcloud-core = { workspace = true, features = ["otel"] }
 wasmcloud-host = { workspace = true }
+humantime = { workspace = true }
 wasmcloud-provider-blobstore-azure = { workspace = true, optional = true }
 wasmcloud-provider-blobstore-fs = { workspace = true, optional = true }
 wasmcloud-provider-blobstore-s3 = { workspace = true, optional = true }
