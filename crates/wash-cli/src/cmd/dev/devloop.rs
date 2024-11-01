@@ -74,14 +74,7 @@ pub(crate) async fn generate_manifests(
     // Pull implied dependencies from WIT
     let wit_implied_deps = discover_dependencies_from_wit(resolve, world_id)
         .context("failed to resolve dependent components")?;
-    eprintln!(
-        "{} Detected component dependencies: {:?}",
-        emoji::INFO_SQUARE,
-        wit_implied_deps
-            .iter()
-            .map(DependencySpec::name)
-            .collect::<BTreeSet<String>>()
-    );
+
     let pkey = ProjectDependencyKey::from_project(
         &project_cfg.common.name,
         &project_cfg.common.project_dir,
@@ -90,7 +83,6 @@ pub(crate) async fn generate_manifests(
 
     let mut current_project_deps = ProjectDeps::from_known_deps(pkey.clone(), wit_implied_deps)
         .context("failed to build project dependencies")?;
-
     // Pull and merge in overrides from project-level wasmcloud.toml
     let project_override_deps = ProjectDeps::from_project_config_overrides(pkey, project_cfg)
         .with_context(|| {
@@ -102,6 +94,16 @@ pub(crate) async fn generate_manifests(
     current_project_deps
         .merge_override(project_override_deps)
         .context("failed to merge & override project-specified deps")?;
+    eprintln!(
+        "{} Detected component dependencies: {:?}",
+        emoji::INFO_SQUARE,
+        current_project_deps
+            .dependencies
+            .values()
+            .flatten()
+            .map(DependencySpec::name)
+            .collect::<BTreeSet<String>>()
+    );
 
     // After we've merged, we can update the session ID to belong to this session
     current_project_deps.session_id = Some(session_id.to_string());

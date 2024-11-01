@@ -397,7 +397,7 @@ pub struct InterfaceComponentOverride {
     /// Configuration that should be provided to the overriden component
     pub config: Option<OneOrMore<DevConfigSpec>>,
 
-    /// Configuration that should be provided to the overriden component
+    /// Secrets that should be provided to the overriden component
     pub secrets: Option<OneOrMore<DevSecretSpec>>,
 
     /// Reference to the component
@@ -672,11 +672,11 @@ pub struct DevConfig {
     #[serde(default)]
     pub manifests: Vec<DevManifestComponentTarget>,
 
-    /// Configuration values to be passed ot the
+    /// Configuration values to be passed to the component
     #[serde(default, alias = "configs")]
     pub config: Vec<DevConfigSpec>,
 
-    /// Configuration values to be passed ot the
+    /// Configuration values to be passed to the component
     #[serde(default)]
     pub secrets: Vec<DevSecretSpec>,
 
