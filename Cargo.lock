@@ -7534,7 +7534,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.8.5",
+ "rand 0.7.3",
  "static_assertions",
 ]
 
@@ -8445,9 +8445,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-pkg-core"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2f2f779377701d6b94b50ce25ab8b8f5400c6cbf9dc3a78ce2dfa6407b1b48f"
+checksum = "d1e840d1a2794baf427374a0d5b1b46e665d73eacbe0ff1b92fec6f9a7ed0b28"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -8462,7 +8462,7 @@ dependencies = [
  "wasm-metadata 0.219.1",
  "wasm-pkg-client",
  "wasm-pkg-common",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
  "wit-component 0.219.1",
  "wit-parser 0.219.1",
 ]
