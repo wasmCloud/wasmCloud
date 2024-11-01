@@ -50,8 +50,8 @@ impl Default for HttpServerProvider {
     fn default() -> Self {
         Self {
             default_address: default_listen_address(),
-            handlers_by_socket: Default::default(),
-            sockets_by_link_name: Default::default(),
+            handlers_by_socket: Arc::default(),
+            sockets_by_link_name: Arc::default(),
         }
     }
 }
@@ -69,8 +69,8 @@ impl HttpServerProvider {
 
         Ok(Self {
             default_address,
-            handlers_by_socket: Default::default(),
-            sockets_by_link_name: Default::default(),
+            handlers_by_socket: Arc::default(),
+            sockets_by_link_name: Arc::default(),
         })
     }
 }
@@ -128,7 +128,7 @@ impl Provider for HttpServerProvider {
             //
             // NOTE: only components at the head of the list are served requests
             std::collections::hash_map::Entry::Occupied(mut v) => {
-                v.get_mut().1.push(component_meta)
+                v.get_mut().1.push(component_meta);
             }
             // If a handler does not already exist, make a new server and insert
             std::collections::hash_map::Entry::Vacant(v) => {

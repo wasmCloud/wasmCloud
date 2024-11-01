@@ -56,7 +56,7 @@ pub async fn run() -> anyhow::Result<()> {
     );
 
     let host_data = load_host_data().context("failed to load host data")?;
-    match host_data.config.get("routing_mode").map(|s| s.as_str()) {
+    match host_data.config.get("routing_mode").map(String::as_str) {
         // Run provider in address mode by default
         Some("address") | None => run_provider(
             address::HttpServerProvider::new(host_data).context(
@@ -153,7 +153,7 @@ pub(crate) async fn invoke_component(
         )
         .iter()
     {
-        cx.insert(k.as_str(), v.as_str())
+        cx.insert(k.as_str(), v.as_str());
     }
 
     trace!(?req, component_id = target, "httpserver calling component");
@@ -338,7 +338,7 @@ impl http_body::Body for ResponseBody {
         match this.errors.poll_next(cx) {
             Poll::Ready(Some(err)) => {
                 if let Some(io) = this.io.as_pin_mut() {
-                    io.abort()
+                    io.abort();
                 }
                 return Poll::Ready(Some(Err(anyhow!(err).context("failed to process body"))));
             }
@@ -348,13 +348,13 @@ impl http_body::Body for ResponseBody {
             Some(Ok(frame)) => Poll::Ready(Some(Ok(frame))),
             Some(Err(err)) => {
                 if let Some(io) = this.io.as_pin_mut() {
-                    io.abort()
+                    io.abort();
                 }
                 Poll::Ready(Some(Err(err)))
             }
             None => {
                 if let Some(io) = this.io.as_pin_mut() {
-                    io.abort()
+                    io.abort();
                 }
                 Poll::Ready(None)
             }
