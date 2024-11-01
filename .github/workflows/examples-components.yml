@@ -37,6 +37,8 @@ on:
       - component-http-task-manager-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-password-checker-typescript-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-password-checker-typescript-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-http-password-checker-rust-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-password-checker-rust-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-task-manager-v[0-9]+.[0-9]+.[0-9]+-*
   pull_request:
     branches: [main]
@@ -214,10 +216,17 @@ jobs:
             wasm-bin: 'http_task_manager_s.wasm'
             test-deploy: local.wadm.yaml
 
+          - folder: "http-password-checker"
+            tag-prefix: 'component-http-password-checker-rust-v'
+            lang: "rust"
+            wasm-bin: 'http_password_checker_s.wasm'
+            test-deploy: local.wadm.yaml
+
           # Python example components
           - folder: 'http-hello-world'
             tag-prefix: 'component-http-hello-world-python-v'
             lang: 'python'
+            wasm-bin: 'http_hello_world_s.wasm'
             lang-version: '3.10'
 
           # Typescript example components
@@ -225,12 +234,14 @@ jobs:
             tag-prefix: 'component-http-hello-world-typescript-v'
             lang: 'typescript'
             lang-version: '20.x'
+            wasm-bin: 'http_hello_world_s.wasm'
             test_deploy: local.wadm.yaml
 
           - folder: "http-password-checker"
             tag-prefix: 'component-http-password-checker-typescript-v'
             lang: "typescript"
             lang-version: "22.x"
+            wasm-bin: 'http_password_checker_s.wasm'
             test_deploy: local.wadm.yaml
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -375,6 +386,11 @@ jobs:
             tag-prefix: 'component-http-task-manager-v'
             lang: 'rust'
             wasm-bin: 'http_task_manager_s.wasm'
+
+          - folder: 'http-password-checker'
+            tag-prefix: 'component-http-password-checker-rust-v'
+            lang: 'rust'
+            wasm-bin: 'http_password_checker_s.wasm'
 
           # Typescript
           - folder: 'http-hello-world'
