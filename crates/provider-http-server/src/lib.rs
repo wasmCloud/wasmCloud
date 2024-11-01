@@ -29,7 +29,6 @@ use core::task::{ready, Context, Poll};
 use core::time::Duration;
 
 use std::net::{SocketAddr, TcpListener};
-use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
 use axum::extract;
@@ -88,8 +87,8 @@ pub(crate) fn build_request(
     request: extract::Request,
     scheme: http::uri::Scheme,
     authority: String,
-    settings: Arc<ServiceSettings>,
-) -> Result<http::Request<axum::body::Body>, (http::StatusCode, String)> {
+    settings: &ServiceSettings,
+) -> Result<http::Request<axum::body::Body>, axum::response::ErrorResponse> {
     let method = request.method();
     if let Some(readonly_mode) = settings.readonly_mode {
         if readonly_mode
@@ -99,7 +98,7 @@ pub(crate) fn build_request(
             debug!("only GET and HEAD allowed in read-only mode");
             Err((
                 http::StatusCode::METHOD_NOT_ALLOWED,
-                "only GET and HEAD allowed in read-only mode".to_string(),
+                "only GET and HEAD allowed in read-only mode",
             ))?;
         }
     }
@@ -127,7 +126,7 @@ pub(crate) fn build_request(
     let mut req = http::Request::builder();
     *req.headers_mut().ok_or((
         http::StatusCode::INTERNAL_SERVER_ERROR,
-        "invalid request generated".to_string(),
+        "invalid request generated",
     ))? = headers;
     let req = req
         .uri(uri)
@@ -186,7 +185,7 @@ pub(crate) async fn invoke_component(
 }
 
 /// Helper function to construct a [`CorsLayer`] according to the [`ServiceSettings`].
-pub(crate) fn get_cors_layer(settings: Arc<ServiceSettings>) -> anyhow::Result<CorsLayer> {
+pub(crate) fn get_cors_layer(settings: &ServiceSettings) -> anyhow::Result<CorsLayer> {
     let allow_origin = settings.cors_allowed_origins.as_ref();
     let allow_origin: Vec<_> = allow_origin
         .map(|origins| {
@@ -271,7 +270,7 @@ pub(crate) fn get_cors_layer(settings: Arc<ServiceSettings>) -> anyhow::Result<C
 ///
 /// Note that this function actually calls the `bind` method on the [`TcpSocket`], it's up to the
 /// caller to ensure that the address is not already in use (or to handle the error if it is).
-pub(crate) fn get_tcp_listener(settings: Arc<ServiceSettings>) -> anyhow::Result<TcpListener> {
+pub(crate) fn get_tcp_listener(settings: &ServiceSettings) -> anyhow::Result<TcpListener> {
     let socket = match &settings.address {
         SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4(),
         SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6(),

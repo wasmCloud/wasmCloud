@@ -224,15 +224,15 @@ async fn handle_request(
         else {
             return Err((
                 http::StatusCode::INTERNAL_SERVER_ERROR,
-                "no targets for HTTP request".into(),
-            ));
+                "no targets for HTTP request",
+            ))?;
         };
         (component_id, wrpc)
     };
 
     let timeout = settings.timeout_ms.map(Duration::from_millis);
-    let req = build_request(request, scheme, authority, settings.clone())?;
-    Ok::<_, (http::StatusCode, String)>(
+    let req = build_request(request, scheme, authority, &settings)?;
+    axum::response::Result::<_, axum::response::ErrorResponse>::Ok(
         invoke_component(
             &wrpc,
             &component_id,
@@ -266,10 +266,10 @@ impl HttpServerCore {
             component_id = target,
             "httpserver starting listener for target",
         );
-        let cors = get_cors_layer(settings.clone())?;
+        let cors = get_cors_layer(&settings)?;
         let service = handle_request.layer(cors);
         let handle = axum_server::Handle::new();
-        let listener = get_tcp_listener(settings.clone())
+        let listener = get_tcp_listener(&settings)
             .with_context(|| format!("failed to create listener (is [{addr}] already in use?)"))?;
 
         let target = target.to_owned();
@@ -289,7 +289,7 @@ impl HttpServerCore {
                     .serve(
                         service
                             .with_state(RequestContext {
-                                server_address: settings.address,
+                                server_address: addr,
                                 settings,
                                 scheme: http::uri::Scheme::HTTPS,
                                 handlers_by_socket,
@@ -312,7 +312,7 @@ impl HttpServerCore {
                     .serve(
                         service
                             .with_state(RequestContext {
-                                server_address: settings.address,
+                                server_address: addr,
                                 settings,
                                 scheme: http::uri::Scheme::HTTP,
                                 handlers_by_socket,
