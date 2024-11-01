@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
@@ -277,7 +277,7 @@ impl DependencySpec {
                     wit: WitInterfaceSpec {
                         namespace: ns,
                         package: pkg,
-                        interface: Some(iface),
+                        interfaces: Some(HashSet::from([iface])),
                         function: None,
                         version,
                     },
@@ -293,7 +293,7 @@ impl DependencySpec {
                 wit: WitInterfaceSpec {
                     namespace: ns,
                     package: pkg,
-                    interface: Some(iface),
+                    interfaces: Some(HashSet::from([iface])),
                     function: None,
                     version,
                 },
@@ -309,7 +309,7 @@ impl DependencySpec {
                     wit: WitInterfaceSpec {
                         namespace: ns,
                         package: pkg,
-                        interface: Some(iface),
+                        interfaces: Some(HashSet::from([iface])),
                         function: None,
                         version,
                     },
@@ -325,7 +325,7 @@ impl DependencySpec {
                 wit: WitInterfaceSpec {
                     namespace: ns,
                     package: pkg,
-                    interface: Some(iface),
+                    interfaces: Some(HashSet::from([iface])),
                     function: None,
                     version,
                 },
@@ -341,7 +341,7 @@ impl DependencySpec {
                 wit: WitInterfaceSpec {
                     namespace: ns,
                     package: pkg,
-                    interface: None,
+                    interfaces: None,
                     function: None,
                     version,
                 },
@@ -359,7 +359,7 @@ impl DependencySpec {
                 wit: WitInterfaceSpec {
                     namespace: ns,
                     package: pkg,
-                    interface: Some(iface),
+                    interfaces: Some(HashSet::from([iface])),
                     function: None,
                     version,
                 },
@@ -395,7 +395,7 @@ impl DependencySpec {
                 wit: WitInterfaceSpec {
                     namespace: ns,
                     package: pkg,
-                    interface: Some(iface),
+                    interfaces: Some(HashSet::from([iface])),
                     function: None,
                     version,
                 },
@@ -410,7 +410,7 @@ impl DependencySpec {
                 wit: WitInterfaceSpec {
                     namespace: ns,
                     package: pkg,
-                    interface: Some(iface),
+                    interfaces: Some(HashSet::from([iface])),
                     function: None,
                     version,
                 },
@@ -426,7 +426,7 @@ impl DependencySpec {
                 wit: WitInterfaceSpec {
                     namespace: ns,
                     package: pkg,
-                    interface: None,
+                    interfaces: None,
                     function: None,
                     version,
                 },
@@ -444,7 +444,7 @@ impl DependencySpec {
                 wit: WitInterfaceSpec {
                     namespace: ns,
                     package: pkg,
-                    interface: Some(iface),
+                    interfaces: Some(HashSet::from([iface])),
                     function: None,
                     version,
                 },
@@ -592,16 +592,24 @@ impl DependencySpecInner {
             Some(DEFAULT_HTTP_SERVER_PROVIDER_IMAGE) => "http-server".into(),
             Some(DEFAULT_BLOBSTORE_FS_PROVIDER_IMAGE) => "blobstore-fs".into(),
             Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE) => "messaging-nats".into(),
+            // Custom dependencies get the format `custom-<namespace>-<package>-<interfaces>`
             _ => format!(
-                // TODO: support interface specific overrides
-                "custom-{}-{}",
+                "custom-{}-{}{}",
                 self.wit.namespace,
                 self.wit.package,
-                // self.wit
-                //     .interface
-                //     .as_deref()
-                //     .map(|i| format!("-{i}"))
-                //     .unwrap_or_default(),
+                self.wit
+                    .interfaces
+                    .clone()
+                    .map(|i| {
+                        let mut interfaces = i.into_iter().collect::<Vec<_>>();
+                        if interfaces.is_empty() {
+                            "".to_string()
+                        } else {
+                            interfaces.sort();
+                            format!("-{}", interfaces.join("/"))
+                        }
+                    })
+                    .unwrap_or_default(),
             ),
         }
     }
@@ -622,8 +630,13 @@ impl DependencySpecInner {
         self.delegated_to_workspace = other.delegated_to_workspace;
         self.image_ref = other.image_ref.clone();
         self.link_name = other.link_name.clone();
-        if self.wit.interface.is_none() && other.wit.interface.is_some() {
-            self.wit.interface = other.wit.interface.clone();
+        // Extend interfaces with the other interfaces
+        match (&mut self.wit.interfaces, other.wit.interfaces.as_ref()) {
+            (Some(self_ifaces), Some(other_ifaces)) => {
+                self_ifaces.extend(other_ifaces.iter().cloned())
+            }
+            (None, Some(other_ifaces)) => self.wit.interfaces = Some(other_ifaces.clone()),
+            _ => (),
         }
         // NOTE: We depend on the fact that configs and secrets should be processed in order,
         // with later entries *overriding* earlier ones
@@ -873,7 +886,7 @@ impl ProjectDeps {
                         WitInterfaceSpec {
                             namespace,
                             package,
-                            interface,
+                            interfaces,
                             version,
                             ..
                         },
@@ -892,8 +905,8 @@ impl ProjectDeps {
                                     && link.package == package
                                     && link.target.name == dep_component.name
                                 {
-                                    if let Some(interface) = &interface {
-                                        link.interfaces.push(interface.into());
+                                    if let Some(interface) = interfaces.clone() {
+                                        link.interfaces.extend(interface.into_iter());
                                     };
                                     return true;
                                 }
@@ -908,10 +921,7 @@ impl ProjectDeps {
                     let mut link_property = LinkProperty {
                         namespace: namespace.clone(),
                         package: package.clone(),
-                        interfaces: interface
-                            .as_ref()
-                            .map(|iface| vec![iface.into()])
-                            .unwrap_or_default(),
+                        interfaces: interfaces.clone().unwrap_or_default().into_iter().collect(),
                         target: TargetConfig {
                             name: dep_component.name.clone(),
                             ..Default::default()
@@ -923,11 +933,15 @@ impl ProjectDeps {
                     match (
                         namespace.as_ref(),
                         package.as_ref(),
-                        interface.as_deref(),
+                        interfaces.as_ref(),
                         version,
                     ) {
-                        ("wasi", "blobstore", Some("blobstore"), _)
-                        | ("wrpc", "blobstore", Some("blobstore"), _) => {
+                        ("wasi", "blobstore", interfaces, _)
+                        | ("wrpc", "blobstore", interfaces, _)
+                            if interfaces.is_some_and(|interfaces| {
+                                interfaces.iter().any(|i| i == "blobstore")
+                            }) =>
+                        {
                             link_property.target.config.push(ConfigProperty {
                                 name: config_name(namespace.as_str(), package.as_str()),
                                 properties: Some(HashMap::from([(
@@ -937,9 +951,13 @@ impl ProjectDeps {
                             });
                         }
                         // Use the default bucket for the NATS KV store
-                        ("wasi", "keyvalue", Some("atomics" | "store" | "batch"), _)
+                        ("wasi", "keyvalue", interfaces, _)
                             if image_ref.as_ref().is_some_and(|image_ref| {
                                 image_ref == DEFAULT_KEYVALUE_PROVIDER_IMAGE
+                            }) && interfaces.is_some_and(|interfaces| {
+                                interfaces
+                                    .iter()
+                                    .any(|i| i == "atomics" || i == "store" || i == "batch")
                             }) =>
                         {
                             link_property.target.config.push(ConfigProperty {
@@ -966,7 +984,7 @@ impl ProjectDeps {
                         WitInterfaceSpec {
                             namespace,
                             package,
-                            interface,
+                            interfaces,
                             version,
                             ..
                         },
@@ -976,10 +994,7 @@ impl ProjectDeps {
                     let mut link_property = LinkProperty {
                         namespace: namespace.clone(),
                         package: package.clone(),
-                        interfaces: interface
-                            .as_ref()
-                            .map(|iface| vec![iface.into()])
-                            .unwrap_or_default(),
+                        interfaces: interfaces.clone().unwrap_or_default().into_iter().collect(),
                         target: TargetConfig {
                             name: component.name.clone(),
                             ..Default::default()
@@ -991,10 +1006,14 @@ impl ProjectDeps {
                     match (
                         namespace.as_ref(),
                         package.as_ref(),
-                        interface.as_deref(),
+                        interfaces.as_ref(),
                         version,
                     ) {
-                        ("wasi", "http", Some("incoming-handler"), _) => {
+                        ("wasi", "http", interfaces, _)
+                            if interfaces.is_some_and(|interfaces| {
+                                interfaces.iter().any(|i| i == "incoming-handler")
+                            }) =>
+                        {
                             link_property
                                 .source
                                 .get_or_insert(Default::default())
@@ -1007,7 +1026,11 @@ impl ProjectDeps {
                                     )])),
                                 });
                         }
-                        ("wasmcloud", "messaging", Some("handler"), _) => {
+                        ("wasmcloud", "messaging", interfaces, _)
+                            if interfaces.is_some_and(|interfaces| {
+                                interfaces.iter().any(|i| i == "handler")
+                            }) =>
+                        {
                             link_property
                                 .source
                                 .get_or_insert(Default::default())
