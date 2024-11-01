@@ -102,21 +102,23 @@ impl KvRedisProvider {
 
     #[instrument(level = "trace", skip_all)]
     async fn get_default_connection(&self) -> anyhow::Result<ConnectionManager> {
+        // NOTE: The read lock is only held for the duration of the `if let` block so we can acquire
+        // the write lock to update the default connection if needed.
         if let DefaultConnection::Conn(conn) = &*self.default_connection.read().await {
-            Ok(conn.clone())
-        } else {
-            let mut default_conn = self.default_connection.write().await;
-            match &mut *default_conn {
-                DefaultConnection::Conn(conn) => Ok(conn.clone()),
-                DefaultConnection::ClientConfig(cfg) => {
-                    let conn = redis::Client::open(retrieve_default_url(cfg))
-                        .context("failed to construct default Redis client")?
-                        .get_connection_manager()
-                        .await
-                        .context("failed to construct Redis connection manager")?;
-                    *default_conn = DefaultConnection::Conn(conn.clone());
-                    Ok(conn)
-                }
+            return Ok(conn.clone());
+        }
+
+        let mut default_conn = self.default_connection.write().await;
+        match &mut *default_conn {
+            DefaultConnection::Conn(conn) => Ok(conn.clone()),
+            DefaultConnection::ClientConfig(cfg) => {
+                let conn = redis::Client::open(retrieve_default_url(cfg))
+                    .context("failed to construct default Redis client")?
+                    .get_connection_manager()
+                    .await
+                    .context("failed to construct Redis connection manager")?;
+                *default_conn = DefaultConnection::Conn(conn.clone());
+                Ok(conn)
             }
         }
     }

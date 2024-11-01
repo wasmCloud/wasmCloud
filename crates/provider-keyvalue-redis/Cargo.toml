@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-keyvalue-redis"
-version = "0.28.1"
+version = "0.28.2"
 
 authors.workspace = true
 categories.workspace = true
