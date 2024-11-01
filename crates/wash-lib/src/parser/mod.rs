@@ -415,11 +415,11 @@ pub struct InterfaceComponentOverride {
 pub struct WitInterfaceSpec {
     /// WIT namespace
     pub namespace: WitNamespace,
-    /// WIT package
+    /// WIT package name
     pub package: WitPackage,
-    /// WIT interface
-    pub interface: Option<WitInterface>,
-    /// WIT interface
+    /// WIT interfaces, if omitted will be used to match any interface
+    pub interfaces: Option<HashSet<WitInterface>>,
+    /// WIT interface function
     pub function: Option<WitFunction>,
     /// Version of WIT interface
     pub version: Option<Version>,
@@ -451,7 +451,7 @@ impl WitInterfaceSpec {
             return true;
         }
         // If interfaces don't match, this interface can't contain the other one
-        match (self.interface.as_ref(), other.interface.as_ref()) {
+        match (self.interfaces.as_ref(), other.interfaces.as_ref()) {
             // If they both have no interface specified, then we do overlap
             (None, None) |
             // If the other has no interface, but this one does, this *does* overlap
@@ -532,12 +532,9 @@ impl std::str::FromStr for WitInterfaceSpec {
                         .into_iter()
                         .next()
                         .context("unexpectedly missing package")?,
-                    interface: match interfaces {
-                        Some(v) => Some(
-                            v.into_iter()
-                                .next()
-                                .context("unexpectedly missing interface")?,
-                        ),
+                    interfaces: match interfaces {
+                        Some(v) if v.is_empty() => bail!("unexpectedly missing interface"),
+                        Some(v) => Some(v.into_iter().collect()),
                         None => None,
                     },
                     function,
@@ -586,7 +583,7 @@ impl<'de> Deserialize<'de> for WitInterfaceSpec {
             } => Ok(Self {
                 namespace,
                 package,
-                interface,
+                interfaces: interface.map(|i| HashSet::from([i])),
                 function,
                 version,
             }),

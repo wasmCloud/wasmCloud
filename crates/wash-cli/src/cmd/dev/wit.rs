@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::{bail, Context as _, Result};
 use wit_parser::{Resolve, WorldId};
 
@@ -44,7 +46,7 @@ pub(crate) fn discover_dependencies_from_wit(
     resolve: Resolve,
     world_id: WorldId,
 ) -> Result<Vec<DependencySpec>> {
-    let mut deps = Vec::new();
+    let mut deps: Vec<DependencySpec> = Vec::new();
     let world = resolve
         .worlds
         .get(world_id)
@@ -60,14 +62,22 @@ pub(crate) fn discover_dependencies_from_wit(
                 .packages
                 .get(iface.package.context("iface missing package")?)
                 .context("failed to find package")?;
-            let iface_name = &format!(
-                "{}:{}/{}",
-                pkg.name.namespace,
-                pkg.name.name,
-                iface.name.as_ref().context("interface missing name")?,
-            );
-            if let Some(dep) = DependencySpec::from_wit_import_iface(iface_name) {
-                deps.push(dep);
+            let interface_name = iface.name.as_ref().context("interface missing name")?;
+            let iface_name = &format!("{}:{}/{interface_name}", pkg.name.namespace, pkg.name.name,);
+
+            if let Some(new_dep) = DependencySpec::from_wit_import_iface(iface_name) {
+                // If the dependency already exists for a different interface, add the interface to the existing dependency
+                if let Some(DependencySpec::Exports(ref mut dep)) = deps.iter_mut().find(|d| {
+                    d.wit().namespace == pkg.name.namespace && d.wit().package == pkg.name.name
+                }) {
+                    if let Some(ref mut interfaces) = dep.wit.interfaces {
+                        interfaces.insert(interface_name.to_string());
+                    } else {
+                        dep.wit.interfaces = Some(HashSet::from([iface_name.to_string()]));
+                    }
+                } else {
+                    deps.push(new_dep);
+                }
             }
         }
     }
@@ -82,14 +92,22 @@ pub(crate) fn discover_dependencies_from_wit(
                 .packages
                 .get(iface.package.context("iface missing package")?)
                 .context("failed to find package")?;
-            let iface_name = &format!(
-                "{}:{}/{}",
-                pkg.name.namespace,
-                pkg.name.name,
-                iface.name.as_ref().context("interface missing name")?,
-            );
-            if let Some(dep) = DependencySpec::from_wit_export_iface(iface_name) {
-                deps.push(dep);
+            let interface_name = iface.name.as_ref().context("interface missing name")?;
+            let iface_name = &format!("{}:{}/{interface_name}", pkg.name.namespace, pkg.name.name,);
+            if let Some(new_dep) = DependencySpec::from_wit_export_iface(iface_name) {
+                // If the dependency already exists for a different interface, add the interface to the existing dependency
+                if let Some(DependencySpec::Imports(ref mut dep)) = deps.iter_mut().find(|d| {
+                    d.wit().namespace == pkg.name.namespace && d.wit().package == pkg.name.name
+                }) {
+                    if let Some(ref mut interfaces) = dep.wit.interfaces {
+                        // SAFETY: we already checked at `iface.name`
+                        interfaces.insert(interface_name.to_string());
+                    } else {
+                        dep.wit.interfaces = Some(HashSet::from([iface_name.to_string()]));
+                    }
+                } else {
+                    deps.push(new_dep);
+                }
             }
         }
     }
