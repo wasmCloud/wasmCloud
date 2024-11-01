@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context as _, Result};
 use semver::Version;
-use tracing::debug;
+use tracing::{debug, trace};
 
 use wadm_types::{
     CapabilityProperties, Component, ComponentProperties, ConfigProperty, LinkProperty, Manifest,
@@ -336,6 +336,22 @@ impl DependencySpec {
                 configs: Default::default(),
                 secrets: Default::default(),
             })),
+            // Support wildcard interfaces
+            (_, _, "*") => Some(Self::Exports(DependencySpecInner {
+                wit: WitInterfaceSpec {
+                    namespace: ns,
+                    package: pkg,
+                    interface: None,
+                    function: None,
+                    version,
+                },
+                delegated_to_workspace: false,
+                link_name: "default".into(),
+                image_ref: None,
+                is_component: false,
+                configs: Default::default(),
+                secrets: Default::default(),
+            })),
             // Treat all other dependencies as custom, and track them as dependencies,
             // though they cannot be resolved to a proper dependency without an explicit override/
             // other configuration method
@@ -401,6 +417,22 @@ impl DependencySpec {
                 delegated_to_workspace: false,
                 link_name: "default".into(),
                 image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
+                is_component: false,
+                configs: Default::default(),
+                secrets: Default::default(),
+            })),
+            // Support wildcard interfaces
+            (_, _, "*") => Some(Self::Exports(DependencySpecInner {
+                wit: WitInterfaceSpec {
+                    namespace: ns,
+                    package: pkg,
+                    interface: None,
+                    function: None,
+                    version,
+                },
+                delegated_to_workspace: false,
+                link_name: "default".into(),
+                image_ref: None,
                 is_component: false,
                 configs: Default::default(),
                 secrets: Default::default(),
@@ -561,10 +593,15 @@ impl DependencySpecInner {
             Some(DEFAULT_BLOBSTORE_FS_PROVIDER_IMAGE) => "blobstore-fs".into(),
             Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE) => "messaging-nats".into(),
             _ => format!(
-                "custom-{}-{}-{}",
+                // TODO: support interface specific overrides
+                "custom-{}-{}",
                 self.wit.namespace,
                 self.wit.package,
-                self.wit.interface.as_deref().unwrap_or("*"),
+                // self.wit
+                //     .interface
+                //     .as_deref()
+                //     .map(|i| format!("-{i}"))
+                //     .unwrap_or_default(),
             ),
         }
     }
@@ -585,11 +622,13 @@ impl DependencySpecInner {
         self.delegated_to_workspace = other.delegated_to_workspace;
         self.image_ref = other.image_ref.clone();
         self.link_name = other.link_name.clone();
+        if self.wit.interface.is_none() && other.wit.interface.is_some() {
+            self.wit.interface = other.wit.interface.clone();
+        }
         // NOTE: We depend on the fact that configs and secrets should be processed in order,
         // with later entries *overriding* earlier ones
-        self.configs.extend(self.configs.clone());
-        // NOTE: we depend on the
-        self.secrets.extend(self.secrets.clone());
+        self.configs.extend(other.configs.clone());
+        self.secrets.extend(other.secrets.clone());
     }
 }
 
@@ -656,7 +695,7 @@ impl ProjectDeps {
                 .iter()
                 .map(|v| {
                     DependencySpec::from_wit_import_iface(&v.interface_spec)
-                        .context("failed to build image ref from interface")
+                        .context("failed to build dependency from import interface override")
                         .map(|dep| (v, dep))
                 })
                 .collect::<Result<Vec<_>>>()?,
@@ -666,11 +705,12 @@ impl ProjectDeps {
                 .iter()
                 .map(|v| {
                     DependencySpec::from_wit_export_iface(&v.interface_spec)
-                        .context("failed to build image ref from interface")
+                        .context("failed to build dependency from export interface override")
                         .map(|dep| (v, dep))
                 })
                 .collect::<Result<Vec<_>>>()?,
         );
+        trace!("detected interface overrides {overrides_with_deps:?}");
 
         // Build a list of the final modified dep specs
         let mut deps = Vec::new();
@@ -702,9 +742,11 @@ impl ProjectDeps {
                                 properties: None,
                             })
                         }
-                        DevConfigSpec::Values { values } => {
-                            dep_spec.add_config_properties_to_existing("default", values.clone())
-                        }
+                        DevConfigSpec::Values { values } => dep_spec
+                            .add_config_properties_to_existing(
+                                format!("{}-default", dep_spec.name()),
+                                values.clone(),
+                            ),
                     }
                 }
             }
@@ -835,6 +877,7 @@ impl ProjectDeps {
                             version,
                             ..
                         },
+                    image_ref,
                     ..
                 }) => {
                     // Check to see if this link (namespace, package, target) already exists,
@@ -893,7 +936,12 @@ impl ProjectDeps {
                                 )])),
                             });
                         }
-                        ("wasi", "keyvalue", Some("atomics" | "store" | "batch"), _) => {
+                        // Use the default bucket for the NATS KV store
+                        ("wasi", "keyvalue", Some("atomics" | "store" | "batch"), _)
+                            if image_ref.as_ref().is_some_and(|image_ref| {
+                                image_ref == DEFAULT_KEYVALUE_PROVIDER_IMAGE
+                            }) =>
+                        {
                             link_property.target.config.push(ConfigProperty {
                                 name: config_name(namespace.as_str(), package.as_str()),
                                 properties: Some(HashMap::from([
