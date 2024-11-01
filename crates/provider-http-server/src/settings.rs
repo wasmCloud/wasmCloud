@@ -150,10 +150,10 @@ impl ServiceSettings {
                             "missing tls_{} '{}'{}",
                             f.0,
                             &path.display(),
-                            if !path.is_absolute() {
-                                " : perhaps you should make the path absolute"
-                            } else {
+                            if path.is_absolute() {
                                 ""
+                            } else {
+                                " : perhaps you should make the path absolute"
                             }
                         ));
                     }
@@ -209,8 +209,10 @@ pub fn load_settings(
     trace!("load settings");
     // Allow keys to be case insensitive, as an accommodation
     // for the lost souls who prefer sPoNgEbOb CaSe variable names.
-    let values: HashMap<UniCase<&str>, &String> =
-        HashMap::from_iter(values.iter().map(|(k, v)| (UniCase::new(k.as_str()), v)));
+    let values: HashMap<UniCase<&str>, &String> = values
+        .iter()
+        .map(|(k, v)| (UniCase::new(k.as_str()), v))
+        .collect();
 
     if let Some(str) = values.get(&UniCase::new("config_b64")) {
         let bytes = BASE64_STANDARD_NO_PAD

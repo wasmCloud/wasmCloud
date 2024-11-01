@@ -115,7 +115,7 @@ async fn duplicate_link_shadowing() -> Result<()> {
     .await?;
 
     // Start the provider and components
-    let (_, _, _) = try_join!(
+    let ((), (), ()) = try_join!(
         assert_start_provider(StartProviderArgs {
             client: &ctl_client,
             host_id: &host_id,
