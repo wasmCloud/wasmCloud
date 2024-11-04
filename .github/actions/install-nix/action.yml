@@ -11,7 +11,7 @@ runs:
   using: composite
   steps:
   # Install Nix
-  - uses: DeterminateSystems/nix-installer-action@da36cb69b1c3247ad7a1f931ebfd954a1105ef14
+  - uses: DeterminateSystems/nix-installer-action@b92f66560d6f97d6576405a7bae901ab57e72b6a
     with:
       extra-conf: |
         accept-flake-config = true
