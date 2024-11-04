@@ -4,12 +4,12 @@ package types
 
 import (
 	"github.com/bytecodealliance/wasm-tools-go/cm"
-	monotonicclock "github.com/wasmcloud/wasmcloud/examples/golang/components/http-client-tinygo/gen/wasi/clocks/monotonic-clock"
 	"unsafe"
 )
 
 // OptionFieldSizePayloadShape is used for storage in variant or result types.
 type OptionFieldSizePayloadShape struct {
+	_     cm.HostLayout
 	shape [unsafe.Sizeof(cm.Option[FieldSizePayload]{})]byte
 }
 
@@ -58,7 +58,7 @@ func lower_OptionScheme(v cm.Option[Scheme]) (f0 uint32, f1 uint32, f2 *uint8, f
 	return
 }
 
-func lower_OptionDuration(v cm.Option[monotonicclock.Duration]) (f0 uint32, f1 uint64) {
+func lower_OptionDuration(v cm.Option[Duration]) (f0 uint32, f1 uint64) {
 	some := v.Some()
 	if some != nil {
 		f0 = 1
@@ -70,6 +70,7 @@ func lower_OptionDuration(v cm.Option[monotonicclock.Duration]) (f0 uint32, f1 u
 
 // ErrorCodeShape is used for storage in variant or result types.
 type ErrorCodeShape struct {
+	_     cm.HostLayout
 	shape [unsafe.Sizeof(ErrorCode{})]byte
 }
 
@@ -252,12 +253,7 @@ func lower_ResultOutgoingResponseErrorCode(v cm.Result[ErrorCodeShape, OutgoingR
 	return
 }
 
-// ResultOptionTrailersErrorCodeShape is used for storage in variant or result types.
-type ResultOptionTrailersErrorCodeShape struct {
-	shape [unsafe.Sizeof(cm.Result[ErrorCodeShape, cm.Option[Fields], ErrorCode]{})]byte
-}
-
-func lower_OptionTrailers(v cm.Option[Fields]) (f0 uint32, f1 uint32) {
+func lower_OptionTrailers(v cm.Option[Trailers]) (f0 uint32, f1 uint32) {
 	some := v.Some()
 	if some != nil {
 		f0 = 1
@@ -265,9 +261,4 @@ func lower_OptionTrailers(v cm.Option[Fields]) (f0 uint32, f1 uint32) {
 		f1 = (uint32)(v1)
 	}
 	return
-}
-
-// ResultIncomingResponseErrorCodeShape is used for storage in variant or result types.
-type ResultIncomingResponseErrorCodeShape struct {
-	shape [unsafe.Sizeof(cm.Result[ErrorCodeShape, IncomingResponse, ErrorCode]{})]byte
 }

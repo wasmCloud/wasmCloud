@@ -23,10 +23,6 @@ func (self CallTargetInterface) ResourceDrop() {
 	return
 }
 
-//go:wasmimport wasmcloud:bus/lattice@1.0.0 [resource-drop]call-target-interface
-//go:noescape
-func wasmimport_CallTargetInterfaceResourceDrop(self0 uint32)
-
 // NewCallTargetInterface represents the imported constructor for resource "call-target-interface".
 //
 //	constructor(namespace: string, %package: string, %interface: string)
@@ -41,10 +37,6 @@ func NewCallTargetInterface(namespace string, package_ string, interface_ string
 	return
 }
 
-//go:wasmimport wasmcloud:bus/lattice@1.0.0 [constructor]call-target-interface
-//go:noescape
-func wasmimport_NewCallTargetInterface(namespace0 *uint8, namespace1 uint32, package0 *uint8, package1 uint32, interface0 *uint8, interface1 uint32) (result0 uint32)
-
 // SetLinkName represents the imported function "set-link-name".
 //
 //	set-link-name: func(name: string, interfaces: list<call-target-interface>)
@@ -56,7 +48,3 @@ func SetLinkName(name string, interfaces cm.List[CallTargetInterface]) {
 	wasmimport_SetLinkName((*uint8)(name0), (uint32)(name1), (*CallTargetInterface)(interfaces0), (uint32)(interfaces1))
 	return
 }
-
-//go:wasmimport wasmcloud:bus/lattice@1.0.0 set-link-name
-//go:noescape
-func wasmimport_SetLinkName(name0 *uint8, name1 uint32, interfaces0 *CallTargetInterface, interfaces1 uint32)

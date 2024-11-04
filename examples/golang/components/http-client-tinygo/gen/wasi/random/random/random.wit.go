@@ -18,10 +18,6 @@ func GetRandomBytes(len_ uint64) (result cm.List[uint8]) {
 	return
 }
 
-//go:wasmimport wasi:random/random@0.2.0 get-random-bytes
-//go:noescape
-func wasmimport_GetRandomBytes(len0 uint64, result *cm.List[uint8])
-
 // GetRandomU64 represents the imported function "get-random-u64".
 //
 //	get-random-u64: func() -> u64
@@ -32,7 +28,3 @@ func GetRandomU64() (result uint64) {
 	result = (uint64)((uint64)(result0))
 	return
 }
-
-//go:wasmimport wasi:random/random@0.2.0 get-random-u64
-//go:noescape
-func wasmimport_GetRandomU64() (result0 uint64)

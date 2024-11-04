@@ -8,17 +8,23 @@ import (
 	"github.com/wasmcloud/wasmcloud/examples/golang/components/http-client-tinygo/gen/wasmcloud/secrets/store"
 )
 
+// Secret represents the imported type alias "wasmcloud:secrets/reveal@0.1.0-draft#secret".
+//
+// See [store.Secret] for more information.
+type Secret = store.Secret
+
+// SecretValue represents the type alias "wasmcloud:secrets/reveal@0.1.0-draft#secret-value".
+//
+// See [store.SecretValue] for more information.
+type SecretValue = store.SecretValue
+
 // Reveal represents the imported function "reveal".
 //
 //	reveal: func(s: borrow<secret>) -> secret-value
 //
 //go:nosplit
-func Reveal(s store.Secret) (result store.SecretValue) {
+func Reveal(s Secret) (result SecretValue) {
 	s0 := cm.Reinterpret[uint32](s)
 	wasmimport_Reveal((uint32)(s0), &result)
 	return
 }
-
-//go:wasmimport wasmcloud:secrets/reveal@0.1.0-draft reveal
-//go:noescape
-func wasmimport_Reveal(s0 uint32, result *store.SecretValue)

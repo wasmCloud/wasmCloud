@@ -2,10 +2,6 @@
 
 package incominghandler
 
-import (
-	"github.com/wasmcloud/wasmcloud/examples/golang/components/http-client-tinygo/gen/wasi/http/types"
-)
-
 // Exports represents the caller-defined exports from "wasi:http/incoming-handler@0.2.0".
 var Exports struct {
 	// Handle represents the caller-defined, exported function "handle".
@@ -22,5 +18,5 @@ var Exports struct {
 	// with an error on its behalf.
 	//
 	//	handle: func(request: incoming-request, response-out: response-outparam)
-	Handle func(request types.IncomingRequest, responseOut types.ResponseOutparam)
+	Handle func(request IncomingRequest, responseOut ResponseOutparam)
 }

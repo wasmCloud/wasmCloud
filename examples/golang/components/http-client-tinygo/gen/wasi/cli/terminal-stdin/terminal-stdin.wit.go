@@ -8,16 +8,17 @@ import (
 	terminalinput "github.com/wasmcloud/wasmcloud/examples/golang/components/http-client-tinygo/gen/wasi/cli/terminal-input"
 )
 
+// TerminalInput represents the imported type alias "wasi:cli/terminal-stdin@0.2.0#terminal-input".
+//
+// See [terminalinput.TerminalInput] for more information.
+type TerminalInput = terminalinput.TerminalInput
+
 // GetTerminalStdin represents the imported function "get-terminal-stdin".
 //
 //	get-terminal-stdin: func() -> option<terminal-input>
 //
 //go:nosplit
-func GetTerminalStdin() (result cm.Option[terminalinput.TerminalInput]) {
+func GetTerminalStdin() (result cm.Option[TerminalInput]) {
 	wasmimport_GetTerminalStdin(&result)
 	return
 }
-
-//go:wasmimport wasi:cli/terminal-stdin@0.2.0 get-terminal-stdin
-//go:noescape
-func wasmimport_GetTerminalStdin(result *cm.Option[terminalinput.TerminalInput])

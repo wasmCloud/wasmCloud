@@ -23,10 +23,6 @@ func (self Pollable) ResourceDrop() {
 	return
 }
 
-//go:wasmimport wasi:io/poll@0.2.0 [resource-drop]pollable
-//go:noescape
-func wasmimport_PollableResourceDrop(self0 uint32)
-
 // Block represents the imported method "block".
 //
 //	block: func()
@@ -37,10 +33,6 @@ func (self Pollable) Block() {
 	wasmimport_PollableBlock((uint32)(self0))
 	return
 }
-
-//go:wasmimport wasi:io/poll@0.2.0 [method]pollable.block
-//go:noescape
-func wasmimport_PollableBlock(self0 uint32)
 
 // Ready represents the imported method "ready".
 //
@@ -54,10 +46,6 @@ func (self Pollable) Ready() (result bool) {
 	return
 }
 
-//go:wasmimport wasi:io/poll@0.2.0 [method]pollable.ready
-//go:noescape
-func wasmimport_PollableReady(self0 uint32) (result0 uint32)
-
 // Poll represents the imported function "poll".
 //
 //	poll: func(in: list<borrow<pollable>>) -> list<u32>
@@ -68,7 +56,3 @@ func Poll(in cm.List[Pollable]) (result cm.List[uint32]) {
 	wasmimport_Poll((*Pollable)(in0), (uint32)(in1), &result)
 	return
 }
-
-//go:wasmimport wasi:io/poll@0.2.0 poll
-//go:noescape
-func wasmimport_Poll(in0 *Pollable, in1 uint32, result *cm.List[uint32])

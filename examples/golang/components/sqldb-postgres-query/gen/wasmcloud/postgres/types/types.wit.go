@@ -121,15 +121,15 @@ func (self *PreparedStatementExecError) UnknownPreparedQuery() bool {
 	return self.Tag() == 0
 }
 
-// PreparedStatementExecErrorQueryError_ returns a [PreparedStatementExecError] of case "query-error".
+// PreparedStatementExecErrorQueryError returns a [PreparedStatementExecError] of case "query-error".
 //
 // An otherwise known query execution error
-func PreparedStatementExecErrorQueryError_(data QueryError) PreparedStatementExecError {
+func PreparedStatementExecErrorQueryError(data QueryError) PreparedStatementExecError {
 	return cm.New[PreparedStatementExecError](1, data)
 }
 
-// QueryError_ returns a non-nil *[QueryError] if [PreparedStatementExecError] represents the variant case "query-error".
-func (self *PreparedStatementExecError) QueryError_() *QueryError {
+// QueryError returns a non-nil *[QueryError] if [PreparedStatementExecError] represents the variant case "query-error".
+func (self *PreparedStatementExecError) QueryError() *QueryError {
 	return cm.Case[QueryError](self, 1)
 }
 
@@ -801,13 +801,13 @@ func (self *PgValue) Int4Array() *cm.List[int32] {
 	return cm.Case[cm.List[int32]](self, 18)
 }
 
-// PgValueNumeric_ returns a [PgValue] of case "numeric".
-func PgValueNumeric_(data Numeric) PgValue {
+// PgValueNumeric returns a [PgValue] of case "numeric".
+func PgValueNumeric(data Numeric) PgValue {
 	return cm.New[PgValue](19, data)
 }
 
-// Numeric_ returns a non-nil *[Numeric] if [PgValue] represents the variant case "numeric".
-func (self *PgValue) Numeric_() *Numeric {
+// Numeric returns a non-nil *[Numeric] if [PgValue] represents the variant case "numeric".
+func (self *PgValue) Numeric() *Numeric {
 	return cm.Case[Numeric](self, 19)
 }
 
@@ -1231,13 +1231,13 @@ func (self *PgValue) PathArray() *cm.List[cm.List[Point]] {
 	return cm.Case[cm.List[cm.List[Point]]](self, 59)
 }
 
-// PgValuePoint_ returns a [PgValue] of case "point".
-func PgValuePoint_(data Point) PgValue {
+// PgValuePoint returns a [PgValue] of case "point".
+func PgValuePoint(data Point) PgValue {
 	return cm.New[PgValue](60, data)
 }
 
-// Point_ returns a non-nil *[Point] if [PgValue] represents the variant case "point".
-func (self *PgValue) Point_() *Point {
+// Point returns a non-nil *[Point] if [PgValue] represents the variant case "point".
+func (self *PgValue) Point() *Point {
 	return cm.Case[Point](self, 60)
 }
 
@@ -1271,15 +1271,15 @@ func (self *PgValue) PolygonArray() *cm.List[cm.List[Point]] {
 	return cm.Case[cm.List[cm.List[Point]]](self, 63)
 }
 
-// PgValueDate_ returns a [PgValue] of case "date".
+// PgValueDate returns a [PgValue] of case "date".
 //
 // Date-time
-func PgValueDate_(data Date) PgValue {
+func PgValueDate(data Date) PgValue {
 	return cm.New[PgValue](64, data)
 }
 
-// Date_ returns a non-nil *[Date] if [PgValue] represents the variant case "date".
-func (self *PgValue) Date_() *Date {
+// Date returns a non-nil *[Date] if [PgValue] represents the variant case "date".
+func (self *PgValue) Date() *Date {
 	return cm.Case[Date](self, 64)
 }
 
@@ -1293,13 +1293,13 @@ func (self *PgValue) DateArray() *cm.List[Date] {
 	return cm.Case[cm.List[Date]](self, 65)
 }
 
-// PgValueInterval_ returns a [PgValue] of case "interval".
-func PgValueInterval_(data Interval) PgValue {
+// PgValueInterval returns a [PgValue] of case "interval".
+func PgValueInterval(data Interval) PgValue {
 	return cm.New[PgValue](66, data)
 }
 
-// Interval_ returns a non-nil *[Interval] if [PgValue] represents the variant case "interval".
-func (self *PgValue) Interval_() *Interval {
+// Interval returns a non-nil *[Interval] if [PgValue] represents the variant case "interval".
+func (self *PgValue) Interval() *Interval {
 	return cm.Case[Interval](self, 66)
 }
 
@@ -1313,13 +1313,13 @@ func (self *PgValue) IntervalArray() *cm.List[Interval] {
 	return cm.Case[cm.List[Interval]](self, 67)
 }
 
-// PgValueTime_ returns a [PgValue] of case "time".
-func PgValueTime_(data Time) PgValue {
+// PgValueTime returns a [PgValue] of case "time".
+func PgValueTime(data Time) PgValue {
 	return cm.New[PgValue](68, data)
 }
 
-// Time_ returns a non-nil *[Time] if [PgValue] represents the variant case "time".
-func (self *PgValue) Time_() *Time {
+// Time returns a non-nil *[Time] if [PgValue] represents the variant case "time".
+func (self *PgValue) Time() *Time {
 	return cm.Case[Time](self, 68)
 }
 
@@ -1333,13 +1333,13 @@ func (self *PgValue) TimeArray() *cm.List[Time] {
 	return cm.Case[cm.List[Time]](self, 69)
 }
 
-// PgValueTimeTz_ returns a [PgValue] of case "time-tz".
-func PgValueTimeTz_(data TimeTz) PgValue {
+// PgValueTimeTz returns a [PgValue] of case "time-tz".
+func PgValueTimeTz(data TimeTz) PgValue {
 	return cm.New[PgValue](70, data)
 }
 
-// TimeTz_ returns a non-nil *[TimeTz] if [PgValue] represents the variant case "time-tz".
-func (self *PgValue) TimeTz_() *TimeTz {
+// TimeTz returns a non-nil *[TimeTz] if [PgValue] represents the variant case "time-tz".
+func (self *PgValue) TimeTz() *TimeTz {
 	return cm.Case[TimeTz](self, 70)
 }
 
@@ -1353,13 +1353,13 @@ func (self *PgValue) TimeTzArray() *cm.List[TimeTz] {
 	return cm.Case[cm.List[TimeTz]](self, 71)
 }
 
-// PgValueTimestamp_ returns a [PgValue] of case "timestamp".
-func PgValueTimestamp_(data Timestamp) PgValue {
+// PgValueTimestamp returns a [PgValue] of case "timestamp".
+func PgValueTimestamp(data Timestamp) PgValue {
 	return cm.New[PgValue](72, data)
 }
 
-// Timestamp_ returns a non-nil *[Timestamp] if [PgValue] represents the variant case "timestamp".
-func (self *PgValue) Timestamp_() *Timestamp {
+// Timestamp returns a non-nil *[Timestamp] if [PgValue] represents the variant case "timestamp".
+func (self *PgValue) Timestamp() *Timestamp {
 	return cm.Case[Timestamp](self, 72)
 }
 
@@ -1373,13 +1373,13 @@ func (self *PgValue) TimestampArray() *cm.List[Timestamp] {
 	return cm.Case[cm.List[Timestamp]](self, 73)
 }
 
-// PgValueTimestampTz_ returns a [PgValue] of case "timestamp-tz".
-func PgValueTimestampTz_(data TimestampTz) PgValue {
+// PgValueTimestampTz returns a [PgValue] of case "timestamp-tz".
+func PgValueTimestampTz(data TimestampTz) PgValue {
 	return cm.New[PgValue](74, data)
 }
 
-// TimestampTz_ returns a non-nil *[TimestampTz] if [PgValue] represents the variant case "timestamp-tz".
-func (self *PgValue) TimestampTz_() *TimestampTz {
+// TimestampTz returns a non-nil *[TimestampTz] if [PgValue] represents the variant case "timestamp-tz".
+func (self *PgValue) TimestampTz() *TimestampTz {
 	return cm.Case[TimestampTz](self, 74)
 }
 

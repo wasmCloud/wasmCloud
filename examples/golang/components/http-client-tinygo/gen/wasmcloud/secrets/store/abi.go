@@ -3,10 +3,12 @@
 package store
 
 import (
+	"github.com/bytecodealliance/wasm-tools-go/cm"
 	"unsafe"
 )
 
 // SecretsErrorShape is used for storage in variant or result types.
 type SecretsErrorShape struct {
+	_     cm.HostLayout
 	shape [unsafe.Sizeof(SecretsError{})]byte
 }

@@ -9,10 +9,12 @@ import (
 
 // OptionStringShape is used for storage in variant or result types.
 type OptionStringShape struct {
+	_     cm.HostLayout
 	shape [unsafe.Sizeof(cm.Option[string]{})]byte
 }
 
 // ConfigErrorShape is used for storage in variant or result types.
 type ConfigErrorShape struct {
+	_     cm.HostLayout
 	shape [unsafe.Sizeof(ConfigError{})]byte
 }

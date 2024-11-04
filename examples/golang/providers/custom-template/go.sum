@@ -57,8 +57,8 @@ go.opentelemetry.io/proto/otlp v1.3.1 h1:TrMUixzpM0yuc/znrFTP9MMRh8trP93mkCiDVeX
 go.opentelemetry.io/proto/otlp v1.3.1/go.mod h1:0X1WI4de4ZsLrrJNLAQbFeLCm3T7yBkR0XqQ7niQU+8=
 go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
 go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
-go.wasmcloud.dev/provider v0.0.2 h1:r+o+QuV5aOcSADDeJrE7Ewkod8zF54ULhAqVMy0XD7w=
-go.wasmcloud.dev/provider v0.0.2/go.mod h1:WcXhsAB0rTiYGnDd0ZyQru4CgPFiWcZhG4S1fZz+w8A=
+go.wasmcloud.dev/provider v0.0.4 h1:LQYE8gL+rLkttkJUUjelvSIOQl7L2IWys37SoofbLNA=
+go.wasmcloud.dev/provider v0.0.4/go.mod h1:WcXhsAB0rTiYGnDd0ZyQru4CgPFiWcZhG4S1fZz+w8A=
 golang.org/x/crypto v0.25.0 h1:ypSNr+bnYL2YhwoMt2zPxHFmbAN1KZs/njMG3hxUp30=
 golang.org/x/crypto v0.25.0/go.mod h1:T+wALwcMOSE0kXgUAnPAHqTLW+XHgcELELW8VaDgm/M=
 golang.org/x/net v0.27.0 h1:5K3Njcw06/l2y9vpGCSdcxWOYHOUk3dVNGDXN+FvAys=
@@ -77,5 +77,5 @@ google.golang.org/protobuf v1.34.2 h1:6xV6lTsCfpGD21XK49h7MhtcApnLqkfYgPcdHftf6h
 google.golang.org/protobuf v1.34.2/go.mod h1:qYOHts0dSfpeUzUFpOMr/WGzszTmLH+DiWniOlNbLDw=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
-wrpc.io/go v0.0.3 h1:clf0KiO8WTjYwkyorrZQ4sSf7k/7xP5gdL4934A4L7s=
-wrpc.io/go v0.0.3/go.mod h1:3EZdmAh0pp6uNJ8RG4aciP3LLIDWlT2fJP6qd9Z/O6U=
+wrpc.io/go v0.1.0 h1:D1mT5rGtoM6EXZYBFis5jQ2xc4BulJzNbk0Onb5qqEc=
+wrpc.io/go v0.1.0/go.mod h1:3EZdmAh0pp6uNJ8RG4aciP3LLIDWlT2fJP6qd9Z/O6U=
