@@ -10,10 +10,11 @@ import (
 
 // ErrorCodeShape is used for storage in variant or result types.
 type ErrorCodeShape struct {
+	_     cm.HostLayout
 	shape [unsafe.Sizeof(types.ErrorCode{})]byte
 }
 
-func lower_OptionRequestOptions(v cm.Option[types.RequestOptions]) (f0 uint32, f1 uint32) {
+func lower_OptionRequestOptions(v cm.Option[RequestOptions]) (f0 uint32, f1 uint32) {
 	some := v.Some()
 	if some != nil {
 		f0 = 1

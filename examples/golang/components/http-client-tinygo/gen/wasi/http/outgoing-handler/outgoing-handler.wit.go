@@ -11,6 +11,26 @@ import (
 	"github.com/wasmcloud/wasmcloud/examples/golang/components/http-client-tinygo/gen/wasi/http/types"
 )
 
+// OutgoingRequest represents the imported type alias "wasi:http/outgoing-handler@0.2.0#outgoing-request".
+//
+// See [types.OutgoingRequest] for more information.
+type OutgoingRequest = types.OutgoingRequest
+
+// RequestOptions represents the imported type alias "wasi:http/outgoing-handler@0.2.0#request-options".
+//
+// See [types.RequestOptions] for more information.
+type RequestOptions = types.RequestOptions
+
+// FutureIncomingResponse represents the imported type alias "wasi:http/outgoing-handler@0.2.0#future-incoming-response".
+//
+// See [types.FutureIncomingResponse] for more information.
+type FutureIncomingResponse = types.FutureIncomingResponse
+
+// ErrorCode represents the type alias "wasi:http/outgoing-handler@0.2.0#error-code".
+//
+// See [types.ErrorCode] for more information.
+type ErrorCode = types.ErrorCode
+
 // Handle represents the imported function "handle".
 //
 // This function is invoked with an outgoing HTTP Request, and it returns
@@ -28,13 +48,9 @@ import (
 //	error-code>
 //
 //go:nosplit
-func Handle(request types.OutgoingRequest, options cm.Option[types.RequestOptions]) (result cm.Result[ErrorCodeShape, types.FutureIncomingResponse, types.ErrorCode]) {
+func Handle(request OutgoingRequest, options cm.Option[RequestOptions]) (result cm.Result[ErrorCodeShape, FutureIncomingResponse, ErrorCode]) {
 	request0 := cm.Reinterpret[uint32](request)
 	options0, options1 := lower_OptionRequestOptions(options)
 	wasmimport_Handle((uint32)(request0), (uint32)(options0), (uint32)(options1), &result)
 	return
 }
-
-//go:wasmimport wasi:http/outgoing-handler@0.2.0 handle
-//go:noescape
-func wasmimport_Handle(request0 uint32, options0 uint32, options1 uint32, result *cm.Result[ErrorCodeShape, types.FutureIncomingResponse, types.ErrorCode])

@@ -23,10 +23,6 @@ func (self Network) ResourceDrop() {
 	return
 }
 
-//go:wasmimport wasi:sockets/network@0.2.0 [resource-drop]network
-//go:noescape
-func wasmimport_NetworkResourceDrop(self0 uint32)
-
 // ErrorCode represents the enum "wasi:sockets/network@0.2.0#error-code".
 //
 //	enum error-code {
@@ -168,6 +164,16 @@ func (self *IPAddress) IPv6() *IPv6Address {
 	return cm.Case[IPv6Address](self, 1)
 }
 
+var stringsIPAddress = [2]string{
+	"ipv4",
+	"ipv6",
+}
+
+// String implements [fmt.Stringer], returning the variant case name of v.
+func (v IPAddress) String() string {
+	return stringsIPAddress[v.Tag()]
+}
+
 // IPv4SocketAddress represents the record "wasi:sockets/network@0.2.0#ipv4-socket-address".
 //
 //	record ipv4-socket-address {
@@ -222,4 +228,14 @@ func IPSocketAddressIPv6(data IPv6SocketAddress) IPSocketAddress {
 // IPv6 returns a non-nil *[IPv6SocketAddress] if [IPSocketAddress] represents the variant case "ipv6".
 func (self *IPSocketAddress) IPv6() *IPv6SocketAddress {
 	return cm.Case[IPv6SocketAddress](self, 1)
+}
+
+var stringsIPSocketAddress = [2]string{
+	"ipv4",
+	"ipv6",
+}
+
+// String implements [fmt.Stringer], returning the variant case name of v.
+func (v IPSocketAddress) String() string {
+	return stringsIPSocketAddress[v.Tag()]
 }

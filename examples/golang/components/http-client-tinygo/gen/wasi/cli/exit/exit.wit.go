@@ -17,7 +17,3 @@ func Exit(status cm.BoolResult) {
 	wasmimport_Exit((uint32)(status0))
 	return
 }
-
-//go:wasmimport wasi:cli/exit@0.2.0 exit
-//go:noescape
-func wasmimport_Exit(status0 uint32)

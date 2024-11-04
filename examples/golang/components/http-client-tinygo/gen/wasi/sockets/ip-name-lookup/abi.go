@@ -4,11 +4,11 @@ package ipnamelookup
 
 import (
 	"github.com/bytecodealliance/wasm-tools-go/cm"
-	"github.com/wasmcloud/wasmcloud/examples/golang/components/http-client-tinygo/gen/wasi/sockets/network"
 	"unsafe"
 )
 
 // OptionIPAddressShape is used for storage in variant or result types.
 type OptionIPAddressShape struct {
-	shape [unsafe.Sizeof(cm.Option[network.IPAddress]{})]byte
+	_     cm.HostLayout
+	shape [unsafe.Sizeof(cm.Option[IPAddress]{})]byte
 }

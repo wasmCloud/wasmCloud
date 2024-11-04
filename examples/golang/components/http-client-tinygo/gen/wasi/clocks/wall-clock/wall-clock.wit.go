@@ -29,10 +29,6 @@ func Now() (result DateTime) {
 	return
 }
 
-//go:wasmimport wasi:clocks/wall-clock@0.2.0 now
-//go:noescape
-func wasmimport_Now(result *DateTime)
-
 // Resolution represents the imported function "resolution".
 //
 //	resolution: func() -> datetime
@@ -42,7 +38,3 @@ func Resolution() (result DateTime) {
 	wasmimport_Resolution(&result)
 	return
 }
-
-//go:wasmimport wasi:clocks/wall-clock@0.2.0 resolution
-//go:noescape
-func wasmimport_Resolution(result *DateTime)

@@ -73,8 +73,8 @@ func Query(stmt string, params ...types.PgValue) cm.Result[query.QueryErrorShape
 }
 
 func formatTimestamp(t types.PgValue) string {
-	if t.TimestampTz_() != nil {
-		ts := t.TimestampTz_()
+	if t.TimestampTz() != nil {
+		ts := t.TimestampTz()
 		date := ts.Timestamp.Date.Ymd()
 		time := ts.Timestamp.Time
 		return fmt.Sprintf("%02d-%02d-%02dT%02d:%02d:%02dZ", date.F0, date.F1, date.F2, time.Hour, time.Min, time.Sec)
