@@ -59,7 +59,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.48.2",
-    "@types/node": "^20.17.2",
+    "@types/node": "^20.17.6",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/uuid": "^10.0.0",
@@ -82,7 +82,7 @@
     "eslint-plugin-react-refresh": "^0.4.14",
     "eslint-plugin-tailwindcss": "^3.17.5",
     "eslint-plugin-unicorn": "^56.0.0",
-    "execa": "^9.5.0",
+    "execa": "^9.5.1",
     "get-port": "^7.1.0",
     "pino": "^9.5.0",
     "postcss": "^8.4.47",
@@ -93,7 +93,7 @@
     "typescript": "^5.6.3",
     "uuid": "^11.0.2",
     "vite": "^5.4.10",
-    "vite-plugin-svgr": "^4.2.0",
+    "vite-plugin-svgr": "^4.3.0",
     "vite-tsconfig-paths": "^5.0.1"
   }
 }
