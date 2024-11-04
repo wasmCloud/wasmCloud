@@ -8040,7 +8040,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.36.1"
+version = "0.36.2"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -8120,7 +8120,7 @@ dependencies = [
 
 [[package]]
 name = "wash-lib"
-version = "0.30.0"
+version = "0.30.1"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -8389,9 +8389,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-pkg-client"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d62ef1729ca15181cf2d11584498bf5473ff8e770a2ad6ec43cf2b5287eda345"
+checksum = "bde35f9ffbc6917f7876f9d07a1083eacb5915736ecfd64f784f4d634384c823"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8423,9 +8423,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-pkg-common"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8c584acc26797b5c82dcdf366c73356add855386692ae641c4ba227c517f2ad"
+checksum = "2d9a1ebffee2a4b3c19d64b264423ddff3a4303e2c3a0dc13f4c9211618e2b67"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8445,9 +8445,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-pkg-core"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1e840d1a2794baf427374a0d5b1b46e665d73eacbe0ff1b92fec6f9a7ed0b28"
+checksum = "62bb12aea0bc78d53465f2cfe52a90fb6c769afc617380483185e6b0fe567dc3"
 dependencies = [
  "anyhow",
  "futures-util",
