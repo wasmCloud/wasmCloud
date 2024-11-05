@@ -97,6 +97,23 @@ pub mod config {
     pub use super::wasmtime_bindings::wasi::config::store;
 }
 
+impl std::fmt::Display for wasmtime_bindings::wasi::logging0_1_0_draft::logging::Level {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Trace => "trace",
+                Self::Debug => "debug",
+                Self::Info => "info",
+                Self::Warn => "warn",
+                Self::Error => "error",
+                Self::Critical => "critical",
+            }
+        )
+    }
+}
+
 pub use unversioned_logging_bindings::wasi::logging as unversioned_logging;
 pub use wasmtime_bindings::wasi::{blobstore, keyvalue, logging0_1_0_draft as logging};
 pub use wasmtime_bindings::wasmcloud::{bus1_0_0, bus2_0_0 as bus, messaging, secrets};
