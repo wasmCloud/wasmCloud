@@ -275,7 +275,7 @@ impl Logging for Handler {
                 tracing::event!(
                     tracing::Level::TRACE,
                     component_id = ?self.component_id,
-                    ?level,
+                    level = level.to_string(),
                     context,
                     "{message}"
                 );
@@ -284,7 +284,7 @@ impl Logging for Handler {
                 tracing::event!(
                     tracing::Level::DEBUG,
                     component_id = ?self.component_id,
-                    ?level,
+                    level = level.to_string(),
                     context,
                     "{message}"
                 );
@@ -293,7 +293,7 @@ impl Logging for Handler {
                 tracing::event!(
                     tracing::Level::INFO,
                     component_id = ?self.component_id,
-                    ?level,
+                    level = level.to_string(),
                     context,
                     "{message}"
                 );
@@ -302,7 +302,7 @@ impl Logging for Handler {
                 tracing::event!(
                     tracing::Level::WARN,
                     component_id = ?self.component_id,
-                    ?level,
+                    level = level.to_string(),
                     context,
                     "{message}"
                 );
@@ -311,7 +311,7 @@ impl Logging for Handler {
                 tracing::event!(
                     tracing::Level::ERROR,
                     component_id = ?self.component_id,
-                    ?level,
+                    level = level.to_string(),
                     context,
                     "{message}"
                 );
@@ -320,7 +320,7 @@ impl Logging for Handler {
                 tracing::event!(
                     tracing::Level::ERROR,
                     component_id = ?self.component_id,
-                    ?level,
+                    level = level.to_string(),
                     context,
                     "{message}"
                 );
