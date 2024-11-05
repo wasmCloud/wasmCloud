@@ -104,10 +104,10 @@ jobs:
             lang: rust
           - name: hello-world-tinygo
             lang: tinygo
-            lang-version: '1.21'
+            lang-version: '1.23'
           - name: hello-world-typescript
             lang: typescript
-            lang-version: "22.x"
+            lang-version: '22.x'
           - name: hello-world-python
             lang: python
             lang-version: '3.10'
@@ -119,6 +119,7 @@ jobs:
         uses: ./.github/actions/wasm-lang-toolchain-setup
         with:
           language: ${{ matrix.template.lang }}
+          language-version: ${{ matrix.template.lang-version }}
           wash-version: ${{ matrix.wash-version }}
 
       # Set up Rust & trigger cargo toolchain
