@@ -111,18 +111,27 @@ jobs:
           # due to all the new WIT package retrieval goodness
           #
           # Once a new version of wash is out we can use prebuilt versions again (>= 35.0)
+          - 0.36.1
           - current
         project:
           # Golang example components
+          - folder: 'http-client-tinygo'
+            tag-prefix: 'component-http-client-tinygo-v'
+            lang: 'tinygo'
+            lang-version: '1.23'
+            test-deploy: wadm.yaml
+            wasm-bin: 'http_client_tinygo_s.wasm'
+
           - folder: 'http-echo-tinygo'
             tag-prefix: 'component-http-echo-tinygo-v'
             lang: 'tinygo'
-            lang_version: '1.21'
-            test_deploy: wadm.yaml
+            lang-version: '1.23'
+            test-deploy: wadm.yaml
+            wasm-bin: 'http-echo-tinygo-component_s.wasm'
 
           - folder: 'http-hello-world'
-            lang: 'tinygo'
             tag-prefix: 'component-http-hello-world-tinygo-v'
+            lang: 'tinygo'
             lang-version: '1.23'
             test-deploy: wadm.yaml
             wasm-bin: 'http_hello_world_s.wasm'
@@ -130,23 +139,9 @@ jobs:
           - folder: 'sqldb-postgres-query'
             tag-prefix: 'component-sqldb-postgres-query-tinygo-v'
             lang: 'tinygo'
-            lang-version: '1.21'
-            wasm-bin: 'sqldb_postgres_query_s.wasm'
+            lang-version: '1.23'
             test-deploy: local.wadm.yaml
-
-          - folder: 'http-echo-tinygo'
-            tag-prefix: 'component-http-echo-tinygo-v'
-            lang: 'tinygo'
-            lang-version: '1.21'
-            wasm-bin: 'http_echo_s.wasm'
-            test-deploy: wadm.yaml
-
-          - folder: 'sqldb-postgres-query'
-            tag-prefix: 'component-sqldb-postgres-query-tinygo-v'
-            lang: 'tinygo'
-            lang-version: '1.21'
             wasm-bin: 'sqldb_postgres_query_s.wasm'
-            test-deploy: local.wadm.yaml
 
           # Rust example components
           - folder: 'blobby'
@@ -311,13 +306,11 @@ jobs:
           - folder: 'http-echo-tinygo'
             tag-prefix: 'component-http-echo-tinygo-v'
             lang: 'tinygo'
-            lang-version: '1.21'
-            wasm-bin: 'http_echo_s.wasm'
+            wasm-bin: 'http-echo-tinygo-component_s.wasm'
 
           - folder: 'http-hello-world'
             tag-prefix: 'component-http-hello-world-tinygo-v'
             lang: 'tinygo'
-            lang-version: '1.21'
             wasm-bin: 'http_hello_world_s.wasm'
 
           # Rust example components (to publish)
