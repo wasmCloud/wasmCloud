@@ -16,7 +16,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: washboard-${{ github.ref }}
+  group: washboard-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
