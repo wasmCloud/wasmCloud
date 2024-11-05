@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   fmt:
+    if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -27,6 +28,7 @@ jobs:
       - run: nix fmt
 
   run:
+    if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -36,6 +38,7 @@ jobs:
       - run: nix run -L . -- --version
 
   develop:
+    if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
