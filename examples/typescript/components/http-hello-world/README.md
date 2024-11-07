@@ -49,9 +49,6 @@ wash dev
 - Deploys the built manifest (i.e all dependencies to run this application) locally
 - Watches your code for changes and re-deploys when necessary.
 
-> [!NOTE]
-> To do things more manually, see [`docs/slow-start.md`](./docs/slow-start.md).
-
 [wasmcloud-host]: https://wasmcloud.com/docs/concepts/hosts
 
 ## Send a request to the running component

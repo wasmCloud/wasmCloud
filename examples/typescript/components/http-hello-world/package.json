@@ -11,7 +11,7 @@
     "install-and-build": "npm install && npm run build",
     "component:start": "wash start component file://build/http_hello_world_s.wasm --auction-timeout-ms 10000 --timeout-ms 10000",
     "component:stop": "wash stop component typescript-hello-world",
-    "wadm:start": "wash app deploy wadm.yaml",
+    "wadm:start": "wash app deploy local.wadm.yaml",
     "wadm:stop": "wash app delete typescript-hello-world v0.0.1",
     "start": "npm run build && npm run wadm:start",
     "reload": "npm run build && npm run wadm:stop && npm run wadm:start",
