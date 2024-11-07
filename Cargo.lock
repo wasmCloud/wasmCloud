@@ -10176,9 +10176,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport"
-version = "0.28.2"
+version = "0.28.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebc808d080712f55ee0ed86d8c7a98c6c5cb50903ac57a69fae18941f1171d98"
+checksum = "806a107cd0b5a1315c381432c38db12497558a629dc13def7c50dac433ae48c8"
 dependencies = [
  "anyhow",
  "bytes",
