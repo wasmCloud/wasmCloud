@@ -42,7 +42,7 @@ While ecosystem tooling for pulling and using WIT-manifest-only components devel
 In your project, include the following `wit/deps.toml`:
 
 ```yaml
-secrets = "https://github.com/wasmCloud/wasmCloud/releases/download/wit-wasmcloud-secrets-v0.1.0-draft/wit-wasmcloud-secrets-0.1.0.tar.gz"
+secrets = "https://github.com/wasmCloud/wasmCloud/releases/download/wit-wasmcloud-secrets-v0.1.0-draft/wit-wasmcloud-secrets-0.1.0-draft.tar.gz"
 ```
 
 From your project root (the folder above `wit/`), you should be able to run `wit-deps`:
