@@ -135,7 +135,7 @@ spec:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
           properties:
-            replicas: 1
+            instances: 1
         - type: link
           properties:
             target: nats
