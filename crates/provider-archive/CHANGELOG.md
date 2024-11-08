@@ -5,11 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.12.0 (2024-07-31)
+## 0.14.0 (2024-11-08)
 
 ### Chore
 
  - <csr-id-a9b02e5e203c1332ee785cbee8b998be9584c5b0/> address clippy warnings
+
+### Other
+
+ - <csr-id-4213d3c378c49c930723313060195653157d63ef/> update to 0.13
+ - <csr-id-c50884ac5e7ca8c58bb8a14ef499b0e4ee7d0530/> update deps for wash-cli-v0.36
+ - <csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/> bump for test-util release
+   Bump wasmcloud-core v0.8.0, opentelemetry-nats v0.1.1, provider-archive v0.12.0, wasmcloud-runtime v0.3.0, wasmcloud-secrets-types v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, safety bump 8 crates
+   
+   SAFETY BUMP: wasmcloud-runtime v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, wasmcloud-provider-sdk v0.7.0, wash-cli v0.30.0, wash-lib v0.23.0
 
 ### New Features (BREAKING)
 
@@ -19,9 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 2 commits contributed to the release over the course of 18 calendar days.
- - 47 days passed between releases.
- - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 5 commits contributed to the release over the course of 119 calendar days.
+ - 148 days passed between releases.
+ - 5 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -31,8 +40,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Update to 0.13 ([`4213d3c`](https://github.com/wasmCloud/wasmCloud/commit/4213d3c378c49c930723313060195653157d63ef))
+    - Update deps for wash-cli-v0.36 ([`c50884a`](https://github.com/wasmCloud/wasmCloud/commit/c50884ac5e7ca8c58bb8a14ef499b0e4ee7d0530))
+    - Bump for test-util release ([`7cd2e71`](https://github.com/wasmCloud/wasmCloud/commit/7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4))
     - Store claims and jwt with par ([`6df433f`](https://github.com/wasmCloud/wasmCloud/commit/6df433f01db7923d11554e2b76b9cdd34452e6f5))
     - Address clippy warnings ([`a9b02e5`](https://github.com/wasmCloud/wasmCloud/commit/a9b02e5e203c1332ee785cbee8b998be9584c5b0))
+</details>
+
+## 0.12.0 (2024-07-31)
+
+<csr-id-a9b02e5e203c1332ee785cbee8b998be9584c5b0/>
+
+### Chore
+
+ - <csr-id-a9b02e5e203c1332ee785cbee8b998be9584c5b0/> address clippy warnings
+
+### New Features (BREAKING)
+
+ - <csr-id-6df433f01db7923d11554e2b76b9cdd34452e6f5/> store claims and jwt with par
+
+## 0.11.0 (2024-06-13)
+
+<csr-id-c86f24b61e68d48104e89e0aecf2a914aebaad6b/>
+<csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/>
+<csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/>
+<csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+<csr-id-569f5636c924c855c1098f63cd9521e2f2e65fa2/>
+
+### Chore
+
+ - <csr-id-c86f24b61e68d48104e89e0aecf2a914aebaad6b/> bump to v0.11.0 for release
+ - <csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/> generate changelogs after 1.0.1 release
+ - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
+ - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
+
+### New Features
+
+ - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
+
+### Refactor
+
+ - <csr-id-569f5636c924c855c1098f63cd9521e2f2e65fa2/> more informative file open error
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 8 commits contributed to the release over the course of 56 calendar days.
+ - 56 days passed between releases.
+ - 6 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Bump to v0.11.0 for release ([`c86f24b`](https://github.com/wasmCloud/wasmCloud/commit/c86f24b61e68d48104e89e0aecf2a914aebaad6b))
+    - Bump provider-archive v0.10.2, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0 ([`73c0ef0`](https://github.com/wasmCloud/wasmCloud/commit/73c0ef0bbe2f6b525655939d2cd30740aef4b6bc))
+    - Bump provider-archive v0.10.1, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0, safety bump 5 crates ([`75a2e52`](https://github.com/wasmCloud/wasmCloud/commit/75a2e52f52690ba143679c90237851ebd07e153f))
+    - Generate changelogs after 1.0.1 release ([`4e0313a`](https://github.com/wasmCloud/wasmCloud/commit/4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e))
+    - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
+    - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
+    - More informative file open error ([`569f563`](https://github.com/wasmCloud/wasmCloud/commit/569f5636c924c855c1098f63cd9521e2f2e65fa2))
+    - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))
 </details>
 
 ## 0.10.2 (2024-05-08)
@@ -83,49 +156,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
  - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
  - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
-
-## 0.11.0 (2024-06-13)
-
-### Chore
-
- - <csr-id-c86f24b61e68d48104e89e0aecf2a914aebaad6b/> bump to v0.11.0 for release
- - <csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/> generate changelogs after 1.0.1 release
- - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
- - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
-
-### New Features
-
- - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
-
-### Refactor
-
- - <csr-id-569f5636c924c855c1098f63cd9521e2f2e65fa2/> more informative file open error
-
-### Commit Statistics
-
-<csr-read-only-do-not-edit/>
-
- - 8 commits contributed to the release over the course of 56 calendar days.
- - 56 days passed between releases.
- - 6 commits were understood as [conventional](https://www.conventionalcommits.org).
- - 0 issues like '(#ID)' were seen in commit messages
-
-### Commit Details
-
-<csr-read-only-do-not-edit/>
-
-<details><summary>view details</summary>
-
- * **Uncategorized**
-    - Bump to v0.11.0 for release ([`c86f24b`](https://github.com/wasmCloud/wasmCloud/commit/c86f24b61e68d48104e89e0aecf2a914aebaad6b))
-    - Bump provider-archive v0.10.2, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0 ([`73c0ef0`](https://github.com/wasmCloud/wasmCloud/commit/73c0ef0bbe2f6b525655939d2cd30740aef4b6bc))
-    - Bump provider-archive v0.10.1, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0, safety bump 5 crates ([`75a2e52`](https://github.com/wasmCloud/wasmCloud/commit/75a2e52f52690ba143679c90237851ebd07e153f))
-    - Generate changelogs after 1.0.1 release ([`4e0313a`](https://github.com/wasmCloud/wasmCloud/commit/4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e))
-    - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
-    - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
-    - More informative file open error ([`569f563`](https://github.com/wasmCloud/wasmCloud/commit/569f5636c924c855c1098f63cd9521e2f2e65fa2))
-    - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))
-</details>
 
 ## v0.10.0 (2024-04-17)
 
