@@ -56,7 +56,7 @@ spec:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
           properties:
-            replicas: 1
+            instances: 1
 
         # Link the httpserver to the component, and configure the HTTP server
         # to listen on port 8080 for incoming requests
@@ -114,7 +114,7 @@ For example, the following WADM manifest fragment:
   traits:
     - type: spreadscaler
       properties:
-        replicas: 1
+        instances: 1
     - type: link
       properties:
         target: sqldb-postgres
@@ -154,7 +154,7 @@ For example, the following WADM manifest fragment:
   traits:
     - type: spreadscaler
       properties:
-        replicas: 1
+        instances: 1
     - type: link
       properties:
         target: sqldb-postgres
