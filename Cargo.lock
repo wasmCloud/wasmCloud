@@ -5275,7 +5275,7 @@ dependencies = [
 
 [[package]]
 name = "provider-archive"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "async-compression",
  "data-encoding",
@@ -8069,7 +8069,7 @@ dependencies = [
  "oci-client",
  "oci-wasm",
  "once_cell",
- "provider-archive 0.12.1",
+ "provider-archive 0.13.0",
  "rand 0.8.5",
  "regex",
  "reqwest 0.12.9",
@@ -8148,7 +8148,7 @@ dependencies = [
  "oci-client",
  "oci-wasm",
  "path-absolutize",
- "provider-archive 0.12.1",
+ "provider-archive 0.13.0",
  "regex",
  "reqwest 0.12.9",
  "rmp-serde",
@@ -8511,7 +8511,7 @@ dependencies = [
  "hyper-util",
  "nkeys",
  "once_cell",
- "provider-archive 0.12.1",
+ "provider-archive 0.13.0",
  "rand 0.8.5",
  "redis",
  "regex",
@@ -8659,7 +8659,7 @@ dependencies = [
  "oci-client",
  "oci-wasm",
  "once_cell",
- "provider-archive 0.12.1",
+ "provider-archive 0.13.0",
  "reqwest 0.12.9",
  "rustls 0.23.13",
  "rustls-native-certs 0.8.0",
@@ -8697,7 +8697,7 @@ dependencies = [
  "nkeys",
  "oci-client",
  "opentelemetry-nats",
- "provider-archive 0.12.1",
+ "provider-archive 0.13.0",
  "rmp-serde",
  "secrecy",
  "serde 1.0.210",

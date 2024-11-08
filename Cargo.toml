@@ -261,7 +261,7 @@ path-clean = { version = "1", default-features = false }
 pg_bigdecimal = { version = "0.1", default-features = false }
 pin-project-lite = { version = "0.2", default-features = false }
 postgres-types = { version = "0.2", default-features = false }
-provider-archive = { version = "^0.12.0", path = "./crates/provider-archive", default-features = false }
+provider-archive = { version = "^0.13.0", path = "./crates/provider-archive", default-features = false }
 quote = { version = "1", default-features = false }
 rand = { version = "0.8", default-features = false }
 redis = { version = "0.25", default-features = false }
