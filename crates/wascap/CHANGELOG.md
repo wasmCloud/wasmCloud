@@ -5,10 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v0.15.1 (2024-10-23)
+## v0.15.2 (2024-11-08)
 
 ### Chore
 
+ - <csr-id-c5ba85cfe6ad63227445b0a5e21d58a8f3e15e33/> bump wascap v0.15.1, wasmcloud-core v0.13.0, wash-lib v0.29.0, wasmcloud-tracing v0.10.0, wasmcloud-provider-sdk v0.11.0, wash-cli v0.36.0, safety bump 7 crates
+   SAFETY BUMP: wash-lib v0.29.0, wasmcloud-tracing v0.10.0, wasmcloud-provider-sdk v0.11.0, wash-cli v0.36.0, wasmcloud-host v0.22.0, wasmcloud-runtime v0.6.0, wasmcloud-test-util v0.14.0
  - <csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/> Replace actor references by component in crates
    Rename wash-cli wash-build tests name and references
    
@@ -43,9 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 6 commits contributed to the release over the course of 145 calendar days.
- - 188 days passed between releases.
- - 5 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 7 commits contributed to the release over the course of 162 calendar days.
+ - 205 days passed between releases.
+ - 6 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -55,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Bump wascap v0.15.1, wasmcloud-core v0.13.0, wash-lib v0.29.0, wasmcloud-tracing v0.10.0, wasmcloud-provider-sdk v0.11.0, wash-cli v0.36.0, safety bump 7 crates ([`c5ba85c`](https://github.com/wasmCloud/wasmCloud/commit/c5ba85cfe6ad63227445b0a5e21d58a8f3e15e33))
     - Enable new component model feature ([`eb9621b`](https://github.com/wasmCloud/wasmCloud/commit/eb9621bddd9febe38b70fae4372ddd74f9031295))
     - Release and update CHANGELOG ([`f128cec`](https://github.com/wasmCloud/wasmCloud/commit/f128cec29f07ae84e37822c5bba1c91eeb9d82fd))
     - Add Host entity type ([`0b164fd`](https://github.com/wasmCloud/wasmCloud/commit/0b164fde352a782a1b3c8a451e5b5bb791505556))
@@ -62,6 +65,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Add Host entity type ([`add7bb1`](https://github.com/wasmCloud/wasmCloud/commit/add7bb1e11bf76eb235f7aa7b7c6ef7db93bae5e))
     - Replace actor references by component in crates ([`20c72ce`](https://github.com/wasmCloud/wasmCloud/commit/20c72ce0ed423561ae6dbd5a91959bec24ff7cf3))
 </details>
+
+## v0.15.1 (2024-10-23)
+
+<csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/>
+<csr-id-f128cec29f07ae84e37822c5bba1c91eeb9d82fd/>
+
+### Chore
+
+ - <csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/> Replace actor references by component in crates
+   Rename wash-cli wash-build tests name and references
+   
+   Fix nix flake path to Cargo.lock file
+   
+   Fix format
+   
+   Rename in wash-cli tests
+
+### New Features
+
+ - <csr-id-0b164fde352a782a1b3c8a451e5b5bb791505556/> add Host entity type
+   Add a `Host` entity type to wascap. This allows us to generate JWTs for
+   hosts that contains assertions about the metadata they were started
+   with. For now this only includes host labels, but this could change in
+   the future.
+ - <csr-id-add7bb1e11bf76eb235f7aa7b7c6ef7db93bae5e/> add Host entity type
+   Add a `Host` entity type to wascap. This allows us to generate JWTs for
+   hosts that contains assertions about the metadata they were started
+   with. For now this only includes host labels, but this could change in
+   the future.
+
+### Bug Fixes
+
+ - <csr-id-eb9621bddd9febe38b70fae4372ddd74f9031295/> enable new component model feature
+
+### Other
+
+ - <csr-id-f128cec29f07ae84e37822c5bba1c91eeb9d82fd/> release and update CHANGELOG
 
 ## v0.15.0 (2024-06-11)
 

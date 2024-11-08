@@ -5,7 +5,84 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.31.0 (2024-11-08)
+
+### Chore
+
+ - <csr-id-a28aa677cdf7f64529520f823ed1cd6ee09b4ebe/> add context to monkey patch
+
+### New Features
+
+ - <csr-id-22ac2b0cc123f00267dc8be4a55b9fd5f9a00713/> tls-first option for command line
+ - <csr-id-40ddd5f11dbd245af378650431cf9b5df5ce12b7/> suppress stderr output of tinygo generate
+ - <csr-id-433b6c36c8675640d06160a782232be92b617dd9/> increase allowed scale component time
+   This commit increases the amount of time waited by default for
+   starting components, to make it a little less unlikely that JS and/or
+   python components that have to be pulled over possibly slow internet
+   connections fail to start.
+   
+   At present, it often happens that components fail to scale but start
+   nearly immediately after the error is shown.
+ - <csr-id-6e113b097402e059ef7e2d5a01d7971e5b139cfa/> Add support for monolithic push
+
+### Bug Fixes
+
+ - <csr-id-940a06d42476a501b090a4bf4eecc90ccbe6c3ce/> Fixes wasmcloud.lock on windows
+   This is a simple dependency bump to pick up the fix from wkg on locking
+   files on windows
+ - <csr-id-514258167854d335eb468bc4819f42c43601cf58/> allow building components without wit dir
+ - <csr-id-08a110605b3d7328dd37b51618aa42b02723069d/> precreate or canonicalize build dir
+ - <csr-id-316dbea27c85e1f6d9bbb7455df96e50233548e3/> canonicalize wit, build, override paths
+
+### Refactor
+
+ - <csr-id-9863a724c43207e282452b09c8f51fdacac44ec0/> deprecate wash app list in favor of wash app get
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 10 commits contributed to the release over the course of 11 calendar days.
+ - 16 days passed between releases.
+ - 10 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Fixes wasmcloud.lock on windows ([`940a06d`](https://github.com/wasmCloud/wasmCloud/commit/940a06d42476a501b090a4bf4eecc90ccbe6c3ce))
+    - Tls-first option for command line ([`22ac2b0`](https://github.com/wasmCloud/wasmCloud/commit/22ac2b0cc123f00267dc8be4a55b9fd5f9a00713))
+    - Allow building components without wit dir ([`5142581`](https://github.com/wasmCloud/wasmCloud/commit/514258167854d335eb468bc4819f42c43601cf58))
+    - Precreate or canonicalize build dir ([`08a1106`](https://github.com/wasmCloud/wasmCloud/commit/08a110605b3d7328dd37b51618aa42b02723069d))
+    - Add context to monkey patch ([`a28aa67`](https://github.com/wasmCloud/wasmCloud/commit/a28aa677cdf7f64529520f823ed1cd6ee09b4ebe))
+    - Canonicalize wit, build, override paths ([`316dbea`](https://github.com/wasmCloud/wasmCloud/commit/316dbea27c85e1f6d9bbb7455df96e50233548e3))
+    - Deprecate wash app list in favor of wash app get ([`9863a72`](https://github.com/wasmCloud/wasmCloud/commit/9863a724c43207e282452b09c8f51fdacac44ec0))
+    - Suppress stderr output of tinygo generate ([`40ddd5f`](https://github.com/wasmCloud/wasmCloud/commit/40ddd5f11dbd245af378650431cf9b5df5ce12b7))
+    - Increase allowed scale component time ([`433b6c3`](https://github.com/wasmCloud/wasmCloud/commit/433b6c36c8675640d06160a782232be92b617dd9))
+    - Add support for monolithic push ([`6e113b0`](https://github.com/wasmCloud/wasmCloud/commit/6e113b097402e059ef7e2d5a01d7971e5b139cfa))
+</details>
+
 ## v0.30.0 (2024-10-23)
+
+<csr-id-3a139923993699fee4fb5fa21d3945d4b4935832/>
+<csr-id-c5ba85cfe6ad63227445b0a5e21d58a8f3e15e33/>
+<csr-id-343c0d7509d3e7ef88ec45798d16bca105831611/>
+<csr-id-44bf4c8793b3989aebbbc28c2f2ce3ebbd4d6a0a/>
+<csr-id-81281b490d9df214e60281a05db35f781656d64f/>
+<csr-id-e5b75f416b4f17d29d5939f25b211a466c842788/>
+<csr-id-9df2bb1754fbffc36ed03a00098831eca49f3171/>
+<csr-id-bff14fac85ce4673a1abe432e152067f506fb994/>
+<csr-id-da7b2cd26cdc4c929e45dc4aee4e5b092c3b26f9/>
+<csr-id-30a7dacf19254c7e0e0762f5c6b007cfc27ad1f0/>
+<csr-id-b3e79caf381e53172fb61cf4c7668816efd65b09/>
+<csr-id-a4a9e365095270bd97b59634699b3790b990bc73/>
+<csr-id-d23f3ef01c8fdb980462aca3f7f37237e531bc4b/>
+<csr-id-25e7bb204023277d651fc3550d6a7c15a540c934/>
+<csr-id-de73278b2730f19e71d3d08996d00f205d9559cf/>
 
 ### Chore
 
@@ -18,6 +95,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-81281b490d9df214e60281a05db35f781656d64f/> tests
  - <csr-id-e5b75f416b4f17d29d5939f25b211a466c842788/> remove async-nats v0.33
  - <csr-id-9df2bb1754fbffc36ed03a00098831eca49f3171/> standardize emoji usage
+
+### Other
+
+ - <csr-id-4db28d960533a68c2597656a6cc6dacd65118e19/> wash-lib v0.30.0
 
 ### New Features
 
@@ -100,9 +181,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 40 commits contributed to the release over the course of 21 calendar days.
+ - 41 commits contributed to the release over the course of 21 calendar days.
  - 23 days passed between releases.
- - 40 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 41 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -112,6 +193,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Wash-lib v0.30.0 ([`4db28d9`](https://github.com/wasmCloud/wasmCloud/commit/4db28d960533a68c2597656a6cc6dacd65118e19))
     - Eprintln instead of info ([`3a13992`](https://github.com/wasmCloud/wasmCloud/commit/3a139923993699fee4fb5fa21d3945d4b4935832))
     - Only run wkg if 'deps.toml' is not present ([`6217719`](https://github.com/wasmCloud/wasmCloud/commit/62177190f09d905173a67db6627f1ef3a315e56e))
     - Try to write the newly created LockFile before using it ([`48a26a3`](https://github.com/wasmCloud/wasmCloud/commit/48a26a3304096ab1eb0684aadbc84d35e4672c71))
@@ -386,9 +468,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Stop returning default credentials from project config if none can be resolved ([`31b21c2`](https://github.com/wasmCloud/wasmCloud/commit/31b21c2baae4dbf16434bca4ddd70938f769618f))
     - Replace dirs dependency with home ([`6903979`](https://github.com/wasmCloud/wasmCloud/commit/69039793fe275c35ebf647d52f117c0bbf3bf675))
 </details>
-
-<csr-unknown>
-Improved terminal handling while watching application latticewatch interval for ‘app list’ is now configurable with a default interval of 1000ms.Added Short flag of -w as an alternative to –watch<csr-unknown/>
 
 ## v0.26.0 (2024-09-18)
 
@@ -980,8 +1059,10 @@ Improved terminal handling while watching application latticewatch interval for 
 <csr-unknown>
 <csr-unknown>
 <csr-unknown>
+<csr-unknown>
 dangling providers/components which aren’t linked to anything<csr-unknown>
  add support for wash up --wadm-manifestThis commit adds support for wash up --wadm-manifest, which deploysa WADM manifest after running wash up. If the manifest existsalready, it is not re-deployed, but it is deployed once. Support configuring proxy credentials for HTTP(S)_PROXY when downloading artifacts add support for specifying multiple labelsThis commit adds support for specifying multiple labels to wash label.Users can use wash label <host-id> key1=value1,key2=value2 to setmultiple labels on the host at the same time, in a best-effort manner Adds an http-client exampleWe’ve been missing an example of the http-client (outgoing-response)interface for a while. This adds one that fetches you a random pictureof a dog<csr-unknown/>
+<csr-unknown/>
 <csr-unknown/>
 <csr-unknown/>
 <csr-unknown/>
