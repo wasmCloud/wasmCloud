@@ -1,0 +1,10 @@
+package wasmcloud:bus@1.0.0;
+
+interface lattice {
+  resource call-target-interface {
+    constructor(namespace: string, %package: string, %interface: string);
+  }
+
+  set-link-name: func(name: string, interfaces: list<call-target-interface>);
+}
+

@@ -1,0 +1,9 @@
+name = "http-password-checker"
+language = "tinygo"
+type = "component"
+version = "0.1.0"
+
+[component]
+wit_world = "password-checker"
+wasm_target = "wasm32-wasip2"
+destination = "build/http-password-checker.wasm"
