@@ -251,75 +251,82 @@ impl wrpc_transport::Serve for WrpcServer {
         let trace_ctx = Arc::clone(&self.trace_ctx);
         let claims = self.claims.clone();
         Ok(invocations.and_then(move |(cx, tx, rx)| {
-            {
-                let annotations = Arc::clone(&annotations);
-                let claims = claims.clone();
-                let func = Arc::clone(&func);
-                let id = Arc::clone(&id);
-                let image_reference = Arc::clone(&image_reference);
-                let instance = Arc::clone(&instance);
-                let metrics = Arc::clone(&metrics);
-                let policy_manager = Arc::clone(&policy_manager);
-                let trace_ctx = Arc::clone(&trace_ctx);
-                async move {
-                    let PolicyResponse {
-                        request_id,
-                        permitted,
-                        message,
-                    } = policy_manager
-                        .evaluate_perform_invocation(
-                            &id,
-                            &image_reference,
-                            &annotations,
-                            claims.as_deref(),
-                            instance.to_string(),
-                            func.to_string(),
-                        )
-                        .await?;
-                    ensure!(
-                        permitted,
-                        "policy denied request to invoke component `{request_id}`: `{message:?}`",
-                    );
+            let annotations = Arc::clone(&annotations);
+            let claims = claims.clone();
+            let func = Arc::clone(&func);
+            let id = Arc::clone(&id);
+            let image_reference = Arc::clone(&image_reference);
+            let instance = Arc::clone(&instance);
+            let metrics = Arc::clone(&metrics);
+            let policy_manager = Arc::clone(&policy_manager);
+            let trace_ctx = Arc::clone(&trace_ctx);
+            // NOTE(thomastaylor312): We create a span each time here for two reasons: First
+            // off, if we create a separate span and then instrument this whole block of code,
+            // it makes it so the function isn't FnMut. So we create this each time. The second
+            // reason is that before we were trying to use the current span for instrumentation.
+            // This didn't work because the span created by the `instrument` macro exits after
+            // this function returns, so we ended up with no parent span at all when trying to
+            // attach header data. I also set this as an info span so that each invocation at
+            // least has this top level span. If the fields add too much overhead, we can remove
+            // those fields instead.
+            let span = tracing::info_span!("component_invocation", func = %func, id = %id, instance = %instance);
+            async move {
+                let PolicyResponse {
+                    request_id,
+                    permitted,
+                    message,
+                } = policy_manager
+                    .evaluate_perform_invocation(
+                        &id,
+                        &image_reference,
+                        &annotations,
+                        claims.as_deref(),
+                        instance.to_string(),
+                        func.to_string(),
+                    )
+                    .await?;
+                ensure!(
+                    permitted,
+                    "policy denied request to invoke component `{request_id}`: `{message:?}`",
+                );
 
-                    if let Some(ref cx) = cx {
-                        // TODO: wasmcloud_tracing take HeaderMap for my own sanity
-                        // Coerce the HashMap<String, Vec<String>> into a Vec<(String, String)> by
-                        // flattening the values
-                        let trace_context = cx
-                            .iter()
-                            .flat_map(|(key, value)| {
-                                value
-                                    .iter()
-                                    .map(|v| (key.to_string(), v.to_string()))
-                                    .collect::<Vec<_>>()
-                            })
-                            .collect::<Vec<(String, String)>>();
-                        wasmcloud_tracing::context::attach_span_context(&trace_context);
-                    }
-
-                    // Associate the current context with the span
-                    let injector = TraceContextInjector::default_with_span();
-                    *trace_ctx.write().await = injector
+                if let Some(ref cx) = cx {
+                    // TODO: wasmcloud_tracing take HeaderMap for my own sanity
+                    // Coerce the HashMap<String, Vec<String>> into a Vec<(String, String)> by
+                    // flattening the values
+                    let trace_context = cx
                         .iter()
-                        .map(|(k, v)| (k.to_string(), v.to_string()))
-                        .collect();
-                    Ok((
-                        (
-                            Instant::now(),
-                            // TODO(metrics): insert information about the source once we have concrete context data
-                            vec![
-                                KeyValue::new("component.ref", image_reference),
-                                KeyValue::new("lattice", metrics.lattice_id.clone()),
-                                KeyValue::new("host", metrics.host_id.clone()),
-                                KeyValue::new("operation", format!("{instance}/{func}")),
-                            ],
-                        ),
-                        tx,
-                        rx,
-                    ))
+                        .flat_map(|(key, value)| {
+                            value
+                                .iter()
+                                .map(|v| (key.to_string(), v.to_string()))
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<(String, String)>>();
+                    wasmcloud_tracing::context::attach_span_context(&trace_context);
                 }
-            }
-            .in_current_span()
+
+                // Associate the current context with the span
+                let injector = TraceContextInjector::default_with_span();
+                *trace_ctx.write().await = injector
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect();
+                Ok((
+                    (
+                        Instant::now(),
+                        // TODO(metrics): insert information about the source once we have concrete context data
+                        vec![
+                            KeyValue::new("component.ref", image_reference),
+                            KeyValue::new("lattice", metrics.lattice_id.clone()),
+                            KeyValue::new("host", metrics.host_id.clone()),
+                            KeyValue::new("operation", format!("{instance}/{func}")),
+                        ],
+                    ),
+                    tx,
+                    rx,
+                ))
+            }.instrument(span)
         }))
     }
 }

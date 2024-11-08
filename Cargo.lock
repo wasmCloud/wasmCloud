@@ -8496,7 +8496,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8680,7 +8680,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-host"
-version = "0.23.0"
+version = "0.23.1"
 dependencies = [
  "anyhow",
  "async-nats",
