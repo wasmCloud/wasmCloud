@@ -1,0 +1,58 @@
+package wasi:cli@0.2.0;
+
+interface stdout {
+  use wasi:io/streams@0.2.0.{output-stream};
+
+  get-stdout: func() -> output-stream;
+}
+
+interface stderr {
+  use wasi:io/streams@0.2.0.{output-stream};
+
+  get-stderr: func() -> output-stream;
+}
+
+interface stdin {
+  use wasi:io/streams@0.2.0.{input-stream};
+
+  get-stdin: func() -> input-stream;
+}
+
+interface environment {
+  get-environment: func() -> list<tuple<string, string>>;
+
+  get-arguments: func() -> list<string>;
+
+  initial-cwd: func() -> option<string>;
+}
+
+interface exit {
+  exit: func(status: result);
+}
+
+interface terminal-input {
+  resource terminal-input;
+}
+
+interface terminal-output {
+  resource terminal-output;
+}
+
+interface terminal-stdin {
+  use terminal-input.{terminal-input};
+
+  get-terminal-stdin: func() -> option<terminal-input>;
+}
+
+interface terminal-stdout {
+  use terminal-output.{terminal-output};
+
+  get-terminal-stdout: func() -> option<terminal-output>;
+}
+
+interface terminal-stderr {
+  use terminal-output.{terminal-output};
+
+  get-terminal-stderr: func() -> option<terminal-output>;
+}
+
