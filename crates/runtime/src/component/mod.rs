@@ -476,6 +476,21 @@ where
         self.claims.as_ref()
     }
 
+    /// Instantiates the component given a handler and event channel
+    pub fn instantiate<C>(
+        &self,
+        handler: H,
+        events: mpsc::Sender<WrpcServeEvent<C>>,
+    ) -> Instance<H, C> {
+        Instance {
+            engine: self.engine.clone(),
+            pre: self.instance_pre.clone(),
+            handler,
+            max_execution_time: self.max_execution_time,
+            events,
+        }
+    }
+
     /// Serve all exports of this [Component] using supplied [`wrpc_transport::Serve`]
     ///
     /// The returned [Vec] contains an [InvocationStream] per each function exported by the component.
@@ -495,13 +510,7 @@ where
         let span = Span::current();
         let max_execution_time = self.max_execution_time;
         let mut invocations = vec![];
-        let instance = Instance {
-            engine: self.engine.clone(),
-            pre: self.instance_pre.clone(),
-            handler: handler.clone(),
-            max_execution_time: self.max_execution_time,
-            events: events.clone(),
-        };
+        let instance = self.instantiate(handler.clone(), events.clone());
         for (name, ty) in self
             .instance_pre
             .component()
@@ -676,7 +685,8 @@ where
     }
 }
 
-struct Instance<H, C>
+/// Instantiated component
+pub struct Instance<H, C>
 where
     H: Handler,
 {

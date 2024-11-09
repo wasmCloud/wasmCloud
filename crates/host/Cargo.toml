@@ -24,6 +24,9 @@ futures = { workspace = true, features = ["async-await", "std"] }
 hex = { workspace = true, features = ["std"] }
 http = { workspace = true }
 http-body = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true, features = ["server"] }
 humantime = { workspace = true }
 names = { workspace = true }
 nkeys = { workspace = true }
@@ -61,5 +64,7 @@ wasmcloud-runtime = { workspace = true }
 wasmcloud-secrets-client = { workspace = true }
 wasmcloud-secrets-types = { workspace = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
+wasmtime-wasi-http = { workspace = true }
 wrpc-transport = { workspace = true }
+wrpc-interface-http = { workspace = true }
 wrpc-transport-nats = { workspace = true }

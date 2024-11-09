@@ -98,7 +98,6 @@ async fn interfaces() -> anyhow::Result<()> {
         rust_blobstore_fs,
         rust_blobstore_s3,
         rust_http_client,
-        rust_http_server,
         rust_keyvalue_redis,
         rust_keyvalue_vault,
         rust_messaging_nats,
@@ -106,7 +105,6 @@ async fn interfaces() -> anyhow::Result<()> {
         providers::rust_blobstore_fs(),
         providers::rust_blobstore_s3(),
         providers::rust_http_client(),
-        providers::rust_http_server(),
         providers::rust_keyvalue_redis(),
         providers::rust_keyvalue_vault(),
         providers::rust_messaging_nats(),
@@ -115,11 +113,12 @@ async fn interfaces() -> anyhow::Result<()> {
     let rust_blobstore_fs_id = rust_blobstore_fs.subject.public_key();
     let rust_blobstore_s3_id = rust_blobstore_s3.subject.public_key();
     let rust_http_client_id = rust_http_client.subject.public_key();
-    let rust_http_server_id = rust_http_server.subject.public_key();
     let rust_keyvalue_redis_id = rust_keyvalue_redis.subject.public_key();
     let rust_keyvalue_vault_id = rust_keyvalue_vault.subject.public_key();
     let rust_messaging_nats_id = rust_messaging_nats.subject.public_key();
 
+    let host_key = host.host_key();
+    let host_id = host_key.public_key();
     try_join!(
         async {
             let minio_config_json = format!(
@@ -146,7 +145,7 @@ async fn interfaces() -> anyhow::Result<()> {
                     &ctl_client,
                     &http_server_config_name,
                     [(
-                        "ADDRESS".to_string(),
+                        "address".to_string(),
                         format!("{}:{http_port}", Ipv4Addr::LOCALHOST),
                     )],
                 ),
@@ -187,15 +186,13 @@ async fn interfaces() -> anyhow::Result<()> {
             .context("failed to put configuration")
         },
         async {
-            let host_key = host.host_key();
+            let builtin_http_server_url = providers::builtin_http_server();
             let rust_blobstore_fs_url = rust_blobstore_fs.url();
             let rust_blobstore_s3_url = rust_blobstore_s3.url();
             let rust_http_client_url = rust_http_client.url();
-            let rust_http_server_url = rust_http_server.url();
             let rust_keyvalue_redis_url = rust_keyvalue_redis.url();
             let rust_keyvalue_vault_url = rust_keyvalue_vault.url();
             let rust_messaging_nats_url = rust_messaging_nats.url();
-            let host_id = host_key.public_key();
             try_join!(
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
@@ -221,8 +218,8 @@ async fn interfaces() -> anyhow::Result<()> {
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
                     host_id: &host_id,
-                    provider_id: &rust_http_server_id,
-                    provider_ref: rust_http_server_url.as_str(),
+                    provider_id: &host_id,
+                    provider_ref: builtin_http_server_url.as_str(),
                     config: vec![],
                 }),
                 assert_start_provider(StartProviderArgs {
@@ -286,7 +283,7 @@ async fn interfaces() -> anyhow::Result<()> {
 
     assert_advertise_link(
         &ctl_client,
-        &rust_http_server_id,
+        &host_id,
         INTERFACES_REACTOR_ID,
         "default",
         "wasi",
