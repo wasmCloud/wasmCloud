@@ -3321,7 +3321,7 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
- "socket2 0.4.10",
+ "socket2 0.5.7",
  "tokio",
  "tower-service",
  "tracing",
@@ -5270,7 +5270,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tar",
- "wascap 0.15.1",
+ "wascap 0.15.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -7761,9 +7761,9 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "wadm-client"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3a757b8119e1b368bc361cfa473de521584a75f52a7b984105d192b8755c6c2"
+checksum = "dffbf5d870d576641ff13b70d3a27ad9ef23a91e86425f7416cab1d68a188090"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -7782,9 +7782,9 @@ dependencies = [
 
 [[package]]
 name = "wadm-types"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6231cff881b56402cb1114f3b6ecd16dd534b01fcf15e2932e6903bef6a953b5"
+checksum = "4b170f578ad5d7048c8079f3e36a541f6f7e5422a2d57a41c82b61b338659c51"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -7812,7 +7812,7 @@ dependencies = [
  "utoipa",
  "uuid 1.11.0",
  "wasmcloud-control-interface 2.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "wasmcloud-secrets-types 0.2.0",
+ "wasmcloud-secrets-types 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -8007,9 +8007,7 @@ dependencies = [
 
 [[package]]
 name = "wascap"
-version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87b61e0374306fb5a764a701780c267aefa9eda984e012285308f7d86355b704"
+version = "0.15.2"
 dependencies = [
  "data-encoding",
  "humantime",
@@ -8026,6 +8024,8 @@ dependencies = [
 [[package]]
 name = "wascap"
 version = "0.15.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b11a88ff74d38e894ff559c14a48f0d95d7732ba409afbee6ef18d3848803061"
 dependencies = [
  "data-encoding",
  "humantime",
@@ -8640,7 +8640,7 @@ dependencies = [
  "ulid",
  "url",
  "uuid 1.11.0",
- "wascap 0.15.1",
+ "wascap 0.15.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -9073,22 +9073,6 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-secrets-types"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e141cc3ac1fd9b71ec0813796e0a40767afea090d6395fa2b82abca9c882426"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "nkeys",
- "serde 1.0.210",
- "serde_json",
- "thiserror",
- "wascap 0.15.1",
-]
-
-[[package]]
-name = "wasmcloud-secrets-types"
 version = "0.5.0"
 dependencies = [
  "anyhow",
@@ -9099,6 +9083,22 @@ dependencies = [
  "serde_json",
  "thiserror",
  "wascap 0.15.2",
+]
+
+[[package]]
+name = "wasmcloud-secrets-types"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ee8358ba91cf74b60d0de37e0c33031b6059e4aa173e0d4bd14950a776d67ed"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "nkeys",
+ "serde 1.0.210",
+ "serde_json",
+ "thiserror",
+ "wascap 0.15.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -9643,7 +9643,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
