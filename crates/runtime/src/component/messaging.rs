@@ -1,3 +1,5 @@
+use core::future::Future;
+
 use super::{new_store, Ctx, Handler, Instance, WrpcServeEvent};
 
 use crate::capability::messaging::{consumer, types};
@@ -5,7 +7,6 @@ use crate::capability::wrpc;
 
 use anyhow::Context as _;
 use async_trait::async_trait;
-use bytes::Bytes;
 use tracing::{instrument, warn};
 
 pub mod wasmtime_handler_bindings {
@@ -18,14 +19,21 @@ pub mod wasmtime_handler_bindings {
     });
 }
 
-pub mod wrpc_handler_bindings {
-    wit_bindgen_wrpc::generate!({
-        world: "messaging-handler",
-        with: {
-           "wasmcloud:messaging/types@0.2.0": generate,
-           "wasmcloud:messaging/handler@0.2.0": generate,
-        }
-    });
+/// `wasmcloud:messaging` abstraction
+pub trait Messaging {
+    /// Handle `wasmcloud:messaging/request`
+    fn request(
+        &self,
+        subject: String,
+        body: Vec<u8>,
+        timeout_ms: u32,
+    ) -> impl Future<Output = anyhow::Result<Result<types::BrokerMessage, String>>> + Send;
+
+    /// Handle `wasmcloud:messaging/publish`
+    fn publish(
+        &self,
+        msg: types::BrokerMessage,
+    ) -> impl Future<Output = anyhow::Result<Result<(), String>>> + Send;
 }
 
 impl<H> types::Host for Ctx<H> where H: Handler {}
@@ -35,59 +43,23 @@ impl<H> consumer::Host for Ctx<H>
 where
     H: Handler,
 {
-    #[instrument]
+    #[instrument(level = "debug", skip_all)]
     async fn request(
         &mut self,
         subject: String,
         body: Vec<u8>,
         timeout_ms: u32,
     ) -> anyhow::Result<Result<types::BrokerMessage, String>> {
-        match wrpc::wasmcloud::messaging::consumer::request(
-            &self.handler,
-            None,
-            &subject,
-            &Bytes::from(body),
-            timeout_ms,
-        )
-        .await?
-        {
-            Ok(wrpc::wasmcloud::messaging::types::BrokerMessage {
-                subject,
-                body,
-                reply_to,
-            }) => Ok(Ok(types::BrokerMessage {
-                subject,
-                body: body.into(),
-                reply_to,
-            })),
-            Err(err) => Ok(Err(err)),
-        }
+        self.handler.request(subject, body, timeout_ms).await
     }
 
-    #[instrument(skip(self))]
-    async fn publish(
-        &mut self,
-        types::BrokerMessage {
-            subject,
-            body,
-            reply_to,
-        }: types::BrokerMessage,
-    ) -> anyhow::Result<Result<(), String>> {
-        wrpc::wasmcloud::messaging::consumer::publish(
-            &self.handler,
-            None,
-            &wrpc::wasmcloud::messaging::types::BrokerMessage {
-                subject,
-                body: body.into(),
-                reply_to,
-            },
-        )
-        .await
+    #[instrument(level = "debug", skip_all)]
+    async fn publish(&mut self, msg: types::BrokerMessage) -> anyhow::Result<Result<(), String>> {
+        self.handler.publish(msg).await
     }
 }
 
-impl<H, C> wrpc_handler_bindings::exports::wasmcloud::messaging::handler::Handler<C>
-    for Instance<H, C>
+impl<H, C> wrpc::exports::wasmcloud::messaging::handler::Handler<C> for Instance<H, C>
 where
     H: Handler,
     C: Send,
@@ -96,11 +68,11 @@ where
     async fn handle_message(
         &self,
         cx: C,
-        wrpc_handler_bindings::wasmcloud::messaging::types::BrokerMessage {
+        wrpc::wasmcloud::messaging::types::BrokerMessage {
             subject,
             body,
             reply_to,
-        }: wrpc_handler_bindings::wasmcloud::messaging::types::BrokerMessage,
+        }: wrpc::wasmcloud::messaging::types::BrokerMessage,
     ) -> anyhow::Result<Result<(), String>> {
         let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
         let pre = wasmtime_handler_bindings::MessagingHandlerPre::new(self.pre.clone())

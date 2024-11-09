@@ -1,3 +1,7 @@
+#![allow(clippy::type_complexity)]
+
+use core::net::SocketAddr;
+
 use std::collections::btree_map::Entry as BTreeMapEntry;
 use std::collections::hash_map::{self, Entry};
 use std::collections::{BTreeMap, HashMap};
@@ -6,6 +10,7 @@ use std::env::consts::{ARCH, FAMILY, OS};
 use std::future::Future;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::Stdio;
 use std::str::FromStr;
@@ -22,15 +27,20 @@ use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::future::Either;
 use futures::stream::{AbortHandle, Abortable, SelectAll};
 use futures::{join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt};
+use http::header::HOST;
+use http::uri::Scheme;
+use http::Uri;
+use http_body_util::BodyExt as _;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use nkeys::{KeyPair, KeyPairType, XKey};
 use secrecy::Secret;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::{broadcast, mpsc, watch, RwLock, Semaphore};
-use tokio::task::JoinHandle;
+use tokio::sync::{broadcast, mpsc, watch, Mutex, RwLock, Semaphore};
+use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{interval_at, Instant};
-use tokio::{process, select, spawn};
+use tokio::{fs, process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
 use uuid::Uuid;
@@ -42,10 +52,16 @@ use wasmcloud_control_interface::{
     StartProviderCommand, StopHostCommand, StopProviderCommand, UpdateComponentCommand,
 };
 use wasmcloud_core::{
-    provider_config_update_subject, ComponentId, HealthCheckResponse, HostData, OtelConfig,
-    CTL_API_VERSION_1,
+    provider_config_update_subject, ComponentId, HealthCheckResponse, HostData,
+    InterfaceLinkDefinition, OtelConfig, CTL_API_VERSION_1,
 };
+use wasmcloud_provider_messaging_nats::add_tls_ca;
+use wasmcloud_provider_sdk::provider::{
+    handle_provider_commands, receive_link_for_provider, ProviderCommandReceivers,
+};
+use wasmcloud_provider_sdk::{LinkConfig, LinkDeleteInfo, ProviderConnection};
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
+use wasmcloud_runtime::capability::wrpc;
 use wasmcloud_runtime::component::WrpcServeEvent;
 use wasmcloud_runtime::Runtime;
 use wasmcloud_secrets_types::SECRET_PREFIX;
@@ -55,7 +71,7 @@ use wasmcloud_tracing::{global, KeyValue};
 use crate::registry::RegistryCredentialExt;
 use crate::{
     fetch_component, HostMetrics, OciConfig, PolicyHostInfo, PolicyManager, PolicyResponse,
-    RegistryAuth, RegistryConfig, RegistryType, SecretsManager,
+    RegistryAuth, RegistryConfig, RegistryType, ResourceRef, SecretsManager,
 };
 
 mod event;
@@ -338,25 +354,16 @@ struct Provider {
     claims_token: Option<jwt::Token<jwt::CapabilityProvider>>,
     xkey: XKey,
     annotations: Annotations,
-    /// Task that continuously performs health checks against the provider
-    health_check_task: JoinHandle<()>,
-    /// Task that continuously forwards configuration updates to the provider
-    config_update_task: JoinHandle<()>,
-    /// Config bundle for the aggregated configuration being watched by the provider
     #[allow(unused)]
+    /// Config bundle for the aggregated configuration being watched by the provider
     config: Arc<RwLock<ConfigBundle>>,
-}
-
-impl Drop for Provider {
-    fn drop(&mut self) {
-        self.health_check_task.abort();
-        self.config_update_task.abort();
-    }
+    #[allow(unused)]
+    tasks: JoinSet<()>,
 }
 
 /// wasmCloud Host
 pub struct Host {
-    components: RwLock<HashMap<ComponentId, Arc<Component>>>,
+    components: Arc<RwLock<HashMap<ComponentId, Arc<Component>>>>,
     event_builder: EventBuilderV10,
     friendly_name: String,
     heartbeat: AbortHandle,
@@ -392,6 +399,8 @@ pub struct Host {
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
     metrics: Arc<HostMetrics>,
     max_execution_time: Duration,
+    messaging_links:
+        Arc<RwLock<HashMap<Arc<str>, Arc<RwLock<HashMap<Box<str>, async_nats::Client>>>>>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -888,7 +897,7 @@ impl Host {
         let max_execution_time_ms = config.max_execution_time;
 
         let host = Host {
-            components: RwLock::default(),
+            components: Arc::default(),
             event_builder,
             friendly_name,
             heartbeat: heartbeat_abort.clone(),
@@ -918,6 +927,7 @@ impl Host {
             provider_claims: Arc::default(),
             metrics: Arc::new(metrics),
             max_execution_time: max_execution_time_ms,
+            messaging_links: Arc::default(),
         };
 
         let host = Arc::new(host);
@@ -1363,6 +1373,10 @@ impl Host {
             targets: Arc::default(),
             trace_ctx: Arc::default(),
             instance_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
+            messaging_links: {
+                let mut links = self.messaging_links.write().await;
+                Arc::clone(links.entry(Arc::clone(&component_id)).or_default())
+            },
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
         };
         let component = wasmcloud_runtime::Component::new(&self.runtime, &wasm)?;
@@ -2086,6 +2100,733 @@ impl Host {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(level = "debug", skip_all)]
+    async fn start_binary_provider(
+        &self,
+        tasks: &mut JoinSet<()>,
+        link_definitions: Vec<InterfaceLinkDefinition>,
+        provider_xkey: XKey,
+        secrets: HashMap<String, wasmcloud_core::secrets::SecretValue>,
+        host_config: HashMap<String, String>,
+        config: Arc<RwLock<ConfigBundle>>,
+        path: PathBuf,
+        provider_id: &str,
+        host_id: &str,
+    ) -> anyhow::Result<()> {
+        let health_subject = async_nats::Subject::from(format!(
+            "wasmbus.rpc.{}.{provider_id}.health",
+            &self.host_config.lattice
+        ));
+
+        let event_builder = self.event_builder.clone();
+        let ctl_nats = self.ctl_nats.clone();
+
+        let lattice_rpc_user_seed = self
+            .host_config
+            .rpc_key
+            .as_ref()
+            .map(|key| key.seed())
+            .transpose()
+            .context("private key missing for provider RPC key")?;
+        let default_rpc_timeout_ms = Some(
+            self.host_config
+                .rpc_timeout
+                .as_millis()
+                .try_into()
+                .context("failed to convert rpc_timeout to u64")?,
+        );
+        let otel_config = OtelConfig {
+            enable_observability: self.host_config.otel_config.enable_observability,
+            enable_traces: self.host_config.otel_config.enable_traces,
+            enable_metrics: self.host_config.otel_config.enable_metrics,
+            enable_logs: self.host_config.otel_config.enable_logs,
+            observability_endpoint: self.host_config.otel_config.observability_endpoint.clone(),
+            traces_endpoint: self.host_config.otel_config.traces_endpoint.clone(),
+            metrics_endpoint: self.host_config.otel_config.metrics_endpoint.clone(),
+            logs_endpoint: self.host_config.otel_config.logs_endpoint.clone(),
+            protocol: self.host_config.otel_config.protocol,
+            additional_ca_paths: self.host_config.otel_config.additional_ca_paths.clone(),
+            trace_level: self.host_config.otel_config.trace_level.clone(),
+            ..Default::default()
+        };
+
+        // The provider itself needs to know its private key
+        let provider_xkey_private_key = if let Ok(seed) = provider_xkey.seed() {
+            seed
+        } else if self.host_config.secrets_topic_prefix.is_none() {
+            "".to_string()
+        } else {
+            // This should never happen since this returns an error when an Xkey is
+            // created from a public key, but if we can't generate one for whatever
+            // reason, we should bail.
+            bail!("failed to generate seed for provider xkey")
+        };
+        let host_data = HostData {
+            host_id: self.host_key.public_key(),
+            lattice_rpc_prefix: self.host_config.lattice.to_string(),
+            link_name: "default".to_string(),
+            lattice_rpc_user_jwt: self.host_config.rpc_jwt.clone().unwrap_or_default(),
+            lattice_rpc_user_seed: lattice_rpc_user_seed.unwrap_or_default(),
+            lattice_rpc_url: self.host_config.rpc_nats_url.to_string(),
+            env_values: vec![],
+            instance_id: Uuid::new_v4().to_string(),
+            provider_key: provider_id.to_string(),
+            link_definitions,
+            config: host_config,
+            secrets,
+            provider_xkey_private_key,
+            host_xkey_public_key: self.secrets_xkey.public_key(),
+            cluster_issuers: vec![],
+            default_rpc_timeout_ms,
+            log_level: Some(self.host_config.log_level.clone()),
+            structured_logging: self.host_config.enable_structured_logging,
+            otel_config,
+        };
+        let host_data =
+            serde_json::to_vec(&host_data).context("failed to serialize provider data")?;
+
+        trace!("spawn provider process");
+
+        let mut child_cmd = process::Command::new(&path);
+        // Prevent the provider from inheriting the host's environment, with the exception of
+        // the following variables we manually add back
+        child_cmd.env_clear();
+
+        if cfg!(windows) {
+            // Proxy SYSTEMROOT to providers. Without this, providers on Windows won't be able to start
+            child_cmd.env(
+                "SYSTEMROOT",
+                env::var("SYSTEMROOT")
+                    .context("SYSTEMROOT is not set. Providers cannot be started")?,
+            );
+        }
+
+        // Proxy RUST_LOG to (Rust) providers, so they can use the same module-level directives
+        if let Ok(rust_log) = env::var("RUST_LOG") {
+            let _ = child_cmd.env("RUST_LOG", rust_log);
+        }
+
+        let mut child = child_cmd
+            .stdin(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .context("failed to spawn provider process")?;
+        let mut stdin = child.stdin.take().context("failed to take stdin")?;
+        stdin
+            .write_all(STANDARD.encode(&host_data).as_bytes())
+            .await
+            .context("failed to write provider data")?;
+        stdin
+            .write_all(b"\r\n")
+            .await
+            .context("failed to write newline")?;
+        stdin.shutdown().await.context("failed to close stdin")?;
+
+        // Create a channel for watching for child process exit
+        let (exit_tx, exit_rx) = broadcast::channel::<()>(1);
+
+        spawn(async move {
+            match child.wait().await {
+                Ok(status) => {
+                    debug!("provider @ [{}] exited with `{status:?}`", path.display());
+                }
+                Err(e) => {
+                    error!(
+                        "failed to wait for provider @ [{}] to execute: {e}",
+                        path.display()
+                    );
+                }
+            }
+            if let Err(err) = exit_tx.send(()) {
+                warn!(%err, "failed to send exit tx");
+            }
+        });
+        let mut exit_health_rx = exit_rx.resubscribe();
+
+        let lattice = Arc::clone(&self.host_config.lattice);
+        let rpc_nats = Arc::clone(&self.rpc_nats);
+        let host_id = host_id.to_string();
+        let provider_id: Arc<str> = provider_id.into();
+        tasks.spawn({
+            let rpc_nats = Arc::clone(&rpc_nats);
+            let provider_id = Arc::clone(&provider_id);
+            async move {
+                // Check the health of the provider every 30 seconds
+                let mut health_check = tokio::time::interval(Duration::from_secs(30));
+                let mut previous_healthy = false;
+                // Allow the provider 5 seconds to initialize
+                health_check.reset_after(Duration::from_secs(5));
+                // TODO: Refactor this logic to simplify nesting
+                loop {
+                    select! {
+                        _ = health_check.tick() => {
+                            trace!(?provider_id, "performing provider health check");
+                            let request = async_nats::Request::new()
+                                .payload(Bytes::new())
+                                .headers(injector_to_headers(&TraceContextInjector::default_with_span()));
+                            if let Ok(async_nats::Message { payload, ..}) = rpc_nats.send_request(
+                                health_subject.clone(),
+                                request,
+                                ).await {
+                                    match (serde_json::from_slice::<HealthCheckResponse>(&payload), previous_healthy) {
+                                        (Ok(HealthCheckResponse { healthy: true, ..}), false) => {
+                                            trace!(?provider_id, "provider health check succeeded");
+                                            previous_healthy = true;
+                                            if let Err(e) = event::publish(
+                                                &event_builder,
+                                                &ctl_nats,
+                                                &lattice,
+                                                "health_check_passed",
+                                                event::provider_health_check(
+                                                    &host_id,
+                                                    &provider_id,
+                                                )
+                                            ).await {
+                                                warn!(
+                                                    ?e,
+                                                    ?provider_id,
+                                                    "failed to publish provider health check succeeded event",
+                                                );
+                                            }
+                                        },
+                                        (Ok(HealthCheckResponse { healthy: false, ..}), true) => {
+                                            trace!(?provider_id, "provider health check failed");
+                                            previous_healthy = false;
+                                            if let Err(e) = event::publish(
+                                                &event_builder,
+                                                &ctl_nats,
+                                                &lattice,
+                                                "health_check_failed",
+                                                event::provider_health_check(
+                                                    &host_id,
+                                                    &provider_id,
+                                                )
+                                            ).await {
+                                                warn!(
+                                                    ?e,
+                                                    ?provider_id,
+                                                    "failed to publish provider health check failed event",
+                                                );
+                                            }
+                                        }
+                                        // If the provider health status didn't change, we simply publish a health check status event
+                                        (Ok(_), _) => {
+                                            if let Err(e) = event::publish(
+                                                &event_builder,
+                                                &ctl_nats,
+                                                &lattice,
+                                                "health_check_status",
+                                                event::provider_health_check(
+                                                    &host_id,
+                                                    &provider_id,
+                                                )
+                                            ).await {
+                                                warn!(
+                                                    ?e,
+                                                    ?provider_id,
+                                                    "failed to publish provider health check status event",
+                                                );
+                                            }
+                                        },
+                                        _ => warn!(
+                                            ?provider_id,
+                                            "failed to deserialize provider health check response"
+                                        ),
+                                    }
+                                }
+                                else {
+                                    warn!(?provider_id, "failed to request provider health, retrying in 30 seconds");
+                                }
+                        }
+                        exit = exit_health_rx.recv() => {
+                            if let Err(err) = exit {
+                                warn!(%err, ?provider_id, "failed to receive exit in health check task");
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        // Spawn off a task to watch for config bundle updates and forward them to
+        // the provider that we're spawning and managing
+        let mut exit_config_tx = exit_rx;
+        let provider_id = Arc::clone(&provider_id);
+        let lattice = Arc::clone(&self.host_config.lattice);
+        tasks.spawn({
+             let config = Arc::clone(&config);
+             async move {
+                 let subject = provider_config_update_subject(&lattice, &provider_id);
+                 trace!(?provider_id, "starting config update listener");
+                 loop {
+                     let mut config = config.write().await;
+                     select! {
+                         maybe_update = config.changed() => {
+                             let Ok(update) = maybe_update else {
+                                 break;
+                             };
+                             trace!(?provider_id, "provider config bundle changed");
+                             let bytes = match serde_json::to_vec(&*update) {
+                                 Ok(bytes) => bytes,
+                                 Err(err) => {
+                                     error!(%err, ?provider_id, ?lattice, "failed to serialize configuration update ");
+                                     continue;
+                                 }
+                             };
+                             trace!(?provider_id, subject, "publishing config bundle bytes");
+                             if let Err(err) = rpc_nats.publish(subject.clone(), Bytes::from(bytes)).await {
+                                 error!(%err, ?provider_id, ?lattice, "failed to publish configuration update bytes to component");
+                             }
+                         }
+                         exit = exit_config_tx.recv() => {
+                             if let Err(err) = exit {
+                                 warn!(%err, ?provider_id, "failed to receive exit in config update task");
+                             }
+                             break;
+                         }
+                     }
+                 }
+             }
+         });
+        Ok(())
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn start_http_provider(
+        &self,
+        tasks: &mut JoinSet<()>,
+        link_definitions: impl IntoIterator<Item = InterfaceLinkDefinition>,
+        provider_xkey: XKey,
+        host_config: HashMap<String, String>,
+        provider_id: &str,
+        host_id: &str,
+    ) -> anyhow::Result<()> {
+        use wasmcloud_provider_http_server::{
+            default_listen_address, load_settings, ServiceSettings,
+        };
+        use wrpc_interface_http::ServeIncomingHandlerWasmtime as _;
+
+        struct Provider {
+            address: SocketAddr,
+            components: Arc<RwLock<HashMap<String, Arc<Component>>>>,
+            links: Mutex<HashMap<Arc<str>, HashMap<Box<str>, JoinSet<()>>>>,
+        }
+
+        impl wasmcloud_provider_sdk::Provider for Provider {
+            #[instrument(level = "debug", skip_all)]
+            async fn receive_link_config_as_source(
+                &self,
+                LinkConfig {
+                    target_id,
+                    config,
+                    link_name,
+                    ..
+                }: LinkConfig<'_>,
+            ) -> anyhow::Result<()> {
+                let ServiceSettings { address, .. } =
+                    load_settings(Some(self.address), config).context("failed to load settings")?;
+
+                let socket = match &address {
+                    SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
+                    SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
+                };
+                socket.set_reuseaddr(!cfg!(windows))?;
+                socket.set_nodelay(true)?;
+                socket.bind(address)?;
+                let listener = socket.listen(8196)?;
+
+                let mut tasks = JoinSet::new();
+                let target_id: Arc<str> = Arc::from(target_id);
+                let components = Arc::clone(&self.components);
+                let svc = hyper::service::service_fn({
+                    let target_id = Arc::clone(&target_id);
+                    move |req: hyper::Request<hyper::body::Incoming>| {
+                        let target_id = Arc::clone(&target_id);
+                        let components = Arc::clone(&components);
+                        async move {
+                            let component = {
+                                let components = components.read().await;
+                                let component = components
+                                    .get(target_id.as_ref())
+                                    .context("linked component not found")?;
+                                Arc::clone(component)
+                            };
+                            let (events_tx, _) = mpsc::channel(1);
+                            let (
+                                http::request::Parts {
+                                    method,
+                                    uri,
+                                    headers,
+                                    ..
+                                },
+                                body,
+                            ) = req.into_parts();
+                            let http::uri::Parts {
+                                scheme,
+                                authority,
+                                path_and_query,
+                                ..
+                            } = uri.into_parts();
+                            let mut uri = Uri::builder().scheme(scheme.unwrap_or(Scheme::HTTP));
+                            if let Some(authority) = authority {
+                                uri = uri.authority(authority);
+                            } else if let Some(authority) = headers.get("X-Forwarded-Host") {
+                                uri = uri.authority(authority.as_bytes());
+                            } else if let Some(authority) = headers.get(HOST) {
+                                uri = uri.authority(authority.as_bytes());
+                            }
+                            if let Some(path_and_query) = path_and_query {
+                                uri = uri.path_and_query(path_and_query)
+                            };
+                            let uri = uri.build().context("invalid URI")?;
+                            let mut req = http::Request::builder().method(method);
+                            *req.headers_mut().expect("headers missing") = headers;
+
+                            let req = req
+                                .uri(uri)
+                                .body(
+                                    body.map_err(wasmtime_wasi_http::hyper_response_error)
+                                        .boxed(),
+                                )
+                                .context("invalid request")?;
+                            let res = component
+                                .instantiate(component.handler.clone(), events_tx)
+                                .handle((), req)
+                                .await?;
+                            let res = res?;
+                            anyhow::Ok(res)
+                        }
+                    }
+                });
+
+                let srv = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+                let srv = Arc::new(srv);
+
+                tasks.spawn(async move {
+                    loop {
+                        let stream = match listener.accept().await {
+                            Ok((stream, _)) => stream,
+                            Err(err) => {
+                                error!(?err, "failed to accept HTTP server connection");
+                                continue;
+                            }
+                        };
+                        let svc = svc.clone();
+                        tokio::spawn({
+                            let srv = Arc::clone(&srv);
+                            let svc = svc.clone();
+                            async move {
+                                if let Err(err) =
+                                    srv.serve_connection(TokioIo::new(stream), svc).await
+                                {
+                                    error!(?err, "failed to serve connection");
+                                }
+                            }
+                        });
+                    }
+                });
+                self.links
+                    .lock()
+                    .await
+                    .entry(target_id)
+                    .or_default()
+                    .insert(link_name.into(), tasks);
+                Ok(())
+            }
+
+            #[instrument(level = "debug", skip_all)]
+            async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+                let target_id = info.get_target_id();
+                let link_name = info.get_link_name();
+                self.links
+                    .lock()
+                    .await
+                    .get_mut(target_id)
+                    .map(|links| links.remove(link_name));
+                Ok(())
+            }
+        }
+
+        match host_config.get("routing_mode").map(String::as_str) {
+            // Run provider in address mode by default
+            Some("address") | None => {}
+            // Run provider in path mode
+            Some("path") => bail!("path mode not supported by builtin yet"),
+            Some(other) => bail!("unknown routing_mode: {other}"),
+        };
+        let default_address = host_config
+            .get("default_address")
+            .map(|s| SocketAddr::from_str(s))
+            .transpose()
+            .context("failed to parse default_address")?
+            .unwrap_or_else(default_listen_address);
+
+        let (quit_tx, quit_rx) = broadcast::channel(1);
+        let commands = ProviderCommandReceivers::new(
+            Arc::clone(&self.rpc_nats),
+            &quit_tx,
+            &self.host_config.lattice,
+            provider_id,
+            provider_id,
+            host_id,
+        )
+        .await?;
+        let conn = ProviderConnection::new(
+            Arc::clone(&self.rpc_nats),
+            Arc::from(provider_id),
+            Arc::clone(&self.host_config.lattice),
+            host_id.to_string(),
+            host_config,
+            provider_xkey,
+            Arc::clone(&self.secrets_xkey),
+        )
+        .context("failed to establish provider connection")?;
+        let provider = Provider {
+            address: default_address,
+            components: Arc::clone(&self.components),
+            links: Mutex::default(),
+        };
+        for ld in link_definitions {
+            if let Err(e) = receive_link_for_provider(&provider, &conn, ld).await {
+                error!(
+                    error = %e,
+                    "failed to initialize link during provider startup",
+                );
+            }
+        }
+        tasks.spawn(async move {
+            handle_provider_commands(provider, &conn, quit_rx, quit_tx, commands).await
+        });
+        Ok(())
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn start_messaging_nats_provider(
+        &self,
+        tasks: &mut JoinSet<()>,
+        link_definitions: impl IntoIterator<Item = InterfaceLinkDefinition>,
+        provider_xkey: XKey,
+        host_config: HashMap<String, String>,
+        provider_id: &str,
+        host_id: &str,
+    ) -> anyhow::Result<()> {
+        use wasmcloud_provider_messaging_nats::ConnectionConfig;
+
+        struct Provider {
+            config: ConnectionConfig,
+            components: Arc<RwLock<HashMap<String, Arc<Component>>>>,
+            messaging_links:
+                Arc<RwLock<HashMap<Arc<str>, Arc<RwLock<HashMap<Box<str>, async_nats::Client>>>>>>,
+            subscriptions: Mutex<HashMap<Arc<str>, HashMap<Box<str>, JoinSet<()>>>>,
+        }
+
+        impl Provider {
+            async fn connect(
+                &self,
+                config: &HashMap<String, String>,
+            ) -> anyhow::Result<(async_nats::Client, ConnectionConfig)> {
+                // NOTE: Big part of this is copy-pasted from `provider-messaging-nats`
+                let config = if config.is_empty() {
+                    self.config.clone()
+                } else {
+                    match ConnectionConfig::from_map(config) {
+                        Ok(cc) => self.config.merge(&cc),
+                        Err(err) => {
+                            error!(?err, "failed to build connection configuration");
+                            return Err(anyhow!(err).context("failed to build connection config"));
+                        }
+                    }
+                };
+                let mut opts = match (&config.auth_jwt, &config.auth_seed) {
+                    (Some(jwt), Some(seed)) => {
+                        let seed =
+                            KeyPair::from_seed(seed).context("failed to parse seed key pair")?;
+                        let seed = Arc::new(seed);
+                        async_nats::ConnectOptions::with_jwt(jwt.clone(), move |nonce| {
+                            let seed = seed.clone();
+                            async move { seed.sign(&nonce).map_err(async_nats::AuthError::new) }
+                        })
+                    }
+                    (None, None) => async_nats::ConnectOptions::default(),
+                    _ => bail!("must provide both jwt and seed for jwt authentication"),
+                };
+                if let Some(tls_ca) = &config.tls_ca {
+                    opts = add_tls_ca(tls_ca, opts)?;
+                } else if let Some(tls_ca_file) = &config.tls_ca_file {
+                    let ca = fs::read_to_string(tls_ca_file)
+                        .await
+                        .context("failed to read TLS CA file")?;
+                    opts = add_tls_ca(&ca, opts)?;
+                }
+
+                // Use the first visible cluster_uri
+                let url = config.cluster_uris.first().context("invalid address")?;
+
+                // Override inbox prefix if specified
+                if let Some(ref prefix) = config.custom_inbox_prefix {
+                    opts = opts.custom_inbox_prefix(prefix);
+                }
+                let nats = opts
+                    .name("builtin NATS Messaging Provider")
+                    .connect(url)
+                    .await
+                    .context("failed to connect to NATS")?;
+                Ok((nats, config))
+            }
+        }
+
+        impl wasmcloud_provider_sdk::Provider for Provider {
+            #[instrument(level = "debug", skip_all)]
+            async fn receive_link_config_as_target(
+                &self,
+                LinkConfig {
+                    source_id,
+                    link_name,
+                    config,
+                    ..
+                }: LinkConfig<'_>,
+            ) -> anyhow::Result<()> {
+                let (nats, _) = self.connect(config).await?;
+                let mut links = self.messaging_links.write().await;
+                let mut links = links.entry(source_id.into()).or_default().write().await;
+                links.insert(link_name.into(), nats);
+                Ok(())
+            }
+
+            #[instrument(level = "debug", skip_all)]
+            async fn receive_link_config_as_source(
+                &self,
+                LinkConfig {
+                    target_id,
+                    config,
+                    link_name,
+                    ..
+                }: LinkConfig<'_>,
+            ) -> anyhow::Result<()> {
+                use wrpc::exports::wasmcloud::messaging::handler::Handler as _;
+
+                let (nats, config) = self.connect(config).await?;
+                let mut tasks = JoinSet::new();
+                let target_id: Arc<str> = Arc::from(target_id);
+                for sub in config.subscriptions {
+                    if sub.is_empty() {
+                        continue;
+                    }
+                    let mut sub = if let Some((subject, queue)) = sub.split_once('|') {
+                        nats.queue_subscribe(async_nats::Subject::from(subject), queue.into())
+                            .await
+                    } else {
+                        nats.subscribe(async_nats::Subject::from(sub)).await
+                    }
+                    .context("failed to subscribe")?;
+                    let components = Arc::clone(&self.components);
+                    let target_id = Arc::clone(&target_id);
+                    tasks.spawn(async move {
+                        while let Some(async_nats::Message {
+                            subject,
+                            payload,
+                            reply,
+                            ..
+                        }) = sub.next().await
+                        {
+                            let component = {
+                                let components = components.read().await;
+                                let Some(component) = components.get(target_id.as_ref()) else {
+                                    warn!(?target_id, "linked component not found");
+                                    continue;
+                                };
+                                Arc::clone(component)
+                            };
+                            let (events_tx, _) = mpsc::channel(1);
+                            match component
+                                .instantiate(component.handler.clone(), events_tx)
+                                .handle_message(
+                                    (),
+                                    wrpc::wasmcloud::messaging::types::BrokerMessage {
+                                        subject: subject.into_string(),
+                                        body: payload,
+                                        reply_to: reply.map(async_nats::Subject::into_string),
+                                    },
+                                )
+                                .await
+                            {
+                                Ok(Ok(())) => {}
+                                Ok(Err(err)) => {
+                                    warn!(?err, "component failed to handle message")
+                                }
+                                Err(err) => {
+                                    warn!(?err, "failed to call component")
+                                }
+                            }
+                        }
+                    });
+                }
+                self.subscriptions
+                    .lock()
+                    .await
+                    .entry(target_id)
+                    .or_default()
+                    .insert(link_name.into(), tasks);
+                Ok(())
+            }
+
+            #[instrument(level = "debug", skip_all)]
+            async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+                let target_id = info.get_target_id();
+                let link_name = info.get_link_name();
+                self.subscriptions
+                    .lock()
+                    .await
+                    .get_mut(target_id)
+                    .map(|links| links.remove(link_name));
+                Ok(())
+            }
+        }
+
+        let config = ConnectionConfig::from_map(&host_config).context("failed to parse config")?;
+
+        let (quit_tx, quit_rx) = broadcast::channel(1);
+        let commands = ProviderCommandReceivers::new(
+            Arc::clone(&self.rpc_nats),
+            &quit_tx,
+            &self.host_config.lattice,
+            provider_id,
+            provider_id,
+            host_id,
+        )
+        .await?;
+        let conn = ProviderConnection::new(
+            Arc::clone(&self.rpc_nats),
+            Arc::from(provider_id),
+            Arc::clone(&self.host_config.lattice),
+            host_id.to_string(),
+            host_config,
+            provider_xkey,
+            Arc::clone(&self.secrets_xkey),
+        )
+        .context("failed to establish provider connection")?;
+        let provider = Provider {
+            config,
+            components: Arc::clone(&self.components),
+            messaging_links: Arc::clone(&self.messaging_links),
+            subscriptions: Mutex::default(),
+        };
+        for ld in link_definitions {
+            if let Err(e) = receive_link_for_provider(&provider, &conn, ld).await {
+                error!(
+                    error = %e,
+                    "failed to initialize link during provider startup",
+                );
+            }
+        }
+        tasks.spawn(async move {
+            handle_provider_commands(provider, &conn, quit_rx, quit_tx, commands).await
+        });
+        Ok(())
+    }
+
     #[instrument(level = "debug", skip_all)]
     async fn handle_start_provider_task(
         &self,
@@ -2098,14 +2839,22 @@ impl Host {
         trace!(provider_ref, provider_id, "start provider task");
 
         let registry_config = self.registry_config.read().await;
-        let (path, claims_token) = crate::fetch_provider(
-            provider_ref,
-            host_id,
-            self.host_config.allow_file_load,
-            &registry_config,
-        )
-        .await
-        .context("failed to fetch provider")?;
+        let provider_ref =
+            ResourceRef::try_from(provider_ref).context("failed to parse provider reference")?;
+        let (path, claims_token) = match &provider_ref {
+            ResourceRef::Builtin(..) => (None, None),
+            _ => {
+                let (path, claims_token) = crate::fetch_provider(
+                    &provider_ref,
+                    host_id,
+                    self.host_config.allow_file_load,
+                    &registry_config,
+                )
+                .await
+                .context("failed to fetch provider")?;
+                (Some(path), claims_token)
+            }
+        };
         let claims = claims_token.as_ref().map(|t| t.claims.clone());
 
         if let Some(claims) = claims.clone() {
@@ -2122,7 +2871,12 @@ impl Host {
             message,
         } = self
             .policy_manager
-            .evaluate_start_provider(provider_id, provider_ref, &annotations, claims.as_ref())
+            .evaluate_start_provider(
+                provider_id,
+                provider_ref.as_ref(),
+                &annotations,
+                claims.as_ref(),
+            )
             .await?;
         ensure!(
             permitted,
@@ -2132,7 +2886,7 @@ impl Host {
         let component_specification = self
             .get_component_spec(provider_id)
             .await?
-            .unwrap_or_else(|| ComponentSpecification::new(provider_ref));
+            .unwrap_or_else(|| ComponentSpecification::new(provider_ref.as_ref()));
 
         self.store_component_spec(&provider_id, &component_specification)
             .await?;
@@ -2147,47 +2901,7 @@ impl Host {
 
         let mut providers = self.providers.write().await;
         if let hash_map::Entry::Vacant(entry) = providers.entry(provider_id.into()) {
-            let lattice_rpc_user_seed = self
-                .host_config
-                .rpc_key
-                .as_ref()
-                .map(|key| key.seed())
-                .transpose()
-                .context("private key missing for provider RPC key")?;
-            let default_rpc_timeout_ms = Some(
-                self.host_config
-                    .rpc_timeout
-                    .as_millis()
-                    .try_into()
-                    .context("failed to convert rpc_timeout to u64")?,
-            );
-            let otel_config = OtelConfig {
-                enable_observability: self.host_config.otel_config.enable_observability,
-                enable_traces: self.host_config.otel_config.enable_traces,
-                enable_metrics: self.host_config.otel_config.enable_metrics,
-                enable_logs: self.host_config.otel_config.enable_logs,
-                observability_endpoint: self.host_config.otel_config.observability_endpoint.clone(),
-                traces_endpoint: self.host_config.otel_config.traces_endpoint.clone(),
-                metrics_endpoint: self.host_config.otel_config.metrics_endpoint.clone(),
-                logs_endpoint: self.host_config.otel_config.logs_endpoint.clone(),
-                protocol: self.host_config.otel_config.protocol,
-                additional_ca_paths: self.host_config.otel_config.additional_ca_paths.clone(),
-                trace_level: self.host_config.otel_config.trace_level.clone(),
-                ..Default::default()
-            };
-
             let provider_xkey = XKey::new();
-            // The provider itself needs to know its private key
-            let provider_xkey_private_key = if let Ok(seed) = provider_xkey.seed() {
-                seed
-            } else if self.host_config.secrets_topic_prefix.is_none() {
-                "".to_string()
-            } else {
-                // This should never happen since this returns an error when an Xkey is
-                // created from a public key, but if we can't generate one for whatever
-                // reason, we should bail.
-                bail!("failed to generate seed for provider xkey")
-            };
             // We only need to store the public key of the provider xkey, as the private key is only needed by the provider
             let xkey = XKey::from_public_key(&provider_xkey.public_key())
                 .context("failed to create XKey from provider public key xkey")?;
@@ -2248,256 +2962,74 @@ impl Host {
                     })
                     .collect()
             };
-
-            let host_data = HostData {
-                host_id: self.host_key.public_key(),
-                lattice_rpc_prefix: self.host_config.lattice.to_string(),
-                link_name: "default".to_string(),
-                lattice_rpc_user_jwt: self.host_config.rpc_jwt.clone().unwrap_or_default(),
-                lattice_rpc_user_seed: lattice_rpc_user_seed.unwrap_or_default(),
-                lattice_rpc_url: self.host_config.rpc_nats_url.to_string(),
-                env_values: vec![],
-                instance_id: Uuid::new_v4().to_string(),
-                provider_key: provider_id.to_string(),
-                link_definitions,
-                config: config.get_config().await.clone(),
-                secrets,
-                provider_xkey_private_key,
-                host_xkey_public_key: self.secrets_xkey.public_key(),
-                cluster_issuers: vec![],
-                default_rpc_timeout_ms,
-                log_level: Some(self.host_config.log_level.clone()),
-                structured_logging: self.host_config.enable_structured_logging,
-                otel_config,
+            let host_config = config.get_config().await.clone();
+            let config = Arc::new(RwLock::new(config));
+            let mut tasks = JoinSet::new();
+            match (path, &provider_ref) {
+                (Some(path), ..) => {
+                    self.start_binary_provider(
+                        &mut tasks,
+                        link_definitions,
+                        provider_xkey,
+                        secrets,
+                        host_config,
+                        Arc::clone(&config),
+                        path,
+                        provider_id,
+                        host_id,
+                    )
+                    .await?
+                }
+                (None, ResourceRef::Builtin(name)) => match *name {
+                    "http-server" => {
+                        self.start_http_provider(
+                            &mut tasks,
+                            link_definitions,
+                            provider_xkey,
+                            host_config,
+                            provider_id,
+                            host_id,
+                        )
+                        .await?
+                    }
+                    "messaging-nats" => {
+                        self.start_messaging_nats_provider(
+                            &mut tasks,
+                            link_definitions,
+                            provider_xkey,
+                            host_config,
+                            provider_id,
+                            host_id,
+                        )
+                        .await?
+                    }
+                    _ => bail!("unknown builtin name: {name}"),
+                },
+                _ => bail!("invalid provider reference"),
             };
-            let host_data =
-                serde_json::to_vec(&host_data).context("failed to serialize provider data")?;
 
-            trace!("spawn provider process");
-
-            let mut child_cmd = process::Command::new(&path);
-            // Prevent the provider from inheriting the host's environment, with the exception of
-            // the following variables we manually add back
-            child_cmd.env_clear();
-
-            if cfg!(windows) {
-                // Proxy SYSTEMROOT to providers. Without this, providers on Windows won't be able to start
-                child_cmd.env(
-                    "SYSTEMROOT",
-                    env::var("SYSTEMROOT")
-                        .context("SYSTEMROOT is not set. Providers cannot be started")?,
-                );
-            }
-
-            // Proxy RUST_LOG to (Rust) providers, so they can use the same module-level directives
-            if let Ok(rust_log) = env::var("RUST_LOG") {
-                let _ = child_cmd.env("RUST_LOG", rust_log);
-            }
-
-            let mut child = child_cmd
-                .stdin(Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-                .context("failed to spawn provider process")?;
-            let mut stdin = child.stdin.take().context("failed to take stdin")?;
-            stdin
-                .write_all(STANDARD.encode(&host_data).as_bytes())
-                .await
-                .context("failed to write provider data")?;
-            stdin
-                .write_all(b"\r\n")
-                .await
-                .context("failed to write newline")?;
-            stdin.shutdown().await.context("failed to close stdin")?;
-
-            // Create a channel for watching for child process exit
-            let (exit_tx, exit_rx) = broadcast::channel::<()>(1);
-            spawn(async move {
-                match child.wait().await {
-                    Ok(status) => {
-                        debug!("provider @ [{}] exited with `{status:?}`", path.display());
-                    }
-                    Err(e) => {
-                        error!(
-                            "failed to wait for provider @ [{}] to execute: {e}",
-                            path.display()
-                        );
-                    }
-                }
-                if let Err(err) = exit_tx.send(()) {
-                    warn!(%err, "failed to send exit tx");
-                }
-            });
-            let mut exit_health_rx = exit_rx.resubscribe();
-
-            // TODO: Change method receiver to Arc<Self> and `move` into the closure
-            let rpc_nats = self.rpc_nats.clone();
-            let ctl_nats = self.ctl_nats.clone();
-            let event_builder = self.event_builder.clone();
-            // NOTE: health_ prefix here is to allow us to move the variables into the closure
-            let health_lattice = self.host_config.lattice.clone();
-            let health_host_id = host_id.to_string();
-            let health_provider_id = provider_id.to_string();
-            let health_check_task = spawn(async move {
-                // Check the health of the provider every 30 seconds
-                let mut health_check = tokio::time::interval(Duration::from_secs(30));
-                let mut previous_healthy = false;
-                // Allow the provider 5 seconds to initialize
-                health_check.reset_after(Duration::from_secs(5));
-                let health_topic =
-                    format!("wasmbus.rpc.{health_lattice}.{health_provider_id}.health");
-                // TODO: Refactor this logic to simplify nesting
-                loop {
-                    select! {
-                        _ = health_check.tick() => {
-                            trace!(provider_id=health_provider_id, "performing provider health check");
-                            let request = async_nats::Request::new()
-                                .payload(Bytes::new())
-                                .headers(injector_to_headers(&TraceContextInjector::default_with_span()));
-                            if let Ok(async_nats::Message { payload, ..}) = rpc_nats.send_request(
-                                health_topic.clone(),
-                                request,
-                                ).await {
-                                    match (serde_json::from_slice::<HealthCheckResponse>(&payload), previous_healthy) {
-                                        (Ok(HealthCheckResponse { healthy: true, ..}), false) => {
-                                            trace!(provider_id=health_provider_id, "provider health check succeeded");
-                                            previous_healthy = true;
-                                            if let Err(e) = event::publish(
-                                                &event_builder,
-                                                &ctl_nats,
-                                                &health_lattice,
-                                                "health_check_passed",
-                                                event::provider_health_check(
-                                                    &health_host_id,
-                                                    &health_provider_id,
-                                                )
-                                            ).await {
-                                                warn!(
-                                                    ?e,
-                                                    provider_id = health_provider_id,
-                                                    "failed to publish provider health check succeeded event",
-                                                );
-                                            }
-                                        },
-                                        (Ok(HealthCheckResponse { healthy: false, ..}), true) => {
-                                            trace!(provider_id=health_provider_id, "provider health check failed");
-                                            previous_healthy = false;
-                                            if let Err(e) = event::publish(
-                                                &event_builder,
-                                                &ctl_nats,
-                                                &health_lattice,
-                                                "health_check_failed",
-                                                event::provider_health_check(
-                                                    &health_host_id,
-                                                    &health_provider_id,
-                                                )
-                                            ).await {
-                                                warn!(
-                                                    ?e,
-                                                    provider_id = health_provider_id,
-                                                    "failed to publish provider health check failed event",
-                                                );
-                                            }
-                                        }
-                                        // If the provider health status didn't change, we simply publish a health check status event
-                                        (Ok(_), _) => {
-                                            if let Err(e) = event::publish(
-                                                &event_builder,
-                                                &ctl_nats,
-                                                &health_lattice,
-                                                "health_check_status",
-                                                event::provider_health_check(
-                                                    &health_host_id,
-                                                    &health_provider_id,
-                                                )
-                                            ).await {
-                                                warn!(
-                                                    ?e,
-                                                    provider_id = health_provider_id,
-                                                    "failed to publish provider health check status event",
-                                                );
-                                            }
-                                        },
-                                        _ => warn!(
-                                            provider_id = health_provider_id,
-                                            "failed to deserialize provider health check response"
-                                        ),
-                                    }
-                                }
-                                else {
-                                    warn!(provider_id = health_provider_id, "failed to request provider health, retrying in 30 seconds");
-                                }
-                        }
-                        exit = exit_health_rx.recv() => {
-                            if let Err(err) = exit {
-                                warn!(%err, provider_id = health_provider_id, "failed to receive exit in health check task");
-                            }
-                            break;
-                        }
-                    }
-                }
-            });
-            info!(provider_ref, provider_id, "provider started");
+            info!(
+                provider_ref = provider_ref.as_ref(),
+                provider_id, "provider started"
+            );
             self.publish_event(
                 "provider_started",
                 event::provider_started(
                     claims.as_ref(),
                     &annotations,
                     host_id,
-                    provider_ref,
+                    &provider_ref,
                     provider_id,
                 ),
             )
             .await?;
 
-            // Spawn off a task to watch for config bundle updates and forward them to
-            // the provider that we're spawning and managing
-            let mut exit_config_tx = exit_rx;
-            let provider_id = provider_id.to_string();
-            let lattice = self.host_config.lattice.to_string();
-            let client = self.rpc_nats.clone();
-            let config = Arc::new(RwLock::new(config));
-            let update_config = config.clone();
-            let config_update_task = spawn(async move {
-                let subject = provider_config_update_subject(&lattice, &provider_id);
-                trace!(provider_id, "starting config update listener");
-                loop {
-                    let mut update_config = update_config.write().await;
-                    select! {
-                        maybe_update = update_config.changed() => {
-                            let Ok(update) = maybe_update else {
-                                break;
-                            };
-                            trace!(provider_id, "provider config bundle changed");
-                            let bytes = match serde_json::to_vec(&*update) {
-                                Ok(bytes) => bytes,
-                                Err(err) => {
-                                    error!(%err, provider_id, lattice, "failed to serialize configuration update ");
-                                    continue;
-                                }
-                            };
-                            trace!(provider_id, subject, "publishing config bundle bytes");
-                            if let Err(err) = client.publish(subject.clone(), Bytes::from(bytes)).await {
-                                error!(%err, provider_id, lattice, "failed to publish configuration update bytes to component");
-                            }
-                        }
-                        exit = exit_config_tx.recv() => {
-                            if let Err(err) = exit {
-                                warn!(%err, provider_id, "failed to receive exit in config update task");
-                            }
-                            break;
-                        }
-                    }
-                }
-            });
-
             // Add the provider
             entry.insert(Provider {
-                health_check_task,
-                config_update_task,
+                tasks,
                 annotations,
                 claims_token,
-                image_ref: provider_ref.to_string(),
+                image_ref: provider_ref.as_ref().to_string(),
                 xkey,
                 config,
             });

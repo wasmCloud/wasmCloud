@@ -23,7 +23,7 @@ use wasmcloud_provider_sdk::{
 };
 
 mod connection;
-use connection::ConnectionConfig;
+pub use connection::ConnectionConfig;
 
 mod bindings {
     wit_bindgen_wrpc::generate!({
@@ -513,7 +513,7 @@ fn should_strip_headers(topic: &str) -> bool {
     topic.starts_with("$SYS")
 }
 
-fn add_tls_ca(
+pub fn add_tls_ca(
     tls_ca: &str,
     opts: async_nats::ConnectOptions,
 ) -> anyhow::Result<async_nats::ConnectOptions> {

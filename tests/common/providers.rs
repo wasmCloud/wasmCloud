@@ -38,6 +38,19 @@ impl Provider {
     }
 }
 
+static BUILTIN_HTTP_SERVER: std::sync::OnceLock<Url> = std::sync::OnceLock::new();
+pub fn builtin_http_server() -> &'static Url {
+    BUILTIN_HTTP_SERVER
+        .get_or_init(|| Url::parse("wasmcloud+builtin://http-server").expect("failed to parse URL"))
+}
+
+static BUILTIN_MESSAGING_NATS: std::sync::OnceLock<Url> = std::sync::OnceLock::new();
+pub fn builtin_messaging_nats() -> &'static Url {
+    BUILTIN_MESSAGING_NATS.get_or_init(|| {
+        Url::parse("wasmcloud+builtin://messaging-nats").expect("failed to parse URL")
+    })
+}
+
 static RUST_BLOBSTORE_FS: OnceCell<Provider> = OnceCell::const_new();
 pub async fn rust_blobstore_fs() -> &'static Provider {
     RUST_BLOBSTORE_FS

@@ -55,11 +55,11 @@ async fn example_rust_http_hello_world() -> anyhow::Result<()> {
     let http_port = free_port().await?;
 
     let http_server_config_name = "http-server".to_string();
+    let http_server_id = "http-server";
 
-    let rust_http_server = providers::rust_http_server().await;
-    let rust_http_server_id = rust_http_server.subject.public_key();
     let host_key = host.host_key();
     let host_id = host_key.public_key();
+
     try_join!(
         async {
             assert_config_put(
@@ -74,12 +74,11 @@ async fn example_rust_http_hello_world() -> anyhow::Result<()> {
             .context("failed to put configuration")
         },
         async {
-            let rust_http_server_url = rust_http_server.url();
             assert_start_provider(StartProviderArgs {
                 client: &ctl_client,
                 host_id: &host_id,
-                provider_id: &rust_http_server_id,
-                provider_ref: rust_http_server_url.as_str(),
+                provider_id: http_server_id,
+                provider_ref: providers::builtin_http_server().as_str(),
                 config: vec![],
             })
             .await
@@ -103,7 +102,7 @@ async fn example_rust_http_hello_world() -> anyhow::Result<()> {
 
     assert_advertise_link(
         &ctl_client,
-        &rust_http_server_id,
+        http_server_id,
         COMPONENT_ID,
         "default",
         "wasi",

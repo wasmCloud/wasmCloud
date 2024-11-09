@@ -11,10 +11,11 @@ use tokio::sync::RwLock;
 use tracing::{error, instrument, warn};
 use wasmcloud_runtime::capability;
 use wasmcloud_runtime::capability::logging::logging;
+use wasmcloud_runtime::capability::messaging::types::BrokerMessage;
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_runtime::capability::{secrets, CallTargetInterface};
 use wasmcloud_runtime::component::{
-    Bus, Bus1_0_0, Config, InvocationErrorIntrospect, InvocationErrorKind, Logging,
+    Bus, Bus1_0_0, Config, InvocationErrorIntrospect, InvocationErrorKind, Logging, Messaging,
     ReplacedInstanceTarget, Secrets,
 };
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -56,6 +57,8 @@ pub struct Handler {
     /// - Some other opaque string
     #[allow(clippy::type_complexity)]
     pub instance_links: Arc<RwLock<HashMap<Box<str>, HashMap<Box<str>, Box<str>>>>>,
+    /// Link name -> messaging client
+    pub messaging_links: Arc<RwLock<HashMap<Box<str>, async_nats::Client>>>,
 
     pub invocation_timeout: Duration,
 }
@@ -73,6 +76,7 @@ impl Handler {
             targets: Arc::default(),
             trace_ctx: Arc::default(),
             instance_links: self.instance_links.clone(),
+            messaging_links: self.messaging_links.clone(),
             invocation_timeout: self.invocation_timeout,
         }
     }
@@ -361,6 +365,104 @@ impl Secrets for Handler {
         };
         use secrecy::ExposeSecret;
         Ok(secret_val.expose_secret().clone())
+    }
+}
+
+impl Messaging for Handler {
+    #[instrument(level = "debug", skip_all)]
+    async fn request(
+        &self,
+        subject: String,
+        body: Vec<u8>,
+        timeout_ms: u32,
+    ) -> anyhow::Result<Result<BrokerMessage, String>> {
+        use wasmcloud_runtime::capability::wrpc::wasmcloud::messaging;
+
+        {
+            let targets = self.targets.read().await;
+            let target = targets
+                .get("wasmcloud:messaging/consumer")
+                .map(AsRef::as_ref)
+                .unwrap_or("default");
+            if let Some(nats) = self.messaging_links.read().await.get(target) {
+                match nats.request(subject, body.into()).await {
+                    Ok(async_nats::Message {
+                        subject,
+                        payload,
+                        reply,
+                        ..
+                    }) => {
+                        return Ok(Ok(BrokerMessage {
+                            subject: subject.into_string(),
+                            body: payload.into(),
+                            reply_to: reply.map(async_nats::Subject::into_string),
+                        }))
+                    }
+                    Err(err) => return Ok(Err(err.to_string())),
+                }
+            }
+        }
+
+        match messaging::consumer::request(self, None, &subject, &Bytes::from(body), timeout_ms)
+            .await?
+        {
+            Ok(messaging::types::BrokerMessage {
+                subject,
+                body,
+                reply_to,
+            }) => Ok(Ok(BrokerMessage {
+                subject,
+                body: body.into(),
+                reply_to,
+            })),
+            Err(err) => Ok(Err(err)),
+        }
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn publish(
+        &self,
+        BrokerMessage {
+            subject,
+            body,
+            reply_to,
+        }: BrokerMessage,
+    ) -> anyhow::Result<Result<(), String>> {
+        use wasmcloud_runtime::capability::wrpc::wasmcloud::messaging;
+
+        {
+            let targets = self.targets.read().await;
+            let target = targets
+                .get("wasmcloud:messaging/consumer")
+                .map(AsRef::as_ref)
+                .unwrap_or("default");
+            if let Some(nats) = self.messaging_links.read().await.get(target) {
+                if let Some(reply_to) = reply_to {
+                    match nats
+                        .publish_with_reply(subject, reply_to, body.into())
+                        .await
+                    {
+                        Ok(()) => return Ok(Ok(())),
+                        Err(err) => return Ok(Err(err.to_string())),
+                    }
+                }
+                match nats.publish(subject, body.into()).await {
+                    Ok(()) => return Ok(Ok(())),
+                    Err(err) => return Ok(Err(err.to_string())),
+                }
+            }
+        }
+
+        messaging::consumer::publish(
+            self,
+            None,
+            &messaging::types::BrokerMessage {
+                subject,
+                body: body.into(),
+                reply_to,
+            },
+        )
+        .await
     }
 }
 

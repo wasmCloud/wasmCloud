@@ -46,7 +46,7 @@ use wrpc_interface_http::InvokeIncomingHandler as _;
 mod address;
 mod path;
 mod settings;
-pub use settings::{load_settings, ServiceSettings};
+pub use settings::{default_listen_address, load_settings, ServiceSettings};
 
 pub async fn run() -> anyhow::Result<()> {
     initialize_observability!(
