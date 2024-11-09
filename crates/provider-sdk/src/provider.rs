@@ -196,12 +196,13 @@ async fn subscribe_shutdown(
     quit: broadcast::Sender<()>,
     lattice: &str,
     provider_key: &str,
-    host_id: &'static str,
+    host_id: impl Into<Arc<str>>,
 ) -> ProviderInitResult<mpsc::Receiver<oneshot::Sender<()>>> {
     let mut sub = nats
         .subscribe(shutdown_subject(lattice, provider_key, "default"))
         .await?;
     let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
+    let host_id = host_id.into();
     spawn({
         async move {
             loop {
@@ -216,7 +217,7 @@ async fn subscribe_shutdown(
                     let ShutdownMessage {
                         host_id: ref req_host_id,
                     } = serde_json::from_slice(&payload).unwrap_or_default();
-                    if req_host_id == host_id {
+                    if req_host_id == host_id.as_ref() {
                         info!("Received termination signal and stopping");
                         // Tell provider to shutdown - before we shut down nats subscriptions,
                         // in case it needs to do any message passing during shutdown
@@ -332,7 +333,7 @@ async fn subscribe_link_del(
 /// with information on whether the configuration applies to a specific link,
 /// and the contents of the new/updated configuration.
 async fn subscribe_config_update(
-    nats: async_nats::Client,
+    nats: Arc<async_nats::Client>,
     mut quit: broadcast::Receiver<()>,
     lattice: &str,
     provider_key: &str,
@@ -369,12 +370,64 @@ async fn subscribe_config_update(
     Ok(config_update_rx)
 }
 
-pub(crate) struct ProviderCommandReceivers {
-    pub health: mpsc::Receiver<(HealthCheckRequest, oneshot::Sender<HealthCheckResponse>)>,
-    pub shutdown: mpsc::Receiver<oneshot::Sender<()>>,
-    pub link_put: mpsc::Receiver<(InterfaceLinkDefinition, oneshot::Sender<()>)>,
-    pub link_del: mpsc::Receiver<(InterfaceLinkDefinition, oneshot::Sender<()>)>,
-    pub config_update: mpsc::Receiver<(HashMap<String, String>, oneshot::Sender<()>)>,
+pub struct ProviderCommandReceivers {
+    health: mpsc::Receiver<(HealthCheckRequest, oneshot::Sender<HealthCheckResponse>)>,
+    shutdown: mpsc::Receiver<oneshot::Sender<()>>,
+    link_put: mpsc::Receiver<(InterfaceLinkDefinition, oneshot::Sender<()>)>,
+    link_del: mpsc::Receiver<(InterfaceLinkDefinition, oneshot::Sender<()>)>,
+    config_update: mpsc::Receiver<(HashMap<String, String>, oneshot::Sender<()>)>,
+}
+
+impl ProviderCommandReceivers {
+    pub async fn new(
+        nats: Arc<async_nats::Client>,
+        quit_tx: &broadcast::Sender<()>,
+        lattice: &str,
+        provider_key: &str,
+        provider_link_put_id: &str,
+        host_id: &str,
+    ) -> ProviderInitResult<Self> {
+        let (health, shutdown, link_put, link_del, config_update) = try_join!(
+            subscribe_health(
+                Arc::clone(&nats),
+                quit_tx.subscribe(),
+                lattice,
+                provider_key
+            ),
+            subscribe_shutdown(
+                Arc::clone(&nats),
+                quit_tx.clone(),
+                lattice,
+                provider_key,
+                host_id
+            ),
+            subscribe_link_put(
+                Arc::clone(&nats),
+                quit_tx.subscribe(),
+                lattice,
+                provider_link_put_id
+            ),
+            subscribe_link_del(
+                Arc::clone(&nats),
+                quit_tx.subscribe(),
+                lattice,
+                provider_key
+            ),
+            subscribe_config_update(
+                Arc::clone(&nats),
+                quit_tx.subscribe(),
+                lattice,
+                provider_key
+            ),
+        )?;
+        Ok(Self {
+            health,
+            shutdown,
+            link_put,
+            link_del,
+            config_update,
+        })
+    }
 }
 
 /// State of provider initialization
@@ -484,43 +537,18 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
     .name(name)
     .connect(nats_addr)
     .await?;
-    let store_client = nats.clone();
     let nats = Arc::new(nats);
 
     // Listen and process various provider events/functionality
-    let (health, shutdown, link_put, link_del, config_update) = try_join!(
-        subscribe_health(
-            Arc::clone(&nats),
-            quit_tx.subscribe(),
-            lattice_rpc_prefix,
-            provider_key
-        ),
-        subscribe_shutdown(
-            Arc::clone(&nats),
-            quit_tx.clone(),
-            lattice_rpc_prefix,
-            provider_key,
-            host_id
-        ),
-        subscribe_link_put(
-            Arc::clone(&nats),
-            quit_tx.subscribe(),
-            lattice_rpc_prefix,
-            &provider_link_put_id,
-        ),
-        subscribe_link_del(
-            Arc::clone(&nats),
-            quit_tx.subscribe(),
-            lattice_rpc_prefix,
-            provider_key,
-        ),
-        subscribe_config_update(
-            store_client,
-            quit_tx.subscribe(),
-            lattice_rpc_prefix,
-            provider_key,
-        ),
-    )?;
+    let commands = ProviderCommandReceivers::new(
+        Arc::clone(&nats),
+        &quit_tx,
+        lattice_rpc_prefix,
+        provider_key,
+        &provider_link_put_id,
+        host_id,
+    )
+    .await?;
     Ok(ProviderInitState {
         nats,
         quit_rx,
@@ -533,18 +561,12 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         secrets: secrets.clone(),
         host_public_xkey,
         provider_private_xkey,
-        commands: ProviderCommandReceivers {
-            health,
-            shutdown,
-            link_put,
-            link_del,
-            config_update,
-        },
+        commands,
     })
 }
 
 /// Appropriately receive a link (depending on if it's source/target) for a provider
-async fn receive_link_for_provider<P>(
+pub async fn receive_link_for_provider<P>(
     provider: &P,
     connection: &ProviderConnection,
     ld: InterfaceLinkDefinition,
@@ -640,7 +662,7 @@ where
 }
 
 /// Handle provider commands in a loop.
-async fn handle_provider_commands(
+pub async fn handle_provider_commands(
     provider: impl Provider,
     connection: &ProviderConnection,
     mut quit_rx: broadcast::Receiver<()>,
@@ -811,8 +833,8 @@ pub async fn run_provider(
 
     let connection = ProviderConnection::new(
         Arc::clone(&nats),
-        provider_key.into(),
-        lattice_rpc_prefix.clone(),
+        provider_key,
+        lattice_rpc_prefix,
         host_id,
         config,
         provider_xkey,
@@ -907,26 +929,26 @@ type SourceId = String;
 pub struct ProviderConnection {
     /// Links from the provider to other components, aka where the provider is the
     /// source of the link. Indexed by the component ID of the target
-    source_links: Arc<RwLock<HashMap<LatticeTarget, InterfaceLinkDefinition>>>,
+    pub source_links: Arc<RwLock<HashMap<LatticeTarget, InterfaceLinkDefinition>>>,
     /// Links from other components to the provider, aka where the provider is the
     /// target of the link. Indexed by the component ID of the source
-    target_links: Arc<RwLock<HashMap<SourceId, InterfaceLinkDefinition>>>,
+    pub target_links: Arc<RwLock<HashMap<SourceId, InterfaceLinkDefinition>>>,
 
     /// NATS client used for performing RPCs
-    nats: Arc<async_nats::Client>,
+    pub nats: Arc<async_nats::Client>,
 
     /// Lattice name
-    lattice: String,
-    host_id: String,
-    provider_id: Arc<str>,
+    pub lattice: Arc<str>,
+    pub host_id: String,
+    pub provider_id: Arc<str>,
 
     /// Secrets XKeys
-    provider_xkey: Arc<XKey>,
-    host_xkey: Arc<XKey>,
+    pub provider_xkey: Arc<XKey>,
+    pub host_xkey: Arc<XKey>,
 
     // TODO: Reference this field to get static config
     #[allow(unused)]
-    config: HashMap<String, String>,
+    pub config: HashMap<String, String>,
 }
 
 impl fmt::Debug for ProviderConnection {
@@ -1015,25 +1037,25 @@ impl wrpc_transport::Serve for WrpcClient {
 }
 
 impl ProviderConnection {
-    pub(crate) fn new(
-        nats: Arc<async_nats::Client>,
-        provider_id: Arc<str>,
-        lattice: String,
+    pub fn new(
+        nats: impl Into<Arc<async_nats::Client>>,
+        provider_id: impl Into<Arc<str>>,
+        lattice: impl Into<Arc<str>>,
         host_id: String,
         config: HashMap<String, String>,
-        provider_private_xkey: XKey,
-        host_public_xkey: XKey,
+        provider_private_xkey: impl Into<Arc<XKey>>,
+        host_public_xkey: impl Into<Arc<XKey>>,
     ) -> ProviderInitResult<ProviderConnection> {
         Ok(ProviderConnection {
             source_links: Arc::default(),
             target_links: Arc::default(),
-            nats,
-            lattice,
+            nats: nats.into(),
+            lattice: lattice.into(),
             host_id,
-            provider_id,
+            provider_id: provider_id.into(),
             config,
-            provider_xkey: Arc::new(provider_private_xkey),
-            host_xkey: Arc::new(host_public_xkey),
+            provider_xkey: provider_private_xkey.into(),
+            host_xkey: host_public_xkey.into(),
         })
     }
 

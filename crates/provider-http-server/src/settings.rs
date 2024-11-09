@@ -42,7 +42,7 @@ const CORS_ALLOWED_HEADERS: &[&str] = &[
 const CORS_EXPOSED_HEADERS: &[&str] = &[];
 const CORS_DEFAULT_MAX_AGE_SECS: u64 = 300;
 
-pub(crate) fn default_listen_address() -> SocketAddr {
+pub fn default_listen_address() -> SocketAddr {
     (Ipv4Addr::UNSPECIFIED, 8000).into()
 }
 

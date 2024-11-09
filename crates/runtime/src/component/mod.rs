@@ -1,4 +1,4 @@
-use crate::capability::{self};
+use crate::capability::{self, wrpc};
 use crate::Runtime;
 
 use core::fmt::{self, Debug};
@@ -27,6 +27,7 @@ pub use bus::Bus;
 pub use bus1_0_0::Bus as Bus1_0_0;
 pub use config::Config;
 pub use logging::Logging;
+pub use messaging::Messaging;
 pub use secrets::Secrets;
 
 pub(crate) mod blobstore;
@@ -201,6 +202,7 @@ pub trait Handler:
     + Config
     + Logging
     + Secrets
+    + Messaging
     + InvocationErrorIntrospect
     + Send
     + Sync
@@ -215,6 +217,7 @@ impl<
             + Config
             + Logging
             + Secrets
+            + Messaging
             + InvocationErrorIntrospect
             + Send
             + Sync
@@ -476,6 +479,21 @@ where
         self.claims.as_ref()
     }
 
+    /// Instantiates the component given a handler and event channel
+    pub fn instantiate<C>(
+        &self,
+        handler: H,
+        events: mpsc::Sender<WrpcServeEvent<C>>,
+    ) -> Instance<H, C> {
+        Instance {
+            engine: self.engine.clone(),
+            pre: self.instance_pre.clone(),
+            handler,
+            max_execution_time: self.max_execution_time,
+            events,
+        }
+    }
+
     /// Serve all exports of this [Component] using supplied [`wrpc_transport::Serve`]
     ///
     /// The returned [Vec] contains an [InvocationStream] per each function exported by the component.
@@ -495,13 +513,7 @@ where
         let span = Span::current();
         let max_execution_time = self.max_execution_time;
         let mut invocations = vec![];
-        let instance = Instance {
-            engine: self.engine.clone(),
-            pre: self.instance_pre.clone(),
-            handler: handler.clone(),
-            max_execution_time: self.max_execution_time,
-            events: events.clone(),
-        };
+        let instance = self.instantiate(handler.clone(), events.clone());
         for (name, ty) in self
             .instance_pre
             .component()
@@ -526,12 +538,12 @@ where
                     types::ComponentItem::ComponentInstance(..),
                 ) => {
                     let instance = instance.clone();
-                    let [(_, _, handle_message)] = messaging::wrpc_handler_bindings::exports::wasmcloud::messaging::handler::serve_interface(
-                            srv,
-                            instance,
+                    let [(_, _, handle_message)] =
+                        wrpc::exports::wasmcloud::messaging::handler::serve_interface(
+                            srv, instance,
                         )
                         .await
-                    .context("failed to serve `wasmcloud:messaging/handler`")?;
+                        .context("failed to serve `wasmcloud:messaging/handler`")?;
                     invocations.push(handle_message);
                 }
                 (name, types::ComponentItem::ComponentFunc(ty)) => {
@@ -676,7 +688,8 @@ where
     }
 }
 
-struct Instance<H, C>
+/// Instantiated component
+pub struct Instance<H, C>
 where
     H: Handler,
 {

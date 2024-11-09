@@ -21,6 +21,10 @@ base64 = { workspace = true }
 bytes = { workspace = true }
 cloudevents-sdk = { workspace = true }
 futures = { workspace = true, features = ["async-await", "std"] }
+http = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true, features = ["server"] }
 humantime = { workspace = true }
 names = { workspace = true }
 nkeys = { workspace = true }
@@ -49,11 +53,16 @@ wasmcloud-core = { workspace = true, features = [
     "otel",
     "rustls-native-certs",
 ] }
+wasmcloud-provider-http-server = { workspace = true }
+wasmcloud-provider-messaging-nats = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true }
 wasmcloud-runtime = { workspace = true }
 wasmcloud-secrets-client = { workspace = true }
 wasmcloud-secrets-types = { workspace = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
+wasmtime-wasi-http = { workspace = true }
 wrpc-transport = { workspace = true }
+wrpc-interface-http = { workspace = true }
 wrpc-transport-nats = { workspace = true }
 
 [package.metadata.cargo-machete]
