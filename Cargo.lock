@@ -8106,7 +8106,6 @@ dependencies = [
  "wasm-pkg-core",
  "wasmcloud-control-interface 2.2.0",
  "wasmcloud-core 0.15.0",
- "wasmcloud-provider-sdk",
  "wasmcloud-secrets-types 0.5.0",
  "wat",
  "weld-codegen",
