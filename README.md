@@ -1,6 +1,6 @@
 [![Stars](https://img.shields.io/github/stars/wasmcloud?color=gold&label=wasmCloud%20Org%20Stars)](https://github.com/wasmcloud/)
 [![Homepage and Documentation](https://img.shields.io/website?label=Documentation&url=https%3A%2F%2Fwasmcloud.com)](https://wasmcloud.com)
-[![CNCF sandbox project](https://img.shields.io/website?label=CNCF%20Sandbox%20Project&url=https://landscape.cncf.io/?selected=wasm-cloud&item=orchestration-management--scheduling-orchestration--wasmcloud)](https://landscape.cncf.io/?selected=wasm-cloud&item=orchestration-management--scheduling-orchestration--wasmcloud)
+[![CNCF Incubating project](https://img.shields.io/website?label=CNCF%20Incubating%20Project&url=https://landscape.cncf.io/?selected=wasm-cloud&item=orchestration-management--scheduling-orchestration--wasmcloud)](https://landscape.cncf.io/?selected=wasm-cloud&item=orchestration-management--scheduling-orchestration--wasmcloud)
 ![Powered by WebAssembly](https://img.shields.io/badge/powered%20by-WebAssembly-orange.svg)
 [![OpenSSF Best Practices](https://bestpractices.coreinfrastructure.org/projects/6363/badge)](https://bestpractices.coreinfrastructure.org/projects/6363)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/wasmcloud/wasmcloud/badge)](https://securityscorecards.dev/viewer/?uri=github.com/wasmcloud/wasmcloud)
@@ -110,4 +110,4 @@ wasmCloud provides the following SDKs for creating capability providers; native 
 
 ---
 
-_We are a Cloud Native Computing Foundation [sandbox project](https://www.cncf.io/sandbox-projects/)._
+_We are a Cloud Native Computing Foundation [Incubating project](https://www.cncf.io/projects/)._
