@@ -62,10 +62,23 @@ docker run \
     postgres:16-alpine
 ```
 
+### Start the application
+
+Now, we're ready to start our component along with the required providers.
+
+First we start a new wasmCloud host:
+
+```console
+wash up
+```
+
+> [!NOTE]
+> This command won't return, so run open a new terminal to continue running commands
+
 To enable our application we'll start to *connect* to Postgres requires setting up some configuration with `wash`:
 
 ```console
-wash config put pg-task-db \
+wash config put default-postgres \
     POSTGRES_HOST=localhost \
     POSTGRES_PORT=5432 \
     POSTGRES_USERNAME=postgres \
@@ -81,18 +94,6 @@ wash config put pg-task-db \
 
 [wasmcloud-secrets]: https://wasmcloud.com/docs/concepts/secrets
 
-### Start the application
-
-Now, we're ready to start our component along with the required providers.
-
-First we start a new wasmCloud host:
-
-```console
-wash up
-```
-
-> [!NOTE]
-> This command won't return, so run open a new terminal to continue running commands
 
 Next, we deploy our application:
 
@@ -103,7 +104,7 @@ wash app deploy ./local.wadm.yaml
 We can confirm that the application was deployed successfully:
 
 ```console
-wash app get
+wash app list
 ```
 
 Once the application reports as **Deployed** in the application list, you can use `curl` to send a request to the running HTTP server.
@@ -155,10 +156,7 @@ curl \
 To retrieve all existing tasks:
 
 ```console
-curl \
-    -X GET \
-    -H "Content-Type: application/json; charset=utf8" \
-    localhost:8080/api/v1/tasks
+curl localhost:8080/api/v1/tasks
 ```
 
 > [!NOTE]
