@@ -1743,10 +1743,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@remix-run/router@npm:1.20.0":
-  version: 1.20.0
-  resolution: "@remix-run/router@npm:1.20.0"
-  checksum: 10/e1d2420db94a1855b97f1784898d0ae389cf3b77129b8f419e51d4833b77ca2c92ac09e2cb558015324d64580a138fd6faa31e52fcc3ba90e3cc382a1a324d4a
+"@remix-run/router@npm:1.21.0":
+  version: 1.21.0
+  resolution: "@remix-run/router@npm:1.21.0"
+  checksum: 10/cf0fb69d19c1b79095ff67c59cea89086f3982a9a54c8a993818a60fc76e0ebab5a8db647c1a96a662729fad8e806ddd0a96622adf473f5a9f0b99998b2dbad4
   languageName: node
   linkType: hard
 
@@ -3082,15 +3082,15 @@ __metadata:
     eslint-plugin-unicorn: "npm:^56.0.0"
     execa: "npm:^9.5.1"
     get-port: "npm:^7.1.0"
-    lucide-react: "npm:^0.454.0"
+    lucide-react: "npm:^0.456.0"
     nats.ws: "npm:^1.29.2"
     pino: "npm:^9.5.0"
     postcss: "npm:^8.4.47"
     prettier: "npm:^3.3.3"
     react: "npm:^18.3.1"
     react-dom: "npm:^18.3.1"
-    react-hook-form: "npm:^7.53.1"
-    react-router-dom: "npm:^6.27.0"
+    react-hook-form: "npm:^7.53.2"
+    react-router-dom: "npm:^6.28.0"
     rollup-plugin-sourcemaps: "npm:^0.6.3"
     tailwind-merge: "npm:^2.5.4"
     tailwindcss: "npm:^3.4.14"
@@ -6334,12 +6334,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.454.0":
-  version: 0.454.0
-  resolution: "lucide-react@npm:0.454.0"
+"lucide-react@npm:^0.456.0":
+  version: 0.456.0
+  resolution: "lucide-react@npm:0.456.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0-rc
-  checksum: 10/90b40271182e15fefc9cbc6aca4645a49691f73b1887daffb0c9d048f61c89a1c1d7eac1096a37ba627bdce91e8aa49fcf43a5cf0ebd255117ce848d71a56dd1
+  checksum: 10/214a3585e9b028d86f7ea161a13c4b9b7578d3901a7fda040e1bb8e115552957b91d29c248a25c77e1b9e466c160195219809ea0fa4b26e5a741c8534cea17e9
   languageName: node
   linkType: hard
 
@@ -7318,12 +7318,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-hook-form@npm:^7.53.1":
-  version: 7.53.1
-  resolution: "react-hook-form@npm:7.53.1"
+"react-hook-form@npm:^7.53.2":
+  version: 7.53.2
+  resolution: "react-hook-form@npm:7.53.2"
   peerDependencies:
     react: ^16.8.0 || ^17 || ^18 || ^19
-  checksum: 10/41ac7140add546b90f75b0aef343b67b795d26a60da7bfeac1ded7716ec01234c6050f5c00a4487c28a73c24f9c9347cda741173a8083d7f4b02b588203e7544
+  checksum: 10/172589ac5871bd41717e8c6bc4c825d149db88eb02e356a8fef4115615a56b21bf66ad16954575b1d6302ed265b8780f1975a2730d5aa10a53e412b56d9f72ca
   languageName: node
   linkType: hard
 
@@ -7376,27 +7376,27 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-router-dom@npm:^6.27.0":
-  version: 6.27.0
-  resolution: "react-router-dom@npm:6.27.0"
+"react-router-dom@npm:^6.28.0":
+  version: 6.28.0
+  resolution: "react-router-dom@npm:6.28.0"
   dependencies:
-    "@remix-run/router": "npm:1.20.0"
-    react-router: "npm:6.27.0"
+    "@remix-run/router": "npm:1.21.0"
+    react-router: "npm:6.28.0"
   peerDependencies:
     react: ">=16.8"
     react-dom: ">=16.8"
-  checksum: 10/cfbcbc1d387d3341a335e3a075e487cc09dcbb62f1b83bc827fc3eec937523d5647a2c4488c804dc61581e65561823d0166d17b5dbc8579998c25b5a0bcabad6
+  checksum: 10/e637825132ea96c3514ef7b8322f9bf0b752a942d6b4ffc4c20e389b5911726adf3dba8208ed4b97bf5b9c3bd465d9d1a1db1a58a610a8d528f18d890e0b143f
   languageName: node
   linkType: hard
 
-"react-router@npm:6.27.0":
-  version: 6.27.0
-  resolution: "react-router@npm:6.27.0"
+"react-router@npm:6.28.0":
+  version: 6.28.0
+  resolution: "react-router@npm:6.28.0"
   dependencies:
-    "@remix-run/router": "npm:1.20.0"
+    "@remix-run/router": "npm:1.21.0"
   peerDependencies:
     react: ">=16.8"
-  checksum: 10/352e3af2075cdccf9d114b7e06d94a1b46a2147ba9d6e8643787a92464f5fd9ead950252a98d551f99f21860288bcf3a4f088cb5f46b28d1274a4e2ba24cc0f9
+  checksum: 10/f021a644513144884a567d9c2dcc432e8e3233f931378c219c5a3b5b842340f0faca86225a708bafca1e9010965afe1a7dada28aef5b7b6138c885c0552d9a7d
   languageName: node
   linkType: hard
 
