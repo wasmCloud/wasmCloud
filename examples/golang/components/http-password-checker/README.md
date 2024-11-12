@@ -55,7 +55,6 @@ You should see a JSON response like:
 ```json
 {
     "valid": false, "message": "insecure password, try including more special characters, using uppercase letters or using a longer password"
-
 }
 ```
 
