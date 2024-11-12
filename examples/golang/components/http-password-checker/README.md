@@ -18,7 +18,7 @@ This repository contains a WebAssembly Component written in [TinyGo][tinygo], wh
 Before starting, ensure that you have the following installed:
 
 - The [TinyGo toolchain][tinygo]
-- [`wash`, the WebAssembly SHell][wash] installed.
+- [`wash`, the WAsmcloud SHell][wash] installed.
 
 # Quickstart
 
