@@ -20,7 +20,7 @@ This repository contains a [Web Assembly System Interface ("WASI")][wasi] and [C
 Before starting, ensure that you have the following installed:
 
 - The [TinyGo toolchain][tinygo-toolchain]
-- [`wash`, the WebAssembly SHell][wash] installed.
+- [`wash`, the WAsmcloud SHell][wash] installed.
 
 ## Build the WASI component
 
