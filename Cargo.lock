@@ -3321,7 +3321,7 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
- "socket2 0.5.7",
+ "socket2 0.4.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -5787,15 +5787,15 @@ dependencies = [
 
 [[package]]
 name = "rustify"
-version = "0.5.3"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9c02e25271068de581e03ac3bb44db60165ff1a10d92b9530192ccb898bc706"
+checksum = "d375f36613139ffb8d55ead633a4904c74ffa1279cbdd2b96a037184cb56d932"
 dependencies = [
  "anyhow",
  "async-trait",
  "bytes",
- "http 0.2.12",
- "reqwest 0.11.27",
+ "http 1.1.0",
+ "reqwest 0.12.9",
  "rustify_derive",
  "serde 1.0.210",
  "serde_json",
@@ -7729,15 +7729,15 @@ checksum = "830b7e5d4d90034032940e4ace0d9a9a057e7a45cd94e6c007832e39edb82f6d"
 
 [[package]]
 name = "vaultrs"
-version = "0.7.2"
+version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bb996bb053adadc767f8b0bda2a80bc2b67d24fe89f2b959ae919e200d79a19"
+checksum = "a769a71e45deef489beed23167f79ee75d41f482b5e3d96ddab833f24fd07e51"
 dependencies = [
  "async-trait",
  "bytes",
  "derive_builder 0.12.0",
- "http 0.2.12",
- "reqwest 0.11.27",
+ "http 1.1.0",
+ "reqwest 0.12.9",
  "rustify",
  "rustify_derive",
  "serde 1.0.210",
