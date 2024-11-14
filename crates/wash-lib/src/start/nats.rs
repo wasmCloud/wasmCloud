@@ -77,11 +77,31 @@ where
 {
     let nats_bin_path = dir.as_ref().join(NATS_SERVER_BINARY);
     if let Ok(_md) = metadata(&nats_bin_path).await {
-        // NATS already exists, return early
-        return Ok(nats_bin_path);
+        // Check version to see if we need to update
+        if let Ok(output) = Command::new(&nats_bin_path).arg("version").output().await {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            eprintln!("👀 Found nats-server version on the disk: {}", stdout.trim_end());
+            let re = regex::Regex::new(r"^nats-server:[^\s]*").unwrap();
+            if re.replace(&stdout, "").to_string().trim() == version {
+                // nats-server already at correct version, return early
+                eprintln!("✅ Using nats-server version [{}]", &version);
+                return Ok(nats_bin_path);
+            }
+        }
     }
+
+    // Download nats-server binary
+    eprintln!(
+        "🎣 Downloading new nats-server from {}", &nats_url(os, arch, version)
+    );
+
     // Download NATS tarball
-    download_binary_from_github(&nats_url(os, arch, version), dir, NATS_SERVER_BINARY).await
+    let res = download_binary_from_github(&nats_url(os, arch, version), dir, NATS_SERVER_BINARY).await;
+    if let Ok(ref path) = res {
+        eprintln!("🎯 Saved nats-server to {}", path.display());
+    }
+
+    res
 }
 
 /// Downloads the NATS binary for the architecture and operating system of the current host machine.
