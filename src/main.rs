@@ -5,7 +5,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use nkeys::KeyPair;
 use regex::Regex;
 use tokio::time::{timeout, timeout_at};
@@ -22,6 +22,7 @@ use wasmcloud_tracing::configure_observability;
 
 #[derive(Debug, Parser)]
 #[allow(clippy::struct_excessive_bools)]
+#[clap(name = "wasmcloud")]
 #[command(version, about, long_about = None)]
 struct Args {
     /// Controls the verbosity of traces emitted from the wasmCloud host
@@ -325,6 +326,15 @@ struct Args {
     /// If provided, overrides the default heartbeat interval of every 30 seconds. Provided value is interpreted as seconds.
     #[arg(long = "heartbeat-interval-seconds", env = "WASMCLOUD_HEARTBEAT_INTERVAL", value_parser = parse_duration_secs, hide = true)]
     heartbeat_interval: Option<Duration>,
+
+    #[clap(
+    long = "help-markdown",
+    short,
+    action=ArgAction::SetTrue,
+    conflicts_with = "help",
+    hide = true
+    )]
+    markdown_help: bool,
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -333,6 +343,12 @@ const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 #[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
     let args: Args = Args::parse();
+
+    // Implements clap_markdown for markdown generation of command line documentation.`
+    if args.markdown_help {
+        clap_markdown::print_help_markdown::<Args>();
+        std::process::exit(0);
+    }
 
     if let Some(tls_ca_paths) = args.tls_ca_paths.clone() {
         ensure_certs_for_paths(tls_ca_paths)?;
