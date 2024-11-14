@@ -30,7 +30,7 @@ Make sure to follow the build steps above, and replace the file path in [the wad
 ```shell
 wash up -d
 wash app deploy ./wadm.yaml
-curl http://localhost:8080
+curl http://localhost:8000
 ```
 
 ## Adding Capabilities

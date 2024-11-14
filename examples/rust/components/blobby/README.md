@@ -26,7 +26,7 @@ Ensuring you've built your component with `wash build`, you can launch wasmCloud
 wash up -d
 wash app deploy ./wadm.yaml
 wash app get
-curl http://localhost:8080
+curl http://localhost:8000
 ```
 
 ## Required Capabilities
@@ -43,11 +43,11 @@ annotated commands below:
 $ echo 'Hello there!' > myfile.txt
 
 # Upload the file to the fileserver
-$ curl -H 'Content-Type: text/plain' -v 'http://127.0.0.1:8080/myfile.txt' --data-binary @myfile.txt
-*   Trying 127.0.0.1:8080...
-* Connected to 127.0.0.1 (127.0.0.1) port 8080 (#0)
+$ curl -H 'Content-Type: text/plain' -v 'http://127.0.0.1:8000/myfile.txt' --data-binary @myfile.txt
+*   Trying 127.0.0.1:8000...
+* Connected to 127.0.0.1 (127.0.0.1) port 8000 (#0)
 > POST /myfile.txt HTTP/1.1
-> Host: 127.0.0.1:8080
+> Host: 127.0.0.1:8000
 > User-Agent: curl/7.85.0
 > Accept: */*
 > Content-Type: text/plain
@@ -61,11 +61,11 @@ $ curl -H 'Content-Type: text/plain' -v 'http://127.0.0.1:8080/myfile.txt' --dat
 * Connection #0 to host 127.0.0.1 left intact
 
 # Get the file back from the server
-$ curl -v 'http://127.0.0.1:8080/myfile.txt'
-*   Trying 127.0.0.1:8080...
-* Connected to 127.0.0.1 (127.0.0.1) port 8080 (#0)
+$ curl -v 'http://127.0.0.1:8000/myfile.txt'
+*   Trying 127.0.0.1:8000...
+* Connected to 127.0.0.1 (127.0.0.1) port 8000 (#0)
 > GET /myfile.txt HTTP/1.1
-> Host: 127.0.0.1:8080
+> Host: 127.0.0.1:8000
 > User-Agent: curl/7.85.0
 > Accept: */*
 >
@@ -79,11 +79,11 @@ Hello there!
 
 # Update the file
 $ echo 'General Kenobi!' >> myfile.txt
-$ curl -H 'Content-Type: text/plain' -v 'http://127.0.0.1:8080/myfile.txt' --data-binary @myfile.txt
-*   Trying 127.0.0.1:8080...
-* Connected to 127.0.0.1 (127.0.0.1) port 8080 (#0)
+$ curl -H 'Content-Type: text/plain' -v 'http://127.0.0.1:8000/myfile.txt' --data-binary @myfile.txt
+*   Trying 127.0.0.1:8000...
+* Connected to 127.0.0.1 (127.0.0.1) port 8000 (#0)
 > POST /myfile.txt HTTP/1.1
-> Host: 127.0.0.1:8080
+> Host: 127.0.0.1:8000
 > User-Agent: curl/7.85.0
 > Accept: */*
 > Content-Type: text/plain
@@ -97,11 +97,11 @@ $ curl -H 'Content-Type: text/plain' -v 'http://127.0.0.1:8080/myfile.txt' --dat
 * Connection #0 to host 127.0.0.1 left intact
 
 # Get the file again to see your updates
-$ curl -v 'http://127.0.0.1:8080/myfile.txt'
-*   Trying 127.0.0.1:8080...
-* Connected to 127.0.0.1 (127.0.0.1) port 8080 (#0)
+$ curl -v 'http://127.0.0.1:8000/myfile.txt'
+*   Trying 127.0.0.1:8000...
+* Connected to 127.0.0.1 (127.0.0.1) port 8000 (#0)
 > GET /myfile.txt HTTP/1.1
-> Host: 127.0.0.1:8080
+> Host: 127.0.0.1:8000
 > User-Agent: curl/7.85.0
 > Accept: */*
 >
@@ -115,11 +115,11 @@ General Kenobi!
 * Connection #0 to host 127.0.0.1 left intact
 
 # Delete the file
-$ curl -X DELETE -v 'http://127.0.0.1:8080/myfile.txt'
-*   Trying 127.0.0.1:8080...
-* Connected to 127.0.0.1 (127.0.0.1) port 8080 (#0)
+$ curl -X DELETE -v 'http://127.0.0.1:8000/myfile.txt'
+*   Trying 127.0.0.1:8000...
+* Connected to 127.0.0.1 (127.0.0.1) port 8000 (#0)
 > DELETE /myfile.txt HTTP/1.1
-> Host: 127.0.0.1:8080
+> Host: 127.0.0.1:8000
 > User-Agent: curl/7.85.0
 > Accept: */*
 >
@@ -131,11 +131,11 @@ $ curl -X DELETE -v 'http://127.0.0.1:8080/myfile.txt'
 * Connection #0 to host 127.0.0.1 left intact
 
 # (Optional) See that the file doesn't exist anymore
-$ curl -v 'http://127.0.0.1:8080/myfile.txt'
-*   Trying 127.0.0.1:8080...
-* Connected to 127.0.0.1 (127.0.0.1) port 8080 (#0)
+$ curl -v 'http://127.0.0.1:8000/myfile.txt'
+*   Trying 127.0.0.1:8000...
+* Connected to 127.0.0.1 (127.0.0.1) port 8000 (#0)
 > GET /myfile.txt HTTP/1.1
-> Host: 127.0.0.1:8080
+> Host: 127.0.0.1:8000
 > User-Agent: curl/7.85.0
 > Accept: */*
 >

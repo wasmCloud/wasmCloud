@@ -29,7 +29,7 @@ spec:
         image: ghcr.io/wasmcloud/http-server:0.23.2
       traits:
         # Link the httpserver to the component, and configure the HTTP server
-        # to listen on port 8080 for incoming requests
+        # to listen on port 8000 for incoming requests
         #
         # Since the HTTP server calls the `http-component` component, we establish
         # a unidirectional link from this `httpserver` provider (the "source")
@@ -44,4 +44,4 @@ spec:
             source_config:
               - name: default-http
                 properties:
-                  address: 127.0.0.1:8080
+                  address: 127.0.0.1:8000

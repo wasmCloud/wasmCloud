@@ -33,5 +33,5 @@ Ensuring you've built your component with `wash build`, you can launch wasmCloud
 wash up -d
 wash app deploy ./wadm.yaml
 wash app get
-curl http://127.0.0.1:8080
+curl http://127.0.0.1:8000
 ```

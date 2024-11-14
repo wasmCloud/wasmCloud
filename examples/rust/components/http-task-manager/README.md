@@ -112,7 +112,7 @@ Once the application reports as **Deployed** in the application list, you can us
 We'll hit the `/ready` endpoint:
 
 ```console
-curl localhost:8080/ready
+curl localhost:8000/ready
 ```
 
 You should receive output like the following:
@@ -130,7 +130,7 @@ While normally a separate component (or manual DB administrator action) would tr
 ```console
 curl -X \
     POST -H "Content-Type: application/json; charset=utf8" \
-    localhost:8080/admin/v1/db/migrate
+    localhost:8000/admin/v1/db/migrate
 ```
 
 Regardless of how many times you run the migration, you should receive the output below:
@@ -147,7 +147,7 @@ To try out adding a new task we can use `curl`:
 curl \
     -X POST \
     -H "Content-Type: application/json; charset=utf8" \
-    localhost:8080/api/v1/tasks \
+    localhost:8000/api/v1/tasks \
     --data '{"group_id": "test", "task_data": {"one":1}}'
 ```
 
@@ -156,7 +156,7 @@ curl \
 To retrieve all existing tasks:
 
 ```console
-curl localhost:8080/api/v1/tasks
+curl localhost:8000/api/v1/tasks
 ```
 
 > [!NOTE]
