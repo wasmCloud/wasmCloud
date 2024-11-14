@@ -40,7 +40,7 @@ spec:
       properties:
         image: ghcr.io/wasmcloud/http-server:0.23.2
       traits:
-        # Link to Echo, and inform it to listen on port 8080
+        # Link to Echo, and inform it to listen on port 8000
         # on the local machine
         - type: link
           properties:
@@ -51,4 +51,4 @@ spec:
             source_config:
               - name: default-http
                 properties:
-                  address: '0.0.0.0:8080'
+                  address: '0.0.0.0:8000'

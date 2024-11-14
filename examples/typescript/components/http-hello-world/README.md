@@ -59,7 +59,7 @@ wash dev
 Once `wash dev` is serving your component, to send a request to the running component (via the HTTP server provider):
 
 ```console
-curl localhost:8080
+curl localhost:8000
 ```
 
 ## Adding Capabilities

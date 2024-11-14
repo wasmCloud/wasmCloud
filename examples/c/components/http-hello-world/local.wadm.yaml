@@ -26,7 +26,7 @@ spec:
         # Establish a unidirectional link from this http server provider (the "source")
         # to the `http-component` component (the "target") so the component can handle incoming HTTP requests,
         #
-        # The source (this provider) is configured such that the HTTP server listens on 127.0.0.1:8080
+        # The source (this provider) is configured such that the HTTP server listens on 127.0.0.1:8000
         - type: link
           properties:
             target: http-component
@@ -36,4 +36,4 @@ spec:
             source_config:
               - name: default-http
                 properties:
-                  address: 127.0.0.1:8080
+                  address: 127.0.0.1:8000

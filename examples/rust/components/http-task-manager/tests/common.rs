@@ -19,7 +19,7 @@ const DEFAULT_POSTGRES_PASSWORD: &str = "postgres";
 const DEFAULT_POSTGRES_DATABASE: &str = "postgres";
 
 const DEFAULT_WASH_BIN: &str = "wash";
-const DEFAULT_APPLICATION_BASE_URL: &str = "http://localhost:8080";
+const DEFAULT_APPLICATION_BASE_URL: &str = "http://localhost:8000";
 
 // TODO: replace this with wasmcloud-test-util once we have the newer code released
 

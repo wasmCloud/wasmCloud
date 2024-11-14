@@ -21,7 +21,7 @@ const DEFAULT_POSTGRES_USER: &str = "postgres";
 const DEFAULT_POSTGRES_PASSWORD: &str = "postgres";
 const DEFAULT_POSTGRES_DATABASE: &str = "postgres";
 
-const DEFAULT_APPLICATION_BASE_URL: &str = "http://localhost:8080";
+const DEFAULT_APPLICATION_BASE_URL: &str = "http://localhost:8000";
 
 /// Name of the subscription that will be linked to the component  (see fixtures/test.wadm.yaml)
 pub const TEST_SUBSCRIPTION_NAME: &str = "wasmcloud.test";

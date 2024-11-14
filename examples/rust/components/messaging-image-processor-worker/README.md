@@ -96,7 +96,7 @@ See [the docs for the HTTP task manager][component-http-task-manager] for more i
 First, make sure the HTTP task manager is migrated:
 
 ```console
-curl -X POST localhost:8080/admin/v1/db/migrate
+curl -X POST localhost:8000/admin/v1/db/migrate
 ```
 
 Then, create a new job:
@@ -104,7 +104,7 @@ Then, create a new job:
 ```console
 curl \
     -X POST \
-    "localhost:8080/api/v1/tasks/submit \
+    "localhost:8000/api/v1/tasks/submit \
     --data-binary @- <<EOF
 {
   "source": {
