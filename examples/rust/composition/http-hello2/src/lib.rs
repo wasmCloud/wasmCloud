@@ -16,9 +16,9 @@ impl Guest for HttpServer {
             .split('=')
             .collect::<Vec<&str>>()[..]
         {
-            // query string is "/?name=<name>" e.g. localhost:8080?name=Bob
+            // query string is "/?name=<name>" e.g. localhost:8000?name=Bob
             ["/?name", name] => name.to_string(),
-            // query string is anything else or empty e.g. localhost:8080
+            // query string is anything else or empty e.g. localhost:8000
             _ => "World".to_string(),
         };
 

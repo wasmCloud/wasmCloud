@@ -107,9 +107,9 @@ impl Guest for Blobby {
 
         // Derive the appropriate file and container name from the path & query string
         //
-        // ex. 'localhost:8080' -> bucket name 'default', file_name ''
-        // ex. 'localhost:8080?container=test' -> bucket name 'test', file name ''
-        // ex. 'localhost:8080/your-file.txt?container=test' -> bucket name 'test', file name 'your-file.txt'
+        // ex. 'localhost:8000' -> bucket name 'default', file_name ''
+        // ex. 'localhost:8000?container=test' -> bucket name 'test', file name ''
+        // ex. 'localhost:8000/your-file.txt?container=test' -> bucket name 'test', file name 'your-file.txt'
         let (file_name, container_id) = match path_and_query.split_once('?') {
             Some((path, query)) => {
                 // We have a query string, so let's split it into a container name and a file name
@@ -133,7 +133,7 @@ impl Guest for Blobby {
                 response_out,
                 Error {
                     status_code: StatusCode::BAD_REQUEST,
-                    message: "Please pass a valid file (object) by specifying a URL path (ex. 'localhost:8080/some-path')".into(),
+                    message: "Please pass a valid file (object) by specifying a URL path (ex. 'localhost:8000/some-path')".into(),
                 },
             );
             return;

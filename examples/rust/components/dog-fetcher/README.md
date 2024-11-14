@@ -33,7 +33,7 @@ the application list, you can use `curl` to send a request to the running HTTP s
 wash up -d
 wash app deploy ./wadm.yaml
 wash app get
-curl http://127.0.0.1:8080
+curl http://127.0.0.1:8000
 ```
 
 ## Adding Capabilities

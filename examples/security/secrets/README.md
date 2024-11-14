@@ -74,21 +74,21 @@ You can first verify that unauthenticated requests to Redis and the component ar
 ➜ redis-cli -u redis://127.0.0.1:6379 keys '*'
 (error) NOAUTH Authentication required.
 
-➜ curl 127.0.0.1:8080/counter
+➜ curl 127.0.0.1:8000/counter
 Unauthorized
 ```
 
 Then, authenticating passes the check in the component:
 
 ```bash
-➜ curl -H "password: opensesame" 127.0.0.1:8080/counter
+➜ curl -H "password: opensesame" 127.0.0.1:8000/counter
 Counter /counter: 1
 ```
 
 Passing in an invalid password will still fail the authentication check:
 
 ```bash
-➜ curl -H "password: letmein" 127.0.0.1:8080/counter
+➜ curl -H "password: letmein" 127.0.0.1:8000/counter
 Unauthorized
 ```
 
