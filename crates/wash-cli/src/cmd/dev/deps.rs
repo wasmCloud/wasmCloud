@@ -1041,16 +1041,22 @@ impl ProjectDeps {
             .context("failed to generate manifests")?
             .into_iter()
         {
-            wash_lib::app::delete_model_version(
+            if let Err(error) = wash_lib::app::delete_model_version(
                 client,
                 Some(lattice.into()),
                 &manifest.metadata.name,
                 None,
             )
-            .await
-            .with_context(|| {
-                format!("failed to delete application [{}]", manifest.metadata.name)
-            })?;
+            .await {
+                if error.to_string().contains("deadline has elapsed") {
+                    eprintln!(
+                        "{WARN} WADM not available: Timeout occurred while deleting application [{}]",
+                        manifest.metadata.name
+                    );
+                } else {
+                    return Err(error);
+                }
+            }
         }
 
         Ok(())
