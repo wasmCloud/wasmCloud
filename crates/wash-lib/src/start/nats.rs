@@ -93,13 +93,12 @@ where
         }
     }
 
-    // Download nats-server binary
     eprintln!(
         "🎣 Downloading new nats-server from {}",
         &nats_url(os, arch, version)
     );
 
-    // Download NATS tarball
+    // Download NATS binary
     let res =
         download_binary_from_github(&nats_url(os, arch, version), dir, NATS_SERVER_BINARY).await;
     if let Ok(ref path) = res {
