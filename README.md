@@ -4,7 +4,6 @@
 ![Powered by WebAssembly](https://img.shields.io/badge/powered%20by-WebAssembly-orange.svg)
 [![OpenSSF Best Practices](https://bestpractices.coreinfrastructure.org/projects/6363/badge)](https://bestpractices.coreinfrastructure.org/projects/6363)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/wasmcloud/wasmcloud/badge)](https://securityscorecards.dev/viewer/?uri=github.com/wasmcloud/wasmcloud)
-[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/wasmcloud-chart)](https://artifacthub.io/packages/search?repo=wasmcloud-chart)
 [![CLOMonitor](https://img.shields.io/endpoint?url=https://clomonitor.io/api/projects/cncf/wasm-cloud/badge)](https://clomonitor.io/projects/cncf/wasm-cloud)
 [![FOSSA Status](https://app.fossa.com/api/projects/custom%2B40030%2Fgit%40github.com%3AwasmCloud%2FwasmCloud.git.svg?type=small)](https://app.fossa.com/projects/custom%2B40030%2Fgit%40github.com%3AwasmCloud%2FwasmCloud.git?ref=badge_small)
 [![twitter](https://img.shields.io/twitter/follow/wasmcloud?style=social)](https://twitter.com/wasmcloud)
