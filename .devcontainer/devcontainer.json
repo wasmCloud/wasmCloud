@@ -1,10 +1,7 @@
 {
     "name": "wasmCloud",
-    "dockerComposeFile": "docker-compose.yml",
+    "image": "devcontainer-nix:latest",
     "service": "dev",
-    "workspaceFolder": "/workspace",
-    "userEnvProbe": "loginShell",
-    "updateRemoteUserUID": false,
     "onCreateCommand": "${containerWorkspaceFolder}/.devcontainer/setup.sh",
     "customizations": {
         "vscode": {
