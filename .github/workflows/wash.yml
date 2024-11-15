@@ -40,7 +40,7 @@ jobs:
         with:
           shared-key: '${{ matrix.os }}-shared-cache'
       - name: Install nextest
-        uses: taiki-e/install-action@85c1f06374fc4ed2429b1de98eae4dd8e3b5a57a
+        uses: taiki-e/install-action@15d8c416d16bd924ecd41f97bb1a90d2cfa695f4
         with:
           tool: nextest,wit-bindgen-cli
       - uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed
@@ -83,7 +83,7 @@ jobs:
         with:
           cli-args: '-f ./crates/wash-cli/tools/docker-compose.yml up --detach'
       - name: Install nextest
-        uses: taiki-e/install-action@85c1f06374fc4ed2429b1de98eae4dd8e3b5a57a
+        uses: taiki-e/install-action@15d8c416d16bd924ecd41f97bb1a90d2cfa695f4
         with:
           tool: nextest,wit-bindgen-cli,wasm-tools
       - name: Run integration tests
