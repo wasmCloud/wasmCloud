@@ -2,7 +2,7 @@
 [![Homepage and Documentation](https://img.shields.io/website?label=Documentation&url=https%3A%2F%2Fwasmcloud.com)](https://wasmcloud.com)
 [![CNCF Incubating project](https://img.shields.io/website?label=CNCF%20Incubating%20Project&url=https://landscape.cncf.io/?selected=wasm-cloud&item=orchestration-management--scheduling-orchestration--wasmcloud)](https://landscape.cncf.io/?selected=wasm-cloud&item=orchestration-management--scheduling-orchestration--wasmcloud)
 ![Powered by WebAssembly](https://img.shields.io/badge/powered%20by-WebAssembly-orange.svg)
-[![OpenSSF Best Practices](https://bestpractices.coreinfrastructure.org/projects/6363/badge)](https://bestpractices.coreinfrastructure.org/projects/6363)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/6363/badge)](https://www.bestpractices.dev/projects/6363)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/wasmcloud/wasmcloud/badge)](https://securityscorecards.dev/viewer/?uri=github.com/wasmcloud/wasmcloud)
 [![CLOMonitor](https://img.shields.io/endpoint?url=https://clomonitor.io/api/projects/cncf/wasm-cloud/badge)](https://clomonitor.io/projects/cncf/wasm-cloud)
 [![FOSSA Status](https://app.fossa.com/api/projects/custom%2B40030%2Fgit%40github.com%3AwasmCloud%2FwasmCloud.git.svg?type=small)](https://app.fossa.com/projects/custom%2B40030%2Fgit%40github.com%3AwasmCloud%2FwasmCloud.git?ref=badge_small)
