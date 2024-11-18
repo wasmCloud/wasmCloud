@@ -56,5 +56,8 @@
   },
   "peerDependencies": {
     "react": "^18.0.0"
+  },
+  "resolutions": {
+    "cross-spawn": "^7.0.5"
   }
 }

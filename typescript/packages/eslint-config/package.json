@@ -32,5 +32,8 @@
     "eslint-plugin-react-refresh": "^0.4.14",
     "eslint-plugin-tailwindcss": "3.17.5",
     "eslint-plugin-unicorn": "^56.0.0"
+  },
+  "resolutions": {
+    "cross-spawn": "^7.0.5"
   }
 }

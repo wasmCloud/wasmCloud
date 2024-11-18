@@ -54,5 +54,8 @@
   },
   "dependencies": {
     "nats.ws": "^1.29.2"
+  },
+  "resolutions": {
+    "cross-spawn": "^7.0.5"
   }
 }
