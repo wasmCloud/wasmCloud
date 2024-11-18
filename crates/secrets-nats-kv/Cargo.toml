@@ -20,20 +20,28 @@ path = "src/lib.rs"
 anyhow = { workspace = true }
 async-nats = { workspace = true, features = ["server_2_10", "ring"] }
 async-trait = { workspace = true }
-backoff = { workspace = true, features = ["tokio"] }
-bytes = { workspace = true}
-clap = { workspace = true, features = ["derive", "std", "help", "suggestions", "color", "usage", "env"] }
+bytes = { workspace = true }
+clap = { workspace = true, features = [
+    "derive",
+    "std",
+    "help",
+    "suggestions",
+    "color",
+    "usage",
+    "env",
+] }
+exponential-backoff = { workspace = true }
 futures = { workspace = true }
 nkeys = { workspace = true, features = ["xkeys"] }
 serde = { workspace = true, features = ["derive"] }
-serde_json = {workspace = true }
-thiserror = {workspace = true }
-tokio = { workspace = true,  features = ["full"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
 wascap = { workspace = true }
 wasmcloud-secrets-types = { workspace = true }
 
 [dev-dependencies]
-rand = {workspace = true}
+rand = { workspace = true }
 wasmcloud-secrets-client = { workspace = true }

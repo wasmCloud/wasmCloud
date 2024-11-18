@@ -10,8 +10,8 @@ use async_nats::{
     Message, Subject,
 };
 use async_trait::async_trait;
-use backoff::{future::retry, Error as BackoffError, ExponentialBackoffBuilder};
 use bytes::Bytes;
+use exponential_backoff::Backoff;
 use futures::StreamExt;
 use nkeys::XKey;
 use std::{collections::HashSet, time::Duration};
@@ -459,35 +459,56 @@ impl Api {
 
     async fn get_lock(&self, subject: String) -> anyhow::Result<PublishAck> {
         // TODO: make this all configurable
-        let exp = ExponentialBackoffBuilder::new()
-            .with_initial_interval(Duration::from_millis(100))
-            .with_max_elapsed_time(Some(Duration::from_secs(3)))
-            .build();
+        let max_attempts = 5;
+        let min_interval = Duration::from_millis(100);
+        let max_interval = Duration::from_millis(1000);
+        let backoff = Backoff::new(max_attempts, min_interval, max_interval);
 
-        let op = || async {
-            let resp = self
-                .client
-                .request(subject.clone(), "lock".into())
-                .await
-                .map_err(|e| {
-                    debug!("Error locking state stream: {}", e);
-                    BackoffError::transient("")
-                })?;
-            match serde_json::from_slice(&resp.payload) {
-                Ok(Response::Ok(p)) => Ok(p),
-                Ok(Response::Err { error: e }) => {
-                    debug!("Error locking state stream: {:?}", e);
-                    Err(BackoffError::transient("unable to get lock"))
-                }
-                Err(e) => {
-                    error!("Error locking state stream: {}", e);
-                    Err(BackoffError::permanent("error publishing message"))
+        // Wrap the retries in timeout to ensure the code runs for a given period
+        let result = tokio::time::timeout(Duration::from_secs(3), async {
+            for duration in backoff {
+                // Attempt to request a lock
+                let resp = match self.client.request(subject.clone(), "lock".into()).await {
+                    Ok(msg) => msg,
+                    Err(e) => match duration {
+                        Some(duration) => {
+                            debug!("Error locking state stream: {}", e);
+                            tokio::time::sleep(duration).await;
+                            continue;
+                        }
+                        None => {
+                            debug!("Error locking state stream: {}", e);
+                            return Err(anyhow::anyhow!("timed out getting lock"));
+                        }
+                    },
+                };
+
+                // Parse NATS response to lock request
+                match serde_json::from_slice(&resp.payload) {
+                    Ok(Response::Ok(p)) => return Ok(p),
+                    Ok(Response::Err { error: e }) => match duration {
+                        Some(duration) => {
+                            debug!("Error locking state stream: {:?}", e);
+                            tokio::time::sleep(duration).await;
+                            continue;
+                        }
+                        None => {
+                            debug!("Error locking state stream: {}", e);
+                            return Err(anyhow::anyhow!("unable to get lock"));
+                        }
+                    },
+                    Err(e) => {
+                        error!("Error locking state stream: {}", e);
+                        return Err(anyhow::anyhow!("error publishing message"));
+                    }
                 }
             }
-        };
-
-        let result = retry(exp, op).await;
-        result.map_err(|_e| anyhow::anyhow!("timed out getting lock"))
+            Err(anyhow::anyhow!(
+                "reached maximum attempts while attempting to get a lock"
+            ))
+        })
+        .await;
+        result.map_err(|_e| anyhow::anyhow!("timed out getting lock"))?
     }
 
     // TODO: add a way to specify labels that should apply to this mapping. That way you can
