@@ -6,10 +6,10 @@
 //
 use crate::generate::{genconfig::Config, ParamMap, TomlMap, PROJECT_NAME_REGEX};
 use anyhow::{bail, Result};
+use handlebars::Handlebars;
 use regex::Regex;
 use serde_json::Value;
 use thiserror::Error;
-use weld_codegen::render::Renderer;
 
 #[derive(Debug)]
 pub(crate) struct TemplateSlots {
@@ -110,7 +110,7 @@ const RESERVED_NAMES: [&str; 5] = [
 pub(crate) fn fill_project_variables<F>(
     config: &Config,
     values: &mut ParamMap,
-    renderer: &weld_codegen::render::Renderer,
+    renderer: &Handlebars,
     silent: bool,
     value_provider: F,
 ) -> Result<Vec<String>>
@@ -166,7 +166,7 @@ where
 fn expand_default_value(
     entry: StringEntry,
     values: &ParamMap,
-    renderer: &Renderer,
+    renderer: &Handlebars,
 ) -> Result<StringEntry> {
     if let Some(default) = &entry.default {
         let new_def = renderer.render_template(default, values)?;
@@ -182,7 +182,7 @@ fn expand_default_value(
 fn try_placeholder_into_slot(
     table: &TomlMap,
     values: &ParamMap,
-    renderer: &Renderer,
+    renderer: &Handlebars,
 ) -> Result<TemplateSlots, ConversionError> {
     let key = match table.get("name") {
         Some(toml::Value::String(key)) => key,
@@ -308,7 +308,7 @@ fn extract_default(
     table_entry: Option<&toml::Value>,
     choices: Option<&Vec<String>>,
     values: &ParamMap,
-    renderer: &Renderer,
+    renderer: &Handlebars,
 ) -> Result<Option<SupportedVarValue>, ConversionError> {
     match (table_entry, choices, var_type) {
         // no default set
@@ -600,7 +600,7 @@ mod tests {
             None,
             None,
             &ParamMap::default(),
-            &Renderer::default(),
+            &Handlebars::default(),
         );
 
         assert_eq!(result, Ok(None));
@@ -615,7 +615,7 @@ mod tests {
             Some(&toml::Value::Boolean(true)),
             None,
             &ParamMap::default(),
-            &Renderer::default(),
+            &Handlebars::default(),
         );
 
         assert_eq!(result, Ok(Some(SupportedVarValue::Bool(true))));
@@ -630,7 +630,7 @@ mod tests {
             Some(&toml::Value::String("bar".to_string())),
             None,
             &ParamMap::default(),
-            &Renderer::default(),
+            &Handlebars::default(),
         );
 
         assert_eq!(
@@ -650,7 +650,7 @@ mod tests {
             Some(&toml::Value::String("bar".to_string())),
             None,
             &ParamMap::default(),
-            &Renderer::default(),
+            &Handlebars::default(),
         );
 
         assert_eq!(
@@ -670,7 +670,7 @@ mod tests {
             Some(&toml::Value::String("0bar".to_string())),
             None,
             &ParamMap::default(),
-            &Renderer::default(),
+            &Handlebars::default(),
         );
 
         assert_eq!(
@@ -691,7 +691,7 @@ mod tests {
             Some(&toml::Value::String("bar".to_string())),
             Some(&vec!["zoo".to_string(), "far".to_string()]),
             &ParamMap::default(),
-            &Renderer::default(),
+            &Handlebars::default(),
         );
 
         assert_eq!(
@@ -713,7 +713,7 @@ mod tests {
             Some(&toml::Value::String("bar".to_string())),
             Some(&vec!["zoo".to_string(), "bar".to_string()]),
             &ParamMap::default(),
-            &Renderer::default(),
+            &Handlebars::default(),
         );
 
         assert_eq!(result, Ok(Some(SupportedVarValue::String("bar".into()))));
@@ -730,7 +730,7 @@ mod tests {
             Some(&toml::Value::String("bar".to_string())),
             Some(&vec!["zoo".to_string(), "bar".to_string()]),
             &ParamMap::default(),
-            &Renderer::default(),
+            &Handlebars::default(),
         );
 
         assert_eq!(result, Ok(Some(SupportedVarValue::String("bar".into()))));
@@ -745,7 +745,7 @@ mod tests {
             Some(&toml::Value::Integer(0)),
             None,
             &ParamMap::default(),
-            &Renderer::default(),
+            &Handlebars::default(),
         );
 
         assert_eq!(
@@ -767,7 +767,7 @@ mod tests {
             Some(&toml::Value::Integer(0)),
             None,
             &ParamMap::default(),
-            &Renderer::default(),
+            &Handlebars::default(),
         );
 
         assert_eq!(
