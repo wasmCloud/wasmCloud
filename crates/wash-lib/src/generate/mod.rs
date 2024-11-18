@@ -10,11 +10,11 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use console::style;
 use genconfig::{Config, CONFIG_FILE_NAME};
+use handlebars::Handlebars;
 use indicatif::MultiProgress;
 use serde::Serialize;
 use tempfile::TempDir;
 use tokio::process::Command;
-use weld_codegen::render::Renderer;
 
 pub mod emoji;
 mod favorites;
@@ -254,7 +254,7 @@ async fn make_project(project: Project) -> std::result::Result<PathBuf, anyhow::
 
     // resolve all project values, prompting if necessary,
     // and expanding templates in default values
-    let renderer = Renderer::default();
+    let renderer = Handlebars::default();
     let undefined =
         fill_project_variables(&config, &mut values, &renderer, project.silent, |slot| {
             crate::generate::interactive::variable(slot)

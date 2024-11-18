@@ -8,6 +8,7 @@ use crate::generate::{
 };
 use anyhow::{bail, Context, Result};
 use console::style;
+use handlebars::Handlebars;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use path_absolutize::Absolutize;
@@ -17,7 +18,6 @@ use std::{
     path::{Path, PathBuf},
 };
 use walkdir::WalkDir;
-use weld_codegen::render::Renderer;
 
 /// Matcher determines disposition of file: whether it should be copied, whether translated with template engine, and whether it is renamed
 /// The exclude and raw lists use `GitIgnore` pattern matching
@@ -100,7 +100,7 @@ pub(crate) fn process_template_dir(
     source_dir: &Path,
     project_dir: &Path,
     template_config: &TemplateConfig,
-    renderer: &Renderer,
+    renderer: &Handlebars,
     values: &ParamMap,
     mp: &mut MultiProgress,
 ) -> Result<()> {
