@@ -73,8 +73,6 @@ reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 rmp-serde = { workspace = true }
 semver = { workspace = true, features = ["serde"], optional = true }
 serde = { workspace = true, features = ["derive"] }
-serde-transcode = { workspace = true }
-serde_cbor = { workspace = true, features = ["std"] }
 serde_json = { workspace = true }
 serde_with = { workspace = true, features = ["macros"] }
 serde_yaml = { workspace = true }

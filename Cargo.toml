@@ -285,9 +285,7 @@ secrecy = { version = "0.8", default-features = false }
 secrets-nats-kv = { version = "0.1", path = "crates/secrets-nats-kv", default-features = false }
 semver = { version = "1", default-features = false }
 serde = { version = "1", default-features = false }
-serde-transcode = { version = "1", default-features = false }
 serde_bytes = { version = "0.11", default-features = false }
-serde_cbor = { version = "0.11", default-features = false }
 serde_json = { version = "1", default-features = false }
 serde_with = { version = "3", default-features = false }
 serde_yaml = { version = "0.9", default-features = false }
