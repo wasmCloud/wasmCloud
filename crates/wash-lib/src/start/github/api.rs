@@ -12,7 +12,7 @@ type DateTimeUtc = DateTime<Utc>;
 const GITHUB_PER_PAGE: u32 = 100;
 
 // Batch size to fetch releases from GitHub
-const GITHUB_REQUEST_BATCH_SIZE: u32 = 10;
+const GITHUB_REQUEST_BATCH_SIZE: u32 = 30;
 
 const VERSION_FETCHER_CLIENT_USER_AGENT: &str =
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
