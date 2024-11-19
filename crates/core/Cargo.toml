@@ -24,10 +24,8 @@ oci = ["dep:oci-client", "dep:oci-wasm"]
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
 async-nats = { workspace = true, features = ["ring"] }
-async-trait = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
-hex = { workspace = true, features = ["std"] }
 hyper-rustls = { workspace = true, features = [
     "http2",
     "ring",
@@ -45,12 +43,10 @@ rustls-pemfile = { workspace = true }
 semver = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_bytes = { workspace = true, features = ["std"] }
 sha2 = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true, features = ["std"] }
 url = { workspace = true }
-uuid = { workspace = true, features = ["serde"] }
 wascap = { workspace = true }
 webpki-roots = { workspace = true, optional = true }
