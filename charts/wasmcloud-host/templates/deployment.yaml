@@ -24,7 +24,7 @@ spec:
         - name: wasmcloud-host
           command: ["wasmcloud"]
         {{- if or (eq .Values.config.observability.enable true) (eq .Values.config.observability.traces.enable true) (eq .Values.config.observability.metrics.enable true) (eq .Values.config.observability.logs.enable true) }}
-          arg:
+          args:
           {{- if .Values.config.observability.enable }}
             - --enable-observability
           {{- end }}
@@ -37,21 +37,21 @@ spec:
             - {{ .Values.config.observability.protocol }}
           {{- end }}
           {{- if .Values.config.observability.traces.enable }}
-            - --enable-traces
+            - --enable-traces=true
           {{ end }}
           {{- if .Values.config.observability.traces.endpoint }}
             - --override-traces-endpoint
             - {{ .Values.config.observability.traces.endpoint }}
           {{- end }}
           {{- if .Values.config.observability.metrics.enable }}
-            - --enable-metrics
+            - --enable-metrics=true
           {{ end }}
           {{- if .Values.config.observability.metrics.endpoint }}
             - --override-metrics-endpoint
             - {{ .Values.config.observability.metrics.endpoint }}
           {{- end }}
           {{- if .Values.config.observability.logs.enable }}
-            - --enable-logs
+            - --enable-logs=true
           {{ end }}
           {{- if .Values.config.observability.logs.endpoint }}
             - --override-logs-endpoint
@@ -165,7 +165,7 @@ spec:
             name: {{ include "wasmcloud-host.nats-config-name" . }}
       {{- if .Values.config.natsCredentialsSecret }}
         - name: {{ .Values.config.natsCredentialsSecret }}
-          secret: 
+          secret:
             secretName: {{ .Values.config.natsCredentialsSecret }}
             items:
               - key: nats.creds
