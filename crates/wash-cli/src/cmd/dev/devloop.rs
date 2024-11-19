@@ -45,8 +45,6 @@ pub(crate) struct RunLoopState<'a> {
 /// Generate manifests that should be deployed, based on the current run loop state
 pub(crate) async fn generate_manifests(
     RunLoopState {
-        dev_session,
-        ctl_client,
         project_cfg,
         session_id,
         ref mut previous_deps,
@@ -118,31 +116,8 @@ pub(crate) async fn generate_manifests(
     let project_deps_unchanged = previous_deps
         .as_ref()
         .is_some_and(|deps| deps.eq(&current_project_deps));
+    // Return with no generated manifests if deps haven't changed
     if project_deps_unchanged {
-        eprintln!(
-            "{} {}",
-            emoji::RECYCLE,
-            style(format!(
-                "(Fast-)Reloading component [{component_id}] (no dependencies have changed)..."
-            ))
-            .bold()
-        );
-        // Scale the component to zero, trusting that wadm will re-create it
-        scale_down_component(
-            ctl_client,
-            project_cfg,
-            &dev_session
-                .host_data
-                .as_ref()
-                .context("missing host ID for session")?
-                .0,
-            component_id,
-            component_ref,
-        )
-        .await
-        .with_context(|| format!("failed to reload component [{component_id}]"))?;
-
-        // Return with no generated manifests
         return Ok(Vec::new());
     }
 
@@ -347,6 +322,7 @@ pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
         emoji::CONSTRUCTION_BARRIER,
         style("Building project...").bold(),
     );
+    // TODO: spinner
     // Build the project (equivalent to `wash build`)
     let built_artifact_path = match build_project(
         state.project_cfg,
@@ -423,6 +399,24 @@ pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
         .as_ref()
         .context("unexpectedly missing component_ref")?;
 
+    // If manifests are empty, let the user know we're not deploying anything, just reloading
+    // the same component
+    if manifests.is_empty() {
+        eprintln!(
+            "{} {}",
+            emoji::RECYCLE,
+            style(format!(
+                "(Fast-)Reloading component [{component_id}] (no dependencies have changed)..."
+            ))
+            .bold()
+        );
+    } else {
+        eprintln!(
+            "{} {}",
+            emoji::RECYCLE,
+            style(format!("Reloading component [{component_id}]...")).bold()
+        );
+    }
     // Apply all manifests
     for manifest in manifests {
         // Generate all help text for this manifest
@@ -473,38 +467,33 @@ pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
             "{} {}",
             emoji::RECYCLE,
             style(format!(
-                "Deployed development manifest for application [{}]",
+                "Deployed updated manifest for application [{}]",
                 manifest.metadata.name,
             ))
             .bold(),
         );
+
+        // Scale the component to zero, trusting that wadm will re-create it
+        scale_down_component(
+            state.ctl_client,
+            state.project_cfg,
+            &state
+                .dev_session
+                .host_data
+                .as_ref()
+                .context("missing host ID for session")?
+                .0,
+            component_id,
+            component_ref,
+        )
+        .await
+        .with_context(|| format!("failed to reload component [{component_id}]"))?;
 
         // Print all help text lines (as long as there are some)
         if !help_text_lines.is_empty() {
             eprintln!("{}", help_text_lines.join("\n"));
         }
     }
-
-    eprintln!(
-        "{} {}",
-        emoji::RECYCLE,
-        style(format!("Reloading component [{component_id}]...")).bold()
-    );
-    // Scale the component to zero, trusting that wadm will re-create it
-    scale_down_component(
-        state.ctl_client,
-        state.project_cfg,
-        &state
-            .dev_session
-            .host_data
-            .as_ref()
-            .context("missing host ID for session")?
-            .0,
-        component_id,
-        component_ref,
-    )
-    .await
-    .with_context(|| format!("failed to reload component [{component_id}]"))?;
 
     Ok(())
 }
