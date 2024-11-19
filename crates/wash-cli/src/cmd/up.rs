@@ -951,12 +951,13 @@ async fn install_patch_or_default_wadm_version(
     }
 
     let version = version.clone().unwrap_or_else(|| WADM_VERSION.to_owned());
-    let new_patch_version = new_patch_version_of_after_string(
+    let new_patch_version = (new_patch_version_of_after_string(
         GITHUB_WASMCLOUD_ORG,
         GITHUB_WASMCLOUD_WADM_REPO,
         &version,
     )
-    .await?;
+    .await)
+        .unwrap_or_default();
     match new_patch_version {
         Some(new_patch) => {
             // Re-add stripped 'v' prefix due to semver parsing
