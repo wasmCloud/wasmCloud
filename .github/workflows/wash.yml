@@ -22,6 +22,9 @@ env:
   GO_VERSION: '1.23'
   TINYGO_VERSION: '0.33.0'
 
+permissions:
+  contents: read
+
 jobs:
   unit_tests:
     name: Unit Tests

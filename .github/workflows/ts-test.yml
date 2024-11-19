@@ -12,6 +12,9 @@ defaults:
   run:
     working-directory: ./typescript
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: test:format-lint-unit
