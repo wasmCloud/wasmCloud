@@ -1,5 +1,5 @@
 HELLO_WASM=http_hello_world.wasm
-WASI_SDK_DIR=/opt/wasi-sdk
+WASI_SDK_DIR?=/opt/wasi-sdk
 AR=$(WASI_SDK_DIR)/bin/ar
 CC=$(WASI_SDK_DIR)/bin/clang
 VERSION=0.1.0
