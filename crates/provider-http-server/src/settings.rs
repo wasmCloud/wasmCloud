@@ -81,6 +81,8 @@ pub struct ServiceSettings {
     #[deprecated(since = "0.22.0", note = "Use top-level fields instead")]
     #[serde(default)]
     pub cors: Cors,
+    #[serde(default)]
+    pub disable_keepalive: Option<bool>,
 }
 
 impl Default for ServiceSettings {
@@ -100,6 +102,7 @@ impl Default for ServiceSettings {
             readonly_mode: Some(false),
             tls: Tls::default(),
             cors: Cors::default(),
+            disable_keepalive: None,
         }
     }
 }
@@ -125,6 +128,7 @@ impl ServiceSettings {
                 cors_max_age_secs: s.cors_max_age_secs.or(s.cors.max_age_secs),
                 tls: Tls::default(),
                 cors: Cors::default(),
+                disable_keepalive: s.disable_keepalive,
             })
             .map_err(|e| HttpServerError::Settings(format!("invalid json: {e}")))
     }
@@ -292,6 +296,9 @@ pub fn load_settings(
             HttpServerError::InvalidParameter("Invalid cors_max_age_secs".to_string())
         })?;
         settings.cors_max_age_secs = Some(max_age_secs);
+    }
+    if let Some(disable_keepalive) = values.get(&UniCase::new("disable_keepalive")) {
+        settings.disable_keepalive = Some(disable_keepalive.parse().unwrap_or(false));
     }
 
     settings.validate()?;
