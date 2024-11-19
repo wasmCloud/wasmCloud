@@ -3,10 +3,12 @@ import {clsx} from 'clsx';
 import * as React from 'react';
 
 export function ConnectionStatus(): React.ReactElement {
-  const [latticeConfig] = useLatticeConfig();
+  const {config: latticeConfig} = useLatticeConfig();
   const [status, setStatus] = React.useState<'PENDING' | 'ONLINE' | 'OFFLINE'>('PENDING');
   React.useEffect(() => {
-    canConnect(latticeConfig.latticeUrl).then((online) => setStatus(online ? 'ONLINE' : 'OFFLINE'));
+    canConnect(latticeConfig?.latticeUrl).then((online) =>
+      setStatus(online ? 'ONLINE' : 'OFFLINE'),
+    );
   }, [latticeConfig.latticeUrl]);
   return (
     <div
