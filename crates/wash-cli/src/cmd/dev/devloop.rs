@@ -18,6 +18,7 @@ use wash_lib::parser::{
 };
 
 use crate::app::deploy_model_from_manifest;
+use crate::appearance::spinner::Spinner;
 
 use super::deps::{DependencySpec, ProjectDependencyKey, ProjectDeps};
 use super::manifest::{generate_component_from_project_cfg, generate_help_text_for_manifest};
@@ -40,6 +41,7 @@ pub(crate) struct RunLoopState<'a> {
     pub(crate) component_ref: Option<String>,
     pub(crate) package_args: &'a CommonPackageArgs,
     pub(crate) skip_fetch: bool,
+    pub(crate) output_kind: OutputKind,
 }
 
 /// Generate manifests that should be deployed, based on the current run loop state
@@ -317,12 +319,16 @@ async fn update_secret_properties_by_spec(
 /// Run one iteration of the development loop
 pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
     // Build the project (equivalent to `wash build`)
-    eprintln!(
-        "{} {}",
-        emoji::CONSTRUCTION_BARRIER,
-        style("Building project...").bold(),
-    );
-    // TODO: spinner
+    let spinner = Spinner::new(&state.output_kind).context("failed to create spinner")?;
+    if matches!(state.output_kind, OutputKind::Text) {
+        spinner.update_spinner_message("Building project...");
+    } else {
+        eprintln!(
+            "{} {}",
+            emoji::CONSTRUCTION_BARRIER,
+            style("Building project...").bold(),
+        );
+    }
     // Build the project (equivalent to `wash build`)
     let built_artifact_path = match build_project(
         state.project_cfg,
@@ -345,6 +351,7 @@ pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
             return Ok(());
         }
     };
+    spinner.finish_and_clear();
     eprintln!(
         "{} Successfully built project at [{}]",
         emoji::GREEN_CHECK,
