@@ -314,7 +314,6 @@ impl WashDevSession {
         .await
         {
             Ok(c) => Some(c),
-            Err(e) if e.to_string().contains("already listening") => None,
             Err(e) => bail!("failed to start wadm for wash dev: {e}"),
         };
 
