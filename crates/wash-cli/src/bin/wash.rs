@@ -58,10 +58,10 @@ Interact and manage wasmCloud applications, projects, and runtime environments
 Usage: wash [OPTIONS] <COMMAND>
 
 Build:
-  new          Create a new project from a template
+  new          Create a new project from a template or git repository
   build        Build (and sign) a wasmCloud component or capability provider
   dev          Start a developer loop to hot-reload a local wasmCloud component
-  inspect      Inspect a capability provider or Wasm component for signing information and interfaces
+  inspect      Inspect a Wasm component or capability provider for signing information and interfaces
   par          Create, inspect, and modify capability provider archive files
   wit          Create wit packages and fetch wit dependencies for a component
 
@@ -92,7 +92,7 @@ Configure:
   completions  Generate shell completions for wash
   ctx          Manage wasmCloud host configuration contexts
   drain        Manage contents of local wasmCloud caches
-  keys         Utilities for generating and managing signing keys
+  keys         Generate and manage signing keys
   claims       Generate and manage JWTs for wasmCloud components and capability providers
   plugin       Manage wash plugins
 
