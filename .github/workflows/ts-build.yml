@@ -12,6 +12,9 @@ defaults:
   run:
     working-directory: ./typescript
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
