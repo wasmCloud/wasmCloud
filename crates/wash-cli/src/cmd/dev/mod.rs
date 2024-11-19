@@ -1,10 +1,10 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use anyhow::{Context as _, Result};
+use anyhow::{bail, Context as _, Result};
 use clap::Parser;
-use console::style;
 use notify::event::ModifyKind;
 use notify::{event::EventKind, Event as NotifyEvent, RecursiveMode, Watcher};
 use semver::Version;
@@ -87,13 +87,18 @@ pub struct DevCommand {
     pub host_id: Option<ServerId>,
 
     /// Path to code directory
-    #[clap(name = "code-dir", long = "work-dir", env = "WASH_DEV_CODE_DIR")]
+    #[clap(
+        name = "code-dir",
+        short = 'd',
+        long = "work-dir",
+        env = "WASH_DEV_CODE_DIR"
+    )]
     pub code_dir: Option<PathBuf>,
 
     /// Directories to ignore when watching for changes. This should be set
     /// to directories where generated files are placed, such as `target/` or `dist/`.
     /// Can be specified multiple times.
-    #[clap(name = "ignore-dir", long = "ignore-dir")]
+    #[clap(name = "ignore-dir", short = 'i', long = "ignore-dir")]
     pub ignore_dirs: Vec<PathBuf>,
 
     /// Whether to leave the host running after dev
@@ -119,7 +124,7 @@ pub struct DevCommand {
 /// Handle `wash dev`
 pub async fn handle_command(
     cmd: DevCommand,
-    _output_kind: wash_lib::cli::OutputKind,
+    output_kind: wash_lib::cli::OutputKind,
 ) -> Result<CommandOutput> {
     let current_dir = std::env::current_dir()?;
     let project_path = cmd.code_dir.unwrap_or(current_dir);
@@ -134,6 +139,64 @@ pub async fn handle_command(
         emoji::INFO_SQUARE
     );
 
+    // Create NATS and control interface client to use to connect
+    let nats_client = nats_client_from_wasmcloud_opts(&cmd.wasmcloud_opts).await?;
+    let ctl_client = Arc::new(
+        cmd.wasmcloud_opts
+            .clone()
+            .into_ctl_client(None)
+            .await
+            .context("failed to create wasmcloud control client")?,
+    );
+
+    let host_id: Option<ServerId> = match ctl_client
+        .get_hosts()
+        .await
+        .as_ref()
+        .map(|r| r.as_slice())
+    {
+        // Failing to get hosts is acceptable if none are supposed to be running, or if NATS is not running
+        Ok([]) | Err(_) if cmd.host_id.is_none() => {
+            eprintln!(
+                "{} No running hosts found, will start one...",
+                emoji::INFO_SQUARE
+            );
+            None
+        }
+        Ok([]) | Err(_) => {
+            bail!("host ID specified but no running hosts found");
+        }
+        Ok([host]) if host.data().is_some() => {
+            // SAFETY: We know that the host exists and has data
+            Some(
+                ServerId::from_str(host.data().unwrap().id())
+                    .map_err(|e| anyhow::anyhow!("failed to parse host ID: {e}"))?,
+            )
+        }
+        Ok(hosts) if cmd.host_id.is_some() => {
+            // SAFETY: We know that the host ID is Some as checked above
+            let host_id = cmd.host_id.unwrap();
+            if let Some(_host) = hosts
+                .iter()
+                .find(|h| h.data().map(|d| d.id()).is_some_and(|id| *id == *host_id))
+            {
+                Some(host_id)
+            } else {
+                bail!("specified host ID '{host_id}' not found in running hosts");
+            }
+        }
+        Ok(hosts) => {
+            bail!(
+                    "found multiple running hosts, please specify a host ID with --host-id. Eligible hosts: [{:?}]",
+                    hosts
+                        .iter()
+                        .filter_map(|h| h.data().map(|d| d.id()))
+                        .collect::<Vec<&str>>()
+                        .join(", ")
+                );
+        }
+    };
+
     let (mut nats_child, mut wadm_child, mut wasmcloud_child) = (None, None, None);
 
     // If there is not a running host for this session, then we can start one
@@ -143,6 +206,7 @@ pub async fn handle_command(
                 cmd.wasmcloud_opts.clone(),
                 cmd.nats_opts.clone(),
                 cmd.wadm_opts.clone(),
+                host_id,
             )
             .await
             .with_context(|| format!("failed to start host for session [{session_id}]"))?;
@@ -153,39 +217,53 @@ pub async fn handle_command(
         .context("missing host_id, after ensuring host has started")?
         .0;
 
-    // Create NATS and control interface client to use to connect
-    let nats_client = nats_client_from_wasmcloud_opts(&cmd.wasmcloud_opts).await?;
-    let ctl_client = Arc::new(
-        cmd.wasmcloud_opts
-            .clone()
-            .into_ctl_client(None)
-            .await
-            .context("failed to create wasmcloud control client")?,
-    );
     let lattice = ctl_client.lattice();
+
+    // Build state for the run loop
+    let mut run_loop_state = devloop::RunLoopState {
+        dev_session: &mut wash_dev_session,
+        nats_client: &nats_client,
+        ctl_client: &ctl_client,
+        project_cfg: &project_cfg,
+        lattice,
+        session_id: &session_id,
+        manifest_output_dir: cmd.manifest_output_dir.as_ref(),
+        previous_deps: None,
+        artifact_path: None,
+        component_id: None,
+        component_ref: None,
+        package_args: &cmd.package_args,
+        skip_fetch: cmd.skip_wit_fetch,
+        output_kind,
+    };
 
     // See if the host is running by retrieving an inventory
     if let Err(_e) = ctl_client.get_host_inventory(&host_id).await {
         eprintln!(
-            "{} Failed to retrieve inventory from host [{host_id}]... Is it running?",
-            emoji::WARN
+            "{} Failed to retrieve inventory from host [{host_id}]... Exiting developer loop",
+            emoji::ERROR
         );
         eprintln!(
-            "{} {}",
-            emoji::CONSTRUCTION_BARRIER,
-            style(format!(
-                "Starting host for wash dev session [{session_id}]...",
-            ))
-            .bold(),
+            "{} Try running `wash down --all` to stop all running wasmCloud instances, then run `wash dev` again",
+            emoji::ERROR
         );
-        (nats_child, wadm_child, wasmcloud_child) = wash_dev_session
-            .start_host(
-                cmd.wasmcloud_opts.clone(),
-                cmd.nats_opts.clone(),
-                cmd.wadm_opts.clone(),
-            )
-            .await
-            .context("failed to start host for session")?;
+        if let Err(e) = stop_dev_session(
+            run_loop_state,
+            &ctl_client,
+            wasmcloud_child,
+            wadm_child,
+            nats_child,
+            cmd.leave_host_running,
+        )
+        .await
+        {
+            eprintln!(
+                "{} Failed to cleanup incomplete dev session: {e}",
+                emoji::ERROR
+            );
+        }
+
+        bail!("failed to initialize dev session, host did not start.");
     }
 
     // Set up a oneshot channel to perform graceful shutdown, handle Ctrl + c w/ tokio
@@ -253,23 +331,6 @@ pub async fn handle_command(
     })?;
     watcher.watch(&project_path.clone(), RecursiveMode::Recursive)?;
 
-    // Build sup state for the run loop
-    let mut run_loop_state = devloop::RunLoopState {
-        dev_session: &mut wash_dev_session,
-        nats_client: &nats_client,
-        ctl_client: &ctl_client,
-        project_cfg: &project_cfg,
-        lattice,
-        session_id: &session_id,
-        manifest_output_dir: cmd.manifest_output_dir.as_ref(),
-        previous_deps: None,
-        artifact_path: None,
-        component_id: None,
-        component_ref: None,
-        package_args: &cmd.package_args,
-        skip_fetch: cmd.skip_wit_fetch,
-    };
-
     // NOTE(brooksmtownsend): Yes, it would make more sense to return here. For some reason unknown to me
     // trying to return any error here will just cause the dev loop to hang infinitely and require a force quit.
     // Even a panic will display a tokio error and then hang. Thankfully, the error will just probably happen
@@ -311,71 +372,116 @@ pub async fn handle_command(
                 pause_watch.store(true, Ordering::SeqCst);
                 eprintln!("\n{} Received Ctrl + c, stopping devloop...", emoji::STOP);
 
-                // Update the sessions file with the fact that this session stopped
-                run_loop_state.dev_session.in_use = false;
-                SessionMetadata::persist_session(run_loop_state.dev_session).await?;
+                stop_dev_session(run_loop_state, &ctl_client, wasmcloud_child, wadm_child, nats_child, cmd.leave_host_running).await?;
 
-                // Delete manifests related to the application
-                if let Some(dependencies) = run_loop_state.previous_deps {
-                    eprintln!("{} Cleaning up deployed WADM application(s)...", emoji::BROOM);
-                    dependencies.delete_manifests(&nats_client, lattice).await?;
-                }
-
-                // Stop the host, unless explicitly instructed to leave host running
-                if !cmd.leave_host_running {
-                    eprintln!("{} Stopping wasmCloud instance...", emoji::HOURGLASS_DRAINING);
-
-                    // Stop host via the control interface
-                    if let Some((ref host_id, _log_file)) = wash_dev_session.host_data.as_ref() {
-                        let receiver = ctl_client.events_receiver(vec!["host_stopped".to_string()]).await;
-                        if let Err(e) = ctl_client
-                            .stop_host(host_id, Some(2000))
-                            .await {
-                                eprintln!("{} failed to stop host through control interface: {e}", emoji::WARN);
-                            }
-
-                        // Wait for the host_stopped event to be received
-                        if let Ok(mut receiver) = receiver {
-                            receiver.recv().await;
-                        }
-                    }
-
-                    // Ensure that the host exited, if not, kill the process forcefully
-                    if let Some(mut host) = wasmcloud_child {
-                        if tokio::time::timeout(std::time::Duration::from_secs(5), host.wait())
-                            .await
-                            .context("failed to wait for wasmcloud process to stop, forcefully terminating")
-                            .is_err() {
-                                eprintln!("{} Terminating host forcefully, this may leave provider processes running", emoji::WARN);
-                                host
-                                    .kill()
-                                    .await
-                                    .context("failed to stop wasmcloud process")?;
-                            }
-                    }
-
-                    // Stop WADM
-                    if let Some(mut wadm) = wadm_child {
-                        eprintln!("{} Stopping wadm...", emoji::HOURGLASS_DRAINING);
-                        wadm
-                            .kill()
-                            .await
-                            .context("failed to stop wadm child process")?;
-                        remove_wadm_pidfile(wash_dev_session.base_dir().await?)
-                            .await
-                            .context("failed to remove wadm pidfile")?;
-                    }
-
-                    // Stop NATS
-                    if let Some(mut nats) = nats_child {
-                        eprintln!("{} Stopping NATS...", emoji::HOURGLASS_DRAINING);
-                        nats.kill().await?;
-                    }
-                }
-
-                eprintln!("{} Dev session exited successfully", emoji::GREEN_CHECK);
-                break Ok(CommandOutput::default());
+                break Ok(CommandOutput::from_key_and_text(
+                    "result",
+                    format!(
+                        "{} Dev session [{session_id}] exited successfully.",
+                        emoji::GREEN_CHECK,
+                    ),
+                ));
             },
         }
     }
+}
+
+async fn stop_dev_session(
+    run_loop_state: devloop::RunLoopState<'_>,
+    ctl_client: &wasmcloud_control_interface::Client,
+    wasmcloud_child: Option<tokio::process::Child>,
+    wadm_child: Option<tokio::process::Child>,
+    nats_child: Option<tokio::process::Child>,
+    leave_host_running: bool,
+) -> Result<()> {
+    // Update the sessions file with the fact that this session stopped
+    run_loop_state.dev_session.in_use = false;
+    SessionMetadata::persist_session(run_loop_state.dev_session).await?;
+
+    // Delete manifests related to the application
+    if let Some(dependencies) = run_loop_state.previous_deps {
+        eprintln!(
+            "{} Cleaning up deployed wasmCloud application(s)...",
+            emoji::BROOM
+        );
+        dependencies
+            .delete_manifests(&ctl_client.nats_client(), ctl_client.lattice())
+            .await?;
+    }
+
+    // NOTE(brooksmtownsend): Wait here for a second or so to ensure that all links and config are cleaned up.
+    // There's not a really easy way to ensure everything is cleaned up after deleting the old manifest, so we
+    // can do our best to give wadm a second to tell the host what to delete.
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    // Stop the host, unless explicitly instructed to leave host running
+    if !leave_host_running {
+        eprintln!(
+            "{} Stopping wasmCloud instance...",
+            emoji::HOURGLASS_DRAINING
+        );
+
+        // Stop host via the control interface
+        if let Some((ref host_id, _log_file)) = run_loop_state.dev_session.host_data.as_ref() {
+            let receiver = ctl_client
+                .events_receiver(vec!["host_stopped".to_string()])
+                .await;
+            if let Err(e) = ctl_client.stop_host(host_id, Some(2000)).await {
+                eprintln!(
+                    "{} Failed to stop host through control interface: {e}",
+                    emoji::WARN
+                );
+            }
+
+            // Wait for the host_stopped event to be received
+            if let Ok(mut receiver) = receiver {
+                // If we don't receive the host_stopped event within 2 seconds, log a warning
+                if tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv())
+                    .await
+                    .is_err()
+                {
+                    eprintln!(
+                        "{} Did not receive host_stopped event, host may have exited early",
+                        emoji::WARN
+                    );
+                }
+            }
+        }
+
+        // Ensure that the host exited, if not, kill the process forcefully
+        if let Some(mut host) = wasmcloud_child {
+            if tokio::time::timeout(std::time::Duration::from_secs(5), host.wait())
+                .await
+                .context("failed to wait for wasmcloud process to stop, forcefully terminating")
+                .is_err()
+            {
+                eprintln!(
+                    "{} Terminating host forcefully, this may leave provider processes running",
+                    emoji::WARN
+                );
+                host.kill()
+                    .await
+                    .context("failed to stop wasmcloud process")?;
+            }
+        }
+
+        // Stop WADM
+        if let Some(mut wadm) = wadm_child {
+            eprintln!("{} Stopping wadm...", emoji::HOURGLASS_DRAINING);
+            wadm.kill()
+                .await
+                .context("failed to stop wadm child process")?;
+            remove_wadm_pidfile(run_loop_state.dev_session.base_dir().await?)
+                .await
+                .context("failed to remove wadm pidfile")?;
+        }
+
+        // Stop NATS
+        if let Some(mut nats) = nats_child {
+            eprintln!("{} Stopping NATS...", emoji::HOURGLASS_DRAINING);
+            nats.kill().await?;
+        }
+    }
+
+    Ok(())
 }

@@ -11,7 +11,7 @@ use wasmcloud_control_interface::Client as CtlClient;
 
 use wadm_types::{ConfigProperty, Manifest, Properties, SecretProperty, SecretSourceProperty};
 use wash_lib::build::{build_project, SignConfig};
-use wash_lib::cli::CommonPackageArgs;
+use wash_lib::cli::{CommonPackageArgs, OutputKind};
 use wash_lib::generate::emoji;
 use wash_lib::parser::{
     DevConfigSpec, DevManifestComponentTarget, DevSecretSpec, ProjectConfig, TypeConfig,
@@ -417,6 +417,23 @@ pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
             style(format!("Reloading component [{component_id}]...")).bold()
         );
     }
+
+    // Scale the component to zero, trusting that wadm will re-create it
+    scale_down_component(
+        state.ctl_client,
+        state.project_cfg,
+        &state
+            .dev_session
+            .host_data
+            .as_ref()
+            .context("missing host ID for session")?
+            .0,
+        component_id,
+        component_ref,
+    )
+    .await
+    .with_context(|| format!("failed to reload component [{component_id}]"))?;
+
     // Apply all manifests
     for manifest in manifests {
         // Generate all help text for this manifest
@@ -472,22 +489,6 @@ pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
             ))
             .bold(),
         );
-
-        // Scale the component to zero, trusting that wadm will re-create it
-        scale_down_component(
-            state.ctl_client,
-            state.project_cfg,
-            &state
-                .dev_session
-                .host_data
-                .as_ref()
-                .context("missing host ID for session")?
-                .0,
-            component_id,
-            component_ref,
-        )
-        .await
-        .with_context(|| format!("failed to reload component [{component_id}]"))?;
 
         // Print all help text lines (as long as there are some)
         if !help_text_lines.is_empty() {

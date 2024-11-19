@@ -15,6 +15,7 @@ use wash_lib::common::CommandGroupUsage;
 
 use wash_lib::config::downloads_dir;
 use wash_lib::generate::emoji;
+use wash_lib::id::ServerId;
 use wash_lib::start::{
     ensure_nats_server, ensure_wadm, ensure_wasmcloud, start_wadm, start_wasmcloud_host,
     NatsConfig, WadmConfig, NATS_SERVER_BINARY,
@@ -218,12 +219,15 @@ impl WashDevSession {
         Ok(session)
     }
 
-    /// Start a host for the given session, if one is not present
+    /// Start a host for the given session, if one is not present. Providing a host ID will
+    /// cause the session to attempt to connect to the specified host, rather than starting a
+    /// new one
     pub(crate) async fn start_host(
         &mut self,
         mut wasmcloud_opts: WasmcloudOpts,
         nats_opts: NatsOpts,
         wadm_opts: WadmOpts,
+        host_id: Option<ServerId>,
     ) -> Result<(Option<Child>, Option<Child>, Option<Child>)> {
         if self.host_data.is_some() {
             return Ok((None, None, None));
@@ -330,77 +334,86 @@ impl WashDevSession {
             .await
             .into();
         let host_env = configure_host_env(wasmcloud_opts.clone()).await?;
-        let wasmcloud_child = match start_wasmcloud_host(
-            &wasmcloud_binary,
-            std::process::Stdio::null(),
-            log_output,
-            host_env,
-        )
-        .await
-        {
-            Ok(child) => Some(child),
-            Err(e) => {
-                eprintln!("{} Failed to start wasmCloud instance", emoji::ERROR);
-                if let Some(mut wadm) = wadm_child {
-                    wadm.kill()
-                        .await
-                        .context("failed to stop wadm child process")?;
-                    remove_wadm_pidfile(session_dir)
-                        .await
-                        .context("failed to remove wadm pidfile")?;
+
+        let (wasmcloud_child, host_id) = if let Some(host_id) = host_id {
+            eprintln!(
+                "{} {}",
+                emoji::GREEN_CHECK,
+                style(format!(
+                    "Connected to host [{host_id}], refer to existing logs for details"
+                ))
+                .bold()
+            );
+            (None, host_id.to_string())
+        } else {
+            let wasmcloud_child = match start_wasmcloud_host(
+                &wasmcloud_binary,
+                std::process::Stdio::null(),
+                log_output,
+                host_env,
+            )
+            .await
+            {
+                Ok(child) => Some(child),
+                Err(e) => {
+                    eprintln!("{} Failed to start wasmCloud instance", emoji::ERROR);
+                    if let Some(mut wadm) = wadm_child {
+                        wadm.kill()
+                            .await
+                            .context("failed to stop wadm child process")?;
+                        remove_wadm_pidfile(session_dir)
+                            .await
+                            .context("failed to remove wadm pidfile")?;
+                    }
+                    let nats_bin = install_dir.join(NATS_SERVER_BINARY);
+                    let _ = stop_nats(install_dir, nats_bin).await?;
+                    bail!("failed to start wasmCloud instance: {e}");
                 }
-                let nats_bin = install_dir.join(NATS_SERVER_BINARY);
-                let _ = stop_nats(install_dir, nats_bin).await?;
-                bail!("failed to start wasmCloud instance: {e}");
-            }
-        };
+            };
 
-        eprintln!(
-            "{} {}",
-            emoji::WRENCH,
-            style("Successfully started wasmCloud instance").bold(),
-        );
-
-        // Read the log until we get output that
-        let _wasmcloud_log_path = wasmcloud_log_path.clone();
-        let host_id = tokio::time::timeout(tokio::time::Duration::from_secs(1), async move {
-            let log_file = tokio::fs::File::open(&_wasmcloud_log_path)
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to open log file @ [{}]",
-                        _wasmcloud_log_path.display()
-                    )
-                })?;
-            let mut lines = tokio::io::BufReader::new(log_file).lines();
-            loop {
-                if let Some(line) = lines
-                    .next_line()
+            // Read the log until we get output that
+            let _wasmcloud_log_path = wasmcloud_log_path.clone();
+            let host_id = tokio::time::timeout(tokio::time::Duration::from_secs(1), async move {
+                let log_file = tokio::fs::File::open(&_wasmcloud_log_path)
                     .await
-                    .context("failed to read line from file")?
-                {
-                    if let Some(host_id) = line
-                        .split_once("host_id=\"")
-                        .map(|(_, rhs)| &rhs[0..rhs.len() - 1])
+                    .with_context(|| {
+                        format!(
+                            "failed to open log file @ [{}]",
+                            _wasmcloud_log_path.display()
+                        )
+                    })?;
+                let mut lines = tokio::io::BufReader::new(log_file).lines();
+                loop {
+                    if let Some(line) = lines
+                        .next_line()
+                        .await
+                        .context("failed to read line from file")?
                     {
-                        return Ok(host_id.to_string()) as anyhow::Result<String>;
+                        if let Some(host_id) = line
+                            .split_once("host_id=\"")
+                            .map(|(_, rhs)| &rhs[0..rhs.len() - 1])
+                        {
+                            return Ok(host_id.to_string()) as anyhow::Result<String>;
+                        }
                     }
                 }
-            }
-        })
-        .await
-        .context("timeout expired while reading for Host ID in logs")?
-        .context("failed to retrieve host ID from logs")?;
+            })
+            .await
+            .context("timeout expired while reading for Host ID in logs")?
+            .context("failed to retrieve host ID from logs")?;
 
-        eprintln!(
-            "{} {}",
-            emoji::GREEN_CHECK,
-            style(format!(
-                "Successfully started host, logs writing to {}",
-                wasmcloud_log_path.display()
-            ))
-            .bold()
-        );
+            eprintln!(
+                "{} {}",
+                emoji::GREEN_CHECK,
+                style(format!(
+                    "Successfully started host, logs writing to {}",
+                    wasmcloud_log_path.display()
+                ))
+                .bold()
+            );
+
+            (wasmcloud_child, host_id)
+        };
 
         self.host_data = Some((host_id, wasmcloud_log_path));
 
