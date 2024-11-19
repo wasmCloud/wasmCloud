@@ -66,7 +66,7 @@ pub fn keytype_parser(keytype: &str) -> Result<KeyPairType> {
         "cluster" => Ok(KeyPairType::Cluster),
         "x25519" | "curve" => Ok(KeyPairType::Curve),
         _ => Err(anyhow::anyhow!(
-            "Invalid key type. Must be one of Account, User, Module (or Component), Service (or Provider), Server (or Host), Operator, Cluster"
+            "Invalid key type. Must be one of Account, User, Module (or Component), Service (or Provider), Server (or Host), Operator, Cluster, Curve (xkey)"
         )),
     }
 }
