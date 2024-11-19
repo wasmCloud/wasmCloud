@@ -8566,7 +8566,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-opentelemetry",
- "wasmcloud-core 0.15.0",
 ]
 
 [[package]]
