@@ -80,7 +80,6 @@ where
             let re = regex::Regex::new(r"^wadm[^\s]*").unwrap();
             if re.replace(&stdout, "").to_string().trim() == version.trim_start_matches('v') {
                 // wadm already exists, return early
-                eprintln!("✅ Using wadm version [{}]", &version);
                 return Ok(wadm_bin_path);
             }
         }
