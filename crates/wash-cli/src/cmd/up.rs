@@ -732,7 +732,9 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         "CTRL+c received, stopping wasmCloud, wadm, and NATS...".to_string(),
     );
     stop_wasmcloud(wasmcloud_child).await?;
-    tokio::fs::remove_file(host_pid_file()?).await?;
+    if let Err(e) = tokio::fs::remove_file(host_pid_file()?).await {
+        warn!("failed to remove host pid file: {e}");
+    };
 
     if let Some(mut wadm_process) = wadm_process {
         if let Err(e) = wadm_process.kill().await {
