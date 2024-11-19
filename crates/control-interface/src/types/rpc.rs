@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ComponentId, LinkName, Result, WitNamespace, WitPackage};
+use crate::Result;
 
 /// A host response to a request to start a component.
 ///
@@ -130,7 +130,7 @@ pub struct ComponentAuctionRequest {
     /// The unique identifier to be used for this component.
     ///
     /// The host will ensure that no other component with the same ID is running on the host
-    pub(crate) component_id: ComponentId,
+    pub(crate) component_id: String,
     /// The set of constraints that must match the labels of a suitable target host
     pub(crate) constraints: BTreeMap<String, String>,
 }
@@ -162,7 +162,7 @@ impl ComponentAuctionRequest {
 #[derive(Default, Clone, PartialEq, Eq)]
 pub struct ComponentAuctionRequestBuilder {
     component_ref: Option<String>,
-    component_id: Option<ComponentId>,
+    component_id: Option<String>,
     constraints: Option<BTreeMap<String, String>>,
 }
 
@@ -312,7 +312,7 @@ pub struct ProviderAuctionRequest {
 
     /// The unique identifier to be used for this provider. The host will ensure
     /// that no other provider with the same ID is running on the host
-    pub(crate) provider_id: ComponentId,
+    pub(crate) provider_id: String,
 
     /// The set of constraints that must match the labels of a suitable target host
     pub(crate) constraints: BTreeMap<String, String>,
@@ -347,7 +347,7 @@ impl ProviderAuctionRequest {
 #[derive(Default, Clone, PartialEq, Eq)]
 pub struct ProviderAuctionRequestBuilder {
     provider_ref: Option<String>,
-    provider_id: Option<ComponentId>,
+    provider_id: Option<String>,
     constraints: Option<BTreeMap<String, String>>,
 }
 
@@ -389,17 +389,17 @@ impl ProviderAuctionRequestBuilder {
 #[non_exhaustive]
 pub struct DeleteInterfaceLinkDefinitionRequest {
     /// The source component's identifier.
-    pub(crate) source_id: ComponentId,
+    pub(crate) source_id: String,
 
     /// Name of the link. Not providing this is equivalent to specifying Some("default")
     #[serde(default = "default_link_name")]
-    pub(crate) name: LinkName,
+    pub(crate) name: String,
 
     /// WIT namespace of the link, e.g. `wasi` in `wasi:keyvalue/readwrite.get`
-    pub(crate) wit_namespace: WitNamespace,
+    pub(crate) wit_namespace: String,
 
     /// WIT package of the link, e.g. `keyvalue` in `wasi:keyvalue/readwrite.get`
-    pub(crate) wit_package: WitPackage,
+    pub(crate) wit_package: String,
 }
 
 impl DeleteInterfaceLinkDefinitionRequest {
@@ -448,10 +448,10 @@ impl DeleteInterfaceLinkDefinitionRequest {
 
 #[derive(Default, Clone, PartialEq, Eq)]
 pub struct DeleteInterfaceLinkDefinitionRequestBuilder {
-    source_id: Option<ComponentId>,
-    name: Option<LinkName>,
-    wit_namespace: Option<WitNamespace>,
-    wit_package: Option<WitPackage>,
+    source_id: Option<String>,
+    name: Option<String>,
+    wit_namespace: Option<String>,
+    wit_package: Option<String>,
 }
 
 impl DeleteInterfaceLinkDefinitionRequestBuilder {
@@ -492,7 +492,7 @@ impl DeleteInterfaceLinkDefinitionRequestBuilder {
 }
 
 /// Helper function to provide a default link name
-fn default_link_name() -> LinkName {
+fn default_link_name() -> String {
     "default".to_string()
 }
 

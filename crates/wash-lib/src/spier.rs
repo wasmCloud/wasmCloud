@@ -4,7 +4,6 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 use futures::{Stream, StreamExt};
 use tracing::debug;
-use wasmcloud_control_interface::ComponentId;
 
 /// A struct that represents an invocation that was observed by the spier.
 #[derive(Debug)]
@@ -54,7 +53,7 @@ impl ObservedMessage {
 /// A struct that can spy on the RPC messages sent to and from an component, consumable as a stream
 pub struct Spier {
     stream: futures::stream::SelectAll<async_nats::Subscriber>,
-    component_id: ComponentId,
+    component_id: String,
     friendly_name: Option<String>,
 }
 
@@ -152,7 +151,7 @@ impl Stream for Spier {
 
 #[derive(Debug)]
 struct ProviderDetails {
-    id: ComponentId,
+    id: String,
 }
 
 /// Fetches all components linked to the given component

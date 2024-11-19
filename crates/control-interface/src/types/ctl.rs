@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ComponentId, Result};
+use crate::Result;
 
 /// A control interface response that wraps a response payload, a success flag, and a message
 /// with additional context if necessary.
@@ -89,7 +89,7 @@ pub struct ScaleComponentCommand {
     #[serde(default)]
     pub(crate) component_ref: String,
     /// Unique identifier of the component to scale.
-    pub(crate) component_id: ComponentId,
+    pub(crate) component_id: String,
     /// Optional set of annotations used to describe the nature of this component scale command. For
     /// example, autonomous agents may wish to "tag" scale requests as part of a given deployment
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -165,7 +165,7 @@ impl ScaleComponentCommand {
 #[non_exhaustive]
 pub struct ScaleComponentCommandBuilder {
     component_ref: Option<String>,
-    component_id: Option<ComponentId>,
+    component_id: Option<String>,
     annotations: Option<BTreeMap<String, String>>,
     max_instances: Option<u32>,
     host_id: Option<String>,
@@ -246,7 +246,7 @@ impl ScaleComponentCommandBuilder {
 #[non_exhaustive]
 pub struct StartProviderCommand {
     /// Unique identifier of the provider to start.
-    provider_id: ComponentId,
+    provider_id: String,
     /// The image reference of the provider to be started
     #[serde(default)]
     provider_ref: String,
@@ -303,7 +303,7 @@ impl StartProviderCommand {
 #[non_exhaustive]
 pub struct StartProviderCommandBuilder {
     host_id: Option<String>,
-    provider_id: Option<ComponentId>,
+    provider_id: Option<String>,
     provider_ref: Option<String>,
     annotations: Option<BTreeMap<String, String>>,
     config: Option<Vec<String>>,
@@ -435,7 +435,7 @@ pub struct StopProviderCommand {
     pub(crate) host_id: String,
     /// Unique identifier for the provider to stop.
     #[serde(default, alias = "provider_ref")]
-    pub(crate) provider_id: ComponentId,
+    pub(crate) provider_id: String,
 }
 
 impl StopProviderCommand {
@@ -460,7 +460,7 @@ impl StopProviderCommand {
 #[non_exhaustive]
 pub struct StopProviderCommandBuilder {
     host_id: Option<String>,
-    provider_id: Option<ComponentId>,
+    provider_id: Option<String>,
 }
 
 impl StopProviderCommandBuilder {
@@ -501,7 +501,7 @@ impl StopProviderCommandBuilder {
 pub struct UpdateComponentCommand {
     /// The component's 56-character unique ID
     #[serde(default)]
-    pub(crate) component_id: ComponentId,
+    pub(crate) component_id: String,
     /// Optional set of annotations used to describe the nature of this
     /// update request. Only component instances that have matching annotations
     /// will be upgraded, allowing for instance isolation by
@@ -547,7 +547,7 @@ impl UpdateComponentCommand {
 #[non_exhaustive]
 pub struct UpdateComponentCommandBuilder {
     host_id: Option<String>,
-    component_id: Option<ComponentId>,
+    component_id: Option<String>,
     new_component_ref: Option<String>,
     annotations: Option<BTreeMap<String, String>>,
 }

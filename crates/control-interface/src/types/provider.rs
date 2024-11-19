@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ComponentId, Result};
+use crate::Result;
 
 /// A summary description of a capability provider within a host inventory
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -12,7 +12,7 @@ use crate::{ComponentId, Result};
 pub struct ProviderDescription {
     /// Provider's unique identifier
     #[serde(default)]
-    pub(crate) id: ComponentId,
+    pub(crate) id: String,
     /// Image reference for this provider, if applicable
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) image_ref: Option<String>,
@@ -64,7 +64,7 @@ impl ProviderDescription {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ProviderDescriptionBuilder {
-    id: Option<ComponentId>,
+    id: Option<String>,
     image_ref: Option<String>,
     name: Option<String>,
     revision: Option<i32>,

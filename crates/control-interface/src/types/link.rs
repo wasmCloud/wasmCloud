@@ -2,11 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    ComponentId, KnownConfigName, LatticeTarget, LinkName, Result, WitInterface, WitNamespace,
-    WitPackage,
-};
-
 /// A link definition between a source and target component (component or provider) on a given
 /// interface.
 ///
@@ -20,24 +15,24 @@ use crate::{
 #[non_exhaustive]
 pub struct Link {
     /// Source identifier for the link
-    pub(crate) source_id: ComponentId,
+    pub(crate) source_id: String,
     /// Target for the link, which can be a unique identifier or (future) a routing group
-    pub(crate) target: LatticeTarget,
+    pub(crate) target: String,
     /// Name of the link. Not providing this is equivalent to specifying "default"
     #[serde(default = "default_link_name")]
-    pub(crate) name: LinkName,
+    pub(crate) name: String,
     /// WIT namespace of the link operation, e.g. `wasi` in `wasi:keyvalue/readwrite.get`
-    pub(crate) wit_namespace: WitNamespace,
+    pub(crate) wit_namespace: String,
     /// WIT package of the link operation, e.g. `keyvalue` in `wasi:keyvalue/readwrite.get`
-    pub(crate) wit_package: WitPackage,
+    pub(crate) wit_package: String,
     /// WIT Interfaces to be used for the link, e.g. `readwrite`, `atomic`, etc.
-    pub(crate) interfaces: Vec<WitInterface>,
+    pub(crate) interfaces: Vec<String>,
     /// List of named configurations to provide to the source upon request
     #[serde(default)]
-    pub(crate) source_config: Vec<KnownConfigName>,
+    pub(crate) source_config: Vec<String>,
     /// List of named configurations to provide to the target upon request
     #[serde(default)]
-    pub(crate) target_config: Vec<KnownConfigName>,
+    pub(crate) target_config: Vec<String>,
 }
 
 impl Link {
@@ -91,14 +86,14 @@ impl Link {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct LinkBuilder {
-    source_id: Option<ComponentId>,
-    target: Option<LatticeTarget>,
-    name: Option<LinkName>,
-    wit_namespace: Option<WitNamespace>,
-    wit_package: Option<WitPackage>,
-    interfaces: Option<Vec<WitInterface>>,
-    source_config: Option<Vec<KnownConfigName>>,
-    target_config: Option<Vec<KnownConfigName>>,
+    source_id: Option<String>,
+    target: Option<String>,
+    name: Option<String>,
+    wit_namespace: Option<String>,
+    wit_package: Option<String>,
+    interfaces: Option<Vec<String>>,
+    source_config: Option<Vec<String>>,
+    target_config: Option<Vec<String>>,
 }
 
 impl LinkBuilder {
@@ -150,7 +145,7 @@ impl LinkBuilder {
         self
     }
 
-    pub fn build(self) -> Result<Link> {
+    pub fn build(self) -> crate::Result<Link> {
         Ok(Link {
             source_id: self
                 .source_id
@@ -175,7 +170,7 @@ impl LinkBuilder {
 }
 
 /// Helper function to provide a default link name
-pub(crate) fn default_link_name() -> LinkName {
+pub(crate) fn default_link_name() -> String {
     "default".to_string()
 }
 
