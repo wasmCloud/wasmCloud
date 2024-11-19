@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _, Result};
+use nkeys::KeyPair;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
@@ -13,7 +14,7 @@ use wasmcloud_control_interface::{ClientBuilder as CtlClientBuilder, Host};
 mod common;
 use common::{
     find_open_port, init, start_nats, test_dir_with_subfolder, wait_for_no_hosts, wait_for_no_nats,
-    wait_for_no_wadm,
+    wait_for_no_wadm, wait_for_num_hosts,
 };
 
 #[tokio::test]
@@ -504,6 +505,394 @@ link_name = "default"
     let _ = tokio::time::timeout(Duration::from_secs(15), dev_cmd.write().await.wait())
         .await
         .context("dev command did not exit")?;
+
+    wait_for_no_hosts()
+        .await
+        .context("wasmcloud instance failed to exit cleanly (processes still left over)")?;
+
+    // Kill the nats instance
+    nats.kill().await.map_err(|e| anyhow!(e))?;
+
+    wait_for_no_nats()
+        .await
+        .context("nats instance failed to exit cleanly (processes still left over)")?;
+
+    wait_for_no_wadm()
+        .await
+        .context("wadm instance failed to exit cleanly (processes still left over)")?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+/// This test ensures that dev works when there is already a running host by
+/// connecting to it and then starting a dev loop.
+async fn integration_dev_running_host_tests() -> Result<()> {
+    wait_for_no_hosts()
+        .await
+        .context("unexpected wasmcloud instance(s) running")?;
+    let test_setup = init(
+        /* component_name= */ "hello",
+        /* template_name= */ "hello-world-rust",
+    )
+    .await?;
+    let project_dir = test_setup.project_dir.clone();
+
+    let dir = test_dir_with_subfolder("dev_hello_component");
+
+    wait_for_no_hosts()
+        .await
+        .context("one or more unexpected wasmcloud instances running")?;
+
+    let nats_port = find_open_port().await?;
+    let mut nats = start_nats(nats_port, &dir).await?;
+
+    // Start a wasmCloud host
+    let up_cmd = Arc::new(RwLock::new(
+        test_setup
+            .base_command()
+            .args([
+                "up",
+                "--nats-connect-only",
+                "--nats-port",
+                nats_port.to_string().as_ref(),
+                "--ctl-port",
+                nats_port.to_string().as_ref(),
+                "--rpc-port",
+                nats_port.to_string().as_ref(),
+            ])
+            .kill_on_drop(true)
+            .spawn()
+            .context("failed running cargo dev")?,
+    ));
+
+    // Start a dev loop, which should just work and use the existing host
+    let dev_cmd = Arc::new(RwLock::new(
+        test_setup
+            .base_command()
+            .args([
+                "dev",
+                "--nats-connect-only",
+                "--nats-port",
+                nats_port.to_string().as_ref(),
+                "--ctl-port",
+                nats_port.to_string().as_ref(),
+                "--rpc-port",
+                nats_port.to_string().as_ref(),
+            ])
+            .kill_on_drop(true)
+            .spawn()
+            .context("failed running cargo dev")?,
+    ));
+    let watch_dev_cmd = dev_cmd.clone();
+
+    let signed_file_path = Arc::new(project_dir.join("build/http_hello_world_s.wasm"));
+    let expected_path = signed_file_path.clone();
+
+    // Wait until the signed file is there (this means dev succeeded)
+    let _ = tokio::time::timeout(
+        Duration::from_secs(1200),
+        tokio::spawn(async move {
+            loop {
+                // If the command failed (and exited early), bail
+                if let Ok(Some(exit_status)) = watch_dev_cmd.write().await.try_wait() {
+                    if !exit_status.success() {
+                        bail!("dev command failed");
+                    }
+                }
+                // If the file got built, we know dev succeeded
+                if expected_path.exists() {
+                    break Ok(());
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }),
+    )
+    .await
+    .context("timed out while waiting for file path to get created")?;
+    assert!(signed_file_path.exists(), "signed component file was built");
+
+    let process_pid = dev_cmd
+        .write()
+        .await
+        .id()
+        .context("failed to get child process pid")?;
+
+    // Send ctrl + c signal to stop the process
+    // send SIGINT to the child
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(process_pid as i32),
+        nix::sys::signal::Signal::SIGINT,
+    )
+    .expect("cannot send ctrl-c");
+
+    // Wait until the process stops
+    let _ = tokio::time::timeout(Duration::from_secs(15), dev_cmd.write().await.wait())
+        .await
+        .context("dev command did not exit")?;
+
+    // Kill the originally launched host
+    let process_pid = up_cmd
+        .write()
+        .await
+        .id()
+        .context("failed to get child process pid")?;
+
+    // Send ctrl + c signal to stop the process
+    // send SIGINT to the child
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(process_pid as i32),
+        nix::sys::signal::Signal::SIGINT,
+    )
+    .expect("cannot send ctrl-c");
+
+    wait_for_no_hosts()
+        .await
+        .context("wasmcloud instance failed to exit cleanly (processes still left over)")?;
+
+    // Kill the nats instance
+    nats.kill().await.map_err(|e| anyhow!(e))?;
+
+    wait_for_no_nats()
+        .await
+        .context("nats instance failed to exit cleanly (processes still left over)")?;
+
+    wait_for_no_wadm()
+        .await
+        .context("wadm instance failed to exit cleanly (processes still left over)")?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+/// This test ensures that dev does not start and exits cleanly when multiple hosts are
+/// available and the host ID is not specified. Then, ensures dev does start when
+/// the host ID is specified.
+async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
+    wait_for_no_hosts()
+        .await
+        .context("unexpected wasmcloud instance(s) running")?;
+    let test_setup = init(
+        /* component_name= */ "hello",
+        /* template_name= */ "hello-world-rust",
+    )
+    .await?;
+    let project_dir = test_setup.project_dir.clone();
+
+    let dir = test_dir_with_subfolder("dev_hello_component");
+
+    wait_for_no_hosts()
+        .await
+        .context("one or more unexpected wasmcloud instances running")?;
+
+    let nats_port = find_open_port().await?;
+    let mut nats = start_nats(nats_port, &dir).await?;
+
+    // Start a wasmCloud host
+    let host_id = KeyPair::new_server();
+    let up_cmd = Arc::new(RwLock::new(
+        test_setup
+            .base_command()
+            .args([
+                "up",
+                "--nats-connect-only",
+                "--nats-port",
+                nats_port.to_string().as_ref(),
+                "--ctl-port",
+                nats_port.to_string().as_ref(),
+                "--rpc-port",
+                nats_port.to_string().as_ref(),
+                "--host-seed",
+                host_id.seed().context("failed to get host seed")?.as_str(),
+            ])
+            .kill_on_drop(true)
+            .spawn()
+            .context("failed running cargo dev")?,
+    ));
+    // Start a second wasmCloud host
+    let up_cmd2 = Arc::new(RwLock::new(
+        test_setup
+            .base_command()
+            .args([
+                "up",
+                "--nats-connect-only",
+                "--nats-port",
+                nats_port.to_string().as_ref(),
+                "--ctl-port",
+                nats_port.to_string().as_ref(),
+                "--rpc-port",
+                nats_port.to_string().as_ref(),
+                "--multi-local",
+            ])
+            .kill_on_drop(true)
+            .spawn()
+            .context("failed running cargo dev")?,
+    ));
+
+    // Ensure two hosts are running
+    wait_for_num_hosts(2)
+        .await
+        .context("did not get 2 hosts running")?;
+
+    // Start a dev loop, which will not work with more than one host
+    let bad_dev_cmd_multiple_hosts =
+        // We're going to wait for the output, which should happen right after
+        // querying for the host list.
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            test_setup
+                .base_command()
+                .args([
+                    "dev",
+                    "--nats-connect-only",
+                    "--nats-port",
+                    nats_port.to_string().as_ref(),
+                    "--ctl-port",
+                    nats_port.to_string().as_ref(),
+                    "--rpc-port",
+                    nats_port.to_string().as_ref(),
+                ])
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .context("dev loop did not exit in expected time")?
+        .context("dev loop failed to exit cleanly")?;
+
+    assert!(!bad_dev_cmd_multiple_hosts.status.success());
+    assert!(bad_dev_cmd_multiple_hosts.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&bad_dev_cmd_multiple_hosts.stderr)
+        .contains("found multiple running hosts"));
+
+    // Start a dev loop, which will fail to find the desired host
+    let bad_dev_cmd_multiple_hosts =
+        // We're going to wait for the output, which should happen right after
+        // querying for the host list.
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            test_setup
+                .base_command()
+                .args([
+                    "dev",
+                    "--nats-connect-only",
+                    "--nats-port",
+                    nats_port.to_string().as_ref(),
+                    "--ctl-port",
+                    nats_port.to_string().as_ref(),
+                    "--rpc-port",
+                    nats_port.to_string().as_ref(),
+                    "--host-id",
+                    // Real host ID, just not one of the ones we started
+                    "NAAX34C3KIELJQJRZBAJSRJ6S3Q5NGAGMAAFITB64F4L5L4LQC6XVAZK"
+                ])
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .context("dev loop did not exit in expected time")?
+        .context("dev loop failed to exit cleanly")?;
+
+    assert!(!bad_dev_cmd_multiple_hosts.status.success());
+    assert!(bad_dev_cmd_multiple_hosts.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&bad_dev_cmd_multiple_hosts.stderr)
+        .contains("not found in running hosts"));
+
+    let dev_cmd = Arc::new(RwLock::new(
+        test_setup
+            .base_command()
+            .args([
+                "dev",
+                "--nats-connect-only",
+                "--nats-port",
+                nats_port.to_string().as_ref(),
+                "--ctl-port",
+                nats_port.to_string().as_ref(),
+                "--rpc-port",
+                nats_port.to_string().as_ref(),
+                "--host-id",
+                host_id.public_key().as_str(),
+            ])
+            .kill_on_drop(true)
+            .spawn()
+            .context("dev loop did not start successfully with multiple hosts")?,
+    ));
+
+    let watch_dev_cmd = dev_cmd.clone();
+
+    let signed_file_path = Arc::new(project_dir.join("build/http_hello_world_s.wasm"));
+    let expected_path = signed_file_path.clone();
+
+    // Wait until the signed file is there (this means dev succeeded)
+    let _ = tokio::time::timeout(
+        Duration::from_secs(1200),
+        tokio::spawn(async move {
+            loop {
+                // If the command failed (and exited early), bail
+                if let Ok(Some(exit_status)) = watch_dev_cmd.write().await.try_wait() {
+                    if !exit_status.success() {
+                        bail!("dev command failed");
+                    }
+                }
+                // If the file got built, we know dev succeeded
+                if expected_path.exists() {
+                    break Ok(());
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }),
+    )
+    .await
+    .context("timed out while waiting for file path to get created")?;
+    assert!(signed_file_path.exists(), "signed component file was built");
+
+    let process_pid = dev_cmd
+        .write()
+        .await
+        .id()
+        .context("failed to get child process pid")?;
+
+    // Send ctrl + c signal to stop the process
+    // send SIGINT to the child
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(process_pid as i32),
+        nix::sys::signal::Signal::SIGINT,
+    )
+    .expect("cannot send ctrl-c");
+
+    // Wait until the process stops
+    let _ = tokio::time::timeout(Duration::from_secs(15), dev_cmd.write().await.wait())
+        .await
+        .context("dev command did not exit")?;
+
+    // Kill the originally launched host
+    let process_pid = up_cmd
+        .write()
+        .await
+        .id()
+        .context("failed to get child process pid")?;
+    // Send ctrl + c signal to stop the process
+    // send SIGINT to the child
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(process_pid as i32),
+        nix::sys::signal::Signal::SIGINT,
+    )
+    .expect("cannot send ctrl-c");
+
+    // Kill the second host
+    let process_pid = up_cmd2
+        .write()
+        .await
+        .id()
+        .context("failed to get child process pid")?;
+    // Send ctrl + c signal to stop the process
+    // send SIGINT to the child
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(process_pid as i32),
+        nix::sys::signal::Signal::SIGINT,
+    )
+    .expect("cannot send ctrl-c");
 
     wait_for_no_hosts()
         .await

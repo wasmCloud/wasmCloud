@@ -1018,14 +1018,9 @@ pub async fn init_workspace(component_names: Vec<&str>) -> Result<WorkspaceTestS
 /// expecting that the wasmcloud process invocation contains `wasmcloud_host`
 #[allow(dead_code)]
 pub async fn wait_for_no_hosts() -> Result<()> {
-    wait_until_process_has_count(
-        WASMCLOUD_HOST_BIN,
-        |v| v == 0,
-        Duration::from_secs(15),
-        Duration::from_millis(250),
-    )
-    .await
-    .context("number of hosts running is still non-zero")?;
+    wait_for_num_hosts(0)
+        .await
+        .context("number of hosts running is still non-zero")?;
     let lockfile = host_pid_file()?;
     if wait_for_file_to_be_removed(&lockfile).await.is_err() {
         // If the PID file wasn't removed, attempt to delete it manually
@@ -1037,6 +1032,18 @@ pub async fn wait_for_no_hosts() -> Result<()> {
         })?;
     }
     Ok(())
+}
+
+/// Waits until the number of hosts running matches the expected number
+pub async fn wait_for_num_hosts(num_hosts: usize) -> Result<()> {
+    wait_until_process_has_count(
+        WASMCLOUD_HOST_BIN,
+        |v| v == num_hosts,
+        Duration::from_secs(15),
+        Duration::from_millis(250),
+    )
+    .await
+    .context(format!("number of hosts running is not [{num_hosts}]"))
 }
 
 /// Wait for a file to be removed.
