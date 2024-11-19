@@ -1,10 +1,12 @@
 use std::collections::HashSet;
 
-use anyhow::{ensure, Context};
+use anyhow::{bail, ensure, Context};
+use async_nats::jetstream;
+use wasmcloud_secrets_types::Secret;
 
 pub const SECRETS_API_VERSION: &str = "v1alpha1";
 
-use crate::{PutSecretError, PutSecretRequest, PutSecretResponse};
+use crate::{find_key_rev, PutSecretError, PutSecretRequest, PutSecretResponse};
 
 /// Helper function wrapper around [`put_secret`] that allows putting multiple secrets in the secret store.
 /// See the documentation for [`put_secret`] for more information.
@@ -71,6 +73,68 @@ pub async fn put_secret(
             .context("Error decrypting secret. Ensure the transit xkey is the same as the one provided to the backend")),
         _ => Err(anyhow::anyhow!(e)),
     })
+}
+
+/// Get a secret from the NATS KV backed secret store. This function directly requests the secret from the KV store
+/// and decrypts it using the provided encryption key. Notably, this does not check if the requesting entity is allowed
+/// to access the secret, as owning the encryption key implies that the caller is trusted.
+///
+/// # Arguments
+/// - `nats_client` - the NATS client connected to a server that the secret store is accessible on, jetstream enabled
+/// - `secret_bucket_name` - the name of the secret bucket to use fetch secrets from
+/// - `encryption_xkey` - the encryption key to use to decrypt the secret. Must be constructed from a seed key
+/// - `name` - the name of the secret to get
+/// - `version` - the version of the secret to get
+pub async fn get_secret(
+    nats_client: &async_nats::Client,
+    secret_bucket_name: &str,
+    encryption_xkey: &nkeys::XKey,
+    name: &str,
+    version: Option<&str>,
+) -> anyhow::Result<Secret> {
+    let js = jetstream::new(nats_client.clone());
+    let secrets = js.get_key_value(secret_bucket_name).await?;
+
+    let entry = match &version {
+        Some(v) => {
+            let revision = str::parse::<u64>(v)
+                .context("invalid version format - must be a positive integer")?;
+
+            let mut key_hist = secrets
+                .history(&name)
+                .await
+                .with_context(|| format!("failed to get history for secret '{name}'"))?;
+            find_key_rev(&mut key_hist, revision).await
+        }
+        None => secrets
+            .entry(name)
+            .await
+            .with_context(|| format!("failed to get latest version of secret '{name}'"))?,
+    };
+
+    let Some(entry) = entry else {
+        bail!("secret not found in KV store")
+    };
+
+    let mut secret = Secret {
+        version: entry.revision.to_string(),
+        ..Default::default()
+    };
+
+    let decrypted = encryption_xkey
+        .open(&entry.value, encryption_xkey)
+        .context("failed to decrypt secret: ensure the encryption key is correct")?;
+
+    match String::from_utf8(decrypted) {
+        Ok(s) => {
+            secret.string_secret = Some(s);
+        }
+        Err(_) => {
+            secret.binary_secret = Some(entry.value.to_vec());
+        }
+    };
+
+    Ok(secret)
 }
 
 /// Add the allowed secrets a given public key is allowed to access

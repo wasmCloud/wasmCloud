@@ -704,7 +704,7 @@ impl SecretsServer for Api {
     }
 }
 
-async fn find_key_rev(h: &mut History, revision: u64) -> Option<Entry> {
+pub(crate) async fn find_key_rev(h: &mut History, revision: u64) -> Option<Entry> {
     while let Some(entry) = h.next().await {
         if let Ok(entry) = entry {
             if entry.revision == revision {
