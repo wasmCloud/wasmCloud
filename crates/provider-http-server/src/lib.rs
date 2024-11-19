@@ -38,7 +38,7 @@ use pin_project_lite::pin_project;
 use tokio::task::JoinHandle;
 use tokio::{spawn, time};
 use tower_http::cors::{self, CorsLayer};
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 use wasmcloud_provider_sdk::provider::WrpcClient;
 use wasmcloud_provider_sdk::{initialize_observability, load_host_data, run_provider};
 use wrpc_interface_http::InvokeIncomingHandler as _;
@@ -286,9 +286,19 @@ pub(crate) fn get_tcp_listener(settings: &ServiceSettings) -> anyhow::Result<Tcp
     socket
         .set_nodelay(true)
         .context("failed to set `TCP_NODELAY`")?;
-    socket
-        .set_keepalive(false)
-        .context("failed to disable TCP keepalive")?;
+
+    match settings.disable_keepalive {
+        Some(false) => {
+            info!("disabling TCP keepalive");
+            socket
+                .set_keepalive(false)
+                .context("failed to disable TCP keepalive")?
+        }
+        None | Some(true) => socket
+            .set_keepalive(true)
+            .context("failed to enable TCP keepalive")?,
+    }
+
     socket
         .bind(settings.address)
         .context("Unable to bind to address")?;
