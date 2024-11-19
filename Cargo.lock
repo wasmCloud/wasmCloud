@@ -8563,16 +8563,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmcloud-host-sys"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cbindgen",
- "tokio",
- "wasmcloud-host",
-]
-
-[[package]]
 name = "wasmcloud-provider-blobstore-azure"
 version = "0.5.1"
 dependencies = [
