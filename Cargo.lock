@@ -8398,8 +8398,6 @@ version = "2.2.0"
 dependencies = [
  "anyhow",
  "async-nats",
- "async-trait",
- "bytes",
  "cloudevents-sdk",
  "futures",
  "oci-client",
