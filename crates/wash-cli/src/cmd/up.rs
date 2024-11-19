@@ -734,7 +734,10 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     stop_wasmcloud(wasmcloud_child).await?;
     tokio::fs::remove_file(host_pid_file()?).await?;
 
-    if wadm_process.is_some() {
+    if let Some(mut wadm_process) = wadm_process {
+        if let Err(e) = wadm_process.kill().await {
+            warn!("failed to kill wadm: {e}");
+        };
         // remove wadm pidfile, the process is stopped automatically by CTRL+c
         remove_wadm_pidfile(&install_dir).await?;
     }
