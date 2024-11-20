@@ -67,11 +67,11 @@ pub struct ListCommand {
 #[derive(Args, Debug, Clone)]
 pub struct UndeployCommand {
     /// Name of the application to undeploy
-    #[clap(name = "name", required_unless_present("all"))]
+    #[clap(name = "name", required_unless_present("all"), id = "app_name")]
     app_name: Option<String>,
 
     #[clap(flatten)]
-    opts: CliConnectionOpts,
+    pub opts: CliConnectionOpts,
 
     /// Whether to undeploy all the available apps
     #[clap(long = "all", default_value = "false")]
@@ -159,11 +159,11 @@ pub struct StatusCommand {
 #[derive(Args, Debug, Clone)]
 pub struct HistoryCommand {
     /// The name of the application
-    #[clap(name = "name")]
+    #[clap(name = "name", id = "app_name")]
     app_name: String,
 
     #[clap(flatten)]
-    opts: CliConnectionOpts,
+    pub opts: CliConnectionOpts,
 }
 
 #[derive(Args, Debug, Clone)]
