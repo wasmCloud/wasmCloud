@@ -1,21 +1,11 @@
-import {type LatticeClient, type LatticeClientOptions} from '@wasmcloud/lattice-client-core';
+import type {
+  LatticeClientConfigOutput,
+  LatticeClientConfigInput,
+  SetConfigFunction,
+} from './lattice-config-context';
 import * as React from 'react';
 import {useLatticeClient} from '@/context/use-lattice-client';
-
-type LatticeClientConfigOutput = typeof LatticeClient.prototype.instance.config;
-type LatticeClientConfigInput = Partial<LatticeClientOptions['config']>;
-
-type SetConfigFunction = (value: LatticeClientConfigInput) => void;
-
-export type LatticeConfigContextType = {
-  config: LatticeClientConfigOutput;
-  setConfig: SetConfigFunction;
-};
-
-export const LatticeConfigContext = React.createContext<LatticeConfigContextType>({
-  config: {} as LatticeClientConfigOutput,
-  setConfig: () => {},
-});
+import {LatticeConfigContext} from './lattice-config-context';
 
 export function LatticeConfigProvider({
   children,
