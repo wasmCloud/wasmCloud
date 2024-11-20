@@ -134,6 +134,8 @@ jobs:
       - name: test provider load
         if: ${{ matrix.project.test_deploy && matrix.wash-version == 'current' }}
         shell: bash
+        env:
+          RUST_LOG: trace
         working-directory: examples/${{ matrix.project.lang }}/providers/${{ matrix.project.name }}
         run: |
           set -xe

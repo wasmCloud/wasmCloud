@@ -960,6 +960,11 @@ async fn install_patch_or_default_wadm_version(
         .unwrap_or_default();
     match new_patch_version {
         Some(new_patch) => {
+            eprintln!(
+                "{} Found a new patch version of wadm: {}",
+                emoji::INFO_SQUARE,
+                new_patch
+            );
             // Re-add stripped 'v' prefix due to semver parsing
             let new_version = format!("v{}", new_patch);
             match ensure_wadm(&new_version, install_dir).await {
