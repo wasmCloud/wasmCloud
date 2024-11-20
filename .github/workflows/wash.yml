@@ -22,6 +22,9 @@ env:
   GO_VERSION: '1.23'
   TINYGO_VERSION: '0.33.0'
 
+permissions:
+  contents: read
+
 jobs:
   unit_tests:
     name: Unit Tests
@@ -40,7 +43,7 @@ jobs:
         with:
           shared-key: '${{ matrix.os }}-shared-cache'
       - name: Install nextest
-        uses: taiki-e/install-action@5d427d86f088a6cedcddb92b3ad038d30721b52f
+        uses: taiki-e/install-action@32cafa544d95997bc99ee83f9e90727b66e1ff6a
         with:
           tool: nextest,wit-bindgen-cli
       - uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed
@@ -83,7 +86,7 @@ jobs:
         with:
           cli-args: '-f ./crates/wash-cli/tools/docker-compose.yml up --detach'
       - name: Install nextest
-        uses: taiki-e/install-action@5d427d86f088a6cedcddb92b3ad038d30721b52f
+        uses: taiki-e/install-action@32cafa544d95997bc99ee83f9e90727b66e1ff6a
         with:
           tool: nextest,wit-bindgen-cli,wasm-tools
       - name: Run integration tests

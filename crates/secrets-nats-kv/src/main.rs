@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{ensure, Context};
+use clap::ValueEnum;
 use clap::{Parser, Subcommand};
 use nkeys::XKey;
 use secrets_nats_kv::client::SECRETS_API_VERSION;
@@ -30,6 +31,8 @@ enum Command {
     Run(RunCommand),
     /// Put a secret into the NATS KV secrets backend
     Put(PutCommand),
+    /// Get a secret from the NATS KV secrets backend
+    Get(GetCommand),
     /// Add a secret mapping to the NATS KV secrets backend
     AddMapping(AddSecretMappingCommand),
     /// Remove a secret mapping from the NATS KV secrets backend
@@ -107,6 +110,35 @@ struct PutCommand {
     global: GlobalOpts,
 }
 
+#[derive(Parser, Debug, Clone, ValueEnum)]
+enum SecretKind {
+    String,
+    Binary,
+}
+
+#[derive(Parser, Debug, Clone)]
+struct GetCommand {
+    /// The server's encryption XKey to decrypt the secret fetched from the KV store.
+    #[clap(short, long, env = "ENCRYPTION_XKEY_SEED")]
+    encryption_xkey_seed: String,
+    /// The NATS address to connect to where the backend is running
+    #[clap(long, default_value = "127.0.0.1:4222")]
+    nats_address: String,
+    /// The NATS KV bucket to use for storing secrets
+    #[clap(short = 'b', long, default_value = "WASMCLOUD_SECRETS")]
+    secrets_bucket: String,
+    /// The name of the secret to get from the backend
+    name: String,
+    /// The version of the secret to get from the backend
+    #[clap(long = "secret-version")]
+    version: Option<String>,
+    /// The kind of secret to get from the backend, `string` or `binary`
+    #[clap(long, default_value = "string")]
+    kind: SecretKind,
+    #[command(flatten)]
+    global: GlobalOpts,
+}
+
 #[derive(Parser, Debug, Clone)]
 struct AddSecretMappingCommand {
     /// The NATS address to connect to where the backend is running
@@ -152,6 +184,7 @@ async fn main() -> anyhow::Result<()> {
     match args.command {
         Command::Run(args) => run(args).await,
         Command::Put(args) => put(args).await,
+        Command::Get(args) => get(args).await,
         Command::AddMapping(args) => add_mapping(args).await,
         Command::RemoveMapping(args) => remove_mapping(args).await,
     }
@@ -248,6 +281,57 @@ async fn put(args: PutCommand) -> anyhow::Result<()> {
 
     client::put_secret(&nats_client, &args.subject_base, &server_xkey, secret).await?;
     println!("Secret '{}' put successfully", args.name);
+    Ok(())
+}
+
+async fn get(args: GetCommand) -> anyhow::Result<()> {
+    let nats_client = match args.global.nats_creds_file {
+        Some(creds_file) => async_nats::ConnectOptions::new()
+            .credentials_file(creds_file.clone())
+            .await
+            .context(format!(
+                "failed to read NATS credentials file '{}'",
+                &creds_file
+            ))?
+            .connect(&args.nats_address)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to connect to NATS at {} with credentials file '{creds_file}'",
+                    args.nats_address
+                )
+            })?,
+        None => async_nats::connect(&args.nats_address)
+            .await
+            .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?,
+    };
+
+    let encryption_xkey = XKey::from_seed(&args.encryption_xkey_seed)
+        .context("failed to create encryption key from seed")?;
+
+    let secret = client::get_secret(
+        &nats_client,
+        &args.secrets_bucket,
+        &encryption_xkey,
+        &args.name,
+        args.version.as_deref(),
+    )
+    .await?;
+
+    match (args.kind, secret.string_secret, secret.binary_secret) {
+        (SecretKind::String, Some(s), None) => println!("{s}"),
+        (SecretKind::Binary, None, Some(b)) => {
+            println!("{b:?}");
+        }
+        (SecretKind::String, None, Some(_)) => {
+            anyhow::bail!("secret was in binary format, but string format was requested")
+        }
+        (SecretKind::Binary, Some(_), None) => {
+            anyhow::bail!("secret was in string format, but binary format was requested")
+        }
+        _ => anyhow::bail!("no secret found in KV store"),
+    }
+
     Ok(())
 }
 

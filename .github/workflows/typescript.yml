@@ -13,7 +13,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: washboard-${{ github.event.pull_request.number || github.ref }}
@@ -29,4 +29,6 @@ jobs:
   release:
     if: startswith(github.ref, 'refs/tags/typescript/')
     needs: [build, test]
+    permissions:
+      contents: write
     uses: ./.github/workflows/ts-release.yml
