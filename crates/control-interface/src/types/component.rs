@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ComponentId, Result};
+use crate::Result;
 
 /// A summary description of an component within a host inventory
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -12,7 +12,7 @@ use crate::{ComponentId, Result};
 pub struct ComponentDescription {
     /// The unique component identifier for this component
     #[serde(default)]
-    pub(crate) id: ComponentId,
+    pub(crate) id: String,
 
     /// Image reference for this component
     #[serde(default)]
@@ -39,7 +39,7 @@ pub struct ComponentDescription {
 #[derive(Default, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ComponentDescriptionBuilder {
-    id: Option<ComponentId>,
+    id: Option<String>,
     image_ref: Option<String>,
     name: Option<String>,
     annotations: Option<BTreeMap<String, String>>,

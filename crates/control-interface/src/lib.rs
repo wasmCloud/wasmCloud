@@ -34,10 +34,6 @@ pub use types::provider::*;
 pub use types::registry::*;
 pub use types::rpc::*;
 
-pub use wasmcloud_core::{
-    ComponentId, KnownConfigName, LatticeTarget, LinkName, WitInterface, WitNamespace, WitPackage,
-};
-
 /// Generic result
 type Result<T> = ::core::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

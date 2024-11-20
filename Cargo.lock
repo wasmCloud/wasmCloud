@@ -1401,24 +1401,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cbindgen"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "faeaa693e5a727975a79211b8f35c0cb09b031fdb6eaa4a788bc6713d01488ca"
-dependencies = [
- "heck 0.4.1",
- "indexmap 1.9.3",
- "log",
- "proc-macro2",
- "quote",
- "serde 1.0.210",
- "serde_json",
- "syn 1.0.109",
- "tempfile",
- "toml 0.5.11",
-]
-
-[[package]]
 name = "cc"
 version = "1.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8382,8 +8364,6 @@ version = "2.2.0"
 dependencies = [
  "anyhow",
  "async-nats",
- "async-trait",
- "bytes",
  "cloudevents-sdk",
  "futures",
  "oci-client",
@@ -8394,7 +8374,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-opentelemetry",
- "wasmcloud-core 0.15.0",
 ]
 
 [[package]]
@@ -8455,10 +8434,8 @@ version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-nats",
- "async-trait",
  "bytes",
  "futures",
- "hex",
  "hyper-rustls 0.27.3",
  "hyper-util",
  "nkeys",
@@ -8473,13 +8450,11 @@ dependencies = [
  "secrecy",
  "semver",
  "serde 1.0.210",
- "serde_bytes",
  "sha2",
  "tokio",
  "tracing",
  "ulid",
  "url",
- "uuid 1.11.0",
  "wascap 0.15.2",
  "webpki-roots 0.26.6",
 ]
@@ -8526,16 +8501,6 @@ dependencies = [
  "wasmcloud-tracing",
  "wrpc-transport",
  "wrpc-transport-nats",
-]
-
-[[package]]
-name = "wasmcloud-host-sys"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cbindgen",
- "tokio",
- "wasmcloud-host",
 ]
 
 [[package]]

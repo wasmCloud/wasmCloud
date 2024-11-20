@@ -1,4 +1,6 @@
 const DEFAULT_TOPIC_PREFIX: &str = "wasmbus.ctl";
+// Copied from https://docs.rs/wasmcloud-core/0.15.0/wasmcloud_core/constant.CTL_API_VERSION_1.html
+const CTL_API_VERSION_1: &str = "v1";
 
 fn prefix(topic_prefix: &Option<String>, lattice: &str, version: &str) -> String {
     format!(
@@ -10,7 +12,7 @@ fn prefix(topic_prefix: &Option<String>, lattice: &str, version: &str) -> String
 }
 
 pub mod v1 {
-    use wasmcloud_core::CTL_API_VERSION_1;
+    use crate::broker::CTL_API_VERSION_1;
 
     use super::prefix;
 
@@ -82,7 +84,7 @@ pub mod v1 {
     }
 
     pub mod commands {
-        use wasmcloud_core::CTL_API_VERSION_1;
+        use crate::broker::CTL_API_VERSION_1;
 
         use super::prefix;
 
@@ -139,7 +141,7 @@ pub mod v1 {
     }
 
     pub mod queries {
-        use wasmcloud_core::CTL_API_VERSION_1;
+        use crate::broker::CTL_API_VERSION_1;
 
         use super::prefix;
 
