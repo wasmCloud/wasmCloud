@@ -328,13 +328,13 @@ struct Args {
     heartbeat_interval: Option<Duration>,
 
     #[clap(
-    long = "help-markdown",
-    short,
-    action=ArgAction::SetTrue,
-    conflicts_with = "help",
-    hide = true
+        long = "help-markdown",
+        short,
+        action=ArgAction::SetTrue,
+        conflicts_with = "help",
+        hide = true
     )]
-    markdown_help: bool,
+    help_markdown: bool,
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -345,7 +345,7 @@ async fn main() -> anyhow::Result<()> {
     let args: Args = Args::parse();
 
     // Implements clap_markdown for markdown generation of command line documentation.`
-    if args.markdown_help {
+    if args.help_markdown {
         clap_markdown::print_help_markdown::<Args>();
         std::process::exit(0);
     }
