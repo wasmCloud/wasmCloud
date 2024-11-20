@@ -28,7 +28,7 @@ jobs:
           # - path pattern: `path/to/project/v1.2.3`
           # - package pattern: `refs/tags/package-name-v1.2.3`
           # - tag only pattern: `refs/tags/v1.2.3`
-          pattern: '^refs\/tags\/(?:.*\/|[a-z-]*)?v?(.*)$'
+          pattern: '^(?:.*\/|[a-z-]*)?v?(.*)$'
 
       - name: Setup
         uses: ./.github/actions/ts-setup
