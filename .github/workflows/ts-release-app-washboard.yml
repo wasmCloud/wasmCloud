@@ -45,4 +45,6 @@ jobs:
           draft: false
           prerelease: ${{ steps.extract.outputs.prerelease != '' }}
           make_latest: false
+          # release name used in wash-cli (file://./../../crates/wash-cli/src/ui/mod.rs#L68)
+          name: washboard-ui-v${{ steps.extract.outputs.full }}
           files: washboard.tar.gz
