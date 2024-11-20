@@ -143,7 +143,7 @@ struct Cli {
         hide = true,
         global = true
     )]
-    markdown_help: bool,
+    help_markdown: bool,
 
     #[clap(subcommand)]
     command: CliCommand,
@@ -387,7 +387,7 @@ async fn main() {
     let output_kind = cli.output;
 
     // Implements clap_markdown for markdown generation of command line documentation. Most straightforward way to invoke is probably `wash app get --help-markdown > help.md`
-    if cli.markdown_help {
+    if cli.help_markdown {
         clap_markdown::print_help_markdown::<Cli>();
         std::process::exit(0);
     };
