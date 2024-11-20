@@ -32,12 +32,7 @@ type LatticeFormOutput = z.output<typeof formSchema>;
 export function LatticeSettings(): ReactElement {
   const {config, setConfig} = useLatticeConfig();
 
-  const {latticeUrl, latticeId, ctlTopicPrefix, retryCount} = config ?? {
-    latticeUrl: '',
-    latticeId: 'default',
-    ctlTopicPrefix: 'wasmcloud.control',
-    retryCount: 5,
-  };
+  const {latticeUrl, latticeId, ctlTopicPrefix, retryCount} = config;
   const form = useForm<LatticeFormInput, object, LatticeFormOutput>({
     resolver: zodResolver(formSchema),
     defaultValues: {
