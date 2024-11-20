@@ -69,6 +69,36 @@ macro_rules! initialize_observability {
                     "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT" => {
                         otel_config.logs_endpoint = Some(v.clone())
                     }
+                    "OTEL_TRACES_SAMPLER" => {
+                        otel_config.traces_sampler = Some(v.clone())
+                    }
+                    "OTEL_TRACES_SAMPLER_ARG" => {
+                        otel_config.traces_sampler_arg = Some(v.clone())
+                    }
+                    "OTEL_BSP_MAX_CONCURRENT_EXPORTS" => {
+                        let parsed = match v.parse::<usize>() {
+                            Ok(v) => v,
+                            Err(_) => {
+                                eprintln!(
+                                    "Failed to parse OTEL_BSP_MAX_CONCURRENT_EXPORTS as usize, using previously set value or default"
+                                );
+                                continue
+                            }
+                        };
+                        otel_config.concurrent_exports = Some(parsed)
+                    }
+                    "OTEL_BSP_MAX_QUEUE_SIZE" => {
+                        let parsed = match v.parse::<usize>() {
+                            Ok(v) => v,
+                            Err(_) => {
+                                eprintln!(
+                                    "Failed to parse OTEL_BSP_MAX_QUEUE_SIZE as usize, using previously set value or default"
+                                );
+                                continue
+                            }
+                        };
+                        otel_config.max_batch_queue_size = Some(parsed)
+                    }
                     _ => {}
                 }
             }

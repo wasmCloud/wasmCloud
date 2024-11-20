@@ -366,6 +366,7 @@ async fn main() -> anyhow::Result<()> {
         protocol: args.observability_protocol.unwrap_or_default(),
         additional_ca_paths: args.tls_ca_paths.clone().unwrap_or_default(),
         trace_level,
+        ..Default::default()
     };
     let log_level = WasmcloudLogLevel::from(args.log_level);
 
