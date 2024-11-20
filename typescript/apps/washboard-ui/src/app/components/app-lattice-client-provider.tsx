@@ -14,10 +14,7 @@ const getClient = (parameters?: Config) => {
       latticeUrl: import.meta.env.VITE_NATS_WEBSOCKET_URL ?? 'ws://localhost:4223',
       ...parameters,
     },
-    getNewConnection: ({latticeUrl}) =>
-      new NatsWsLatticeConnection({
-        latticeUrl: latticeUrl,
-      }),
+    getNewConnection: ({latticeUrl}) => new NatsWsLatticeConnection({latticeUrl}),
   };
   return new LatticeClient(config);
 };
