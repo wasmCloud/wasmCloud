@@ -207,6 +207,7 @@ where
     S: Subscriber,
     S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
+    use opentelemetry_sdk::trace::{BatchConfigBuilder, Config as TraceConfig, Sampler};
     use tracing_opentelemetry::OpenTelemetryLayer;
 
     let builder: SpanExporterBuilder = match otel_config.protocol {
@@ -229,20 +230,69 @@ where
         }
     };
 
+    // NOTE(thomastaylor312): This is copied and modified from the opentelemetry-sdk crate. We
+    // currently need this because providers map config back into the vars needed to configure the
+    // SDK. When we update providers to be managed externally and remove host-managed ones, we can
+    // remove this. But for now we need to parse all the possible options
+    let mut config = TraceConfig::default().with_resource(opentelemetry_sdk::Resource::new(vec![
+        opentelemetry::KeyValue::new("service.name", service_name),
+    ])); // This loads from the env vars by default and then we set the service name
+    if let Some(sampler) = otel_config.traces_sampler.as_deref() {
+        config.sampler = match sampler {
+            "always_on" => Box::new(Sampler::AlwaysOn),
+            "always_off" => Box::new(Sampler::AlwaysOff),
+            "traceidratio" => {
+                let ratio = otel_config
+                    .traces_sampler_arg
+                    .as_ref()
+                    .and_then(|r| r.parse::<f64>().ok());
+                if let Some(r) = ratio {
+                    Box::new(Sampler::TraceIdRatioBased(r))
+                } else {
+                    eprintln!("Missing or invalid OTEL_TRACES_SAMPLER_ARG value. Falling back to default: 1.0");
+                    Box::new(Sampler::TraceIdRatioBased(1.0))
+                }
+            }
+            "parentbased_always_on" => Box::new(Sampler::ParentBased(Box::new(Sampler::AlwaysOn))),
+            "parentbased_always_off" => {
+                Box::new(Sampler::ParentBased(Box::new(Sampler::AlwaysOff)))
+            }
+            "parentbased_traceidratio" => {
+                let ratio = otel_config
+                    .traces_sampler_arg
+                    .as_ref()
+                    .and_then(|r| r.parse::<f64>().ok());
+                if let Some(r) = ratio {
+                    Box::new(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
+                        r,
+                    ))))
+                } else {
+                    eprintln!("Missing or invalid OTEL_TRACES_SAMPLER_ARG value. Falling back to default: 1.0");
+                    Box::new(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
+                        1.0,
+                    ))))
+                }
+            }
+            s => {
+                eprintln!("Unrecognised or unimplemented OTEL_TRACES_SAMPLER value: {s}. Falling back to default: parentbased_always_on");
+                Box::new(Sampler::ParentBased(Box::new(Sampler::AlwaysOn)))
+            }
+        };
+    }
+    let mut batch_builder = BatchConfigBuilder::default();
+    if let Some(max_batch_queue_size) = otel_config.max_batch_queue_size {
+        batch_builder = batch_builder.with_max_queue_size(max_batch_queue_size);
+    }
+    if let Some(concurrent_exports) = otel_config.concurrent_exports {
+        batch_builder = batch_builder.with_max_concurrent_exports(concurrent_exports);
+    }
+    let batch_config = batch_builder.build();
+
     let tracer = opentelemetry_otlp::new_pipeline()
         .tracing()
         .with_exporter(builder)
-        .with_trace_config(
-            opentelemetry_sdk::trace::config()
-                .with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn)
-                .with_id_generator(opentelemetry_sdk::trace::RandomIdGenerator::default())
-                .with_max_events_per_span(64)
-                .with_max_attributes_per_span(16)
-                .with_max_events_per_span(16)
-                .with_resource(opentelemetry_sdk::Resource::new(vec![
-                    opentelemetry::KeyValue::new("service.name", service_name),
-                ])),
-        )
+        .with_trace_config(config)
+        .with_batch_config(batch_config)
         .install_batch(opentelemetry_sdk::runtime::Tokio)
         .context("failed to create OTEL tracer")?;
 

@@ -46,6 +46,28 @@ pub struct OtelConfig {
     /// The level of tracing to enable.
     #[serde(default)]
     pub trace_level: Level,
+    /// Configures type of sampler to use for tracing. This will override any sampler set via
+    /// the standard environment variables
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traces_sampler: Option<String>,
+    /// An additional argument to pass to the sampler. Used for cases such as the
+    /// trace_id_ratio_based sampler.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traces_sampler_arg: Option<String>,
+    /// The maximum number of tracing events that can be buffered in memory before being exported.
+    /// If the queue is full, events will be dropped. If not set, the default for the underlying
+    /// exporter will be used. This will override any value set via the standard environment
+    /// variables.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_batch_queue_size: Option<usize>,
+    /// The maximum number of concurrent export threads that can be used to export tracing data to
+    /// collectors. By default, this number is set to 1, which means that export batches will be
+    /// exported synchronously. This setting has a direct impact on memory usage and performance.
+    /// Setting to > 1 can improve the performance of the exporter, but it can also increase memory
+    /// usage (and possibly CPU). This will override any value set via the standard environment
+    /// variables.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub concurrent_exports: Option<usize>,
 }
 
 impl OtelConfig {

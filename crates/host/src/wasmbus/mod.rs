@@ -2181,6 +2181,7 @@ impl Host {
                 protocol: self.host_config.otel_config.protocol,
                 additional_ca_paths: self.host_config.otel_config.additional_ca_paths.clone(),
                 trace_level: self.host_config.otel_config.trace_level.clone(),
+                ..Default::default()
             };
 
             let provider_xkey = XKey::new();
