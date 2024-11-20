@@ -97,11 +97,16 @@ where
 
 /// Helper function to set up a reqwest client for performing the download
 pub(crate) fn get_download_client() -> Result<reqwest::Client> {
+    get_download_client_with_user_agent(DOWNLOAD_CLIENT_USER_AGENT)
+}
+
+/// Helper function to set up a reqwest client for performing the download with a user agent
+pub(crate) fn get_download_client_with_user_agent(user_agent: &str) -> Result<reqwest::Client> {
     let proxy_username = std::env::var("WASH_PROXY_USERNAME").unwrap_or_default();
     let proxy_password = std::env::var("WASH_PROXY_PASSWORD").unwrap_or_default();
 
     let mut builder = reqwest::ClientBuilder::default()
-        .user_agent(DOWNLOAD_CLIENT_USER_AGENT)
+        .user_agent(user_agent)
         .with_native_certificates();
 
     if let Ok(http_proxy) = std::env::var("HTTP_PROXY").or_else(|_| std::env::var("http_proxy")) {

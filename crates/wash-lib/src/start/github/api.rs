@@ -4,7 +4,8 @@ use futures::future::join_all;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use tracing::trace;
-use wasmcloud_core::tls::NativeRootsExt;
+
+use super::get_download_client_with_user_agent;
 
 type DateTimeUtc = DateTime<Utc>;
 
@@ -118,12 +119,8 @@ async fn fetch_latest_releases(
     owner: &str,
     repo: &str,
     latest_interested: &semver::Version,
-) -> Result<Vec<GitHubRelease>, reqwest::Error> {
-    let client = reqwest::ClientBuilder::default()
-        .user_agent(VERSION_FETCHER_CLIENT_USER_AGENT)
-        .with_native_certificates()
-        .build()
-        .expect("failed to build HTTP client");
+) -> Result<Vec<GitHubRelease>, anyhow::Error> {
+    let client = get_download_client_with_user_agent(VERSION_FETCHER_CLIENT_USER_AGENT)?;
     let mut page = 0u32;
     let mut releases: Vec<GitHubRelease> = Vec::new();
     'fetch_loop: loop {
