@@ -1050,11 +1050,12 @@ impl ProjectDeps {
             .await {
                 if error.to_string().contains("deadline has elapsed") {
                     eprintln!(
-                        "{WARN} WADM not available: Timeout occurred while deleting application [{}]",
+                        "{} WADM not available: Timeout occurred while deleting application [{}]",
+                        emoji::WARN,
                         manifest.metadata.name
                     );
                 } else {
-                    return Err(error);
+                    return Err(error.into());
                 }
             }
         }
