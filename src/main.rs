@@ -329,7 +329,6 @@ struct Args {
 
     #[clap(
         long = "help-markdown",
-        short,
         action=ArgAction::SetTrue,
         conflicts_with = "help",
         hide = true
