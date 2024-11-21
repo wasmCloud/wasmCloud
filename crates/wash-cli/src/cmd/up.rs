@@ -153,7 +153,11 @@ impl From<NatsOpts> for NatsConfig {
 
 #[derive(Parser, Debug, Clone)]
 pub struct WasmcloudOpts {
-    /// wasmCloud host version to download, e.g. `v0.55.0`. See https://github.com/wasmCloud/wasmcloud/releases for releases
+    /// wasmcloud host version to download, e.g. `v1.4.2`.
+    ///
+    /// defaults to the [`WASMCLOUD_HOST_VERSION`] if not provided
+    /// or the latest patch version after that when `wash up` issued,
+    /// see <https://github.com/wasmCloud/wasmCloud/releases> for releases
     #[clap(long = "wasmcloud-version", env = "WASMCLOUD_VERSION")]
     pub wasmcloud_version: Option<String>,
 
@@ -362,7 +366,11 @@ impl WasmcloudOpts {
 
 #[derive(Parser, Debug, Clone)]
 pub struct WadmOpts {
-    /// wadm version to download, e.g. `v0.4.0`. See https://github.com/wasmCloud/wadm/releases for releases
+    /// wadm version to download, e.g. `v0.18.0`.
+    ///
+    /// defaults to the [`WADM_VERSION`] if not provided
+    /// or the latest patch version after that when `wash up` issued,
+    /// see <https://github.com/wasmCloud/wadm/releases> for releases
     #[clap(long = "wadm-version", env = "WADM_VERSION")]
     pub wadm_version: Option<String>,
 
