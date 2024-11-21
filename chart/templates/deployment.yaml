@@ -48,7 +48,7 @@ spec:
               value: {{ .Values.wasmcloud.config.natsSeed | quote }}
             {{- end }}
             {{- if .Values.wasmcloud.config.latticePrefix }}
-            - name: WASMCLOUD_LATTICE_PREFIX
+            - name: WASMCLOUD_LATTICE
               value: {{ .Values.wasmcloud.config.latticePrefix | quote }}
             {{- end }}
             {{- if .Values.wasmcloud.config.hostSeed }}
