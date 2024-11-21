@@ -64,25 +64,20 @@ async fn ensure_washboard(version: &str, base_dir: PathBuf) -> Result<PathBuf> {
 }
 
 async fn download_washboard(version: &str, install_dir: &PathBuf) -> Result<()> {
-    let release_url = format!(
-        "https://github.com/wasmCloud/wasmCloud/releases/download/washboard-ui-{version}/washboard.tar.gz"
-    );
+    let urls = vec![
+        format!(
+            "https://github.com/wasmCloud/wasmCloud/releases/download/typescript%2Fapps%2Fwashboard-ui%2F{version}/washboard.tar.gz"
+        ),
+        format!(
+            "https://github.com/wasmCloud/wasmCloud/releases/download/washboard-ui-{version}/washboard.tar.gz"
+        ),
+    ];
 
-    // Download tarball
-    let resp = tls::DEFAULT_REQWEST_CLIENT
-        .get(&release_url)
-        .send()
+    let body = try_download_from_urls(&urls)
         .await
-        .context("failed to request washboard tarball")?;
+        .context("Failed to download washboard-ui assets")?;
 
-    if resp.status() != reqwest::StatusCode::OK {
-        bail!("failed to download washboard tarball: {}", resp.status());
-    }
-
-    let body = resp
-        .bytes()
-        .await
-        .context("failed to read bytes from washboard tarball")?;
+    eprintln!("Downloaded washboard-ui@{}", version);
 
     // Unpack and copy to install dir
     let cursor = Cursor::new(body);
@@ -90,7 +85,36 @@ async fn download_washboard(version: &str, install_dir: &PathBuf) -> Result<()> 
     tarball
         .unpack(install_dir)
         .await
-        .context("failed to unpack washboard tarball")?;
+        .context("Failed to unpack washboard-ui assets")?;
 
     Ok(())
+}
+
+async fn try_download_from_urls(urls: &[String]) -> Result<bytes::Bytes> {
+    let mut last_error = None;
+
+    for url in urls {
+        match try_download(url).await {
+            Ok(body) => return Ok(body),
+            Err(e) => last_error = Some(e),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Failed to find suitable download URL")))
+}
+
+async fn try_download(url: &String) -> Result<bytes::Bytes> {
+    let resp = tls::DEFAULT_REQWEST_CLIENT
+        .get(url)
+        .send()
+        .await
+        .context("Failed to download washboard.tar.gz. Are you offline?")?;
+
+    if resp.status() != reqwest::StatusCode::OK {
+        bail!("Failed to download washboard.tar.gz: {}", resp.status());
+    }
+
+    resp.bytes().await.context(
+        "Failed to read bytes from washboard.tar.gz. Try deleting the download and try again.",
+    )
 }
