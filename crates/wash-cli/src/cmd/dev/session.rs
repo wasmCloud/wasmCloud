@@ -303,11 +303,12 @@ impl WashDevSession {
                     wadm_log_path.display()
                 )
             })?;
-        let wadm_binary = ensure_wadm(
-            &wadm_opts.wadm_version.unwrap_or(WADM_VERSION.to_owned()),
-            &install_dir,
-        )
-        .await?;
+        let wadm_version = wadm_opts
+            .wadm_version
+            .as_ref()
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| WADM_VERSION.into());
+        let wadm_binary = ensure_wadm(&wadm_version, &install_dir).await?;
         let wadm_child = match start_wadm(
             &install_dir,
             &wadm_binary,
