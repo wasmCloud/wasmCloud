@@ -27,7 +27,7 @@ use secrecy::Secret;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::{broadcast, mpsc, watch, RwLock, Semaphore};
+use tokio::sync::{broadcast, mpsc, watch, RwLock};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{interval_at, Instant};
 use tokio::{process, select, spawn};
@@ -1247,9 +1247,9 @@ impl Host {
                 events_tx,
             )
             .await?;
-        let permits = Arc::new(Semaphore::new(
-            usize::from(max_instances).min(Semaphore::MAX_PERMITS),
-        ));
+        // let permits = Arc::new(Semaphore::new(
+        //     usize::from(max_instances).min(Semaphore::MAX_PERMITS),
+        // ));
         let metrics = Arc::clone(&self.metrics);
         Ok(Arc::new(Component {
             component,
@@ -1262,15 +1262,15 @@ impl Host {
                             let mut tasks = JoinSet::new();
                             let mut exports = stream::select_all(exports);
                             loop {
-                                let permits = Arc::clone(&permits);
+                                // let permits = Arc::clone(&permits);
                                 select! {
                                     Some(fut) = exports.next() => {
                                         match fut {
                                             Ok(fut) => {
                                                 debug!("accepted invocation, acquiring permit");
-                                                let permit = permits.acquire_owned().await;
+                                                // let permit = permits.acquire_owned().await;
                                                 tasks.spawn(async move {
-                                                    let _permit = permit;
+                                                    // let _permit = permit;
                                                     debug!("handling invocation");
                                                     match fut.await {
                                                         Ok(()) => {
