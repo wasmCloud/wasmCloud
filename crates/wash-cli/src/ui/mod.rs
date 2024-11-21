@@ -43,7 +43,10 @@ pub async fn handle_ui(cmd: UiCommand, _output_kind: OutputKind) -> Result<()> {
         .allow_methods(vec!["GET", "POST"])
         .allow_headers(vec!["Content-Type"]);
 
-    eprintln!("Washboard running on http://localhost:{}", cmd.port);
+    eprintln!(
+        "washboard-ui@{} running on http://localhost:{}",
+        cmd.version, cmd.port
+    );
     eprintln!("Hit CTRL-C to stop");
 
     warp::serve(static_files.with(cors))
