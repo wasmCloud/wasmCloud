@@ -10,7 +10,7 @@ pub struct SquidProxy {
 
 impl Image for SquidProxy {
     fn name(&self) -> &str {
-        "cgr.dev/chainguard/squid-proxy"
+        "ghcr.io/wasmcloud/mirrors/squid-proxy"
     }
 
     fn tag(&self) -> &str {
