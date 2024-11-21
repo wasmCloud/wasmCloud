@@ -11,8 +11,8 @@ use warp::Filter;
 use wash_lib::{
     cli::{CommandOutput, OutputKind},
     config::downloads_dir,
+    start::get_download_client,
 };
-use wasmcloud_core::tls;
 
 const DEFAULT_WASHBOARD_VERSION: &str = "v0.6.0";
 
@@ -104,7 +104,7 @@ async fn try_download_from_urls(urls: &[String]) -> Result<bytes::Bytes> {
 }
 
 async fn try_download(url: &String) -> Result<bytes::Bytes> {
-    let resp = tls::DEFAULT_REQWEST_CLIENT
+    let resp = get_download_client()?
         .get(url)
         .send()
         .await

@@ -96,7 +96,7 @@ where
 }
 
 /// Helper function to set up a reqwest client for performing the download
-pub(crate) fn get_download_client() -> Result<reqwest::Client> {
+pub fn get_download_client() -> Result<reqwest::Client> {
     get_download_client_with_user_agent(DOWNLOAD_CLIENT_USER_AGENT)
 }
 
