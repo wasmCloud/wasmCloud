@@ -11,11 +11,6 @@ repository.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 async-nats = { workspace = true, features = ["ring"] }
-async-trait = { workspace = true }
-azure_core = { workspace = true, features = [
-    "enable_reqwest_rustls",
-    "hmac_rust",
-], default-features = false }
 azure_storage = { workspace = true, features = [
     "enable_reqwest_rustls",
     "hmac_rust",
@@ -24,20 +19,15 @@ azure_storage_blobs = { workspace = true, features = [
     "enable_reqwest_rustls",
     "hmac_rust",
 ], default-features = false }
-base64 = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
-path-clean = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["fs"] }
-tokio-util = { workspace = true, features = ["io"] }
 tracing = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wrpc-interface-blobstore = { workspace = true }
-wrpc-transport = { workspace = true }
 
 [dev-dependencies]
 wasmcloud-test-util = { workspace = true, features = ["testcontainers"] }

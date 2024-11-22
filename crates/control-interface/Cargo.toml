@@ -16,8 +16,6 @@ repository.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 async-nats = { workspace = true }
-async-trait = { workspace = true }
-bytes = { workspace = true }
 cloudevents-sdk = { workspace = true }
 futures = { workspace = true }
 oci-client = { workspace = true, features = ["rustls-tls"] }
@@ -33,3 +31,6 @@ tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 wasmcloud-core = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["cloudevents-sdk"]

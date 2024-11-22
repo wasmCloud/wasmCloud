@@ -30,7 +30,6 @@ clap = { workspace = true, features = [
 ] }
 clap_complete = { workspace = true }
 clap-markdown = { workspace = true }
-cloudevents-sdk = { workspace = true }
 console = { workspace = true }
 crossterm = { workspace = true, features = ["events", "windows"] }
 docker_credential = { workspace = true }
@@ -38,13 +37,11 @@ etcetera = { workspace = true }
 file-guard = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
-humantime.workspace = true
 indicatif = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
 nkeys = { workspace = true, features = ["xkeys"] }
 notify = { workspace = true }
 oci-client = { workspace = true, features = ["rustls-tls"] }
-oci-wasm = { workspace = true, features = ["rustls-tls"] }
 once_cell = { workspace = true }
 provider-archive = { workspace = true }
 rand = { workspace = true }
@@ -57,7 +54,6 @@ semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }
-serde_with = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
 sysinfo = { workspace = true }
@@ -65,11 +61,9 @@ tempfile = { workspace = true }
 term-table = { workspace = true }
 termcolor = { workspace = true }
 termsize = { workspace = true }
-thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-tar = { workspace = true }
 tokio-util = { workspace = true }
-toml = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = [
     "ansi",
@@ -78,11 +72,9 @@ tracing-subscriber = { workspace = true, features = [
     "json",
     "std",
 ] }
-url = { workspace = true }
 wadm-client = { workspace = true }
 wadm-types = { workspace = true }
 warp = { workspace = true }
-wascap = { workspace = true }
 wash-lib = { workspace = true, features = [
     "cli",
     "parser",
@@ -120,3 +112,6 @@ tokio = { workspace = true, features = ["macros", "net"] }
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/{name}-v{version}/wash-{ target }{ binary-ext }"
 pkg-fmt = "bin"
+
+[package.metadata.cargo-machete]
+ignored = ["serde_bytes"]

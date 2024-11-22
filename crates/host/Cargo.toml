@@ -21,21 +21,13 @@ base64 = { workspace = true }
 bytes = { workspace = true }
 cloudevents-sdk = { workspace = true }
 futures = { workspace = true, features = ["async-await", "std"] }
-hex = { workspace = true, features = ["std"] }
-http = { workspace = true }
-http-body = { workspace = true }
 humantime = { workspace = true }
 names = { workspace = true }
 nkeys = { workspace = true }
-oci-client = { workspace = true, features = ["rustls-tls"] }
 opentelemetry-nats = { workspace = true }
-provider-archive = { workspace = true }
-rmp-serde = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
-serde_bytes = { workspace = true, features = ["std"] }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 time = { workspace = true, features = ["formatting"] }
 tokio = { workspace = true, features = [
     "fs",
@@ -63,3 +55,6 @@ wasmcloud-secrets-types = { workspace = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["cloudevents-sdk"]

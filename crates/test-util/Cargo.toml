@@ -23,9 +23,7 @@ testcontainers = ["dep:testcontainers"]
 [dependencies]
 anyhow = { workspace = true }
 async-nats = { workspace = true }
-cloudevents-sdk = { workspace = true }
 nkeys = { workspace = true }
-rmp-serde = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 testcontainers = { workspace = true, optional = true }

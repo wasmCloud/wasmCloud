@@ -19,14 +19,12 @@ anyhow = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 path-clean = { workspace = true }
-serde = { workspace = true }
 tokio = { workspace = true, features = ["fs", "macros"] }
 tokio-stream = { workspace = true, features = ["fs"] }
 tokio-util = { workspace = true, features = ["io"] }
 tracing = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wrpc-interface-blobstore = { workspace = true }
-wrpc-transport = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
