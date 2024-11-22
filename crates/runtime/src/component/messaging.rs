@@ -9,7 +9,7 @@ use core::ops::Deref;
 
 use anyhow::Context as _;
 use async_trait::async_trait;
-use tracing::{debug_span, instrument, warn, Instrument as _, Span};
+use tracing::{info_span, instrument, warn, Instrument as _, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 pub mod wasmtime_handler_bindings {
@@ -53,11 +53,13 @@ where
         body: Vec<u8>,
         timeout_ms: u32,
     ) -> anyhow::Result<Result<types::BrokerMessage, String>> {
+        self.attach_parent_context();
         self.handler.request(subject, body, timeout_ms).await
     }
 
     #[instrument(level = "debug", skip_all)]
     async fn publish(&mut self, msg: types::BrokerMessage) -> anyhow::Result<Result<(), String>> {
+        self.attach_parent_context();
         self.handler.publish(msg).await
     }
 }
@@ -83,6 +85,8 @@ where
         let pre = wasmtime_handler_bindings::MessagingHandlerPre::new(self.pre.clone())
             .context("failed to pre-instantiate `wasmcloud:messaging/handler`")?;
         let bindings = pre.instantiate_async(&mut store).await?;
+        let call_handle_message = info_span!("call_handle_message");
+        store.data_mut().parent_context = Some(call_handle_message.context());
         let res = bindings
             .wasmcloud_messaging_handler()
             .call_handle_message(
@@ -93,7 +97,7 @@ where
                     reply_to,
                 },
             )
-            .instrument(debug_span!("messaging_handle_message"))
+            .instrument(call_handle_message)
             .await
             .context("failed to call `wasmcloud:messaging/handler.handle-message`");
         let success = res.is_ok();

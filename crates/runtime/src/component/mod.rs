@@ -11,7 +11,8 @@ use anyhow::{ensure, Context as _};
 use futures::{Stream, TryStreamExt as _};
 use tokio::io::{AsyncRead, AsyncReadExt as _};
 use tokio::sync::mpsc;
-use tracing::{debug, instrument, warn, Instrument as _};
+use tracing::{debug, info_span, instrument, warn, Instrument as _, Span};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use wascap::jwt;
 use wascap::wasm::extract_claims;
 use wasi_preview1_component_adapter_provider::{
@@ -308,6 +309,7 @@ fn new_store<H: Handler>(
             table,
             shared_resources: SharedResourceTable::default(),
             timeout: max_execution_time,
+            parent_context: None,
         },
     );
     store.set_epoch_deadline(max_execution_time.as_secs());
@@ -554,7 +556,13 @@ where
                     debug!(?name, "serving root function");
                     let func = srv
                         .serve_function(
-                            move || new_store(&engine, handler.clone(), max_execution_time),
+                            move || {
+                                let span = info_span!("call_instance_function");
+                                let mut store =
+                                    new_store(&engine, handler.clone(), max_execution_time);
+                                store.data_mut().parent_context = Some(span.context());
+                                store
+                            },
                             pre,
                             ty,
                             "",
@@ -568,7 +576,8 @@ where
                         let span = cx.deref().clone();
                         Box::pin(
                             async move {
-                                let res = res.await;
+                                let res =
+                                    res.instrument(info_span!("handle_instance_function")).await;
                                 let success = res.is_ok();
                                 if let Err(err) =
                                     events.try_send(WrpcServeEvent::DynamicExportReturned {
@@ -608,7 +617,14 @@ where
                                 let func = srv
                                     .serve_function(
                                         move || {
-                                            new_store(&engine, handler.clone(), max_execution_time)
+                                            let span = info_span!("call_instance_function");
+                                            let mut store = new_store(
+                                                &engine,
+                                                handler.clone(),
+                                                max_execution_time,
+                                            );
+                                            store.data_mut().parent_context = Some(span.context());
+                                            store
                                         },
                                         pre,
                                         ty,
@@ -728,6 +744,7 @@ where
     table: ResourceTable,
     shared_resources: SharedResourceTable,
     timeout: Duration,
+    parent_context: Option<opentelemetry::Context>,
 }
 
 impl<H: Handler> WasiView for Ctx<H> {
@@ -759,5 +776,13 @@ impl<H: Handler> WrpcView for Ctx<H> {
 impl<H: Handler> Debug for Ctx<H> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ctx").field("runtime", &"wasmtime").finish()
+    }
+}
+
+impl<H: Handler> Ctx<H> {
+    fn attach_parent_context(&self) {
+        if let Some(context) = self.parent_context.as_ref() {
+            Span::current().set_parent(context.clone());
+        }
     }
 }

@@ -106,6 +106,7 @@ where
 {
     #[instrument(skip(self))]
     async fn drop(&mut self, container: Resource<Container>) -> anyhow::Result<()> {
+        self.attach_parent_context();
         self.table
             .delete(container)
             .context("failed to delete container")?;
@@ -114,6 +115,7 @@ where
 
     #[instrument(skip(self))]
     async fn name(&mut self, container: Resource<Container>) -> anyhow::Result<Result<String>> {
+        self.attach_parent_context();
         let name = self
             .table
             .get(&container)
@@ -126,6 +128,7 @@ where
         &mut self,
         container: Resource<Container>,
     ) -> anyhow::Result<Result<ContainerMetadata>> {
+        self.attach_parent_context();
         let name = self
             .table
             .get(&container)
@@ -168,6 +171,7 @@ where
         start: u64,
         end: u64,
     ) -> anyhow::Result<Result<Resource<IncomingValue>>> {
+        self.attach_parent_context();
         let container = self
             .table
             .get(&container)
@@ -230,6 +234,7 @@ where
         object: ObjectName,
         data: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<()>> {
+        self.attach_parent_context();
         let container = self
             .table
             .get(&container)
@@ -301,6 +306,7 @@ where
         &mut self,
         container: Resource<Container>,
     ) -> anyhow::Result<Result<Resource<StreamObjectNames>>> {
+        self.attach_parent_context();
         let container = self
             .table
             .get(&container)
@@ -362,6 +368,7 @@ where
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<()>> {
+        self.attach_parent_context();
         self.delete_objects(container, vec![name]).await
     }
 
@@ -371,6 +378,7 @@ where
         container: Resource<Container>,
         names: Vec<ObjectName>,
     ) -> anyhow::Result<Result<()>> {
+        self.attach_parent_context();
         let container = self
             .table
             .get(&container)
@@ -405,6 +413,7 @@ where
         container: Resource<Container>,
         object: ObjectName,
     ) -> anyhow::Result<Result<bool>> {
+        self.attach_parent_context();
         let container = self
             .table
             .get(&container)
@@ -440,6 +449,7 @@ where
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<ObjectMetadata>> {
+        self.attach_parent_context();
         let container = self
             .table
             .get(&container)
@@ -482,6 +492,7 @@ where
 
     #[instrument(skip(self))]
     async fn clear(&mut self, container: Resource<Container>) -> anyhow::Result<Result<()>> {
+        self.attach_parent_context();
         let container = self
             .table
             .get(&container)
@@ -512,6 +523,7 @@ where
 impl<H: Handler> container::HostStreamObjectNames for Ctx<H> {
     #[instrument(skip(self))]
     async fn drop(&mut self, names: Resource<StreamObjectNames>) -> anyhow::Result<()> {
+        self.attach_parent_context();
         let _ = self
             .table
             .delete(names)
@@ -525,6 +537,7 @@ impl<H: Handler> container::HostStreamObjectNames for Ctx<H> {
         this: Resource<StreamObjectNames>,
         len: u64,
     ) -> anyhow::Result<Result<(Vec<ObjectName>, bool)>> {
+        self.attach_parent_context();
         let StreamObjectNames {
             stream,
             ref mut status,
@@ -561,6 +574,7 @@ impl<H: Handler> container::HostStreamObjectNames for Ctx<H> {
         this: Resource<StreamObjectNames>,
         num: u64,
     ) -> anyhow::Result<Result<(u64, bool)>> {
+        self.attach_parent_context();
         let StreamObjectNames { stream, status, io } = self
             .table
             .get_mut(&this)
@@ -657,6 +671,7 @@ impl Subscribe for OutputStream {
 impl<H: Handler> types::HostOutgoingValue for Ctx<H> {
     #[instrument(skip(self))]
     async fn drop(&mut self, outgoing_value: Resource<OutgoingValue>) -> anyhow::Result<()> {
+        self.attach_parent_context();
         self.table
             .delete(outgoing_value)
             .context("failed to delete outgoing value")?;
@@ -665,6 +680,7 @@ impl<H: Handler> types::HostOutgoingValue for Ctx<H> {
 
     #[instrument(skip(self))]
     async fn new_outgoing_value(&mut self) -> anyhow::Result<Resource<OutgoingValue>> {
+        self.attach_parent_context();
         let (tx, rx) = mpsc::channel(128);
         self.table
             .push(OutgoingValue {
@@ -781,6 +797,7 @@ impl Subscribe for InputStream {
 impl<H: Handler> types::HostIncomingValue for Ctx<H> {
     #[instrument(skip(self))]
     async fn drop(&mut self, incoming_value: Resource<IncomingValue>) -> anyhow::Result<()> {
+        self.attach_parent_context();
         let _ = self
             .table
             .delete(incoming_value)
@@ -793,6 +810,7 @@ impl<H: Handler> types::HostIncomingValue for Ctx<H> {
         &mut self,
         incoming_value: Resource<IncomingValue>,
     ) -> anyhow::Result<Result<Vec<u8>>> {
+        self.attach_parent_context();
         let IncomingValue { stream, status, io } = self
             .table
             .delete(incoming_value)
@@ -827,6 +845,7 @@ impl<H: Handler> types::HostIncomingValue for Ctx<H> {
         &mut self,
         incoming_value: Resource<IncomingValue>,
     ) -> anyhow::Result<Result<Resource<Box<dyn HostInputStream>>>> {
+        self.attach_parent_context();
         let IncomingValue { stream, status, io } = self
             .table
             .delete(incoming_value)
@@ -847,6 +866,7 @@ impl<H: Handler> types::HostIncomingValue for Ctx<H> {
 
     #[instrument(skip(self))]
     async fn size(&mut self, _incoming_value: Resource<IncomingValue>) -> anyhow::Result<u64> {
+        self.attach_parent_context();
         bail!("size unknown")
     }
 }
@@ -863,6 +883,7 @@ where
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>>> {
+        self.attach_parent_context();
         match invoke_with_fallback(
             "create-container",
             &self.handler,
@@ -899,6 +920,7 @@ where
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>>> {
+        self.attach_parent_context();
         match invoke_with_fallback(
             "container-exists",
             &self.handler,
@@ -933,6 +955,7 @@ where
 
     #[instrument(skip(self))]
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<()>> {
+        self.attach_parent_context();
         invoke_with_fallback(
             "delete-container",
             &self.handler,
@@ -956,6 +979,7 @@ where
 
     #[instrument(skip(self))]
     async fn container_exists(&mut self, name: ContainerName) -> anyhow::Result<Result<bool>> {
+        self.attach_parent_context();
         invoke_with_fallback(
             "container-exists",
             &self.handler,
@@ -979,6 +1003,7 @@ where
 
     #[instrument(skip(self))]
     async fn copy_object(&mut self, src: ObjectId, dest: ObjectId) -> anyhow::Result<Result<()>> {
+        self.attach_parent_context();
         let src = bindings::wasi::blobstore::types::ObjectId {
             container: src.container,
             object: src.object,
@@ -1012,6 +1037,7 @@ where
 
     #[instrument(skip(self))]
     async fn move_object(&mut self, src: ObjectId, dest: ObjectId) -> anyhow::Result<Result<()>> {
+        self.attach_parent_context();
         let src = bindings::wasi::blobstore::types::ObjectId {
             container: src.container,
             object: src.object,

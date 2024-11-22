@@ -35,9 +35,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{interval_at, Instant};
 use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
-use tracing::{
-    debug, debug_span, error, info, instrument, trace, trace_span, warn, Instrument as _,
-};
+use tracing::{debug, debug_span, error, info, instrument, trace, warn, Instrument as _};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 use wascap::{jwt, prelude::ClaimsBuilder};
@@ -221,7 +219,6 @@ struct WrpcServer {
     image_reference: Arc<str>,
     annotations: Arc<Annotations>,
     policy_manager: Arc<PolicyManager>,
-    trace_ctx: Arc<RwLock<Vec<(String, String)>>>,
     metrics: Arc<HostMetrics>,
 }
 
@@ -271,7 +268,6 @@ impl wrpc_transport::Serve for WrpcServer {
         let image_reference = Arc::clone(&self.image_reference);
         let metrics = Arc::clone(&self.metrics);
         let policy_manager = Arc::clone(&self.policy_manager);
-        let trace_ctx = Arc::clone(&self.trace_ctx);
         let claims = self.claims.clone();
         Ok(invocations.and_then(move |(cx, tx, rx)| {
             let annotations = Arc::clone(&annotations);
@@ -282,11 +278,9 @@ impl wrpc_transport::Serve for WrpcServer {
             let instance = Arc::clone(&instance);
             let metrics = Arc::clone(&metrics);
             let policy_manager = Arc::clone(&policy_manager);
-            let trace_ctx = Arc::clone(&trace_ctx);
             let span = tracing::info_span!("component_invocation", func = %func, id = %id, instance = %instance);
             async move {
                 if let Some(ref cx) = cx {
-                    // TODO: wasmcloud_tracing take HeaderMap for my own sanity
                     // Coerce the HashMap<String, Vec<String>> into a Vec<(String, String)> by
                     // flattening the values
                     let trace_context = cx
@@ -321,14 +315,6 @@ impl wrpc_transport::Serve for WrpcServer {
                     "policy denied request to invoke component `{request_id}`: `{message:?}`",
                 );
 
-                // Associate the current context with the span so that outgoing component invocations
-                // have the same context
-                let mut injector = TraceContextInjector::default();
-                injector.inject_context_from_span(&span);
-                *trace_ctx.write().instrument(trace_span!(parent: &span, "write_trace_ctx")).await = injector
-                    .iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect();
                 Ok((
                     InvocationContext{
                         start_at: Instant::now(),
@@ -1252,7 +1238,6 @@ impl Host {
                     image_reference: Arc::clone(&image_reference),
                     annotations: Arc::new(annotations.clone()),
                     policy_manager: Arc::clone(&self.policy_manager),
-                    trace_ctx: Arc::clone(&handler.trace_ctx),
                     metrics: Arc::clone(&self.metrics),
                 },
                 handler.clone(),
@@ -1387,7 +1372,6 @@ impl Host {
             component_id: Arc::clone(&component_id),
             secrets: Arc::new(RwLock::new(secrets)),
             targets: Arc::default(),
-            trace_ctx: Arc::default(),
             instance_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
             messaging_links: {
                 let mut links = self.messaging_links.write().await;

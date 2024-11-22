@@ -28,13 +28,14 @@ impl<H> atomics::Host for Ctx<H>
 where
     H: Handler,
 {
-    #[instrument]
+    #[instrument(level = "debug", skip_all)]
     async fn increment(
         &mut self,
         bucket: Resource<store::Bucket>,
         key: String,
         delta: u64,
     ) -> anyhow::Result<Result<u64>> {
+        self.attach_parent_context();
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
         match wrpc::wrpc::keyvalue::atomics::increment(
             &self.handler,
@@ -58,6 +59,7 @@ where
 {
     #[instrument]
     async fn open(&mut self, name: String) -> anyhow::Result<Result<Resource<store::Bucket>>> {
+        self.attach_parent_context();
         let bucket = self
             .table
             .push(Arc::from(name))
@@ -77,6 +79,7 @@ where
         bucket: Resource<store::Bucket>,
         keys: Vec<String>,
     ) -> anyhow::Result<Result<Vec<Option<(String, Vec<u8>)>>>> {
+        self.attach_parent_context();
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
         // NOTE(thomastaylor312): I don't like allocating a new vec, but I need borrowed strings to
         // have the right type
@@ -104,6 +107,7 @@ where
         bucket: Resource<store::Bucket>,
         entries: Vec<(String, Vec<u8>)>,
     ) -> anyhow::Result<Result<()>> {
+        self.attach_parent_context();
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
         let entries = entries
             .into_iter()
@@ -132,6 +136,7 @@ where
         bucket: Resource<store::Bucket>,
         keys: Vec<String>,
     ) -> anyhow::Result<Result<()>> {
+        self.attach_parent_context();
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
         let keys = keys.iter().map(String::as_str).collect::<Vec<_>>();
         match wrpc::wrpc::keyvalue::batch::delete_many(
@@ -159,6 +164,7 @@ where
         bucket: Resource<store::Bucket>,
         key: String,
     ) -> anyhow::Result<Result<Option<Vec<u8>>>> {
+        self.attach_parent_context();
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
         match wrpc::wrpc::keyvalue::store::get(
             &self.handler,
@@ -180,6 +186,7 @@ where
         key: String,
         outgoing_value: Vec<u8>,
     ) -> anyhow::Result<Result<()>> {
+        self.attach_parent_context();
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
         match wrpc::wrpc::keyvalue::store::set(
             &self.handler,
@@ -201,6 +208,7 @@ where
         bucket: Resource<store::Bucket>,
         key: String,
     ) -> anyhow::Result<Result<()>> {
+        self.attach_parent_context();
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
         match wrpc::wrpc::keyvalue::store::delete(
             &self.handler,
@@ -221,6 +229,7 @@ where
         bucket: Resource<store::Bucket>,
         key: String,
     ) -> anyhow::Result<Result<bool>> {
+        self.attach_parent_context();
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
         match wrpc::wrpc::keyvalue::store::exists(
             &self.handler,
@@ -241,6 +250,7 @@ where
         bucket: Resource<store::Bucket>,
         cursor: Option<u64>,
     ) -> anyhow::Result<Result<store::KeyResponse>> {
+        self.attach_parent_context();
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
         match wrpc::wrpc::keyvalue::store::list_keys(
             &self.handler,
@@ -259,6 +269,7 @@ where
 
     #[instrument]
     async fn drop(&mut self, bucket: Resource<store::Bucket>) -> anyhow::Result<()> {
+        self.attach_parent_context();
         self.table
             .delete(bucket)
             .context("failed to delete bucket")?;

@@ -8971,6 +8971,7 @@ dependencies = [
  "futures",
  "http 1.1.0",
  "once_cell",
+ "opentelemetry",
  "secrecy",
  "serde",
  "serde_json",

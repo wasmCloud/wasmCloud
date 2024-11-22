@@ -22,6 +22,7 @@ impl<H: Handler> store::Host for Ctx<H> {
         &mut self,
         key: String,
     ) -> anyhow::Result<Result<Option<String>, config::store::Error>> {
+        self.attach_parent_context();
         Config::get(&self.handler, &key).await
     }
 
@@ -29,6 +30,7 @@ impl<H: Handler> store::Host for Ctx<H> {
     async fn get_all(
         &mut self,
     ) -> anyhow::Result<Result<Vec<(String, String)>, config::store::Error>> {
+        self.attach_parent_context();
         self.handler.get_all().await
     }
 }
@@ -49,6 +51,7 @@ impl<H: Handler> runtime::Host for Ctx<H> {
         &mut self,
         key: String,
     ) -> anyhow::Result<Result<Option<String>, config::runtime::ConfigError>> {
+        self.attach_parent_context();
         let res = Config::get(&self.handler, &key).await?;
         Ok(res.map_err(Into::into))
     }
@@ -57,6 +60,7 @@ impl<H: Handler> runtime::Host for Ctx<H> {
     async fn get_all(
         &mut self,
     ) -> anyhow::Result<Result<Vec<(String, String)>, config::runtime::ConfigError>> {
+        self.attach_parent_context();
         let res = self.handler.get_all().await?;
         Ok(res.map_err(Into::into))
     }
