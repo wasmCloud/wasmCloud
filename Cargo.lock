@@ -6073,7 +6073,7 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.3",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -8121,7 +8121,7 @@ dependencies = [
  "term-table",
  "test-case",
  "testcontainers",
- "thiserror 1.0.69",
+ "thiserror 2.0.3",
  "time",
  "tokio",
  "tokio-stream",
@@ -8786,7 +8786,7 @@ dependencies = [
  "reqwest 0.12.9",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.3",
  "tokio",
  "tower-http",
  "tracing",
@@ -8911,7 +8911,7 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.3",
  "tokio",
  "tracing",
  "tracing-futures",
@@ -8991,7 +8991,7 @@ dependencies = [
  "async-nats",
  "nkeys",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.3",
  "wasmcloud-secrets-types 0.5.0",
 ]
 
@@ -9005,7 +9005,7 @@ dependencies = [
  "nkeys",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.3",
  "wascap 0.15.2",
 ]
 
