@@ -75,10 +75,16 @@ impl TraceContextInjector {
         header_map
     }
 
-    /// Injects the current context from the span into the headers
+    /// Injects the context from the current span into the headers
     pub fn inject_context(&mut self) {
         let ctx_propagator = TraceContextPropagator::new();
         ctx_propagator.inject_context(&Span::current().context(), self);
+    }
+
+    /// Injects the context from the given span into the headers
+    pub fn inject_context_from_span(&mut self, span: &Span) {
+        let ctx_propagator = TraceContextPropagator::new();
+        ctx_propagator.inject_context(&span.context(), self);
     }
 }
 
@@ -114,8 +120,16 @@ impl From<TraceContextInjector> for TraceContext {
     }
 }
 
+/// A convenience function that will extract the [`opentelemetry::Context`] from the given
+/// [`TraceContext`]. If you want to do something more advanced, use the [`TraceContextExtractor`]
+pub fn get_span_context(trace_context: &TraceContext) -> opentelemetry::Context {
+    let ctx_propagator = TraceContextPropagator::new();
+    let extractor = TraceContextExtractor::new(trace_context);
+    ctx_propagator.extract(&extractor)
+}
+
 /// A convenience function that will extract from an incoming context and set the parent span for
-/// the current tracing Span.  If you want to do something more advanced, use the
+/// the current tracing Span. If you want to do something more advanced, use the
 /// [`TraceContextExtractor`] type directly
 ///
 /// **WARNING**: To avoid performance issues, this function does not check if you have empty tracing
@@ -123,8 +137,6 @@ impl From<TraceContextInjector> for TraceContext {
 /// hierarchy.**
 #[allow(clippy::module_name_repetitions)]
 pub fn attach_span_context(trace_context: &TraceContext) {
-    let ctx_propagator = TraceContextPropagator::new();
-    let extractor = TraceContextExtractor::new(trace_context);
-    let parent_ctx = ctx_propagator.extract(&extractor);
+    let parent_ctx = get_span_context(trace_context);
     Span::current().set_parent(parent_ctx);
 }
