@@ -2301,6 +2301,14 @@ impl Host {
                 let _ = child_cmd.env("RUST_LOG", rust_log);
             }
 
+            // Proxy SSL_CERT_FILE and SSL_CERT_DIR to the provider to use for setting up TLS connections
+            if let Ok(ssl_cert_file) = env::var("SSL_CERT_FILE") {
+                let _ = child_cmd.env("SSL_CERT_FILE", ssl_cert_file);
+            }
+            if let Ok(ssl_cert_dir) = env::var("SSL_CERT_DIR") {
+                let _ = child_cmd.env("SSL_CERT_DIR", ssl_cert_dir);
+            }
+
             let mut child = child_cmd
                 .stdin(Stdio::piped())
                 .kill_on_drop(true)
