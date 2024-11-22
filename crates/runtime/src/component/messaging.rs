@@ -9,7 +9,8 @@ use core::ops::Deref;
 
 use anyhow::Context as _;
 use async_trait::async_trait;
-use tracing::{instrument, warn, Instrument as _};
+use tracing::{debug_span, instrument, warn, Instrument as _, Span};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 pub mod wasmtime_handler_bindings {
     wasmtime::component::bindgen!({
@@ -76,41 +77,38 @@ where
             reply_to,
         }: wrpc::wasmcloud::messaging::types::BrokerMessage,
     ) -> anyhow::Result<Result<(), String>> {
-        let span = cx.deref().clone();
-        async move {
-            let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
-            let pre = wasmtime_handler_bindings::MessagingHandlerPre::new(self.pre.clone())
-                .context("failed to pre-instantiate `wasmcloud:messaging/handler`")?;
-            let bindings = pre.instantiate_async(&mut store).await?;
-            let res = bindings
-                .wasmcloud_messaging_handler()
-                .call_handle_message(
-                    &mut store,
-                    &types::BrokerMessage {
-                        subject,
-                        body: body.into(),
-                        reply_to,
-                    },
-                )
-                .await
-                .context("failed to call `wasmcloud:messaging/handler.handle-message`");
-            let success = res.is_ok();
-            if let Err(err) =
-                self.events
-                    .try_send(WrpcServeEvent::MessagingHandlerHandleMessageReturned {
-                        context: cx,
-                        success,
-                    })
-            {
-                warn!(
-                    ?err,
+        // Set the parent of the current context to the span passed in
+        Span::current().set_parent(cx.deref().context());
+        let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
+        let pre = wasmtime_handler_bindings::MessagingHandlerPre::new(self.pre.clone())
+            .context("failed to pre-instantiate `wasmcloud:messaging/handler`")?;
+        let bindings = pre.instantiate_async(&mut store).await?;
+        let res = bindings
+            .wasmcloud_messaging_handler()
+            .call_handle_message(
+                &mut store,
+                &types::BrokerMessage {
+                    subject,
+                    body: body.into(),
+                    reply_to,
+                },
+            )
+            .instrument(debug_span!("messaging_handle_message"))
+            .await
+            .context("failed to call `wasmcloud:messaging/handler.handle-message`");
+        let success = res.is_ok();
+        if let Err(err) =
+            self.events
+                .try_send(WrpcServeEvent::MessagingHandlerHandleMessageReturned {
+                    context: cx,
                     success,
-                    "failed to send `wasmcloud:messaging/handler.handle-message` return event"
-                );
-            }
-            res
+                })
+        {
+            warn!(
+                ?err,
+                success, "failed to send `wasmcloud:messaging/handler.handle-message` return event"
+            );
         }
-        .instrument(span)
-        .await
+        res
     }
 }

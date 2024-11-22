@@ -11,7 +11,7 @@ use anyhow::{ensure, Context as _};
 use futures::{Stream, TryStreamExt as _};
 use tokio::io::{AsyncRead, AsyncReadExt as _};
 use tokio::sync::mpsc;
-use tracing::{debug, instrument, warn, Instrument as _, Span};
+use tracing::{debug, instrument, warn, Instrument as _};
 use wascap::jwt;
 use wascap::wasm::extract_claims;
 use wasi_preview1_component_adapter_provider::{
@@ -512,7 +512,6 @@ where
         S: wrpc_transport::Serve,
         S::Context: Deref<Target = tracing::Span>,
     {
-        let span = Span::current();
         let max_execution_time = self.max_execution_time;
         let mut invocations = vec![];
         let instance = self.instantiate(handler.clone(), events.clone());
@@ -565,8 +564,8 @@ where
                         .context("failed to serve root function")?;
                     let events = events.clone();
                     invocations.push(Box::pin(func.map_ok(move |(cx, res)| {
-                        let span = cx.deref().clone();
                         let events = events.clone();
+                        let span = cx.deref().clone();
                         Box::pin(
                             async move {
                                 let res = res.await;
@@ -620,8 +619,8 @@ where
                                     .context("failed to serve instance function")?;
                                 let events = events.clone();
                                 invocations.push(Box::pin(func.map_ok(move |(cx, res)| {
-                                    let span = cx.deref().clone();
                                     let events = events.clone();
+                                    let span = cx.deref().clone();
                                     Box::pin(
                                         async move {
                                             let res = res.await;

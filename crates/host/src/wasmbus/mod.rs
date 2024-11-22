@@ -35,7 +35,10 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{interval_at, Instant};
 use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
-use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
+use tracing::{
+    debug, debug_span, error, info, instrument, trace, trace_span, warn, Instrument as _,
+};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
@@ -280,37 +283,8 @@ impl wrpc_transport::Serve for WrpcServer {
             let metrics = Arc::clone(&metrics);
             let policy_manager = Arc::clone(&policy_manager);
             let trace_ctx = Arc::clone(&trace_ctx);
-            // NOTE(thomastaylor312): We create a span each time here for two reasons: First
-            // off, if we create a separate span and then instrument this whole block of code,
-            // it makes it so the function isn't FnMut. So we create this each time. The second
-            // reason is that before we were trying to use the current span for instrumentation.
-            // This didn't work because the span created by the `instrument` macro exits after
-            // this function returns, so we ended up with no parent span at all when trying to
-            // attach header data. I also set this as an info span so that each invocation at
-            // least has this top level span. If the fields add too much overhead, we can remove
-            // those fields instead.
             let span = tracing::info_span!("component_invocation", func = %func, id = %id, instance = %instance);
             async move {
-                let PolicyResponse {
-                    request_id,
-                    permitted,
-                    message,
-                } = policy_manager
-                    .evaluate_perform_invocation(
-                        &id,
-                        &image_reference,
-                        &annotations,
-                        claims.as_deref(),
-                        instance.to_string(),
-                        func.to_string(),
-                    )
-                    .instrument(span.clone())
-                    .await?;
-                ensure!(
-                    permitted,
-                    "policy denied request to invoke component `{request_id}`: `{message:?}`",
-                );
-
                 if let Some(ref cx) = cx {
                     // TODO: wasmcloud_tracing take HeaderMap for my own sanity
                     // Coerce the HashMap<String, Vec<String>> into a Vec<(String, String)> by
@@ -324,12 +298,34 @@ impl wrpc_transport::Serve for WrpcServer {
                                 .collect::<Vec<_>>()
                         })
                         .collect::<Vec<(String, String)>>();
-                    wasmcloud_tracing::context::attach_span_context(&trace_context);
+                    span.set_parent(wasmcloud_tracing::context::get_span_context(&trace_context));
                 }
 
-                // Associate the current context with the span
-                let injector = TraceContextInjector::default_with_span();
-                *trace_ctx.write().await = injector
+                let PolicyResponse {
+                    request_id,
+                    permitted,
+                    message,
+                } = policy_manager
+                    .evaluate_perform_invocation(
+                        &id,
+                        &image_reference,
+                        &annotations,
+                        claims.as_deref(),
+                        instance.to_string(),
+                        func.to_string(),
+                    )
+                    .instrument(debug_span!(parent: &span, "policy_check"))
+                    .await?;
+                ensure!(
+                    permitted,
+                    "policy denied request to invoke component `{request_id}`: `{message:?}`",
+                );
+
+                // Associate the current context with the span so that outgoing component invocations
+                // have the same context
+                let mut injector = TraceContextInjector::default();
+                injector.inject_context_from_span(&span);
+                *trace_ctx.write().instrument(trace_span!(parent: &span, "write_trace_ctx")).await = injector
                     .iter()
                     .map(|(k, v)| (k.to_string(), v.to_string()))
                     .collect();
@@ -1273,69 +1269,81 @@ impl Host {
             handler,
             events: events_tx,
             permits: Arc::clone(&permits),
-            exports: spawn(
-                async move {
-                    join!(
-                        async move {
-                            let mut exports = stream::select_all(exports);
-                            loop {
-                                let permits = Arc::clone(&permits);
-                                if let Some(fut) = exports.next().await {
-                                    match fut {
-                                        Ok(fut) => {
-                                            debug!("accepted invocation, acquiring permit");
-                                            let permit = permits.acquire_owned().await;
-                                            spawn(async move {
-                                                let _permit = permit;
-                                                debug!("handling invocation");
-                                                match fut.await {
-                                                    Ok(()) => {
-                                                        debug!("successfully handled invocation");
-                                                        Ok(())
-                                                    }
-                                                    Err(err) => {
-                                                        warn!(?err, "failed to handle invocation");
-                                                        Err(err)
-                                                    }
+            exports: spawn(async move {
+                join!(
+                    async move {
+                        let mut exports = stream::select_all(exports);
+                        loop {
+                            let permits = Arc::clone(&permits);
+                            if let Some(fut) = exports.next().await {
+                                match fut {
+                                    Ok(fut) => {
+                                        debug!("accepted invocation, acquiring permit");
+                                        let permit = permits.acquire_owned().await;
+                                        spawn(async move {
+                                            let _permit = permit;
+                                            debug!("handling invocation");
+                                            match fut.await {
+                                                Ok(()) => {
+                                                    debug!("successfully handled invocation");
+                                                    Ok(())
                                                 }
-                                            });
-                                        }
-                                        Err(err) => {
-                                            warn!(?err, "failed to accept invocation")
-                                        }
+                                                Err(err) => {
+                                                    warn!(?err, "failed to handle invocation");
+                                                    Err(err)
+                                                }
+                                            }
+                                        });
+                                    }
+                                    Err(err) => {
+                                        warn!(?err, "failed to accept invocation")
                                     }
                                 }
                             }
-                        },
-                        async move {
-                            while let Some(evt) = events_rx.recv().await {
-                                match evt {
-                                    WrpcServeEvent::HttpIncomingHandlerHandleReturned {
-                                        context: InvocationContext{start_at, ref attributes, ..},
-                                        success,
-                                    }
-                                    | WrpcServeEvent::MessagingHandlerHandleMessageReturned {
-                                        context: InvocationContext{start_at, ref attributes, ..},
-                                        success,
-                                    }
-                                    | WrpcServeEvent::DynamicExportReturned {
-                                        context: InvocationContext{start_at, ref attributes, ..},
-                                        success,
-                                    } => metrics.record_component_invocation(
-                                        u64::try_from(start_at.elapsed().as_nanos())
-                                            .unwrap_or_default(),
-                                        attributes,
-                                        !success,
-                                    ),
+                        }
+                    },
+                    async move {
+                        while let Some(evt) = events_rx.recv().await {
+                            match evt {
+                                WrpcServeEvent::HttpIncomingHandlerHandleReturned {
+                                    context:
+                                        InvocationContext {
+                                            start_at,
+                                            ref attributes,
+                                            ..
+                                        },
+                                    success,
                                 }
+                                | WrpcServeEvent::MessagingHandlerHandleMessageReturned {
+                                    context:
+                                        InvocationContext {
+                                            start_at,
+                                            ref attributes,
+                                            ..
+                                        },
+                                    success,
+                                }
+                                | WrpcServeEvent::DynamicExportReturned {
+                                    context:
+                                        InvocationContext {
+                                            start_at,
+                                            ref attributes,
+                                            ..
+                                        },
+                                    success,
+                                } => metrics.record_component_invocation(
+                                    u64::try_from(start_at.elapsed().as_nanos())
+                                        .unwrap_or_default(),
+                                    attributes,
+                                    !success,
+                                ),
                             }
-                            debug!("serving event stream is done");
-                        },
-                    );
-                    debug!("export serving task done");
-                }
-                .in_current_span(),
-            ),
+                        }
+                        debug!("serving event stream is done");
+                    },
+                );
+                debug!("export serving task done");
+            }),
             annotations: annotations.clone(),
             max_instances,
             image_reference,
