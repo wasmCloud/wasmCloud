@@ -222,8 +222,22 @@ struct WrpcServer {
     metrics: Arc<HostMetrics>,
 }
 
+struct InvocationContext {
+    start_at: Instant,
+    attributes: Vec<KeyValue>,
+    span: tracing::Span,
+}
+
+impl Deref for InvocationContext {
+    type Target = tracing::Span;
+
+    fn deref(&self) -> &Self::Target {
+        &self.span
+    }
+}
+
 impl wrpc_transport::Serve for WrpcServer {
-    type Context = (Instant, Vec<KeyValue>);
+    type Context = InvocationContext;
     type Outgoing = <wrpc_transport_nats::Client as wrpc_transport::Serve>::Outgoing;
     type Incoming = <wrpc_transport_nats::Client as wrpc_transport::Serve>::Incoming;
 
@@ -290,6 +304,7 @@ impl wrpc_transport::Serve for WrpcServer {
                         instance.to_string(),
                         func.to_string(),
                     )
+                    .instrument(span.clone())
                     .await?;
                 ensure!(
                     permitted,
@@ -319,20 +334,21 @@ impl wrpc_transport::Serve for WrpcServer {
                     .map(|(k, v)| (k.to_string(), v.to_string()))
                     .collect();
                 Ok((
-                    (
-                        Instant::now(),
+                    InvocationContext{
+                        start_at: Instant::now(),
                         // TODO(metrics): insert information about the source once we have concrete context data
-                        vec![
+                        attributes: vec![
                             KeyValue::new("component.ref", image_reference),
                             KeyValue::new("lattice", metrics.lattice_id.clone()),
                             KeyValue::new("host", metrics.host_id.clone()),
                             KeyValue::new("operation", format!("{instance}/{func}")),
                         ],
-                    ),
+                        span,
+                    },
                     tx,
                     rx,
                 ))
-            }.instrument(span)
+            }
         }))
     }
 }
@@ -1295,15 +1311,15 @@ impl Host {
                             while let Some(evt) = events_rx.recv().await {
                                 match evt {
                                     WrpcServeEvent::HttpIncomingHandlerHandleReturned {
-                                        context: (start_at, ref attributes),
+                                        context: InvocationContext{start_at, ref attributes, ..},
                                         success,
                                     }
                                     | WrpcServeEvent::MessagingHandlerHandleMessageReturned {
-                                        context: (start_at, ref attributes),
+                                        context: InvocationContext{start_at, ref attributes, ..},
                                         success,
                                     }
                                     | WrpcServeEvent::DynamicExportReturned {
-                                        context: (start_at, ref attributes),
+                                        context: InvocationContext{start_at, ref attributes, ..},
                                         success,
                                     } => metrics.record_component_invocation(
                                         u64::try_from(start_at.elapsed().as_nanos())
