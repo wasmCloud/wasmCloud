@@ -8029,7 +8029,7 @@ dependencies = [
  "futures",
  "http 1.1.0",
  "indicatif",
- "nix 0.27.1",
+ "nix 0.29.0",
  "nkeys",
  "notify",
  "oci-client",
