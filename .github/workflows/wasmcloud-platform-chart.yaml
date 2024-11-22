@@ -48,7 +48,10 @@ jobs:
         uses: helm/kind-action@0025e74a8c7512023d06dc019c617aa3cf561fde
 
       - name: Run chart-testing (install)
-        run: ct install --config charts/wasmcloud-platform/ct.yaml
+        run: |
+          helm repo add nats https://nats-io.github.io/k8s/helm/charts/
+          helm repo update
+          ct install --config charts/wasmcloud-platform/ct.yaml
 
   publish:
     if: ${{ startsWith(github.ref, 'refs/tags/wasmcloud-platform-chart-v') }}
