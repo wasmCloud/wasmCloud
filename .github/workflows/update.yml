@@ -22,3 +22,46 @@ jobs:
           delete-branch: true
           signoff: true
           labels: dependencies
+
+  oci-base-update:
+    if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Update OCI image bases
+        id: update
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email github-actions[bot]@users.noreply.github.com
+
+          ./nix/update-images.sh
+          if ! git diff --exit-code; then
+            echo "updated=true" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: peter-evans/create-pull-request@v7
+        if: ${{ steps.update.outputs.updated == 'true' }}
+        with:
+          assignees: rvolosatovs, joonas
+          reviewers: rvolosatovs, joonas
+          author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
+          body: |
+            ## Description
+
+            Automated OCI image base update
+          branch: build/update-oci-bases
+          commit-message: 'build(nix): update OCI image bases'
+          delete-branch: true
+          labels: dependencies
+          signoff: true
+          title: 'build(nix): update OCI image bases'
+          token: ${{ steps.app-token.outputs.token }}
