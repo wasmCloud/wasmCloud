@@ -3,6 +3,7 @@ use crate::Runtime;
 
 use core::fmt::{self, Debug};
 use core::future::Future;
+use core::ops::Deref;
 use core::pin::Pin;
 use core::time::Duration;
 
@@ -509,6 +510,7 @@ where
     ) -> anyhow::Result<Vec<InvocationStream>>
     where
         S: wrpc_transport::Serve,
+        S::Context: Deref<Target = tracing::Span>,
     {
         let span = Span::current();
         let max_execution_time = self.max_execution_time;
@@ -562,8 +564,8 @@ where
                         .await
                         .context("failed to serve root function")?;
                     let events = events.clone();
-                    let span = span.clone();
                     invocations.push(Box::pin(func.map_ok(move |(cx, res)| {
+                        let span = cx.deref().clone();
                         let events = events.clone();
                         Box::pin(
                             async move {
@@ -582,7 +584,7 @@ where
                                 }
                                 res
                             }
-                            .instrument(span.clone()),
+                            .instrument(span),
                         )
                             as Pin<Box<dyn Future<Output = _> + Send + 'static>>
                     })));
@@ -617,8 +619,8 @@ where
                                     .await
                                     .context("failed to serve instance function")?;
                                 let events = events.clone();
-                                let span = span.clone();
                                 invocations.push(Box::pin(func.map_ok(move |(cx, res)| {
+                                    let span = cx.deref().clone();
                                     let events = events.clone();
                                     Box::pin(
                                         async move {
@@ -638,7 +640,7 @@ where
                                             }
                                             res
                                         }
-                                        .instrument(span.clone()),
+                                        .instrument(span),
                                     )
                                         as Pin<Box<dyn Future<Output = _> + Send + 'static>>
                                 })));
