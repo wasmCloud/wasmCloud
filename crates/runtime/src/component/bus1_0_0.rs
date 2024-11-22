@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use async_trait::async_trait;
+use tracing::instrument;
 use wasmcloud_core::CallTargetInterface;
 use wasmtime::component::Resource;
 
@@ -19,11 +20,13 @@ pub trait Bus {
 
 #[async_trait]
 impl<H: Handler> lattice::Host for Ctx<H> {
+    #[instrument(level = "debug", skip_all)]
     async fn set_link_name(
         &mut self,
         link_name: String,
         interfaces: Vec<Resource<Arc<CallTargetInterface>>>,
     ) -> anyhow::Result<()> {
+        self.attach_parent_context();
         let interfaces = interfaces
             .into_iter()
             .map(|interface| self.table.get(&interface).cloned())

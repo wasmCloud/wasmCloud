@@ -46,6 +46,7 @@ impl<H: Handler> logging::Host for Ctx<H> {
         context: String,
         message: String,
     ) -> anyhow::Result<()> {
+        self.attach_parent_context();
         self.handler.log(level, context, message).await
     }
 }
@@ -59,6 +60,7 @@ impl<H: Handler> crate::capability::unversioned_logging::logging::Host for Ctx<H
         context: String,
         message: String,
     ) -> anyhow::Result<()> {
+        self.attach_parent_context();
         // NOTE(thomastaylor312): I couldn't figure out the proper incantation for using `with` to
         // avoid this. If there is a better way, we can fix it
         use crate::capability::unversioned_logging::logging::Level;

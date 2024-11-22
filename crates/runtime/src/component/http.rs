@@ -8,7 +8,7 @@ use anyhow::{bail, Context as _};
 use futures::stream::StreamExt as _;
 use tokio::sync::oneshot;
 use tokio::{join, spawn};
-use tracing::{debug, debug_span, instrument, trace, warn, Instrument as _, Span};
+use tracing::{debug, debug_span, info_span, instrument, trace, warn, Instrument as _, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi_http::body::{HostIncomingBody, HyperOutgoingBody};
@@ -109,6 +109,7 @@ where
     where
         Self: Sized,
     {
+        self.attach_parent_context();
         Ok(HostFutureIncomingResponse::pending(
             wasmtime_wasi::runtime::spawn(
                 invoke_outgoing_handle(self.handler.clone(), request, config).in_current_span(),
@@ -165,13 +166,18 @@ where
         let response = data
             .new_response_outparam(tx)
             .context("failed to create response")?;
+
+        // TODO: Replicate this for custom interface
+        // Set the current invocation parent context for injection on outgoing wRPC requests
+        let call_incoming_handle = info_span!("call_http_incoming_handle");
+        store.data_mut().parent_context = Some(call_incoming_handle.context());
         let handle = spawn(
             async move {
                 debug!("invoking `wasi:http/incoming-handler.handle`");
                 if let Err(err) = bindings
                     .wasi_http_incoming_handler()
                     .call_handle(&mut store, request, response)
-                    .instrument(debug_span!("call_http_incoming_handle"))
+                    .instrument(call_incoming_handle)
                     .await
                 {
                     warn!(?err, "failed to call `wasi:http/incoming-handler.handle`");
@@ -179,7 +185,7 @@ where
                 }
                 Ok(())
             }
-            .instrument(debug_span!("handle_task")),
+            .in_current_span(),
         );
         let res = async {
             debug!("awaiting `wasi:http/incoming-handler.handle` response");

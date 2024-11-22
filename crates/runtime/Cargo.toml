@@ -27,6 +27,7 @@ tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "sync"] }
 tokio-stream = { workspace = true }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
+opentelemetry = { workspace = true }
 wascap = { workspace = true }
 wasi-preview1-component-adapter-provider = { workspace = true }
 wasmcloud-core = { workspace = true }

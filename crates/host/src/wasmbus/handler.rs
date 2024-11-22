@@ -42,9 +42,6 @@ pub struct Handler {
     /// The current link targets. `instance` -> `link-name`
     /// Instance specification does not include a version
     pub targets: Arc<RwLock<HashMap<Box<str>, Arc<str>>>>,
-    /// The current trace context of the handler, required to propagate trace context
-    /// when crossing the Wasm guest/host boundary
-    pub trace_ctx: Arc<RwLock<Vec<(String, String)>>>,
 
     /// Map of link names -> instance -> Target
     ///
@@ -74,7 +71,6 @@ impl Handler {
             lattice: self.lattice.clone(),
             component_id: self.component_id.clone(),
             targets: Arc::default(),
-            trace_ctx: Arc::default(),
             instance_links: self.instance_links.clone(),
             messaging_links: self.messaging_links.clone(),
             invocation_timeout: self.invocation_timeout,
@@ -162,6 +158,7 @@ impl wrpc_transport::Invoke for Handler {
     type Outgoing = <wrpc_transport_nats::Client as wrpc_transport::Invoke>::Outgoing;
     type Incoming = <wrpc_transport_nats::Client as wrpc_transport::Invoke>::Incoming;
 
+    #[instrument(level = "debug", skip_all)]
     async fn invoke<P>(
         &self,
         target_instance: Self::Context,
@@ -173,13 +170,6 @@ impl wrpc_transport::Invoke for Handler {
     where
         P: AsRef<[Option<usize>]> + Send + Sync,
     {
-        // Reading a trace context should _never_ block because writing happens once at the beginning of a component
-        // invocation. If it does block here, it's a bug in the runtime, and it's better to deal with a
-        // disconnected trace than to block on the invocation for an extended period of time.
-        if let Ok(trace_context) = self.trace_ctx.try_read() {
-            wasmcloud_tracing::context::attach_span_context(&trace_context);
-        }
-
         let links = self.instance_links.read().await;
         let targets = self.targets.read().await;
 
