@@ -14,6 +14,7 @@ permissions:
 
 env:
   HELM_VERSION: v3.13.3
+  CHART_TESTING_NAMESPACE: chart-testing
 
 jobs:
   validate:
@@ -51,7 +52,7 @@ jobs:
         run: |
           helm repo add nats https://nats-io.github.io/k8s/helm/charts/
           helm repo update
-          ct install --config charts/wasmcloud-platform/ct.yaml
+          ct install --config charts/wasmcloud-platform/ct.yaml --namespace ${{ env.CHART_TESTING_NAMESPACE }} --helm-extra-set-args "--set=wadm.wadm.config.nats.server=nats://nats-headless.${{ env.CHART_TESTING_NAMESPACE }}.svc.cluster.local"
 
   publish:
     if: ${{ startsWith(github.ref, 'refs/tags/wasmcloud-platform-chart-v') }}
