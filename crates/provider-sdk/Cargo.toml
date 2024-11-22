@@ -11,7 +11,7 @@ license.workspace = true
 repository.workspace = true
 
 [package.metadata.docs.rs]
-features = [ "otel" ]
+features = ["otel"]
 
 [features]
 default = []
@@ -28,7 +28,6 @@ once_cell = { workspace = true }
 opentelemetry = { workspace = true, optional = true }
 rmp-serde = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_bytes = { workspace = true, features = ["default"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
@@ -36,8 +35,6 @@ tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["std"] }
 tracing-futures = { workspace = true, features = ["default"] }
 tracing-opentelemetry = { workspace = true, optional = true }
-ulid = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
 wasmcloud-core = { workspace = true, features = [
     "hyper-rustls",
     "otel",
@@ -45,6 +42,8 @@ wasmcloud-core = { workspace = true, features = [
     "webpki-roots",
 ] }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
-wrpc-interface-http = { workspace = true, features = ["http-body"] }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["opentelemetry", "tracing-futures", "tracing-opentelemetry"]

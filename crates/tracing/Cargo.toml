@@ -42,11 +42,9 @@ opentelemetry-otlp = { workspace = true, features = [
     "reqwest-client",
 ], optional = true }
 reqwest-0_11 = { workspace = true, features = ["rustls-tls"] }
-serde = { workspace = true, features = ["derive"] }
 tracing = { workspace = true, features = ["log"] }
 tracing-appender = { workspace = true }
 tracing-flame = { workspace = true }
-tracing-futures = { workspace = true, features = ["default"] }
 tracing-opentelemetry = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, features = [
     "ansi",

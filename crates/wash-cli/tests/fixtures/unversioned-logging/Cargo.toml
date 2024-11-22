@@ -11,8 +11,6 @@ name = "blobby"
 [workspace]
 
 [dependencies]
-anyhow = "1.0.81"
-form_urlencoded = "1.2.1"
 http = "1.1.0"
 wasi = "0.13.2"
 wit-bindgen = "0.32"

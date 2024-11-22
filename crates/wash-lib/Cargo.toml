@@ -70,7 +70,6 @@ path-absolutize = { workspace = true, features = [
 provider-archive = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
-rmp-serde = { workspace = true }
 semver = { workspace = true, features = ["serde"], optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -134,3 +133,6 @@ tokio = { workspace = true }
 toml = { workspace = true }
 wasmcloud-test-util = { workspace = true, features = ["testcontainers"] }
 wasmparser = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["cloudevents-sdk"]

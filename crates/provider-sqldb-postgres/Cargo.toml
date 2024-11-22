@@ -21,7 +21,6 @@ cidr = { workspace = true, features = [ "std" ] }
 deadpool-postgres = { workspace = true, features = [ "rt_tokio_1" ] }
 futures = { workspace = true }
 geo-types = { workspace = true }
-num = { workspace = true }
 pg_bigdecimal = { workspace = true }
 postgres-types = { workspace = true, features = [ "with-cidr-0_2" ] }
 rustls = { workspace = true }

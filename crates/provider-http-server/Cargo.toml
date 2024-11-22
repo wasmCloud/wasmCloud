@@ -27,7 +27,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
-toml = { workspace = true, features = ["parse"] }
 tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
 unicase = { workspace = true }
