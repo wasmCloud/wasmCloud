@@ -305,8 +305,6 @@ impl WashDevSession {
             })?;
         let wadm_version = wadm_opts
             .wadm_version
-            .as_ref()
-            .map(|v| v.to_string())
             .unwrap_or_else(|| WADM_VERSION.into());
         let wadm_binary = ensure_wadm(&wadm_version, &install_dir).await?;
         let wadm_child = match start_wadm(
@@ -324,9 +322,8 @@ impl WashDevSession {
 
         // Start the host in detached mode, w/ custom log file
         let wasmcloud_version = wasmcloud_opts
+            .clone()
             .wasmcloud_version
-            .as_ref()
-            .map(|v| v.to_string())
             .unwrap_or_else(|| WASMCLOUD_HOST_VERSION.into());
         let wasmcloud_log_path = session_dir.join("wasmcloud.log");
         let wasmcloud_binary = ensure_wasmcloud(&wasmcloud_version, &install_dir).await?;
