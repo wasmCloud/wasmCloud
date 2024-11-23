@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::io::{stdout, BufWriter, Write};
 
 use anyhow::bail;
 use clap::{self, Arg, Command, FromArgMatches, Parser, Subcommand};
@@ -462,7 +463,11 @@ async fn main() {
         CliCommand::Wit(wit_cli) => wit_cli.run().await,
     };
 
-    std::process::exit(match res {
+    // Use buffered writes to stdout preventing a broken pipe error in case this program has been
+    // piped to another program (e.g. 'wash dev | jq') and CTRL^C has been pressed.
+    let mut stdout_buf = BufWriter::new(stdout().lock());
+
+    let exit_code: i32 = match res {
         Ok(out) => {
             match output_kind {
                 OutputKind::Json => {
@@ -472,15 +477,15 @@ async fn main() {
                     if append_json_success {
                         map.insert("success".to_string(), json!(true));
                     }
-                    println!("\n{}", serde_json::to_string_pretty(&map).unwrap());
+                    let _ = writeln!(stdout_buf,"\n{}", serde_json::to_string_pretty(&map).unwrap());
                     0
                 }
                 OutputKind::Text => {
-                    println!("\n{}", out.text);
+                    let _ = writeln!(stdout_buf, "\n{}", out.text);
                     // on the first non-error, non-json use of wash, print info about shell completions
                     match completions::first_run_suggestion() {
                         Ok(Some(suggestion)) => {
-                            println!("\n{suggestion}");
+                            let _ = writeln!(stdout_buf, "\n{suggestion}");
                             0
                         }
                         Ok(None) => {
@@ -527,7 +532,10 @@ async fn main() {
             }
             1
         }
-    })
+    };
+
+    let _ = stdout_buf.flush();
+    std::process::exit(exit_code);
 }
 
 fn experimental_error_message(command: &str) -> anyhow::Result<CommandOutput> {
