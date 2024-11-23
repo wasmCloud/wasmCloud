@@ -274,7 +274,7 @@ reqwest-0_11 = { package = "reqwest", version = "0.11", default-features = false
 ring = { version = "0.17", default-features = false }
 rmp-serde = { version = "1", default-features = false }
 rmpv = { version = "1", default-features = false }
-rustls = { version = "0.23.11", default-features = false }
+rustls = { version = "0.23.17", default-features = false }
 rustls-native-certs = { version = "0.8", default-features = false }
 rustls-pemfile = { version = "2", default-features = false }
 rustversion = { version = "1.0", default-features = false }
