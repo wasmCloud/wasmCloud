@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::io::{stdout, BufWriter, Write};
+use std::path::{Path, PathBuf};
 
 use anyhow::bail;
 use clap::{self, Arg, Command, FromArgMatches, Parser, Subcommand};
@@ -477,7 +477,11 @@ async fn main() {
                     if append_json_success {
                         map.insert("success".to_string(), json!(true));
                     }
-                    let _ = writeln!(stdout_buf,"\n{}", serde_json::to_string_pretty(&map).unwrap());
+                    let _ = writeln!(
+                        stdout_buf,
+                        "\n{}",
+                        serde_json::to_string_pretty(&map).unwrap()
+                    );
                     0
                 }
                 OutputKind::Text => {
