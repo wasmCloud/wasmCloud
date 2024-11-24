@@ -45,19 +45,24 @@ fn integration_help_subcommand_check() -> Result<()> {
 /// Ensure `wash -h` works
 #[test]
 fn integration_help_short_works() -> Result<()> {
-    wash()
+    let stdout = wash()
         .args(["-h"])
         .output()
-        .context("failed to display help text")?;
+        .context("failed to display wash help text")
+        .and_then(|output| output_to_string(output).context("failed to extract stdout"))?;
+    assert!(stdout.contains("new"));
+    assert!(stdout.contains("build"));
     Ok(())
 }
 
-/// Ensure `wash --help-markdown` works
+/// Ensure `wash up --help-markdown` works
 #[test]
-fn integration_help_works() -> Result<()> {
-    wash()
-        .args(["--help-markdown"])
+fn integration_help_up_markdown_works() -> Result<()> {
+    let stdout = wash()
+        .args(["up", "--help-markdown"])
         .output()
-        .context("failed to display help text markdown")?;
+        .context("failed to display wash up help text markdown")
+        .and_then(|output| output_to_string(output).context("failed to extract stdout"))?;
+    assert!(stdout.contains("## `wash up`"));
     Ok(())
 }
