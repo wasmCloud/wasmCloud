@@ -1359,6 +1359,20 @@ impl Host {
         self.store_component_spec(&component_id, &component_spec)
             .await?;
 
+        let links = component_import_links(&component_spec.links);
+        // TODO: We need to support multiple link names with this. Right now this only supports default
+        let maybe_messaging = if let Some(link) = links.get("default").and_then(|links| links.get("wasmcloud:messaging/consumer")) {
+            // Hack: This is how we know if it is a host ID rather than another NKEY. We should
+            // replace this and not require the host ID for every component
+            if link.starts_with("N") {
+                // TODO: grab config from here to create the NATS client
+                Some(async_nats::connect("127.0.0.1:4222").await?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         // Map the imports to pull out the result types of the functions for lookup when invoking them
         let handler = Handler {
             nats: Arc::clone(&self.rpc_nats),
@@ -1366,9 +1380,10 @@ impl Host {
             lattice: Arc::clone(&self.host_config.lattice),
             component_id: Arc::clone(&component_id),
             secrets: Arc::new(RwLock::new(secrets)),
+            messaging_client: maybe_messaging,
             targets: Arc::default(),
             trace_ctx: Arc::default(),
-            instance_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
+            instance_links: Arc::new(RwLock::new(links)),
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
         };
         let component = wasmcloud_runtime::Component::new(&self.runtime, &wasm)?;
@@ -2698,6 +2713,129 @@ impl Host {
                                             Arc::clone(&provider_id),
                                             link,
                                         ) {
+                                            error!(?err, "failed to handle link put");
+                                        }
+                                    }
+                                    Err(err) => error!(?err, "failed to decode link put payload"),
+                                }
+                            }
+                        });
+                    }
+                    "nats-messaging" => {
+                        tracing::info!("starting nats messaging built in provider");
+                        let mut health = rpc_nats
+                            .subscribe(health_subject.clone())
+                            .await
+                            .context("failed to subscribe on heath check subject")?;
+                        let mut links = rpc_nats
+                            .subscribe(async_nats::Subject::from(format!(
+                                "wasmbus.rpc.{}.{provider_id}.linkdefs.put",
+                                &self.host_config.lattice
+                            )))
+                            .await
+                            .context("failed to subscribe on link put subject")?;
+                        let health_res = serde_json::to_vec(&HealthCheckResponse {
+                            healthy: true,
+                            message: None,
+                        })
+                        .context("failed to encode health check response")?;
+                        let health_res = Bytes::from(health_res);
+                        tasks.spawn(async move {
+                            while let Some(async_nats::Message { reply, .. }) = health.next().await
+                            {
+                                let Some(reply) = reply else { continue };
+                                if let Err(err) = rpc_nats.publish(reply, health_res.clone()).await
+                                {
+                                    warn!(?err, "failed to send health check response")
+                                }
+                            }
+                        });
+
+                        async fn handle_link_put_msg(tasks: &mut JoinSet<()>,
+                        provider_id: Arc<str>,
+                        components: Arc<RwLock<HashMap<String, Arc<Component>>>>,
+                        wasmcloud_core::InterfaceLinkDefinition {
+                            source_id,
+                            target,
+                            wit_namespace,
+                            wit_package,
+                            interfaces,
+                            source_config,
+                            ..
+                        }: wasmcloud_core::InterfaceLinkDefinition) -> anyhow::Result<()> {
+                                let target = Arc::<str>::from(target);
+                                // Check that the target component exists
+                                if !components.read().await.contains_key(target.as_ref()) {
+                                    anyhow::bail!("Target component {} not found", target);
+                                }
+                                for interface in interfaces {
+                                    if wit_namespace == "wasmcloud"
+                                        && wit_package == "messaging"
+                                        && interface == "handler"
+                                        && source_id == provider_id.as_ref()
+                                    {
+                                        let subscription_topic = source_config.get("subscription_topic").context("Subscription topic must be set")?;
+                                        tracing::info!(%subscription_topic, "Setting up messaging link");
+                                        
+                                        // TODO: Actually setup a client from a specific URL
+                                        let nc = async_nats::connect("localhost:4222").await?;
+
+                                        let mut sub = nc.queue_subscribe(subscription_topic.to_owned(), subscription_topic.to_owned()).await?;
+                                        let components = Arc::clone(&components);
+                                        let target = Arc::clone(&target);
+                                        tasks.spawn(async move {
+                                            let components = components.read().await;
+                                            // We can unwrap here because we check that the
+                                            // component exists above. We want to avoid the clone
+                                            // here so we're not allocating every invocation so we
+                                            // fetch a reference out of the map.
+                                            let c = components
+                                                .get(target.as_ref()).expect("target component not found, this is programmer error");
+                                            while let Some(msg) = sub.next().await {
+                                                
+                                                let (events_tx, _) = mpsc::channel(1);
+                                                let converted_msg = wasmcloud_runtime::component::messaging::wrpc_handler_bindings::wasmcloud::messaging::types::BrokerMessage {
+                                                    subject: msg.subject.into_string(),
+                                                    body: msg.payload,
+                                                    reply_to: msg.reply.map(|s| s.into_string()),
+                                                };
+                                                if let Err(err) = wasmcloud_runtime::component::messaging::wrpc_handler_bindings::exports::wasmcloud::messaging::handler::Handler::handle_message(
+                                                    &c.instantiate(
+                                                        c.handler.clone(),
+                                                        events_tx,
+                                                    ),
+                                                    (),
+                                                    converted_msg,
+                                                )
+                                                .await {
+                                                    error!(%err, "Error when executing component handler");
+                                                };
+                                            }
+                                        });
+                                    } else {
+                                        bail!("unsupported link")
+                                    }
+                                }
+                                Ok(())
+                            }
+                        let provider_id: Arc<str> = provider_id.into();
+                        tracing::info!(?provider_id, ?link_definitions, "Trying to link the thing");
+                        for link in link_definitions {
+                            handle_link_put_msg(&mut tasks, Arc::clone(&provider_id),Arc::clone(&components), link).await?;
+                        }
+                        let components = Arc::clone(&components);
+                        tasks.spawn(async move {
+                            let mut tasks = JoinSet::new();
+                            while let Some(async_nats::Message { payload, .. }) = links.next().await
+                            {
+                                match serde_json::from_slice(&payload) {
+                                    Ok(link) => {
+                                        if let Err(err) = handle_link_put_msg(
+                                            &mut tasks,
+                                            Arc::clone(&provider_id),
+                                            Arc::clone(&components),
+                                            link,
+                                        ).await {
                                             error!(?err, "failed to handle link put");
                                         }
                                     }

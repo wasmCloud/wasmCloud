@@ -1,11 +1,9 @@
 use super::{new_store, Ctx, Handler, Instance, WrpcServeEvent};
 
 use crate::capability::messaging::{consumer, types};
-use crate::capability::wrpc;
 
 use anyhow::Context as _;
 use async_trait::async_trait;
-use bytes::Bytes;
 use tracing::{instrument, warn};
 
 pub mod wasmtime_handler_bindings {
@@ -31,6 +29,18 @@ pub mod wrpc_handler_bindings {
 impl<H> types::Host for Ctx<H> where H: Handler {}
 
 #[async_trait]
+pub trait MessagingClient {
+    async fn request(
+        &self,
+        subject: String,
+        body: Vec<u8>,
+        timeout_ms: u32,
+    ) -> anyhow::Result<Result<types::BrokerMessage, String>>;
+
+    async fn publish(&self, msg: types::BrokerMessage) -> anyhow::Result<Result<(), String>>;
+}
+
+#[async_trait]
 impl<H> consumer::Host for Ctx<H>
 where
     H: Handler,
@@ -42,47 +52,12 @@ where
         body: Vec<u8>,
         timeout_ms: u32,
     ) -> anyhow::Result<Result<types::BrokerMessage, String>> {
-        match wrpc::wasmcloud::messaging::consumer::request(
-            &self.handler,
-            None,
-            &subject,
-            &Bytes::from(body),
-            timeout_ms,
-        )
-        .await?
-        {
-            Ok(wrpc::wasmcloud::messaging::types::BrokerMessage {
-                subject,
-                body,
-                reply_to,
-            }) => Ok(Ok(types::BrokerMessage {
-                subject,
-                body: body.into(),
-                reply_to,
-            })),
-            Err(err) => Ok(Err(err)),
-        }
+        self.handler.request(subject, body, timeout_ms).await
     }
 
     #[instrument(skip(self))]
-    async fn publish(
-        &mut self,
-        types::BrokerMessage {
-            subject,
-            body,
-            reply_to,
-        }: types::BrokerMessage,
-    ) -> anyhow::Result<Result<(), String>> {
-        wrpc::wasmcloud::messaging::consumer::publish(
-            &self.handler,
-            None,
-            &wrpc::wasmcloud::messaging::types::BrokerMessage {
-                subject,
-                body: body.into(),
-                reply_to,
-            },
-        )
-        .await
+    async fn publish(&mut self, msg: types::BrokerMessage) -> anyhow::Result<Result<(), String>> {
+        self.handler.publish(msg).await
     }
 }
 

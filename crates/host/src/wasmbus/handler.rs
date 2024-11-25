@@ -9,10 +9,12 @@ use bytes::Bytes;
 use secrecy::Secret;
 use tokio::sync::RwLock;
 use tracing::{error, instrument, warn};
-use wasmcloud_runtime::capability;
 use wasmcloud_runtime::capability::logging::logging;
+use wasmcloud_runtime::capability::messaging::consumer::BrokerMessage;
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
+use wasmcloud_runtime::capability::{self, wrpc};
 use wasmcloud_runtime::capability::{secrets, CallTargetInterface};
+use wasmcloud_runtime::component::messaging::MessagingClient;
 use wasmcloud_runtime::component::{
     Bus, Bus1_0_0, Config, InvocationErrorIntrospect, InvocationErrorKind, Logging,
     ReplacedInstanceTarget, Secrets,
@@ -57,6 +59,9 @@ pub struct Handler {
     #[allow(clippy::type_complexity)]
     pub instance_links: Arc<RwLock<HashMap<Box<str>, HashMap<Box<str>, Box<str>>>>>,
 
+    /// The configured client to use for built-in nats messaging if configured. If not configured, it will default to wRPC
+    pub messaging_client: Option<async_nats::Client>,
+
     pub invocation_timeout: Duration,
 }
 
@@ -74,6 +79,7 @@ impl Handler {
             trace_ctx: Arc::default(),
             instance_links: self.instance_links.clone(),
             invocation_timeout: self.invocation_timeout,
+            messaging_client: self.messaging_client.clone(),
         }
     }
 }
@@ -372,5 +378,71 @@ impl InvocationErrorIntrospect for Handler {
             }
         }
         InvocationErrorKind::Trap
+    }
+}
+
+#[async_trait]
+impl MessagingClient for Handler {
+    async fn request(
+        &self,
+        subject: String,
+        body: Vec<u8>,
+        timeout_ms: u32,
+    ) -> anyhow::Result<Result<BrokerMessage, String>> {
+        if let Some(nc) = self.messaging_client.as_ref() {
+            // TODO: use timeout_ms
+            return match nc.request(subject, body.into()).await {
+                Ok(async_nats::Message {
+                    subject,
+                    payload,
+                    reply,
+                    ..
+                }) => Ok(Ok(BrokerMessage {
+                    subject: subject.into_string(),
+                    body: payload.into(),
+                    reply_to: reply.map(|r| r.into_string()),
+                })),
+                Err(err) => Ok(Err(err.to_string())),
+            };
+        }
+        match wrpc::wasmcloud::messaging::consumer::request(
+            self,
+            None,
+            &subject,
+            &Bytes::from(body),
+            timeout_ms,
+        )
+        .await?
+        {
+            Ok(wrpc::wasmcloud::messaging::types::BrokerMessage {
+                subject,
+                body,
+                reply_to,
+            }) => Ok(Ok(BrokerMessage {
+                subject,
+                body: body.into(),
+                reply_to,
+            })),
+            Err(err) => Ok(Err(err)),
+        }
+    }
+
+    async fn publish(&self, msg: BrokerMessage) -> anyhow::Result<Result<(), String>> {
+        if let Some(nc) = self.messaging_client.as_ref() {
+            return match nc.publish(msg.subject, msg.body.into()).await {
+                Ok(_) => Ok(Ok(())),
+                Err(err) => Ok(Err(err.to_string())),
+            };
+        }
+        wrpc::wasmcloud::messaging::consumer::publish(
+            self,
+            None,
+            &wrpc::wasmcloud::messaging::types::BrokerMessage {
+                subject: msg.subject,
+                body: msg.body.into(),
+                reply_to: msg.reply_to,
+            },
+        )
+        .await
     }
 }

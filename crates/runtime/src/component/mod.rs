@@ -8,6 +8,7 @@ use core::time::Duration;
 
 use anyhow::{ensure, Context as _};
 use futures::{Stream, TryStreamExt as _};
+use messaging::MessagingClient;
 use tokio::io::{AsyncRead, AsyncReadExt as _};
 use tokio::sync::mpsc;
 use tracing::{debug, instrument, warn, Instrument as _, Span};
@@ -36,7 +37,8 @@ mod config;
 mod http;
 mod keyvalue;
 mod logging;
-mod messaging;
+#[allow(missing_docs)]
+pub mod messaging;
 mod secrets;
 
 /// Instance target, which is replaced in wRPC
@@ -201,6 +203,7 @@ pub trait Handler:
     + Config
     + Logging
     + Secrets
+    + MessagingClient
     + InvocationErrorIntrospect
     + Send
     + Sync
@@ -215,6 +218,7 @@ impl<
             + Config
             + Logging
             + Secrets
+            + MessagingClient
             + InvocationErrorIntrospect
             + Send
             + Sync
