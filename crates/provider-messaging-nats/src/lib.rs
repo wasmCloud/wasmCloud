@@ -15,10 +15,11 @@ use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
 use wasmcloud_provider_sdk::core::HostData;
+use wasmcloud_provider_sdk::provider::WrpcClient;
 use wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_provider_sdk::{
-    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, serve_provider_exports,
-    Context, LinkConfig, LinkDeleteInfo, Provider,
+    get_connection, initialize_observability, load_host_data, propagate_trace_for_ctx,
+    run_provider, serve_provider_exports, Context, LinkConfig, LinkDeleteInfo, Provider,
 };
 
 mod connection;
