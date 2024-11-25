@@ -512,7 +512,11 @@ async fn tags() {
 }
 
 /// Projects with overridden paths should be properly handled
+///
+/// NOTE: this test uses hard-coded paths in config that include '/tmp'
+/// and as such, doesn't work on windows.
 #[tokio::test]
+#[cfg(not(target_os = "windows"))]
 async fn separate_project_paths() {
     let result = load_config(
         Some(PathBuf::from(
