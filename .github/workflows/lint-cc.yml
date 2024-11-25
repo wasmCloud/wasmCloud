@@ -17,7 +17,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install commitsar
-        uses: jaxxstorm/action-install-gh-release@7f2440a9a41f74262d8f6433da138c799799a969
+        uses: jaxxstorm/action-install-gh-release@cd6b2b78ad38bdd294341cda064ec0692b06215b
         with:
           repo: aevea/commitsar
           tag: v0.20.2
