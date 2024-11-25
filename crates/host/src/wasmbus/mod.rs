@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc, watch, RwLock, Semaphore};
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinHandle;
 use tokio::time::{interval_at, Instant};
 use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
@@ -1259,39 +1259,31 @@ impl Host {
                 async move {
                     join!(
                         async move {
-                            let mut tasks = JoinSet::new();
                             let mut exports = stream::select_all(exports);
                             loop {
                                 let permits = Arc::clone(&permits);
-                                select! {
-                                    Some(fut) = exports.next() => {
-                                        match fut {
-                                            Ok(fut) => {
-                                                debug!("accepted invocation, acquiring permit");
-                                                let permit = permits.acquire_owned().await;
-                                                tasks.spawn(async move {
-                                                    let _permit = permit;
-                                                    debug!("handling invocation");
-                                                    match fut.await {
-                                                        Ok(()) => {
-                                                            debug!("successfully handled invocation");
-                                                            Ok(())
-                                                        },
-                                                        Err(err) => {
-                                                            warn!(?err, "failed to handle invocation");
-                                                            Err(err)
-                                                        },
+                                if let Some(fut) = exports.next().await {
+                                    match fut {
+                                        Ok(fut) => {
+                                            debug!("accepted invocation, acquiring permit");
+                                            let permit = permits.acquire_owned().await;
+                                            spawn(async move {
+                                                let _permit = permit;
+                                                debug!("handling invocation");
+                                                match fut.await {
+                                                    Ok(()) => {
+                                                        debug!("successfully handled invocation");
+                                                        Ok(())
                                                     }
-                                                });
-                                            }
-                                            Err(err) => {
-                                                warn!(?err, "failed to accept invocation")
-                                            }
+                                                    Err(err) => {
+                                                        warn!(?err, "failed to handle invocation");
+                                                        Err(err)
+                                                    }
+                                                }
+                                            });
                                         }
-                                    }
-                                    Some(res) = tasks.join_next() => {
-                                        if let Err(err) = res {
-                                            error!(?err, "export serving task failed");
+                                        Err(err) => {
+                                            warn!(?err, "failed to accept invocation")
                                         }
                                     }
                                 }

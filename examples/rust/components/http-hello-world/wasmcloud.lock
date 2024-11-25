@@ -4,7 +4,7 @@ version = 1
 
 [[packages]]
 name = "wasi:http"
-registry = "another.com"
+registry = "wasi.dev"
 
 [[packages.versions]]
 requirement = "=0.2.2"
