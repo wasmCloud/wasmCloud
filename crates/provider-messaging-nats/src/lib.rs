@@ -9,7 +9,7 @@ use bytes::Bytes;
 use futures::StreamExt as _;
 use opentelemetry_nats::{attach_span_context, NatsHeaderInjector};
 use tokio::fs;
-use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
+use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument;
@@ -182,20 +182,11 @@ impl NatsMessagingProvider {
         // Spawn a thread that listens for messages coming from NATS
         // this thread is expected to run the full duration that the provider is available
         let join_handle = tokio::spawn(async move {
-            // MAGIC NUMBER: Based on our benchmark testing, this seems to be a good upper limit
-            // where we start to get diminishing returns. We can consider making this
-            // configurable down the line.
-            // NOTE (thomastaylor312): It may be better to have a semaphore pool on the
-            // NatsMessagingProvider struct that has a global limit of permits so that we don't end
-            // up with 20 subscriptions all getting slammed with up to 75 tasks, but we should wait
-            // to do anything until we see what happens with real world usage and benchmarking
-            let semaphore = Arc::new(Semaphore::new(75));
-
             let wrpc = match get_connection()
                 .get_wrpc_client_custom(&component_id, None)
                 .await
             {
-                Ok(wrpc) => wrpc,
+                Ok(wrpc) => Arc::new(wrpc),
                 Err(err) => {
                     error!(?err, "failed to construct wRPC client");
                     return;
@@ -207,23 +198,10 @@ impl NatsMessagingProvider {
                 // Set up tracing context for the NATS message
                 let span = tracing::debug_span!("handle_message", ?component_id);
 
-                let permit = match semaphore
-                    .clone()
-                    .acquire_owned()
-                    .instrument(tracing::trace_span!("acquire_semaphore"))
-                    .await
-                {
-                    Ok(p) => p,
-                    Err(_) => {
-                        warn!("Work pool has been closed, exiting queue subscribe");
-                        break;
-                    }
-                };
-
                 let component_id = Arc::clone(&component_id);
-                let wrpc = wrpc.clone();
+                let wrpc = Arc::clone(&wrpc);
                 tokio::spawn(async move {
-                    dispatch_msg(&wrpc, component_id.as_str(), msg, permit)
+                    dispatch_msg(&wrpc, component_id.as_str(), msg)
                         .instrument(span)
                         .await;
                 });
@@ -235,12 +213,7 @@ impl NatsMessagingProvider {
 }
 
 #[instrument(level = "debug", skip_all, fields(component_id = %component_id, subject = %nats_msg.subject, reply_to = ?nats_msg.reply))]
-async fn dispatch_msg(
-    wrpc: &WrpcClient,
-    component_id: &str,
-    nats_msg: async_nats::Message,
-    _permit: OwnedSemaphorePermit,
-) {
+async fn dispatch_msg(wrpc: &WrpcClient, component_id: &str, nats_msg: async_nats::Message) {
     match nats_msg.headers {
         // If there are some headers on the message they might contain a span context
         // so attempt to attach them.
