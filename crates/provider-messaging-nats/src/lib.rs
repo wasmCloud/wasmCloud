@@ -69,6 +69,11 @@ pub struct NatsMessagingProvider {
 
 impl NatsMessagingProvider {
     pub async fn run() -> anyhow::Result<()> {
+        initialize_observability!(
+            "nats-messaging-provider",
+            std::env::var_os("PROVIDER_NATS_MESSAGING_FLAMEGRAPH_PATH")
+        );
+
         let host_data = load_host_data().context("failed to load host data")?;
         let provider = Self::from_host_data(host_data);
         let shutdown = run_provider(provider.clone(), "messaging-nats-provider")
@@ -186,6 +191,16 @@ impl NatsMessagingProvider {
             // to do anything until we see what happens with real world usage and benchmarking
             let semaphore = Arc::new(Semaphore::new(75));
 
+            let wrpc = match get_connection()
+                .get_wrpc_client_custom(&component_id, None)
+                .await
+            {
+                Ok(wrpc) => wrpc,
+                Err(err) => {
+                    error!(?err, "failed to construct wRPC client");
+                    return;
+                }
+            };
             // Listen for NATS message(s)
             while let Some(msg) = subscriber.next().await {
                 debug!(?msg, ?component_id, "received messsage");
@@ -206,8 +221,9 @@ impl NatsMessagingProvider {
                 };
 
                 let component_id = Arc::clone(&component_id);
+                let wrpc = wrpc.clone();
                 tokio::spawn(async move {
-                    dispatch_msg(component_id.as_str(), msg, permit)
+                    dispatch_msg(&wrpc, component_id.as_str(), msg, permit)
                         .instrument(span)
                         .await;
                 });
@@ -220,6 +236,7 @@ impl NatsMessagingProvider {
 
 #[instrument(level = "debug", skip_all, fields(component_id = %component_id, subject = %nats_msg.subject, reply_to = ?nats_msg.reply))]
 async fn dispatch_msg(
+    wrpc: &WrpcClient,
     component_id: &str,
     nats_msg: async_nats::Message,
     _permit: OwnedSemaphorePermit,
@@ -249,18 +266,8 @@ async fn dispatch_msg(
     for (k, v) in TraceContextInjector::default_with_span().iter() {
         cx.insert(k.as_str(), v.as_str())
     }
-    let wrpc = match get_connection()
-        .get_wrpc_client_custom(component_id, None)
-        .await
-    {
-        Ok(wrpc) => wrpc,
-        Err(err) => {
-            error!(?err, "failed to construct wRPC client");
-            return;
-        }
-    };
     if let Err(e) =
-        bindings::wasmcloud::messaging::handler::handle_message(&wrpc, Some(cx), &msg).await
+        bindings::wasmcloud::messaging::handler::handle_message(wrpc, Some(cx), &msg).await
     {
         error!(
             error = %e,
