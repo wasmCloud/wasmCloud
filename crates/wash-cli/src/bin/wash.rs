@@ -56,18 +56,17 @@ struct HelpTopic {
 impl Display for HelpTopic {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         const PADDING_AFTER_LONGEST_SPACES: usize = 3;
+        const DEFAULT_PADDING_START: usize = 25;
         writeln!(f, "{}", self.name.green().bold())?;
         let longest_command_length = self
             .commands
             .iter()
             .map(|(name, _)| name.len())
             .max()
-            .unwrap_or(25)
+            .unwrap_or(DEFAULT_PADDING_START)
             + PADDING_AFTER_LONGEST_SPACES;
 
         for (name, desc) in &self.commands {
-            // Add a padding to the desc to align the descriptions
-            // NOTE: There should be a (hopefullty) a better way to align the descriptions
             let padding = " ".repeat(longest_command_length - name.len());
             writeln!(f, "  {}{}{}", name.blue(), padding, desc)?;
         }
