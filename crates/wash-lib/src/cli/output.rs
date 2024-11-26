@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use serde::Deserialize;
-use wasmcloud_control_interface::{Host, HostInventory};
-use wasmcloud_core::{InterfaceLinkDefinition, LinkName};
+use wasmcloud_control_interface::{Host, HostInventory, Link};
 
 use wadm_types::api::ModelSummary;
 use wadm_types::validation::ValidationFailure;
@@ -38,7 +37,7 @@ pub struct StopCommandOutput {
 /// JSON output representation of the `wash link query` command
 #[derive(Debug, Deserialize)]
 pub struct LinkQueryCommandOutput {
-    pub links: Vec<HashMap<LinkName, Vec<InterfaceLinkDefinition>>>,
+    pub links: Vec<Link>,
     pub success: bool,
 }
 
