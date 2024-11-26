@@ -24,7 +24,11 @@ This example also serves as a great example of using JS ecosystem projects, nota
 
 # Dependencies
 
-This relies on the following installed software:
+> ![WARN]
+> When building this project, ensure you have the latest stable NodeJS version
+> If you're using a tool like `nvm` you can use the incldued `.nvmrc`.
+
+This project relies on the following installed software:
 
 | Name   | Description                                                                                                 |
 | ------ | ----------------------------------------------------------------------------------------------------------- |
