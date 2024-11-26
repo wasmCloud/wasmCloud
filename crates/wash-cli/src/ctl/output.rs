@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Result};
 use serde_json::json;
 use term_table::{
     row::Row,
@@ -28,31 +27,6 @@ pub fn get_claims_output(claims: Vec<HashMap<String, String>>) -> CommandOutput 
     let mut map = HashMap::new();
     map.insert("claims".to_string(), json!(claims));
     CommandOutput::new(claims_table(claims), map)
-}
-
-pub fn link_del_output(
-    source_id: &str,
-    link_name: &str,
-    wit_namespace: &str,
-    wit_package: &str,
-    failure: Option<String>,
-) -> Result<CommandOutput> {
-    match failure {
-        None => {
-            let mut map = HashMap::new();
-            map.insert("source_id".to_string(), json!(source_id));
-            map.insert("wit_namespace".to_string(), json!(wit_namespace));
-            map.insert("wit_package".to_string(), json!(wit_package));
-            map.insert("link_name".to_string(), json!(link_name));
-            Ok(CommandOutput::new(
-                format!(
-                    "Deleted link for {source_id} on {wit_namespace}:{wit_package} ({link_name}) successfully"
-                ),
-                map,
-            ))
-        }
-        Some(f) => bail!("Error deleting link: {}", f),
-    }
 }
 
 pub fn links_table(mut list: Vec<Link>) -> String {
