@@ -54,6 +54,12 @@ description = "a component (in Rust) that can be used as a plugin for the Wash C
 git = "wasmCloud/wasmCloud"
 subfolder = "examples/rust/components/wash-plugin-rust"
 
+[[component]]
+name = "http-password-checker-typescript"
+description = "a HTTP API for checking password strength"
+git = "wasmCloud/wasmCloud"
+subfolder = "examples/typescript/components/http-password-checker"
+
 [[provider]]
 name = "messaging-nats"
 description = "a capability provider with scaffolding to implement the `wasmcloud:messaging` interface for pubsub"
@@ -71,3 +77,4 @@ name = "custom-template-go"
 description = "a capability provider template written in Go with scaffolding to implement a custom interface"
 git = "wasmCloud/wasmCloud"
 subfolder = "examples/golang/providers/custom-template"
+
