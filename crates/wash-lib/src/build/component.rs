@@ -391,10 +391,14 @@ async fn build_custom_component(
             ))
         }
     })?;
+
     if !output.status.success() {
+        let stdout_output = String::from_utf8_lossy(&output.stdout);
+        let stderr_output = String::from_utf8_lossy(&output.stderr);
+        eprintln!("STDOUT:\n{stdout_output}\nSTDERR:\n{stderr_output}");
         bail!(
-            "failed to build component with custom command: {:?}",
-            String::from_utf8_lossy(&output.stderr)
+            "failed to build component with custom command: {}",
+            output.status.to_string()
         );
     }
 
