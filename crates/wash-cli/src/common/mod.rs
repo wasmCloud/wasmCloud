@@ -1,6 +1,5 @@
 pub mod get_cmd;
 pub mod label_cmd;
-pub mod link_cmd;
 pub mod registry_cmd;
 pub mod scale_cmd;
 pub mod start_cmd;
