@@ -210,6 +210,7 @@ struct Component {
     /// Maximum number of instances of this component that can be running at once
     max_instances: NonZeroUsize,
     image_reference: Arc<str>,
+    events: mpsc::Sender<WrpcServeEvent<<WrpcServer as wrpc_transport::Serve>::Context>>,
 }
 
 impl Deref for Component {
@@ -1254,7 +1255,7 @@ impl Host {
                     metrics: Arc::clone(&self.metrics),
                 },
                 handler.clone(),
-                events_tx,
+                events_tx.clone(),
             )
             .await?;
         let permits = Arc::new(Semaphore::new(
@@ -1265,6 +1266,7 @@ impl Host {
             component,
             id,
             handler,
+            events: events_tx,
             exports: spawn(
                 async move {
                     join!(
@@ -2412,6 +2414,8 @@ impl Host {
             address: SocketAddr,
             components: Arc<RwLock<HashMap<String, Arc<Component>>>>,
             links: Mutex<HashMap<Arc<str>, HashMap<Box<str>, JoinSet<()>>>>,
+            lattice_id: Arc<str>,
+            host_id: Arc<str>,
         }
 
         impl wasmcloud_provider_sdk::Provider for Provider {
@@ -2439,11 +2443,15 @@ impl Host {
 
                 let mut tasks = JoinSet::new();
                 let target_id: Arc<str> = Arc::from(target_id);
-                let components = Arc::clone(&self.components);
                 let svc = hyper::service::service_fn({
                     let target_id = Arc::clone(&target_id);
+                    let lattice_id = Arc::clone(&self.lattice_id);
+                    let host_id = Arc::clone(&self.host_id);
+                    let components = Arc::clone(&self.components);
                     move |req: hyper::Request<hyper::body::Incoming>| {
                         let target_id = Arc::clone(&target_id);
+                        let lattice_id = Arc::clone(&lattice_id);
+                        let host_id = Arc::clone(&host_id);
                         let components = Arc::clone(&components);
                         async move {
                             let component = {
@@ -2453,7 +2461,6 @@ impl Host {
                                     .context("linked component not found")?;
                                 Arc::clone(component)
                             };
-                            let (events_tx, _) = mpsc::channel(1);
                             let (
                                 http::request::Parts {
                                     method,
@@ -2492,8 +2499,24 @@ impl Host {
                                 )
                                 .context("invalid request")?;
                             let res = component
-                                .instantiate(component.handler.clone(), events_tx)
-                                .handle((), req)
+                                .instantiate(
+                                    component.handler.copy_for_new(),
+                                    component.events.clone(),
+                                )
+                                .handle(
+                                    (
+                                        Instant::now(),
+                                        vec![
+                                            KeyValue::new(
+                                                "component.ref",
+                                                Arc::clone(&component.image_reference),
+                                            ),
+                                            KeyValue::new("lattice", Arc::clone(&lattice_id)),
+                                            KeyValue::new("host", Arc::clone(&host_id)),
+                                        ],
+                                    ),
+                                    req,
+                                )
                                 .await?;
                             let res = res?;
                             anyhow::Ok(res)
@@ -2587,6 +2610,8 @@ impl Host {
             address: default_address,
             components: Arc::clone(&self.components),
             links: Mutex::default(),
+            host_id: Arc::from(host_id),
+            lattice_id: Arc::clone(&self.host_config.lattice),
         };
         for ld in link_definitions {
             if let Err(e) = receive_link_for_provider(&provider, &conn, ld).await {
@@ -2620,6 +2645,8 @@ impl Host {
             messaging_links:
                 Arc<RwLock<HashMap<Arc<str>, Arc<RwLock<HashMap<Box<str>, async_nats::Client>>>>>>,
             subscriptions: Mutex<HashMap<Arc<str>, HashMap<Box<str>, JoinSet<()>>>>,
+            lattice_id: Arc<str>,
+            host_id: Arc<str>,
         }
 
         impl Provider {
@@ -2721,8 +2748,10 @@ impl Host {
                         nats.subscribe(async_nats::Subject::from(sub)).await
                     }
                     .context("failed to subscribe")?;
-                    let components = Arc::clone(&self.components);
                     let target_id = Arc::clone(&target_id);
+                    let lattice_id = Arc::clone(&self.lattice_id);
+                    let host_id = Arc::clone(&self.host_id);
+                    let components = Arc::clone(&self.components);
                     tasks.spawn(async move {
                         while let Some(async_nats::Message {
                             subject,
@@ -2739,11 +2768,23 @@ impl Host {
                                 };
                                 Arc::clone(component)
                             };
-                            let (events_tx, _) = mpsc::channel(1);
                             match component
-                                .instantiate(component.handler.clone(), events_tx)
+                                .instantiate(
+                                    component.handler.copy_for_new(),
+                                    component.events.clone(),
+                                )
                                 .handle_message(
-                                    (),
+                                    (
+                                        Instant::now(),
+                                        vec![
+                                            KeyValue::new(
+                                                "component.ref",
+                                                Arc::clone(&component.image_reference),
+                                            ),
+                                            KeyValue::new("lattice", Arc::clone(&lattice_id)),
+                                            KeyValue::new("host", Arc::clone(&host_id)),
+                                        ],
+                                    ),
                                     wrpc::wasmcloud::messaging::types::BrokerMessage {
                                         subject: subject.into_string(),
                                         body: payload,
@@ -2812,6 +2853,8 @@ impl Host {
             components: Arc::clone(&self.components),
             messaging_links: Arc::clone(&self.messaging_links),
             subscriptions: Mutex::default(),
+            host_id: Arc::from(host_id),
+            lattice_id: Arc::clone(&self.host_config.lattice),
         };
         for ld in link_definitions {
             if let Err(e) = receive_link_for_provider(&provider, &conn, ld).await {
