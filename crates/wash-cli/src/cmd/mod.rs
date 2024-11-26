@@ -2,5 +2,5 @@
 
 pub mod config;
 pub mod dev;
-pub mod up;
 pub mod link;
+pub mod up;
