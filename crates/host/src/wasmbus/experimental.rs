@@ -17,14 +17,15 @@ impl Features {
     pub fn new() -> Self {
         Self::default()
     }
+
     /// Enable the built-in HTTP server capability provider
-    pub fn with_builtin_http(mut self) -> Self {
+    pub fn enable_builtin_http(mut self) -> Self {
         self.builtin_http = true;
         self
     }
 
     /// Enable the built-in NATS messaging capability provider
-    pub fn with_builtin_messaging(mut self) -> Self {
+    pub fn enable_builtin_messaging(mut self) -> Self {
         self.builtin_messaging = true;
         self
     }
@@ -55,8 +56,8 @@ impl std::iter::Sum for Features {
 impl From<&str> for Features {
     fn from(s: &str) -> Self {
         match &*s.to_ascii_lowercase() {
-            "builtin-http" | "builtin_http" => Self::new().with_builtin_http(),
-            "builtin-messaging" | "builtin_messaging" => Self::new().with_builtin_messaging(),
+            "builtin-http" | "builtin_http" => Self::new().enable_builtin_http(),
+            "builtin-messaging" | "builtin_messaging" => Self::new().enable_builtin_messaging(),
             _ => {
                 warn!(%s, "unknown feature flag");
                 Self::new()
