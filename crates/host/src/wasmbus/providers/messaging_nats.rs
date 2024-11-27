@@ -8,7 +8,7 @@ use tokio::fs;
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
-use tracing::{error, instrument, warn};
+use tracing::{error, info_span, instrument, trace_span, warn, Instrument as _, Span};
 use wasmcloud_core::InterfaceLinkDefinition;
 use wasmcloud_provider_messaging_nats::add_tls_ca;
 use wasmcloud_provider_messaging_nats::ConnectionConfig;
@@ -19,7 +19,7 @@ use wasmcloud_provider_sdk::{LinkConfig, LinkDeleteInfo, ProviderConnection};
 use wasmcloud_runtime::capability::wrpc;
 use wasmcloud_tracing::KeyValue;
 
-use crate::wasmbus::Component;
+use crate::wasmbus::{Component, InvocationContext};
 
 struct Provider {
     config: ConnectionConfig,
@@ -134,64 +134,71 @@ impl wasmcloud_provider_sdk::Provider for Provider {
             let host_id = Arc::clone(&self.host_id);
             let components = Arc::clone(&self.components);
             tasks.spawn(async move {
-                while let Some(async_nats::Message {
-                    subject,
-                    payload,
-                    reply,
-                    ..
-                }) = sub.next().await
-                {
+                while let Some(msg) = sub.next().await {
                     let target_id = Arc::clone(&target_id);
                     let lattice_id = Arc::clone(&lattice_id);
                     let host_id = Arc::clone(&host_id);
                     let components = Arc::clone(&components);
-                    tokio::spawn(async move {
-                        let component = {
-                            let components = components.read().await;
-                            let Some(component) = components.get(target_id.as_ref()) else {
-                                warn!(?target_id, "linked component not found");
-                                return;
+                    tokio::spawn(
+                        async move {
+                            opentelemetry_nats::attach_span_context(&msg);
+                            let component = {
+                                let components = components.read().await;
+                                let Some(component) = components.get(target_id.as_ref()) else {
+                                    warn!(?target_id, "linked component not found");
+                                    return;
+                                };
+                                Arc::clone(component)
                             };
-                            Arc::clone(component)
-                        };
-                        let _permit = match component.permits.acquire().await {
-                            Ok(permit) => permit,
-                            Err(err) => {
-                                error!(?err, "failed to acquire execution permit");
-                                return;
-                            }
-                        };
-                        match component
-                            .instantiate(component.handler.copy_for_new(), component.events.clone())
-                            .handle_message(
-                                (
-                                    Instant::now(),
-                                    vec![
-                                        KeyValue::new(
-                                            "component.ref",
-                                            Arc::clone(&component.image_reference),
-                                        ),
-                                        KeyValue::new("lattice", Arc::clone(&lattice_id)),
-                                        KeyValue::new("host", Arc::clone(&host_id)),
-                                    ],
-                                ),
-                                wrpc::wasmcloud::messaging::types::BrokerMessage {
-                                    subject: subject.into_string(),
-                                    body: payload,
-                                    reply_to: reply.map(async_nats::Subject::into_string),
-                                },
-                            )
-                            .await
-                        {
-                            Ok(Ok(())) => {}
-                            Ok(Err(err)) => {
-                                warn!(?err, "component failed to handle message")
-                            }
-                            Err(err) => {
-                                warn!(?err, "failed to call component")
+                            let _permit = match component
+                                .permits
+                                .acquire()
+                                .instrument(trace_span!("acquire_message_permit"))
+                                .await
+                            {
+                                Ok(permit) => permit,
+                                Err(err) => {
+                                    error!(?err, "failed to acquire execution permit");
+                                    return;
+                                }
+                            };
+                            match component
+                                .instantiate(
+                                    component.handler.copy_for_new(),
+                                    component.events.clone(),
+                                )
+                                .handle_message(
+                                    InvocationContext {
+                                        span: Span::current(),
+                                        start_at: Instant::now(),
+                                        attributes: vec![
+                                            KeyValue::new(
+                                                "component.ref",
+                                                Arc::clone(&component.image_reference),
+                                            ),
+                                            KeyValue::new("lattice", Arc::clone(&lattice_id)),
+                                            KeyValue::new("host", Arc::clone(&host_id)),
+                                        ],
+                                    },
+                                    wrpc::wasmcloud::messaging::types::BrokerMessage {
+                                        subject: msg.subject.into_string(),
+                                        body: msg.payload,
+                                        reply_to: msg.reply.map(async_nats::Subject::into_string),
+                                    },
+                                )
+                                .await
+                            {
+                                Ok(Ok(())) => {}
+                                Ok(Err(err)) => {
+                                    warn!(?err, "component failed to handle message")
+                                }
+                                Err(err) => {
+                                    warn!(?err, "failed to call component")
+                                }
                             }
                         }
-                    });
+                        .instrument(info_span!("handle_message")),
+                    );
                 }
             });
         }
