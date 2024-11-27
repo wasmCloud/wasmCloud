@@ -63,6 +63,7 @@ use crate::{
 };
 
 mod event;
+mod experimental;
 mod handler;
 mod providers;
 
@@ -73,6 +74,7 @@ pub mod host_config;
 pub use self::host_config::Host as HostConfig;
 
 use self::config::{BundleGenerator, ConfigBundle};
+pub use self::experimental::Features;
 use self::handler::Handler;
 
 const MAX_INVOCATION_CHANNEL_SIZE: usize = 5000;
@@ -389,6 +391,8 @@ pub struct Host {
     max_execution_time: Duration,
     messaging_links:
         Arc<RwLock<HashMap<Arc<str>, Arc<RwLock<HashMap<Box<str>, async_nats::Client>>>>>>,
+    /// Experimental features to enable in the host that gate functionality
+    experimental_features: Features,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -884,6 +888,8 @@ impl Host {
 
         let max_execution_time_ms = config.max_execution_time;
 
+        debug!("Feature flags: {:?}", config.experimental_features);
+
         let host = Host {
             components: Arc::default(),
             event_builder,
@@ -896,6 +902,7 @@ impl Host {
             labels: RwLock::new(labels),
             ctl_nats,
             rpc_nats: Arc::new(rpc_nats),
+            experimental_features: config.experimental_features,
             host_config: config,
             data: data.clone(),
             data_watch: data_watch_abort.clone(),
@@ -2547,7 +2554,7 @@ impl Host {
                     .await?
                 }
                 (None, ResourceRef::Builtin(name)) => match *name {
-                    "http-server" => {
+                    "http-server" if self.experimental_features.builtin_http => {
                         self.start_http_server_provider(
                             &mut tasks,
                             link_definitions,
@@ -2558,7 +2565,8 @@ impl Host {
                         )
                         .await?
                     }
-                    "messaging-nats" => {
+                    "http-server" => bail!("feature `builtin-http` is not enabled, denying start"),
+                    "messaging-nats" if self.experimental_features.builtin_messaging => {
                         self.start_messaging_nats_provider(
                             &mut tasks,
                             link_definitions,
@@ -2568,6 +2576,9 @@ impl Host {
                             host_id,
                         )
                         .await?
+                    }
+                    "messaging-nats" => {
+                        bail!("feature `messaging-nats` is not enabled, denying start")
                     }
                     _ => bail!("unknown builtin name: {name}"),
                 },

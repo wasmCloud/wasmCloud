@@ -17,6 +17,7 @@ use wasmcloud_core::{OtelConfig, OtelProtocol};
 use wasmcloud_host::oci::Config as OciConfig;
 use wasmcloud_host::url::Url;
 use wasmcloud_host::wasmbus::host_config::PolicyService as PolicyServiceConfig;
+use wasmcloud_host::wasmbus::Features;
 use wasmcloud_host::WasmbusHostConfig;
 use wasmcloud_tracing::configure_observability;
 
@@ -327,6 +328,15 @@ struct Args {
     #[arg(long = "heartbeat-interval-seconds", env = "WASMCLOUD_HEARTBEAT_INTERVAL", value_parser = parse_duration_secs, hide = true)]
     heartbeat_interval: Option<Duration>,
 
+    /// Experimental features to enable in the host. This is a repeatable option.
+    #[arg(
+        long = "feature",
+        env = "WASMCLOUD_EXPERIMENTAL_FEATURES",
+        value_delimiter = ',',
+        hide = true
+    )]
+    experimental_features: Vec<Features>,
+
     #[clap(
         long = "help-markdown",
         action=ArgAction::SetTrue,
@@ -498,6 +508,8 @@ async fn main() -> anyhow::Result<()> {
         max_component_size: args.max_component_size,
         max_components: args.max_components,
         heartbeat_interval: args.heartbeat_interval,
+        // NOTE(brooks): Summing the feature flags "OR"s the multiple flags together.
+        experimental_features: args.experimental_features.into_iter().sum(),
     }))
     .await
     .context("failed to initialize host")?;

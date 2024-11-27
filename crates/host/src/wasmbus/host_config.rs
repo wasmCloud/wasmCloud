@@ -9,6 +9,8 @@ use url::Url;
 use wasmcloud_core::{logging::Level as LogLevel, OtelConfig};
 use wasmcloud_runtime::{MAX_COMPONENTS, MAX_COMPONENT_SIZE, MAX_LINEAR_MEMORY};
 
+use crate::wasmbus::experimental::Features;
+
 /// wasmCloud Host configuration
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug)]
@@ -72,6 +74,8 @@ pub struct Host {
     pub max_components: u32,
     /// The interval at which the Host will send heartbeats
     pub heartbeat_interval: Option<Duration>,
+    /// Experimental features that can be enabled in the host
+    pub experimental_features: Features,
 }
 
 /// Configuration for wasmCloud policy service
@@ -121,6 +125,7 @@ impl Default for Host {
             max_component_size: MAX_COMPONENT_SIZE,
             max_components: MAX_COMPONENTS,
             heartbeat_interval: None,
+            experimental_features: Features::default(),
         }
     }
 }
