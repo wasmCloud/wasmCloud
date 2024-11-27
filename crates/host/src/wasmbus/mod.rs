@@ -199,6 +199,7 @@ struct Component {
     max_instances: NonZeroUsize,
     image_reference: Arc<str>,
     events: mpsc::Sender<WrpcServeEvent<<WrpcServer as wrpc_transport::Serve>::Context>>,
+    permits: Arc<Semaphore>,
 }
 
 impl Deref for Component {
@@ -1255,6 +1256,7 @@ impl Host {
             id,
             handler,
             events: events_tx,
+            permits: Arc::clone(&permits),
             exports: spawn(
                 async move {
                     join!(

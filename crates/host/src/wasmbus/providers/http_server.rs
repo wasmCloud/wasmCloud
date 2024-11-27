@@ -114,6 +114,11 @@ impl wasmcloud_provider_sdk::Provider for Provider {
                                 .boxed(),
                         )
                         .context("invalid request")?;
+                    let _permit = component
+                        .permits
+                        .acquire()
+                        .await
+                        .context("failed to acquire execution permit")?;
                     let res = component
                         .instantiate(component.handler.copy_for_new(), component.events.clone())
                         .handle(

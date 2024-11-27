@@ -154,6 +154,13 @@ impl wasmcloud_provider_sdk::Provider for Provider {
                             };
                             Arc::clone(component)
                         };
+                        let _permit = match component.permits.acquire().await {
+                            Ok(permit) => permit,
+                            Err(err) => {
+                                error!(?err, "failed to acquire execution permit");
+                                return;
+                            }
+                        };
                         match component
                             .instantiate(component.handler.copy_for_new(), component.events.clone())
                             .handle_message(
