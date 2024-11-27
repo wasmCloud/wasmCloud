@@ -11,7 +11,7 @@ use url::Url;
 
 use wasmcloud_control_interface::{Client as WasmcloudCtlClient, ClientBuilder};
 use wasmcloud_host::wasmbus::host_config::PolicyService;
-use wasmcloud_host::wasmbus::{Host, HostConfig};
+use wasmcloud_host::wasmbus::{Features, Host, HostConfig};
 
 /// Add a host label, and ensure that it has been added
 pub async fn assert_put_label(
@@ -101,6 +101,7 @@ impl WasmCloudTestHost {
             provider_shutdown_delay: Some(Duration::from_millis(300)),
             allow_file_load: true,
             secrets_topic_prefix,
+            experimental_features: Features::new().with_builtin_http().with_builtin_messaging(),
             ..Default::default()
         };
         if let Some(psc) = policy_service_config {

@@ -13,20 +13,20 @@ pub struct Features {
 }
 
 impl Features {
+    /// Create a new set of feature flags with all features disabled
+    pub fn new() -> Self {
+        Self::default()
+    }
     /// Enable the built-in HTTP server capability provider
-    pub fn with_builtin_http() -> Self {
-        Self {
-            builtin_http: true,
-            ..Default::default()
-        }
+    pub fn with_builtin_http(mut self) -> Self {
+        self.builtin_http = true;
+        self
     }
 
     /// Enable the built-in NATS messaging capability provider
-    pub fn with_builtin_messaging() -> Self {
-        Self {
-            builtin_messaging: true,
-            ..Default::default()
-        }
+    pub fn with_builtin_messaging(mut self) -> Self {
+        self.builtin_messaging = true;
+        self
     }
 }
 
@@ -55,11 +55,11 @@ impl std::iter::Sum for Features {
 impl From<&str> for Features {
     fn from(s: &str) -> Self {
         match &*s.to_ascii_lowercase() {
-            "builtin-http" | "builtin_http" => Self::with_builtin_http(),
-            "builtin-messaging" | "builtin_messaging" => Self::with_builtin_messaging(),
+            "builtin-http" | "builtin_http" => Self::new().with_builtin_http(),
+            "builtin-messaging" | "builtin_messaging" => Self::new().with_builtin_messaging(),
             _ => {
                 warn!(%s, "unknown feature flag");
-                Features::default()
+                Self::new()
             }
         }
     }
