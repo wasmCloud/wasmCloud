@@ -141,44 +141,50 @@ impl wasmcloud_provider_sdk::Provider for Provider {
                     ..
                 }) = sub.next().await
                 {
-                    let component = {
-                        let components = components.read().await;
-                        let Some(component) = components.get(target_id.as_ref()) else {
-                            warn!(?target_id, "linked component not found");
-                            continue;
+                    let target_id = Arc::clone(&target_id);
+                    let lattice_id = Arc::clone(&lattice_id);
+                    let host_id = Arc::clone(&host_id);
+                    let components = Arc::clone(&components);
+                    tokio::spawn(async move {
+                        let component = {
+                            let components = components.read().await;
+                            let Some(component) = components.get(target_id.as_ref()) else {
+                                warn!(?target_id, "linked component not found");
+                                return;
+                            };
+                            Arc::clone(component)
                         };
-                        Arc::clone(component)
-                    };
-                    match component
-                        .instantiate(component.handler.copy_for_new(), component.events.clone())
-                        .handle_message(
-                            (
-                                Instant::now(),
-                                vec![
-                                    KeyValue::new(
-                                        "component.ref",
-                                        Arc::clone(&component.image_reference),
-                                    ),
-                                    KeyValue::new("lattice", Arc::clone(&lattice_id)),
-                                    KeyValue::new("host", Arc::clone(&host_id)),
-                                ],
-                            ),
-                            wrpc::wasmcloud::messaging::types::BrokerMessage {
-                                subject: subject.into_string(),
-                                body: payload,
-                                reply_to: reply.map(async_nats::Subject::into_string),
-                            },
-                        )
-                        .await
-                    {
-                        Ok(Ok(())) => {}
-                        Ok(Err(err)) => {
-                            warn!(?err, "component failed to handle message")
+                        match component
+                            .instantiate(component.handler.copy_for_new(), component.events.clone())
+                            .handle_message(
+                                (
+                                    Instant::now(),
+                                    vec![
+                                        KeyValue::new(
+                                            "component.ref",
+                                            Arc::clone(&component.image_reference),
+                                        ),
+                                        KeyValue::new("lattice", Arc::clone(&lattice_id)),
+                                        KeyValue::new("host", Arc::clone(&host_id)),
+                                    ],
+                                ),
+                                wrpc::wasmcloud::messaging::types::BrokerMessage {
+                                    subject: subject.into_string(),
+                                    body: payload,
+                                    reply_to: reply.map(async_nats::Subject::into_string),
+                                },
+                            )
+                            .await
+                        {
+                            Ok(Ok(())) => {}
+                            Ok(Err(err)) => {
+                                warn!(?err, "component failed to handle message")
+                            }
+                            Err(err) => {
+                                warn!(?err, "failed to call component")
+                            }
                         }
-                        Err(err) => {
-                            warn!(?err, "failed to call component")
-                        }
-                    }
+                    });
                 }
             });
         }
