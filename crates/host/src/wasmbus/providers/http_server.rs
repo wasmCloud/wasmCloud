@@ -14,7 +14,7 @@ use nkeys::XKey;
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
-use tracing::{error, instrument};
+use tracing::{error, info_span, instrument, trace_span, Instrument as _, Span};
 use wasmcloud_core::InterfaceLinkDefinition;
 use wasmcloud_provider_http_server::{default_listen_address, load_settings, ServiceSettings};
 use wasmcloud_provider_sdk::provider::{
@@ -24,7 +24,7 @@ use wasmcloud_provider_sdk::{LinkConfig, LinkDeleteInfo, ProviderConnection};
 use wasmcloud_tracing::KeyValue;
 use wrpc_interface_http::ServeIncomingHandlerWasmtime as _;
 
-use crate::wasmbus::Component;
+use crate::wasmbus::{Component, InvocationContext};
 
 struct Provider {
     address: SocketAddr,
@@ -92,6 +92,7 @@ impl wasmcloud_provider_sdk::Provider for Provider {
                         path_and_query,
                         ..
                     } = uri.into_parts();
+                    // TODO(#3705): Propagate trace context from headers
                     let mut uri = Uri::builder().scheme(scheme.unwrap_or(Scheme::HTTP));
                     if let Some(authority) = authority {
                         uri = uri.authority(authority);
@@ -117,14 +118,16 @@ impl wasmcloud_provider_sdk::Provider for Provider {
                     let _permit = component
                         .permits
                         .acquire()
+                        .instrument(trace_span!("acquire_permit"))
                         .await
                         .context("failed to acquire execution permit")?;
                     let res = component
                         .instantiate(component.handler.copy_for_new(), component.events.clone())
                         .handle(
-                            (
-                                Instant::now(),
-                                vec![
+                            InvocationContext {
+                                span: Span::current(),
+                                start_at: Instant::now(),
+                                attributes: vec![
                                     KeyValue::new(
                                         "component.ref",
                                         Arc::clone(&component.image_reference),
@@ -132,13 +135,14 @@ impl wasmcloud_provider_sdk::Provider for Provider {
                                     KeyValue::new("lattice", Arc::clone(&lattice_id)),
                                     KeyValue::new("host", Arc::clone(&host_id)),
                                 ],
-                            ),
+                            },
                             req,
                         )
                         .await?;
                     let res = res?;
                     anyhow::Ok(res)
                 }
+                .instrument(info_span!("handle"))
             }
         });
 
