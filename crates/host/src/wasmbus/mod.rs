@@ -71,10 +71,10 @@ pub mod config;
 /// wasmCloud host configuration
 pub mod host_config;
 
+pub use self::experimental::Features;
 pub use self::host_config::Host as HostConfig;
 
 use self::config::{BundleGenerator, ConfigBundle};
-pub use self::experimental::Features;
 use self::handler::Handler;
 
 const MAX_INVOCATION_CHANNEL_SIZE: usize = 5000;
