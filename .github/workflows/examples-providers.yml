@@ -139,7 +139,7 @@ jobs:
           set -xe
           wash up &
           WASH_PID=$!
-          sleep 3;
+          sleep 4;
           wash app deploy ${{ matrix.project.test_deploy }};
           TRIES=0
           while [[ $(wash get inventory --output=json | jq '.inventories[0].providers | length') -eq 0 ]] ; do
