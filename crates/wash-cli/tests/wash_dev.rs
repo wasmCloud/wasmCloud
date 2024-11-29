@@ -1,7 +1,11 @@
 #![cfg(target_family = "unix")]
 
+use std::io::{self, BufRead};
+use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::Arc;
+use std::thread;
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use nkeys::KeyPair;
@@ -1142,6 +1146,225 @@ async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
     wait_for_no_wadm()
         .await
         .context("wadm instance failed to exit cleanly (processes still left over)")?;
+
+    Ok(())
+}
+
+/// ### DESCRIPTION
+/// Verifies that `wash dev`` does not panic with a broken pipe error in case it is piped
+/// to another process; e.g. 'wash dev -o json | wc -l', and the user has entered CTRL+C.
+/// Please note this is a regression test for issue [#3639](https://github.com/wasmCloud/wasmCloud/issues/3639).
+///
+/// #### BACKGROUND
+/// When the user enters CTRL+C both processes will receive a SIGINT signal and should shutdown as soon
+/// as possible. In many cases the 2nd process will be the first to process the SIGINT signal, especially
+/// when it's a fairly simple process like `wc -l`. As a result the 2nd process will exit thus blocking
+/// any further writes to the stdout of the first process(`wash dev`).
+///
+/// ### EXPECTED RESULT
+/// Both processses should exit cleanly, the 2nd should report SIGINT(2) as exit reason and the first
+/// process should exit with code 0 without any broken pipe errors.
+///
+#[tokio::test]
+#[serial_test::serial]
+#[cfg(target_family = "unix")]
+async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
+    // ========================================================================
+    // Preamble
+    // ========================================================================
+    // Create the test component
+    let test_setup = init("hello", "hello-world-rust").await?;
+    let project_dir = test_setup.project_dir.clone();
+
+    // Build the test component
+    let mut proc = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .env("RUST_BACKTRACE", "full")
+        .arg("build")
+        .current_dir(project_dir.clone())
+        .spawn()
+        .expect("failed to spawn('wash build')");
+    let status: ExitStatus = proc
+        .wait()
+        .expect("failed to wait for `wash build` process");
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "unexpected exit code for 'wash build' process; status({:?})",
+        status,
+    );
+    assert!(
+        status.success(),
+        "process `wash build` failed; status({:?})",
+        status
+    );
+
+    // TODO: Start NATS server
+    // let dir = test_dir_with_subfolder("dev_hello_component");
+    // wait_for_no_hosts()
+    //     .await
+    //     .context("one or more unexpected wasmcloud instances running")?;
+    // let nats_port = find_open_port().await?;
+    // let mut nats = start_nats(nats_port, &dir).await?;
+
+    // ========================================================================
+    // Test setup
+    // ========================================================================
+    let cmd1 = "wash dev -o json";
+    let cmd2 = "wc -l";
+
+    // Create the 'wash dev' process using a piped stdout
+    let mut proc1 = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .env("RUST_BACKTRACE", "full")
+        .arg("dev")
+        .arg("--nats-connect-only")
+        //.arg("--nats-port")
+        //.arg(nats_port.to_string())
+        .arg("-o")
+        .arg("json")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .current_dir(project_dir.clone())
+        .spawn()
+        .unwrap_or_else(|_| panic!("failed to spawn('{}')", cmd1));
+    let pid1 = proc1.id();
+
+    // Create the 'wc -l' process and use the piped stdout of wash dev as stdin
+    let mut proc2 = Command::new("wc")
+        .arg("-l")
+        .stdin(
+            proc1
+                .stdout
+                .take()
+                .expect("failed to take stdout of proc1 as stdin for proc2"),
+        )
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|_| panic!("failed to spawn proc2('{}')", cmd2));
+    let pid2 = proc2.id();
+
+    // Wait for the first process('wash dev') to be started and is waiting for CTRL+C
+    let stderr1_pattern = "press Ctrl+c to stop";
+    let mut stderr1_out = String::new();
+    let mut stderr1_reader =
+        io::BufReader::new(proc1.stderr.take().expect("failed to take stderr of proc1"));
+    let mut stderr1_line_count = 0;
+    loop {
+        let mut line = String::new();
+
+        match stderr1_reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                stderr1_out.push_str(&line);
+                if line.contains(stderr1_pattern) {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+
+        stderr1_line_count += 1;
+        assert!(stderr1_line_count < 20, "failed to process stderr of proc1");
+    }
+    assert!(stderr1_out.contains(stderr1_pattern));
+
+    // Send SIGINT to second process; this will be trigger the
+    // stdout of the first process to be closed
+    {
+        let pid = proc2.id();
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGINT,
+        )
+        .expect("cannot send ctrl-c");
+    }
+
+    // Give the first process some time to do its job/damage
+    thread::sleep(Duration::from_millis(500));
+
+    // Send SIGINT to first process; unbuffered writes to stdout will result in a broken pipe
+    {
+        let pid = proc1.id();
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGINT,
+        )
+        .expect("cannot send ctrl-c");
+    }
+
+    // Wait for the processes to complete
+    let status1: ExitStatus = proc1
+        .wait()
+        .unwrap_or_else(|_| panic!("failed to wait for proc({}), pid({})", cmd1, pid1));
+    let status2: ExitStatus = proc2
+        .wait()
+        .unwrap_or_else(|_| panic!("failed to wait for proc({}), pid({})", cmd2, pid2));
+
+    // ========================================================================
+    // Postamble
+    // ========================================================================
+    // TODO:
+    // Stop the NATS server
+    // nats.kill().await.map_err(|e| anyhow!(e))?;
+    // wait_for_no_nats()
+    //     .await
+    //     .context("nats instance failed to exit cleanly (processes still left over)")?;
+
+    // Remove test component
+    drop(test_setup.project_dir);
+    test_setup.test_dir.close()?;
+
+    // ========================================================================
+    // Verdict
+    // ========================================================================
+    // The exit status of proc('wc -l') should be SIGINT(2)
+    assert_eq!(
+        status2.signal(),
+        Some(2),
+        "unexpected exit signal for proc({}), status({:?}), pid({})",
+        cmd2,
+        status2,
+        pid2
+    );
+    assert_eq!(
+        status2.code(),
+        None,
+        "unexpected exit code for proc({}), status({:?}), pid({})",
+        cmd2,
+        status2,
+        pid2
+    );
+    assert!(
+        !status2.success(),
+        "expected failure for proc({}), status({:?}), pid({})",
+        cmd2,
+        status2,
+        pid2
+    );
+
+    // The exit status of proc('wash dev') should be code 0
+    assert_eq!(
+        status1.signal(),
+        None,
+        "unexpected exit signal for proc({}), status({:?}), pid({})",
+        cmd1,
+        status1,
+        pid1
+    );
+    assert_eq!(
+        status1.code(),
+        Some(0),
+        "unexpected exit code for proc({}, status({:?}), pid({})",
+        cmd1,
+        status1,
+        pid1
+    );
+    assert!(
+        status1.success(),
+        "expected success for proc({}), status({:?}), pid({})",
+        cmd1,
+        status1,
+        pid1
+    );
 
     Ok(())
 }
