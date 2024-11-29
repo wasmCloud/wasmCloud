@@ -1,5 +1,5 @@
 # First stage: Build the binary
-FROM rust:1-bullseye AS builder
+FROM rust:1-bullseye@sha256:821c41ed8d70347b32c2a3e4779fa0f05354773adf627aa388d0904494e0d21f AS builder
 
 WORKDIR /app
 
