@@ -459,6 +459,10 @@
               ;
 
             rust = hostRustToolchain;
+            wash = pkgs.runCommandLocal "wash" {} ''
+              mkdir -p $out/bin
+              cp ${packages.wasmcloud}/bin/wash $out/bin/wash
+            '';
           };
 
         withDevShells = {
