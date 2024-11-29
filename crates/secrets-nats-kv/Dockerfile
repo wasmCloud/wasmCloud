@@ -15,7 +15,7 @@ WORKDIR crates/secrets-nats-kv
 RUN cargo build --release
 
 # Second stage: Create a minimal container with the binary
-FROM debian:bullseye-slim
+FROM debian:bullseye-slim@sha256:60a596681410bd31a48e5975806a24cd78328f3fd6b9ee5bc64dca6d46a51f29
 
 WORKDIR /app
 
