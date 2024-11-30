@@ -1,6 +1,6 @@
 #![cfg(target_family = "unix")]
 
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, Write};
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
@@ -1178,54 +1178,45 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
 
     // Build the test component
     let mut proc = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .env("RUST_BACKTRACE", "full")
         .arg("build")
         .current_dir(project_dir.clone())
         .spawn()
-        .expect("failed to spawn('wash build')");
-    let status: ExitStatus = proc
-        .wait()
-        .expect("failed to wait for `wash build` process");
-    assert_eq!(
-        status.code(),
-        Some(0),
-        "unexpected exit code for 'wash build' process; status({:?})",
+        .expect("failed to spawn proc(`wash build`)");
+    let status: ExitStatus = proc.wait().expect("failed to wait for proc(`wash build`)");
+    assert!(
+        status.code() == Some(0) && status.success(),
+        "unexpected exit status for proc(`wash build`); {:?}",
         status,
     );
-    assert!(
-        status.success(),
-        "process `wash build` failed; status({:?})",
-        status
-    );
 
-    // TODO: Start NATS server
-    // let dir = test_dir_with_subfolder("dev_hello_component");
-    // wait_for_no_hosts()
-    //     .await
-    //     .context("one or more unexpected wasmcloud instances running")?;
-    // let nats_port = find_open_port().await?;
-    // let mut nats = start_nats(nats_port, &dir).await?;
+    // Start a NATS server
+    let port = find_open_port().await?;
+    let mut nats = start_nats(port, &project_dir).await?;
+    let nats_port = port.to_string();
 
     // ========================================================================
     // Test setup
     // ========================================================================
-    let cmd1 = "wash dev -o json";
-    let cmd2 = "wc -l";
-
     // Create the 'wash dev' process using a piped stdout
     let mut proc1 = Command::new(env!("CARGO_BIN_EXE_wash"))
         .env("RUST_BACKTRACE", "full")
-        .arg("dev")
-        .arg("--nats-connect-only")
-        //.arg("--nats-port")
-        //.arg(nats_port.to_string())
-        .arg("-o")
-        .arg("json")
+        .args([
+            "dev",
+            "--nats-connect-only",
+            "--nats-port",
+            &nats_port,
+            "--ctl-port",
+            &nats_port,
+            "--rpc-port",
+            &nats_port,
+            "-o",
+            "json",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .current_dir(project_dir.clone())
         .spawn()
-        .unwrap_or_else(|_| panic!("failed to spawn('{}')", cmd1));
+        .expect("failed to spawn proc(`wash dev`)");
     let pid1 = proc1.id();
 
     // Create the 'wc -l' process and use the piped stdout of wash dev as stdin
@@ -1235,25 +1226,31 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
             proc1
                 .stdout
                 .take()
-                .expect("failed to take stdout of proc1 as stdin for proc2"),
+                .expect("failed to take stdout of proc(`wash dev`) as stdin for proc(`wc -l`)"),
         )
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap_or_else(|_| panic!("failed to spawn proc2('{}')", cmd2));
+        .expect("failed to spawn piped proc(`wc -l`)");
     let pid2 = proc2.id();
 
     // Wait for the first process('wash dev') to be started and is waiting for CTRL+C
     let stderr1_pattern = "press Ctrl+c to stop";
     let mut stderr1_out = String::new();
-    let mut stderr1_reader =
-        io::BufReader::new(proc1.stderr.take().expect("failed to take stderr of proc1"));
+    let mut stderr1_reader = io::BufReader::new(
+        proc1
+            .stderr
+            .take()
+            .expect("failed to take stderr of proc(`wash dev`)"),
+    );
     let mut stderr1_line_count = 0;
+    let mut stderr = std::io::stderr(); // used to echo output of proc(`wash dev`) to stderr
     loop {
         let mut line = String::new();
 
         match stderr1_reader.read_line(&mut line) {
             Ok(0) => break,
             Ok(_) => {
+                write!(&mut stderr, "{}", line)?;
                 stderr1_out.push_str(&line);
                 if line.contains(stderr1_pattern) {
                     break;
@@ -1263,7 +1260,10 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
         }
 
         stderr1_line_count += 1;
-        assert!(stderr1_line_count < 20, "failed to process stderr of proc1");
+        assert!(
+            stderr1_line_count < 20,
+            "failed to process stderr of proc(`wash dev`)"
+        );
     }
     assert!(stderr1_out.contains(stderr1_pattern));
 
@@ -1275,7 +1275,7 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
             nix::unistd::Pid::from_raw(pid as i32),
             nix::sys::signal::Signal::SIGINT,
         )
-        .expect("cannot send ctrl-c");
+        .expect("cannot send ctrl-c to piped proc(`wc -l`)");
     }
 
     // Give the first process some time to do its job/damage
@@ -1288,26 +1288,33 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
             nix::unistd::Pid::from_raw(pid as i32),
             nix::sys::signal::Signal::SIGINT,
         )
-        .expect("cannot send ctrl-c");
+        .expect("cannot send ctrl-c to proc(`wash dev`)");
     }
 
     // Wait for the processes to complete
     let status1: ExitStatus = proc1
         .wait()
-        .unwrap_or_else(|_| panic!("failed to wait for proc({}), pid({})", cmd1, pid1));
+        .unwrap_or_else(|_| panic!("failed to wait for proc(`wash dev`), pid({})", pid1));
     let status2: ExitStatus = proc2
         .wait()
-        .unwrap_or_else(|_| panic!("failed to wait for proc({}), pid({})", cmd2, pid2));
+        .unwrap_or_else(|_| panic!("failed to wait for piped proc(`wc -l`), pid({})", pid2));
+
+    // Echo the remaining stderr output of the first process
+    loop {
+        let mut line = String::new();
+
+        match stderr1_reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => write!(&mut stderr, "{}", line)?,
+            Err(_) => break,
+        }
+    }
 
     // ========================================================================
     // Postamble
     // ========================================================================
-    // TODO:
     // Stop the NATS server
-    // nats.kill().await.map_err(|e| anyhow!(e))?;
-    // wait_for_no_nats()
-    //     .await
-    //     .context("nats instance failed to exit cleanly (processes still left over)")?;
+    nats.kill().await.map_err(|e| anyhow!(e))?;
 
     // Remove test component
     drop(test_setup.project_dir);
@@ -1317,53 +1324,19 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
     // Verdict
     // ========================================================================
     // The exit status of proc('wc -l') should be SIGINT(2)
-    assert_eq!(
-        status2.signal(),
-        Some(2),
-        "unexpected exit signal for proc({}), status({:?}), pid({})",
-        cmd2,
-        status2,
-        pid2
-    );
-    assert_eq!(
-        status2.code(),
-        None,
-        "unexpected exit code for proc({}), status({:?}), pid({})",
-        cmd2,
-        status2,
-        pid2
-    );
     assert!(
-        !status2.success(),
-        "expected failure for proc({}), status({:?}), pid({})",
-        cmd2,
-        status2,
-        pid2
+        status2.signal() == Some(2) && !status2.success() && status2.code().is_none(),
+        "unexpected exit status for piped proc(`wc -l`), pid({}); {:?}",
+        pid2,
+        status2
     );
 
     // The exit status of proc('wash dev') should be code 0
-    assert_eq!(
-        status1.signal(),
-        None,
-        "unexpected exit signal for proc({}), status({:?}), pid({})",
-        cmd1,
-        status1,
-        pid1
-    );
-    assert_eq!(
-        status1.code(),
-        Some(0),
-        "unexpected exit code for proc({}, status({:?}), pid({})",
-        cmd1,
-        status1,
-        pid1
-    );
     assert!(
-        status1.success(),
-        "expected success for proc({}), status({:?}), pid({})",
-        cmd1,
+        status1.signal().is_none() && status1.success() && status1.code() == Some(0),
+        "unexpected exit status for proc(`wash dev`), pid({}); {:?}",
+        pid1,
         status1,
-        pid1
     );
 
     Ok(())
