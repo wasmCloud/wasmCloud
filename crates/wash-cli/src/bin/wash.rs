@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::io::{stdout, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::bail;
 use clap::{self, Arg, Command, FromArgMatches, Parser, Subcommand};
+use console::style;
+use crossterm::style::Stylize;
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
 use wash_cli::wit::WitCommand;
@@ -44,7 +47,54 @@ use wash_cli::style::WASH_CLI_STYLE;
 use wash_cli::ui::{self, UiCommand};
 use wash_cli::util::ensure_plugin_dir;
 
-const HELP: &str = r"
+#[derive(Clone)]
+struct HelpTopic {
+    name: &'static str,
+    commands: Vec<(&'static str, &'static str)>,
+}
+
+impl Display for HelpTopic {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        const PADDING_AFTER_LONGEST_SPACES: usize = 3;
+        writeln!(f, "{}", self.name.green().bold())?;
+        let longest_command_length = self
+            .commands
+            .iter()
+            .map(|(name, _)| name.len())
+            .max()
+            .unwrap_or(25)
+            + PADDING_AFTER_LONGEST_SPACES;
+
+        for (name, desc) in &self.commands {
+            // Add a padding to the desc to align the descriptions
+            // NOTE: There should be a (hopefullty) a better way to align the descriptions
+            let padding = " ".repeat(longest_command_length - name.len());
+            writeln!(f, "  {}{}{}", name.blue(), padding, desc)?;
+        }
+        Ok(())
+    }
+}
+
+struct HelpTopics(Vec<HelpTopic>);
+
+impl Display for HelpTopics {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for topic in &self.0 {
+            writeln!(f, "{}", topic)?;
+        }
+        Ok(())
+    }
+}
+
+impl From<Vec<HelpTopic>> for HelpTopics {
+    fn from(topics: Vec<HelpTopic>) -> Self {
+        HelpTopics(topics)
+    }
+}
+
+fn create_colored_help() -> String {
+    let banner = style(
+        r"
 _________________________________________________________________________________
                                _____ _                 _    _____ _          _ _
                               / ____| |               | |  / ____| |        | | |
@@ -53,56 +103,124 @@ ________________________________________________________________________________
   \ V  V / (_| \__ \ | | | | | |____| | (_) | |_| | (_| |  ____) | | | |  __/ | |
    \_/\_/ \__,_|___/_| |_| |_|\_____|_|\___/ \__,_|\__,_| |_____/|_| |_|\___|_|_|
 _________________________________________________________________________________
+",
+    )
+    .green()
+    .bold();
 
-Interact and manage wasmCloud applications, projects, and runtime environments
+    let description =
+        "Interact and manage wasmCloud applications, projects, and runtime environments".green();
 
-Usage: wash [OPTIONS] <COMMAND>
+    let usage_description = format!("{} {}", "Usage:".green(), "[OPTIONS] <COMMAND>".blue());
 
-Build:
-  new          Create a new project from a template or git repository
-  build        Build (and sign) a wasmCloud component or capability provider
-  dev          Start a developer loop to hot-reload a local wasmCloud component
-  inspect      Inspect a Wasm component or capability provider for signing information and interfaces
-  par          Create, inspect, and modify capability provider archive files
-  wit          Create wit packages and fetch wit dependencies for a component
+    let command_descriptions = HelpTopics::from([
+        HelpTopic {
+            name: "Build:",
+            commands: vec![
+                ("new", "Create a new project from a template or git repository"),
+                ("build", "Build (and sign) a wasmCloud component or capability provider"),
+                ("dev", "Start a developer loop to hot-reload a local wasmCloud component"),
+                (
+                    "inspect",
+                    "Inspect a Wasm component or capability provider for signing information and interfaces",
+                ),
+                (
+                    "par",
+                    "Create, inspect, and modify capability provider archive files",
+                ),
+                (
+                    "wit",
+                    "Create wit packages and fetch wit dependencies for a component",
+                ),
+            ],
+        },
+        HelpTopic {
+            name: "Run:",
+            commands: vec![
+                ("up", "Bootstrap a local wasmCloud environment"),
+                (
+                    "down",
+                    "Tear down a local wasmCloud environment (launched with wash up)",
+                ),
+                ("app", "Manage declarative applications and deployments (wadm)"),
+                ("spy", "Spy on all invocations a component sends and receives"),
+                ("ui", "Serve a web UI for wasmCloud"),
+            ],
+        },
+        HelpTopic {
+            name: "Iterate:",
+            commands: vec![
+                ("get", "Get information about different running wasmCloud resources"),
+                ("start", "Start a component or capability provider"),
+                (
+                    "scale",
+                    "Scale a component running in a host to a certain level of concurrency",
+                ),
+                ("stop", "Stop a component, capability provider, or host"),
+                (
+                    "update",
+                    "Update a component running in a host to newer image reference",
+                ),
+                ("link", "Link one component to another on a set of interfaces"),
+                ("call", "Invoke a simple function on a component running in a wasmCloud host"),
+                ("label", "Label (or un-label) a host with a key=value label pair"),
+                (
+                    "config",
+                    "Create configuration for components, capability providers and links",
+                ),
+                (
+                    "secrets",
+                    "Create secret references for components, capability providers and links",
+                ),
+            ],
+        },
+        HelpTopic {
+            name: "Publish:",
+            commands: vec![
+                ("pull", "Pull an artifact from an OCI compliant registry"),
+                ("push", "Push an artifact to an OCI compliant registry"),
+            ],
+        },
+        HelpTopic {
+            name: "Configure:",
+            commands: vec![
+                ("completions", "Generate shell completions for wash"),
+                ("ctx", "Manage wasmCloud host configuration contexts"),
+                ("drain", "Manage contents of local wasmCloud caches"),
+                ("keys", "Generate and manage signing keys"),
+                ("claims", "Generate and manage JWTs for wasmCloud components and capability providers"),
+                ("plugin", "Manage wash plugins"),
+            ],
+        },
+        HelpTopic {
+            name: "Options:",
+            commands: vec![
+                (
+                    "-o, --output <OUTPUT>",
+                    "Specify output format (text or json) [default: text]",
+                ),
+                (
+                    "--experimental",
+                    "Whether or not to enable experimental features [default: false]",
+                ),
+                ("-h, --help", "Print help"),
+                ("-V, --version", "Print version"),
+            ],
+        },
+    ].to_vec());
 
-Run:
-  up           Bootstrap a local wasmCloud environment
-  down         Tear down a local wasmCloud environment (launched with wash up)
-  app          Manage declarative applications and deployments (wadm)
-  spy          Spy on all invocations a component sends and receives
-  ui           Serve a web UI for wasmCloud
+    format!(
+        r#"
+{banner}
 
-Iterate:
-  get          Get information about different running wasmCloud resources
-  start        Start a component or capability provider
-  scale        Scale a component running in a host to a certain level of concurrency
-  stop         Stop a component, capability provider, or host
-  update       Update a component running in a host to newer image reference
-  link         Link one component to another on a set of interfaces
-  call         Invoke a simple function on a component running in a wasmCloud host
-  label        Label (or un-label) a host with a key=value label pair
-  config       Create configuration for components, capability providers and links
-  secrets      Create secret references for components, capability providers and links
+{description}
 
-Publish:
-  pull         Pull an artifact from an OCI compliant registry
-  push         Push an artifact to an OCI compliant registry
+{usage_description}
 
-Configure:
-  completions  Generate shell completions for wash
-  ctx          Manage wasmCloud host configuration contexts
-  drain        Manage contents of local wasmCloud caches
-  keys         Generate and manage signing keys
-  claims       Generate and manage JWTs for wasmCloud components and capability providers
-  plugin       Manage wash plugins
-
-Options:
-  -o, --output <OUTPUT>  Specify output format (text or json) [default: text]
-  --experimental         Whether or not to enable experimental features [default: false]
-  -h, --help             Print help
-  -V, --version          Print version
-";
+{command_descriptions}
+"#
+    )
+}
 
 /// Helper function to display the version of all the binaries wash runs
 fn version() -> String {
@@ -116,7 +234,7 @@ fn version() -> String {
 }
 
 #[derive(Debug, Clone, Parser)]
-#[clap(name = "wash", version = version(), override_help = HELP)]
+#[clap(name = "wash", version = version(), override_help = create_colored_help())]
 #[command(styles = WASH_CLI_STYLE)]
 struct Cli {
     #[clap(
@@ -166,7 +284,7 @@ enum CliCommand {
     /// Capture and debug cluster invocations and state
     #[clap(name = "capture")]
     Capture(CaptureCommand),
-    /// Generate shell completions
+    /// Generate shell completions for wash
     #[clap(name = "completions")]
     Completions(CompletionOpts),
     /// Generate and manage JWTs for wasmCloud components and capability providers
@@ -181,7 +299,7 @@ enum CliCommand {
     /// Start a developer loop to hot-reload a local wasmCloud component
     #[clap(name = "dev")]
     Dev(DevCommand),
-    /// Tear down a wasmCloud environment launched with wash up
+    /// Tear down a local wasmCloud environment (launched with wash up)
     #[clap(name = "down")]
     Down(DownCommand),
     /// Manage contents of local wasmCloud caches
@@ -190,16 +308,16 @@ enum CliCommand {
     /// Get information about different running wasmCloud resources
     #[clap(name = "get", subcommand)]
     Get(GetCommand),
-    /// Inspect a capability provider or Wasm component for signing information and interfaces
+    /// Inspect a Wasm component or capability provider for signing information and interfaces
     #[clap(name = "inspect")]
     Inspect(InspectCliCommand),
-    /// Utilities for generating and managing signing keys
+    /// Generate and manage signing keys
     #[clap(name = "keys", alias = "key", subcommand)]
     Keys(KeysCliCommand),
     /// Link one component to another on a set of interfaces
     #[clap(name = "link", alias = "links", subcommand)]
     Link(LinkCommand),
-    /// Create a new project from a template
+    /// Create a new project from a template or git repository
     #[clap(name = "new", subcommand)]
     New(NewCliCommand),
     /// Create, inspect, and modify capability provider archive files
@@ -214,7 +332,7 @@ enum CliCommand {
     /// Pull an artifact from an OCI compliant registry
     #[clap(name = "pull")]
     RegPull(RegistryPullCommand),
-    /// Manage secret references
+    /// Create secret references for components, capability providers and links
     #[clap(name = "secrets", alias = "secret", subcommand)]
     Secrets(SecretsCliCommand),
     /// Spy on all invocations a component sends and receives
@@ -235,7 +353,7 @@ enum CliCommand {
     /// Update a component running in a host to newer image reference
     #[clap(name = "update", subcommand)]
     Update(UpdateCommand),
-    /// Bootstrap a wasmCloud environment
+    /// Bootstrap a local wasmCloud environment
     #[clap(name = "up")]
     Up(UpCommand),
     /// Serve a web UI for wasmCloud
