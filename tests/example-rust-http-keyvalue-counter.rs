@@ -1,4 +1,4 @@
-#![cfg(feature = "providers")]
+#![cfg(all(feature = "provider-http-server", feature = "provider-keyvalue-redis",))]
 
 use core::str;
 use core::time::Duration;

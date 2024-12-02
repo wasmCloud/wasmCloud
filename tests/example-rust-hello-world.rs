@@ -1,5 +1,3 @@
-#![cfg(feature = "providers")]
-
 use core::str;
 use core::time::Duration;
 

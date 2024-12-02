@@ -8516,10 +8516,8 @@ dependencies = [
  "wasmcloud-provider-keyvalue-nats",
  "wasmcloud-provider-keyvalue-redis",
  "wasmcloud-provider-keyvalue-vault",
- "wasmcloud-provider-lattice-controller",
  "wasmcloud-provider-messaging-kafka",
  "wasmcloud-provider-messaging-nats",
- "wasmcloud-provider-sdk",
  "wasmcloud-provider-sqldb-postgres",
  "wasmcloud-test-util",
  "wasmcloud-tracing",
@@ -9129,15 +9127,6 @@ dependencies = [
  "hashbrown 0.14.5",
  "indexmap 2.6.0",
  "semver",
-]
-
-[[package]]
-name = "wasmparser"
-version = "0.220.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e246c2772ce3ebc83f89a2d4487ac5794cad6c309b2071818a88c7db7c36d87b"
-dependencies = [
- "bitflags 2.6.0",
 ]
 
 [[package]]
