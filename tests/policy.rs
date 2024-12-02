@@ -1,3 +1,5 @@
+#![cfg(feature = "wasmcloud")]
+
 use core::time::Duration;
 
 use anyhow::Context as _;

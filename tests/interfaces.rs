@@ -1,4 +1,12 @@
-#![cfg(feature = "providers")]
+#![cfg(all(
+    feature = "provider-blobstore-fs",
+    feature = "provider-blobstore-s3",
+    feature = "provider-http-client",
+    feature = "provider-http-server",
+    feature = "provider-keyvalue-redis",
+    feature = "provider-keyvalue-vault",
+    feature = "provider-messaging-nats",
+))]
 
 use core::str::{self, FromStr as _};
 use core::time::Duration;

@@ -107,20 +107,6 @@ pub async fn rust_http_server() -> &'static Provider {
         .await
 }
 
-static RUST_LATTICE_CONTROLLER: OnceCell<Provider> = OnceCell::const_new();
-pub async fn rust_lattice_controller() -> &'static Provider {
-    RUST_LATTICE_CONTROLLER
-        .get_or_init(|| async {
-            Provider::new(
-                "wasmcloud-provider-lattice-controller",
-                env!("CARGO_BIN_EXE_lattice-controller-provider"),
-            )
-            .await
-            .expect("failed to build lattice-controller PAR")
-        })
-        .await
-}
-
 static RUST_KEYVALUE_REDIS: OnceCell<Provider> = OnceCell::const_new();
 pub async fn rust_keyvalue_redis() -> &'static Provider {
     RUST_KEYVALUE_REDIS

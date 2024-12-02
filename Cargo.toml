@@ -22,71 +22,92 @@ repository = "https://github.com/wasmCloud/wasmCloud"
 status = "actively-developed"
 
 [features]
-providers = [
-    "dep:redis",
-    "dep:wasmcloud-provider-blobstore-azure",
-    "dep:wasmcloud-provider-blobstore-fs",
-    "dep:wasmcloud-provider-blobstore-s3",
-    "dep:wasmcloud-provider-http-client",
-    "dep:wasmcloud-provider-http-server",
-    "dep:wasmcloud-provider-keyvalue-nats",
-    "dep:wasmcloud-provider-keyvalue-redis",
-    "dep:wasmcloud-provider-keyvalue-vault",
-    "dep:wasmcloud-provider-lattice-controller",
-    "dep:wasmcloud-provider-messaging-kafka",
-    "dep:wasmcloud-provider-messaging-nats",
-    "dep:wasmcloud-provider-sqldb-postgres",
-    "dep:wasmcloud-provider-sdk",
+provider-blobstore-azure = ["dep:wasmcloud-provider-blobstore-azure"]
+provider-blobstore-fs = ["dep:wasmcloud-provider-blobstore-fs"]
+provider-blobstore-s3 = ["dep:wasmcloud-provider-blobstore-s3"]
+provider-http-client = ["dep:wasmcloud-provider-http-client"]
+provider-http-server = ["dep:wasmcloud-provider-http-server"]
+provider-keyvalue-nats = ["dep:wasmcloud-provider-keyvalue-nats"]
+provider-keyvalue-redis = ["dep:wasmcloud-provider-keyvalue-redis"]
+provider-keyvalue-vault = ["dep:wasmcloud-provider-keyvalue-vault"]
+provider-messaging-kafka = ["dep:wasmcloud-provider-messaging-kafka"]
+provider-messaging-nats = ["dep:wasmcloud-provider-messaging-nats"]
+provider-sqldb-postgres = ["dep:wasmcloud-provider-sqldb-postgres"]
+
+wasmcloud = [
+    "dep:clap",
+    "dep:clap-markdown",
+    "dep:nkeys",
+    "dep:regex",
+    "dep:tracing-subscriber",
+    "dep:wascap",
+    "dep:wasmcloud-core",
+    "dep:wasmcloud-host",
+    "dep:wasmcloud-tracing",
 ]
-default = ["providers"]
+
+default = [
+    "provider-blobstore-azure",
+    "provider-blobstore-fs",
+    "provider-blobstore-s3",
+    "provider-http-client",
+    "provider-http-server",
+    "provider-keyvalue-nats",
+    "provider-keyvalue-redis",
+    "provider-keyvalue-vault",
+    "provider-messaging-kafka",
+    "provider-messaging-nats",
+    "provider-sqldb-postgres",
+    "wasmcloud",
+]
 
 [[bin]]
 name = "blobstore-azure-provider"
-required-features = ["providers"]
+required-features = ["provider-blobstore-azure"]
 
 [[bin]]
 name = "blobstore-fs-provider"
-required-features = ["providers"]
+required-features = ["provider-blobstore-fs"]
 
 [[bin]]
 name = "blobstore-s3-provider"
-required-features = ["providers"]
+required-features = ["provider-blobstore-s3"]
 
 [[bin]]
 name = "http-server-provider"
-required-features = ["providers"]
+required-features = ["provider-http-server"]
 
 [[bin]]
 name = "http-client-provider"
-required-features = ["providers"]
+required-features = ["provider-http-client"]
 
 [[bin]]
 name = "keyvalue-nats-provider"
-required-features = ["providers"]
+required-features = ["provider-keyvalue-nats"]
 
 [[bin]]
 name = "keyvalue-redis-provider"
-required-features = ["providers"]
+required-features = ["provider-keyvalue-redis"]
 
 [[bin]]
 name = "keyvalue-vault-provider"
-required-features = ["providers"]
-
-[[bin]]
-name = "lattice-controller-provider"
-required-features = ["providers"]
+required-features = ["provider-keyvalue-vault"]
 
 [[bin]]
 name = "messaging-kafka-provider"
-required-features = ["providers"]
+required-features = ["provider-messaging-kafka"]
 
 [[bin]]
 name = "messaging-nats-provider"
-required-features = ["providers"]
+required-features = ["provider-messaging-nats"]
 
 [[bin]]
 name = "sqldb-postgres-provider"
-required-features = ["providers"]
+required-features = ["provider-sqldb-postgres"]
+
+[[bin]]
+name = "wasmcloud"
+required-features = ["wasmcloud"]
 
 [profile.release]
 strip = true
@@ -104,17 +125,16 @@ clap = { workspace = true, features = [
     "std",
     "suggestions",
     "usage",
-] }
-clap-markdown = { workspace = true }
-nkeys = { workspace = true }
-redis = { workspace = true, optional = true }
-regex = { workspace = true }
+], optional = true }
+clap-markdown = { workspace = true, optional = true }
+nkeys = { workspace = true, optional = true }
+regex = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tracing = { workspace = true } # TODO: revisit the 'release_max_level_info' feature https://github.com/wasmCloud/wasmCloud/issues/468
-tracing-subscriber = { workspace = true }
-wascap = { workspace = true }
-wasmcloud-core = { workspace = true, features = ["otel"] }
-wasmcloud-host = { workspace = true }
+tracing-subscriber = { workspace = true, optional = true }
+wascap = { workspace = true, optional = true }
+wasmcloud-core = { workspace = true, features = ["otel"], optional = true }
+wasmcloud-host = { workspace = true, optional = true }
 wasmcloud-provider-blobstore-azure = { workspace = true, optional = true }
 wasmcloud-provider-blobstore-fs = { workspace = true, optional = true }
 wasmcloud-provider-blobstore-s3 = { workspace = true, optional = true }
@@ -123,14 +143,10 @@ wasmcloud-provider-http-server = { workspace = true, optional = true }
 wasmcloud-provider-keyvalue-nats = { workspace = true, optional = true }
 wasmcloud-provider-keyvalue-redis = { workspace = true, optional = true }
 wasmcloud-provider-keyvalue-vault = { workspace = true, optional = true }
-wasmcloud-provider-lattice-controller = { workspace = true, optional = true }
 wasmcloud-provider-messaging-kafka = { workspace = true, optional = true }
 wasmcloud-provider-messaging-nats = { workspace = true, optional = true }
 wasmcloud-provider-sqldb-postgres = { workspace = true, optional = true }
-wasmcloud-provider-sdk = { workspace = true, features = [
-    "otel",
-], optional = true }
-wasmcloud-tracing = { workspace = true, features = ["otel"] }
+wasmcloud-tracing = { workspace = true, features = ["otel"], optional = true }
 
 [dev-dependencies]
 async-nats = { workspace = true, features = ["ring"] }
@@ -140,6 +156,7 @@ futures = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true, features = ["server-auto", "tokio"] }
+nkeys = { workspace = true }
 once_cell = { workspace = true }
 provider-archive = { workspace = true }
 rand = { workspace = true }
@@ -349,7 +366,6 @@ wasmcloud-provider-http-server = { version = "*", path = "./crates/provider-http
 wasmcloud-provider-keyvalue-nats = { version = "*", path = "./crates/provider-keyvalue-nats", default-features = false }
 wasmcloud-provider-keyvalue-redis = { version = "*", path = "./crates/provider-keyvalue-redis", default-features = false }
 wasmcloud-provider-keyvalue-vault = { version = "*", path = "./crates/provider-keyvalue-vault", default-features = false }
-wasmcloud-provider-lattice-controller = { version = "*", path = "./crates/provider-lattice-controller", default-features = false }
 wasmcloud-provider-messaging-kafka = { version = "*", path = "./crates/provider-messaging-kafka", default-features = false }
 wasmcloud-provider-messaging-nats = { version = "*", path = "./crates/provider-messaging-nats", default-features = false }
 wasmcloud-provider-sdk = { version = "^0.12.0", path = "./crates/provider-sdk", default-features = false }
@@ -380,6 +396,3 @@ wrpc-transport = { version = "0.28", default-features = false }
 wrpc-transport-nats = { version = "0.27.1", default-features = false, features = [
     "async-nats-0_36",
 ] }
-
-[package.metadata.cargo-machete]
-ignored = ["wasmcloud-provider-lattice-controller", "wasmcloud-provider-sdk"]
