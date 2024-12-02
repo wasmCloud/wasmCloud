@@ -812,9 +812,6 @@ impl Host {
 
         let (runtime, _epoch) = Runtime::builder()
             .max_execution_time(config.max_execution_time)
-            .max_linear_memory(config.max_linear_memory)
-            .max_components(config.max_components)
-            .max_component_size(config.max_component_size)
             .build()
             .context("failed to build runtime")?;
         let event_builder = EventBuilderV10::new().source(host_key.public_key());
