@@ -123,9 +123,6 @@
           pkgsCross ? pkgs,
           ...
         }: {
-          buildInputs ? [],
-          depsBuildBuild ? [],
-          nativeBuildInputs ? [],
           nativeCheckInputs ? [],
           ...
         } @ args:
@@ -157,34 +154,14 @@
               // {
                 package = attrValues lockPackages';
               };
-
-            darwin2darwin = pkgs.stdenv.hostPlatform.isDarwin && pkgsCross.stdenv.hostPlatform.isDarwin;
-
-            depsBuildBuild' =
-              depsBuildBuild
-              ++ optional pkgs.stdenv.hostPlatform.isDarwin pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-              ++ optional darwin2darwin pkgs.xcbuild.xcrun;
           in
             {
               inherit
                 cargoLockParsed
                 ;
               cargoExtraArgs = ""; # disable `--locked` passed by default by crane
-
-              buildInputs =
-                buildInputs
-                ++ optional pkgs.stdenv.hostPlatform.isDarwin pkgs.libiconv;
-
-              depsBuildBuild = depsBuildBuild';
             }
             // optionalAttrs (args ? cargoArtifacts) {
-              depsBuildBuild =
-                depsBuildBuild'
-                ++ optionals darwin2darwin [
-                  pkgs.darwin.apple_sdk.frameworks.CoreFoundation
-                  pkgs.darwin.apple_sdk.frameworks.CoreServices
-                ];
-
               nativeCheckInputs =
                 nativeCheckInputs
                 ++ [
