@@ -35,7 +35,6 @@ impl RuntimeBuilder {
         let mut engine_config = wasmtime::Config::default();
         engine_config.async_support(true);
         engine_config.epoch_interruption(true);
-        engine_config.memory_init_cow(false);
         engine_config.wasm_component_model(true);
 
         Self {
