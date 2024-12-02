@@ -72,18 +72,22 @@ fn resolve_relative_file_paths_in_yaml(
         serde_yaml::Value::String(s)
             if s.starts_with("file://") && s.chars().nth(7).is_some_and(|v| v != '/') =>
         {
-            // Only check existence for relative paths we're resolving
-            let relative_path = s.strip_prefix("file://")
-                .context("failed to strip prefix")?; 
-            
-            let full_path = base_dir.as_ref().join(relative_path);
-            // Only check existence if it was a relative path (starts with ./ or ../)
-            if relative_path.starts_with('.') {
-                (!full_path.exists()).then(|| ()).context(format!(
-                    "referenced relative file does not exist: {}", 
-                    full_path.display()
-                ))?;
+            // Convert the base dir + relative path into a file based URL
+            let full_path = base_dir.as_ref().join(
+                s.strip_prefix("file://")
+                    .context("failed to strip prefix on relative file path")?,
+            );
+
+            // Ensure the resolved relative path exists
+            if !full_path.exists() {
+                return Err(wadm_client::error::ClientError::ManifestLoad(
+                    anyhow::anyhow!(
+                        "relative file path [{s}] (resolved to [{}]) does not exist",
+                        full_path.display()
+                    ),
+                ));
             }
+
             // Build a file based URL and replace the existing one
             if let Ok(url) = Url::from_file_path(&full_path) {
                 *s = url.into();
