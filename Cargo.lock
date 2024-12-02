@@ -7986,7 +7986,7 @@ dependencies = [
  "serde_json",
  "wasm-encoder 0.221.0",
  "wasm-gen",
- "wasmparser 0.221.0",
+ "wasmparser 0.221.2",
 ]
 
 [[package]]
@@ -8141,7 +8141,7 @@ dependencies = [
  "wasmcloud-control-interface 2.2.0",
  "wasmcloud-core 0.15.0",
  "wasmcloud-test-util",
- "wasmparser 0.221.0",
+ "wasmparser 0.221.2",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
@@ -8317,7 +8317,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "de35b6c3ef1f53ac7a31b5e69bc00f1542ea337e7e7162dc34c68b537ff82690"
 dependencies = [
  "leb128",
- "wasmparser 0.221.0",
+ "wasmparser 0.221.2",
 ]
 
 [[package]]
@@ -8982,7 +8982,7 @@ dependencies = [
  "wasi-preview1-component-adapter-provider",
  "wasmcloud-component",
  "wasmcloud-core 0.15.0",
- "wasmparser 0.221.0",
+ "wasmparser 0.221.2",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
@@ -9131,9 +9131,9 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.221.0"
+version = "0.221.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8659e755615170cfe20da468865c989da78c5da16d8652e69a75acda02406a92"
+checksum = "9845c470a2e10b61dd42c385839cdd6496363ed63b5c9e420b5488b77bd22083"
 dependencies = [
  "bitflags 2.6.0",
  "indexmap 2.6.0",
