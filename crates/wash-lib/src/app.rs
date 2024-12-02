@@ -645,4 +645,25 @@ mod test {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_resolve_relative_manifest() -> Result<()> {
+        let tmp_dir = tempdir()?;
+        std::fs::write(tmp_dir.path().join("foo.yaml"), "exists")?;
+        let mut yaml = serde_yaml::from_str(
+            r#"
+mapping:
+  path: 'file://foo.yaml'
+"#,
+        )
+        .context("failed to build YAML")?;
+
+        resolve_relative_file_paths_in_yaml(&mut yaml, tmp_dir)
+            .context("failed to resolve relative file path")?;
+        assert!(matches!(
+                &yaml["mapping"]["path"],
+                serde_yaml::Value::String(s) if s.contains("file:///") && s.contains("/foo.yaml")
+        ));
+        Ok(())
+    }
 }
