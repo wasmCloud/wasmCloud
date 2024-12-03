@@ -1,8 +1,3 @@
-use super::{Ctx, Handler, ReplacedInstanceTarget};
-
-use crate::capability::keyvalue::{atomics, batch, store};
-use crate::capability::wrpc;
-
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -10,6 +5,11 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use tracing::instrument;
 use wasmtime::component::Resource;
+
+use crate::capability::keyvalue::{atomics, batch, store};
+use crate::capability::wrpc;
+
+use super::{Ctx, Handler, ReplacedInstanceTarget};
 
 type Result<T, E = store::Error> = core::result::Result<T, E>;
 

@@ -1,7 +1,3 @@
-use super::{new_store, Ctx, Handler, Instance, ReplacedInstanceTarget, WrpcServeEvent};
-
-use crate::capability::http::types;
-
 use core::ops::Deref;
 
 use anyhow::{bail, Context as _};
@@ -17,6 +13,10 @@ use wasmtime_wasi_http::types::{
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpView};
 use wrpc_interface_http::ServeIncomingHandlerWasmtime;
+
+use crate::capability::http::types;
+
+use super::{new_store, Ctx, Handler, Instance, ReplacedInstanceTarget, WrpcServeEvent};
 
 pub mod incoming_http_bindings {
     wasmtime::component::bindgen!({

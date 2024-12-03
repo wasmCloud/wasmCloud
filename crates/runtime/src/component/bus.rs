@@ -1,7 +1,3 @@
-use super::{Ctx, Handler, TableResult};
-
-use crate::capability::bus::lattice;
-
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -9,6 +5,10 @@ use async_trait::async_trait;
 use tracing::instrument;
 use wasmcloud_core::CallTargetInterface;
 use wasmtime::component::Resource;
+
+use crate::capability::bus::lattice;
+
+use super::{Ctx, Handler, TableResult};
 
 #[async_trait]
 /// `wasmcloud:bus/lattice@2.0.0` implementation

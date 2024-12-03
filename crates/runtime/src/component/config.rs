@@ -1,9 +1,9 @@
-use super::{Ctx, Handler};
+use async_trait::async_trait;
+use tracing::instrument;
 
 use crate::capability::config::{self, runtime, store};
 
-use async_trait::async_trait;
-use tracing::instrument;
+use super::{Ctx, Handler};
 
 /// `wasi:config/store` implementation
 #[async_trait]

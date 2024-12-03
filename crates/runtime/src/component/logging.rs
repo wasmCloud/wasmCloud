@@ -1,9 +1,9 @@
-use super::{Ctx, Handler};
+use async_trait::async_trait;
+use tracing::instrument;
 
 use crate::capability::logging::logging;
 
-use async_trait::async_trait;
-use tracing::instrument;
+use super::{Ctx, Handler};
 
 pub mod unversioned_logging_bindings {
     wasmtime::component::bindgen!({

@@ -1,8 +1,4 @@
 //! Compatibility implementation of the `wasmcloud:bus/lattice@1.0.0` interface
-use super::{Ctx, Handler, TableResult};
-
-use crate::capability::bus1_0_0::lattice;
-
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -10,6 +6,10 @@ use async_trait::async_trait;
 use tracing::instrument;
 use wasmcloud_core::CallTargetInterface;
 use wasmtime::component::Resource;
+
+use crate::capability::bus1_0_0::lattice;
+
+use super::{Ctx, Handler, TableResult};
 
 #[async_trait]
 /// `wasmcloud:bus/lattice@1.0.0` implementation
