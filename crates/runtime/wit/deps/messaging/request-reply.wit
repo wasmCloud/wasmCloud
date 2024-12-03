@@ -1,0 +1,47 @@
+/// The request-reply interface allows a guest to send a message and await a response. This
+/// interface is considered optional as not all message services support the concept of
+/// request/reply. However, request/reply is a very common pattern in messaging and as such, we have
+/// included it as a core interface.
+interface request-reply {
+    use types.{client, message, error};
+
+    /// Options for a request/reply operation. This is a resource to allow for future expansion of
+    /// options.
+    resource request-options {
+        /// Creates a new request options resource with no options set.
+        constructor();
+
+        /// The maximum amount of time to wait for a response. If the timeout value is not set, then
+        /// the request/reply operation will block until a message is received in response.
+        set-timeout-ms: func(timeout-ms: u32);
+
+        /// The maximum number of replies to expect before returning.
+        set-expected-replies: func(expected-replies: u32);
+    }
+
+    /// Performs a blocking request/reply operation with an optional set of request options. 
+    /// 
+    /// The behavior of this function is largely dependent on the options given to the function.
+    /// If no options are provided, then the request/reply operation will block until a single 
+    /// message is received in response. If a timeout is provided, then the request/reply operation
+    /// will block for the specified amount of time before returning an error if no messages were
+    /// received (or the list of messages that were received). If both a timeout and an expected
+    /// number of replies are provided, the function should return when either condition is met
+    /// (whichever comes first)—e.g., (1) if no replies were received within the timeout return an
+    /// error, (2) if the maximum expected number of replies were received before timeout, return
+    /// the list of messages, or (3) if the timeout is reached before the expected number of replies,
+    /// return the list of messages received up to that point.
+    request: func(c: borrow<client>, message: borrow<message>, options: option<request-options>) -> result<list<message>, error>;
+
+    /// Replies to the given message with the given response message. The details of which topic
+    /// the message is sent to is up to the implementation. This allows for reply-to details to be
+    /// handled in the best way possible for the underlying messaging system.
+    /// 
+    /// Please note that this reply functionality is different than something like HTTP because there
+    /// are several use cases in which a reply might not be required for every message (so this would
+    /// be a noop). There are also cases when you might want to reply and then continue processing.
+    /// Additionally, you might want to reply to a message several times (such as providing an
+    /// update). So this function is allowed to be called multiple times, unlike something like HTTP
+    /// where the reply is sent and the connection is closed.
+    reply: func(reply-to: borrow<message>, message: message) -> result<_, error>;
+}

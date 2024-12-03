@@ -542,7 +542,7 @@ where
                 ) => {
                     let instance = instance.clone();
                     let [(_, _, handle_message)] =
-                        wrpc::exports::wasmcloud::messaging::handler::serve_interface(
+                        wrpc::exports::wasmcloud::messaging0_2_0::handler::serve_interface(
                             srv, instance,
                         )
                         .await

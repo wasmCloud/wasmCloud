@@ -64,7 +64,7 @@ where
     }
 }
 
-impl<H, C> wrpc::exports::wasmcloud::messaging::handler::Handler<C> for Instance<H, C>
+impl<H, C> wrpc::exports::wasmcloud::messaging0_2_0::handler::Handler<C> for Instance<H, C>
 where
     H: Handler,
     C: Send + Deref<Target = tracing::Span>,
@@ -73,11 +73,11 @@ where
     async fn handle_message(
         &self,
         cx: C,
-        wrpc::wasmcloud::messaging::types::BrokerMessage {
+        wrpc::wasmcloud::messaging0_2_0::types::BrokerMessage {
             subject,
             body,
             reply_to,
-        }: wrpc::wasmcloud::messaging::types::BrokerMessage,
+        }: wrpc::wasmcloud::messaging0_2_0::types::BrokerMessage,
     ) -> anyhow::Result<Result<(), String>> {
         // Set the parent of the current context to the span passed in
         Span::current().set_parent(cx.deref().context());
@@ -88,7 +88,7 @@ where
         let call_handle_message = info_span!("call_handle_message");
         store.data_mut().parent_context = Some(call_handle_message.context());
         let res = bindings
-            .wasmcloud_messaging_handler()
+            .wasmcloud_messaging0_2_0_handler()
             .call_handle_message(
                 &mut store,
                 &types::BrokerMessage {
