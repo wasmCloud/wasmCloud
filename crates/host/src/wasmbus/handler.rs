@@ -9,11 +9,10 @@ use bytes::Bytes;
 use secrecy::Secret;
 use tokio::sync::RwLock;
 use tracing::{error, instrument, warn};
-use wasmcloud_runtime::capability;
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::messaging::types::BrokerMessage;
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
-use wasmcloud_runtime::capability::{secrets, CallTargetInterface};
+use wasmcloud_runtime::capability::{self, secrets, CallTargetInterface};
 use wasmcloud_runtime::component::{
     Bus, Bus1_0_0, Config, InvocationErrorIntrospect, InvocationErrorKind, Logging, Messaging,
     ReplacedInstanceTarget, Secrets,

@@ -1,27 +1,29 @@
-package wasmcloud:messaging@0.2.0;
+package wasmcloud:messaging@0.3.0;
 
-// Types common to message broker interactions
-interface types {
-    // A message sent to or received from a broker
-    record broker-message {
-        subject: string,
-        body: list<u8>,
-        reply-to: option<string>,
-    }
+/// The `imports` world defines the interfaces that the component will import from the host.
+/// It includes the `producer` interface for sending messages.
+world imports {
+  import producer;
 }
 
-interface handler {
-    use types.{broker-message};
-
-    // Callback handled to invoke a function when a message is received from a subscription
-    handle-message: func(msg: broker-message) -> result<_, string>;
+/// The `imports-request-reply` world extends `imports` by including the `request-reply` interface.
+/// This allows the component to perform request/reply messaging patterns.
+world imports-request-reply {
+  include imports;
+  import request-reply;
 }
 
-interface consumer {
-    use types.{broker-message};
+/// The `messaging-request-reply` world combines `imports-request-reply` with the `incoming-handler`
+/// export. This setup allows the host to interact with the component for both sending messages and
+/// handling incoming messages with request/reply capabilities.
+world messaging-request-reply {
+  include imports-request-reply;
+  export incoming-handler;
+}
 
-    // Perform a request operation on a subject
-    request: func(subject: string, body: list<u8>, timeout-ms: u32) -> result<broker-message, string>;
-    // Publish a message to a subject without awaiting a response
-    publish: func(msg: broker-message) -> result<_, string>;
+/// The `messaging-core` world includes the basic `imports` and exports the `incoming-handler`,
+/// enabling the component to handle incoming messages without request/reply capabilities.
+world messaging-core {
+  include imports;
+  export incoming-handler;
 }
