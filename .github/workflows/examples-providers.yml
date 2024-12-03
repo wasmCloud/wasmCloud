@@ -133,6 +133,7 @@ jobs:
       # Build required project if necessary
       - name: Build dependent component if present
         shell: bash
+        working-directory: examples/${{ matrix.project.lang }}/providers/${{ matrix.project.name }}
         run: |
           [[ -d component ]] && wash build -p component/wasmcloud.toml
 
