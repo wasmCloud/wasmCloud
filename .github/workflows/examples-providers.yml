@@ -130,12 +130,19 @@ jobs:
         run: wash build
         working-directory: examples/${{ matrix.project.lang }}/providers/${{ matrix.project.name }}
 
+      # Install wit-bindgen
+      - uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
+        with:
+          tool: wit-bindgen-cli
+
       # Build required project if necessary
       - name: Build dependent component if present
         shell: bash
         working-directory: examples/${{ matrix.project.lang }}/providers/${{ matrix.project.name }}
         run: |
-          [[ -d component ]] && wash build -p component/wasmcloud.toml
+          if [[ -f component/wasmcloud.toml ]]; then
+             wash build -p component/wasmcloud.toml;
+          fi
 
       # Run the local.wadm that comes with the example
       - name: test provider load
