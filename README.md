@@ -14,6 +14,7 @@
 
 <img src="https://markupgo.com/github/wasmCloud/wasmCloud/contributors?count=0&circleSize=40&circleRadius=40&center=true" width="100%" /> 
 
+just testing a readme change
 wasmCloud is an open source Cloud Native Computing Foundation (CNCF) project that enables teams to build, manage, and scale polyglot Wasm apps across any cloud, K8s, or edge.
 
 wasmCloud offers faster development cycles with reusable, polyglot components and centrally maintainable apps, allowing platform teams to manage thousands of diverse applications. It integrates seamlessly with existing stacks like Kubernetes and cloud providers, while providing portability across different operating systems and architectures without new builds. With custom capabilities, scale-to-zero, fault-tolerant features, and deployment across clouds, wasmCloud enables secure, reliable, and scalable applications without vendor lock-in.
