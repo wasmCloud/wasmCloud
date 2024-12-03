@@ -1,13 +1,13 @@
-use super::{Ctx, Handler};
-
-use crate::capability::secrets::store::{HostSecret, Secret, SecretValue};
-use crate::capability::secrets::{self, reveal, store};
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use tracing::instrument;
 use wasmtime::component::Resource;
+
+use crate::capability::secrets::store::{HostSecret, Secret, SecretValue};
+use crate::capability::secrets::{self, reveal, store};
+
+use super::{Ctx, Handler};
 
 /// `wasmcloud:secrets` implementation
 #[async_trait]

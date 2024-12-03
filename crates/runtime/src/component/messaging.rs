@@ -1,16 +1,15 @@
 use core::future::Future;
-
-use super::{new_store, Ctx, Handler, Instance, WrpcServeEvent};
-
-use crate::capability::messaging::{consumer, types};
-use crate::capability::wrpc;
-
 use core::ops::Deref;
 
 use anyhow::Context as _;
 use async_trait::async_trait;
 use tracing::{info_span, instrument, warn, Instrument as _, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+use crate::capability::messaging::{consumer, types};
+use crate::capability::wrpc;
+
+use super::{new_store, Ctx, Handler, Instance, WrpcServeEvent};
 
 pub mod wasmtime_handler_bindings {
     wasmtime::component::bindgen!({

@@ -1,6 +1,3 @@
-use crate::capability::{self, wrpc};
-use crate::Runtime;
-
 use core::fmt::{self, Debug};
 use core::future::Future;
 use core::ops::Deref;
@@ -24,6 +21,9 @@ use wasmtime_wasi_http::WasiHttpCtx;
 use wrpc_runtime_wasmtime::{
     collect_component_resources, link_item, ServeExt as _, SharedResourceTable, WrpcView,
 };
+
+use crate::capability::{self, wrpc};
+use crate::Runtime;
 
 pub use bus::Bus;
 pub use bus1_0_0::Bus as Bus1_0_0;
