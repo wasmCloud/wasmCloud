@@ -130,6 +130,12 @@ jobs:
         run: wash build
         working-directory: examples/${{ matrix.project.lang }}/providers/${{ matrix.project.name }}
 
+      # Build required project if necessary
+      - name: Build dependent component if present
+        shell: bash
+        run: |
+          [[ -d component ]] && wash build -p component/wasmcloud.toml
+
       # Run the local.wadm that comes with the example
       - name: test provider load
         if: ${{ matrix.project.test_deploy && matrix.wash-version == 'current' }}
