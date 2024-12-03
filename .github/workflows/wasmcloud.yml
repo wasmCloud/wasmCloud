@@ -195,7 +195,6 @@ jobs:
       - run: move "target/release/keyvalue-nats-provider.exe" "artifact/bin/keyvalue-nats-provider.exe"
       - run: move "target/release/keyvalue-redis-provider.exe" "artifact/bin/keyvalue-redis-provider.exe"
       - run: move "target/release/keyvalue-vault-provider.exe" "artifact/bin/keyvalue-vault-provider.exe"
-      - run: move "target/release/lattice-controller-provider.exe" "artifact/bin/lattice-controller-provider.exe"
       - run: move "target/release/messaging-kafka-provider.exe" "artifact/bin/messaging-kafka-provider.exe"
       - run: move "target/release/messaging-nats-provider.exe" "artifact/bin/messaging-nats-provider.exe"
       - run: move "target/release/sqldb-postgres-provider.exe" "artifact/bin/sqldb-postgres-provider.exe"
