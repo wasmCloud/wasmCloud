@@ -169,7 +169,6 @@ jobs:
           - bin-path: src/bin/keyvalue-nats-provider
           - bin-path: src/bin/keyvalue-redis-provider
           - bin-path: src/bin/keyvalue-vault-provider
-          - bin-path: src/bin/lattice-controller-provider
           - bin-path: src/bin/messaging-kafka-provider
           - bin-path: src/bin/messaging-nats-provider
           - bin-path: src/bin/sqldb-postgres-provider
