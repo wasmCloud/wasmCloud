@@ -61,7 +61,7 @@ jobs:
 
   # Ensure that `wash build` and `wash app validate` works for all example projects below
   wash-build:
-    name: build
+    name: example-provider-build
     runs-on: ubuntu-22.04
     needs: [build-wash-cli]
     strategy:
