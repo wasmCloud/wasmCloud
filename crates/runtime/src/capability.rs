@@ -3,10 +3,6 @@ pub use wasmcloud_core::CallTargetInterface;
 #[allow(clippy::doc_markdown)]
 #[allow(missing_docs)]
 mod wasmtime_bindings {
-    mod keyvalue {
-        pub type Bucket = std::sync::Arc<str>;
-    }
-
     mod blobstore {
         pub type Container = std::sync::Arc<str>;
         pub type IncomingValue = crate::component::blobstore::IncomingValue;
@@ -14,8 +10,18 @@ mod wasmtime_bindings {
         pub type StreamObjectNames = crate::component::blobstore::StreamObjectNames;
     }
 
+    mod keyvalue {
+        pub type Bucket = std::sync::Arc<str>;
+    }
+
     mod lattice {
         pub type CallTargetInterface = std::sync::Arc<wasmcloud_core::CallTargetInterface>;
+    }
+
+    mod messaging0_3_0 {
+        pub type Message = crate::component::messaging::v0_3::Message;
+        pub type RequestOptions = crate::component::messaging::v0_3::RequestOptions;
+        pub type Client = Box<dyn crate::component::messaging::v0_3::Client + Send + Sync>;
     }
 
     mod secrets {
@@ -51,6 +57,9 @@ mod wasmtime_bindings {
            "wasi:io": wasmtime_wasi::bindings::io,
            "wasi:keyvalue/store/bucket": keyvalue::Bucket,
            "wasmcloud:bus/lattice/call-target-interface": lattice::CallTargetInterface,
+           "wasmcloud:messaging/types@0.3.0/client": messaging0_3_0::Client,
+           "wasmcloud:messaging/types@0.3.0/message": messaging0_3_0::Message,
+           "wasmcloud:messaging/request-reply@0.3.0/request-options": messaging0_3_0::RequestOptions,
            "wasmcloud:secrets/store/secret": secrets::Secret,
         },
     });
@@ -117,7 +126,8 @@ impl std::fmt::Display for wasmtime_bindings::wasi::logging0_1_0_draft::logging:
 pub use unversioned_logging_bindings::wasi::logging as unversioned_logging;
 pub use wasmtime_bindings::wasi::{blobstore, keyvalue, logging0_1_0_draft as logging};
 pub use wasmtime_bindings::wasmcloud::{
-    bus1_0_0, bus2_0_0 as bus, messaging0_2_0 as messaging, secrets,
+    bus1_0_0, bus2_0_0 as bus, bus2_0_0, messaging0_2_0, messaging0_3_0 as messaging,
+    messaging0_3_0, secrets,
 };
 pub use wasmtime_bindings::Interfaces;
 pub use wasmtime_wasi_http::bindings::http;

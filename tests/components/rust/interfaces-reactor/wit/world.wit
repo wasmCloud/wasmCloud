@@ -15,4 +15,5 @@ world component {
 
   export wasi:http/incoming-handler@0.2.2;
   export wasmcloud:messaging/handler@0.2.0;
+  export wasmcloud:messaging/incoming-handler@0.3.0;
 }

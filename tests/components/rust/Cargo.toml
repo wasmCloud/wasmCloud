@@ -17,5 +17,5 @@ serde = { version = "1", default-features = false }
 serde_json = { version = "1", default-features = false }
 tokio = { version = "1", default-features = false }
 uuid = { version = "1", default-features = false }
-wasmcloud-component = { version = "0.2", default-features = false }
+wasmcloud-component = { version = "0.2.1", path = "../../../crates/component", default-features = false }
 wit-bindgen = { version = "0.32", default-features = false }

@@ -12,6 +12,10 @@ world incoming-http {
     export wasi:http/incoming-handler@0.2.0;
 }
 
-world messaging-handler {
+world messaging-handler-oh-two {
     export wasmcloud:messaging/handler@0.2.0;
+}
+
+world messaging-handler {
+    export wasmcloud:messaging/incoming-handler@0.3.0;
 }

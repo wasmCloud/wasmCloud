@@ -26,8 +26,8 @@ interface types {
     /// A message with a binary payload and additional information
     resource message {
         constructor(data: list<u8>);
-        /// The topic/subject/channel this message was received on, if any
-        topic: func() -> option<topic>;
+        /// The topic/subject/channel this message was received on
+        topic: func() -> topic;
         /// An optional content-type describing the format of the data in the message. This is 
         /// sometimes described as the "format" type
         content-type: func() -> option<string>;
