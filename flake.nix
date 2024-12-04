@@ -122,18 +122,19 @@
           pkgs,
           pkgsCross ? pkgs,
           ...
-        }: {
-          nativeCheckInputs ? [],
-          ...
-        } @ args:
+        }: {nativeCheckInputs ? [], ...} @ args:
           with pkgs.lib; let
             cargoLock.root = readTOML ./Cargo.lock;
+            cargoLock.tests = readTOML ./tests/components/rust/Cargo.lock;
 
-            cargoLock.actors-rust = readTOML ./tests/components/rust/Cargo.lock;
+            cargoLock.examples.http-hello-world = readTOML ./examples/rust/components/http-hello-world/Cargo.lock;
+            cargoLock.examples.http-keyvalue-counter = readTOML ./examples/rust/components/http-keyvalue-counter/Cargo.lock;
 
             lockPackages =
-              cargoLock.root.package
-              ++ cargoLock.actors-rust.package;
+              cargoLock.examples.http-hello-world.package
+              ++ cargoLock.examples.http-keyvalue-counter.package
+              ++ cargoLock.tests.package
+              ++ cargoLock.root.package;
 
             # deduplicate lockPackages by $name:$version:$checksum
             lockPackages' = listToAttrs (
