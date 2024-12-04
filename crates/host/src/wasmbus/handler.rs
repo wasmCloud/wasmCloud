@@ -475,7 +475,9 @@ impl MessagingClient0_3 for MessagingClient {
     }
 }
 
-pub enum Message {
+/// Concrete implementation of a message originating directly from the host, i.e. not received via
+/// wRPC.
+enum Message {
     Nats(async_nats::Message),
 }
 
