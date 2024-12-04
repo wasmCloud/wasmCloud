@@ -91,3 +91,22 @@ async fn test_wash_wit_wkg_override() {
         .expect("Failed to fetch dependencies");
     assert!(fetch_status.success(), "Failed to fetch dependencies");
 }
+
+#[tokio::test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+async fn test_wash_wit_wasmcloud_expanded_integrated_wkg() {
+    let test_setup = load_fixture("integrated-wkg-extended").await.unwrap();
+
+    // Run `wit fetch` (an alias for wit deps)
+    let fetch_status = test_setup
+        .base_command()
+        .args(["wit", "fetch"])
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .await
+        .expect("Failed to fetch dependencies");
+    assert!(fetch_status.success(), "Failed to fetch dependencies");
+
+    // TODO: Ensure that the local WIT files that were pointed to are used
+}
