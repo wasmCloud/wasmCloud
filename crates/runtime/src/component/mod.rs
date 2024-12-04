@@ -29,7 +29,11 @@ pub use bus::Bus;
 pub use bus1_0_0::Bus as Bus1_0_0;
 pub use config::Config;
 pub use logging::Logging;
-pub use messaging::Messaging;
+pub use messaging::v0_2::Messaging as Messaging0_2;
+pub use messaging::v0_3::{
+    Client as MessagingClient0_3, GuestMessage as MessagingGuestMessage0_3,
+    HostMessage as MessagingHostMessage0_3, Messaging as Messaging0_3,
+};
 pub use secrets::Secrets;
 
 pub(crate) mod blobstore;
@@ -39,7 +43,7 @@ mod config;
 mod http;
 mod keyvalue;
 mod logging;
-mod messaging;
+pub(crate) mod messaging;
 mod secrets;
 
 /// Instance target, which is replaced in wRPC
@@ -172,8 +176,10 @@ macro_rules! skip_static_instances {
             | "wasmcloud:bus/lattice@1.0.0"
             | "wasmcloud:bus/lattice@2.0.0"
             | "wasmcloud:messaging/consumer@0.2.0"
-            | "wasmcloud:messaging/handler@0.2.0"
+            | "wasmcloud:messaging/producer@0.3.0"
+            | "wasmcloud:messaging/request-reply@0.3.0"
             | "wasmcloud:messaging/types@0.2.0"
+            | "wasmcloud:messaging/types@0.3.0"
             | "wasmcloud:secrets/reveal@0.1.0-draft"
             | "wasmcloud:secrets/store@0.1.0-draft" => continue,
             _ => {}
@@ -204,7 +210,8 @@ pub trait Handler:
     + Config
     + Logging
     + Secrets
-    + Messaging
+    + Messaging0_2
+    + Messaging0_3
     + InvocationErrorIntrospect
     + Send
     + Sync
@@ -219,7 +226,8 @@ impl<
             + Config
             + Logging
             + Secrets
-            + Messaging
+            + Messaging0_2
+            + Messaging0_3
             + InvocationErrorIntrospect
             + Send
             + Sync
@@ -413,10 +421,18 @@ where
 
         capability::bus1_0_0::lattice::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasmcloud:bus/lattice@1.0.0`")?;
-        capability::bus::lattice::add_to_linker(&mut linker, |ctx| ctx)
+        capability::bus2_0_0::lattice::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasmcloud:bus/lattice@2.0.0`")?;
-        capability::messaging::consumer::add_to_linker(&mut linker, |ctx| ctx)
-            .context("failed to link `wasmcloud:messaging/consumer`")?;
+        capability::messaging0_2_0::types::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasmcloud:messaging/types@0.2.0`")?;
+        capability::messaging0_2_0::consumer::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasmcloud:messaging/consumer@0.2.0`")?;
+        capability::messaging0_3_0::types::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasmcloud:messaging/types@0.3.0`")?;
+        capability::messaging0_3_0::producer::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasmcloud:messaging/producer@0.3.0`")?;
+        capability::messaging0_3_0::request_reply::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasmcloud:messaging/request-reply@0.3.0`")?;
         capability::secrets::reveal::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasmcloud:secrets/reveal`")?;
         capability::secrets::store::add_to_linker(&mut linker, |ctx| ctx)
@@ -537,7 +553,8 @@ where
                     invocations.push(handle);
                 }
                 (
-                    "wasmcloud:messaging/handler@0.2.0",
+                    "wasmcloud:messaging/handler@0.2.0"
+                    | "wasmcloud:messaging/incoming-handler@0.3.0",
                     types::ComponentItem::ComponentInstance(..),
                 ) => {
                     let instance = instance.clone();

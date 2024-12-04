@@ -1,6 +1,7 @@
 wit_bindgen::generate!({
     with: {
-        "wasmcloud:messaging/types@0.2.0": wasmcloud_component::wasmcloud::messaging::types,
+        "wasmcloud:messaging/types@0.2.0": wasmcloud_component::wasmcloud::messaging0_2_0::types,
+        "wasmcloud:messaging/types@0.3.0": wasmcloud_component::wasmcloud::messaging0_3_0::types,
     },
     generate_all,
 });
@@ -8,7 +9,7 @@ wit_bindgen::generate!({
 use exports::test_components::testing;
 
 use wasmcloud_component::wasi::logging::logging;
-use wasmcloud_component::wasmcloud::messaging;
+use wasmcloud_component::wasmcloud::{messaging0_2_0, messaging0_3_0};
 
 struct Actor;
 
@@ -55,20 +56,26 @@ impl testing::busybox::Guest for Actor {
     }
 }
 
-impl exports::wasmcloud::messaging::handler::Guest for Actor {
+impl exports::wasmcloud::messaging0_2_0::handler::Guest for Actor {
     fn handle_message(
-        messaging::types::BrokerMessage {
+        messaging0_2_0::types::BrokerMessage {
             subject,
             body,
             reply_to,
-        }: messaging::types::BrokerMessage,
+        }: messaging0_2_0::types::BrokerMessage,
     ) -> Result<(), String> {
         let reply_to = reply_to.ok_or("`reply_to` subject missing".to_string())?;
-        messaging::consumer::publish(&messaging::types::BrokerMessage {
+        messaging0_2_0::consumer::publish(&messaging0_2_0::types::BrokerMessage {
             subject: reply_to,
             body,
             reply_to: Some(subject),
         })
+    }
+}
+
+impl exports::wasmcloud::messaging0_3_0::incoming_handler::Guest for Actor {
+    fn handle(msg: messaging0_3_0::types::Message) -> Result<(), messaging0_3_0::types::Error> {
+        messaging0_3_0::request_reply::reply(&msg, messaging0_3_0::types::Message::new(&msg.data()))
     }
 }
 

@@ -1,20 +1,25 @@
+use core::any::Any;
+use core::iter::{repeat, zip};
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context as _};
+use anyhow::{anyhow, bail, Context as _};
+use async_nats::header::{IntoHeaderName as _, IntoHeaderValue as _};
 use async_trait::async_trait;
 use bytes::Bytes;
 use secrecy::Secret;
 use tokio::sync::RwLock;
 use tracing::{error, instrument, warn};
 use wasmcloud_runtime::capability::logging::logging;
-use wasmcloud_runtime::capability::messaging::types::BrokerMessage;
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
-use wasmcloud_runtime::capability::{self, secrets, CallTargetInterface};
+use wasmcloud_runtime::capability::{
+    self, messaging0_2_0, messaging0_3_0, secrets, CallTargetInterface,
+};
 use wasmcloud_runtime::component::{
-    Bus, Bus1_0_0, Config, InvocationErrorIntrospect, InvocationErrorKind, Logging, Messaging,
+    Bus, Bus1_0_0, Config, InvocationErrorIntrospect, InvocationErrorKind, Logging, Messaging0_2,
+    Messaging0_3, MessagingClient0_3, MessagingGuestMessage0_3, MessagingHostMessage0_3,
     ReplacedInstanceTarget, Secrets,
 };
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -357,15 +362,15 @@ impl Secrets for Handler {
     }
 }
 
-impl Messaging for Handler {
+impl Messaging0_2 for Handler {
     #[instrument(level = "debug", skip_all)]
     async fn request(
         &self,
         subject: String,
         body: Vec<u8>,
         timeout_ms: u32,
-    ) -> anyhow::Result<Result<BrokerMessage, String>> {
-        use wasmcloud_runtime::capability::wrpc::wasmcloud::messaging;
+    ) -> anyhow::Result<Result<messaging0_2_0::types::BrokerMessage, String>> {
+        use wasmcloud_runtime::capability::wrpc::wasmcloud::messaging0_2_0 as messaging;
 
         {
             let targets = self.targets.read().await;
@@ -381,7 +386,7 @@ impl Messaging for Handler {
                         reply,
                         ..
                     }) => {
-                        return Ok(Ok(BrokerMessage {
+                        return Ok(Ok(messaging0_2_0::types::BrokerMessage {
                             subject: subject.into_string(),
                             body: payload.into(),
                             reply_to: reply.map(async_nats::Subject::into_string),
@@ -399,7 +404,7 @@ impl Messaging for Handler {
                 subject,
                 body,
                 reply_to,
-            }) => Ok(Ok(BrokerMessage {
+            }) => Ok(Ok(messaging0_2_0::types::BrokerMessage {
                 subject,
                 body: body.into(),
                 reply_to,
@@ -411,13 +416,13 @@ impl Messaging for Handler {
     #[instrument(level = "debug", skip_all)]
     async fn publish(
         &self,
-        BrokerMessage {
+        messaging0_2_0::types::BrokerMessage {
             subject,
             body,
             reply_to,
-        }: BrokerMessage,
+        }: messaging0_2_0::types::BrokerMessage,
     ) -> anyhow::Result<Result<(), String>> {
-        use wasmcloud_runtime::capability::wrpc::wasmcloud::messaging;
+        use wasmcloud_runtime::capability::wrpc::wasmcloud::messaging0_2_0 as messaging;
 
         {
             let targets = self.targets.read().await;
@@ -452,6 +457,642 @@ impl Messaging for Handler {
             },
         )
         .await
+    }
+}
+
+struct MessagingClient {
+    name: Box<str>,
+}
+
+#[async_trait]
+impl MessagingClient0_3 for MessagingClient {
+    async fn disconnect(&mut self) -> anyhow::Result<Result<(), messaging0_3_0::types::Error>> {
+        Ok(Ok(()))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+pub enum Message {
+    Nats(async_nats::Message),
+}
+
+#[async_trait]
+impl MessagingHostMessage0_3 for Message {
+    async fn topic(&self) -> anyhow::Result<Option<messaging0_3_0::types::Topic>> {
+        match self {
+            Message::Nats(async_nats::Message { subject, .. }) => Ok(Some(subject.to_string())),
+        }
+    }
+    async fn content_type(&self) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+    async fn set_content_type(&mut self, _content_type: String) -> anyhow::Result<()> {
+        bail!("`content-type` not supported")
+    }
+    async fn data(&self) -> anyhow::Result<Vec<u8>> {
+        match self {
+            Message::Nats(async_nats::Message { payload, .. }) => Ok(payload.to_vec()),
+        }
+    }
+    async fn set_data(&mut self, buf: Vec<u8>) -> anyhow::Result<()> {
+        match self {
+            Message::Nats(msg) => {
+                msg.payload = buf.into();
+            }
+        }
+        Ok(())
+    }
+    async fn metadata(&self) -> anyhow::Result<Option<messaging0_3_0::types::Metadata>> {
+        match self {
+            Message::Nats(async_nats::Message { headers: None, .. }) => Ok(None),
+            Message::Nats(async_nats::Message {
+                headers: Some(headers),
+                ..
+            }) => Ok(Some(headers.iter().fold(
+                // TODO: Initialize vector with capacity, once `async-nats` is updated to 0.37,
+                // where `len` method is introduced:
+                // https://docs.rs/async-nats/0.37.0/async_nats/header/struct.HeaderMap.html#method.len
+                //Vec::with_capacity(headers.len()),
+                Vec::default(),
+                |mut headers, (k, vs)| {
+                    for v in vs {
+                        headers.push((k.to_string(), v.to_string()))
+                    }
+                    headers
+                },
+            ))),
+        }
+    }
+    async fn add_metadata(&mut self, key: String, value: String) -> anyhow::Result<()> {
+        match self {
+            Message::Nats(async_nats::Message {
+                headers: Some(headers),
+                ..
+            }) => {
+                headers.append(key, value);
+                Ok(())
+            }
+            Message::Nats(async_nats::Message { headers, .. }) => {
+                *headers = Some(async_nats::HeaderMap::from_iter([(
+                    key.into_header_name(),
+                    value.into_header_value(),
+                )]));
+                Ok(())
+            }
+        }
+    }
+    async fn set_metadata(&mut self, meta: messaging0_3_0::types::Metadata) -> anyhow::Result<()> {
+        match self {
+            Message::Nats(async_nats::Message { headers, .. }) => {
+                *headers = Some(
+                    meta.into_iter()
+                        .map(|(k, v)| (k.into_header_name(), v.into_header_value()))
+                        .collect(),
+                );
+                Ok(())
+            }
+        }
+    }
+    async fn remove_metadata(&mut self, key: String) -> anyhow::Result<()> {
+        match self {
+            Message::Nats(async_nats::Message {
+                headers: Some(headers),
+                ..
+            }) => {
+                *headers = headers
+                    .iter()
+                    .filter(|(k, ..)| (k.as_ref() != key))
+                    .flat_map(|(k, vs)| zip(repeat(k.clone()), vs.iter().cloned()))
+                    .collect();
+                Ok(())
+            }
+            Message::Nats(..) => Ok(()),
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
+impl Messaging0_3 for Handler {
+    async fn connect(
+        &self,
+        name: String,
+    ) -> anyhow::Result<
+        Result<Box<dyn MessagingClient0_3 + Send + Sync>, messaging0_3_0::types::Error>,
+    > {
+        Ok(Ok(Box::new(MessagingClient {
+            name: name.into_boxed_str(),
+        })))
+    }
+
+    async fn send(
+        &self,
+        client: &(dyn MessagingClient0_3 + Send + Sync),
+        topic: messaging0_3_0::types::Topic,
+        message: messaging0_3_0::types::Message,
+    ) -> anyhow::Result<Result<(), messaging0_3_0::types::Error>> {
+        use wasmcloud_runtime::capability::wrpc::wasmcloud::messaging0_2_0 as messaging;
+
+        let MessagingClient { name } = client
+            .as_any()
+            .downcast_ref()
+            .context("unknown client type")?;
+        {
+            let targets = self.targets.read().await;
+            let target = targets
+                .get("wasmcloud:messaging/producer")
+                .map(AsRef::as_ref)
+                .unwrap_or("default");
+            let name = if name.is_empty() {
+                "default"
+            } else {
+                name.as_ref()
+            };
+            if name != target {
+                return Ok(Err(messaging0_3_0::types::Error::Other(format!(
+                    "mismatch between link name and client connection name, `{name}` != `{target}`"
+                ))));
+            }
+            if let Some(nats) = self.messaging_links.read().await.get(target) {
+                match match message {
+                    messaging0_3_0::types::Message::Host(message) => {
+                        let message = message
+                            .into_any()
+                            .downcast::<Message>()
+                            .map_err(|_| anyhow!("unknown message type"))?;
+                        match *message {
+                            Message::Nats(async_nats::Message {
+                                payload,
+                                headers: Some(headers),
+                                ..
+                            }) => nats.publish_with_headers(topic, headers, payload).await,
+                            Message::Nats(async_nats::Message { payload, .. }) => {
+                                nats.publish(topic, payload).await
+                            }
+                        }
+                    }
+                    messaging0_3_0::types::Message::Wrpc(messaging::types::BrokerMessage {
+                        body,
+                        ..
+                    }) => nats.publish(topic, body).await,
+                    messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
+                        content_type,
+                        data,
+                        metadata,
+                    }) => {
+                        if content_type.is_some() {
+                            return Ok(Err(messaging0_3_0::types::Error::Other(
+                                "`content-type` not supported by NATS.io".into(),
+                            )));
+                        }
+                        if let Some(metadata) = metadata {
+                            nats.publish_with_headers(
+                                topic,
+                                metadata
+                                    .into_iter()
+                                    .map(|(k, v)| (k.into_header_name(), v.into_header_value()))
+                                    .collect(),
+                                data.into(),
+                            )
+                            .await
+                        } else {
+                            nats.publish(topic, data.into()).await
+                        }
+                    }
+                } {
+                    Ok(()) => return Ok(Ok(())),
+                    Err(err) => {
+                        // TODO: Correctly handle error kind
+                        return Ok(Err(messaging0_3_0::types::Error::Other(err.to_string())));
+                    }
+                }
+            }
+            let body = match message {
+                messaging0_3_0::types::Message::Host(message) => {
+                    let message = message
+                        .into_any()
+                        .downcast::<Message>()
+                        .map_err(|_| anyhow!("unknown message type"))?;
+                    match *message {
+                        Message::Nats(async_nats::Message {
+                            headers: Some(..), ..
+                        }) => {
+                            return Ok(Err(messaging0_3_0::types::Error::Other(
+                                "headers not currently supported by wRPC targets".into(),
+                            )));
+                        }
+                        Message::Nats(async_nats::Message { payload, .. }) => payload,
+                    }
+                }
+                messaging0_3_0::types::Message::Wrpc(messaging::types::BrokerMessage {
+                    body,
+                    ..
+                }) => body,
+                messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
+                    content_type: Some(..),
+                    ..
+                }) => {
+                    return Ok(Err(messaging0_3_0::types::Error::Other(
+                        "`content-type` not currently supported by wRPC targets".into(),
+                    )));
+                }
+                messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
+                    metadata: Some(..),
+                    ..
+                }) => {
+                    return Ok(Err(messaging0_3_0::types::Error::Other(
+                        "`metadata` not currently supported by wRPC targets".into(),
+                    )));
+                }
+                messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
+                    data, ..
+                }) => data.into(),
+            };
+            match messaging::consumer::publish(
+                self,
+                None,
+                &messaging::types::BrokerMessage {
+                    subject: topic,
+                    body,
+                    reply_to: None,
+                },
+            )
+            .await
+            {
+                Ok(Ok(())) => Ok(Ok(())),
+                Ok(Err(err)) => Ok(Err(messaging0_3_0::types::Error::Other(err))),
+                // TODO: Correctly handle error kind
+                Err(err) => Ok(Err(messaging0_3_0::types::Error::Other(err.to_string()))),
+            }
+        }
+    }
+
+    async fn request(
+        &self,
+        client: &(dyn MessagingClient0_3 + Send + Sync),
+        topic: messaging0_3_0::types::Topic,
+        message: &messaging0_3_0::types::Message,
+        options: Option<messaging0_3_0::request_reply::RequestOptions>,
+    ) -> anyhow::Result<
+        Result<Vec<Box<dyn MessagingHostMessage0_3 + Send + Sync>>, messaging0_3_0::types::Error>,
+    > {
+        if options.is_some() {
+            return Ok(Err(messaging0_3_0::types::Error::Other(
+                "`options` not currently supported".into(),
+            )));
+        }
+
+        use wasmcloud_runtime::capability::wrpc::wasmcloud::messaging0_2_0 as messaging;
+
+        let MessagingClient { name } = client
+            .as_any()
+            .downcast_ref()
+            .context("unknown client type")?;
+        {
+            let targets = self.targets.read().await;
+            let target = targets
+                .get("wasmcloud:messaging/request-reply")
+                .map(AsRef::as_ref)
+                .unwrap_or("default");
+            let name = if name.is_empty() {
+                "default"
+            } else {
+                name.as_ref()
+            };
+            if name != target {
+                return Ok(Err(messaging0_3_0::types::Error::Other(format!(
+                    "mismatch between link name and client connection name, `{name}` != `{target}`"
+                ))));
+            }
+            if let Some(nats) = self.messaging_links.read().await.get(target) {
+                match match message {
+                    messaging0_3_0::types::Message::Host(message) => {
+                        let message = message
+                            .as_any()
+                            .downcast_ref::<Message>()
+                            .context("unknown message type")?;
+                        match message {
+                            Message::Nats(async_nats::Message {
+                                payload,
+                                headers: Some(headers),
+                                ..
+                            }) => {
+                                nats.request_with_headers(topic, headers.clone(), payload.clone())
+                                    .await
+                            }
+                            Message::Nats(async_nats::Message { payload, .. }) => {
+                                nats.request(topic, payload.clone()).await
+                            }
+                        }
+                    }
+                    messaging0_3_0::types::Message::Wrpc(messaging::types::BrokerMessage {
+                        body,
+                        ..
+                    }) => nats.request(topic, body.clone()).await,
+                    messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
+                        content_type,
+                        data,
+                        metadata,
+                    }) => {
+                        if content_type.is_some() {
+                            return Ok(Err(messaging0_3_0::types::Error::Other(
+                                "`content-type` not supported by NATS.io".into(),
+                            )));
+                        }
+                        if let Some(metadata) = metadata {
+                            nats.request_with_headers(
+                                topic,
+                                metadata
+                                    .iter()
+                                    .map(|(k, v)| {
+                                        (
+                                            k.as_str().into_header_name(),
+                                            v.as_str().into_header_value(),
+                                        )
+                                    })
+                                    .collect(),
+                                Bytes::copy_from_slice(data),
+                            )
+                            .await
+                        } else {
+                            nats.request(topic, Bytes::copy_from_slice(data)).await
+                        }
+                    }
+                } {
+                    Ok(msg) => return Ok(Ok(vec![Box::new(Message::Nats(msg))])),
+                    Err(err) => {
+                        // TODO: Correctly handle error kind
+                        return Ok(Err(messaging0_3_0::types::Error::Other(err.to_string())));
+                    }
+                }
+            }
+            let body = match message {
+                messaging0_3_0::types::Message::Host(message) => {
+                    let message = message
+                        .as_any()
+                        .downcast_ref::<Message>()
+                        .context("unknown message type")?;
+                    match message {
+                        Message::Nats(async_nats::Message {
+                            headers: Some(..), ..
+                        }) => {
+                            return Ok(Err(messaging0_3_0::types::Error::Other(
+                                "headers not currently supported by wRPC targets".into(),
+                            )));
+                        }
+                        Message::Nats(async_nats::Message { payload, .. }) => payload.clone(),
+                    }
+                }
+                messaging0_3_0::types::Message::Wrpc(messaging::types::BrokerMessage {
+                    body,
+                    ..
+                }) => body.clone(),
+                messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
+                    content_type: Some(..),
+                    ..
+                }) => {
+                    return Ok(Err(messaging0_3_0::types::Error::Other(
+                        "`content-type` not currently supported by wRPC targets".into(),
+                    )));
+                }
+                messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
+                    metadata: Some(..),
+                    ..
+                }) => {
+                    return Ok(Err(messaging0_3_0::types::Error::Other(
+                        "`metadata` not currently supported by wRPC targets".into(),
+                    )));
+                }
+                messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
+                    data, ..
+                }) => Bytes::copy_from_slice(data),
+            };
+
+            match messaging::consumer::publish(
+                self,
+                None,
+                &messaging::types::BrokerMessage {
+                    subject: topic,
+                    body,
+                    reply_to: None,
+                },
+            )
+            .await
+            {
+                Ok(Ok(())) => Ok(Err(messaging0_3_0::types::Error::Other(
+                    "message sent, but returning responses is not currently supported by wRPC targets".into(),
+                ))),
+                Ok(Err(err)) => Ok(Err(messaging0_3_0::types::Error::Other(err))),
+                // TODO: Correctly handle error kind
+                Err(err) => Ok(Err(messaging0_3_0::types::Error::Other(err.to_string()))),
+            }
+        }
+    }
+
+    async fn reply(
+        &self,
+        reply_to: &messaging0_3_0::types::Message,
+        message: messaging0_3_0::types::Message,
+    ) -> anyhow::Result<Result<(), messaging0_3_0::types::Error>> {
+        use wasmcloud_runtime::capability::wrpc::wasmcloud::messaging0_2_0 as messaging;
+
+        {
+            let targets = self.targets.read().await;
+            let target = targets
+                .get("wasmcloud:messaging/request-reply")
+                .map(AsRef::as_ref)
+                .unwrap_or("default");
+            if let Some(nats) = self.messaging_links.read().await.get(target) {
+                let subject = match reply_to {
+                    messaging0_3_0::types::Message::Host(reply_to) => {
+                        match reply_to
+                            .as_any()
+                            .downcast_ref::<Message>()
+                            .context("unknown message type")?
+                        {
+                            Message::Nats(async_nats::Message {
+                                reply: Some(reply), ..
+                            }) => reply.clone(),
+                            Message::Nats(async_nats::Message { reply: None, .. }) => {
+                                return Ok(Err(messaging0_3_0::types::Error::Other(
+                                    "reply not set in incoming NATS.io message".into(),
+                                )))
+                            }
+                        }
+                    }
+                    messaging0_3_0::types::Message::Wrpc(messaging::types::BrokerMessage {
+                        reply_to: Some(reply_to),
+                        ..
+                    }) => reply_to.as_str().into(),
+                    messaging0_3_0::types::Message::Wrpc(messaging::types::BrokerMessage {
+                        reply_to: None,
+                        ..
+                    }) => {
+                        return Ok(Err(messaging0_3_0::types::Error::Other(
+                            "reply not set in incoming wRPC message".into(),
+                        )))
+                    }
+                    messaging0_3_0::types::Message::Guest(..) => {
+                        return Ok(Err(messaging0_3_0::types::Error::Other(
+                            "cannot reply to guest message".into(),
+                        )))
+                    }
+                };
+                match match message {
+                    messaging0_3_0::types::Message::Host(message) => {
+                        let message = message
+                            .into_any()
+                            .downcast::<Message>()
+                            .map_err(|_| anyhow!("unknown message type"))?;
+                        match *message {
+                            Message::Nats(async_nats::Message {
+                                payload,
+                                headers: Some(headers),
+                                ..
+                            }) => nats.publish_with_headers(subject, headers, payload).await,
+                            Message::Nats(async_nats::Message { payload, .. }) => {
+                                nats.publish(subject, payload).await
+                            }
+                        }
+                    }
+                    messaging0_3_0::types::Message::Wrpc(messaging::types::BrokerMessage {
+                        body,
+                        ..
+                    }) => nats.publish(subject, body).await,
+                    messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
+                        content_type,
+                        data,
+                        metadata,
+                    }) => {
+                        if content_type.is_some() {
+                            return Ok(Err(messaging0_3_0::types::Error::Other(
+                                "`content-type` not supported by NATS.io".into(),
+                            )));
+                        }
+                        if let Some(metadata) = metadata {
+                            nats.publish_with_headers(
+                                subject,
+                                metadata
+                                    .into_iter()
+                                    .map(|(k, v)| (k.into_header_name(), v.into_header_value()))
+                                    .collect(),
+                                data.into(),
+                            )
+                            .await
+                        } else {
+                            nats.publish(subject, data.into()).await
+                        }
+                    }
+                } {
+                    Ok(()) => return Ok(Ok(())),
+                    Err(err) => {
+                        // TODO: Correctly handle error kind
+                        return Ok(Err(messaging0_3_0::types::Error::Other(err.to_string())));
+                    }
+                }
+            }
+            let body = match message {
+                messaging0_3_0::types::Message::Host(message) => {
+                    let message = message
+                        .into_any()
+                        .downcast::<Message>()
+                        .map_err(|_| anyhow!("unknown message type"))?;
+                    match *message {
+                        Message::Nats(async_nats::Message {
+                            headers: Some(..), ..
+                        }) => {
+                            return Ok(Err(messaging0_3_0::types::Error::Other(
+                                "headers not currently supported by wRPC targets".into(),
+                            )));
+                        }
+                        Message::Nats(async_nats::Message { payload, .. }) => payload,
+                    }
+                }
+                messaging0_3_0::types::Message::Wrpc(messaging::types::BrokerMessage {
+                    body,
+                    ..
+                }) => body,
+                messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
+                    content_type: Some(..),
+                    ..
+                }) => {
+                    return Ok(Err(messaging0_3_0::types::Error::Other(
+                        "`content-type` not currently supported by wRPC targets".into(),
+                    )));
+                }
+                messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
+                    metadata: Some(..),
+                    ..
+                }) => {
+                    return Ok(Err(messaging0_3_0::types::Error::Other(
+                        "`metadata` not currently supported by wRPC targets".into(),
+                    )));
+                }
+                messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
+                    data, ..
+                }) => data.into(),
+            };
+            let subject = match reply_to {
+                messaging0_3_0::types::Message::Host(reply_to) => {
+                    match reply_to
+                        .as_any()
+                        .downcast_ref::<Message>()
+                        .context("unknown message type")?
+                    {
+                        Message::Nats(async_nats::Message {
+                            reply: Some(reply), ..
+                        }) => reply.to_string(),
+                        Message::Nats(async_nats::Message { reply: None, .. }) => {
+                            return Ok(Err(messaging0_3_0::types::Error::Other(
+                                "reply not set in incoming NATS.io message".into(),
+                            )))
+                        }
+                    }
+                }
+                messaging0_3_0::types::Message::Wrpc(messaging::types::BrokerMessage {
+                    reply_to: Some(reply_to),
+                    ..
+                }) => reply_to.clone(),
+                messaging0_3_0::types::Message::Wrpc(messaging::types::BrokerMessage {
+                    reply_to: None,
+                    ..
+                }) => {
+                    return Ok(Err(messaging0_3_0::types::Error::Other(
+                        "reply not set in incoming wRPC message".into(),
+                    )))
+                }
+                messaging0_3_0::types::Message::Guest(..) => {
+                    return Ok(Err(messaging0_3_0::types::Error::Other(
+                        "cannot reply to guest message".into(),
+                    )))
+                }
+            };
+            match messaging::consumer::publish(
+                self,
+                None,
+                &messaging::types::BrokerMessage {
+                    subject,
+                    body,
+                    reply_to: None,
+                },
+            )
+            .await
+            {
+                Ok(Ok(())) => Ok(Ok(())),
+                Ok(Err(err)) => Ok(Err(messaging0_3_0::types::Error::Other(err))),
+                // TODO: Correctly handle error kind
+                Err(err) => Ok(Err(messaging0_3_0::types::Error::Other(err.to_string()))),
+            }
+        }
     }
 }
 

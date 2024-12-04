@@ -113,7 +113,7 @@ impl wasmcloud_provider_sdk::Provider for Provider {
             ..
         }: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
-        use wrpc::exports::wasmcloud::messaging::handler::Handler as _;
+        use wrpc::exports::wasmcloud::messaging0_2_0::handler::Handler as _;
 
         let (nats, config) = self.connect(config).await?;
         let mut tasks = JoinSet::new();
@@ -180,7 +180,7 @@ impl wasmcloud_provider_sdk::Provider for Provider {
                                             KeyValue::new("host", Arc::clone(&host_id)),
                                         ],
                                     },
-                                    wrpc::wasmcloud::messaging::types::BrokerMessage {
+                                    wrpc::wasmcloud::messaging0_2_0::types::BrokerMessage {
                                         subject: msg.subject.into_string(),
                                         body: msg.payload,
                                         reply_to: msg.reply.map(async_nats::Subject::into_string),

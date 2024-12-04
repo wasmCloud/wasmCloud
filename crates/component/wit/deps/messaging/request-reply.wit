@@ -3,7 +3,7 @@
 /// request/reply. However, request/reply is a very common pattern in messaging and as such, we have
 /// included it as a core interface.
 interface request-reply {
-    use types.{client, message, error, topic};
+    use types.{client, message, error};
 
     /// Options for a request/reply operation. This is a resource to allow for future expansion of
     /// options.
@@ -31,7 +31,7 @@ interface request-reply {
     /// error, (2) if the maximum expected number of replies were received before timeout, return
     /// the list of messages, or (3) if the timeout is reached before the expected number of replies,
     /// return the list of messages received up to that point.
-    request: func(c: borrow<client>, topic: topic, message: borrow<message>, options: option<request-options>) -> result<list<message>, error>;
+    request: func(c: borrow<client>, message: borrow<message>, options: option<request-options>) -> result<list<message>, error>;
 
     /// Replies to the given message with the given response message. The details of which topic
     /// the message is sent to is up to the implementation. This allows for reply-to details to be

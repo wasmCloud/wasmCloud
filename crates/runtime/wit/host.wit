@@ -11,6 +11,8 @@ world interfaces {
     import wasmcloud:bus/lattice@1.0.0;
     import wasmcloud:bus/lattice@2.0.0;
     import wasmcloud:messaging/consumer@0.2.0;
+    import wasmcloud:messaging/producer@0.3.0;
+    import wasmcloud:messaging/request-reply@0.3.0;
     import wasmcloud:secrets/store@0.1.0-draft;
     import wasmcloud:secrets/reveal@0.1.0-draft;
 }

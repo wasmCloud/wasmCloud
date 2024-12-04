@@ -14,4 +14,6 @@ world interfaces {
     import wasi:random/random@0.2.2;
 
     import wasmcloud:messaging/consumer@0.2.0;
+    import wasmcloud:messaging/producer@0.3.0;
+    import wasmcloud:messaging/request-reply@0.3.0;
 }
