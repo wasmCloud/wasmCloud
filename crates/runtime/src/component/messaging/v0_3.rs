@@ -161,6 +161,7 @@ where
         &mut self,
         name: String,
     ) -> wasmtime::Result<Result<Resource<Box<dyn Client + Send + Sync>>, Error>> {
+        self.attach_parent_context();
         match self.handler.connect(name).await? {
             Ok(client) => {
                 let client = self
@@ -178,6 +179,7 @@ where
         &mut self,
         client: Resource<Box<dyn Client + Send + Sync>>,
     ) -> wasmtime::Result<Result<(), Error>> {
+        self.attach_parent_context();
         let client = self
             .table
             .get_mut(&client)
@@ -190,6 +192,7 @@ where
         &mut self,
         client: Resource<Box<dyn Client + Send + Sync>>,
     ) -> wasmtime::Result<()> {
+        self.attach_parent_context();
         self.table
             .delete(client)
             .context("failed to delete client")?;
@@ -204,6 +207,7 @@ where
 {
     #[instrument(level = "debug", skip_all)]
     async fn new(&mut self, data: Vec<u8>) -> wasmtime::Result<Resource<Message>> {
+        self.attach_parent_context();
         self.table
             .push(Message::Guest(GuestMessage {
                 data,
@@ -214,6 +218,7 @@ where
 
     #[instrument(level = "debug", skip_all)]
     async fn topic(&mut self, msg: Resource<Message>) -> wasmtime::Result<Option<Topic>> {
+        self.attach_parent_context();
         let msg = self.table.get(&msg).context("failed to get message")?;
         match msg {
             Message::Host(msg) => msg.topic().await,
@@ -224,6 +229,7 @@ where
 
     #[instrument(level = "debug", skip_all)]
     async fn content_type(&mut self, msg: Resource<Message>) -> wasmtime::Result<Option<String>> {
+        self.attach_parent_context();
         let msg = self.table.get(&msg).context("failed to get message")?;
         match msg {
             Message::Host(msg) => msg.content_type().await,
@@ -238,6 +244,7 @@ where
         msg: Resource<Message>,
         content_type: String,
     ) -> wasmtime::Result<()> {
+        self.attach_parent_context();
         let msg = self.table.get_mut(&msg).context("failed to get message")?;
         match msg {
             Message::Host(msg) => msg.set_content_type(content_type).await,
@@ -251,6 +258,7 @@ where
 
     #[instrument(level = "debug", skip_all)]
     async fn data(&mut self, msg: Resource<Message>) -> wasmtime::Result<Vec<u8>> {
+        self.attach_parent_context();
         let msg = self.table.get(&msg).context("failed to get message")?;
         match msg {
             Message::Host(msg) => msg.data().await,
@@ -261,6 +269,7 @@ where
 
     #[instrument(level = "debug", skip_all)]
     async fn set_data(&mut self, msg: Resource<Message>, buf: Vec<u8>) -> wasmtime::Result<()> {
+        self.attach_parent_context();
         let msg = self.table.get_mut(&msg).context("failed to get message")?;
         match msg {
             Message::Host(msg) => msg.set_data(buf).await,
@@ -277,6 +286,7 @@ where
 
     #[instrument(level = "debug", skip_all)]
     async fn metadata(&mut self, msg: Resource<Message>) -> wasmtime::Result<Option<Metadata>> {
+        self.attach_parent_context();
         let msg = self.table.get(&msg).context("failed to get message")?;
         match msg {
             Message::Host(msg) => msg.metadata().await,
@@ -292,6 +302,7 @@ where
         key: String,
         value: String,
     ) -> wasmtime::Result<()> {
+        self.attach_parent_context();
         let msg = self.table.get_mut(&msg).context("failed to get message")?;
         match msg {
             Message::Host(msg) => msg.add_metadata(key, value).await,
@@ -316,6 +327,7 @@ where
         msg: Resource<Message>,
         meta: Metadata,
     ) -> wasmtime::Result<()> {
+        self.attach_parent_context();
         let msg = self.table.get_mut(&msg).context("failed to get message")?;
         match msg {
             Message::Host(msg) => msg.set_metadata(meta).await,
@@ -334,6 +346,7 @@ where
         msg: Resource<Message>,
         key: String,
     ) -> wasmtime::Result<()> {
+        self.attach_parent_context();
         let msg = self.table.get_mut(&msg).context("failed to get message")?;
         match msg {
             Message::Host(msg) => msg.remove_metadata(key).await,
@@ -350,6 +363,7 @@ where
 
     #[instrument(level = "debug", skip_all)]
     async fn drop(&mut self, rep: Resource<Message>) -> wasmtime::Result<()> {
+        self.attach_parent_context();
         self.table.delete(rep).context("failed to delete message")?;
         Ok(())
     }
@@ -367,6 +381,7 @@ where
         topic: Topic,
         message: Resource<Message>,
     ) -> wasmtime::Result<Result<(), Error>> {
+        self.attach_parent_context();
         let message = self
             .table
             .delete(message)
@@ -388,6 +403,7 @@ where
         message: Resource<Message>,
         options: Option<Resource<RequestOptions>>,
     ) -> wasmtime::Result<Result<Vec<Resource<Message>>, Error>> {
+        self.attach_parent_context();
         let options = options
             .map(|options| self.table.delete(options))
             .transpose()
@@ -418,6 +434,7 @@ where
         reply_to: Resource<Message>,
         message: Resource<Message>,
     ) -> wasmtime::Result<Result<(), Error>> {
+        self.attach_parent_context();
         let message = self
             .table
             .delete(message)
@@ -436,6 +453,7 @@ where
     H: Handler,
 {
     async fn new(&mut self) -> wasmtime::Result<Resource<RequestOptions>> {
+        self.attach_parent_context();
         self.table
             .push(RequestOptions::default())
             .context("failed to push request options to table")
@@ -446,6 +464,7 @@ where
         opts: Resource<RequestOptions>,
         timeout_ms: u32,
     ) -> wasmtime::Result<()> {
+        self.attach_parent_context();
         let opts = self
             .table
             .get_mut(&opts)
@@ -459,6 +478,7 @@ where
         opts: Resource<RequestOptions>,
         expected_replies: u32,
     ) -> wasmtime::Result<()> {
+        self.attach_parent_context();
         let opts = self
             .table
             .get_mut(&opts)
@@ -468,6 +488,7 @@ where
     }
 
     async fn drop(&mut self, opts: Resource<RequestOptions>) -> wasmtime::Result<()> {
+        self.attach_parent_context();
         self.table
             .delete(opts)
             .context("failed to delete request options")?;
