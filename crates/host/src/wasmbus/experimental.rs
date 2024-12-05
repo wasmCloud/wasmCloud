@@ -10,6 +10,8 @@ pub struct Features {
     /// Enable the built-in NATS Messaging capability provider
     /// that can be started with the reference wasmcloud+builtin://messaging-nats
     pub(crate) builtin_messaging_nats: bool,
+    /// Enable the wasmcloud:messaging@v3 interface support in the host
+    pub(crate) wasmcloud_messaging_v3: bool,
 }
 
 impl Features {
@@ -29,6 +31,12 @@ impl Features {
         self.builtin_messaging_nats = true;
         self
     }
+
+    /// Enable the wasmcloud:messaging@v3 interface support in the host
+    pub fn enable_wasmcloud_messaging_v3(mut self) -> Self {
+        self.wasmcloud_messaging_v3 = true;
+        self
+    }
 }
 
 /// This enables unioning feature flags together
@@ -39,6 +47,7 @@ impl std::ops::BitOr for Features {
         Self {
             builtin_http_server: self.builtin_http_server || rhs.builtin_http_server,
             builtin_messaging_nats: self.builtin_messaging_nats || rhs.builtin_messaging_nats,
+            wasmcloud_messaging_v3: self.wasmcloud_messaging_v3 || rhs.wasmcloud_messaging_v3,
         }
     }
 }
@@ -62,10 +71,22 @@ impl From<&str> for Features {
             "builtin-messaging-nats" | "builtin_messaging_nats" => {
                 Self::new().enable_builtin_messaging_nats()
             }
+            "wasmcloud-messaging-v3" | "wasmcloud_messaging_v3" => {
+                Self::new().enable_wasmcloud_messaging_v3()
+            }
             _ => {
                 warn!(%s, "unknown feature flag");
                 Self::new()
             }
+        }
+    }
+}
+
+/// Convert the host feature flags to the runtime feature flags
+impl From<Features> for wasmcloud_runtime::experimental::Features {
+    fn from(f: Features) -> wasmcloud_runtime::experimental::Features {
+        wasmcloud_runtime::experimental::Features {
+            wasmcloud_messaging_v3: f.wasmcloud_messaging_v3,
         }
     }
 }
