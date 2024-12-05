@@ -824,6 +824,7 @@ impl Host {
             .max_linear_memory(config.max_linear_memory)
             .max_components(config.max_components)
             .max_component_size(config.max_component_size)
+            .experimental_features(config.experimental_features.into())
             .build()
             .context("failed to build runtime")?;
         let event_builder = EventBuilderV10::new().source(host_key.public_key());
@@ -1451,6 +1452,7 @@ impl Host {
                 Arc::clone(links.entry(Arc::clone(&component_id)).or_default())
             },
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
+            experimental_features: self.experimental_features,
         };
         let component = wasmcloud_runtime::Component::new(&self.runtime, &wasm)?;
         let component = self
