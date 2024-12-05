@@ -102,8 +102,8 @@ impl WasmCloudTestHost {
             allow_file_load: true,
             secrets_topic_prefix,
             experimental_features: Features::new()
-                .enable_builtin_http()
-                .enable_builtin_messaging(),
+                .enable_builtin_http_server()
+                .enable_builtin_messaging_nats(),
             ..Default::default()
         };
         if let Some(psc) = policy_service_config {
