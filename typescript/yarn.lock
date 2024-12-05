@@ -2582,13 +2582,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/react@npm:^18.3.12":
-  version: 18.3.12
-  resolution: "@types/react@npm:18.3.12"
+"@types/react@npm:^18.3.13":
+  version: 18.3.13
+  resolution: "@types/react@npm:18.3.13"
   dependencies:
     "@types/prop-types": "npm:*"
     csstype: "npm:^3.0.2"
-  checksum: 10/c9bbdfeacd5347d2240e0d2cb5336bc57dbc1b9ff557b6c4024b49df83419e4955553518169d3736039f1b62608e15b35762a6c03d49bd86e33add4b43b19033
+  checksum: 10/4f2b851cabdb68430b50998ad18f206edaea5b3c651d92e3573d86b7ac740224a91b7ca63176fa70e1defc78459faf518e5d2f58e1ba2839b1f12365dab70de2
   languageName: node
   linkType: hard
 
@@ -2996,8 +2996,8 @@ __metadata:
     nats.ws: "npm:^1.29.2"
     rollup-plugin-sourcemaps: "npm:^0.6.3"
     tsup: "npm:^8.3.5"
-    type-fest: "npm:^4.29.1"
-    vite: "npm:^6.0.2"
+    type-fest: "npm:^4.30.0"
+    vite: "npm:^6.0.3"
     vite-plugin-dts: "npm:^4.3.0"
     vite-tsconfig-paths: "npm:^5.1.3"
   peerDependencies:
@@ -3011,7 +3011,7 @@ __metadata:
   resolution: "@wasmcloud/lattice-client-react@workspace:packages/lattice-client-react"
   dependencies:
     "@types/eslint": "npm:~8.56.10"
-    "@types/react": "npm:^18.3.12"
+    "@types/react": "npm:^18.3.13"
     "@types/react-dom": "npm:^18.3.1"
     "@vitejs/plugin-react": "npm:^4.3.4"
     "@wasmcloud/eslint-config": "workspace:^"
@@ -3019,9 +3019,9 @@ __metadata:
     "@wasmcloud/tsconfig": "workspace:^"
     eslint: "npm:^8.57.0"
     rollup-plugin-sourcemaps: "npm:^0.6.3"
-    tailwindcss: "npm:^3.4.15"
+    tailwindcss: "npm:^3.4.16"
     tsup: "npm:^8.3.5"
-    vite: "npm:^6.0.2"
+    vite: "npm:^6.0.3"
     vite-plugin-dts: "npm:^4.3.0"
     vite-tsconfig-paths: "npm:^5.1.3"
   peerDependencies:
@@ -3037,7 +3037,7 @@ __metadata:
     "@wasmcloud/prettier-config": "workspace:*"
     eslint: "npm:^8.57.0"
     eslint-config-turbo: "npm:^2.3.3"
-    prettier: "npm:^3.4.1"
+    prettier: "npm:^3.4.2"
     turbo: "npm:^2.3.3"
     typescript: "npm:^5.7.2"
   languageName: unknown
@@ -3080,7 +3080,7 @@ __metadata:
     "@radix-ui/react-tooltip": "npm:^1.1.4"
     "@tanstack/react-table": "npm:^8.20.5"
     "@types/node": "npm:^20.17.9"
-    "@types/react": "npm:^18.3.12"
+    "@types/react": "npm:^18.3.13"
     "@types/react-dom": "npm:^18.3.1"
     "@types/uuid": "npm:^10.0.0"
     "@typescript-eslint/eslint-plugin": "npm:^8.16.0"
@@ -3112,20 +3112,20 @@ __metadata:
     nats.ws: "npm:^1.29.2"
     pino: "npm:^9.5.0"
     postcss: "npm:^8.4.49"
-    prettier: "npm:^3.4.1"
+    prettier: "npm:^3.4.2"
     react: "npm:^18.3.1"
     react-dom: "npm:^18.3.1"
     react-hook-form: "npm:^7.53.2"
     react-router-dom: "npm:^6.28.0"
     rollup-plugin-sourcemaps: "npm:^0.6.3"
     tailwind-merge: "npm:^2.5.5"
-    tailwindcss: "npm:^3.4.15"
+    tailwindcss: "npm:^3.4.16"
     tailwindcss-animate: "npm:^1.0.7"
     ts-node: "npm:^10.9.2"
     typescript: "npm:^5.7.2"
     usehooks-ts: "npm:^3.1.0"
     uuid: "npm:^11.0.3"
-    vite: "npm:^6.0.2"
+    vite: "npm:^6.0.3"
     vite-plugin-svgr: "npm:^4.3.0"
     vite-tsconfig-paths: "npm:^5.1.3"
     zod: "npm:^3.23.8"
@@ -6144,17 +6144,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lilconfig@npm:^2.1.0":
-  version: 2.1.0
-  resolution: "lilconfig@npm:2.1.0"
-  checksum: 10/b1314a2e55319013d5e7d7d08be39015829d2764a1eaee130129545d40388499d81b1c31b0f9b3417d4db12775a88008b72ec33dd06e0184cf7503b32ca7cc0b
-  languageName: node
-  linkType: hard
-
 "lilconfig@npm:^3.0.0, lilconfig@npm:^3.1.1":
   version: 3.1.2
   resolution: "lilconfig@npm:3.1.2"
   checksum: 10/8058403850cfad76d6041b23db23f730e52b6c17a8c28d87b90766639ca0ee40c748a3e85c2d7bd133d572efabff166c4b015e5d25e01fd666cb4b13cfada7f0
+  languageName: node
+  linkType: hard
+
+"lilconfig@npm:^3.1.3":
+  version: 3.1.3
+  resolution: "lilconfig@npm:3.1.3"
+  checksum: 10/b932ce1af94985f0efbe8896e57b1f814a48c8dbd7fc0ef8469785c6303ed29d0090af3ccad7e36b626bfca3a4dc56cc262697e9a8dd867623cf09a39d54e4c3
   languageName: node
   linkType: hard
 
@@ -7182,12 +7182,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"prettier@npm:^3.4.1":
-  version: 3.4.1
-  resolution: "prettier@npm:3.4.1"
+"prettier@npm:^3.4.2":
+  version: 3.4.2
+  resolution: "prettier@npm:3.4.2"
   bin:
     prettier: bin/prettier.cjs
-  checksum: 10/1ee4d1b1a9b6761cbb847cd81b9d87e51a0f4b2a4d5fe5755627c24828afe057a7ee9b764c3ee777d84abd46218d173d8a204ee9cb3acdd321ff9a6b25f99c1c
+  checksum: 10/a3e806fb0b635818964d472d35d27e21a4e17150c679047f5501e1f23bd4aa806adf660f0c0d35214a210d5d440da6896c2e86156da55f221a57938278dc326e
   languageName: node
   linkType: hard
 
@@ -8269,9 +8269,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tailwindcss@npm:^3.4.15":
-  version: 3.4.15
-  resolution: "tailwindcss@npm:3.4.15"
+"tailwindcss@npm:^3.4.16":
+  version: 3.4.16
+  resolution: "tailwindcss@npm:3.4.16"
   dependencies:
     "@alloc/quick-lru": "npm:^5.2.0"
     arg: "npm:^5.0.2"
@@ -8282,7 +8282,7 @@ __metadata:
     glob-parent: "npm:^6.0.2"
     is-glob: "npm:^4.0.3"
     jiti: "npm:^1.21.6"
-    lilconfig: "npm:^2.1.0"
+    lilconfig: "npm:^3.1.3"
     micromatch: "npm:^4.0.8"
     normalize-path: "npm:^3.0.0"
     object-hash: "npm:^3.0.0"
@@ -8298,7 +8298,7 @@ __metadata:
   bin:
     tailwind: lib/cli.js
     tailwindcss: lib/cli.js
-  checksum: 10/670bc70ae98d36601990424067f1164eebcbe97493ce8d314e8baa85eb47a6b92caabcea3046dfa9e3888a40a4807c123e12dfa2e05d884ff0583c6a1b647cb7
+  checksum: 10/d84b3d9bd8f3d53021b6754e3d7efa704cf32f72714dea2036d955fe46ea4154180d2c47593881a9c524229f9efc13fa924fa6347fc8969427036329ee8a9338
   languageName: node
   linkType: hard
 
@@ -8644,10 +8644,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"type-fest@npm:^4.29.1":
-  version: 4.29.1
-  resolution: "type-fest@npm:4.29.1"
-  checksum: 10/aa75198c18d93ea5eef727bfdc3461ac4aa51619dd8ca43651152e3eeacfd1a6a5206b7abf4ac2e722a15c5b948eb619bdc2c9eceef0a6b3ac23cbf71b24dcbd
+"type-fest@npm:^4.30.0":
+  version: 4.30.0
+  resolution: "type-fest@npm:4.30.0"
+  checksum: 10/46c733df4feb87dfd281fba4fa3913dc38b45136be35adffbcef95e13414105a4669476c1f8686680b9c98e59ed5dc85efe42caf67adbaa04f48dfc41f8330fa
   languageName: node
   linkType: hard
 
@@ -8965,9 +8965,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"vite@npm:^6.0.2":
-  version: 6.0.2
-  resolution: "vite@npm:6.0.2"
+"vite@npm:^6.0.3":
+  version: 6.0.3
+  resolution: "vite@npm:6.0.3"
   dependencies:
     esbuild: "npm:^0.24.0"
     fsevents: "npm:~2.3.3"
@@ -9013,7 +9013,7 @@ __metadata:
       optional: true
   bin:
     vite: bin/vite.js
-  checksum: 10/24fea725676da1812ec0f073d1748a09f6fd8552a86b9b2b3002326d8cb8ada72e0abfe0837b00077412dc5bbd1773aec38d1fc3462709b0ecc1512332b5d2a0
+  checksum: 10/eca0949b8cbc887e78977515d8fc22eaa2d03425d60a0a422f2db1da9d26bd1b431b2815a273c798e8e3fe176a99e105c3d87b0ba615ca19b8bf19e0334d807a
   languageName: node
   linkType: hard
 
