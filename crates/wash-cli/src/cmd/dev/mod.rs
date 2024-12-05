@@ -140,53 +140,41 @@ pub async fn handle_command(
     );
 
     // Create NATS and control interface client to use to connect
-    let nats_client = nats_client_from_wasmcloud_opts(&cmd.wasmcloud_opts).await?;
-    let ctl_client = Arc::new(
-        cmd.wasmcloud_opts
-            .clone()
-            .into_ctl_client(None)
-            .await
-            .context("failed to create wasmcloud control client")?,
-    );
-
-    let host_id: Option<ServerId> = match ctl_client
-        .get_hosts()
-        .await
-        .as_ref()
-        .map(|r| r.as_slice())
-    {
-        // Failing to get hosts is acceptable if none are supposed to be running, or if NATS is not running
-        Ok([]) | Err(_) if cmd.host_id.is_none() => {
-            eprintln!(
-                "{} No running hosts found, will start one...",
-                emoji::INFO_SQUARE
-            );
-            None
-        }
-        Ok([]) | Err(_) => {
-            bail!("host ID specified but no running hosts found");
-        }
-        Ok([host]) if host.data().is_some() => {
-            // SAFETY: We know that the host exists and has data
-            Some(
-                ServerId::from_str(host.data().unwrap().id())
-                    .map_err(|e| anyhow::anyhow!("failed to parse host ID: {e}"))?,
-            )
-        }
-        Ok(hosts) if cmd.host_id.is_some() => {
-            // SAFETY: We know that the host ID is Some as checked above
-            let host_id = cmd.host_id.unwrap();
-            if let Some(_host) = hosts
-                .iter()
-                .find(|h| h.data().map(|d| d.id()).is_some_and(|id| *id == *host_id))
-            {
-                Some(host_id)
-            } else {
-                bail!("specified host ID '{host_id}' not found in running hosts");
+    let ctl_client = cmd.wasmcloud_opts.clone().into_ctl_client(None).await;
+    let host_id = match ctl_client {
+        Ok(ref ctl_client) => match ctl_client.get_hosts().await.as_ref().map(|r| r.as_slice()) {
+            // Failing to get hosts is acceptable if none are supposed to be running, or if NATS is not running
+            Ok([]) | Err(_) if cmd.host_id.is_none() => {
+                eprintln!(
+                    "{} No running hosts found, will start one...",
+                    emoji::INFO_SQUARE
+                );
+                None
             }
-        }
-        Ok(hosts) => {
-            bail!(
+            Ok([]) | Err(_) => {
+                bail!("host ID specified but no running hosts found");
+            }
+            Ok([host]) if host.data().is_some() => {
+                // SAFETY: We know that the host exists and has data
+                Some(
+                    ServerId::from_str(host.data().unwrap().id())
+                        .map_err(|e| anyhow::anyhow!("failed to parse host ID: {e}"))?,
+                )
+            }
+            Ok(hosts) if cmd.host_id.is_some() => {
+                // SAFETY: We know that the host ID is Some as checked above
+                let host_id = cmd.host_id.unwrap();
+                if let Some(_host) = hosts
+                    .iter()
+                    .find(|h| h.data().map(|d| d.id()).is_some_and(|id| *id == *host_id))
+                {
+                    Some(host_id)
+                } else {
+                    bail!("specified host ID '{host_id}' not found in running hosts");
+                }
+            }
+            Ok(hosts) => {
+                bail!(
                     "found multiple running hosts, please specify a host ID with --host-id. Eligible hosts: [{:?}]",
                     hosts
                         .iter()
@@ -194,7 +182,10 @@ pub async fn handle_command(
                         .collect::<Vec<&str>>()
                         .join(", ")
                 );
-        }
+            }
+        },
+        Err(_) if cmd.host_id.is_some() => bail!("host ID specified but could not connect to control interface, ensure host and NATS is running or omit host ID"),
+        Err(_) => None,
     };
 
     let (mut nats_child, mut wadm_child, mut wasmcloud_child) = (None, None, None);
@@ -217,6 +208,17 @@ pub async fn handle_command(
         .context("missing host_id, after ensuring host has started")?
         .0;
 
+    let nats_client = nats_client_from_wasmcloud_opts(&cmd.wasmcloud_opts).await?;
+    // If we failed to connect to the control interface earlier, we can retry now that NATS is up
+    let ctl_client = if let Ok(ctl_client) = ctl_client {
+        ctl_client
+    } else {
+        cmd.wasmcloud_opts
+            .clone()
+            .into_ctl_client(None)
+            .await
+            .context("failed to create control interface client")?
+    };
     let lattice = ctl_client.lattice();
 
     // Build state for the run loop
