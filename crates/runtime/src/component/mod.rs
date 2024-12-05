@@ -23,6 +23,7 @@ use wrpc_runtime_wasmtime::{
 };
 
 use crate::capability::{self, wrpc};
+use crate::experimental::Features;
 use crate::Runtime;
 
 pub use bus::Bus;
@@ -176,10 +177,7 @@ macro_rules! skip_static_instances {
             | "wasmcloud:bus/lattice@1.0.0"
             | "wasmcloud:bus/lattice@2.0.0"
             | "wasmcloud:messaging/consumer@0.2.0"
-            | "wasmcloud:messaging/producer@0.3.0"
-            | "wasmcloud:messaging/request-reply@0.3.0"
             | "wasmcloud:messaging/types@0.2.0"
-            | "wasmcloud:messaging/types@0.3.0"
             | "wasmcloud:secrets/reveal@0.1.0-draft"
             | "wasmcloud:secrets/store@0.1.0-draft" => continue,
             _ => {}
@@ -282,6 +280,7 @@ where
     claims: Option<jwt::Claims<jwt::Component>>,
     instance_pre: wasmtime::component::InstancePre<Ctx<H>>,
     max_execution_time: Duration,
+    experimental_features: Features,
 }
 
 impl<H> Debug for Component<H>
@@ -427,16 +426,19 @@ where
             .context("failed to link `wasmcloud:messaging/types@0.2.0`")?;
         capability::messaging0_2_0::consumer::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasmcloud:messaging/consumer@0.2.0`")?;
-        capability::messaging0_3_0::types::add_to_linker(&mut linker, |ctx| ctx)
-            .context("failed to link `wasmcloud:messaging/types@0.3.0`")?;
-        capability::messaging0_3_0::producer::add_to_linker(&mut linker, |ctx| ctx)
-            .context("failed to link `wasmcloud:messaging/producer@0.3.0`")?;
-        capability::messaging0_3_0::request_reply::add_to_linker(&mut linker, |ctx| ctx)
-            .context("failed to link `wasmcloud:messaging/request-reply@0.3.0`")?;
         capability::secrets::reveal::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasmcloud:secrets/reveal`")?;
         capability::secrets::store::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasmcloud:secrets/store`")?;
+        // Only link wasmcloud:messaging@v3 if the feature is enabled
+        if rt.experimental_features.wasmcloud_messaging_v3 {
+            capability::messaging0_3_0::types::add_to_linker(&mut linker, |ctx| ctx)
+                .context("failed to link `wasmcloud:messaging/types@0.3.0`")?;
+            capability::messaging0_3_0::producer::add_to_linker(&mut linker, |ctx| ctx)
+                .context("failed to link `wasmcloud:messaging/producer@0.3.0`")?;
+            capability::messaging0_3_0::request_reply::add_to_linker(&mut linker, |ctx| ctx)
+                .context("failed to link `wasmcloud:messaging/request-reply@0.3.0`")?;
+        }
 
         let ty = component.component_type();
         let mut guest_resources = Vec::new();
@@ -445,7 +447,11 @@ where
             warn!("exported component resources are not supported in wasmCloud runtime and will be ignored, use a provider instead to enable this functionality");
         }
         for (name, ty) in ty.imports(&engine) {
+            // Don't link builtin instances or feature-gated instances if the feature is disabled
             skip_static_instances!(name);
+            if rt.skip_feature_gated_instance(name) {
+                continue;
+            }
             link_item(&engine, &mut linker.root(), [], ty, "", name, None)
                 .context("failed to link item")?;
         }
@@ -455,6 +461,7 @@ where
             claims,
             instance_pre,
             max_execution_time: rt.max_execution_time,
+            experimental_features: rt.experimental_features,
         })
     }
 
@@ -510,6 +517,7 @@ where
             handler,
             max_execution_time: self.max_execution_time,
             events,
+            experimental_features: self.experimental_features,
         }
     }
 
@@ -732,6 +740,7 @@ where
     handler: H,
     max_execution_time: Duration,
     events: mpsc::Sender<WrpcServeEvent<C>>,
+    experimental_features: Features,
 }
 
 impl<H, C> Clone for Instance<H, C>
@@ -745,13 +754,14 @@ where
             handler: self.handler.clone(),
             max_execution_time: self.max_execution_time,
             events: self.events.clone(),
+            experimental_features: self.experimental_features,
         }
     }
 }
 
 type TableResult<T> = Result<T, ResourceTableError>;
 
-struct Ctx<H>
+pub(crate) struct Ctx<H>
 where
     H: Handler,
 {

@@ -3,8 +3,10 @@ use core::future::Future;
 
 use anyhow::{bail, Context as _};
 use async_trait::async_trait;
-use tracing::instrument;
+use tracing::{info_span, instrument, Instrument as _};
+use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use wasmtime::component::Resource;
+use wasmtime::Store;
 
 use crate::capability::messaging0_3_0::types::{Error, Metadata, Topic};
 use crate::capability::messaging0_3_0::{producer, request_reply, types};
@@ -19,6 +21,32 @@ pub mod bindings {
            "wasmcloud:messaging/types": crate::capability::messaging0_3_0::types,
         },
     });
+}
+
+#[instrument(level = "debug", skip_all)]
+pub(crate) async fn handle_message<H>(
+    pre: bindings::MessagingHandlerPre<Ctx<H>>,
+    mut store: &mut Store<Ctx<H>>,
+    msg: wrpc::wasmcloud::messaging0_2_0::types::BrokerMessage,
+) -> anyhow::Result<Result<(), String>>
+where
+    H: Handler,
+{
+    let call_handle_message = info_span!("call_handle_message");
+    store.data_mut().parent_context = Some(call_handle_message.context());
+    let bindings = pre.instantiate_async(&mut store).await?;
+    let msg = store
+        .data_mut()
+        .table
+        .push(Message::Wrpc(msg))
+        .context("failed to push message to table")?;
+    bindings
+        .wasmcloud_messaging0_3_0_incoming_handler()
+        .call_handle(&mut store, msg)
+        .instrument(call_handle_message)
+        .await
+        .context("failed to call `wasmcloud:messaging/incoming-handler@0.3.0#handle`")
+        .map(|err| err.map_err(|err| err.to_string()))
 }
 
 /// Options for a request/reply operation.
