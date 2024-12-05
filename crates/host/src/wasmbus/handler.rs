@@ -651,10 +651,11 @@ impl Messaging0_3 for Handler {
                         data,
                         metadata,
                     }) => {
-                        if content_type.is_some() {
-                            return Ok(Err(messaging0_3_0::types::Error::Other(
-                                "`content-type` not supported by NATS.io".into(),
-                            )));
+                        if let Some(content_type) = content_type {
+                            warn!(
+                                content_type,
+                                "`content-type` not supported by NATS.io, value is ignored"
+                            );
                         }
                         if let Some(metadata) = metadata {
                             nats.publish_with_headers(
@@ -700,14 +701,6 @@ impl Messaging0_3 for Handler {
                     ..
                 }) => body,
                 messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
-                    content_type: Some(..),
-                    ..
-                }) => {
-                    return Ok(Err(messaging0_3_0::types::Error::Other(
-                        "`content-type` not currently supported by wRPC targets".into(),
-                    )));
-                }
-                messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
                     metadata: Some(..),
                     ..
                 }) => {
@@ -716,8 +709,18 @@ impl Messaging0_3 for Handler {
                     )));
                 }
                 messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
-                    data, ..
-                }) => data.into(),
+                    content_type,
+                    data,
+                    ..
+                }) => {
+                    if let Some(content_type) = content_type {
+                        warn!(
+                            content_type,
+                            "`content-type` not currently supported by wRPC targets, value is ignored",
+                        );
+                    }
+                    data.into()
+                }
             };
             match messaging::consumer::publish(
                 self,
@@ -805,10 +808,11 @@ impl Messaging0_3 for Handler {
                         data,
                         metadata,
                     }) => {
-                        if content_type.is_some() {
-                            return Ok(Err(messaging0_3_0::types::Error::Other(
-                                "`content-type` not supported by NATS.io".into(),
-                            )));
+                        if let Some(content_type) = content_type {
+                            warn!(
+                                content_type,
+                                "`content-type` not supported by NATS.io, value is ignored"
+                            );
                         }
                         if let Some(metadata) = metadata {
                             nats.request_with_headers(
@@ -859,14 +863,6 @@ impl Messaging0_3 for Handler {
                     ..
                 }) => body.clone(),
                 messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
-                    content_type: Some(..),
-                    ..
-                }) => {
-                    return Ok(Err(messaging0_3_0::types::Error::Other(
-                        "`content-type` not currently supported by wRPC targets".into(),
-                    )));
-                }
-                messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
                     metadata: Some(..),
                     ..
                 }) => {
@@ -875,8 +871,18 @@ impl Messaging0_3 for Handler {
                     )));
                 }
                 messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
-                    data, ..
-                }) => Bytes::copy_from_slice(data),
+                    content_type,
+                    data,
+                    ..
+                }) => {
+                    if let Some(content_type) = content_type {
+                        warn!(
+                            content_type,
+                            "`content-type` not currently supported by wRPC targets, value is ignored",
+                        );
+                    }
+                    Bytes::copy_from_slice(data)
+                }
             };
 
             match messaging::consumer::publish(
@@ -975,10 +981,11 @@ impl Messaging0_3 for Handler {
                         data,
                         metadata,
                     }) => {
-                        if content_type.is_some() {
-                            return Ok(Err(messaging0_3_0::types::Error::Other(
-                                "`content-type` not supported by NATS.io".into(),
-                            )));
+                        if let Some(content_type) = content_type {
+                            warn!(
+                                content_type,
+                                "`content-type` not supported by NATS.io, value is ignored"
+                            );
                         }
                         if let Some(metadata) = metadata {
                             nats.publish_with_headers(
@@ -1024,14 +1031,6 @@ impl Messaging0_3 for Handler {
                     ..
                 }) => body,
                 messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
-                    content_type: Some(..),
-                    ..
-                }) => {
-                    return Ok(Err(messaging0_3_0::types::Error::Other(
-                        "`content-type` not currently supported by wRPC targets".into(),
-                    )));
-                }
-                messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
                     metadata: Some(..),
                     ..
                 }) => {
@@ -1040,8 +1039,18 @@ impl Messaging0_3 for Handler {
                     )));
                 }
                 messaging0_3_0::types::Message::Guest(MessagingGuestMessage0_3 {
-                    data, ..
-                }) => data.into(),
+                    content_type,
+                    data,
+                    ..
+                }) => {
+                    if let Some(content_type) = content_type {
+                        warn!(
+                            content_type,
+                            "`content-type` not currently supported by wRPC targets, value is ignored",
+                        );
+                    }
+                    data.into()
+                }
             };
             let subject = match reply_to {
                 messaging0_3_0::types::Message::Host(reply_to) => {
