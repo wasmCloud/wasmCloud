@@ -3,7 +3,7 @@ use core::time::Duration;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{anyhow, bail, ensure, Context as _};
 use async_nats::subject::ToSubject;
 use bytes::Bytes;
 use futures::StreamExt as _;
@@ -23,7 +23,7 @@ use wasmcloud_provider_sdk::{
 };
 
 mod connection;
-pub use connection::ConnectionConfig;
+pub use connection::{ConnectionConfig, ConsumerConfig};
 
 mod bindings {
     wit_bindgen_wrpc::generate!({
@@ -108,11 +108,15 @@ impl NatsMessagingProvider {
         cfg: ConnectionConfig,
         component_id: &str,
     ) -> anyhow::Result<NatsClientBundle> {
+        ensure!(
+            cfg.consumers.is_empty(),
+            "JetStream consumers not supported by this provider"
+        );
         let mut opts = match (cfg.auth_jwt, cfg.auth_seed) {
             (Some(jwt), Some(seed)) => {
                 let seed = KeyPair::from_seed(&seed).context("failed to parse seed key pair")?;
                 let seed = Arc::new(seed);
-                async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
+                async_nats::ConnectOptions::with_jwt(jwt.into_string(), move |nonce| {
                     let seed = seed.clone();
                     async move { seed.sign(&nonce).map_err(async_nats::AuthError::new) }
                 })
@@ -120,9 +124,9 @@ impl NatsMessagingProvider {
             (None, None) => async_nats::ConnectOptions::default(),
             _ => bail!("must provide both jwt and seed for jwt authentication"),
         };
-        if let Some(tls_ca) = &cfg.tls_ca {
+        if let Some(tls_ca) = cfg.tls_ca.as_deref() {
             opts = add_tls_ca(tls_ca, opts)?;
-        } else if let Some(tls_ca_file) = &cfg.tls_ca_file {
+        } else if let Some(tls_ca_file) = cfg.tls_ca_file.as_deref() {
             let ca = fs::read_to_string(tls_ca_file)
                 .await
                 .context("failed to read TLS CA file")?;
@@ -139,19 +143,19 @@ impl NatsMessagingProvider {
 
         let client = opts
             .name("NATS Messaging Provider") // allow this to show up uniquely in a NATS connection list
-            .connect(url)
+            .connect(url.as_ref())
             .await?;
 
         // Connections
         let mut sub_handles = Vec::new();
         for sub in cfg.subscriptions.iter().filter(|s| !s.is_empty()) {
             let (sub, queue) = match sub.split_once('|') {
-                Some((sub, queue)) => (sub, Some(queue.to_string())),
+                Some((sub, queue)) => (sub, Some(queue.into())),
                 None => (sub.as_str(), None),
             };
 
             sub_handles.push((
-                sub.to_string(),
+                sub.into(),
                 self.subscribe(&client, component_id, sub.to_string(), queue)
                     .await?,
             ));
@@ -178,7 +182,7 @@ impl NatsMessagingProvider {
 
         debug!(?component_id, "spawning listener for component");
 
-        let component_id = Arc::new(component_id.to_string());
+        let component_id = Arc::from(component_id);
         // Spawn a thread that listens for messages coming from NATS
         // this thread is expected to run the full duration that the provider is available
         let join_handle = tokio::spawn(async move {
@@ -201,7 +205,7 @@ impl NatsMessagingProvider {
                 let component_id = Arc::clone(&component_id);
                 let wrpc = Arc::clone(&wrpc);
                 tokio::spawn(async move {
-                    dispatch_msg(&wrpc, component_id.as_str(), msg)
+                    dispatch_msg(&wrpc, &component_id, msg)
                         .instrument(span)
                         .await;
                 });
@@ -226,8 +230,8 @@ async fn dispatch_msg(wrpc: &WrpcClient, component_id: &str, nats_msg: async_nat
 
     let msg = BrokerMessage {
         body: nats_msg.payload,
-        reply_to: nats_msg.reply.map(|s| s.to_string()),
-        subject: nats_msg.subject.to_string(),
+        reply_to: nats_msg.reply.map(|s| s.into_string()),
+        subject: nats_msg.subject.into_string(),
     };
     debug!(
         subject = msg.subject,
@@ -267,7 +271,7 @@ impl Provider for NatsMessagingProvider {
             // create a config from the supplied values and merge that with the existing default
             match ConnectionConfig::from_link_config(&link_config) {
                 Ok(cc) => self.default_config.merge(&ConnectionConfig {
-                    subscriptions: Vec::new(),
+                    subscriptions: Box::default(),
                     ..cc
                 }),
                 Err(e) => {
@@ -427,21 +431,16 @@ impl bindings::exports::wasmcloud::messaging::consumer::Handler<Option<Context>>
         let res = match msg.reply_to.clone() {
             Some(reply_to) => if should_strip_headers(&msg.subject) {
                 nats_client
-                    .publish_with_reply(msg.subject.to_string(), reply_to, body)
+                    .publish_with_reply(msg.subject, reply_to, body)
                     .await
             } else {
                 nats_client
-                    .publish_with_reply_and_headers(
-                        msg.subject.to_string(),
-                        reply_to,
-                        headers,
-                        body,
-                    )
+                    .publish_with_reply_and_headers(msg.subject, reply_to, headers, body)
                     .await
             }
             .map_err(|e| e.to_string()),
             None => nats_client
-                .publish_with_headers(msg.subject.to_string(), headers, body)
+                .publish_with_headers(msg.subject, headers, body)
                 .await
                 .map_err(|e| e.to_string()),
         };
@@ -500,8 +499,8 @@ impl bindings::exports::wasmcloud::messaging::consumer::Handler<Option<Context>>
             }
             Ok(Ok(resp)) => Ok(Ok(BrokerMessage {
                 body: resp.payload,
-                reply_to: resp.reply.map(|s| s.to_string()),
-                subject: resp.subject.to_string(),
+                reply_to: resp.reply.map(|s| s.into_string()),
+                subject: resp.subject.into_string(),
             })),
         }
     }
@@ -547,9 +546,9 @@ mod test {
 "#;
 
         let config: ConnectionConfig = serde_json::from_str(input).unwrap();
-        assert_eq!(config.auth_jwt.unwrap(), "authy");
-        assert_eq!(config.auth_seed.unwrap(), "seedy");
-        assert_eq!(config.cluster_uris, ["nats://soyvuh"]);
+        assert_eq!(config.auth_jwt.unwrap().as_ref(), "authy");
+        assert_eq!(config.auth_seed.unwrap().as_ref(), "seedy");
+        assert_eq!(config.cluster_uris, [Box::from("nats://soyvuh")].into());
         assert_eq!(config.custom_inbox_prefix, None);
         assert!(config.subscriptions.is_empty());
         assert!(config.ping_interval_sec.is_none());
@@ -559,30 +558,30 @@ mod test {
     fn test_connectionconfig_merge() {
         // second > original, individual vec fields are replace not extend
         let cc1 = ConnectionConfig {
-            cluster_uris: vec!["old_server".to_string()],
-            subscriptions: vec!["topic1".to_string()],
+            cluster_uris: ["old_server".into()].into(),
+            subscriptions: ["topic1".into()].into(),
             custom_inbox_prefix: Some("_NOPE.>".into()),
             ..Default::default()
         };
         let cc2 = ConnectionConfig {
-            cluster_uris: vec!["server1".to_string(), "server2".to_string()],
-            auth_jwt: Some("jawty".to_string()),
+            cluster_uris: ["server1".into(), "server2".into()].into(),
+            auth_jwt: Some("jawty".into()),
             ..Default::default()
         };
         let cc3 = cc1.merge(&cc2);
         assert_eq!(cc3.cluster_uris, cc2.cluster_uris);
         assert_eq!(cc3.subscriptions, cc1.subscriptions);
-        assert_eq!(cc3.auth_jwt, Some("jawty".to_string()));
-        assert_eq!(cc3.custom_inbox_prefix, Some("_NOPE.>".to_string()));
+        assert_eq!(cc3.auth_jwt, Some("jawty".into()));
+        assert_eq!(cc3.custom_inbox_prefix, Some("_NOPE.>".into()));
     }
 
     #[test]
     fn test_from_map() -> anyhow::Result<()> {
         let cc = ConnectionConfig::from_map(&HashMap::from([(
-            "custom_inbox_prefix".to_string(),
-            "_TEST.>".to_string(),
+            "custom_inbox_prefix".into(),
+            "_TEST.>".into(),
         )]))?;
-        assert_eq!(cc.custom_inbox_prefix, Some("_TEST.>".to_string()));
+        assert_eq!(cc.custom_inbox_prefix, Some("_TEST.>".into()));
         Ok(())
     }
 }
