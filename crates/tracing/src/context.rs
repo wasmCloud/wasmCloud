@@ -25,7 +25,7 @@ impl<'a> TraceContextExtractor<'a> {
     }
 }
 
-impl<'a> Extractor for TraceContextExtractor<'a> {
+impl Extractor for TraceContextExtractor<'_> {
     fn get(&self, key: &str) -> Option<&str> {
         // NOTE(thomastaylor312): I don't like that we have to iterate to find this, but I didn't
         // want to allocate hashmap for now. If this starts to cause performance issues, we can see
