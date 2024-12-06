@@ -8,23 +8,18 @@ import {
   ApplicationDetail,
 } from '@/types';
 
-type ApplicationListResponse =
-  | {
-      result: 'success';
-      message: string;
-      models: ApplicationSummary[];
-    }
-  | {
-      result: 'error';
-      message: string;
-    };
+type GetResponseResult = 'success' | 'notfound' | 'error';
+type ApplicationListResponse = {
+  [Result in GetResponseResult]: Result extends 'success'
+    ? WadmApiResponse<Result, {models: ApplicationSummary[]}>
+    : WadmApiResponse<Result>;
+}[GetResponseResult];
 
-type ManifestResponseResult = 'success' | 'notfound' | 'error';
 type ApplicationManifestResponse = {
-  [Result in ManifestResponseResult]: Result extends 'success'
+  [Result in GetResponseResult]: Result extends 'success'
     ? WadmApiResponse<Result, {manifest: ApplicationManifest}>
     : WadmApiResponse<Result>;
-}[ManifestResponseResult];
+}[GetResponseResult];
 
 type ApplicationHistoryResponse =
   | WadmApiResponse<'success', {versions: ApplicationHistory}>
@@ -62,7 +57,7 @@ class ApplicationsController extends BaseController {
    */
   async list() {
     const response = await this.connection.request<ApplicationListResponse | ApplicationSummary[]>(
-      `${this.config.wadmTopic}.model.list`,
+      `${this.config.wadmTopic}.model.get`,
     );
 
     // TODO: See https://github.com/wasmCloud/wadm/issues/278
