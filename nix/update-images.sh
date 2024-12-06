@@ -35,13 +35,13 @@ update() {
     echo "  ${3}-amd64.finalImageTag = \"${2}\";"
     echo "  ${3}-amd64.imageDigest = \"${amd64}\";"
     echo "  ${3}-amd64.imageName = \"${1}\";"
-    echo "  ${3}-amd64.sha256 = \"$(nix hash file "${dir}/${3}-amd64.tar")\";"
+    echo "  ${3}-amd64.sha256 = \"$(nix hash file "$(realpath "${dir}/${3}-amd64.tar")")\";"
     echo "  ${3}-arm64.arch = \"arm64\";"
     echo "  ${3}-arm64.finalImageName = \"${1}\";"
     echo "  ${3}-arm64.finalImageTag = \"${2}\";"
     echo "  ${3}-arm64.imageDigest = \"${arm64}\";"
     echo "  ${3}-arm64.imageName = \"${1}\";"
-    echo "  ${3}-arm64.sha256 = \"$(nix hash file "${dir}/${3}-arm64.tar")\";"
+    echo "  ${3}-arm64.sha256 = \"$(nix hash file "$(realpath "${dir}/${3}-arm64.tar")")\";"
 
     rm -rf "${dir}"
 }
