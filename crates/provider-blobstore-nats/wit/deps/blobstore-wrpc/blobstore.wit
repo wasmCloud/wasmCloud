@@ -1,0 +1,19 @@
+interface blobstore {
+    use types.{container-name, container-metadata, object-metadata, object-id};
+
+    clear-container: func(name: string) -> result<_, string>;
+    container-exists: func(name: string) -> result<bool, string>;
+    create-container: func(name: string) -> result<_, string>;
+    delete-container: func(name: string) -> result<_, string>;
+    get-container-info: func(name: string) -> result<container-metadata, string>;
+    list-container-objects: func(name: string, limit: option<u64>, offset: option<u64>) -> result<tuple<stream<string>, future<result<_, string>>>, string>;
+
+    copy-object: func(src: object-id, dest: object-id) -> result<_, string>;
+    delete-object: func(id: object-id) -> result<_, string>;
+    delete-objects: func(container: string, objects: list<string>) -> result<_, string>;
+    get-container-data: func(id: object-id, start: u64, end: u64) -> result<tuple<stream<u8>, future<result<_, string>>>, string>;
+    get-object-info: func(id: object-id) -> result<object-metadata, string>;
+    has-object: func(id: object-id) -> result<bool, string>;
+    move-object: func(src: object-id, dest: object-id) -> result<_, string>;
+    write-container-data: func(id: object-id, data: stream<u8>) -> result<future<result<_, string>>, string>;
+}

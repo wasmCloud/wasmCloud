@@ -8939,6 +8939,7 @@ dependencies = [
  "wasmcloud-host",
  "wasmcloud-provider-blobstore-azure",
  "wasmcloud-provider-blobstore-fs",
+ "wasmcloud-provider-blobstore-nats",
  "wasmcloud-provider-blobstore-s3",
  "wasmcloud-provider-http-client",
  "wasmcloud-provider-http-server",
@@ -9103,6 +9104,29 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wrpc-interface-blobstore",
+]
+
+[[package]]
+name = "wasmcloud-provider-blobstore-nats"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "bytes",
+ "futures",
+ "rustls-pemfile 2.2.0",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "wascap",
+ "wasmcloud-provider-sdk",
+ "wasmcloud-test-util",
+ "wrpc-interface-blobstore",
+ "wrpc-transport-nats",
 ]
 
 [[package]]

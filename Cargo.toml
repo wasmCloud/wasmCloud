@@ -24,6 +24,7 @@ status = "actively-developed"
 [features]
 provider-blobstore-azure = ["dep:wasmcloud-provider-blobstore-azure"]
 provider-blobstore-fs = ["dep:wasmcloud-provider-blobstore-fs"]
+provider-blobstore-nats = ["dep:wasmcloud-provider-blobstore-nats"]
 provider-blobstore-s3 = ["dep:wasmcloud-provider-blobstore-s3"]
 provider-http-client = ["dep:wasmcloud-provider-http-client"]
 provider-http-server = ["dep:wasmcloud-provider-http-server"]
@@ -48,19 +49,20 @@ wasmcloud = [
 ]
 
 default = [
-  "provider-blobstore-azure",
-  "provider-blobstore-fs",
-  "provider-blobstore-s3",
-  "provider-http-client",
-  "provider-http-server",
-  "provider-keyvalue-nats",
-  "provider-keyvalue-redis",
-  "provider-keyvalue-vault",
-  "provider-messaging-kafka",
-  "provider-messaging-nats",
-  "provider-sqldb-postgres",
-  "provider-wadm",
-  "wasmcloud",
+    "provider-blobstore-azure",
+    "provider-blobstore-fs",
+    "provider-blobstore-nats",
+    "provider-blobstore-s3",
+    "provider-http-client",
+    "provider-http-server",
+    "provider-keyvalue-nats",
+    "provider-keyvalue-redis",
+    "provider-keyvalue-vault",
+    "provider-messaging-kafka",
+    "provider-messaging-nats",
+    "provider-sqldb-postgres",
+    "provider-wadm",
+    "wasmcloud",
 ]
 
 
@@ -71,6 +73,10 @@ required-features = ["provider-blobstore-azure"]
 [[bin]]
 name = "blobstore-fs-provider"
 required-features = ["provider-blobstore-fs"]
+
+[[bin]]
+name = "blobstore-nats-provider"
+required-features = ["provider-blobstore-nats"]
 
 [[bin]]
 name = "blobstore-s3-provider"
@@ -146,6 +152,7 @@ wasmcloud-core = { workspace = true, features = ["otel"], optional = true }
 wasmcloud-host = { workspace = true, optional = true }
 wasmcloud-provider-blobstore-azure = { workspace = true, optional = true }
 wasmcloud-provider-blobstore-fs = { workspace = true, optional = true }
+wasmcloud-provider-blobstore-nats = { workspace = true, optional = true }
 wasmcloud-provider-blobstore-s3 = { workspace = true, optional = true }
 wasmcloud-provider-http-client = { workspace = true, optional = true }
 wasmcloud-provider-http-server = { workspace = true, optional = true }
@@ -374,6 +381,7 @@ wasmcloud-core = { version = "^0.20.0", path = "./crates/core", default-features
 wasmcloud-host = { version = "^0.26.0", path = "./crates/host", default-features = false }
 wasmcloud-provider-blobstore-azure = { version = "*", path = "./crates/provider-blobstore-azure", default-features = false }
 wasmcloud-provider-blobstore-fs = { version = "*", path = "./crates/provider-blobstore-fs", default-features = false }
+wasmcloud-provider-blobstore-nats = { version = "*", path = "./crates/provider-blobstore-nats", default-features = false }
 wasmcloud-provider-blobstore-s3 = { version = "*", path = "./crates/provider-blobstore-s3", default-features = false }
 wasmcloud-provider-http-client = { version = "*", path = "./crates/provider-http-client", default-features = false }
 wasmcloud-provider-http-server = { version = "^0.28.0", path = "./crates/provider-http-server", default-features = false }

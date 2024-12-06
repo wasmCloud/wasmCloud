@@ -1,10 +1,4 @@
-package wasi:io@0.2.1;
-
-interface error {
-  resource error {
-    to-debug-string: func() -> string;
-  }
-}
+package wasi:io@0.2.2;
 
 interface poll {
   resource pollable {
@@ -13,6 +7,12 @@ interface poll {
   }
 
   poll: func(in: list<borrow<pollable>>) -> list<u32>;
+}
+
+interface error {
+  resource error {
+    to-debug-string: func() -> string;
+  }
 }
 
 interface streams {
