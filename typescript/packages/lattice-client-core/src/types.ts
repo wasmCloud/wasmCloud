@@ -21,7 +21,7 @@ export type ControlResponse<ResponseType = never> = [ResponseType] extends [neve
       response: ResponseType;
     };
 
-export type WasmCloudProviderState = "Pending" | "Failed" | "Running";
+export type WasmCloudProviderState = 'Pending' | 'Failed' | 'Running';
 export type WasmCloudComponent = {
   id: string;
   name?: string;
@@ -30,7 +30,7 @@ export type WasmCloudComponent = {
   annotations: Record<string, string>;
   max_instances: number;
   revision: number;
-  state?: WasmCloudProviderState
+  state?: WasmCloudProviderState;
 };
 
 export type WasmCloudProvider = {
@@ -134,21 +134,29 @@ export type WasmCloudHostRef = {
   version: string;
 };
 
-type StatusType = {
+type StatusInfo = {
   type: DeploymentStatus;
   message?: string;
 };
 
 export type ApplicationStatus = {
+  status: StatusInfo;
+  scalers: Array<{
+    status: StatusInfo;
+    id: string;
+    kind: string;
+    name: string;
+  }>;
+  /** @deprecated get version data from parent ApplicationSummary */
   version: string;
-  status: StatusType;
+  /** @deprecated get data from scalers */
   components: Array<{
     name: string;
     type: string;
-    status: StatusType;
+    status: StatusInfo;
     traits: Array<{
       type: string;
-      status: StatusType;
+      status: StatusInfo;
     }>;
   }>;
 };
@@ -249,9 +257,19 @@ export type ApplicationSummary = {
   version: string;
   description: string;
   deployed_version: string;
-  status: DeploymentStatus;
-  status_message: string;
+  detailed_status: ApplicationStatus;
+
+  /** @deprecated Use detailed_status instead */
+  status?: DeploymentStatus;
+  /** @deprecated Use detailed_status instead */
+  status_message?: string;
 };
 
 /** Application deployment status */
-export type DeploymentStatus = 'undeployed' | 'reconciling' | 'deployed' | 'failed' | 'unknown';
+export type DeploymentStatus =
+  | 'undeployed'
+  | 'reconciling'
+  | 'deployed'
+  | 'failed'
+  | 'waiting'
+  | 'unknown';
