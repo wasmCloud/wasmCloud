@@ -1,0 +1,8 @@
+package wasmcloud:config@0.1.0;
+
+@since(version = 0.1.0)
+world imports {
+    /// The interface for wasi:config/store
+    @since(version = 0.1.0)
+    import store;
+}
