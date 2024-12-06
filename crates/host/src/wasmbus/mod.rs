@@ -2911,10 +2911,8 @@ impl Host {
         );
 
         let Some(mut component_spec) = self.get_component_spec(source_id).await? else {
-            // If the component spec doesn't exist, the link is deleted
-            return Ok(CtlResponse::<()>::success(
-                "successfully deleted link (spec doesn't exist)".into(),
-            ));
+            // If the component spec doesn't exist, then the link does not exist ;-)
+            return Ok(CtlResponse::error("link does not exist"));
         };
 
         // If we can find an existing link with the same source, namespace, package, and name, remove it

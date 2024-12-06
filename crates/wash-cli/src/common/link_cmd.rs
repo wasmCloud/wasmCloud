@@ -87,7 +87,16 @@ pub async fn handle_command(
 
             let failure = delete_link(wco, &source_id, &link_name, &namespace, &package)
                 .await
-                .map_or_else(|e| Some(format!("{e}")), |_| None);
+                .map_or_else(
+                    |e| Some(format!("{e}")),
+                    |response| {
+                        if response.succeeded() {
+                            None
+                        } else {
+                            Some(response.message().to_string())
+                        }
+                    },
+                );
 
             link_del_output(&source_id, &link_name, &namespace, &package, failure)?
         }
