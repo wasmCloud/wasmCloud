@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 use wasmcloud_provider_sdk::{core::secrets::SecretValue, LinkConfig};
@@ -8,11 +8,20 @@ use wasmcloud_provider_sdk::{core::secrets::SecretValue, LinkConfig};
 const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
 
 const CONFIG_NATS_SUBSCRIPTION: &str = "subscriptions";
+const CONFIG_NATS_CONSUMERS: &str = "consumers";
 const CONFIG_NATS_URI: &str = "cluster_uris";
 const CONFIG_NATS_CLIENT_JWT: &str = "client_jwt";
 const CONFIG_NATS_CLIENT_SEED: &str = "client_seed";
 const CONFIG_NATS_TLS_CA: &str = "tls_ca";
 const CONFIG_NATS_CUSTOM_INBOX_PREFIX: &str = "custom_inbox_prefix";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConsumerConfig {
+    pub stream: Box<str>,
+    pub consumer: Box<str>,
+    pub max_messages: Option<usize>,
+    pub max_bytes: Option<usize>,
+}
 
 /// Configuration for connecting a nats client.
 /// More options are available if you use the json than variables in the values string map.
@@ -20,27 +29,31 @@ const CONFIG_NATS_CUSTOM_INBOX_PREFIX: &str = "custom_inbox_prefix";
 pub struct ConnectionConfig {
     /// List of topics to subscribe to
     #[serde(default)]
-    pub subscriptions: Vec<String>,
+    pub subscriptions: Box<[async_nats::Subject]>,
+
+    /// List of JetStream consumers
+    #[serde(default)]
+    pub consumers: Box<[ConsumerConfig]>,
 
     /// Cluster(s) to make a subscription on and connect to
     #[serde(default)]
-    pub cluster_uris: Vec<String>,
+    pub cluster_uris: Box<[Box<str>]>,
 
     /// Auth JWT to use (if necessary)
     #[serde(default)]
-    pub auth_jwt: Option<String>,
+    pub auth_jwt: Option<Box<str>>,
 
     /// Auth seed to use (if necessary)
     #[serde(default)]
-    pub auth_seed: Option<String>,
+    pub auth_seed: Option<Box<str>>,
 
     /// TLS Certificate Authority, encoded as a string
     #[serde(default)]
-    pub tls_ca: Option<String>,
+    pub tls_ca: Option<Box<str>>,
 
     /// TLS Certifiate Authority, as a path on disk
     #[serde(default)]
-    pub tls_ca_file: Option<String>,
+    pub tls_ca_file: Option<Box<str>>,
 
     /// Ping interval in seconds
     #[serde(default)]
@@ -48,7 +61,7 @@ pub struct ConnectionConfig {
 
     /// Inbox prefix to use (by default
     #[serde(default)]
-    pub custom_inbox_prefix: Option<String>,
+    pub custom_inbox_prefix: Option<Box<str>>,
 }
 
 impl ConnectionConfig {
@@ -58,6 +71,9 @@ impl ConnectionConfig {
         let mut out = self.clone();
         if !extra.subscriptions.is_empty() {
             out.subscriptions.clone_from(&extra.subscriptions);
+        }
+        if !extra.consumers.is_empty() {
+            out.consumers.clone_from(&extra.consumers);
         }
         // If the default configuration has a URL in it, and then the link definition
         // also provides a URL, the assumption is to replace/override rather than combine
@@ -91,8 +107,9 @@ impl ConnectionConfig {
 impl Default for ConnectionConfig {
     fn default() -> ConnectionConfig {
         ConnectionConfig {
-            subscriptions: vec![],
-            cluster_uris: vec![DEFAULT_NATS_URI.into()],
+            subscriptions: Box::default(),
+            consumers: Box::default(),
+            cluster_uris: Box::from([DEFAULT_NATS_URI.into()]),
             auth_jwt: None,
             auth_seed: None,
             tls_ca: None,
@@ -144,24 +161,25 @@ impl ConnectionConfig {
         let mut config = ConnectionConfig::default();
 
         if let Some(sub) = values.get(CONFIG_NATS_SUBSCRIPTION) {
-            config
-                .subscriptions
-                .extend(sub.split(',').map(std::string::ToString::to_string));
+            config.subscriptions = sub.split(',').map(async_nats::Subject::from).collect();
+        }
+        if let Some(cons) = values.get(CONFIG_NATS_CONSUMERS) {
+            config.consumers = serde_json::from_str(cons).context("failed to parse `consumers`")?;
         }
         if let Some(url) = values.get(CONFIG_NATS_URI) {
-            config.cluster_uris = url.split(',').map(String::from).collect();
+            config.cluster_uris = url.split(',').map(Box::from).collect();
         }
         if let Some(custom_inbox_prefix) = values.get(CONFIG_NATS_CUSTOM_INBOX_PREFIX) {
-            config.custom_inbox_prefix = Some(custom_inbox_prefix.clone());
+            config.custom_inbox_prefix = Some(custom_inbox_prefix.as_str().into());
         }
         if let Some(jwt) = values.get(CONFIG_NATS_CLIENT_JWT) {
-            config.auth_jwt = Some(jwt.clone());
+            config.auth_jwt = Some(jwt.as_str().into());
         }
         if let Some(seed) = values.get(CONFIG_NATS_CLIENT_SEED) {
-            config.auth_seed = Some(seed.clone());
+            config.auth_seed = Some(seed.as_str().into());
         }
         if let Some(tls_ca) = values.get(CONFIG_NATS_TLS_CA) {
-            config.tls_ca = Some(tls_ca.clone());
+            config.tls_ca = Some(tls_ca.as_str().into());
         }
         if config.auth_jwt.is_some() && config.auth_seed.is_none() {
             bail!("if you specify jwt, you must also specify a seed");

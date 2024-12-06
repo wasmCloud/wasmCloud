@@ -2,16 +2,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
+use async_nats::jetstream;
 use futures::StreamExt;
 use nkeys::{KeyPair, XKey};
 use tokio::fs;
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
-use tracing::{error, info_span, instrument, trace_span, warn, Instrument as _, Span};
+use tracing::{debug, error, instrument, trace_span, warn, Instrument as _, Span};
 use wasmcloud_core::InterfaceLinkDefinition;
-use wasmcloud_provider_messaging_nats::add_tls_ca;
 use wasmcloud_provider_messaging_nats::ConnectionConfig;
+use wasmcloud_provider_messaging_nats::{add_tls_ca, ConsumerConfig};
 use wasmcloud_provider_sdk::provider::{
     handle_provider_commands, receive_link_for_provider, ProviderCommandReceivers,
 };
@@ -52,7 +53,7 @@ impl Provider {
             (Some(jwt), Some(seed)) => {
                 let seed = KeyPair::from_seed(seed).context("failed to parse seed key pair")?;
                 let seed = Arc::new(seed);
-                async_nats::ConnectOptions::with_jwt(jwt.clone(), move |nonce| {
+                async_nats::ConnectOptions::with_jwt(jwt.to_string(), move |nonce| {
                     let seed = seed.clone();
                     async move { seed.sign(&nonce).map_err(async_nats::AuthError::new) }
                 })
@@ -60,9 +61,9 @@ impl Provider {
             (None, None) => async_nats::ConnectOptions::default(),
             _ => bail!("must provide both jwt and seed for jwt authentication"),
         };
-        if let Some(tls_ca) = &config.tls_ca {
+        if let Some(tls_ca) = config.tls_ca.as_deref() {
             opts = add_tls_ca(tls_ca, opts)?;
-        } else if let Some(tls_ca_file) = &config.tls_ca_file {
+        } else if let Some(tls_ca_file) = config.tls_ca_file.as_deref() {
             let ca = fs::read_to_string(tls_ca_file)
                 .await
                 .context("failed to read TLS CA file")?;
@@ -78,10 +79,71 @@ impl Provider {
         }
         let nats = opts
             .name("builtin NATS Messaging Provider")
-            .connect(url)
+            .connect(url.as_ref())
             .await
             .context("failed to connect to NATS")?;
         Ok((nats, config))
+    }
+}
+
+#[instrument(skip_all)]
+async fn handle_message(
+    components: Arc<RwLock<HashMap<String, Arc<Component>>>>,
+    lattice_id: Arc<str>,
+    host_id: Arc<str>,
+    target_id: Arc<str>,
+    msg: async_nats::Message,
+) {
+    use wrpc::exports::wasmcloud::messaging0_2_0::handler::Handler as _;
+
+    opentelemetry_nats::attach_span_context(&msg);
+    let component = {
+        let components = components.read().await;
+        let Some(component) = components.get(target_id.as_ref()) else {
+            warn!(?target_id, "linked component not found");
+            return;
+        };
+        Arc::clone(component)
+    };
+    let _permit = match component
+        .permits
+        .acquire()
+        .instrument(trace_span!("acquire_message_permit"))
+        .await
+    {
+        Ok(permit) => permit,
+        Err(err) => {
+            error!(?err, "failed to acquire execution permit");
+            return;
+        }
+    };
+    match component
+        .instantiate(component.handler.copy_for_new(), component.events.clone())
+        .handle_message(
+            InvocationContext {
+                span: Span::current(),
+                start_at: Instant::now(),
+                attributes: vec![
+                    KeyValue::new("component.ref", Arc::clone(&component.image_reference)),
+                    KeyValue::new("lattice", lattice_id),
+                    KeyValue::new("host", host_id),
+                ],
+            },
+            wrpc::wasmcloud::messaging0_2_0::types::BrokerMessage {
+                subject: msg.subject.into_string(),
+                body: msg.payload,
+                reply_to: msg.reply.map(async_nats::Subject::into_string),
+            },
+        )
+        .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            warn!(?err, "component failed to handle message")
+        }
+        Err(err) => {
+            warn!(?err, "failed to call component")
+        }
     }
 }
 
@@ -113,11 +175,69 @@ impl wasmcloud_provider_sdk::Provider for Provider {
             ..
         }: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
-        use wrpc::exports::wasmcloud::messaging0_2_0::handler::Handler as _;
-
         let (nats, config) = self.connect(config).await?;
         let mut tasks = JoinSet::new();
         let target_id: Arc<str> = Arc::from(target_id);
+        for ConsumerConfig {
+            stream,
+            consumer,
+            max_messages,
+            max_bytes,
+        } in config.consumers
+        {
+            let js = jetstream::new(nats.clone());
+            let stream = js
+                .get_stream(stream)
+                .await
+                .context("failed to get stream")?;
+            let consumer = stream
+                .get_consumer(&consumer)
+                .await
+                .map_err(|err| anyhow!(err).context("failed to get consumer"))?;
+            let sub = consumer.batch();
+            let sub = if let Some(max_messages) = max_messages {
+                sub.max_messages(max_messages)
+            } else {
+                sub
+            };
+            let sub = if let Some(max_bytes) = max_bytes {
+                sub.max_bytes(max_bytes)
+            } else {
+                sub
+            };
+            let mut sub = sub.messages().await.context("failed to subscribe")?;
+
+            let components = Arc::clone(&self.components);
+            let lattice_id = Arc::clone(&self.lattice_id);
+            let host_id = Arc::clone(&self.host_id);
+            let target_id = Arc::clone(&target_id);
+            tasks.spawn(async move {
+                while let Some(msg) = sub.next().await {
+                    let msg = match msg {
+                        Ok(msg) => msg,
+                        Err(err) => {
+                            error!(?err, "failed to receive message");
+                            continue;
+                        }
+                    };
+                    let (msg, ack) = msg.split();
+                    tokio::spawn(async move {
+                        if let Err(err) = ack.ack().await {
+                            error!(?err, "failed to ACK message");
+                        } else {
+                            debug!("successfully ACK'ed message")
+                        }
+                    });
+                    tokio::spawn(handle_message(
+                        Arc::clone(&components),
+                        Arc::clone(&lattice_id),
+                        Arc::clone(&host_id),
+                        Arc::clone(&target_id),
+                        msg,
+                    ));
+                }
+            });
+        }
         for sub in config.subscriptions {
             if sub.is_empty() {
                 continue;
@@ -126,79 +246,22 @@ impl wasmcloud_provider_sdk::Provider for Provider {
                 nats.queue_subscribe(async_nats::Subject::from(subject), queue.into())
                     .await
             } else {
-                nats.subscribe(async_nats::Subject::from(sub)).await
+                nats.subscribe(sub).await
             }
             .context("failed to subscribe")?;
-            let target_id = Arc::clone(&target_id);
+            let components = Arc::clone(&self.components);
             let lattice_id = Arc::clone(&self.lattice_id);
             let host_id = Arc::clone(&self.host_id);
-            let components = Arc::clone(&self.components);
+            let target_id = Arc::clone(&target_id);
             tasks.spawn(async move {
                 while let Some(msg) = sub.next().await {
-                    let target_id = Arc::clone(&target_id);
-                    let lattice_id = Arc::clone(&lattice_id);
-                    let host_id = Arc::clone(&host_id);
-                    let components = Arc::clone(&components);
-                    tokio::spawn(
-                        async move {
-                            opentelemetry_nats::attach_span_context(&msg);
-                            let component = {
-                                let components = components.read().await;
-                                let Some(component) = components.get(target_id.as_ref()) else {
-                                    warn!(?target_id, "linked component not found");
-                                    return;
-                                };
-                                Arc::clone(component)
-                            };
-                            let _permit = match component
-                                .permits
-                                .acquire()
-                                .instrument(trace_span!("acquire_message_permit"))
-                                .await
-                            {
-                                Ok(permit) => permit,
-                                Err(err) => {
-                                    error!(?err, "failed to acquire execution permit");
-                                    return;
-                                }
-                            };
-                            match component
-                                .instantiate(
-                                    component.handler.copy_for_new(),
-                                    component.events.clone(),
-                                )
-                                .handle_message(
-                                    InvocationContext {
-                                        span: Span::current(),
-                                        start_at: Instant::now(),
-                                        attributes: vec![
-                                            KeyValue::new(
-                                                "component.ref",
-                                                Arc::clone(&component.image_reference),
-                                            ),
-                                            KeyValue::new("lattice", Arc::clone(&lattice_id)),
-                                            KeyValue::new("host", Arc::clone(&host_id)),
-                                        ],
-                                    },
-                                    wrpc::wasmcloud::messaging0_2_0::types::BrokerMessage {
-                                        subject: msg.subject.into_string(),
-                                        body: msg.payload,
-                                        reply_to: msg.reply.map(async_nats::Subject::into_string),
-                                    },
-                                )
-                                .await
-                            {
-                                Ok(Ok(())) => {}
-                                Ok(Err(err)) => {
-                                    warn!(?err, "component failed to handle message")
-                                }
-                                Err(err) => {
-                                    warn!(?err, "failed to call component")
-                                }
-                            }
-                        }
-                        .instrument(info_span!("handle_message")),
-                    );
+                    tokio::spawn(handle_message(
+                        Arc::clone(&components),
+                        Arc::clone(&lattice_id),
+                        Arc::clone(&host_id),
+                        Arc::clone(&target_id),
+                        msg,
+                    ));
                 }
             });
         }
