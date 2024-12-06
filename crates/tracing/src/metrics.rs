@@ -50,6 +50,7 @@ pub fn configure_metrics(
 /// Replaces the default `ExplicitBucketHistogram` aggregation for Histograms
 /// with `Base2ExponentialHistogram`. This makes it easier to capture latency
 /// at nanosecond accuracy.
+#[cfg(feature = "otel")]
 #[derive(Clone, Default, Debug)]
 struct ExponentialHistogramAggregationSelector {
     pub(crate) _private: (),
