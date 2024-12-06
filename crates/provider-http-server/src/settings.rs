@@ -354,7 +354,7 @@ impl<'de> Deserialize<'de> for CorsOrigin {
         D: Deserializer<'de>,
     {
         struct CorsOriginVisitor;
-        impl<'de> Visitor<'de> for CorsOriginVisitor {
+        impl Visitor<'_> for CorsOriginVisitor {
             type Value = CorsOrigin;
 
             fn expecting(&self, fmt: &mut fmt::Formatter) -> fmt::Result {

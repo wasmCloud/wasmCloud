@@ -1,9 +1,9 @@
+//! wasmCloud I/O functionality
+
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
 use futures::{Stream, StreamExt as _};
-
-/// wasmCloud I/O functionality
 
 /// Incoming value [`Stream`] wrapper, which buffers the chunks and flattens them
 pub struct BufferedIncomingStream<T> {
