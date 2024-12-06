@@ -19,8 +19,7 @@ spec:
       type: component
       properties:
         # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
-        # image: file://./build/http_blobstore_s.wasm
-        image: ghcr.io/wasmcloud/http-blobstore-rust:0.3.0
+        image: file://./build/http_blobstore_s.wasm
         id: http-blobstore
       traits:
         # Govern the spread/scheduling of the component
@@ -47,7 +46,7 @@ spec:
         # (and ensure that you've used `wash par crate` to create the par file below)
         #
         # image: file://../../../../crates/provider-http-server/provider-http-server.par.gz
-        image: ghcr.io/wasmcloud/http-server:0.27.0
+        image: ghcr.io/wasmcloud/http-server:0.25.0
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
@@ -63,16 +62,14 @@ spec:
         # the component to handle an incoming HTTP request.
         - type: link
           properties:
-            target:
-              name: http-blobstore
+            target: http-blobstore
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            source:
-              config:
-                - name: default-http
-                  properties:
-                    address: 0.0.0.0:8000
+            source_config:
+              - name: default-http
+                properties:
+                  address: 127.0.0.1:8000
 
     # Capability provider that exposes a blobstore with the filesystem
     - name: blobstore-nats
@@ -81,8 +78,7 @@ spec:
         # To use a locally compiled provider, uncomment the line below
         # (and ensure that you've used `wash par crate` to create the par file below)
         #
-        # image: file://../../../../src/bin/blobstore-nats-provider/build/blobstore-nats-provider.par.gz
-        image: ghcr.io/wasmcloud/blobstore-nats:0.1.0
+        image: file://../../../../src/bin/blobstore-nats-provider/build/blobstore-nats-provider.par.gz
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel

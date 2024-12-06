@@ -1,0 +1,11 @@
+name = "Blobstore NATS"
+language = "rust"
+type = "provider"
+version = "0.1.0"
+
+[rust]
+target_path = "../../../target"
+
+[provider]
+bin_name = "blobstore-nats-provider"
+vendor = "wasmCloud"

@@ -1,8 +1,9 @@
 package wasmcloud:hello;
 
 world hello {
-  import wasi:logging/logging@0.1.0-draft;
-  import wasi:blobstore/blobstore@0.2.0-draft;
+    // import wasi:logging/logging@0.1.0-draft;
+    import wasi:config/runtime@0.2.0-draft;
+    import wasi:blobstore/blobstore@0.2.0-draft;
 
-  export wasi:http/incoming-handler@0.2.1;
+    export wasi:http/incoming-handler@0.2.2;
 }
