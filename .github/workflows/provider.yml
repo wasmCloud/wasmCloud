@@ -138,6 +138,7 @@ jobs:
         provider:
           - bin-path: src/bin/blobstore-azure-provider
           - bin-path: src/bin/blobstore-fs-provider
+          - bin-path: src/bin/blobstore-nats-provider
           - bin-path: src/bin/blobstore-s3-provider
           - bin-path: src/bin/http-client-provider
           - bin-path: src/bin/http-server-provider
