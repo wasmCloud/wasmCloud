@@ -1,3 +1,5 @@
+import {homedir} from 'node:os';
+import path from 'node:path';
 import {execa, ResultPromise} from 'execa';
 import getPort from 'get-port';
 import {v1 as uuidv1} from 'uuid';
@@ -67,14 +69,14 @@ export class WasmCloudInstanceOptions {
   debug?: boolean;
 
   /** Build a default instance of `WasmCloudInstanceOptions` */
-  static default() {
+  static default(): WasmCloudInstanceOptions {
     return {
       // By default, most tests should use the *latest* version of the `wash ui` code in-tree,
       // which means that starting `wash-ui` is unnecessary (use playwright's devServer instead)
       startWashUI: false,
       multiLocal: true,
       washBinPath: process.env.TEST_WASH_BIN_PATH ?? DEFAULT_WASH_BIN_PATH,
-      debug: !!process.env.DEBUG ?? false,
+      debug: Boolean(process.env.DEBUG) ?? false,
     };
   }
 }
@@ -118,6 +120,16 @@ export class WasmCloudInstance {
   /** Internal processes of this instance */
   #processes: Map<WashProcessType, ProcessAndMeta>;
 
+  get logPaths() {
+    const logDirectory = path.join(homedir(), '.wash', 'downloads');
+
+    return {
+      wasmcloud: path.join(logDirectory, 'wasmcloud.log'),
+      nats: path.join(logDirectory, 'nats.log'),
+      wadm: path.join(logDirectory, 'wadm.log'),
+    };
+  }
+
   constructor(options?: WasmCloudInstanceOptions) {
     this.opts = options ?? WasmCloudInstanceOptions.default();
     this.#_uuid = uuidv1();
@@ -153,10 +165,6 @@ export class WasmCloudInstance {
     const port = existing ? existing.extra?.port : (this.opts.washUI?.port ?? DEFAULT_WASH_UI_PORT);
     return `http://localhost:${port}`;
   }
-
-  /// ////////////
-  // Protected //
-  /// ////////////
 
   protected getWashBinaryPath(): string {
     const washBinPath = this.opts.washBinPath ?? DEFAULT_WASH_BIN_PATH;
@@ -228,11 +236,11 @@ export class WasmCloudInstance {
       stderr: this.opts.debug ? process.stderr : 'pipe',
     });
     this.#processes.set(processType, {process: child, abort, stopped: false, extra});
-    const pam = this.#processes.get(processType);
-    if (!pam) {
+    const processAndMeta = this.#processes.get(processType);
+    if (!processAndMeta) {
       throw new Error('unexpectedly missing created process & metadata');
     }
-    return pam;
+    return processAndMeta;
   }
 
   /** Stop the running `wash` process */
@@ -243,7 +251,7 @@ export class WasmCloudInstance {
     // due to missing $HOME/.wash/downloads/wasmcloud.pid.
     //
     // In versions of wash up to 0.27.0, attempting to use a normal signal to stop the process
-    // will leave a ophaned host process. With fixes available in versions of wash > 0.27.0,
+    // will leave an orphaned host process. With fixes available in versions of wash > 0.27.0,
     // the extra `wash down` step is unnecessary (signal is properly handled with no orphaned host process)
     // so this step can be removed later (but probably should not be removed now).
     try {
