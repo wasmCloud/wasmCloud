@@ -15,6 +15,7 @@
     "lint:eslint": "eslint src tests --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "lint:eslint:fix": "yarn lint:eslint --fix",
     "test:e2e": "yarn test:playwright:headless",
+    "test:e2e:setup": "yarn playwright install --with-deps chromium",
     "test:playwright:headless": "playwright test",
     "test:playwright:ui": "playwright test --ui",
     "format": "yarn format:prettier",
