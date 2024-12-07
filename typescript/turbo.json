@@ -15,7 +15,11 @@
       "dependsOn": ["^format:fix"]
     },
     "test:e2e": {
+      "dependsOn": ["test:e2e:setup"],
       "outputs": ["playwright-report", "test-results"]
+    },
+    "test:e2e:setup": {
+      "dependsOn": ["^test:e2e:setup", "^build"]
     },
     "test:unit": {
       "outputs": []
