@@ -73,7 +73,7 @@ spec:
             source_config:
               - name: default-http
                 properties:
-                  address: 127.0.0.1:8000
+                  address: 0.0.0.0:8000
 
     # Capability provider that exposes a blobstore with the filesystem
     - name: blobstore-fs
