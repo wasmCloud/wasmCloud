@@ -27,8 +27,6 @@ jobs:
 
       - name: Setup
         uses: ./.github/actions/ts-setup
-        with:
-          working-directory: ./typescript
 
       - name: Run Tests
         run: yarn turbo lint format test:unit
@@ -39,10 +37,6 @@ jobs:
     env:
       # store browsers in the node_modules folder
       PLAYWRIGHT_BROWSERS_PATH: 0
-
-    defaults:
-      run:
-        working-directory: ./typescript/apps/washboard-ui
 
     strategy:
       matrix:
@@ -57,11 +51,6 @@ jobs:
 
       - name: Setup
         uses: ./.github/actions/ts-setup
-        with:
-          working-directory: ./typescript
-
-      - name: Install Playwright Browsers
-        run: npx playwright install --with-deps chromium
 
       - name: Install `wash` CLI
         uses: taiki-e/install-action@f635080d9c6d032e2de5576897c6878b7dd4c4a9
@@ -69,7 +58,7 @@ jobs:
           tool: wash-cli@${{ matrix.wash.version }}
 
       - name: Run Playwright Tests
-        run: npx playwright test
+        run: yarn test:e2e
 
       - name: Upload Test Results
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
