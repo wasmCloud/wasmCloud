@@ -28,37 +28,40 @@ where
         let call_handle_message = info_span!("call_handle_message");
         store.data_mut().parent_context = Some(call_handle_message.context());
 
-        let res = if let Ok(pre) = v0_3::bindings::MessagingHandlerPre::new(self.pre.clone()) {
-            let bindings = pre.instantiate_async(&mut store).await?;
-            let msg = store
-                .data_mut()
-                .table
-                .push(v0_3::Message::Wrpc(msg))
-                .context("failed to push message to table")?;
-            bindings
-                .wasmcloud_messaging0_3_0_incoming_handler()
-                .call_handle(&mut store, msg)
-                .instrument(call_handle_message)
-                .await
-                .context("failed to call `wasmcloud:messaging/incoming-handler@0.3.0#handle`")
-                .map(|err| err.map_err(|err| err.to_string()))
-        } else {
-            let pre = v0_2::bindings::MessagingHandlerOhTwoPre::new(self.pre.clone())
-                .context("failed to pre-instantiate `wasmcloud:messaging/handler`")?;
-            let bindings = pre.instantiate_async(&mut store).await?;
-            bindings
-                .wasmcloud_messaging0_2_0_handler()
-                .call_handle_message(
-                    &mut store,
-                    &types::BrokerMessage {
-                        subject: msg.subject,
-                        body: msg.body.into(),
-                        reply_to: msg.reply_to,
-                    },
-                )
-                .instrument(call_handle_message)
-                .await
-                .context("failed to call `wasmcloud:messaging/handler@0.2.0#handle-message`")
+        let res = match v0_3::bindings::MessagingHandlerPre::new(self.pre.clone()) {
+            Ok(pre) if self.experimental_features.wasmcloud_messaging_v3 => {
+                let bindings = pre.instantiate_async(&mut store).await?;
+                let msg = store
+                    .data_mut()
+                    .table
+                    .push(v0_3::Message::Wrpc(msg))
+                    .context("failed to push message to table")?;
+                bindings
+                    .wasmcloud_messaging0_3_0_incoming_handler()
+                    .call_handle(&mut store, msg)
+                    .instrument(call_handle_message)
+                    .await
+                    .context("failed to call `wasmcloud:messaging/incoming-handler@0.3.0#handle`")
+                    .map(|err| err.map_err(|err| err.to_string()))
+            }
+            _ => {
+                let pre = v0_2::bindings::MessagingHandlerOhTwoPre::new(self.pre.clone())
+                    .context("failed to pre-instantiate `wasmcloud:messaging/handler`")?;
+                let bindings = pre.instantiate_async(&mut store).await?;
+                bindings
+                    .wasmcloud_messaging0_2_0_handler()
+                    .call_handle_message(
+                        &mut store,
+                        &types::BrokerMessage {
+                            subject: msg.subject,
+                            body: msg.body.into(),
+                            reply_to: msg.reply_to,
+                        },
+                    )
+                    .instrument(call_handle_message)
+                    .await
+                    .context("failed to call `wasmcloud:messaging/handler@0.2.0#handle-message`")
+            }
         };
         let success = res.is_ok();
         if let Err(err) =
