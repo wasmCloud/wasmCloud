@@ -66,6 +66,15 @@ impl TraceContextInjector {
         header_map
     }
 
+    /// Creates a new injector with the context extracted from the given extractor
+    pub fn new_with_extractor(extractor: &dyn Extractor) -> Self {
+        let mut header_map = Self::default();
+        let ctx_propagator = TraceContextPropagator::new();
+        let context = ctx_propagator.extract(extractor);
+        ctx_propagator.inject_context(&context, &mut header_map);
+        header_map
+    }
+
     /// Convenience constructor that returns a new injector with the current span context already
     /// injected into a default [`TraceContext`]
     #[must_use]
@@ -86,6 +95,7 @@ impl TraceContextInjector {
         let ctx_propagator = TraceContextPropagator::new();
         ctx_propagator.inject_context(&span.context(), self);
     }
+
 }
 
 impl Injector for TraceContextInjector {
