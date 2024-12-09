@@ -1,8 +1,9 @@
-use common::load_fixture;
+use anyhow::Result;
 use tokio::fs;
 use wit_component::DecodedWasm;
 
 mod common;
+use common::load_fixture;
 
 #[tokio::test]
 #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
@@ -90,4 +91,76 @@ async fn test_wash_wit_wkg_override() {
         .await
         .expect("Failed to fetch dependencies");
     assert!(fetch_status.success(), "Failed to fetch dependencies");
+}
+
+/// Succeed on various "extended" configuration pull overrides
+#[tokio::test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+async fn test_wash_wit_extended() -> Result<()> {
+    let test_setup = load_fixture("integrated-wkg-extended").await.unwrap();
+
+    // Run `wit fetch` (an alias for wit deps)
+    let fetch_status = test_setup
+        .base_command()
+        .args(["wit", "fetch"])
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .await
+        .expect("Failed to fetch dependencies");
+    assert!(fetch_status.success(), "Failed to fetch dependencies");
+
+    // Ensure the expected directories are present
+    let wit_output_dir = test_setup.project_dir.join("wit");
+    assert!(tokio::fs::metadata(&wit_output_dir)
+        .await
+        .is_ok_and(|m| m.is_dir()));
+    let deps_dir = wit_output_dir.join("deps");
+    let wasmcloud_bus_dir = deps_dir.join("wasmcloud-bus-1.0.0");
+    let test_components_dir = deps_dir.join("test-components-testing-0.1.0");
+    assert!(tokio::fs::metadata(&wasmcloud_bus_dir)
+        .await
+        .is_ok_and(|m| m.is_dir()));
+    assert!(tokio::fs::metadata(&test_components_dir)
+        .await
+        .is_ok_and(|m| m.is_dir()));
+    assert!(tokio::fs::metadata(&wasmcloud_bus_dir)
+        .await
+        .is_ok_and(|m| m.is_dir()));
+    assert!(tokio::fs::metadata(&wasmcloud_bus_dir)
+        .await
+        .is_ok_and(|m| m.is_dir()));
+    let wasmcloud_bus_wit = wasmcloud_bus_dir.join("package.wit");
+    let test_components_wit = test_components_dir.join("package.wit");
+    assert!(tokio::fs::metadata(&wasmcloud_bus_wit)
+        .await
+        .is_ok_and(|m| m.is_file()));
+    assert!(tokio::fs::metadata(&test_components_wit)
+        .await
+        .is_ok_and(|m| m.is_file()));
+
+    Ok(())
+}
+
+/// Fail on invalid pull source
+#[tokio::test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+async fn test_wash_wit_extended_bad_source() -> Result<()> {
+    let test_setup = load_fixture("integrated-wkg-extended").await.unwrap();
+
+    let output = test_setup
+        .base_command()
+        .args([
+            "wit",
+            "fetch",
+            "--config-path",
+            "bad-pull-source.wasmcloud.toml",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .expect("Failed to fetch dependencies");
+    assert!(!output.status.success(), "Failed to fetch dependencies");
+    Ok(())
 }
