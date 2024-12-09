@@ -34,8 +34,6 @@ use anyhow::{anyhow, bail, Context as _};
 use axum::extract;
 use bytes::Bytes;
 use futures::Stream;
-use http::HeaderMap;
-use opentelemetry_http::HeaderExtractor;
 use pin_project_lite::pin_project;
 use tokio::task::JoinHandle;
 use tokio::{spawn, time};
@@ -151,7 +149,7 @@ pub(crate) async fn invoke_component(
     let mut cx = async_nats::HeaderMap::new();
     for (k, v) in
         wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector::new_with_extractor(
-            &HeaderExtractor(req.headers()),
+            &wasmcloud_provider_sdk::wasmcloud_tracing::http::HeaderExtractor(req.headers()),
         )
         .iter()
     {
