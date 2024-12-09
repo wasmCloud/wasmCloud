@@ -13,6 +13,9 @@ pub mod component;
 /// Capability bindings
 pub mod capability;
 
+/// Feature flags to enable experimental functionality in the runtime
+pub mod experimental;
+
 /// Shared wasmCloud runtime engine
 pub mod runtime;
 
