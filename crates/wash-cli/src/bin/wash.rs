@@ -9,7 +9,6 @@ use console::style;
 use crossterm::style::Stylize;
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
-use wash_cli::wit::WitCommand;
 use wash_lib::cli::capture::{CaptureCommand, CaptureSubcommand};
 use wash_lib::cli::claims::ClaimsCliCommand;
 use wash_lib::cli::get::GetCommand;
@@ -32,6 +31,7 @@ use wash_cli::call::{self, CallCli};
 use wash_cli::cmd::config::{self, ConfigCliCommand};
 use wash_cli::cmd::dev::{self, DevCommand};
 use wash_cli::cmd::up::{self, UpCommand};
+use wash_cli::cmd::wit::{self, WitCommand};
 use wash_cli::common;
 use wash_cli::completions::{self, CompletionOpts};
 use wash_cli::config::{NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_HOST_VERSION};
@@ -577,7 +577,7 @@ async fn main() {
         }
         CliCommand::Up(up_cli) => up::handle_command(up_cli, output_kind).await,
         CliCommand::Ui(ui_cli) => ui::handle_command(ui_cli, output_kind).await,
-        CliCommand::Wit(wit_cli) => wit_cli.run().await,
+        CliCommand::Wit(wit_cli) => wit::handle_command(wit_cli).await,
     };
 
     // Use buffered writes to stdout preventing a broken pipe error in case this program has been
