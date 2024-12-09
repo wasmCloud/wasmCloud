@@ -172,10 +172,10 @@ pub struct RegistryPullConfig {
 /// Information identifying a registry that can be pulled from
 #[derive(Debug, Default, PartialEq, Eq, Clone, Deserialize)]
 pub struct RegistryPullSourceOverride {
-    /// Interface specification (possibly partial) for which this source applies
+    /// Target specification for which this source applies (usually a namespace and/or package)
     ///
-    /// ex. `wasi`, `wasi:keyvalue`, `wasi:keyvalue@0.2.0`, `wasi:http/incoming-handler@0.2.0`
-    pub interface: String,
+    /// ex. `wasi`, `wasi:keyvalue`, `wasi:keyvalue@0.2.0`
+    pub target: String,
 
     /// The source for the configuration
     pub source: RegistryPullSource,
