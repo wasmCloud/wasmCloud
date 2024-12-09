@@ -35,9 +35,6 @@
         }
     ],
     "prHourlyLimit": 10,
-    "schedule": [
-        "every weekend"
-    ],
     "prConcurrentLimit": 1,
     "branchConcurrentLimit": 1,
     "packageRules": [

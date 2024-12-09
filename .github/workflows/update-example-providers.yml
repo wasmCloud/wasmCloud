@@ -1,0 +1,21 @@
+name: update-example-providers
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  renovate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+      - name: Self-hosted Renovate
+        uses: renovatebot/github-action@v41.0.5
+        with:
+          configurationFile: .github/renovate-config.json
+          token: ${{ secrets.RENOVATE_TOKEN }}
