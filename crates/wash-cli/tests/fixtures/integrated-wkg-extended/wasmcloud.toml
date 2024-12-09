@@ -16,3 +16,11 @@ source = "file://extra-wit/pingpong.wit"
 [[registry.pull.sources]]
 interface = "wasi:config"
 source = "https://github.com/WebAssembly/wasi-config/archive/v0.2.0-draft.tar.gz"
+
+[[registry.pull.sources]]
+interface = "wasi:blobstore"
+source = "git+https://github.com/WebAssembly/wasi-blobstore.git"
+
+[[registry.pull.sources]]
+interface = "wasi:messaging"
+source = "git+ssh://github.com/WebAssembly/wasi-messaging.git"
