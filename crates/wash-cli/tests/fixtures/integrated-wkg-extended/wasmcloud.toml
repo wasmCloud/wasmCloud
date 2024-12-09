@@ -6,21 +6,17 @@ type = "component"
 wasm_target = "wasm32-wasip2"
 
 [[registry.pull.sources]]
-interface = "wasmcloud:bus"
+target = "wasmcloud:bus"
 source = "oci://ghcr.io/wasmcloud/interfaces"
 
 [[registry.pull.sources]]
-interface = "test-components:testing"
+target = "test-components:testing"
 source = "file://extra-wit/pingpong.wit"
 
 [[registry.pull.sources]]
-interface = "wasi:config"
+target = "wasi:config"
 source = "https://github.com/WebAssembly/wasi-config/archive/v0.2.0-draft.tar.gz"
 
 [[registry.pull.sources]]
-interface = "wasi:blobstore"
+target = "wasi:blobstore"
 source = "git+https://github.com/WebAssembly/wasi-blobstore.git"
-
-[[registry.pull.sources]]
-interface = "wasi:messaging"
-source = "git+ssh://github.com/WebAssembly/wasi-messaging.git"

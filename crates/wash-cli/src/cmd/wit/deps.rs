@@ -119,8 +119,8 @@ async fn resolve_extended_pull_configs(
     wkg_config_overrides: &mut HashMap<String, Override>,
     wkg_client_config: &mut wasm_pkg_client::Config,
 ) -> Result<()> {
-    for RegistryPullSourceOverride { interface, source } in pull_cfg.sources.iter() {
-        let (ns, pkgs, _, _, maybe_version) = parse_wit_package_name(interface)?;
+    for RegistryPullSourceOverride { target, source } in pull_cfg.sources.iter() {
+        let (ns, pkgs, _, _, maybe_version) = parse_wit_package_name(target)?;
         let version_suffix = maybe_version.map(|v| format!("@{v}")).unwrap_or_default();
 
         match source {
