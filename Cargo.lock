@@ -8069,6 +8069,7 @@ dependencies = [
  "tracing-subscriber",
  "wadm-client",
  "wadm-types",
+ "walkdir",
  "warp",
  "wash-lib",
  "wasm-pkg-client",

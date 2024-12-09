@@ -93,10 +93,10 @@ async fn test_wash_wit_wkg_override() {
     assert!(fetch_status.success(), "Failed to fetch dependencies");
 }
 
-/// Succeed on various "extended" configuration pull overrides
+/// Succeed on various "extended" configuration pull overrides (valid sources)
 #[tokio::test]
 #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
-async fn test_wash_wit_extended() -> Result<()> {
+async fn test_wash_wit_extended_valid_sources() -> Result<()> {
     let test_setup = load_fixture("integrated-wkg-extended").await.unwrap();
 
     // Run `wit fetch` (an alias for wit deps)
@@ -145,7 +145,7 @@ async fn test_wash_wit_extended() -> Result<()> {
 /// Fail on invalid pull source
 #[tokio::test]
 #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
-async fn test_wash_wit_extended_bad_source() -> Result<()> {
+async fn test_wash_wit_extended_invalid_source() -> Result<()> {
     let test_setup = load_fixture("integrated-wkg-extended").await.unwrap();
 
     let output = test_setup
