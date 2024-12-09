@@ -8,6 +8,9 @@ world component {
   import wasmcloud:secrets/store@0.1.0-draft;
   import wasmcloud:secrets/reveal@0.1.0-draft;
 
-  // Used we can test OCI pulling for wasmcloud bus import
+  // Test OCI pulling
   import wasmcloud:bus/lattice@1.0.0;
+
+  // Test HTTP pulling
+  import wasi:config/store@0.2.0-draft;
 }
