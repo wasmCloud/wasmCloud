@@ -1,5 +1,7 @@
-use opentelemetry::propagation::{Extractor, Injector};
-
+use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use tracing::span::Span;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 /// Helper for injecting headers into HTTP Requests. This is used for OpenTelemetry context
 /// propagation over HTTP.
@@ -15,6 +17,14 @@ impl Injector for HeaderInjector<'_> {
                 self.0.insert(name, val);
             }
         }
+    }
+}
+
+impl HeaderInjector<'_> {
+    /// Injects the context from the current span into the headers
+    pub fn inject_context(&mut self) {
+        let ctx_propagator = TraceContextPropagator::new();
+        ctx_propagator.inject_context(&Span::current().context(), self);
     }
 }
 
