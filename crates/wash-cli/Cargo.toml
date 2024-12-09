@@ -74,6 +74,7 @@ tracing-subscriber = { workspace = true, features = [
 ] }
 wadm-client = { workspace = true }
 wadm-types = { workspace = true }
+walkdir = { workspace = true }
 warp = { workspace = true }
 wash-lib = { workspace = true, features = [
     "cli",

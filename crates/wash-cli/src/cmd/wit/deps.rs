@@ -1,12 +1,17 @@
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context};
+use anyhow::{bail, Context, Result};
+use async_compression::tokio::bufread::GzipDecoder;
 use clap::Args;
+use futures::TryStreamExt as _;
+use reqwest::Url;
+use walkdir::WalkDir;
 use wash_lib::build::{load_lock_file, monkey_patch_fetch_logging};
 use wash_lib::cli::{CommandOutput, CommonPackageArgs};
 use wash_lib::parser::{
-    load_config, CommonConfig, ProjectConfig, RegistryConfig, RegistryPullSource,
-    RegistryPullSourceOverride,
+    load_config, CommonConfig, ProjectConfig, RegistryConfig, RegistryPullConfig,
+    RegistryPullSource, RegistryPullSourceOverride,
 };
 use wasm_pkg_client::PackageRef;
 use wasm_pkg_core::config::Override;
@@ -67,6 +72,7 @@ pub async fn invoke(
     let mut wkg_client_config = common.load_config().await?;
 
     // If a project configuration was provided, apply any pull-related overrides
+    // in the new "extended" configuration format
     if let Some(ProjectConfig {
         common:
             CommonConfig {
@@ -81,85 +87,13 @@ pub async fn invoke(
         ..
     }) = project_config
     {
-        for RegistryPullSourceOverride { interface, source } in pull_cfg.sources {
-            let (ns, pkgs, _, _, maybe_version) = parse_wit_package_name(&interface)?;
-            let version_suffix = maybe_version.map(|v| format!("@{v}")).unwrap_or_default();
-
-            match source {
-                // Local files can be used by adding them to the config
-                RegistryPullSource::LocalPath(_) => {
-                    let path = source.resolve_file_path(&wasmcloud_toml_dir).await?;
-                    if !tokio::fs::try_exists(&path).await.with_context(|| {
-                        format!(
-                            "failed to check for registry pull source local path [{}]",
-                            path.display()
-                        )
-                    })? {
-                        bail!(
-                            "registry pull source path [{}] does not exist",
-                            path.display()
-                        );
-                    }
-
-                    match (ns, pkgs.as_slice()) {
-                        // namespace-level override
-                        (ns, []) => {
-                            wkg_config_overrides.insert(
-                                ns,
-                                Override {
-                                    path: Some(path),
-                                    version: None,
-                                },
-                            );
-                        }
-                        // package-level override
-                        (ns, packages) => {
-                            for pkg in packages {
-                                wkg_config_overrides.insert(
-                                    format!("{ns}:{pkg}"),
-                                    Override {
-                                        path: Some(path.clone()),
-                                        version: None,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                }
-                RegistryPullSource::Builtin => bail!("no builtins are supported"),
-                RegistryPullSource::RemoteHttp(_) => {
-                    bail!("remote HTTP WIT files/archives are not yet supported")
-                }
-                RegistryPullSource::RemoteGit(_) => {
-                    bail!("remote Git repositories are not yet supported")
-                }
-                // All other registry pull sources should be directly convertible to `RegistryMapping`s
-                rps @ (RegistryPullSource::RemoteOci(_)
-                | RegistryPullSource::RemoteHttpWellKnown(_)) => {
-                    match (ns, pkgs.as_slice()) {
-                        // namespace-level override
-                        (ns, []) => {
-                            wkg_client_config.set_namespace_registry(
-                                format!("{ns}{version_suffix}").try_into()?,
-                                rps.try_into()?,
-                            );
-                        }
-                        // package-level override
-                        (ns, packages) => {
-                            for pkg in packages {
-                                wkg_client_config.set_package_registry_override(
-                                    PackageRef::new(
-                                        ns.clone().try_into()?,
-                                        pkg.to_string().try_into()?,
-                                    ),
-                                    rps.clone().try_into()?,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        resolve_extended_pull_configs(
+            &pull_cfg,
+            &wasmcloud_toml_dir,
+            &mut wkg_config_overrides,
+            &mut wkg_client_config,
+        )
+        .await?;
     }
 
     // Re-add the modified local wkg config overrides
@@ -175,4 +109,159 @@ pub async fn invoke(
     lock_file.write().await?;
 
     Ok("Dependencies fetched".into())
+}
+
+/// Enable extended pull configurations for wkg config
+async fn resolve_extended_pull_configs(
+    pull_cfg: &RegistryPullConfig,
+    wasmcloud_toml_dir: impl AsRef<Path>,
+    wkg_config_overrides: &mut HashMap<String, Override>,
+    wkg_client_config: &mut wasm_pkg_client::Config,
+) -> Result<()> {
+    for RegistryPullSourceOverride { interface, source } in pull_cfg.sources.iter() {
+        let (ns, pkgs, _, _, maybe_version) = parse_wit_package_name(&interface)?;
+        let version_suffix = maybe_version.map(|v| format!("@{v}")).unwrap_or_default();
+
+        match source {
+            // Local files can be used by adding them to the config
+            RegistryPullSource::LocalPath(_) => {
+                let path = source
+                    .resolve_file_path(wasmcloud_toml_dir.as_ref())
+                    .await?;
+                if !tokio::fs::try_exists(&path).await.with_context(|| {
+                    format!(
+                        "failed to check for registry pull source local path [{}]",
+                        path.display()
+                    )
+                })? {
+                    bail!(
+                        "registry pull source path [{}] does not exist",
+                        path.display()
+                    );
+                }
+
+                match (ns, pkgs.as_slice()) {
+                    // namespace-level override
+                    (ns, []) => {
+                        wkg_config_overrides.insert(
+                            ns,
+                            Override {
+                                path: Some(path),
+                                version: None,
+                            },
+                        );
+                    }
+                    // package-level override
+                    (ns, packages) => {
+                        for pkg in packages {
+                            wkg_config_overrides.insert(
+                                format!("{ns}:{pkg}"),
+                                Override {
+                                    path: Some(path.clone()),
+                                    version: None,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            RegistryPullSource::Builtin => bail!("no builtins are supported"),
+            RegistryPullSource::RemoteHttp(s) => {
+                let url = Url::parse(&s)
+                    .with_context(|| format!("invalid registry pull source url [{s}]"))?;
+                let tempdir = tempfile::tempdir()
+                    .with_context(|| format!("failed to create temp dir for downloading [{url}]"))?
+                    .into_path();
+                let output_path = tempdir.join("unpacked");
+                let http_client = wash_lib::start::get_download_client()?;
+                let req = http_client.get(url.clone()).send().await.with_context(|| {
+                    format!("failed to retrieve WIT output from URL [{}]", &url)
+                })?;
+                let mut archive = tokio_tar::Archive::new(GzipDecoder::new(
+                    tokio_util::io::StreamReader::new(req.bytes_stream().map_err(|e| {
+                        std::io::Error::other(format!(
+                            "failed to receive byte stream while downloading from URL [{}]: {e}",
+                            &url
+                        ))
+                    })),
+                ));
+                archive.unpack(&output_path).await.with_context(|| {
+                    format!("failed to unpack archive downloaded from URL [{}]", &url)
+                })?;
+
+                // Find the first nested directory named 'wit', if present
+                let output_wit_dir = tokio::task::spawn_blocking(move || {
+                    if let Some(path) = WalkDir::new(&output_path)
+                        .follow_links(false)
+                        .into_iter()
+                        .filter_map(Result::ok)
+                        .find(|e| e.file_name() == "wit")
+                        .map(walkdir::DirEntry::into_path)
+                    {
+                        path
+                    } else {
+                        output_path
+                    }
+                })
+                .await
+                .context("failed to resolve folder with WIT in downloaded archive")?;
+
+                // Set the local override for the namespaces and/or packages
+                match (ns, pkgs.as_slice()) {
+                    // namespace-level override
+                    (ns, []) => {
+                        wkg_config_overrides.insert(
+                            ns,
+                            Override {
+                                path: Some(output_wit_dir),
+                                version: None,
+                            },
+                        );
+                    }
+                    // package-level override
+                    (ns, packages) => {
+                        for pkg in packages {
+                            wkg_config_overrides.insert(
+                                format!("{ns}:{pkg}"),
+                                Override {
+                                    path: Some(output_wit_dir.clone()),
+                                    version: None,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            RegistryPullSource::RemoteGit(_) => {
+                bail!("remote Git repositories are not yet supported")
+            }
+            // All other registry pull sources should be directly convertible to `RegistryMapping`s
+            rps @ (RegistryPullSource::RemoteOci(_)
+            | RegistryPullSource::RemoteHttpWellKnown(_)) => {
+                let registry = rps.clone().try_into()?;
+                match (ns, pkgs.as_slice()) {
+                    // namespace-level override
+                    (ns, []) => {
+                        wkg_client_config.set_namespace_registry(
+                            format!("{ns}{version_suffix}").try_into()?,
+                            registry,
+                        );
+                    }
+                    // package-level override
+                    (ns, packages) => {
+                        for pkg in packages {
+                            wkg_client_config.set_package_registry_override(
+                                PackageRef::new(
+                                    ns.clone().try_into()?,
+                                    pkg.to_string().try_into()?,
+                                ),
+                                registry.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
