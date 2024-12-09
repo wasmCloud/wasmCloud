@@ -1,14 +1,25 @@
 import {expect} from '@playwright/test';
 
-import {test} from '../common';
+import {test as base} from '../common';
+import {HomePage} from './fixtures/home-page.fixture';
 
-test('home page has the the proper title', async ({page}) => {
-  await page.goto('/');
+const test = base.extend<{homePage: HomePage}>({
+  homePage: async ({page, wasmCloud}, use) => {
+    const homePage = new HomePage(page);
+    await homePage.goto();
+    await homePage.expectConnectionStatus('Online');
+    await homePage.changeSettings([{label: 'Lattice ID', value: wasmCloud.uuid()}]);
+    await use(homePage);
+  },
+});
+
+test('has the the proper title', async ({
+  page,
+  homePage, // eslint-disable-line @typescript-eslint/no-unused-vars -- including the fixture is what enables it
+}) => {
   await expect(page).toHaveTitle('wasmCloud UI | Washboard 🏄');
 });
 
-test('page shows the application frame', async ({page}) => {
-  await page.goto('/');
-  const rootElement = await page.$('#root');
-  await expect(await rootElement.innerHTML()).toBeTruthy();
+test('shows host status', async ({homePage}) => {
+  await expect(await homePage.hosts()).toHaveCount(1);
 });

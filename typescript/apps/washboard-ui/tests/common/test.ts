@@ -19,10 +19,10 @@ export const test = base.extend<WasmCloudInstanceFixture>({
         ...wasmCloudOptions,
       });
       await test.step(`Start (${instance.uuid()})`, async () => {
+        await instance.start();
         if (wasmCloudOptions.startWashUI) {
-          await instance.start();
           const uiBaseURL = instance.uiBaseURL();
-          logger.debug(`UI available at @ ${uiBaseURL}]`);
+          logger.debug(`UI available at @ ${uiBaseURL}`);
           test.use({baseURL: uiBaseURL});
         }
       });
