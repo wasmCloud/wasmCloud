@@ -82,7 +82,7 @@
     "eslint-plugin-react-refresh": "^0.4.16",
     "eslint-plugin-tailwindcss": "^3.17.5",
     "eslint-plugin-unicorn": "^56.0.1",
-    "execa": "^9.5.1",
+    "execa": "^9.5.2",
     "get-port": "^7.1.0",
     "pino": "^9.5.0",
     "postcss": "^8.4.49",
@@ -94,7 +94,7 @@
     "uuid": "^11.0.3",
     "vite": "^6.0.3",
     "vite-plugin-svgr": "^4.3.0",
-    "vite-tsconfig-paths": "^5.1.3"
+    "vite-tsconfig-paths": "^5.1.4"
   },
   "resolutions": {
     "cross-spawn": "^7.0.5"
