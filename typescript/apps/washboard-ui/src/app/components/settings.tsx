@@ -1,5 +1,5 @@
 import {SettingsIcon} from 'lucide-react';
-import {PropsWithChildren, ReactElement} from 'react';
+import {PropsWithChildren, ReactElement, useState} from 'react';
 import {DarkModeToggle} from '@/app/components/dark-mode-toggle';
 import {LatticeSettings} from '@/app/components/lattice-settings';
 import {Button} from '@/components/button';
@@ -16,8 +16,10 @@ import {
 import {WadmManagedToggle} from './wadm-indicator/wadm-managed-toggle';
 
 function Settings(): ReactElement {
+  const [isSheetOpen, setIsSheetOpen] = useState(false);
+
   return (
-    <Sheet>
+    <Sheet open={isSheetOpen} onOpenChange={setIsSheetOpen}>
       <SheetTrigger asChild>
         <Button variant="ghost" size="icon" className="size-6 p-0.5">
           <SettingsIcon className="size-full" />
@@ -48,7 +50,7 @@ function Settings(): ReactElement {
           <SettingsSection>
             <SettingsSectionLabel>Lattice Configuration</SettingsSectionLabel>
             <SettingsSectionContent>
-              <LatticeSettings />
+              <LatticeSettings onSubmit={() => setIsSheetOpen(false)} />
             </SettingsSectionContent>
           </SettingsSection>
         </div>
