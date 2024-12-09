@@ -9,6 +9,7 @@ use reqwest::Url;
 use walkdir::WalkDir;
 use wash_lib::build::{load_lock_file, monkey_patch_fetch_logging};
 use wash_lib::cli::{CommandOutput, CommonPackageArgs};
+use wash_lib::common::clone_git_repo;
 use wash_lib::parser::{
     load_config, CommonConfig, ProjectConfig, RegistryConfig, RegistryPullConfig,
     RegistryPullSource, RegistryPullSourceOverride,
@@ -119,7 +120,7 @@ async fn resolve_extended_pull_configs(
     wkg_client_config: &mut wasm_pkg_client::Config,
 ) -> Result<()> {
     for RegistryPullSourceOverride { interface, source } in pull_cfg.sources.iter() {
-        let (ns, pkgs, _, _, maybe_version) = parse_wit_package_name(&interface)?;
+        let (ns, pkgs, _, _, maybe_version) = parse_wit_package_name(interface)?;
         let version_suffix = maybe_version.map(|v| format!("@{v}")).unwrap_or_default();
 
         match source {
@@ -167,7 +168,7 @@ async fn resolve_extended_pull_configs(
             }
             RegistryPullSource::Builtin => bail!("no builtins are supported"),
             RegistryPullSource::RemoteHttp(s) => {
-                let url = Url::parse(&s)
+                let url = Url::parse(s)
                     .with_context(|| format!("invalid registry pull source url [{s}]"))?;
                 let tempdir = tempfile::tempdir()
                     .with_context(|| format!("failed to create temp dir for downloading [{url}]"))?
@@ -190,21 +191,7 @@ async fn resolve_extended_pull_configs(
                 })?;
 
                 // Find the first nested directory named 'wit', if present
-                let output_wit_dir = tokio::task::spawn_blocking(move || {
-                    if let Some(path) = WalkDir::new(&output_path)
-                        .follow_links(false)
-                        .into_iter()
-                        .filter_map(Result::ok)
-                        .find(|e| e.file_name() == "wit")
-                        .map(walkdir::DirEntry::into_path)
-                    {
-                        path
-                    } else {
-                        output_path
-                    }
-                })
-                .await
-                .context("failed to resolve folder with WIT in downloaded archive")?;
+                let output_wit_dir = find_wit_folder_in_path(&output_path).await?;
 
                 // Set the local override for the namespaces and/or packages
                 match (ns, pkgs.as_slice()) {
@@ -232,8 +219,54 @@ async fn resolve_extended_pull_configs(
                     }
                 }
             }
-            RegistryPullSource::RemoteGit(_) => {
-                bail!("remote Git repositories are not yet supported")
+            RegistryPullSource::RemoteGit(s) => {
+                let url = Url::parse(s)
+                    .with_context(|| format!("invalid registry pull source url [{s}]"))?;
+                let query_pairs = url.query_pairs().collect::<HashMap<_, _>>();
+                let tempdir = tempfile::tempdir()
+                    .with_context(|| format!("failed to create temp dir for downloading [{url}]"))?
+                    .into_path();
+
+                clone_git_repo(
+                    None,
+                    &tempdir,
+                    s.into(),
+                    query_pairs
+                        .get("subfolder")
+                        .map(|s| String::from(s.clone())),
+                    query_pairs.get("branch").map(|s| String::from(s.clone())),
+                )
+                .await
+                .with_context(|| format!("failed to clone repo for pull source git repo [{s}]",))?;
+
+                // Find the first nested directory named 'wit', if present
+                let output_wit_dir = find_wit_folder_in_path(&tempdir).await?;
+
+                // Set the local override for the namespaces and/or packages
+                match (ns, pkgs.as_slice()) {
+                    // namespace-level override
+                    (ns, []) => {
+                        wkg_config_overrides.insert(
+                            ns,
+                            Override {
+                                path: Some(output_wit_dir),
+                                version: None,
+                            },
+                        );
+                    }
+                    // package-level override
+                    (ns, packages) => {
+                        for pkg in packages {
+                            wkg_config_overrides.insert(
+                                format!("{ns}:{pkg}"),
+                                Override {
+                                    path: Some(output_wit_dir.clone()),
+                                    version: None,
+                                },
+                            );
+                        }
+                    }
+                }
             }
             // All other registry pull sources should be directly convertible to `RegistryMapping`s
             rps @ (RegistryPullSource::RemoteOci(_)
@@ -264,4 +297,25 @@ async fn resolve_extended_pull_configs(
         }
     }
     Ok(())
+}
+
+/// Find a folder named 'wit' inside a given dir, if present, otherwise return the path itself
+async fn find_wit_folder_in_path(dir: impl AsRef<Path>) -> Result<PathBuf> {
+    let dir = dir.as_ref().to_path_buf();
+    // Find the first nested directory named 'wit', if present
+    tokio::task::spawn_blocking(move || {
+        if let Some(path) = WalkDir::new(&dir)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(Result::ok)
+            .find(|e| e.file_name() == "wit")
+            .map(walkdir::DirEntry::into_path)
+        {
+            path
+        } else {
+            dir
+        }
+    })
+    .await
+    .context("failed to resolve folder with WIT in downloaded archive")
 }
