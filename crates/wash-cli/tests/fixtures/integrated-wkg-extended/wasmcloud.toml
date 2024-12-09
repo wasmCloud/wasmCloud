@@ -12,3 +12,7 @@ source = "oci://ghcr.io/wasmcloud/interfaces"
 [[registry.pull.sources]]
 interface = "test-components:testing"
 source = "file://extra-wit/pingpong.wit"
+
+[[registry.pull.sources]]
+interface = "wasi:config"
+source = "https://github.com/WebAssembly/wasi-config/archive/v0.2.0-draft.tar.gz"
