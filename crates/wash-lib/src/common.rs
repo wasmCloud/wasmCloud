@@ -1,13 +1,19 @@
-use std::{
-    fmt::{Debug, Display},
-    str::FromStr,
-};
+use std::fmt::{Debug, Display};
+use std::path::Path;
+use std::process::Stdio;
+use std::str::FromStr;
+
+use anyhow::{anyhow, bail, Result};
+use tokio::process::Command;
 
 use anyhow::Context;
 use tracing::error;
 use wasmcloud_control_interface::HostInventory;
 
 use crate::id::{ModuleId, ServerId, ServiceId};
+
+/// Default path to the `git` command (assumes it exists on PATH)
+const DEFAULT_GIT_PATH: &str = "git";
 
 const CLAIMS_CALL_ALIAS: &str = "call_alias";
 pub(crate) const CLAIMS_NAME: &str = "name";
@@ -249,4 +255,99 @@ pub async fn get_all_inventories(
         .into_iter()
         .filter_map(Result::transpose)
         .collect::<anyhow::Result<Vec<HostInventory>>>()
+}
+
+/// Clone a git repository
+pub async fn clone_git_repo(
+    git_cmd: Option<String>,
+    tmp_dir: impl AsRef<Path>,
+    repo_url: String,
+    sub_folder: Option<String>,
+    repo_branch: Option<String>,
+) -> Result<()> {
+    let git_cmd = git_cmd.unwrap_or_else(|| DEFAULT_GIT_PATH.into());
+    let tmp_dir = tmp_dir.as_ref();
+    let cwd =
+        std::env::current_dir().map_err(|e| anyhow!("could not get current directory: {}", e))?;
+    std::env::set_current_dir(tmp_dir)
+        .map_err(|e| anyhow!("could not cd to tmp dir {}: {}", tmp_dir.display(), e))?;
+    // for convenience, allow omission of prefix 'https://' or 'https://github.com'
+    let repo_url = {
+        if repo_url.starts_with("http://")
+            || repo_url.starts_with("https://")
+            || repo_url.starts_with("git+ssh://")
+        {
+            repo_url
+        } else if repo_url.starts_with("git+https://")
+            || repo_url.starts_with("git+http://")
+            || repo_url.starts_with("git+ssh")
+        {
+            repo_url.replace("git+", "")
+        } else if repo_url.starts_with("github.com/") {
+            format!("https://{}", &repo_url)
+        } else {
+            format!("https://github.com/{}", repo_url.trim_start_matches('/'))
+        }
+    };
+
+    // Build args for git clone command
+    let mut args = vec!["clone", &repo_url, "--depth", "1", "."];
+    if let Some(ref branch) = repo_branch {
+        args.push("--no-checkout");
+        args.push("--branch");
+        args.push(branch);
+    }
+
+    let clone_cmd_out = Command::new(&git_cmd)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?
+        .wait_with_output()
+        .await?;
+    if !clone_cmd_out.status.success() {
+        bail!(
+            "git clone error: {}",
+            String::from_utf8_lossy(&clone_cmd_out.stderr)
+        );
+    }
+
+    if let Some(sub_folder) = sub_folder {
+        let checkout_cmd_out = Command::new(&git_cmd)
+            .args(["sparse-checkout", "set", &sub_folder])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?
+            .wait_with_output()
+            .await?;
+        if !checkout_cmd_out.status.success() {
+            bail!(
+                "git sparse-checkout set error: {}",
+                String::from_utf8_lossy(&checkout_cmd_out.stderr)
+            );
+        }
+    }
+
+    // Checkout the branch, if provided
+    if let Some(branch) = repo_branch {
+        let checkout_cmd_out = Command::new(&git_cmd)
+            .args(["checkout", &branch])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?
+            .wait_with_output()
+            .await?;
+        if !checkout_cmd_out.status.success() {
+            bail!(
+                "git checkout error: {}",
+                String::from_utf8_lossy(&checkout_cmd_out.stderr)
+            );
+        }
+    }
+
+    std::env::set_current_dir(cwd)?;
+    Ok(())
 }

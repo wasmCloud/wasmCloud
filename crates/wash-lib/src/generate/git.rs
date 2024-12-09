@@ -1,6 +1,8 @@
-use anyhow::{anyhow, bail, Result};
-use std::{path::PathBuf, process::Stdio};
-use tokio::process::Command;
+use std::path::PathBuf;
+
+use anyhow::Result;
+
+use crate::common::clone_git_repo;
 
 pub struct CloneTemplate {
     /// temp folder where project will be cloned - deleted after 'wash new' completes
@@ -16,87 +18,16 @@ pub struct CloneTemplate {
     pub repo_branch: String,
 }
 
-pub async fn clone_git_template(opts: CloneTemplate) -> Result<()> {
-    let cwd =
-        std::env::current_dir().map_err(|e| anyhow!("could not get current directory: {}", e))?;
-    std::env::set_current_dir(&opts.clone_tmp).map_err(|e| {
-        anyhow!(
-            "could not cd to tmp dir {}: {}",
-            opts.clone_tmp.display(),
-            e
-        )
-    })?;
-    // for convenience, allow omission of prefix 'https://' or 'https://github.com'
-    let repo_url = {
-        if opts.repo_url.starts_with("http://") || opts.repo_url.starts_with("https://") {
-            opts.repo_url
-        } else if opts.repo_url.starts_with("github.com/") {
-            format!("https://{}", &opts.repo_url)
-        } else {
-            format!(
-                "https://github.com/{}",
-                opts.repo_url.trim_start_matches('/')
-            )
-        }
-    };
-
-    let cmd_out = Command::new("git")
-        .args([
-            "clone",
-            &repo_url,
-            "--depth",
-            "1",
-            "--no-checkout",
-            "--branch",
-            &opts.repo_branch,
-            ".",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?
-        .wait_with_output()
-        .await?;
-    if !cmd_out.status.success() {
-        bail!(
-            "git clone error: {}",
-            String::from_utf8_lossy(&cmd_out.stderr)
-        );
-    }
-
-    if let Some(sub_folder) = opts.sub_folder {
-        let cmd_out = Command::new("git")
-            .args(["sparse-checkout", "set", &sub_folder])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?
-            .wait_with_output()
-            .await?;
-        if !cmd_out.status.success() {
-            bail!(
-                "git sparse-checkout set error: {}",
-                String::from_utf8_lossy(&cmd_out.stderr)
-            );
-        }
-    }
-
-    let cmd_out = Command::new("git")
-        .args(["checkout", &opts.repo_branch])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?
-        .wait_with_output()
-        .await?;
-    if !cmd_out.status.success() {
-        bail!(
-            "git checkout error: {}",
-            String::from_utf8_lossy(&cmd_out.stderr)
-        );
-    }
-    std::env::set_current_dir(cwd)?;
-    Ok(())
+/// Clone a git template repository
+pub async fn clone_git_template(
+    CloneTemplate {
+        clone_tmp,
+        repo_url,
+        sub_folder,
+        repo_branch,
+    }: CloneTemplate,
+) -> Result<()> {
+    clone_git_repo(None, &clone_tmp, repo_url, sub_folder, Some(repo_branch)).await
 }
 
 /// Information to find a specific commit in a Git repository.

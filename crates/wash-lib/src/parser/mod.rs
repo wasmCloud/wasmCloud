@@ -266,7 +266,10 @@ impl FromStr for RegistryPullSource {
             s if s.starts_with("http://") || s.starts_with("https://") => {
                 Self::RemoteHttp(s.into())
             }
-            s if s.starts_with("git+ssh://") || s.starts_with("git+http://") => {
+            s if s.starts_with("git+ssh://")
+                || s.starts_with("git+http://")
+                || s.starts_with("git+https://") =>
+            {
                 Self::RemoteGit(s.into())
             }
             "builtin" => Self::Builtin,
