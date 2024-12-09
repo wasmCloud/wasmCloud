@@ -8799,7 +8799,6 @@ dependencies = [
  "futures",
  "http 1.2.0",
  "http-body 1.0.1",
- "opentelemetry-http",
  "pin-project-lite",
  "reqwest 0.12.9",
  "serde",
@@ -9073,7 +9072,9 @@ name = "wasmcloud-tracing"
 version = "0.11.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "heck 0.5.0",
+ "http 1.2.0",
  "once_cell",
  "opentelemetry",
  "opentelemetry-appender-tracing",
