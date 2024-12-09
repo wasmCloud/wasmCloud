@@ -130,6 +130,14 @@ export class WasmCloudInstance {
     };
   }
 
+  get pids() {
+    const pids = new Map<WashProcessType, number>();
+    for (const [type, processAndMeta] of this.#processes.entries()) {
+      if (!processAndMeta.stopped) pids.set(type, processAndMeta.process?.pid ?? -1);
+    }
+    return pids;
+  }
+
   constructor(options?: WasmCloudInstanceOptions) {
     this.opts = options ?? WasmCloudInstanceOptions.default();
     this.#_uuid = uuidv1();

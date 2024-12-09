@@ -112,7 +112,7 @@ export function ConfigsTable(): ReactElement {
             <TableBody>
               {table.getRowModel().rows?.length ? (
                 table.getRowModel().rows.map((row) => (
-                  <Collapsible key={row.id} asChild>
+                  <Collapsible key={row.id} asChild data-testid="config">
                     <Fragment>
                       <TableRow>
                         {row
