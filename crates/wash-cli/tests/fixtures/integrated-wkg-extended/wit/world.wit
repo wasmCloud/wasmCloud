@@ -16,7 +16,4 @@ world component {
 
   // Test GIT (git+http) pulling
   import wasi:blobstore/container@0.2.0-draft;
-
-  // Test GIT (git+ssh) pulling
-  import wasi:messaging/request-reply@0.2.0-draft;
 }
