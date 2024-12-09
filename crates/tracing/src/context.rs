@@ -6,11 +6,11 @@ use std::collections::HashMap;
 use std::ops::Deref;
 
 use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};
+use opentelemetry::trace::TraceContextExt;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use wasmcloud_core::TraceContext;
-use opentelemetry::trace::TraceContextExt;
 
 /// A convenience type that wraps an invocation [`TraceContext`] and implements the [`Extractor`] trait
 #[derive(Debug)]
@@ -103,7 +103,6 @@ impl TraceContextInjector {
         let ctx_propagator = TraceContextPropagator::new();
         ctx_propagator.inject_context(&span.context(), self);
     }
-
 }
 
 impl Injector for TraceContextInjector {
