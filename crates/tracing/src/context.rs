@@ -10,6 +10,7 @@ use opentelemetry_sdk::propagation::TraceContextPropagator;
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use wasmcloud_core::TraceContext;
+use opentelemetry::trace::TraceContextExt;
 
 /// A convenience type that wraps an invocation [`TraceContext`] and implements the [`Extractor`] trait
 #[derive(Debug)]
@@ -66,12 +67,19 @@ impl TraceContextInjector {
         header_map
     }
 
-    /// Creates a new injector with the context extracted from the given extractor
+    // Creates a new injector with the context extracted from the given extractor. If the context is empty, it will use the current span's context
     pub fn new_with_extractor(extractor: &dyn Extractor) -> Self {
         let mut header_map = Self::default();
         let ctx_propagator = TraceContextPropagator::new();
         let context = ctx_propagator.extract(extractor);
-        ctx_propagator.inject_context(&context, &mut header_map);
+
+        // Check if the extracted context is empty and use the current span's context if necessary
+        if !context.span().span_context().is_valid() {
+            ctx_propagator.inject_context(&Span::current().context(), &mut header_map);
+        } else {
+            ctx_propagator.inject_context(&context, &mut header_map);
+        }
+
         header_map
     }
 
