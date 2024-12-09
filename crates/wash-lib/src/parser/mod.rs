@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Display;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -13,7 +13,9 @@ use config::Config;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer};
 use tracing::{trace, warn};
+use url::Url;
 use wadm_types::{Component, Properties, SecretSourceProperty};
+use wasm_pkg_client::{CustomConfig, Registry, RegistryMapping, RegistryMetadata};
 use wasm_pkg_core::config::{Config as PackageConfig, Override};
 use wasmcloud_control_interface::RegistryCredential;
 use wasmcloud_core::{parse_wit_package_name, WitFunction, WitInterface, WitNamespace, WitPackage};
@@ -138,11 +140,217 @@ pub struct RustConfig {
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct RegistryConfig {
+    /// Configuration to use when pushing this project to a registry
+    // NOTE: flattened for backwards compatibility
+    #[serde(flatten)]
+    pub push: RegistryPushConfig,
+
+    /// Configuration to use for pulling from registries
+    pub pull: Option<RegistryPullConfig>,
+}
+
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
+pub struct RegistryPushConfig {
+    /// URL of the registry to push to
     pub url: Option<String>,
+
+    /// Credentials to use for the given registry
     pub credentials: Option<PathBuf>,
+
     /// Whether or not to push to the registry insecurely with http
     #[serde(default)]
     pub push_insecure: bool,
+}
+
+/// Configuration that governs pulling of packages from registries
+#[derive(Debug, Default, PartialEq, Eq, Clone, Deserialize)]
+pub struct RegistryPullConfig {
+    /// List of sources that should be pulled
+    pub sources: Vec<RegistryPullSourceOverride>,
+}
+
+/// Information identifying a registry that can be pulled from
+#[derive(Debug, Default, PartialEq, Eq, Clone, Deserialize)]
+pub struct RegistryPullSourceOverride {
+    /// Interface specification (possibly partial) for which this source applies
+    ///
+    /// ex. `wasi`, `wasi:keyvalue`, `wasi:keyvalue@0.2.0`, `wasi:http/incoming-handler@0.2.0`
+    pub interface: String,
+
+    /// The source for the configuration
+    pub source: RegistryPullSource,
+}
+
+/// Source for a registry pull
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
+pub enum RegistryPullSource {
+    /// Sources for interfaces that are built-in/resolvable without configuration,
+    /// or special-cased in some other way
+    /// (e.g. `wasi:http` is a well known standard)
+    #[default]
+    Builtin,
+
+    /// A file source
+    ///
+    /// These references are resolved in two ways:
+    ///   - If a directory, then the namespace & path are appended
+    ///   - If a direct file then the file itself is used
+    ///
+    /// (ex. 'file://relative/path/to/file', 'file:///absolute/path/to/file')
+    LocalPath(String),
+
+    /// Remote HTTP registry, configured to support `.well-known/wasm-pkg/registry.json`
+    RemoteHttpWellKnown(String),
+
+    /// An OCI reference
+    ///
+    /// These references are resolved by appending the intended namespace and package
+    /// to the provided URI
+    ///
+    /// (ex. resolving `wasi:keyvalue@0.2.0` with 'oci://ghcr.io/wasmcloud/wit' becomes `oci://ghcr.io/wasmcloud/wit/wasi/keyvalue:0.2.0`)
+    RemoteOci(String),
+
+    /// URL to a HTTP/S resource
+    ///
+    /// These references are resolved by downloading and uncompressing (where possible) the linked file
+    /// as WIT, for whatever interfaces were provided.
+    ///
+    /// (ex. resolving `https://example.com/wit/package.tgz` means downloading and unpacking the tarball)
+    RemoteHttp(String),
+
+    /// URL to a GIT repository
+    ///
+    /// These URLs are guaranteed to start with a git-related scheme (ex. `git+http://`, `git+ssh://`, ...)
+    /// and will be used as the base under which to pull a folder of WIT
+    RemoteGit(String),
+}
+
+impl Display for RegistryPullSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RegistryPullSource::Builtin => write!(f, "builtin")?,
+            RegistryPullSource::LocalPath(s)
+            | RegistryPullSource::RemoteHttpWellKnown(s)
+            | RegistryPullSource::RemoteOci(s)
+            | RegistryPullSource::RemoteHttp(s)
+            | RegistryPullSource::RemoteGit(s) => write!(f, "{}", s)?,
+        }
+        Ok(())
+    }
+}
+
+impl<'de> Deserialize<'de> for RegistryPullSource {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl TryFrom<String> for RegistryPullSource {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self> {
+        Self::from_str(&value)
+    }
+}
+
+impl FromStr for RegistryPullSource {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(match s {
+            s if s.starts_with("file://") => Self::LocalPath(s.into()),
+            s if s.starts_with("oci://") => Self::RemoteOci(s.into()),
+            s if s.starts_with("http://") || s.starts_with("https://") => {
+                Self::RemoteHttp(s.into())
+            }
+            s if s.starts_with("git+ssh://") || s.starts_with("git+http://") => {
+                Self::RemoteGit(s.into())
+            }
+            "builtin" => Self::Builtin,
+            s => bail!("unrecognized registry pull source [{s}]"),
+        })
+    }
+}
+
+impl RegistryPullSource {
+    pub async fn resolve_file_path(&self, base_dir: impl AsRef<Path>) -> Result<PathBuf> {
+        match self {
+            RegistryPullSource::LocalPath(p) => match p.strip_prefix("file://") {
+                Some(s) if s.starts_with("/") => tokio::fs::canonicalize(s)
+                    .await
+                    .with_context(|| format!("failed to canonicalize absolute path [{s}]")),
+                Some(s) => tokio::fs::canonicalize(base_dir.as_ref().join(s))
+                    .await
+                    .with_context(|| format!("failed to canonicalize relative path [{s}]")),
+                None => bail!("invalid RegistryPullSource file path [{p}]"),
+            },
+            _ => bail!("registry pull source does not resolve to file path"),
+        }
+    }
+}
+
+impl TryFrom<RegistryPullSource> for RegistryMapping {
+    type Error = anyhow::Error;
+
+    fn try_from(value: RegistryPullSource) -> Result<Self> {
+        match value {
+            RegistryPullSource::Builtin | RegistryPullSource::LocalPath(_) => {
+                bail!("builtins and local files cannot be converted to registry mappings")
+            }
+            RegistryPullSource::RemoteHttp(_) => {
+                bail!("remote files HTTP files cannot be converted to registry mappings")
+            }
+            RegistryPullSource::RemoteGit(_) => {
+                bail!("remote git repositories files cannot be converted to registry mappings")
+            }
+            // For well known strings, we generally expect to receive a HTTP/S URL
+            RegistryPullSource::RemoteHttpWellKnown(url) => {
+                let url = Url::parse(&url).context("failed to parse url")?;
+                Registry::from_str(url.as_str())
+                    .map(RegistryMapping::Registry)
+                    .map_err(|e| anyhow!(e))
+            }
+            // For remote OCI images we expect to receive an 'oci://' prefixed String which we treat as a URI
+            //
+            // ex. `oci://ghcr.io/wasmcloud/interfaces` will turn into a registry with:
+            // - `ghcr.io` as the base
+            // - `wasmcloud/interfaces` as the namespace prefix
+            //
+            RegistryPullSource::RemoteOci(uri) => {
+                let url = Url::parse(&uri).context("failed to parse url")?;
+                if url.scheme() != "oci" {
+                    bail!("invalid scheme [{}], expected 'oci'", url.scheme());
+                }
+                let metadata = {
+                    let mut metadata = RegistryMetadata::default();
+                    metadata.preferred_protocol = Some("oci".into());
+                    let mut protocol_configs = serde_json::Map::new();
+                    let namespace_prefix = format!(
+                        "{}/",
+                        url.path().strip_prefix('/').unwrap_or_else(|| url.path())
+                    );
+                    protocol_configs.insert(
+                        "namespacePrefix".into(),
+                        serde_json::json!(namespace_prefix),
+                    );
+                    metadata.protocol_configs = HashMap::from([("oci".into(), protocol_configs)]);
+                    metadata
+                };
+                Ok(RegistryMapping::Custom(CustomConfig {
+                    registry: Registry::from_str(&format!(
+                        "{}{}",
+                        url.authority(),
+                        url.port().map(|p| format!(":{p}")).unwrap_or_default()
+                    ))
+                    .map_err(|e| anyhow!(e))?,
+                    metadata,
+                }))
+            }
+        }
+    }
 }
 
 /// Configuration common amoung all project types & languages.
@@ -857,17 +1065,19 @@ pub struct WasmcloudDotToml {
     #[serde(default)]
     pub go: GoConfig,
 
-    /// Configuration for image registry usage
-    #[serde(default)]
-    pub registry: RegistryConfig,
-
     /// Configuration for development environments and/or DX related plugins
     #[serde(default)]
     pub dev: DevConfig,
 
-    /// Overrides for interface dependencies. This is often used to point to local wit files
+    /// Overrides for interface dependencies.
+    ///
+    /// This is often used to point to local wit files
     #[serde(flatten)]
     pub package_config: Option<PackageConfig>,
+
+    /// Configuration for image registry usage
+    #[serde(default)]
+    pub registry: RegistryConfig,
 }
 
 impl WasmcloudDotToml {
@@ -1112,7 +1322,7 @@ impl ProjectConfig {
         &self,
         registry: impl AsRef<str>,
     ) -> Result<RegistryCredential> {
-        let credentials_file = &self.common.registry.credentials.clone();
+        let credentials_file = &self.common.registry.push.credentials.clone();
 
         let Some(credentials_file) = credentials_file else {
             bail!("No registry credentials path configured")
