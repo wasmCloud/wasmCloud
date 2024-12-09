@@ -11,13 +11,17 @@ import {
 import * as React from 'react';
 import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from '@/components/table';
 
+type RowProps = React.HTMLAttributes<HTMLTableRowElement> & Record<`data-${string}`, string>;
+
 type DataTableProps<TData, TValue> = {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
+  rowProps?: RowProps | ((row: TData) => RowProps);
 };
 export function DataTable<TData, TValue>({
   data,
   columns,
+  rowProps = {},
 }: DataTableProps<TData, TValue>): React.ReactElement {
   const [sorting, setSorting] = React.useState<SortingState>([]);
 
@@ -31,6 +35,11 @@ export function DataTable<TData, TValue>({
     getFilteredRowModel: getFilteredRowModel(),
     state: {sorting},
   });
+
+  const generateRowProps = React.useCallback(
+    (row: TData) => (typeof rowProps === 'function' ? rowProps(row) : rowProps),
+    [rowProps],
+  );
 
   return (
     <div className="w-full">
@@ -57,7 +66,7 @@ export function DataTable<TData, TValue>({
           <TableBody>
             {table.getRowModel().rows?.length ? (
               table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id}>
+                <TableRow key={row.id} data-testid="" {...generateRowProps(row.original)}>
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}

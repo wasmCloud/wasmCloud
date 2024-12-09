@@ -1,12 +1,12 @@
 import {zodResolver} from '@hookform/resolvers/zod';
 import {canConnect, useLatticeConfig} from '@wasmcloud/lattice-client-react';
-import {ReactElement, useEffect} from 'react';
+import {ReactElement, useCallback} from 'react';
 import {useForm} from 'react-hook-form';
 import * as z from 'zod';
 import {Button} from '@/components/button';
 import {Form, FormControl, FormField, FormItem, FormLabel, FormMessage} from '@/components/form';
 import {Input} from '@/components/input';
-import {SheetClose, SheetFooter} from '@/components/sheet';
+import {SheetFooter} from '@/components/sheet';
 
 const formSchema = z.object({
   latticeUrl: z
@@ -29,10 +29,10 @@ type LatticeFormInput = z.input<typeof formSchema>;
 
 type LatticeFormOutput = z.output<typeof formSchema>;
 
-export function LatticeSettings(): ReactElement {
+export function LatticeSettings({onSubmit}: {onSubmit?: () => void}): ReactElement {
   const {config, setConfig} = useLatticeConfig();
-
   const {latticeUrl, latticeId, ctlTopicPrefix, retryCount} = config;
+
   const form = useForm<LatticeFormInput, object, LatticeFormOutput>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -41,35 +41,36 @@ export function LatticeSettings(): ReactElement {
       ctlTopicPrefix,
       retryCount,
     },
-  });
-
-  function onSubmit({latticeUrl, latticeId, ctlTopicPrefix, retryCount}: LatticeFormOutput): void {
-    setConfig({
+    values: {
       latticeUrl,
       latticeId,
       ctlTopicPrefix,
       retryCount,
-    });
-  }
+    },
+  });
 
-  useEffect(() => {
-    form.setValue('latticeUrl', latticeUrl);
-    form.setValue('latticeId', latticeId);
-    form.setValue('ctlTopicPrefix', ctlTopicPrefix);
-    form.setValue('retryCount', retryCount);
-  }, [form, latticeUrl, ctlTopicPrefix, latticeId, retryCount]);
-
-  const hasErrors = Object.values(form.formState.errors).length > 0;
+  const handleSubmit = useCallback(
+    ({latticeUrl, latticeId, ctlTopicPrefix, retryCount}: LatticeFormOutput): void => {
+      setConfig({
+        latticeUrl,
+        latticeId,
+        ctlTopicPrefix,
+        retryCount,
+      });
+      onSubmit?.();
+    },
+    [onSubmit, setConfig],
+  );
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="contents">
+      <form onSubmit={form.handleSubmit(handleSubmit)} className="contents">
         <FormField
           control={form.control}
           name="latticeUrl"
           render={({field}) => (
             <FormItem>
-              <FormLabel htmlFor="latticeUrl">Server URL</FormLabel>
+              <FormLabel>Server URL</FormLabel>
               <FormControl>
                 <Input type="text" placeholder="ws://server:port" {...field} />
               </FormControl>
@@ -82,7 +83,7 @@ export function LatticeSettings(): ReactElement {
           name="latticeId"
           render={({field}) => (
             <FormItem>
-              <FormLabel htmlFor="latticeId">Lattice ID</FormLabel>
+              <FormLabel>Lattice ID</FormLabel>
               <FormControl>
                 <Input type="text" placeholder="default" {...field} />
               </FormControl>
@@ -95,7 +96,7 @@ export function LatticeSettings(): ReactElement {
           name="retryCount"
           render={({field}) => (
             <FormItem>
-              <FormLabel htmlFor="retryCount">Retry Count</FormLabel>
+              <FormLabel>Retry Count</FormLabel>
               <FormControl>
                 <Input type="number" min="0" {...field} />
               </FormControl>
@@ -108,7 +109,7 @@ export function LatticeSettings(): ReactElement {
           name="ctlTopicPrefix"
           render={({field}) => (
             <FormItem>
-              <FormLabel htmlFor="ctlTopicPrefix">Control Topic Prefix</FormLabel>
+              <FormLabel>Control Topic Prefix</FormLabel>
               <FormControl>
                 <Input type="text" placeholder="wasmbus.ctl" {...field} />
               </FormControl>
@@ -117,11 +118,9 @@ export function LatticeSettings(): ReactElement {
           )}
         />
         <SheetFooter className="mt-4">
-          <SheetClose asChild>
-            <Button variant="default" type="submit" disabled={hasErrors}>
-              Update
-            </Button>
-          </SheetClose>
+          <Button variant="default" type="submit">
+            Update
+          </Button>
         </SheetFooter>
       </form>
     </Form>
