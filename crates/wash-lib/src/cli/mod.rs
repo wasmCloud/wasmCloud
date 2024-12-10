@@ -360,11 +360,20 @@ impl CommonPackageArgs {
         FileCache::new(dir).await
     }
 
-    /// Helper for loading a caching client. This should be the most commonly used method for
+    /// Helper for loading a caching client.
+    ///
+    /// This should be the most commonly used method for
     /// loading a client, but if you need to modify the config or use your own cache, you can use
     /// the [`CommonPackageArgs::load_config`] and [`CommonPackageArgs::load_cache`] methods.
     pub async fn get_client(&self) -> anyhow::Result<CachingClient<FileCache>> {
-        let config = self.load_config().await?;
+        self.get_client_with_config(self.load_config().await?).await
+    }
+
+    /// Helper for loading a caching client, given a configuration.
+    pub async fn get_client_with_config(
+        &self,
+        config: wasm_pkg_client::Config,
+    ) -> anyhow::Result<CachingClient<FileCache>> {
         let cache = self.load_cache().await?;
         let client = wasm_pkg_client::Client::new(config);
         Ok(CachingClient::new(Some(client), cache))

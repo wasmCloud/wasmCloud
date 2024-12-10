@@ -130,7 +130,7 @@ pub async fn registry_push(
             user: credentials.username().map(String::from),
             password: credentials.password().map(String::from),
             insecure: cmd.opts.insecure
-                || project_config.is_some_and(|c| c.common.registry.push_insecure),
+                || project_config.is_some_and(|c| c.common.registry.push.push_insecure),
             insecure_skip_tls_verify: cmd.opts.insecure_skip_tls_verify,
             annotations,
             monolithic_push: cmd.monolithic_push,
@@ -181,6 +181,7 @@ fn resolve_artifact_ref(
             let registry = project_config
                 .common
                 .registry
+                .push
                 .url
                 .clone()
                 .unwrap_or_default();
