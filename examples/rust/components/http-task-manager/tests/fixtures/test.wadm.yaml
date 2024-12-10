@@ -36,10 +36,11 @@ spec:
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            source_config:
-              - name: default-http
-                properties:
-                  address: 0.0.0.0:8000
+            source:
+              config:
+                - name: default-http
+                  properties:
+                    address: 0.0.0.0:8000
 
     - name: sqldb-postgres
       type: capability

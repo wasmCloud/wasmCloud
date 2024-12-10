@@ -54,7 +54,8 @@ spec:
             namespace: wasmcloud
             package: messaging
             interfaces: [handler]
-            source_config:
-              - name: simple-subscription
-                properties:
-                  subscriptions: wasmcloud.echo
+            source:
+              config:
+                - name: simple-subscription
+                  properties:
+                    subscriptions: wasmcloud.echo

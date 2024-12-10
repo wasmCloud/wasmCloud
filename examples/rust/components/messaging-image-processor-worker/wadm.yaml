@@ -88,10 +88,11 @@ spec:
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            source_config:
-              - name: default-http
-                properties:
-                  address: 0.0.0.0:8000
+            source:
+              config:
+                - name: default-http
+                  properties:
+                    address: 0.0.0.0:8000
 
     - name: httpclient
       type: capability
@@ -151,7 +152,8 @@ spec:
             namespace: wasmcloud
             package: messaging
             interfaces: [handler]
-            source_config:
-              - name: subscription
-                properties:
-                  subscriptions: images.processing
+            source:
+              config:
+                - name: subscription
+                  properties:
+                    subscriptions: images.processing
