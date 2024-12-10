@@ -6,6 +6,9 @@
     "enabledManagers": [
         "custom.regex"
     ],
+    "repositories": [
+        "wasmCloud/wasmCloud"
+    ],
     "ignorePaths": [
         "**/node_modules/**",
         "**/bower_components/**",
