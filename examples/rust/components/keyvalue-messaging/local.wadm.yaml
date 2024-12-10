@@ -98,7 +98,8 @@ spec:
             namespace: wasmcloud
             package: messaging
             interfaces: [handler]
-            source_config:
-              - name: nats-subscription
-                properties:
-                  subscriptions: nats.atomic.delta
+            source:
+              config:
+                - name: nats-subscription
+                  properties:
+                    subscriptions: nats.atomic.delta
