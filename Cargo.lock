@@ -5112,7 +5112,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22505a5c94da8e3b7c2996394d1c933236c4d743e81a410bcca4e6989fc066a4"
 dependencies = [
  "bytes",
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools 0.12.1",
  "log",
  "multimap",
@@ -8374,9 +8374,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-pkg-client"
-version = "0.8.5"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce4df26ea869f36b1f7dcd83a3327a1864492281406d48d5dc529a199a3074e3"
+checksum = "a191865bbb4982a938b5bd427560af8eafcaa2990770ed7049ffeaa05075c424"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8408,9 +8408,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-pkg-common"
-version = "0.8.5"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b14acb8e490839c93364c23716feb9af0dd93e0638b8b5e083b1d0803b7ea595"
+checksum = "2687dbb47e3bf1bdfa94ffb5e8983d374875df0a608d0cb63626a19660139048"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8430,9 +8430,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-pkg-core"
-version = "0.8.5"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee3e0edce3d3a9d4e246bd91d1a69f599a237b69ab38184852020ef0bde45df3"
+checksum = "e9c0f15e97074ef71c0148eec9e1de5777270b65ee7c712706bff0ac98e2dd1d"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -9551,7 +9551,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
