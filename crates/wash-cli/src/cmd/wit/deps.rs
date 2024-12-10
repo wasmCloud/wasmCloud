@@ -64,7 +64,6 @@ pub async fn invoke(
         }) => package_config.clone(),
         None => wasm_pkg_core::config::Config::load().await?,
     };
-    let mut wkg_config_overrides = wkg_config.overrides.take().unwrap_or_default();
 
     let mut lock_file =
         load_lock_file(std::env::current_dir().context("failed to get current directory")?).await?;
@@ -91,14 +90,11 @@ pub async fn invoke(
         resolve_extended_pull_configs(
             &pull_cfg,
             &wasmcloud_toml_dir,
-            &mut wkg_config_overrides,
+            &mut wkg_config,
             &mut wkg_client_config,
         )
         .await?;
     }
-
-    // Re-add the modified local wkg config overrides
-    wkg_config.overrides = Some(wkg_config_overrides);
 
     // Build the wkg client
     let wkg_client = common.get_client_with_config(wkg_client_config).await?;
@@ -116,9 +112,11 @@ pub async fn invoke(
 async fn resolve_extended_pull_configs(
     pull_cfg: &RegistryPullConfig,
     wasmcloud_toml_dir: impl AsRef<Path>,
-    wkg_config_overrides: &mut HashMap<String, Override>,
+    wkg_config: &mut wasm_pkg_core::config::Config,
     wkg_client_config: &mut wasm_pkg_client::Config,
 ) -> Result<()> {
+    let mut wkg_config_overrides = wkg_config.overrides.get_or_insert_default();
+
     for RegistryPullSourceOverride { target, source } in pull_cfg.sources.iter() {
         let (ns, pkgs, _, _, maybe_version) = parse_wit_package_name(target)?;
         let version_suffix = maybe_version.map(|v| format!("@{v}")).unwrap_or_default();
@@ -296,6 +294,7 @@ async fn resolve_extended_pull_configs(
             }
         }
     }
+
     Ok(())
 }
 
