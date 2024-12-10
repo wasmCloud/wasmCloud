@@ -15,6 +15,7 @@ use wasmcloud_core::OtelConfig;
 
 #[cfg(feature = "otel")]
 pub mod context;
+pub mod http;
 
 mod traces;
 

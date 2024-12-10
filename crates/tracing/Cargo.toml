@@ -23,6 +23,7 @@ otel = [
 
 [dependencies]
 anyhow = { workspace = true }
+bytes = { workspace = true }
 heck = { workspace = true }
 once_cell = { workspace = true }
 opentelemetry = { workspace = true, optional = true }
@@ -52,4 +53,5 @@ tracing-subscriber = { workspace = true, features = [
     "fmt",
     "json",
 ] }
+http = { workspace = true }
 wasmcloud-core = { workspace = true }
