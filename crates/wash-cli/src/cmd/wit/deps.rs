@@ -115,7 +115,7 @@ async fn resolve_extended_pull_configs(
     wkg_config: &mut wasm_pkg_core::config::Config,
     wkg_client_config: &mut wasm_pkg_client::Config,
 ) -> Result<()> {
-    let mut wkg_config_overrides = wkg_config.overrides.get_or_insert_default();
+    let wkg_config_overrides = wkg_config.overrides.get_or_insert_default();
 
     for RegistryPullSourceOverride { target, source } in pull_cfg.sources.iter() {
         let (ns, pkgs, _, _, maybe_version) = parse_wit_package_name(target)?;
@@ -139,30 +139,8 @@ async fn resolve_extended_pull_configs(
                     );
                 }
 
-                match (ns, pkgs.as_slice()) {
-                    // namespace-level override
-                    (ns, []) => {
-                        wkg_config_overrides.insert(
-                            ns,
-                            Override {
-                                path: Some(path),
-                                version: None,
-                            },
-                        );
-                    }
-                    // package-level override
-                    (ns, packages) => {
-                        for pkg in packages {
-                            wkg_config_overrides.insert(
-                                format!("{ns}:{pkg}"),
-                                Override {
-                                    path: Some(path.clone()),
-                                    version: None,
-                                },
-                            );
-                        }
-                    }
-                }
+                // Set the local override for the namespaces and/or packages
+                update_override_dir(wkg_config_overrides, ns, pkgs.as_slice(), path);
             }
             RegistryPullSource::Builtin => bail!("no builtins are supported"),
             RegistryPullSource::RemoteHttp(s) => {
@@ -192,30 +170,8 @@ async fn resolve_extended_pull_configs(
                 let output_wit_dir = find_wit_folder_in_path(&output_path).await?;
 
                 // Set the local override for the namespaces and/or packages
-                match (ns, pkgs.as_slice()) {
-                    // namespace-level override
-                    (ns, []) => {
-                        wkg_config_overrides.insert(
-                            ns,
-                            Override {
-                                path: Some(output_wit_dir),
-                                version: None,
-                            },
-                        );
-                    }
-                    // package-level override
-                    (ns, packages) => {
-                        for pkg in packages {
-                            wkg_config_overrides.insert(
-                                format!("{ns}:{pkg}"),
-                                Override {
-                                    path: Some(output_wit_dir.clone()),
-                                    version: None,
-                                },
-                            );
-                        }
-                    }
-                }
+                // Set the local override for the namespaces and/or packages
+                update_override_dir(wkg_config_overrides, ns, pkgs.as_slice(), output_wit_dir);
             }
             RegistryPullSource::RemoteGit(s) => {
                 let url = Url::parse(s)
@@ -241,30 +197,7 @@ async fn resolve_extended_pull_configs(
                 let output_wit_dir = find_wit_folder_in_path(&tempdir).await?;
 
                 // Set the local override for the namespaces and/or packages
-                match (ns, pkgs.as_slice()) {
-                    // namespace-level override
-                    (ns, []) => {
-                        wkg_config_overrides.insert(
-                            ns,
-                            Override {
-                                path: Some(output_wit_dir),
-                                version: None,
-                            },
-                        );
-                    }
-                    // package-level override
-                    (ns, packages) => {
-                        for pkg in packages {
-                            wkg_config_overrides.insert(
-                                format!("{ns}:{pkg}"),
-                                Override {
-                                    path: Some(output_wit_dir.clone()),
-                                    version: None,
-                                },
-                            );
-                        }
-                    }
-                }
+                update_override_dir(wkg_config_overrides, ns, pkgs.as_slice(), output_wit_dir);
             }
             // All other registry pull sources should be directly convertible to `RegistryMapping`s
             rps @ (RegistryPullSource::RemoteOci(_)
@@ -296,6 +229,40 @@ async fn resolve_extended_pull_configs(
     }
 
     Ok(())
+}
+
+/// Helper for updating wkg overrides
+fn update_override_dir(
+    overrides: &mut HashMap<String, Override>,
+    ns: String,
+    pkgs: &[String],
+    dir: impl AsRef<Path>,
+) {
+    let dir = dir.as_ref();
+    match (ns, pkgs) {
+        // namespace-level override
+        (ns, []) => {
+            overrides.insert(
+                ns,
+                Override {
+                    path: Some(dir.into()),
+                    version: None,
+                },
+            );
+        }
+        // package-level override
+        (ns, packages) => {
+            for pkg in packages {
+                overrides.insert(
+                    format!("{ns}:{pkg}"),
+                    Override {
+                        path: Some(dir.into()),
+                        version: None,
+                    },
+                );
+            }
+        }
+    }
 }
 
 /// Find a folder named 'wit' inside a given dir, if present, otherwise return the path itself
