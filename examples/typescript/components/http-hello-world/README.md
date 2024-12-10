@@ -18,6 +18,10 @@ This component:
 
 # Dependencies
 
+> ![WARN]
+> When building this project, ensure you have the latest stable NodeJS version
+> If you're using a tool like `nvm` you can use the incldued `.nvmrc`.
+
 Building this project relies on the following software:
 
 | Name   | Description                                                                                                 |
