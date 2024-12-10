@@ -320,8 +320,15 @@ async fn deploy_model(cmd: DeployCommand) -> Result<CommandOutput> {
     let client = connection_opts.into_nats_client().await?;
 
     let app_manifest = match cmd.app_name {
+        Some(source) if source == "-" => load_app_manifest("-".parse()?).await?,
         Some(source) => load_app_manifest(source.parse()?).await?,
-        None => load_app_manifest("-".parse()?).await?,
+        None => {
+            return Err(wadm_client::error::ClientError::ManifestLoad(
+                anyhow::anyhow!(
+                    "Missing manifest name/path. To load a manifest from STDIN, please pass '-'"
+                ),
+            ))
+        }
     };
 
     // If --replace was specified, we should attempt to replace the resources by deleting them beforehand
