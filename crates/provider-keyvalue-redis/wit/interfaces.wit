@@ -4,4 +4,5 @@ world interfaces {
     export wrpc:keyvalue/atomics@0.2.0-draft;
     export wrpc:keyvalue/store@0.2.0-draft;
     export wrpc:keyvalue/batch@0.2.0-draft;
+    export wrpc:keyvalue/watcher@0.2.0-draft;
 }
