@@ -815,6 +815,7 @@ impl Host {
             .max_linear_memory(config.max_linear_memory)
             .max_components(config.max_components)
             .max_component_size(config.max_component_size)
+            .experimental_features(config.experimental_features.into())
             .build()
             .context("failed to build runtime")?;
         let event_builder = EventBuilderV10::new().source(host_key.public_key());
@@ -1385,6 +1386,7 @@ impl Host {
                 Arc::clone(links.entry(Arc::clone(&component_id)).or_default())
             },
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
+            experimental_features: self.experimental_features,
         };
         let component = wasmcloud_runtime::Component::new(&self.runtime, &wasm)?;
         let component = self
@@ -2554,7 +2556,7 @@ impl Host {
                     .await?
                 }
                 (None, ResourceRef::Builtin(name)) => match *name {
-                    "http-server" if self.experimental_features.builtin_http => {
+                    "http-server" if self.experimental_features.builtin_http_server => {
                         self.start_http_server_provider(
                             &mut tasks,
                             link_definitions,
@@ -2565,8 +2567,10 @@ impl Host {
                         )
                         .await?
                     }
-                    "http-server" => bail!("feature `builtin-http` is not enabled, denying start"),
-                    "messaging-nats" if self.experimental_features.builtin_messaging => {
+                    "http-server" => {
+                        bail!("feature `builtin-http-server` is not enabled, denying start")
+                    }
+                    "messaging-nats" if self.experimental_features.builtin_messaging_nats => {
                         self.start_messaging_nats_provider(
                             &mut tasks,
                             link_definitions,
@@ -2578,7 +2582,7 @@ impl Host {
                         .await?
                     }
                     "messaging-nats" => {
-                        bail!("feature `messaging-nats` is not enabled, denying start")
+                        bail!("feature `builtin-messaging-nats` is not enabled, denying start")
                     }
                     _ => bail!("unknown builtin name: {name}"),
                 },
