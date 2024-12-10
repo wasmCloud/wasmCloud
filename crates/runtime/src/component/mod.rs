@@ -6,6 +6,7 @@ use core::time::Duration;
 
 use anyhow::{ensure, Context as _};
 use futures::{Stream, TryStreamExt as _};
+use keyvalue::wrpc_keyvalue_bindings;
 use tokio::io::{AsyncRead, AsyncReadExt as _};
 use tokio::sync::mpsc;
 use tracing::{debug, info_span, instrument, warn, Instrument as _, Span};
@@ -61,6 +62,8 @@ pub enum ReplacedInstanceTarget {
     KeyvalueStore,
     /// `wasi:keyvalue/batch` instance replacement
     KeyvalueBatch,
+    /// `wasi:keyvalue/watch` instance replacment
+    KeyvalueWatch,
     /// `wasi:http/incoming-handler` instance replacement
     HttpIncomingHandler,
     /// `wasi:http/outgoing-handler` instance replacement
@@ -141,6 +144,7 @@ macro_rules! skip_static_instances {
             | "wasi:keyvalue/atomics@0.2.0-draft"
             | "wasi:keyvalue/batch@0.2.0-draft"
             | "wasi:keyvalue/store@0.2.0-draft"
+            | "wasi:keyvalue/watcher@0.2.0-draft"
             | "wasi:logging/logging"
             | "wasi:logging/logging@0.1.0-draft"
             | "wasi:random/insecure-seed@0.2.0"
@@ -414,6 +418,8 @@ where
             .context("failed to link `wasi:keyvalue/store`")?;
         capability::keyvalue::batch::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasi:keyvalue/batch`")?;
+        capability::keyvalue::watcher::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasi:keyvalue/watch`")?;
         capability::logging::logging::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasi:logging/logging`")?;
         capability::unversioned_logging::logging::add_to_linker(&mut linker, |ctx| ctx)
@@ -565,6 +571,20 @@ where
                         .await
                         .context("failed to serve `wasmcloud:messaging/handler`")?;
                     invocations.push(handle_message);
+                }
+                (
+                    "wasi:keyvalue/watcher@0.2.0-draft",
+                    types::ComponentItem::ComponentInstance(..),
+                ) => {
+                    let instance = instance.clone();
+                    let [(_, _, on_set), (_, _, on_delete)] =
+                        wrpc_keyvalue_bindings::exports::wasi::keyvalue::watcher::serve_interface(
+                            srv, instance,
+                        )
+                        .await
+                        .context("failed to serve `wrpc:keyvalue/watcher.on_delete`")?;
+                    invocations.push(on_set);
+                    invocations.push(on_delete);
                 }
                 (name, types::ComponentItem::ComponentFunc(ty)) => {
                     let engine = self.engine.clone();

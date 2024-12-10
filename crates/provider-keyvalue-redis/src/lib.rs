@@ -9,14 +9,16 @@
 
 use core::num::NonZeroU64;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{bail, Context as _};
+use bindings::exports::wrpc::keyvalue::watcher::Handler;
 use bytes::Bytes;
 use redis::aio::ConnectionManager;
 use redis::{Cmd, FromRedisValue};
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
 use wasmcloud_provider_sdk::{
     get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
@@ -30,10 +32,12 @@ mod bindings {
             "wrpc:keyvalue/atomics@0.2.0-draft": generate,
             "wrpc:keyvalue/batch@0.2.0-draft": generate,
             "wrpc:keyvalue/store@0.2.0-draft": generate,
+            "wrpc:keyvalue/watcher@0.2.0-draft": generate,
         }
     });
 }
 use bindings::exports::wrpc::keyvalue;
+use wit_bindgen_wrpc::futures::StreamExt;
 
 /// Default URL to use to connect to Redis
 const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
@@ -49,6 +53,25 @@ pub enum DefaultConnection {
     Conn(ConnectionManager),
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct WatchedKeyInfo {
+    event_type: WatchEventType,
+    value: Option<String>,
+    target: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum WatchEventType {
+    Set,
+    Delete,
+}
+
+/// Represents a unique identifier for a link (target_id, link_name)
+type LinkId = (String, String);
+
+/// Type for storing watch tasks associated with links
+type WatchTaskMap = HashMap<LinkId, JoinHandle<()>>;
+
 /// Redis `wrpc:keyvalue` provider implementation.
 #[derive(Clone)]
 pub struct KvRedisProvider {
@@ -56,6 +79,13 @@ pub struct KvRedisProvider {
     sources: Arc<RwLock<HashMap<(String, String), ConnectionManager>>>,
     // default connection, which may be uninitialized
     default_connection: Arc<RwLock<DefaultConnection>>,
+    // Stores information about watched keys for keyspace notifications
+    // The outer HashMap uses the key as its key, and the HashSet contains
+    // WatchedKeyInfo structs for each watcher of that key, allowing multiple
+    // components to watch the same key for different event types.
+    watched_keys: Arc<RwLock<HashMap<String, HashSet<WatchedKeyInfo>>>>,
+    // Stores background tasks that handle keyspace notifications for each link
+    watch_tasks: Arc<RwLock<WatchTaskMap>>,
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -95,6 +125,8 @@ impl KvRedisProvider {
             default_connection: Arc::new(RwLock::new(DefaultConnection::ClientConfig(
                 initial_config,
             ))),
+            watched_keys: Arc::new(RwLock::new(HashMap::new())),
+            watch_tasks: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -139,6 +171,29 @@ impl KvRedisProvider {
         };
 
         Ok(conn.clone())
+    }
+
+    async fn invoke_on_set(&self, context: Option<Context>, bucket: &str, key: &str, value: &str) {
+        propagate_trace_for_ctx!(context);
+        // send wrpc event to invoke the component with the key set
+        let _ = self
+            .on_set(
+                context,
+                bucket.to_string(),
+                key.to_string(),
+                value.to_string().into(),
+            )
+            .await;
+
+        info!("Key set: {}", key);
+    }
+
+    async fn invoke_on_delete(&self, context: Option<Context>, bucket: &str, key: &str) {
+        propagate_trace_for_ctx!(context);
+        let _ = self
+            .on_delete(context, bucket.to_string(), key.to_string())
+            .await;
+        info!("Key deleted: {}", key);
     }
 
     /// Execute Redis async command
@@ -317,6 +372,72 @@ impl keyvalue::batch::Handler<Option<Context>> for KvRedisProvider {
     }
 }
 
+impl keyvalue::watcher::Handler<Option<Context>> for KvRedisProvider {
+    async fn on_set(
+        &self,
+        cx: Option<Context>,
+        bucket: String,
+        key: String,
+        value: wit_bindgen_wrpc::bytes::Bytes,
+    ) -> wit_bindgen_wrpc::anyhow::Result<()> {
+        check_bucket_name(&bucket);
+        let Some(target) = cx.as_ref().and_then(|c| c.component.clone()) else {
+            error!("received on_set invocation without a source component");
+            bail!("received on_set invocation without a source component")
+        };
+        let value_str = String::from_utf8(value.to_vec()).unwrap_or_default();
+
+        // Add the key to the watched keys
+        let mut watched_keys = self.watched_keys.write().await;
+        watched_keys
+            .entry(key.clone())
+            .or_default()
+            .insert(WatchedKeyInfo {
+                event_type: WatchEventType::Set,
+                value: Some(value_str),
+                target,
+            });
+
+        let mut noti_cmd = redis::cmd("PSUBSCRIBE");
+        noti_cmd.arg("__keyevent@0__:set ").arg(key);
+        match self.exec_cmd::<()>(cx, &mut noti_cmd).await {
+            Ok(_) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn on_delete(
+        &self,
+        cx: Option<Context>,
+        bucket: String,
+        key: String,
+    ) -> wit_bindgen_wrpc::anyhow::Result<()> {
+        check_bucket_name(&bucket);
+        let Some(target) = cx.as_ref().and_then(|c| c.component.clone()) else {
+            error!("received on_delete invocation without a source component");
+            bail!("received on_delete invocation without a source component")
+        };
+
+        // Add the key to the watched keys
+        let mut watched_keys = self.watched_keys.write().await;
+        watched_keys
+            .entry(key.clone())
+            .or_default()
+            .insert(WatchedKeyInfo {
+                event_type: WatchEventType::Delete,
+                value: None,
+                target,
+            });
+
+        let mut noti_cmd = redis::cmd("PSUBSCRIBE");
+        noti_cmd.arg("__keyevent@0__:del ").arg(key);
+        match self.exec_cmd::<()>(cx, &mut noti_cmd).await {
+            Ok(_) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+}
+
 /// Handle provider control commands
 impl Provider for KvRedisProvider {
     /// Provider should perform any operations needed for a new link,
@@ -381,6 +502,120 @@ impl Provider for KvRedisProvider {
         Ok(())
     }
 
+    async fn receive_link_config_as_source(
+        &self,
+        LinkConfig {
+            target_id,
+            config,
+            secrets,
+            link_name,
+            wit_metadata: (_, _, interfaces),
+            ..
+        }: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
+        let url = secrets
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+            .and_then(|url_key| config.get(url_key))
+            .or_else(|| {
+                warn!("Redis connection URLs can be sensitive. Consider using secrets to pass this value.");
+                config.keys()
+                    .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+                    .and_then(|url_key| config.get(url_key))
+            })
+            .map_or(DEFAULT_CONNECT_URL, |v| v);
+
+        let client = match redis::Client::open(url.to_string()) {
+            Ok(client) => {
+                info!(url, "Established link");
+                client
+            }
+            Err(err) => {
+                warn!(?err, "Failed to create Redis client for target [{target_id}]. Key-value operations will fail.");
+                bail!("Failed to create Redis client");
+            }
+        };
+
+        let mut conn = client.get_connection_manager().await.map_err(|e| {
+            error!("Failed to get async connection: {e}");
+            anyhow::anyhow!("Failed to get async connection: {}", e)
+        })?;
+        if interfaces.contains(&"wrpc:keyvalue/watcher".to_string()) {
+            // Set keyspace notifications
+            redis::cmd("CONFIG")
+                .arg("SET")
+                .arg("notify-keyspace-events")
+                .arg("KE")
+                .query_async::<_, ()>(&mut conn)
+                .await
+                .map_err(|e| {
+                    error!("Failed to set keyspace notifications: {e}");
+                    anyhow::anyhow!("Failed to set keyspace notifications: {}", e)
+                })?;
+
+            // Start watching for keyspace events
+            let client_clone = client.clone();
+            let self_clone = self.clone();
+            let task = tokio::spawn(async move {
+                let mut pubsub = client_clone.get_async_pubsub().await.unwrap();
+                let mut stream = pubsub.on_message();
+
+                while let Some(msg) = stream.next().await {
+                    let channel: String = msg.get_channel_name().to_string();
+                    let event: String = msg.get_payload().unwrap();
+
+                    if event == "set" || event == "del" {
+                        let key = channel.split(':').last().unwrap();
+                        let watched_keys = self_clone.watched_keys.read().await;
+                        if let Some(key_info_set) = watched_keys.get(key) {
+                            for key_info in key_info_set {
+                                if (event == "set" && key_info.event_type == WatchEventType::Set)
+                                    || (event == "del"
+                                        && key_info.event_type == WatchEventType::Delete)
+                                {
+                                    if event == "set" {
+                                        // Perform a GET operation to retrieve the new value
+                                        let value = match self_clone
+                                            .exec_cmd::<Option<String>>(
+                                                None,
+                                                redis::cmd("GET").arg(key),
+                                            )
+                                            .await
+                                        {
+                                            Ok(Some(v)) => v,
+                                            Ok(None) => continue, // Key was deleted before we could get its value
+                                            Err(e) => {
+                                                error!(
+                                                    "Failed to get value for key {}: {}",
+                                                    key, e
+                                                );
+                                                continue;
+                                            }
+                                        };
+
+                                        if key_info.value.as_ref().map_or(true, |v| v == &value) {
+                                            self_clone
+                                                .invoke_on_set(None, "default", key, &value)
+                                                .await;
+                                        }
+                                    } else {
+                                        self_clone.invoke_on_delete(None, "default", key).await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            let mut tasks = self.watch_tasks.write().await;
+            tasks.insert((target_id.to_string(), link_name.to_string()), task);
+        }
+        let mut sources = self.sources.write().await;
+        sources.insert((target_id.to_string(), link_name.to_string()), conn);
+
+        Ok(())
+    }
+
     /// Handle notification that a link is dropped - close the connection
     #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
     async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
@@ -391,6 +626,28 @@ impl Provider for KvRedisProvider {
         // we're dealing with one link or the other.
         aw.retain(|(src_id, _link_name), _| src_id != component_id);
         debug!(component_id, "closing all redis connections for component");
+        Ok(())
+    }
+
+    #[instrument(level = "info", skip_all, fields(target_id = info.get_target_id()))]
+    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_target_id();
+        let mut aw = self.sources.write().await;
+        aw.retain(|(src_id, _link_name), _| src_id != component_id);
+        // we remove the watch task associated with the link
+        // we should make sure all the tasks are stopped belonging to the link, so we should loop through it
+        let mut watch_tasks = self.watch_tasks.write().await;
+        let mut keys_to_remove = Vec::new();
+        for (link_id, task) in watch_tasks.iter() {
+            if link_id.0 == component_id {
+                // NOTE: There's probably a much cleaner way to abort this task.
+                task.abort();
+                keys_to_remove.push(link_id.clone());
+            }
+        }
+        for key in keys_to_remove {
+            watch_tasks.remove(&key);
+        }
         Ok(())
     }
 
