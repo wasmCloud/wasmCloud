@@ -30,11 +30,11 @@ spec:
         # (i.e. making external web requests)
         - type: link
           properties:
+            target:
+              name: httpclient
             namespace: wasi
             package: http
             interfaces: [outgoing-handler]
-            target:
-              name: httpclient
 
     # Add a capability provider that enables HTTP access
     - name: httpserver
@@ -59,11 +59,11 @@ spec:
         # the component to handle an incoming HTTP request.
         - type: link
           properties:
+            target:
+              name: http-component
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            target:
-              name: http-component
             source:
               config:
                 - name: default-http

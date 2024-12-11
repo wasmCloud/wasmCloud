@@ -34,15 +34,15 @@ spec:
         # (i.e. reading/writing data blobs)
         - type: link
           properties:
-            namespace: wasi
-            package: blobstore
-            interfaces: [blobstore]
             target:
               name: blobstore
               config:
                 - name: root-directory
                   properties:
                     root: '/tmp/blobstore'
+            namespace: wasi
+            package: blobstore
+            interfaces: [blobstore]
 
     # Capability Providers
     - name: http
@@ -59,11 +59,11 @@ spec:
         # the component to handle a request.
         - type: link
           properties:
+            target:
+              name: blobby
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            target:
-              name: blobby
             source:
               config:
                 - name: default-http

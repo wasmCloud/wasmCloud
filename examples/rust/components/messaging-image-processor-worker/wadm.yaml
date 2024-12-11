@@ -25,13 +25,13 @@ spec:
             instances: 1
         - type: link
           properties:
-            namespace: wasmcloud
-            package: postgres
-            interfaces: [query]
             target:
               name: sqldb-postgres
               config:
                 - name: default-postgres
+            namespace: wasmcloud
+            package: postgres
+            interfaces: [query]
 
     - name: messaging-image-processor
       type: component
@@ -43,36 +43,36 @@ spec:
             instances: 1
         - type: link
           properties:
-            namespace: wasi
-            package: blobstore
-            interfaces: [blobstore]
             target:
               name: blobstore-fs
               config:
                 - name: root-directory
                   properties:
-                    root: "/tmp/test-messaging-processor"
+                    root: '/tmp/test-messaging-processor'
+            namespace: wasi
+            package: blobstore
+            interfaces: [blobstore]
         - type: link
           properties:
+            target:
+              name: http-task-mgr
             namespace: wasmcloud
             package: task-manager
             interfaces: [tasks]
-            target:
-              name: http-task-mgr
         - type: link
           properties:
+            target:
+              name: http-task-mgr
             namespace: wasmcloud
             package: task-manager
             interfaces: [tasks]
-            target:
-              name: http-task-mgr
         - type: link
           properties:
+            target:
+              name: httpclient
             namespace: wasi
             package: http
             interfaces: [outgoing-handler]
-            target:
-              name: httpclient
 
     - name: httpserver
       type: capability
@@ -89,11 +89,11 @@ spec:
       traits:
         - type: link
           properties:
+            target:
+              name: http-task-mgr
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            target:
-              name: http-task-mgr
             source:
               config:
                 - name: default-http
@@ -154,11 +154,11 @@ spec:
       traits:
         - type: link
           properties:
+            target:
+              name: messaging-image-processor
             namespace: wasmcloud
             package: messaging
             interfaces: [handler]
-            target:
-              name: messaging-image-processor
             source:
               config:
                 - name: subscription

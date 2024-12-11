@@ -21,11 +21,11 @@ spec:
         # (i.e. making interacting with the messaging system, in this case NATS)
         - type: link
           properties:
+            target:
+              name: custom-template
             namespace: wasmcloud
             package: messaging
             interfaces: [consumer]
-            target:
-              name: custom-template
 
     - name: custom-template
       type: capability
@@ -40,8 +40,8 @@ spec:
         # Link the provider to the component on wasmcloud:example/process-data
         - type: link
           properties:
+            target:
+              name: test-component
             namespace: wasmcloud
             package: example
             interfaces: [process-data]
-            target:
-              name: test-component
