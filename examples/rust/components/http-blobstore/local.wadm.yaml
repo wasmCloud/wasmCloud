@@ -25,14 +25,15 @@ spec:
         # (i.e. reading/writing blobs)
         - type: link
           properties:
-            target: blobstore-fs
             namespace: wasi
             package: blobstore
             interfaces: [blobstore]
-            target_config:
-              - name: root-directory
-                properties:
-                  root: '/tmp'
+            target:
+              - name: blobstore-fs
+                config:
+                  - name: root-directory
+                    properties:
+                      root: '/tmp'
 
     # Capability provider that serves HTTP requests
     - name: httpserver

@@ -27,29 +27,31 @@ spec:
         - type: link
           properties:
             name: bucket-id1
-            target: nats-kv
             namespace: wasi
             package: keyvalue
             interfaces: [store, atomics]
             # NOTE: The following is an example of how to configure the NATS Kv capability provider, for an individual component
-            target_config:
-              - name: wasmcloud
-                properties:
-                  bucket: "WASMCLOUD"
-                  enable_bucket_auto_create: "true"
+            target:
+              - name: nats-kv
+                config:
+                  - name: wasmcloud
+                    properties:
+                      bucket: "WASMCLOUD"
+                      enable_bucket_auto_create: "true"
 
         # # NOTE: The following is an example of how to configure additional named links to the same capability provider
         # - type: link
         #   properties:
         #     name: bucket-id2
-        #     target: nats-kv
         #     namespace: wasi
         #     package: keyvalue
         #     interfaces: [store, atomics]
-        #     target_config:
-        #       - name: wasmland
-        #         properties:
-        #           bucket: "WASMLAND"
+        #     target:
+        #       - name: nats-kv
+        #         config:
+        #           - name: wasmland
+        #             properties:
+        #               bucket: "WASMLAND"
 
         - type: link
           properties:
