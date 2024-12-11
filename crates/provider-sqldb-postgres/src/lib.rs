@@ -1,3 +1,5 @@
+#![cfg(not(doctest))]
+
 //! SQL-powered database access provider implementing `wasmcloud:postgres` for connecting
 //! to Postgres clusters.
 //!
@@ -10,51 +12,60 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use deadpool_postgres::Pool;
-use futures::stream::TryStreamExt;
+use futures::TryStreamExt as _;
 use tokio::sync::RwLock;
 use tokio_postgres::Statement;
 use tracing::{error, instrument, warn};
 use ulid::Ulid;
 
 use wasmcloud_provider_sdk::{
-    get_connection, propagate_trace_for_ctx, run_provider, LinkConfig, Provider,
+    get_connection, propagate_trace_for_ctx, run_provider, LinkConfig, LinkDeleteInfo, Provider,
 };
+use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 
 mod bindings;
 use bindings::{
-    into_result_row, serve, PgValue, PreparedStatementExecError, PreparedStatementToken,
-    QueryError, ResultRow, StatementPrepareError,
+    into_result_row, PgValue, PreparedStatementExecError, PreparedStatementToken, QueryError,
+    ResultRow, StatementPrepareError,
 };
 
 mod config;
-use config::{parse_prefixed_config_from_map, ConnectionCreateOptions};
+use config::{extract_prefixed_conn_config, ConnectionCreateOptions};
 
 use wasmcloud_provider_sdk::Context;
 
 #[derive(Clone, Default)]
-struct PostgresProvider {
+pub struct PostgresProvider {
     /// Database connections indexed by source ID name
     connections: Arc<RwLock<HashMap<String, Pool>>>,
     /// Lookup of prepared statements to the statement and the source ID that prepared them
     prepared_statements: Arc<RwLock<HashMap<PreparedStatementToken, (Statement, String)>>>,
 }
 
-/// Run [`PostgresProvider`] as a wasmCloud provider
-pub async fn run() -> anyhow::Result<()> {
-    let provider = PostgresProvider::default();
-    let shutdown = run_provider(provider.clone(), "sqldb-postgres-provider")
-        .await
-        .context("failed to run provider")?;
-    let connection = get_connection();
-    serve(
-        &connection.get_wrpc_client(connection.provider_key()),
-        provider,
-        shutdown,
-    )
-    .await
-}
-
 impl PostgresProvider {
+    fn name() -> &'static str {
+        "sqldb-postgres-provider"
+    }
+
+    /// Run [`PostgresProvider`] as a wasmCloud provider
+    pub async fn run() -> anyhow::Result<()> {
+        initialize_observability!(
+            PostgresProvider::name(),
+            std::env::var_os("PROVIDER_SQLDB_POSTGRES_FLAMEGRAPH_PATH")
+        );
+        let provider = PostgresProvider::default();
+        let shutdown = run_provider(provider.clone(), PostgresProvider::name())
+            .await
+            .context("failed to run provider")?;
+        let connection = get_connection();
+        let wrpc = connection
+            .get_wrpc_client(connection.provider_key())
+            .await?;
+        serve_provider_exports(&wrpc, provider, shutdown, bindings::serve)
+            .await
+            .context("failed to serve provider exports")
+    }
+
     /// Create and store a connection pool, if not already present
     async fn ensure_pool(
         &self,
@@ -115,6 +126,27 @@ impl PostgresProvider {
             .try_collect::<Vec<_>>()
             .await
             .map_err(|e| QueryError::Unexpected(format!("failed to evaluate full row: {e}")))
+    }
+
+    /// Perform a raw query
+    async fn do_query_batch(&self, source_id: &str, query: &str) -> Result<(), QueryError> {
+        let connections = self.connections.read().await;
+        let pool = connections.get(source_id).ok_or_else(|| {
+            QueryError::Unexpected(format!(
+                "missing connection pool for source [{source_id}] while querying"
+            ))
+        })?;
+
+        let client = pool.get().await.map_err(|e| {
+            QueryError::Unexpected(format!("failed to build client from pool: {e}"))
+        })?;
+
+        client
+            .batch_execute(query)
+            .await
+            .map_err(|e| QueryError::Unexpected(format!("failed to perform query: {e}")))?;
+
+        Ok(())
     }
 
     /// Prepare a statement
@@ -190,12 +222,10 @@ impl Provider for PostgresProvider {
     #[instrument(level = "debug", skip_all, fields(source_id))]
     async fn receive_link_config_as_target(
         &self,
-        LinkConfig {
-            source_id, config, ..
-        }: LinkConfig<'_>,
+        link_config @ LinkConfig { source_id, .. }: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
         // Attempt to parse a configuration from the map with the prefix POSTGRES_
-        let Some(db_cfg) = parse_prefixed_config_from_map("POSTGRES_", config) else {
+        let Some(db_cfg) = extract_prefixed_conn_config("POSTGRES_", &link_config) else {
             // If we failed to find a config on the link, then we
             warn!(source_id, "no link-level DB configuration");
             return Ok(());
@@ -212,13 +242,14 @@ impl Provider for PostgresProvider {
     /// Handle notification that a link is dropped
     ///
     /// Generally we can release the resources (connections) associated with the source
-    #[instrument(level = "debug", skip_all, fields(source_id))]
-    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_source_id();
         let mut prepared_statements = self.prepared_statements.write().await;
-        prepared_statements.retain(|_stmt_token, (_conn, src_id)| source_id != *src_id);
+        prepared_statements.retain(|_stmt_token, (_conn, src_id)| component_id != *src_id);
         drop(prepared_statements);
         let mut connections = self.connections.write().await;
-        connections.remove(source_id);
+        connections.remove(component_id);
         drop(connections);
         Ok(())
     }
@@ -256,6 +287,26 @@ impl bindings::query::Handler<Option<Context>> for PostgresProvider {
 
         Ok(self.do_query(&source_id, &query, params).await)
     }
+
+    #[instrument(level = "debug", skip_all, fields(query))]
+    async fn query_batch(
+        &self,
+        ctx: Option<Context>,
+        query: String,
+    ) -> Result<Result<(), QueryError>> {
+        propagate_trace_for_ctx!(ctx);
+        let Some(Context {
+            component: Some(source_id),
+            ..
+        }) = ctx
+        else {
+            return Ok(Err(QueryError::Unexpected(
+                "unexpectedly missing source ID".into(),
+            )));
+        };
+
+        Ok(self.do_query_batch(&source_id, &query).await)
+    }
 }
 
 /// Implement the `wasmcloud:postgres/prepared` interface for [`PostgresProvider`]
@@ -291,26 +342,19 @@ impl bindings::prepared::Handler<Option<Context>> for PostgresProvider {
     }
 }
 
-#[cfg(feature = "rustls")]
 fn create_tls_pool(
     cfg: deadpool_postgres::Config,
     runtime: Option<deadpool_postgres::Runtime>,
 ) -> Result<Pool> {
+    let mut store = rustls::RootCertStore::empty();
+    store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     cfg.create_pool(
         runtime,
         tokio_postgres_rustls::MakeRustlsConnect::new(
             rustls::ClientConfig::builder()
-                .with_root_certificates(rustls::RootCertStore::empty())
+                .with_root_certificates(store)
                 .with_no_client_auth(),
         ),
     )
     .context("failed to create TLS-enabled connection pool")
-}
-
-#[cfg(not(feature = "rustls"))]
-fn create_tls_pool(
-    _cfg: deadpool_postgres::Config,
-    _runtime: Option<deadpool_postgres::Runtime>,
-) -> Result<Pool> {
-    anyhow::bail!("cannot build TLS connections without rustls feature")
 }

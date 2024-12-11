@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-keyvalue-vault"
-version = "0.8.0"
+version = "0.11.1"
 description = """
 Hashicorp Vault capability provider for the 'wrpc:keyvalue' capability contract
 """
@@ -13,6 +13,7 @@ repository.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+bytes = { workspace = true }
 base64 = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

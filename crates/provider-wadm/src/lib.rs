@@ -13,24 +13,33 @@ use wadm_types::{
     api::{StatusResponse, StatusResult},
     wasmcloud::wadm::handler::StatusUpdate,
 };
+use wasmcloud_provider_sdk::provider::WrpcClient;
+use wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_provider_sdk::{
     core::HostData, get_connection, load_host_data, run_provider, Context, LinkConfig, Provider,
 };
+use wasmcloud_provider_sdk::{serve_provider_exports, LinkDeleteInfo};
 
-use crate::exports::wasmcloud::wadm::client::{ModelSummary, OamManifest, Status, VersionInfo};
+use crate::bindings::exports::wasmcloud::wadm::client::{
+    ModelSummary, OamManifest, Status, VersionInfo,
+};
 
 mod config;
 use config::WadmConfig;
 
-wit_bindgen_wrpc::generate!({
-    additional_derives: [
-        serde::Serialize,
-        serde::Deserialize,
-    ],
-    with: {
-        "wasmcloud:wadm/types@0.1.0": wadm_types::wasmcloud::wadm::types
-    }
-});
+mod bindings {
+    wit_bindgen_wrpc::generate!({
+        additional_derives: [
+            serde::Serialize,
+            serde::Deserialize,
+        ],
+        with: {
+            "wasmcloud:wadm/types@0.2.0": wadm_types::wasmcloud::wadm::types,
+            "wasmcloud:wadm/handler@0.2.0": generate,
+            "wasmcloud:wadm/client@0.2.0": generate,
+        }
+    });
+}
 
 pub async fn run() -> anyhow::Result<()> {
     WadmProvider::run().await
@@ -74,12 +83,12 @@ impl WadmProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        serve(
-            &connection.get_wrpc_client(connection.provider_key()),
-            provider,
-            shutdown,
-        )
-        .await
+        let wrpc = connection
+            .get_wrpc_client(connection.provider_key())
+            .await?;
+        serve_provider_exports(&wrpc, provider, shutdown, bindings::serve)
+            .await
+            .context("failed to serve provider exports")
     }
 
     /// Build a [`WadmProvider`] from [`HostData`]
@@ -152,6 +161,13 @@ impl WadmProvider {
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
         tokio::task::spawn(Abortable::new(
             {
+                let wrpc = match get_connection().get_wrpc_client(&component_id).await {
+                    Ok(wrpc) => Arc::new(wrpc),
+                    Err(err) => {
+                        error!(?err, "failed to construct wRPC client");
+                        return Err(anyhow::anyhow!("Failed to construct wRPC client: {}", err));
+                    }
+                };
                 let semaphore = Arc::new(Semaphore::new(75));
                 async move {
                     // Listen for NATS message(s)
@@ -181,8 +197,10 @@ impl WadmProvider {
 
                                         let component_id = Arc::clone(&component_id);
                                         let app_name = Arc::clone(&app_name);
+                                        let wrpc = Arc::clone(&wrpc);
                                         tokio::spawn(async move {
                                             dispatch_status_update(
+                                                &wrpc,
                                                 component_id.as_str(),
                                                 &app_name,
                                                 status.into(),
@@ -233,6 +251,7 @@ impl WadmProvider {
 
 #[instrument(level = "debug", skip_all, fields(component_id = %component_id, app_name = %app))]
 async fn dispatch_status_update(
+    wrpc: &WrpcClient,
     component_id: &str,
     app: &str,
     status: Status,
@@ -247,11 +266,14 @@ async fn dispatch_status_update(
         component_id = component_id,
         "sending status to component",
     );
-    if let Err(e) = wasmcloud::wadm::handler::handle_status_update(
-        &get_connection().get_wrpc_client(component_id),
-        &update,
-    )
-    .await
+
+    let mut cx = async_nats::HeaderMap::new();
+    for (k, v) in TraceContextInjector::default_with_span().iter() {
+        cx.insert(k.as_str(), v.as_str())
+    }
+
+    if let Err(e) =
+        bindings::wasmcloud::wadm::handler::handle_status_update(wrpc, Some(cx), &update).await
     {
         error!(
             error = %e,
@@ -326,50 +348,41 @@ impl Provider for WadmProvider {
         Ok(())
     }
 
-    /// Handle notification that a link is dropped: close the connection
-    #[instrument(level = "info", skip(self))]
-    async fn delete_link(&self, component_id: &str) -> anyhow::Result<()> {
-        if component_id == get_connection().provider_key() {
-            return self.delete_link_as_source(component_id).await;
-        }
-
-        self.delete_link_as_target(component_id).await
-    }
-
-    #[instrument(level = "info", skip(self))]
-    async fn delete_link_as_source(&self, target_id: &str) -> anyhow::Result<()> {
+    #[instrument(level = "info", skip_all, fields(target_id = info.get_source_id()))]
+    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_target_id();
         let mut links = self.handler_components.write().await;
-        if let Some(bundle) = links.remove(target_id) {
-            // Note: subscriptions will be closed via Drop on the WadmClientBundle
+        if let Some(bundle) = links.remove(component_id) {
             debug!(
-                "dropping Wadm client and associated subscriptions [{}] for (handler) component [{}]...",
-                &bundle.sub_handles.len(),
-                target_id
-            );
+                    "dropping Wadm client and associated subscriptions [{}] for (handler) component [{}]...",
+                    &bundle.sub_handles.len(),
+                    component_id
+                );
         }
 
         debug!(
             "finished processing (handler) link deletion for component [{}]",
-            target_id
+            component_id
         );
 
         Ok(())
     }
 
-    #[instrument(level = "info", skip(self))]
-    async fn delete_link_as_target(&self, source_id: &str) -> anyhow::Result<()> {
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_source_id();
         let mut links = self.consumer_components.write().await;
-        if let Some(bundle) = links.remove(source_id) {
+        if let Some(bundle) = links.remove(component_id) {
             debug!(
-                "dropping Wadm client and associated subscriptions [{}] for (consumer) component [{}]...",
-                &bundle.sub_handles.len(),
-                source_id
-            );
+                    "dropping Wadm client and associated subscriptions [{}] for (consumer) component [{}]...",
+                    &bundle.sub_handles.len(),
+                    component_id
+                );
         }
 
         debug!(
             "finished processing (consumer) link deletion for component [{}]",
-            source_id
+            component_id
         );
 
         Ok(())
@@ -391,8 +404,7 @@ impl Provider for WadmProvider {
     }
 }
 
-/// Implement the 'wasmcloud:wadm' capability provider interface
-impl exports::wasmcloud::wadm::client::Handler<Option<Context>> for WadmProvider {
+impl bindings::exports::wasmcloud::wadm::client::Handler<Option<Context>> for WadmProvider {
     #[instrument(level = "debug", skip(self, ctx), fields(model_name = %model_name))]
     async fn deploy_model(
         &self,
@@ -400,13 +412,13 @@ impl exports::wasmcloud::wadm::client::Handler<Option<Context>> for WadmProvider
         model_name: String,
         version: Option<String>,
         lattice: Option<String>,
-    ) -> anyhow::Result<Result<(), String>> {
+    ) -> anyhow::Result<Result<String, String>> {
         let client = self.get_client(ctx).await?;
         match client
             .deploy_manifest(&model_name, version.as_deref())
             .await
         {
-            Ok(_) => Ok(Ok(())),
+            Ok((name, _version)) => Ok(Ok(name)),
             Err(err) => {
                 error!("Deployment failed: {err}");
                 Ok(Err(format!("Deployment failed: {err}")))

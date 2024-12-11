@@ -1,12 +1,17 @@
-//! Core reusable functionality related to hosts
+//! Reusable functionality related to [wasmCloud hosts][docs-wasmcloud-hosts]
+//!
+//! [docs-wasmcloud-hosts]: <https://wasmcloud.com/docs/concepts/hosts>
 
 use std::collections::HashMap;
 
+use secrecy::zeroize::ZeroizeOnDrop;
+use secrecy::Zeroize;
 use serde::{Deserialize, Serialize};
 
 use crate::link::InterfaceLinkDefinition;
 use crate::logging::Level;
 use crate::otel::OtelConfig;
+use crate::secrets::SecretValue;
 use crate::wit::{deserialize_wit_map, serialize_wit_map, WitMap};
 
 /// Environment settings for initializing a capability provider
@@ -44,6 +49,15 @@ pub struct HostData {
     /// Merged named configuration set for this provider at runtime
     #[serde(default)]
     pub config: HashMap<String, String>,
+    /// Secrets given to this provider at runtime
+    #[serde(default)]
+    pub secrets: HashMap<String, SecretValue>,
+    /// The public key xkey of the host, used for decrypting secrets
+    #[serde(default)]
+    pub host_xkey_public_key: String,
+    /// The private key xkey of the provider, used for decrypting secrets
+    #[serde(default)]
+    pub provider_xkey_private_key: String,
     /// Host-wide default RPC timeout for rpc messages, in milliseconds.  Defaults to 2000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_rpc_timeout_ms: Option<u64>,
@@ -53,5 +67,14 @@ pub struct HostData {
     /// The log level providers should log at
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_level: Option<Level>,
+    #[serde(default)]
     pub otel_config: OtelConfig,
+}
+
+// Trait implementations that ensure we zeroize the memory of secrets when they are dropped
+impl ZeroizeOnDrop for HostData {}
+impl Zeroize for HostData {
+    fn zeroize(&mut self) {
+        self.provider_xkey_private_key.zeroize();
+    }
 }

@@ -1,0 +1,16 @@
+package wasmcloud:messaging-image-processor;
+
+world component {
+  import wasi:logging/logging@0.1.0-draft;
+
+  // Used for downloading/uploading data to object storage
+  import wasi:blobstore/blobstore@0.2.0-draft; 
+
+  // Used for leasing/completing processing jobs from the task manager
+  import wasmcloud:task-manager/tasks@0.1.0-draft;
+
+  // Used for retrieving remote images
+  import wasi:http/outgoing-handler@0.2.1;
+
+  export wasmcloud:messaging/handler@0.2.0;
+}

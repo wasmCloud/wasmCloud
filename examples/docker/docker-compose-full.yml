@@ -74,7 +74,7 @@ services:
       - "otelcol"
     image: wasmcloud/wasmcloud:latest
     environment:
-      RUST_LOG: debug,hyper=info,async_nats=info,oci_distribution=info,cranelift_codegen=warn
+      RUST_LOG: debug,hyper=info,async_nats=info,oci_client=info,cranelift_codegen=warn
       WASMCLOUD_LOG_LEVEL: debug
       WASMCLOUD_RPC_HOST: nats
       WASMCLOUD_CTL_HOST: nats

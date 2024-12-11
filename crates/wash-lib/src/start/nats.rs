@@ -1,11 +1,12 @@
+use anyhow::{bail, Result};
+use command_group::AsyncCommandGroup;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-
-use anyhow::{bail, Result};
 use tokio::fs::{metadata, write};
 use tokio::process::{Child, Command};
 use tracing::warn;
 
+use crate::common::CommandGroupUsage;
 use crate::start::wait_for_server;
 
 use super::download_binary_from_github;
@@ -76,11 +77,35 @@ where
 {
     let nats_bin_path = dir.as_ref().join(NATS_SERVER_BINARY);
     if let Ok(_md) = metadata(&nats_bin_path).await {
-        // NATS already exists, return early
-        return Ok(nats_bin_path);
+        // Check version to see if we need to update
+        if let Ok(output) = Command::new(&nats_bin_path).arg("version").output().await {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            eprintln!(
+                "👀 Found nats-server version on the disk: {}",
+                stdout.trim_end()
+            );
+            let re = regex::Regex::new(r"^nats-server:[^\s]*").unwrap();
+            if re.replace(&stdout, "").to_string().trim() == version {
+                // nats-server already at correct version, return early
+                eprintln!("✅ Using nats-server version [{}]", &version);
+                return Ok(nats_bin_path);
+            }
+        }
     }
-    // Download NATS tarball
-    download_binary_from_github(&nats_url(os, arch, version), dir, NATS_SERVER_BINARY).await
+
+    eprintln!(
+        "🎣 Downloading new nats-server from {}",
+        &nats_url(os, arch, version)
+    );
+
+    // Download NATS binary
+    let res =
+        download_binary_from_github(&nats_url(os, arch, version), dir, NATS_SERVER_BINARY).await;
+    if let Ok(ref path) = res {
+        eprintln!("🎯 Saved nats-server to {}", path.display());
+    }
+
+    res
 }
 
 /// Downloads the NATS binary for the architecture and operating system of the current host machine.
@@ -114,7 +139,7 @@ where
 
 /// Configuration for a NATS server that supports running either in "standalone" or "leaf" mode.
 /// See the respective [`NatsConfig::new_standalone`] and [`NatsConfig::new_leaf`] implementations below for more information.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NatsConfig {
     pub host: String,
     pub port: u16,
@@ -125,6 +150,7 @@ pub struct NatsConfig {
     pub remote_url: Option<String>,
     pub credentials: Option<PathBuf>,
     pub websocket_port: u16,
+    pub config_path: Option<PathBuf>,
 }
 
 /// Returns a standalone NATS config with the following values:
@@ -144,6 +170,7 @@ impl Default for NatsConfig {
             remote_url: None,
             credentials: None,
             websocket_port: 4223,
+            config_path: None,
         }
     }
 }
@@ -168,6 +195,7 @@ impl NatsConfig {
         remote_url: String,
         credentials: PathBuf,
         websocket_port: u16,
+        config_path: Option<PathBuf>,
     ) -> Self {
         NatsConfig {
             host: host.to_owned(),
@@ -177,6 +205,7 @@ impl NatsConfig {
             remote_url: Some(remote_url),
             credentials: Some(credentials),
             websocket_port,
+            config_path,
         }
     }
     /// Instantiates config for a standalone NATS server. Unless you're looking to extend
@@ -257,12 +286,18 @@ jetstream {{
 /// * `bin_path` - Path to the nats-server binary to execute
 /// * `stderr` - Specify where NATS stderr logs should be written to. If logs aren't important, use `std::process::Stdio::null()`
 /// * `config` - Configuration for the NATS server, see [`NatsConfig`] for options. This config file is written alongside the nats-server binary as `nats.conf`
-pub async fn start_nats_server<P, T>(bin_path: P, stderr: T, config: NatsConfig) -> Result<Child>
+pub async fn start_nats_server<P, T>(
+    bin_path: P,
+    stderr: T,
+    config: NatsConfig,
+    command_group: CommandGroupUsage,
+) -> Result<Child>
 where
     P: AsRef<Path>,
     T: Into<Stdio>,
 {
     let host_addr = format!("{}:{}", config.host, config.port);
+
     // If we can connect to the local port, NATS won't be able to listen on that port
     if tokio::net::TcpStream::connect(&host_addr).await.is_ok() {
         bail!(
@@ -271,28 +306,54 @@ where
             config.port
         );
     }
-    let child = if let Some(parent_path) = bin_path.as_ref().parent() {
-        let config_path = parent_path.join(NATS_SERVER_CONF);
-        let host = config.host.clone();
-        let port = config.port;
-        config.write_to_path(&config_path).await?;
-        Command::new(bin_path.as_ref())
-            .stderr(stderr)
-            .stdin(Stdio::null())
-            .arg("-js")
-            .arg("--config")
-            .arg(config_path)
-            .arg("--addr")
-            .arg(host)
-            .arg("--port")
-            .arg(port.to_string())
-            .arg("--pid")
-            .arg(parent_path.join(NATS_SERVER_PID))
-            .spawn()
-            .map_err(anyhow::Error::from)
-    } else {
+
+    let bin_path_ref = bin_path.as_ref();
+
+    let Some(parent_path) = bin_path_ref.parent() else {
         bail!("could not write config to disk, couldn't find download directory")
-    }?;
+    };
+
+    let config_path = parent_path.join(NATS_SERVER_CONF);
+    let host = config.host.clone();
+    let port = config.port;
+
+    let mut cmd_args = vec![
+        "-js".to_string(),
+        "--addr".to_string(),
+        host,
+        "--port".to_string(),
+        port.to_string(),
+        "--pid".to_string(),
+        parent_path
+            .join(NATS_SERVER_PID)
+            .to_string_lossy()
+            .to_string(),
+        "--config".to_string(),
+    ];
+
+    if let Some(nats_cfg_path) = &config.config_path {
+        anyhow::ensure!(
+            nats_cfg_path.is_file(),
+            "The provided NATS config File [{:?}] is not a valid File",
+            nats_cfg_path
+        );
+
+        cmd_args.push(nats_cfg_path.to_string_lossy().to_string());
+    } else {
+        config.write_to_path(&config_path).await?;
+        cmd_args.push(config_path.to_string_lossy().to_string());
+    }
+
+    let mut cmd = Command::new(bin_path_ref);
+    cmd.stderr(stderr.into())
+        .stdin(Stdio::null())
+        .args(&cmd_args);
+    let child = if command_group == CommandGroupUsage::CreateNew {
+        cmd.group_spawn().map_err(anyhow::Error::from)?.into_inner()
+    } else {
+        cmd.spawn().map_err(anyhow::Error::from)?
+    };
+
     wait_for_server(&host_addr, "NATS server")
         .await
         .map(|()| child)
@@ -321,17 +382,33 @@ fn nats_url(os: &str, arch: &str, version: &str) -> String {
 
 #[cfg(test)]
 mod test {
-    use crate::start::{
-        ensure_nats_server, is_bin_installed, start_nats_server, NatsConfig, NATS_SERVER_BINARY,
+    use anyhow::{Context as _, Result};
+    use std::{
+        env::temp_dir,
+        net::{Ipv4Addr, SocketAddrV4},
     };
-    use anyhow::Result;
-    use std::env::temp_dir;
     use tokio::{
         fs::{create_dir_all, remove_dir_all},
         io::AsyncReadExt,
+        net::TcpListener,
+    };
+
+    use crate::common::CommandGroupUsage;
+    use crate::start::{
+        ensure_nats_server, is_bin_installed, start_nats_server, NatsConfig, NATS_SERVER_BINARY,
     };
 
     const NATS_SERVER_VERSION: &str = "v2.10.7";
+
+    /// Returns an open port on the interface, searching within the range endpoints, inclusive
+    async fn find_open_port() -> Result<u16> {
+        TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+            .await
+            .context("failed to bind random port")?
+            .local_addr()
+            .map(|addr| addr.port())
+            .context("failed to get local address from opened TCP socket")
+    }
 
     #[tokio::test]
     #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
@@ -362,9 +439,17 @@ mod test {
         let log_path = install_dir.join("nats.log");
         let log_file = tokio::fs::File::create(&log_path).await?.into_std().await;
 
-        let config = NatsConfig::new_standalone("127.0.0.1", 10000, None);
-        let child_res =
-            start_nats_server(&install_dir.join(NATS_SERVER_BINARY), log_file, config).await;
+        let nats_port = find_open_port().await?;
+        let nats_ws_port = find_open_port().await?;
+        let mut config = NatsConfig::new_standalone("127.0.0.1", nats_port, None);
+        config.websocket_port = nats_ws_port;
+        let child_res = start_nats_server(
+            &install_dir.join(NATS_SERVER_BINARY),
+            log_file,
+            config,
+            CommandGroupUsage::UseParent,
+        )
+        .await;
         assert!(child_res.is_ok());
 
         // Give NATS max 5 seconds to start up
@@ -400,11 +485,16 @@ mod test {
         let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir).await;
         assert!(res.is_ok());
 
-        let config = NatsConfig::new_standalone("127.0.0.1", 10003, Some("extender".to_string()));
+        let nats_port = find_open_port().await?;
+        let nats_ws_port = find_open_port().await?;
+        let mut config =
+            NatsConfig::new_standalone("127.0.0.1", nats_port, Some("extender".to_string()));
+        config.websocket_port = nats_ws_port;
         let nats_one = start_nats_server(
             &install_dir.join(NATS_SERVER_BINARY),
             std::process::Stdio::null(),
             config.clone(),
+            CommandGroupUsage::UseParent,
         )
         .await;
         assert!(nats_one.is_ok());
@@ -413,7 +503,13 @@ mod test {
         tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
         let log_path = install_dir.join("nats.log");
         let log = std::fs::File::create(&log_path)?;
-        let nats_two = start_nats_server(&install_dir.join(NATS_SERVER_BINARY), log, config).await;
+        let nats_two = start_nats_server(
+            &install_dir.join(NATS_SERVER_BINARY),
+            log,
+            config,
+            CommandGroupUsage::UseParent,
+        )
+        .await;
         assert!(nats_two.is_err());
 
         nats_one.unwrap().kill().await?;
@@ -436,7 +532,7 @@ mod test {
         let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir).await;
         assert!(res.is_ok(), "NATS should be able to start");
 
-        let creds = dirs::home_dir().unwrap().join("nats.creds");
+        let creds = etcetera::home_dir().unwrap().join("nats.creds");
         let config: NatsConfig = NatsConfig::new_leaf(
             "127.0.0.1",
             4243,
@@ -444,6 +540,7 @@ mod test {
             "connect.ngs.global".to_string(),
             creds.clone(),
             4204,
+            None,
         );
 
         config.write_to_path(creds.clone()).await?;
@@ -455,7 +552,7 @@ mod test {
         assert_eq!(contents, format!("\njetstream {{\n    domain={}\n    store_dir={:?}\n}}\n\nleafnodes {{\n    remotes = [\n        {{\n            url: \"{}\"\n            credentials: {:?}\n        }}\n    ]\n}}\n                \n\nwebsocket {{\n    port: 4204\n    no_tls: true\n}}\n                \n", "core", std::env::temp_dir().join("wash-jetstream-4243").display(), "connect.ngs.global", creds.to_string_lossy()));
         // A simple check to ensure we are properly escaping quotes, this is unescaped and checks for "\\"
         #[cfg(target_family = "windows")]
-        assert!(creds.to_string_lossy().contains("\\"));
+        assert!(creds.to_string_lossy().contains('\\'));
 
         let _ = remove_dir_all(install_dir).await;
         Ok(())

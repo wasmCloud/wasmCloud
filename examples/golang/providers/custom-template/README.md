@@ -9,14 +9,18 @@ The purpose of this example is to provide comprehensive comments on the usage of
 Prerequisites:
 
 1. [Go toolchain](https://go.dev/doc/install)
-1. [wit-bindgen-wrpc](https://github.com/wrpc/wit-bindgen-wrpc/tree/main) `cargo install wit-bindgen-wrpc-cli`
+1. [wit-bindgen-wrpc 0.7.0](https://github.com/bytecodealliance/wrpc), download the release binary
 1. [wash](https://wasmcloud.com/docs/installation)
-
-<!-- TODO: Build using wash build -->
 
 ```bash
 go generate ./...
 go build .
+```
+
+Alternatively, you can generate, build and package this provider in one step:
+
+```bash
+wash build
 ```
 
 You can build the included test component with `wash build -p ./component`.
@@ -50,9 +54,16 @@ wash call custom-template wasmcloud:example/system-info.call
 
 ## Running as an application
 
-You can deploy this provider, along with a [prebuilt component](../component/) for testing, by deploying the [wadm.yaml](./wadm.yaml) application.
+You can deploy this provider, along with a [component](../component/) for testing, by deploying the [wadm.yaml](./wadm.yaml) application. Make sure to build the component with `wash build`.
 
 ```bash
+# Build the component
+cd component
+wash build
+
+# Return to the provider directory
+cd ..
+
 # Launch wasmCloud in the background
 wash up -d
 # Deploy the application

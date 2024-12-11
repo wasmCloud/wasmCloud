@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
 use tracing::warn;
+use wasmcloud_provider_sdk::{core::secrets::SecretValue, LinkConfig};
 
 const POSTGRES_DEFAULT_PORT: u16 = 5432;
 
@@ -37,10 +36,14 @@ impl From<ConnectionCreateOptions> for deadpool_postgres::Config {
 ///
 /// For example given a prefix like `EXAMPLE_`, and a Hashmap that contains an entry like ("EXAMPLE_HOST", "localhost"),
 /// the parsed [`ConnectionCreateOptions`] would contain "localhost" as the host.
-pub(crate) fn parse_prefixed_config_from_map(
+pub(crate) fn extract_prefixed_conn_config(
     prefix: &str,
-    config: &HashMap<String, String>,
+    link_config: &LinkConfig,
 ) -> Option<ConnectionCreateOptions> {
+    let LinkConfig {
+        config, secrets, ..
+    } = link_config;
+
     let keys = [
         format!("{prefix}HOST"),
         format!("{prefix}PORT"),
@@ -54,7 +57,24 @@ pub(crate) fn parse_prefixed_config_from_map(
         .map(|k| config.get(k))
         .collect::<Vec<Option<&String>>>()[..]
     {
-        [Some(host), Some(port), Some(username), Some(password), Some(database), Some(tls_required)] => {
+        [Some(host), Some(port), Some(username), config_password, Some(database), Some(tls_required)] =>
+        {
+            let secret_password = secrets
+                .get(&format!("{prefix}PASSWORD"))
+                .and_then(SecretValue::as_string);
+            // Check that the password was pulled from secrets, not config
+            let password = match (secret_password, config_password) {
+                (Some(s), _) => s,
+                (None, Some(c)) => {
+                    warn!("secret value [{prefix}PASSWORD] was not found in secrets, but exists in config. Prefer using secrets for sensitive values.", );
+                    c
+                }
+                (_, None) => {
+                    warn!("failed to find password in config and secrets");
+                    return None;
+                }
+            };
+
             Some(ConnectionCreateOptions {
                 host: host.to_string(),
                 port: port.parse::<u16>().unwrap_or_else(|_e| {

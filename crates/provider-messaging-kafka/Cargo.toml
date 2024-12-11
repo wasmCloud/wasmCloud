@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-messaging-kafka"
-version = "0.2.1"
+version = "0.5.1"
 description = """
 A capability provider that satisfies the 'wasmcloud:messaging' contract using Kafka as a backend.
 """
@@ -16,11 +16,12 @@ status = "actively-developed"
 
 [dependencies]
 anyhow = { workspace = true }
-chrono = { workspace = true, features = ["clock"] }
+bytes = { workspace = true }
 futures = { workspace = true }
-rskafka = { workspace = true }
+kafka = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
 tracing = { workspace = true }
-wasmcloud-provider-sdk = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true, features = [ "otel" ] }
 wasmcloud-tracing = { workspace = true }
 wit-bindgen-wrpc = { workspace = true }

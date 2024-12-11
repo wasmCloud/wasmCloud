@@ -16,7 +16,7 @@ status = "actively-developed"
 
 [dependencies]
 anyhow = { workspace = true }
-async-nats = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 wascap = { workspace = true }

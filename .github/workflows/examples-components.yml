@@ -1,31 +1,62 @@
 name: example-components
 
 on:
+  merge_group:
   push:
     branches:
       - main
     tags:
       - component-blobby-v[0-9]+.[0-9]+.[0-9]+*
+      - component-blobby-v[0-9]+.[0-9]+.[0-9]+-*
       - component-dog-fetcher-v[0-9]+.[0-9]+.[0-9]+*
+      - component-dog-fetcher-v[0-9]+.[0-9]+.[0-9]+-*
       - component-echo-messaging-v[0-9]+.[0-9]+.[0-9]+*
+      - component-echo-messaging-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-ferris-says-v[0-9]+.[0-9]+.[0-9]+*
+      - component-ferris-says-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-blobstore-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-blobstore-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-hello-world-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-hello-world-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-http-hello-world-tinygo-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-hello-world-tinygo-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-http-hello-world-python-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-hello-world-python-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-http-hello-world-typescript-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-hello-world-typescript-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-keyvalue-counter-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-keyvalue-counter-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-keyvalue-messaging-v[0-9]+.[0-9]+.[0-9]+*
+      - component-keyvalue-messaging-v[0-9]+.[0-9]+.[0-9]+-*
       - component-sqldb-postgres-query-v[0-9]+.[0-9]+.[0-9]+*
+      - component-sqldb-postgres-query-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-sqldb-postgres-query-tinygo-v[0-9]+.[0-9]+.[0-9]+*
+      - component-sqldb-postgres-query-tinygo-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-http-task-manager-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-password-checker-typescript-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-password-checker-typescript-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-http-password-checker-rust-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-password-checker-rust-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-http-task-manager-v[0-9]+.[0-9]+.[0-9]+-*
   pull_request:
     branches: [main]
     paths:
-      - .github/workflows/examples.yml
+      - .github/workflows/examples-components.yml
       - crates/wash-lib/**
       - crates/wash-cli/**
       - examples/rust/components/**
       - examples/golang/components/**
+      - examples/tinygo/components/**
       - examples/python/components/**
       - examples/typescript/components/**
 
+permissions:
+  contents: read
+
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -33,139 +64,235 @@ env:
 
 jobs:
   build-wash-cli:
-    name: Build wash CLI
+    name: build wash-cli
     runs-on: ubuntu-22.04
     strategy:
       matrix:
         wash-version:
-          - 0.27.0
+          # NOTE(2024/10/23): we need to use the current version of wash *only*
+          # due to all the new WIT package retrieval goodness
+          #
+          # Once a new version of wash is out we can use prebuilt versions again (>= 35.0)
           - current
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         if: ${{ matrix.wash-version == 'current' }}
-      - uses: Swatinem/rust-cache@v2
+      - run: rustup show
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
         with:
-          shared-key: "ubuntu-22.04-shared-cache"
+          shared-key: 'ubuntu-22.04-shared-cache'
       - name: install wash (previous version)
         if: ${{ matrix.wash-version != 'current' }}
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@ef1f08ff7e5a9451af03151a0e3dc0785d5c9673
         with:
           tool: wash-cli@${{ matrix.wash-version }}
       - name: build wash (current)
         if: ${{ matrix.wash-version == 'current' }}
         run: cargo build -p wash-cli --release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         if: ${{ matrix.wash-version == 'current' }}
         with:
           name: wash-${{ matrix.wash-version }}
           path: ./target/release/wash
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         if: ${{ matrix.wash-version != 'current' }}
         with:
           name: wash-${{ matrix.wash-version }}
           path: ~/.cargo/bin/wash
 
-  # Ensure that `wash build` works for all example projects below
+  # Ensure that `wash build` and `wash app validate` works for all example projects below
   wash-build:
-    name: build
+    name: example-component-build
     runs-on: ubuntu-22.04
     needs: [build-wash-cli]
     strategy:
       fail-fast: false
       matrix:
         wash-version:
-          - 0.27.0
+          # NOTE(2024/10/23): we need to use the current version of wash *only*
+          # due to all the new WIT package retrieval goodness
+          #
+          # Once a new version of wash is out we can use prebuilt versions again (>= 35.0)
+          - 0.36.1
           - current
         project:
           # Golang example components
-          - lang: "golang"
-            lang_version: "1.20"
-            name: "http-echo-tinygo"
-          - lang: "golang"
-            lang_version: "1.20"
-            name: "http-hello-world"
+          - folder: 'http-client-tinygo'
+            tag-prefix: 'component-http-client-tinygo-v'
+            lang: 'tinygo'
+            lang-version: '1.23'
+            test-deploy: wadm.yaml
+            wasm-bin: 'http_client_tinygo_s.wasm'
+
+          - folder: 'http-echo-tinygo'
+            tag-prefix: 'component-http-echo-tinygo-v'
+            lang: 'tinygo'
+            lang-version: '1.23'
+            test-deploy: wadm.yaml
+            wasm-bin: 'http-echo-tinygo-component_s.wasm'
+
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-tinygo-v'
+            lang: 'tinygo'
+            lang-version: '1.23'
+            test-deploy: wadm.yaml
+            wasm-bin: 'http_hello_world_s.wasm'
+
+          - folder: 'sqldb-postgres-query'
+            tag-prefix: 'component-sqldb-postgres-query-tinygo-v'
+            lang: 'tinygo'
+            lang-version: '1.23'
+            test-deploy: local.wadm.yaml
+            wasm-bin: 'sqldb_postgres_query_s.wasm'
+
           # Rust example components
-          - name: "blobby"
+          - folder: 'blobby'
+            tag-prefix: 'component-blobby-v'
+            lang: 'rust'
+            wasm-bin: 'blobby_s.wasm'
+
+          - folder: 'dog-fetcher'
+            tag-prefix: 'component-dog-fetcher-v'
+            lang: 'rust'
+            wasm-bin: 'dog_fetcher_s.wasm'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'echo-messaging'
+            tag-prefix: 'component-echo-messaging-v'
+            lang: 'rust'
+            wasm-bin: 'echo_messaging_s.wasm'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'ferris-says'
+            tag-prefix: 'component-ferris-says-v'
+            lang: 'rust'
+            wasm-bin: 'ferris_says_s.wasm'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'http-blobstore'
+            tag-prefix: 'component-http-blobstore-v'
+            lang: 'rust'
+            wasm-bin: 'http_blobstore_s.wasm'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-v'
+            lang: 'rust'
+            wasm-bin: 'http_hello_world_s.wasm'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'http-jsonify'
+            tag-prefix: 'component-http-jsonify-v'
+            lang: 'rust'
+            wasm-bin: 'http_jsonify_s.wasm'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'http-keyvalue-counter'
+            tag-prefix: 'component-http-keyvalue-counter-v'
+            lang: 'rust'
+            wasm-bin: 'http_keyvalue_counter_s.wasm'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'keyvalue-messaging'
+            tag-prefix: 'component-keyvalue-messaging-v'
+            lang: 'rust'
+            wasm-bin: 'keyvalue_messaging_s.wasm'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'sqldb-postgres-query'
+            tag-prefix: 'component-sqldb-postgres-query-v'
+            lang: 'rust'
+            wasm-bin: 'sqldb_postgres_query_s.wasm'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'http-task-manager'
+            tag-prefix: 'component-http-task-manager-v'
+            lang: 'rust'
+            wasm-bin: 'http_task_manager_s.wasm'
+            test-deploy: local.wadm.yaml
+
+          - folder: "http-password-checker"
+            tag-prefix: 'component-http-password-checker-rust-v'
             lang: "rust"
-            wasm-bin: "blobby_s.wasm"
-          - name: "dog-fetcher"
-            lang: "rust"
-            wasm-bin: "dog_fetcher_s.wasm"
-          - name: "echo-messaging"
-            lang: "rust"
-            wasm-bin: "echo_messaging_s.wasm"
-          - name: "http-blobstore"
-            lang: "rust"
-            wasm-bin: "http_blobstore_s.wasm"
-          - name: "http-hello-world"
-            lang: "rust"
-            wasm-bin: "http_hello_world_s.wasm"
-          - name: "http-jsonify"
-            lang: "rust"
-            wasm-bin: "http_jsonify_s.wasm"
-          - name: "http-keyvalue-counter"
-            lang: "rust"
-            wasm-bin: "http_keyvalue_counter_s.wasm"
-          - name: "sqldb-postgres-query"
-            lang: "rust"
-            wasm-bin: "sqldb_postgres_query_s.wasm"
+            wasm-bin: 'http_password_checker_s.wasm'
+            test-deploy: local.wadm.yaml
+
           # Python example components
-          - name: "http-hello-world"
-            lang: "python"
-            lang_version: "3.10"
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-python-v'
+            lang: 'python'
+            wasm-bin: 'http_hello_world_s.wasm'
+            lang-version: '3.10'
+
           # Typescript example components
-          - name: "http-hello-world"
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-typescript-v'
+            lang: 'typescript'
+            lang-version: '20.x'
+            wasm-bin: 'http_hello_world_s.wasm'
+            test_deploy: local.wadm.yaml
+
+          - folder: "http-password-checker"
+            tag-prefix: 'component-http-password-checker-typescript-v'
             lang: "typescript"
-            lang_version: "20.x"
+            lang-version: "22.x"
+            wasm-bin: 'http_password_checker_s.wasm'
+            test_deploy: local.wadm.yaml
     steps:
-      - uses: actions/checkout@v4
-      # Download wash binary & install to path
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # Set up language toolchain
+      - name: Setup WebAssembly toolchains for language
+        uses: ./.github/actions/wasm-lang-toolchain-setup
         with:
-          name: wash-${{ matrix.wash-version }}
-          path: artifacts
-      - name: install wash binary to PATH # Some build tools expect wash to be on the PATH
+          language: ${{ matrix.project.lang }}
+          language-version: ${{ matrix.project.lang-version }}
+          wash-version: ${{ matrix.wash-version }}
+
+      # Validate example [local.]wadm.yaml if present
+      - name: validate wadm.yaml
+        working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.folder }}
         shell: bash
         run: |
-          chmod +x ./artifacts/wash;
-          echo "$(realpath ./artifacts)" >> "$GITHUB_PATH";
-      # Language specific setup
-      - uses: actions/setup-go@v5
-        if: ${{ matrix.project.lang == 'golang' }}
-        with:
-          go-version: ${{ matrix.project.lang_version }}
-      - uses: acifani/setup-tinygo@v2
-        if: ${{ matrix.project.lang == 'golang' }}
-        with:
-          tinygo-version: "0.30.0"
-          install-binaryen: "false"
-      - uses: actions/setup-python@v5
-        if: ${{ matrix.project.lang == 'python' }}
-        with:
-          python-version: ${{ matrix.project.lang_version }}
-      - name: install python reqs
-        if: ${{ matrix.project.lang == 'python' }}
-        run: |
-          pip install componentize-py
-      - uses: actions/setup-node@v4
-        if: ${{ matrix.project.lang == 'typescript' }}
-        with:
-          node-version: ${{ matrix.project.lang_version }}
-      - name: install node reqs
-        if: ${{ matrix.project.lang == 'typescript' }}
-        run: |
-          npm install -g @bytecodealliance/jco
-          npm install -g @bytecodealliance/componentize-js
+          [[ ! -f wadm.yaml ]] || wash app validate wadm.yaml
+          [[ ! -f local.wadm.yaml ]] || wash app validate local.wadm.yaml
+
       # Build example project(s)
       - name: build project
         run: wash build
-        working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}
+        working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.folder }}
+
+      # Run the local.wadm that comes with the example
+      - name: test component load
+        if: ${{ matrix.project.test-deploy && matrix.wash-version == 'current' }}
+        shell: bash
+        working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.folder }}
+        run: |
+          set -xe
+          wash up &
+          WASH_PID=$!
+          sleep 4;
+          wash app deploy ${{ matrix.project.test-deploy }};
+          TRIES=0
+          while [[ $(wash get inventory --output=json | jq '.inventories[0].components | length') -eq 0 ]] ; do
+            if [[ $TRIES -gt 10 ]]; then
+              echo "❌ failed to find component in inventory output after deploying example manifest";
+              exit -1;
+            fi
+            TRIES=$((TRIES+1));
+            sleep 1;
+          done;
+          echo "✅ successfully started at least one component";
+          wash app delete ${{ matrix.project.test-deploy }};
+          kill $WASH_PID;
+          exit 0;
+
       # Save example as an artifact for later step(s)
-      - uses: actions/upload-artifact@v4
-        if: ${{ startswith(github.ref, format('refs/tags/component-{0}-v', matrix.project.name)) }}
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        if: ${{ startswith(github.ref, format('refs/tags/{0}', matrix.project.tag-prefix)) }}
         with:
-          name: wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.name }}
-          path: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}/build/${{ matrix.project.wasm-bin }}
+          name: wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.folder }}
+          path: examples/${{ matrix.project.lang }}/components/${{ matrix.project.folder }}/build/${{ matrix.project.wasm-bin }}
 
   # Publish components relevant components if they've been tagged
   publish:
@@ -173,54 +300,124 @@ jobs:
     runs-on: ubuntu-22.04
     needs: [wash-build]
     if: ${{ startswith(github.ref, 'refs/tags/component-') }}
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
         wash-version:
+          # NOTE(2024/10/23): we need to use the current version of wash *only*
+          # due to all the new WIT package retrieval goodness
+          #
+          # Once a new version of wash is out we can use prebuilt versions again (>= 35.0)
           - current
         project:
+          # Go example components (to publish)
+          - folder: 'http-echo-tinygo'
+            tag-prefix: 'component-http-echo-tinygo-v'
+            lang: 'tinygo'
+            wasm-bin: 'http-echo-tinygo-component_s.wasm'
+
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-tinygo-v'
+            lang: 'tinygo'
+            wasm-bin: 'http_hello_world_s.wasm'
+
           # Rust example components (to publish)
-          - name: "blobby"
-            lang: "rust"
-            wasm-bin: "blobby_s.wasm"
-          - name: "dog-fetcher"
-            lang: "rust"
-            wasm-bin: "dog_fetcher_s.wasm"
-          - name: "echo-messaging"
-            lang: "rust"
-            wasm-bin: "echo_messaging_s.wasm"
-          - name: "http-blobstore"
-            lang: "rust"
-            wasm-bin: "http_blobstore_s.wasm"
-          - name: "http-hello-world"
-            lang: "rust"
-            wasm-bin: "http_hello_world_s.wasm"
-          - name: "http-jsonify"
-            lang: "rust"
-            wasm-bin: "http_jsonify_s.wasm"
-          - name: "http-keyvalue-counter"
-            lang: "rust"
-            wasm-bin: "http_keyvalue_counter_s.wasm"
-          - name: "sqldb-postgres-query"
-            lang: "rust"
-            wasm-bin: "sqldb_postgres_query_s.wasm"
+          - folder: 'blobby'
+            tag-prefix: 'component-blobby-v'
+            lang: 'rust'
+            wasm-bin: 'blobby_s.wasm'
+
+          - folder: 'dog-fetcher'
+            tag-prefix: 'component-dog-fetcher-v'
+            lang: 'rust'
+            wasm-bin: 'dog_fetcher_s.wasm'
+
+          - folder: 'echo-messaging'
+            tag-prefix: 'component-echo-messaging-v'
+            lang: 'rust'
+            wasm-bin: 'echo_messaging_s.wasm'
+
+          - folder: 'ferris-says'
+            tag-prefix: 'component-ferris-says-v'
+            lang: 'rust'
+            wasm-bin: 'ferris_says_s.wasm'
+
+          - folder: 'http-blobstore'
+            tag-prefix: 'component-http-blobstore-v'
+            lang: 'rust'
+            wasm-bin: 'http_blobstore_s.wasm'
+
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-v'
+            lang: 'rust'
+            wasm-bin: 'http_hello_world_s.wasm'
+
+          - folder: 'http-jsonify'
+            tag-prefix: 'component-http-jsonify-v'
+            lang: 'rust'
+            wasm-bin: 'http_jsonify_s.wasm'
+
+          - folder: 'http-keyvalue-counter'
+            tag-prefix: 'component-keyvalue-counter-v'
+            lang: 'rust'
+            wasm-bin: 'http_keyvalue_counter_s.wasm'
+
+          - folder: 'keyvalue-messaging'
+            tag-prefix: 'component-keyvalue-messaging-v'
+            lang: 'rust'
+            wasm-bin: 'keyvalue_messaging_s.wasm'
+
+          - folder: 'sqldb-postgres-query'
+            tag-prefix: 'component-sqldb-postgres-query-v'
+            lang: 'rust'
+            wasm-bin: 'sqldb_postgres_query_s.wasm'
+
+          - folder: 'http-task-manager'
+            tag-prefix: 'component-http-task-manager-v'
+            lang: 'rust'
+            wasm-bin: 'http_task_manager_s.wasm'
+
+          - folder: 'http-password-checker'
+            tag-prefix: 'component-http-password-checker-rust-v'
+            lang: 'rust'
+            wasm-bin: 'http_password_checker_s.wasm'
+
+          # Typescript
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-typescript-v'
+            lang: 'typescript'
+            wasm-bin: 'http_hello_world_s.wasm'
+
+          - folder: 'http-password-checker'
+            tag-prefix: 'component-http-password-checker-typescript-v'
+            lang: 'typescript'
+            wasm-bin: 'http_password_checker_s.wasm'
+
+          # Python
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-python-v'
+            lang: 'python'
+            wasm-bin: 'http_hello_world_s.wasm'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       # Determine tag version (if this is a release tag), without the 'v'
       - name: Determine version
         id: meta
         shell: bash
         env:
           REF: ${{ github.ref }}
-          REF_PREFIX: ${{ format('refs/tags/component-{0}-v', matrix.project.name) }}
+          REF_PREFIX: ${{ format('refs/tags/{0}', matrix.project.tag-prefix) }}
         run: |
           export VERSION=${REF#$REF_PREFIX};
           echo -e "version=${VERSION}" >> $GITHUB_OUTPUT;
-          echo "bin-name=wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.name }}/${{ matrix.project.wasm-bin }}" >> $GITHUB_OUTPUT;
+          echo "bin-name=wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.folder }}/${{ matrix.project.wasm-bin }}" >> $GITHUB_OUTPUT;
           echo "ref-prefix=$REF_PREFIX" >> $GITHUB_OUTPUT;
-          echo "wasmcloud-toml-path=examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}/wasmcloud.toml" >> $GITHUB_OUTPUT;
+          echo "wasmcloud-toml-path=examples/${{ matrix.project.lang }}/components/${{ matrix.project.folder }}/wasmcloud.toml" >> $GITHUB_OUTPUT;
       # Download all artifacts (wash binary and example component binaries) to work dir
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           path: artifacts
       - name: install wash binary to PATH # Some build tools expect wash to be on the PATH
@@ -235,27 +432,27 @@ jobs:
           WASH_REG_USER: ${{ github.repository_owner }}
           WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          wash push ghcr.io/${{ github.repository_owner }}/components/${{ matrix.project.name }}-${{ matrix.project.lang }}:${{ github.sha }} artifacts/${{ steps.meta.outputs.bin-name }}
+          wash push ghcr.io/${{ github.repository_owner }}/components/${{ matrix.project.folder }}-${{ matrix.project.lang }}:${{ github.sha }} artifacts/${{ steps.meta.outputs.bin-name }}
       - name: Push version-tagged WebAssembly binary to GHCR
         if: ${{ startsWith(github.ref, steps.meta.outputs.ref-prefix) }}
         env:
           WASH_REG_USER: ${{ github.repository_owner }}
           WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          wash push ghcr.io/${{ github.repository_owner }}/components/${{ matrix.project.name }}-${{ matrix.project.lang }}:${{ steps.meta.outputs.version }} artifacts/${{ steps.meta.outputs.bin-name }}
+          wash push ghcr.io/${{ github.repository_owner }}/components/${{ matrix.project.folder }}-${{ matrix.project.lang }}:${{ steps.meta.outputs.version }} artifacts/${{ steps.meta.outputs.bin-name }}
       # (wasmCloud/wasmCloud repository only)
       # Push the project to Azure Container Registry under various tags, if this is a release tag
       - name: Push SHA-tagged WebAssembly binary to AzureCR
         if: ${{ startsWith(github.ref, steps.meta.outputs.ref-prefix) && github.repository_owner == 'wasmCloud' }}
         run: |
-          wash push wasmcloud.azurecr.io/${{ github.repository_owner }}/components/${{ matrix.project.name }}-${{ matrix.project.lang }}:${{ github.sha }} artifacts/${{ steps.meta.outputs.bin-name }}
+          wash push wasmcloud.azurecr.io/${{ github.repository_owner }}/components/${{ matrix.project.folder }}-${{ matrix.project.lang }}:${{ github.sha }} artifacts/${{ steps.meta.outputs.bin-name }}
         env:
           WASH_REG_USER: ${{ secrets.AZURECR_PUSH_USER }}
           WASH_REG_PASSWORD: ${{ secrets.AZURECR_PUSH_PASSWORD }}
       - name: Push version-tagged WebAssembly binary to AzureCR
         if: ${{ startsWith(github.ref, steps.meta.outputs.ref-prefix) && github.repository_owner == 'wasmCloud' }}
         run: |
-          wash push wasmcloud.azurecr.io/${{ github.repository_owner }}/components/${{ matrix.project.name }}-${{ matrix.project.lang }}:${{ steps.meta.outputs.version }} artifacts/${{ steps.meta.outputs.bin-name }}
+          wash push wasmcloud.azurecr.io/${{ github.repository_owner }}/components/${{ matrix.project.folder }}-${{ matrix.project.lang }}:${{ steps.meta.outputs.version }} artifacts/${{ steps.meta.outputs.bin-name }}
         env:
           WASH_REG_USER: ${{ secrets.AZURECR_PUSH_USER }}
           WASH_REG_PASSWORD: ${{ secrets.AZURECR_PUSH_PASSWORD }}

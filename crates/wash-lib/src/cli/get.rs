@@ -1,12 +1,13 @@
-use anyhow::{Context, Result};
-use clap::Parser;
-use wasmcloud_control_interface::{Host, HostInventory};
+use std::str::FromStr;
 
 use crate::{
     common::{boxed_err_to_anyhow, get_all_inventories},
     config::WashConnectionOptions,
     id::ServerId,
 };
+use anyhow::{Context, Result};
+use clap::Parser;
+use wasmcloud_control_interface::{Host, HostInventory};
 
 use super::CliConnectionOpts;
 
@@ -24,6 +25,10 @@ pub struct GetHostInventoriesCommand {
     /// Host ID to retrieve inventory for. If not provided, wash will query the inventories of all running hosts.
     #[clap(name = "host-id", value_parser)]
     pub host_id: Option<ServerId>,
+
+    /// Enables Real-time updates, duration can be specified in ms or in humantime (eg: 2s, 5m, 54ms). Defaults to 5000 milliseconds.
+    #[clap(long, short, num_args = 0..=1, default_missing_value = "5000", value_parser = parse_watch_interval)]
+    pub watch: Option<std::time::Duration>,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -66,7 +71,7 @@ pub async fn get_host_inventories(cmd: GetHostInventoriesCommand) -> Result<Vec<
         if let Some(inventory) = client
             .get_host_inventory(&host_id)
             .await
-            .map(|inventory| inventory.response)
+            .map(|inventory| inventory.into_data())
             .map_err(boxed_err_to_anyhow)?
         {
             Ok(vec![inventory])
@@ -97,8 +102,20 @@ pub async fn get_hosts(cmd: GetHostsCommand) -> Result<Vec<Host>> {
         .map(|hosts| {
             hosts
                 .into_iter()
-                .filter_map(|h| h.response)
+                .filter_map(|h| h.into_data())
                 .collect::<Vec<_>>()
         })
         .context("Was able to connect to NATS, but failed to get hosts.")
+}
+
+pub fn parse_watch_interval(arg: &str) -> Result<std::time::Duration, String> {
+    if let Ok(duration) = humantime::Duration::from_str(arg) {
+        return Ok(duration.into());
+    }
+
+    if let Ok(millis) = arg.parse::<u64>() {
+        return Ok(std::time::Duration::from_millis(millis));
+    }
+
+    Err(format!("Invalid duration: '{}'. Expected a duration like '5s', '1m', '100ms', or milliseconds as an integer.", arg))
 }

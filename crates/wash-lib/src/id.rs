@@ -162,7 +162,7 @@ pub fn validate_contract_id(contract_id: &str) -> Result<()> {
             .chars()
             .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
     {
-        bail!("It looks like you used an Actor or Provider ID (e.g. VABC...) instead of a contract ID (e.g. wasmcloud:httpserver)")
+        bail!("It looks like you used a Component or Provider ID (e.g. VABC...) instead of a contract ID (e.g. wasmcloud:httpserver)")
     } else {
         Ok(())
     }

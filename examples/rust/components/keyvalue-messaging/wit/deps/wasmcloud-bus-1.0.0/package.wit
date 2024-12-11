@@ -1,0 +1,15 @@
+package wasmcloud:bus@1.0.0;
+
+interface lattice {
+  /// Interface target. This represents an interface, which can be selected by `set-link-name`.
+  resource call-target-interface {
+    constructor(namespace: string, %package: string, %interface: string);
+  }
+
+  /// Set an optional link name to use for all interfaces specified. This is advanced
+  /// functionality only available within wasmcloud and, as such, is exposed here as part of the
+  /// wasmcloud:bus package. This is used when you are linking multiple of the same interfaces
+  /// (i.e. a keyvalue implementation for caching and another one for secrets) to a component
+  set-link-name: func(name: string, interfaces: list<call-target-interface>);
+}
+

@@ -1,22 +1,19 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
-use oci_distribution::Reference;
+use docker_credential::{get_credential, DockerCredential};
+use oci_client::Reference;
 use serde_json::json;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tracing::warn;
+
+use wash_lib::cli::registry::{RegistryPullCommand, RegistryPushCommand};
+use wash_lib::cli::{input_vec_to_hashmap, CommandOutput, OutputKind};
+use wash_lib::parser::{load_config, ProjectConfig};
 use wash_lib::registry::{
     identify_artifact, pull_oci_artifact, push_oci_artifact, ArtifactType, OciPullOptions,
     OciPushOptions,
-};
-use wash_lib::{
-    cli::{
-        input_vec_to_hashmap,
-        registry::{RegistryPullCommand, RegistryPushCommand},
-        CommandOutput, OutputKind,
-    },
-    parser::get_config,
 };
 use wasmcloud_control_interface::RegistryCredential;
 
@@ -35,11 +32,9 @@ pub async fn registry_pull(
     spinner.update_spinner_message(format!(" Downloading {} ...", image.whole()));
 
     let credentials = match (cmd.opts.user, cmd.opts.password) {
-        (Some(user), Some(password)) => Ok(RegistryCredential {
-            username: Some(user),
-            password: Some(password),
-            ..Default::default()
-        }),
+        (Some(user), Some(password)) => Ok(RegistryCredential::from_username_password(
+            &user, &password, "oci",
+        )),
         _ => resolve_registry_credentials(image.registry()).await,
     }?;
 
@@ -48,8 +43,8 @@ pub async fn registry_pull(
         OciPullOptions {
             digest: cmd.digest,
             allow_latest: cmd.allow_latest,
-            user: credentials.username,
-            password: credentials.password,
+            user: credentials.username().map(String::from),
+            password: credentials.password().map(String::from),
             insecure: cmd.opts.insecure,
             insecure_skip_tls_verify: cmd.opts.insecure_skip_tls_verify,
         },
@@ -96,10 +91,11 @@ pub async fn registry_push(
     cmd: RegistryPushCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
+    let project_config = load_config(cmd.project_config, Some(true)).await.ok();
     let image: Reference = resolve_artifact_ref(
         &cmd.url,
         &cmd.registry.unwrap_or_default(),
-        cmd.config.clone(),
+        project_config.as_ref(),
     )?;
     let artifact_url = image.whole();
     if artifact_url.starts_with("localhost:") && !cmd.opts.insecure {
@@ -110,18 +106,20 @@ pub async fn registry_push(
     spinner.update_spinner_message(format!(" Pushing {} to {} ...", cmd.artifact, artifact_url));
 
     let credentials = match (cmd.opts.user, cmd.opts.password) {
-        (Some(user), Some(password)) => Ok(RegistryCredential {
-            username: Some(user),
-            password: Some(password),
-            ..Default::default()
-        }),
+        (Some(user), Some(password)) => Ok(RegistryCredential::from_username_password(
+            &user, &password, "oci",
+        )),
         _ => resolve_registry_credentials(image.registry()).await,
     }?;
 
-    let annotations = match cmd.annotations {
-        Some(annotations) => input_vec_to_hashmap(annotations).ok(),
-        None => None,
-    };
+    let annotations = cmd.annotations.and_then(|annotations| {
+        Some(
+            input_vec_to_hashmap(annotations)
+                .ok()?
+                .into_iter()
+                .collect(),
+        )
+    });
 
     let (maybe_tag, digest) = push_oci_artifact(
         artifact_url.clone(),
@@ -129,11 +127,13 @@ pub async fn registry_push(
         OciPushOptions {
             config: cmd.config.map(PathBuf::from),
             allow_latest: cmd.allow_latest,
-            user: credentials.username,
-            password: credentials.password,
-            insecure: cmd.opts.insecure,
+            user: credentials.username().map(String::from),
+            password: credentials.password().map(String::from),
+            insecure: cmd.opts.insecure
+                || project_config.is_some_and(|c| c.common.registry.push_insecure),
             insecure_skip_tls_verify: cmd.opts.insecure_skip_tls_verify,
             annotations,
+            monolithic_push: cmd.monolithic_push,
         },
     )
     .await?;
@@ -156,9 +156,9 @@ pub async fn registry_push(
 fn resolve_artifact_ref(
     url: &str,
     registry: &str,
-    project_config: Option<PathBuf>,
+    project_config: Option<&ProjectConfig>,
 ) -> Result<Reference> {
-    // NOTE: Image URLs must be all lower case for `oci_distribution::Reference` to parse them properly
+    // NOTE: Image URLs must be all lower case for `oci_client::Reference` to parse them properly
     let url = url.trim().to_ascii_lowercase();
     let registry = registry.trim().to_ascii_lowercase();
 
@@ -170,43 +170,50 @@ fn resolve_artifact_ref(
         return Ok(image);
     }
 
-    if !url.is_empty() && !registry.is_empty() {
-        let image: Reference = format!("{}/{}", registry, url)
-            .parse()
-            .context("failed to parse artifact url from specified registry and repository")?;
-
-        return Ok(image);
-    }
-
-    if !url.is_empty() && registry.is_empty() {
-        let project_config = get_config(project_config, Some(true))?;
-        let registry = project_config
-            .common
-            .registry
-            .url
-            .clone()
-            .unwrap_or_default();
-
-        if registry.is_empty() {
-            bail!("Missing or invalid registry url configuration")
+    match project_config {
+        _ if !url.is_empty() && !registry.is_empty() => {
+            let image: Reference = format!("{}/{}", registry, url)
+                .parse()
+                .context("failed to parse artifact url from specified registry and repository")?;
+            Ok(image)
         }
+        Some(project_config) if !url.is_empty() && registry.is_empty() => {
+            let registry = project_config
+                .common
+                .registry
+                .url
+                .clone()
+                .unwrap_or_default();
 
-        let image: Reference = format!("{}/{}", registry, url).parse().context(
-            "failed to parse artifact url from specified repository and registry url configuration",
-        )?;
+            if registry.is_empty() {
+                bail!("Missing or invalid registry url configuration")
+            }
 
-        return Ok(image);
+            let image: Reference = format!("{}/{}", registry, url).parse().context(
+                "failed to parse artifact url from specified repository and registry url configuration",
+            )?;
+            Ok(image)
+        }
+        _ => bail!("Unable to resolve artifact url from specified registry and repository"),
     }
-
-    bail!("Unable to resolve artifact url from specified registry and repository")
 }
 
 async fn resolve_registry_credentials(registry: &str) -> Result<RegistryCredential> {
-    let Ok(project_config) = get_config(None, Some(true)) else {
-        return Ok(RegistryCredential::default());
+    let credentials = if let Ok(credentials) = load_config(None, Some(true))
+        .await
+        .and_then(|config| config.resolve_registry_credentials(registry))
+    {
+        credentials
+    } else {
+        match get_credential(registry) {
+            Ok(DockerCredential::UsernamePassword(username, password)) => {
+                RegistryCredential::from_username_password(&username, &password, "oci")
+            }
+            // IdentityTokens are not supported method.
+            Ok(DockerCredential::IdentityToken(_)) | Err(_) => RegistryCredential::default(),
+        }
     };
-
-    project_config.resolve_registry_credentials(registry).await
+    Ok(credentials)
 }
 
 #[cfg(test)]
@@ -230,18 +237,18 @@ mod tests {
 
     #[test]
     /// Enumerates multiple options of the `pull` command to ensure API doesn't
-    /// change between versions. This test will fail if `wash reg pull`
+    /// change between versions. This test will fail if `wash pull`
     /// changes syntax, ordering of required elements, or flags.
     fn test_pull_comprehensive() -> Result<()> {
         // test basic `wash reg pull`
         let pull_basic: Cmd = Parser::try_parse_from(["wash", "pull", ECHO_WASM])
-            .context("failed to perform reg pull")?;
+            .context("failed to perform wash pull")?;
         ensure!(matches!(
             pull_basic.sub,
             RegistryCommand::Pull(RegistryPullCommand { url, .. }) if url == ECHO_WASM,
         ));
 
-        // test `wash reg pull`
+        // test `wash pull`
         let pull_all_flags: Cmd =
             Parser::try_parse_from(["wash", "pull", ECHO_WASM, "--allow-latest", "--insecure"])
                 .context("failed to pull with all flags")?;
@@ -290,7 +297,7 @@ mod tests {
 
     #[test]
     /// Enumerates multiple options of the `push` command to ensure API doesn't
-    /// change between versions. This test will fail if `wash reg push`
+    /// change between versions. This test will fail if `wash push`
     /// changes syntax, ordering of required elements, or flags.
     fn test_push_comprehensive() {
         // Not explicitly used, just a placeholder for a directory
@@ -317,7 +324,7 @@ mod tests {
                 assert_eq!(artifact, format!("{TESTDIR}/echopush.wasm"));
                 assert!(opts.insecure);
             }
-            _ => panic!("`reg push` constructed incorrect command"),
+            _ => panic!("`wash push` constructed incorrect command"),
         };
 
         // Push logging.par.gz and pull from local registry
@@ -344,7 +351,7 @@ mod tests {
                 assert!(opts.insecure);
                 assert!(allow_latest);
             }
-            _ => panic!("`reg push` constructed incorrect command"),
+            _ => panic!("`wash push` constructed incorrect command"),
         };
 
         // Push logging.par.gz to different tag and pull to confirm successful push
@@ -384,7 +391,7 @@ mod tests {
                 assert_eq!(opts.user.unwrap(), "localuser");
                 assert_eq!(opts.password.unwrap(), "supers3cr3t");
             }
-            _ => panic!("`reg push` constructed incorrect command"),
+            _ => panic!("`wash push` constructed incorrect command"),
         };
     }
 }

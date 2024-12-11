@@ -1,14 +1,14 @@
 //! Module with structs for use in managing and accessing config used by various wasmCloud entities
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use async_nats::jetstream::kv::{Operation, Store};
 use futures::{future::AbortHandle, stream::Abortable, TryStreamExt};
 use tokio::sync::{
     watch::{self, Receiver, Sender},
     RwLock, RwLockReadGuard,
 };
-use tracing::{error, Instrument};
+use tracing::{error, warn, Instrument};
 
 type LockedConfig = Arc<RwLock<HashMap<String, String>>>;
 /// A cache of named config mapped to an existing receiver
@@ -46,11 +46,19 @@ impl Drop for AbortHandles {
 ///    config. This is for use in situations where you want to be notified when a config changes,
 ///    such as for a provider that needs to be notified when a config changes
 pub struct ConfigBundle {
+    /// A live view of the configuration that is being managed/updated by this bundle
     merged_config: LockedConfig,
+    /// Names of named config that contribute to this bundle
     config_names: Vec<String>,
+    /// A receiver that fires when changes are made to the bundle
     changed_receiver: Receiver<()>,
-    // These are here so they can be dropped when the bundle is dropped
+    /// Abort handles to the tasks that are watching for updates
+    ///
+    /// These are `drop()`ed when the bundle is dropped
     _handles: Arc<AbortHandles>,
+    /// The sender that is used to notify the receiver that the config has changed, this
+    /// must not be dropped until the receiver is dropped so we ensure it's kept alive
+    _changed_notifier: Arc<Sender<()>>,
 }
 
 impl Clone for ConfigBundle {
@@ -64,6 +72,7 @@ impl Clone for ConfigBundle {
             merged_config: self.merged_config.clone(),
             config_names: self.config_names.clone(),
             changed_receiver,
+            _changed_notifier: self._changed_notifier.clone(),
             _handles: self._handles.clone(),
         }
     }
@@ -78,29 +87,33 @@ impl Debug for ConfigBundle {
 }
 
 impl ConfigBundle {
-    /// Create a new config bundle. It takes an ordered list of receivers that should match the
+    /// Create a new config bundle.
+    ///
+    /// It takes an ordered list of receivers that should match the
     /// order of config given by the user.
     ///
     /// This is only called internally.
+    #[must_use]
     async fn new(receivers: Vec<ConfigReceiver>) -> Self {
-        // Generate the intital abort handles so we can construct the bundle
+        // Generate the initial abort handles so we can construct the bundle
         let (abort_handles, mut registrations): (Vec<_>, Vec<_>) =
             std::iter::repeat_with(AbortHandle::new_pair)
                 .take(receivers.len())
                 .unzip();
         // Now that we've set initial config, create the bundle and update the merged config with the latest values
         let (changed_notifier, changed_receiver) = watch::channel(());
+        let changed_notifier = Arc::new(changed_notifier);
         let mut bundle = ConfigBundle {
             merged_config: Arc::default(),
             config_names: receivers.iter().map(|r| r.name.clone()).collect(),
             changed_receiver,
+            _changed_notifier: changed_notifier.clone(),
             _handles: Arc::new(AbortHandles {
                 handles: abort_handles,
             }),
         };
         let ordered_configs: Arc<Vec<Receiver<HashMap<String, String>>>> =
             Arc::new(receivers.iter().map(|r| r.receiver.clone()).collect());
-        let changed_notifier = Arc::new(changed_notifier);
         update_merge(&bundle.merged_config, &changed_notifier, &ordered_configs).await;
         // Move all the receivers into spawned tasks to update the config
         for ConfigReceiver { name, mut receiver } in receivers {
@@ -123,7 +136,7 @@ impl ConfigBundle {
                                         .await;
                                 }
                                 Err(e) => {
-                                    error!(error = %e, %name, "Config updater has failed!");
+                                    warn!(error = %e, %name, "config sender dropped, updates will not be delivered");
                                     return;
                                 }
                             }
@@ -153,7 +166,9 @@ impl ConfigBundle {
     ///
     /// Please note that this requires a mutable borrow in order to manage underlying notification
     /// acknowledgement.
-    pub async fn changed(&mut self) -> RwLockReadGuard<'_, HashMap<String, String>> {
+    pub async fn changed(
+        &mut self,
+    ) -> anyhow::Result<RwLockReadGuard<'_, HashMap<String, String>>> {
         // NOTE(thomastaylor312): We use a watch channel here because we want everything to get
         // notified individually (including clones) if config changes. Notify doesn't quite work
         // because we have to have a permit existing when we create otherwise the notify_watchers
@@ -162,8 +177,9 @@ impl ConfigBundle {
             // If we get here, it likely means that a whole bunch of stuff has failed above it.
             // Might be worth changing this to a panic
             error!(error = %e, "Config changed receiver errored, this means that the config sender has dropped and the whole bundle has failed");
+            bail!("failed to read receiver: {e}");
         }
-        self.merged_config.read().await
+        Ok(self.merged_config.read().await)
     }
 
     /// Returns a reference to the ordered list of config names handled by this bundle
@@ -194,9 +210,9 @@ impl BundleGenerator {
 
     /// Generate a new config bundle. Will return an error if any of the configs do not exist or if
     /// there was an error fetching the initial config
-    pub async fn generate(&self, names: Vec<String>) -> anyhow::Result<ConfigBundle> {
+    pub async fn generate(&self, config_names: Vec<String>) -> anyhow::Result<ConfigBundle> {
         let receivers: Vec<ConfigReceiver> =
-            futures::future::join_all(names.into_iter().map(|name| self.get_receiver(name)))
+            futures::future::join_all(config_names.into_iter().map(|name| self.get_receiver(name)))
                 .await
                 .into_iter()
                 .collect::<anyhow::Result<_>>()?;
@@ -321,15 +337,15 @@ async fn update_merge(
 ) {
     // We get a write lock to start so nothing else can update the merged config while we merge
     // in the other configs (e.g. when one of the ordered configs is write locked)
-    let mut lock = merged_config.write().await;
-    lock.clear();
+    let mut hashmap = merged_config.write().await;
+    hashmap.clear();
 
     // NOTE(thomastaylor312): There is a possible optimization here where we could just create a
     // temporary hashmap of borrowed strings and then after extending everything we could
     // into_iter it and clone it into the final hashmap. This would avoid extra allocations at
     // the cost of a few more iterations
     for recv in ordered_receivers {
-        lock.extend(recv.borrow().clone());
+        hashmap.extend(recv.borrow().clone());
     }
     // Send a notification that the config has changed
     changed_notifier.send_replace(());
@@ -381,6 +397,7 @@ mod tests {
         // Wait for the new config to come. This calls the same underlying method as get_config
         let conf = tokio::time::timeout(Duration::from_millis(50), bundle.changed())
             .await
+            .expect("conf should have been present")
             .expect("Should have received a config");
         assert_eq!(
             *conf,
@@ -392,6 +409,7 @@ mod tests {
         baz_tx.send_replace(HashMap::from([("star".to_string(), "wars".to_string())]));
         let conf = tokio::time::timeout(Duration::from_millis(50), bundle.changed())
             .await
+            .expect("conf should have been present")
             .expect("Should have received a config");
         assert_eq!(
             *conf,
@@ -409,6 +427,7 @@ mod tests {
         ]));
         let conf = tokio::time::timeout(Duration::from_millis(50), bundle.changed())
             .await
+            .expect("conf should have been present")
             .expect("Should have received a config");
         // Check that the config merged correctly
         assert_eq!(

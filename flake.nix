@@ -19,16 +19,13 @@
   inputs.nixify.inputs.nixlib.follows = "nixlib";
   inputs.nixify.url = "github:rvolosatovs/nixify";
   inputs.nixlib.url = "github:nix-community/nixpkgs.lib";
-  inputs.wasmcloud-component-adapters.inputs.nixify.follows = "nixify";
-  inputs.wasmcloud-component-adapters.url = "github:wasmCloud/wasmcloud-component-adapters/v0.9.0";
   inputs.wit-deps.inputs.nixify.follows = "nixify";
   inputs.wit-deps.inputs.nixlib.follows = "nixlib";
-  inputs.wit-deps.url = "github:bytecodealliance/wit-deps/v0.3.5";
+  inputs.wit-deps.url = "github:bytecodealliance/wit-deps/v0.4.0";
 
   outputs = {
     nixify,
     nixlib,
-    wasmcloud-component-adapters,
     wit-deps,
     ...
   }:
@@ -38,22 +35,28 @@
       rust.mkFlake {
         src = ./.;
 
+        nixpkgsConfig.allowUnfree = true;
+
         overlays = [
           wit-deps.overlays.default
         ];
 
         excludePaths = let
-          washboardExclude = map (name: "washboard-ui/${name}") (remove "dist" (attrNames (readDir ./washboard-ui)));
+          washboardExclude = map (name: "typescript/${name}") (remove "dist" (attrNames (readDir ./typescript)));
         in
           [
             ".devcontainer"
+            ".dockerignore"
             ".envrc"
             ".github"
             ".gitignore"
             "ADOPTERS.md"
             "adr"
             "awesome-wasmcloud"
+            "brand"
+            "CHANGELOG.md"
             "chart"
+            "charts"
             "CODE_OF_CONDUCT.md"
             "CODEOWNERS"
             "CONTRIBUTING.md"
@@ -72,8 +75,13 @@
             "garnix.yaml"
             "GOVERNANCE.md"
             "LICENSE"
+            "MAINTAINERS.md"
+            "nix"
             "OWNERS"
+            "performance.md"
             "README.md"
+            "RELEASE.md"
+            "RELEASE_RUNBOOK.md"
             "ROADMAP.md"
             "rust-toolchain.toml"
             "SECURITY.md"
@@ -89,7 +97,7 @@
         targets.powerpc64le-unknown-linux-gnu = false;
         targets.s390x-unknown-linux-gnu = false;
         targets.wasm32-unknown-unknown = false;
-        targets.wasm32-wasi = false;
+        targets.wasm32-wasip1 = false;
 
         build.packages = [
           "wash-cli"
@@ -102,6 +110,7 @@
 
         test.allTargets = true;
         test.excludes = [
+          "secrets-nats-kv"
           "wash-cli"
           "wash-lib"
           "wasmcloud-provider-blobstore-s3" # TODO: Make the test self-contained and reenable
@@ -113,21 +122,19 @@
           pkgs,
           pkgsCross ? pkgs,
           ...
-        }: {
-          buildInputs ? [],
-          depsBuildBuild ? [],
-          nativeBuildInputs ? [],
-          nativeCheckInputs ? [],
-          ...
-        } @ args:
+        }: {nativeCheckInputs ? [], ...} @ args:
           with pkgs.lib; let
             cargoLock.root = readTOML ./Cargo.lock;
+            cargoLock.tests = readTOML ./tests/components/rust/Cargo.lock;
 
-            cargoLock.actors-rust = readTOML ./tests/components/rust/Cargo.lock;
+            cargoLock.examples.http-hello-world = readTOML ./examples/rust/components/http-hello-world/Cargo.lock;
+            cargoLock.examples.http-keyvalue-counter = readTOML ./examples/rust/components/http-keyvalue-counter/Cargo.lock;
 
             lockPackages =
-              cargoLock.root.package
-              ++ cargoLock.actors-rust.package;
+              cargoLock.examples.http-hello-world.package
+              ++ cargoLock.examples.http-keyvalue-counter.package
+              ++ cargoLock.tests.package
+              ++ cargoLock.root.package;
 
             # deduplicate lockPackages by $name:$version:$checksum
             lockPackages' = listToAttrs (
@@ -148,44 +155,21 @@
               // {
                 package = attrValues lockPackages';
               };
-
-            darwin2darwin = pkgs.stdenv.hostPlatform.isDarwin && pkgsCross.stdenv.hostPlatform.isDarwin;
-
-            depsBuildBuild' =
-              depsBuildBuild
-              ++ optional pkgs.stdenv.hostPlatform.isDarwin pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-              ++ optional darwin2darwin pkgs.xcbuild.xcrun;
           in
             {
               inherit
                 cargoLockParsed
                 ;
-              WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER = wasmcloud-component-adapters.packages.${pkgs.stdenv.system}.wasi-preview1-command-component-adapter;
-              WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER = wasmcloud-component-adapters.packages.${pkgs.stdenv.system}.wasi-preview1-reactor-component-adapter;
-
               cargoExtraArgs = ""; # disable `--locked` passed by default by crane
-
-              buildInputs =
-                buildInputs
-                ++ optional pkgs.stdenv.hostPlatform.isDarwin pkgs.libiconv;
-
-              depsBuildBuild = depsBuildBuild';
             }
             // optionalAttrs (args ? cargoArtifacts) {
-              depsBuildBuild =
-                depsBuildBuild'
-                ++ optionals darwin2darwin [
-                  pkgs.darwin.apple_sdk.frameworks.CoreFoundation
-                  pkgs.darwin.apple_sdk.frameworks.CoreServices
-                ];
-
               nativeCheckInputs =
                 nativeCheckInputs
                 ++ [
                   pkgs.nats-server
                   pkgs.redis
-                  pkgs.vault
                   pkgs.minio
+                  pkgs.vault
                 ];
             };
 
@@ -198,6 +182,8 @@
           interpreters.aarch64-unknown-linux-gnu = "/lib/ld-linux-aarch64.so.1";
           interpreters.riscv64gc-unknown-linux-gnu = "/lib/ld-linux-riscv64-lp64d.so.1";
           interpreters.x86_64-unknown-linux-gnu = "/lib64/ld-linux-x86-64.so.2";
+
+          images = mapAttrs (_: pkgs.dockerTools.pullImage) (import ./nix/images);
 
           mkFHS = {
             name,
@@ -251,54 +237,6 @@
             name = "wasmcloud-x86_64-unknown-linux-gnu-fhs";
             src = packages.wasmcloud-x86_64-unknown-linux-gnu;
             interpreter = interpreters.x86_64-unknown-linux-gnu;
-          };
-
-          pullDebian = {
-            imageDigest,
-            sha256,
-          }:
-            pkgs.dockerTools.pullImage {
-              inherit
-                imageDigest
-                sha256
-                ;
-
-              imageName = "debian";
-              finalImageTag = "12.2-slim";
-              finalImageName = "debian";
-            };
-
-          debian.aarch64 = pullDebian {
-            imageDigest = "sha256:9ccb91746bf0b2e3e82b2dd37069ef9b358cb7d813217ea3fa430b940fc5dac3";
-            sha256 = "sha256-cb2lPuBXaQGMrVmvp/Gq0/PtNuTtlZzUmF3S+4jHVtQ=";
-          };
-          debian.x86_64 = pullDebian {
-            imageDigest = "sha256:ea5ad531efe1ac11ff69395d032909baf423b8b88e9aade07e11b40b2e5a1338";
-            sha256 = "sha256-k+x4aUW10YAQ7X20xxJxqW57y2k20sc4e7unh/kqQZQ=";
-          };
-
-          pullWolfi = {
-            imageDigest,
-            sha256,
-          }:
-            pkgs.dockerTools.pullImage {
-              inherit
-                imageDigest
-                sha256
-                ;
-
-              imageName = "cgr.dev/chainguard/wolfi-base";
-              finalImageTag = "latest";
-              finalImageName = "cgr.dev/chainguard/wolfi-base";
-            };
-
-          wolfi.aarch64 = pullWolfi {
-            imageDigest = "sha256:e8c9aae5f4f1cddf9ed0449f626772a55a1a45e86155698c9d6e34c862b79736";
-            sha256 = "0wjpvlnashghp5d9vxj9s6685rvahxvd7ygndsjmq3nr9h1xbw2x";
-          };
-          wolfi.x86_64 = pullWolfi {
-            imageDigest = "sha256:4e00b653d9ad1cc7c82856d827ec003e496747d608fd842196fc888f39ddc59d";
-            sha256 = "1rbm5afznmbhrx8xhkx7pbxkjmw1aqxfh3wwm7sdf9w9n1qbjbw7";
           };
 
           buildImage = {
@@ -367,22 +305,22 @@
             };
           wash-aarch64-unknown-linux-musl-oci-debian = buildWashImage {
             pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
-            fromImage = debian.aarch64;
+            fromImage = images.debian-arm64;
             architecture = "arm64";
           };
           wash-x86_64-unknown-linux-musl-oci-debian = buildWashImage {
             pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
-            fromImage = debian.x86_64;
+            fromImage = images.debian-amd64;
             architecture = "amd64";
           };
           wash-aarch64-unknown-linux-musl-oci-wolfi = buildWashImage {
             pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
-            fromImage = wolfi.aarch64;
+            fromImage = images.wolfi-arm64;
             architecture = "arm64";
           };
           wash-x86_64-unknown-linux-musl-oci-wolfi = buildWashImage {
             pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
-            fromImage = wolfi.x86_64;
+            fromImage = images.wolfi-amd64;
             architecture = "amd64";
           };
 
@@ -402,22 +340,22 @@
             };
           wasmcloud-aarch64-unknown-linux-musl-oci-debian = buildWasmcloudImage {
             pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
-            fromImage = debian.aarch64;
+            fromImage = images.debian-arm64;
             architecture = "arm64";
           };
           wasmcloud-x86_64-unknown-linux-musl-oci-debian = buildWasmcloudImage {
             pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
-            fromImage = debian.x86_64;
+            fromImage = images.debian-amd64;
             architecture = "amd64";
           };
           wasmcloud-aarch64-unknown-linux-musl-oci-wolfi = buildWasmcloudImage {
             pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
-            fromImage = wolfi.aarch64;
+            fromImage = images.wolfi-arm64;
             architecture = "arm64";
           };
           wasmcloud-x86_64-unknown-linux-musl-oci-wolfi = buildWasmcloudImage {
             pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
-            fromImage = wolfi.x86_64;
+            fromImage = images.wolfi-amd64;
             architecture = "amd64";
           };
 
@@ -499,6 +437,10 @@
               ;
 
             rust = hostRustToolchain;
+            wash = pkgs.runCommandLocal "wash" {} ''
+              mkdir -p $out/bin
+              cp ${packages.wasmcloud}/bin/wash $out/bin/wash
+            '';
           };
 
         withDevShells = {
@@ -513,6 +455,7 @@
               pkgs.minio
               pkgs.nats-server
               pkgs.redis
+              pkgs.skopeo
               pkgs.tinygo
               pkgs.vault
               pkgs.wit-deps

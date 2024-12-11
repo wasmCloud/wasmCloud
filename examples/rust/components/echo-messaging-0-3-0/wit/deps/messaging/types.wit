@@ -1,0 +1,52 @@
+interface types {
+    /// A type alias for list<tuple<string, string>> to represent metadata attached to a message
+    type metadata = list<tuple<string, string>>;
+
+    /// A type alias for string to represent a message topic
+    type topic = string;
+
+    /// A connection to a message-exchange service (e.g., buffer, broker, etc.).
+    resource client {
+        connect: static func(name: string) -> result<client, error>;
+        disconnect: func() -> result<_, error>;
+    }
+    
+    /// Errors that can occur when using the messaging interface.
+    variant error {
+        /// The request or operation timed out.
+        timeout,
+        /// An error occurred with the connection. Includes a message for additional context
+        connection(string),
+        /// A permission error occurred. Includes a message for additional context
+        permission-denied(string),
+        /// A catch all for other types of errors
+        other(string),
+    }
+  
+    /// A message with a binary payload and additional information
+    resource message {
+        constructor(data: list<u8>);
+        /// The topic/subject/channel this message was received on
+        topic: func() -> topic;
+        /// An optional content-type describing the format of the data in the message. This is 
+        /// sometimes described as the "format" type
+        content-type: func() -> option<string>;
+        /// Set the content-type describing the format of the data in the message. This is
+        /// sometimes described as the "format" type
+        set-content-type: func(content-type: string);
+        /// An opaque blob of data
+        data: func() -> list<u8>;
+        /// Set the opaque blob of data for this message, discarding the old value
+        set-data: func(data: list<u8>);
+        /// Optional metadata (also called headers or attributes in some systems) attached to the
+        /// message. This metadata is simply decoration and should not be interpreted by a host
+        /// to ensure portability across different implementors (e.g., Kafka -> NATS, etc.).
+        metadata: func() -> option<metadata>;
+        /// Add a new key-value pair to the metadata, overwriting any existing value for the same key
+        add-metadata: func(key: string, value: string);
+        /// Set the metadata
+        set-metadata: func(meta: metadata);
+        /// Remove a key-value pair from the metadata
+        remove-metadata: func(key: string);
+    }
+}

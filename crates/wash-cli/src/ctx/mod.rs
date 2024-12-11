@@ -317,6 +317,19 @@ fn prompt_for_context() -> Result<WashContext> {
         &Some(DEFAULT_NATS_TIMEOUT_MS.to_string()),
     )?;
 
+    let ctl_tls_first = match prompt_for_choice(
+        &StringEntry {
+            default: Some("false".to_string()),
+            choices: Some(vec!["true".to_string(), "false".to_string()]),
+            regex: None,
+        },
+        "Should the control interface use TLS first?",
+    ) {
+        Ok(0) => Some(true),
+        Ok(1) => Some(false),
+        _ => None,
+    };
+
     let lattice = user_question(
         "What is the lattice prefix that the host will communicate on?",
         &Some(DEFAULT_LATTICE.to_string()),
@@ -376,6 +389,19 @@ fn prompt_for_context() -> Result<WashContext> {
         &Some(DEFAULT_NATS_TIMEOUT_MS.to_string()),
     )?;
 
+    let rpc_tls_first = match prompt_for_choice(
+        &StringEntry {
+            default: Some("false".to_string()),
+            choices: Some(vec!["true".to_string(), "false".to_string()]),
+            regex: None,
+        },
+        "Should the control interface use TLS first?",
+    ) {
+        Ok(0) => Some(true),
+        Ok(1) => Some(false),
+        _ => None,
+    };
+
     Ok(WashContext {
         name,
         cluster_seed,
@@ -386,6 +412,7 @@ fn prompt_for_context() -> Result<WashContext> {
         ctl_tls_ca_file: ctl_tls_ca_file.map(PathBuf::from),
         ctl_credsfile: ctl_credsfile.map(PathBuf::from),
         ctl_timeout: ctl_timeout.parse()?,
+        ctl_tls_first,
         lattice,
         js_domain,
         rpc_host,
@@ -395,6 +422,7 @@ fn prompt_for_context() -> Result<WashContext> {
         rpc_credsfile: rpc_credsfile.map(PathBuf::from),
         rpc_tls_ca_file: rpc_tls_ca_file.map(PathBuf::from),
         rpc_timeout: rpc_timeout.parse()?,
+        rpc_tls_first,
     })
 }
 

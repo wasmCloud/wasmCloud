@@ -1,7 +1,10 @@
-//! Core reusable types related to links on wasmCloud lattices
+//! Core reusable types related to [links on wasmCloud lattices][docs-links]
+//!
+//! [docs-links]: <https://wasmcloud.com/docs/concepts/linking-components>
 
 use std::collections::HashMap;
 
+use secrecy::{zeroize::ZeroizeOnDrop, Zeroize};
 use serde::{Deserialize, Serialize};
 
 use crate::{ComponentId, LatticeTarget, WitInterface, WitNamespace, WitPackage};
@@ -13,7 +16,7 @@ pub type LinkName = String;
 /// interface. An [`InterfaceLinkDefinition`] connects one component's import to another
 /// component's export, specifying the configuration each component needs in order to execute
 /// the request, and represents an operator's intent to allow the source to invoke the target.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct InterfaceLinkDefinition {
     /// Source identifier for the link
     pub source_id: ComponentId,
@@ -34,6 +37,23 @@ pub struct InterfaceLinkDefinition {
     /// The configuration to give to the target for this link
     #[serde(default)]
     pub target_config: HashMap<String, String>,
+    /// The secrets to give to the source of this link
+    /// Should decrypt as a [`HashMap<String, SecretValue>`]
+    #[serde(default)]
+    pub source_secrets: Option<Vec<u8>>,
+    /// The secrets to give to the target of this link
+    /// Should decrypt as a [`HashMap<String, SecretValue>`]
+    #[serde(default)]
+    pub target_secrets: Option<Vec<u8>>,
+}
+
+// Trait implementations that ensure we zeroize secrets when they are dropped
+impl ZeroizeOnDrop for InterfaceLinkDefinition {}
+impl Zeroize for InterfaceLinkDefinition {
+    fn zeroize(&mut self) {
+        self.source_secrets.zeroize();
+        self.target_secrets.zeroize();
+    }
 }
 
 /// Helper function to provide a default link name

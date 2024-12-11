@@ -3,40 +3,43 @@ name: nix
 on:
   pull_request:
     paths-ignore:
-      - washboard-ui/**
+      - typescript/**
   merge_group:
   push:
     paths-ignore:
-      - washboard-ui/**
+      - typescript/**
+
+permissions:
+  contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   fmt:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v4
-    - uses: ./.github/actions/install-nix
-      with:
-        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-    - run: nix fmt
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - run: nix fmt -L $(find . -type f -name '*.nix')
 
   run:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v4
-    - uses: ./.github/actions/install-nix
-      with:
-        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-    - run: nix run -L . -- --version
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - run: nix run -L . -- --version
 
   develop:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v4
-    - uses: ./.github/actions/install-nix
-      with:
-        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-    - run: nix develop -L --ignore-environment -c cargo tree
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - run: nix develop -L --ignore-environment -c cargo tree

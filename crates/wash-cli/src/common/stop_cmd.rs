@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use wash_lib::cli::stop::{handle_stop_component, stop_host, stop_provider, StopCommand};
+use wash_lib::cli::stop::{handle_stop_component, handle_stop_provider, stop_host, StopCommand};
 use wash_lib::cli::{CommandOutput, OutputKind};
 
 use crate::appearance::spinner::Spinner;
@@ -19,7 +19,7 @@ pub async fn handle_command(
         StopCommand::Provider(cmd) => {
             let provider_id = &cmd.provider_id.to_string();
             sp.update_spinner_message(format!(" Stopping provider {provider_id} ... "));
-            stop_provider(cmd).await?
+            handle_stop_provider(cmd).await?
         }
         StopCommand::Host(cmd) => {
             let host_id = &cmd.host_id.to_string();
@@ -49,7 +49,7 @@ mod test {
     const CTL_PORT: &str = "4222";
     const DEFAULT_LATTICE: &str = "default";
 
-    const ACTOR_ID: &str = "MDPDJEYIAK6MACO67PRFGOSSLODBISK4SCEYDY3HEOY4P5CVJN6UCWUK";
+    const COMPONENT_ID: &str = "MDPDJEYIAK6MACO67PRFGOSSLODBISK4SCEYDY3HEOY4P5CVJN6UCWUK";
     const HOST_ID: &str = "NCE7YHGI42RWEKBRDJZWXBEJJCFNE5YIWYMSTLGHQBEGFY55BKJ3EG3G";
     const PROVIDER_ID: &str = "VBKTSBG2WKP6RJWLQ5O7RDVIIB4LMW6U5R67A7QMIDBZDGZWYTUE3TSI";
     const CONTEXT_PATH: &str = "/tmp/fake/context";
@@ -64,14 +64,14 @@ mod test {
     /// Enumerates multiple options of the `stop component` subcommand to ensure API doesn't
     /// change between versions. This test will fail if the subcommand
     /// changes syntax, ordering of required elements, or flags.
-    fn test_stop_actor_cmd_comprehensive() -> Result<()> {
-        let stop_actor_all: Cmd = Parser::try_parse_from([
+    fn test_stop_component_cmd_comprehensive() -> Result<()> {
+        let stop_component_all: Cmd = Parser::try_parse_from([
             "ctl",
             "stop",
             "component",
             "--host-id",
             HOST_ID,
-            ACTOR_ID,
+            COMPONENT_ID,
             "--lattice",
             DEFAULT_LATTICE,
             "--ctl-host",
@@ -93,11 +93,11 @@ mod test {
             "--skip-wait",
         ])?;
 
-        match stop_actor_all.command {
+        match stop_component_all.command {
             CtlCliCommand::Stop(StopCommand::Component(StopComponentCommand {
                 opts,
                 host_id,
-                component_id: actor_id,
+                component_id,
                 skip_wait,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
@@ -105,7 +105,7 @@ mod test {
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert!(skip_wait);
                 assert_eq!(host_id.unwrap(), HOST_ID);
-                assert_eq!(actor_id.to_string(), ACTOR_ID);
+                assert_eq!(component_id.to_string(), COMPONENT_ID);
             }
             cmd => panic!("stop component constructed incorrect command {cmd:?}"),
         }

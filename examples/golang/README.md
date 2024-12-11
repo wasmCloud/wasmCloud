@@ -16,7 +16,7 @@ wash build
 
 As WebAssembly is intended to be a "compilation target" for native Golang code, upstream work is underway to integrate and improve support for the various standards of WebAssembly.
 
-| Language | Core Modules (`wasm32-unknown-unknown`) | Preview 1 (`wasm32-wasi-preview1`) | WASI Preview 2 (`wasm32-wasi-preview2`)  |
+| Language | Core Modules (`wasm32-unknown-unknown`) | Preview 1 (`wasm32-wasi-preview1`) | WASIP2 (`wasm32-wasip2`)  |
 |----------|-----------------------------------------|------------------------------------|------------------------------------------|
 | Golang   | ✅ (`GOOS=js`,`GOARCH=wasm`)            | ✅ (`GOOS=wasip1`)                 | ✅ (requires [adapter][wasi-p2-adapter]) |
 | TinyGo   | ✅ (`-target=wasm`)                     | ✅ (`-target=wasi`)                | ✅ (requires [adapter][wasi-p2-adapter]) |
@@ -29,9 +29,9 @@ Golang WASI preview 1 support was [announced on the Golang blog][golang-blog-was
 >
 > `wasm32-unknown-unknown` is a compile target which deals in core [WebAssembly modules][wasm-core-modules] (i.e. you're only given access to numbers at this level)
 > [`wasm32-wasi-preview1`][wasi-p1] is a compile target that provides richer types, support for more higher level platform APIs
-> [`wasm32-wasi-preview2`][wasi-p2] is the next generation compile target with much richer types, higher level APIs like async, streaming, the WIT IDL.
+> [`wasm32-wasip2`][wasi-p2] is the next generation compile target with much richer types, higher level APIs like async, streaming, the WIT IDL.
 >
-> In a sentence, WebAssembly functionality is layered, with `wasm32-unknown-unknown` being the most basic (only doing operations on numbers) and `wasm32-wasi-preview2` being the current most advanced.
+> In a sentence, WebAssembly functionality is layered, with `wasm32-unknown-unknown` being the most basic (only doing operations on numbers) and `wasm32-wasip2` being the current most advanced.
 
 ## Want to learn more?
 

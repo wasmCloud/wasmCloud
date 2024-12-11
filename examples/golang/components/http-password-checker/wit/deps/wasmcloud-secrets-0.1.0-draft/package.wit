@@ -1,0 +1,25 @@
+package wasmcloud:secrets@0.1.0-draft;
+
+interface store {
+  variant secrets-error {
+    upstream(string),
+    io(string),
+    not-found,
+  }
+
+  variant secret-value {
+    %string(string),
+    bytes(list<u8>),
+  }
+
+  resource secret;
+
+  get: func(key: string) -> result<secret, secrets-error>;
+}
+
+interface reveal {
+  use store.{secret, secret-value};
+
+  reveal: func(s: borrow<secret>) -> secret-value;
+}
+

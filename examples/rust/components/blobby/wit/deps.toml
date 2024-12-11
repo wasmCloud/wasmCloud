@@ -1,4 +1,0 @@
-blobstore = "../../../../../crates/runtime/wit/deps/blobstore"
-io = "../../../../../crates/runtime/wit/deps/io"
-logging = "../../../../../crates/runtime/wit/deps/logging"
-http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"

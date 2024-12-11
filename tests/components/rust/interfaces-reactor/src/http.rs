@@ -2,7 +2,6 @@ use std::io::{Read, Write};
 
 use wasmcloud_component::wasi::http;
 use wasmcloud_component::wasi::io::poll::poll;
-use wasmcloud_component::{InputStreamReader, OutputStreamWriter};
 
 fn assert_http_echo(
     request: http::types::IncomingRequest,
@@ -150,7 +149,7 @@ fn assert_http_run(
         let mut stream = request_body
             .stream()
             .expect("failed to get incoming request stream");
-        InputStreamReader::from(&mut stream)
+        stream
             .read_to_end(&mut buf)
             .expect("failed to read value from incoming request stream");
         assert_eq!(buf.len(), content_length);
@@ -187,6 +186,7 @@ fn assert_http_run(
         .expect("HTTP request response missing")
         .expect("HTTP request response requested more than once")
         .expect("HTTP request failed");
+    eprintln!("received outgoing HTTP request response");
     assert_eq!(outgoing_request_response.status(), 200);
 
     // TODO: Assert headers
@@ -271,10 +271,12 @@ fn assert_http_run(
         let mut stream = response_body
             .write()
             .expect("failed to get outgoing response stream");
-        let mut w = OutputStreamWriter::from(&mut stream);
-        w.write_all(&body)
+        stream
+            .write_all(&body)
             .expect("failed to write body to outgoing response stream");
-        w.flush().expect("failed to flush outgoing response stream");
+        stream
+            .flush()
+            .expect("failed to flush outgoing response stream");
     }
     http::types::OutgoingBody::finish(response_body, None).expect("failed to finish response body");
 

@@ -1,0 +1,8 @@
+{
+  "name": "@wasmcloud/tsconfig",
+  "files": [
+    "configs",
+    "README.md"
+  ],
+  "main": "configs/base.json"
+}

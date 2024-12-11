@@ -8,6 +8,9 @@ on:
       - 'chart/artifacthub-repo.yml'
       - '.github/workflows/artifacthub.yml'
 
+permissions:
+  contents: read
+
 env:
   CHART_NAME: wasmcloud-chart
 
@@ -19,14 +22,14 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - uses: oras-project/setup-oras@v1.2.0
+      - uses: oras-project/setup-oras@9c92598691bfef1424de2f8fae81941568f5889c
         with:
           version: "1.1.0"
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}

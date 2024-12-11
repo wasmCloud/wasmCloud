@@ -23,7 +23,7 @@ pub enum FindIdError {
     /// No matches were found
     #[error("No matches found with the provided search term")]
     NoMatches,
-    /// Multiple matches were found. The vector contains the list of actors or providers that
+    /// Multiple matches were found. The vector contains the list of components or providers that
     /// matched
     #[error("Multiple matches found with the provided search term: {0:?}")]
     MultipleMatches(Vec<Match>),
@@ -54,25 +54,36 @@ impl Debug for Match {
     }
 }
 
-/// Given a string, attempts to resolve an component ID. Returning the component ID and an optional friendly
+/// Whether or not to use a command group to manage unix/windows signal delivery
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub enum CommandGroupUsage {
+    /// Use the parent command group
+    #[default]
+    UseParent,
+    /// Create a new command group (using this option prevents signals from being delivered)
+    /// automatically to subprocesses
+    CreateNew,
+}
+
+/// Given a string, attempts to resolve a component ID. Returning the component ID and an optional friendly
 /// name
 ///
 /// If the string is a valid component ID, it will be returned unchanged. If it is not an ID, it will
 /// attempt to resolve an ID in the following order:
 ///
-/// 1. The value matches the prefix of the ID of an component
-/// 2. The value is contained in the call alias of an component
-/// 3. The value is contained in the name field of an component
+/// 1. The value matches the prefix of the ID of a component
+/// 2. The value is contained in the call alias of a component
+/// 3. The value is contained in the name field of a component
 ///
 /// If more than one matches, then an error will be returned indicating the options to choose from
-pub async fn find_actor_id(
+pub async fn find_component_id(
     value: &str,
     ctl_client: &wasmcloud_control_interface::Client,
 ) -> Result<(ModuleId, Option<String>), FindIdError> {
     find_id_matches(value, ctl_client).await
 }
 
-/// Given a string, attempts to resolve an provider ID. Returning the provider ID and an optional
+/// Given a string, attempts to resolve a provider ID. Returning the provider ID and an optional
 /// friendly name
 ///
 /// If the string is a valid provider ID, it will be returned unchanged. If it is not an ID, it will
@@ -104,7 +115,7 @@ async fn find_id_matches<T: FromStr + ToString + Display>(
         .await
         .map_err(boxed_err_to_anyhow)
         .context("unable to get claims for lookup")?;
-    let Some(claims) = ctl_response.response else {
+    let Some(claims) = ctl_response.into_data() else {
         error!("received claims response from control interface but no claims were present in the response");
         return Err(FindIdError::NoMatches);
     };
@@ -180,14 +191,14 @@ pub async fn find_host_id(
 
     let all_matches = hosts
         .into_iter()
-        .filter_map(|h| h.response)
+        .filter_map(|h| h.into_data())
         .filter_map(|h| {
-            if h.id.to_lowercase().starts_with(&value)
-                || h.friendly_name.to_lowercase().contains(&value)
+            if h.id().to_lowercase().starts_with(&value)
+                || h.friendly_name().to_lowercase().contains(&value)
             {
-                ServerId::from_str(&h.id)
+                ServerId::from_str(h.id())
                     .ok()
-                    .map(|id| (id, h.friendly_name))
+                    .map(|id| (id, h.friendly_name().to_string()))
             } else {
                 None
             }
@@ -202,7 +213,7 @@ pub async fn find_host_id(
                 .into_iter()
                 .map(|(id, friendly_name)| Match {
                     id: id.to_string(),
-                    friendly_name: Some(friendly_name),
+                    friendly_name: Some(friendly_name.to_string()),
                 })
                 .collect(),
         ))
@@ -218,7 +229,9 @@ pub async fn get_all_inventories(
     let hosts = client.get_hosts().await.map_err(boxed_err_to_anyhow)?;
     let host_ids = match hosts.len() {
         0 => return Ok(Vec::with_capacity(0)),
-        _ => hosts.into_iter().filter_map(|h| h.response.map(|h| h.id)),
+        _ => hosts
+            .into_iter()
+            .filter_map(|h| h.into_data().map(|h| h.id().to_string())),
     };
 
     let futs =
@@ -228,7 +241,7 @@ pub async fn get_all_inventories(
                 client
                     .get_host_inventory(&host_id)
                     .await
-                    .map(|inventory| inventory.response)
+                    .map(|inventory| inventory.into_data())
                     .map_err(boxed_err_to_anyhow)
             });
     futures::future::join_all(futs)

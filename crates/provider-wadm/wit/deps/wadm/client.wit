@@ -1,4 +1,4 @@
-package wasmcloud:wadm@0.1.0;
+package wasmcloud:wadm@0.2.0;
 
 /// A Wadm client which interacts with the wadm api
 interface client {
@@ -11,7 +11,7 @@ interface client {
 
     // Deploys a model to the WADM system.
     // If no lattice is provided, the default lattice name 'default' is used.
-    deploy-model: func(model-name: string, version: option<string>, lattice: option<string>) -> result<_, string>;
+    deploy-model: func(model-name: string, version: option<string>, lattice: option<string>) -> result<string, string>;
 
     // Undeploys a model from the WADM system.
     undeploy-model: func(model-name: string, lattice: option<string>, non-destructive: bool) -> result<_, string>;

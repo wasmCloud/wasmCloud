@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
-use oci_distribution::Reference;
+use oci_client::Reference;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use wash_lib::{

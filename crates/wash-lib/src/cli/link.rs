@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use wasmcloud_control_interface::{CtlResponse, InterfaceLinkDefinition};
+use wasmcloud_control_interface::{CtlResponse, Link};
 
 use crate::{cli::CliConnectionOpts, common::boxed_err_to_anyhow, config::WashConnectionOptions};
 
@@ -50,7 +50,7 @@ pub struct LinkPutCommand {
     pub wit_package: String,
 
     /// The interface of the link, e.g. "incoming-handler" in "wasi:http/incoming-handler"
-    #[clap(long = "interface", required = true)]
+    #[clap(long = "interface", alias = "interfaces", required = true)]
     pub interfaces: Vec<String>,
 
     /// List of named configuration to make available to the source
@@ -98,15 +98,20 @@ pub enum LinkCommand {
 /// # Examples
 ///
 /// ```no_run
-/// let ack = query_links(WashConnectionOptions::default()).await?;
-/// assert_eq!(ack.accepted, true);
+/// # use wash_lib::cli::link::get_links;
+/// use wash_lib::config::WashConnectionOptions;
+/// # async fn doc() -> anyhow::Result<()> {
+/// let links = get_links(WashConnectionOptions::default()).await?;
+/// println!("{links:?}");
+/// # anyhow::Ok(())
+/// # }
 /// ```
-pub async fn get_links(wco: WashConnectionOptions) -> Result<Vec<InterfaceLinkDefinition>> {
+pub async fn get_links(wco: WashConnectionOptions) -> Result<Vec<Link>> {
     wco.into_ctl_client(None)
         .await?
         .get_links()
         .await
-        .map(|ctl| ctl.response.unwrap_or_default())
+        .map(|ctl| ctl.into_data().unwrap_or_default())
         .map_err(boxed_err_to_anyhow)
 }
 
@@ -123,6 +128,9 @@ pub async fn get_links(wco: WashConnectionOptions) -> Result<Vec<InterfaceLinkDe
 /// # Examples
 ///
 /// ```no_run
+/// # use wash_lib::cli::link::delete_link;
+/// use wash_lib::config::WashConnectionOptions;
+/// # async fn doc() -> anyhow::Result<()> {
 /// let ack = delete_link(
 ///   WashConnectionOptions::default(),
 ///   "httpserver",
@@ -130,7 +138,9 @@ pub async fn get_links(wco: WashConnectionOptions) -> Result<Vec<InterfaceLinkDe
 ///   "wasi",
 ///   "http",
 /// ).await?;
-/// assert_eq!(ack.accepted, true);
+/// assert!(ack.succeeded());
+/// # anyhow::Ok(())
+/// # }
 /// ```
 pub async fn delete_link(
     wco: WashConnectionOptions,
@@ -156,30 +166,33 @@ pub async fn delete_link(
 /// # Arguments
 ///
 /// * `wco` - Options for connecting to wash
-/// * `link` - The [`wasmcloud_control_interface::InterfaceLinkDefinition`] to create
+/// * `link` - The [`wasmcloud_control_interface::Link`] to create
 ///
 /// # Examples
 ///
 /// ```no_run
-/// let ack = delete_link(
-///   WashConnectionOptions::default(),
-///   InterfaceLinkDefinition {
-///    source_id: "httpserver".to_string(),
-///    target: "echo".to_string(), // wasmcloud.azurecr.io/echo:0.3.8
-///    wit_namespace: "wasi".to_string(),
-///    wit_package: "http".to_string(),
-///    link_name: "default".to_string(),
-///    interfaces: vec!["incoming-handler".to_string()],
-///    source_config: vec![],
-///    target_config: vec![],
-///   }
-/// ).await?;
-/// assert_eq!(ack.accepted, true);
+/// # use wash_lib::cli::link::put_link;
+/// use wash_lib::config::WashConnectionOptions;
+/// use wasmcloud_control_interface::Link;
+/// # async fn doc() -> anyhow::Result<()> {
+/// let ack = put_link(
+///     WashConnectionOptions::default(),
+///     Link::builder()
+///         .source_id("httpserver")
+///         .target("echo")
+///         .wit_namespace("wasi")
+///         .wit_package("http")
+///         .name("default")
+///         .interfaces(vec!["incoming-handler".to_string()])
+///         .build()
+///         .unwrap(),
+/// )
+/// .await?;
+/// assert!(ack.succeeded());
+/// # anyhow::Ok(())
+/// # }
 /// ```
-pub async fn put_link(
-    wco: WashConnectionOptions,
-    link: InterfaceLinkDefinition,
-) -> Result<CtlResponse<()>> {
+pub async fn put_link(wco: WashConnectionOptions, link: Link) -> Result<CtlResponse<()>> {
     let ctl_client = wco.into_ctl_client(None).await?;
     ctl_client
         .put_link(link.clone())
@@ -188,12 +201,12 @@ pub async fn put_link(
         .with_context(|| {
             format!(
                 "Failed to create link between {} and {} on {}:{}/{:?}. Link name: {}",
-                link.source_id,
-                link.target,
-                link.wit_namespace,
-                link.wit_package,
-                link.interfaces,
-                link.name
+                link.source_id(),
+                link.target(),
+                link.wit_namespace(),
+                link.wit_package(),
+                link.interfaces(),
+                link.name()
             )
         })
 }

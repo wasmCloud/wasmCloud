@@ -30,8 +30,15 @@ pub(crate) async fn build_provider(
     };
 
     trace!("Retrieving provider binary from {:?}", provider_path_buf);
-
-    let provider_bytes = tokio::fs::read(&provider_path_buf).await?;
+    let provider_path_buf = provider_path_buf
+        .canonicalize()
+        .context("failed to resolve file path")?;
+    let provider_bytes = tokio::fs::read(&provider_path_buf).await.with_context(|| {
+        format!(
+            "missing provider binary at [{}]",
+            provider_path_buf.display()
+        )
+    })?;
 
     let mut par = create_provider_archive(
         ParCreateArgs {
@@ -52,12 +59,11 @@ pub(crate) async fn build_provider(
         return Ok(provider_path_buf);
     };
 
-    let destination = common_config
-        .path
-        .join("build")
-        .join(format!("{bin_name}.par.gz"));
+    let destination = common_config.build_dir.join(format!("{bin_name}.par.gz"));
     if let Some(parent) = destination.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("failed to create directory [{}]", parent.display()))?;
     }
     let issuer = extract_keypair(
         sign_config.issuer.as_deref(),
@@ -82,7 +88,7 @@ pub(crate) async fn build_provider(
     Ok(if destination.is_absolute() {
         destination
     } else {
-        common_config.path.join(destination)
+        common_config.project_dir.join(destination)
     })
 }
 
@@ -100,12 +106,16 @@ fn build_rust_provider(
     };
 
     // Change directory into the project directory
-    std::env::set_current_dir(&common_config.path)?;
-    trace!("Building provider in {:?}", common_config.path);
+    std::env::set_current_dir(&common_config.project_dir)?;
+    trace!("Building provider in {:?}", common_config.project_dir);
 
     // Build for a specified target if provided, or the default rust target
-    let mut build_args = Vec::with_capacity(4);
-    build_args.extend_from_slice(&["build", "--release"]);
+    let mut build_args = vec!["build"];
+
+    if !rust_config.debug {
+        build_args.push("--release");
+    }
+
     if let Some(override_target) = &provider_config.rust_target {
         build_args.extend_from_slice(&["--target", override_target]);
     };
@@ -148,7 +158,11 @@ fn build_rust_provider(
         provider_path_buf.push(override_target);
     }
 
-    provider_path_buf.push("release");
+    if rust_config.debug {
+        provider_path_buf.push("debug");
+    } else {
+        provider_path_buf.push("release");
+    }
     provider_path_buf.push(&bin_name);
 
     Ok((provider_path_buf, bin_name))
@@ -168,14 +182,18 @@ fn build_go_provider(
     };
 
     // Change directory into the project directory
-    std::env::set_current_dir(&common_config.path)?;
-    trace!("Building provider in {:?}", common_config.path);
+    std::env::set_current_dir(&common_config.project_dir)?;
+    trace!("Building provider in {:?}", common_config.project_dir);
 
     // Generate interfaces, if not disabled
     if !go_config.disable_go_generate {
         let result = generate_command
             .args(["generate", "./..."])
-            .status()
+            // NOTE: this can be removed once upstream merges verbose flag
+            // https://github.com/bytecodealliance/wasm-tools-go/pull/214
+            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .output()
             .map_err(|e| {
                 if e.kind() == ErrorKind::NotFound {
                     anyhow!("{:?} command is not found", generate_command.get_program())
@@ -184,8 +202,14 @@ fn build_go_provider(
                 }
             })?;
 
-        if !result.success() {
-            bail!("Generating interfaces failed: {result}")
+        if !result.status.success() {
+            let stdout_output = String::from_utf8_lossy(&result.stdout);
+            let stderr_output = String::from_utf8_lossy(&result.stderr);
+            eprintln!("STDOUT:\n{stdout_output}\nSTDERR:\n{stderr_output}");
+            bail!(
+                "Generating interfaces failed: {}",
+                result.status.to_string()
+            )
         }
     }
 

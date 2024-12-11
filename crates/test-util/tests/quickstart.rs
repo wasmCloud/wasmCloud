@@ -33,12 +33,13 @@ async fn test_quickstart() -> Result<()> {
 
     assert_scale_component(
         &ctl_client,
-        &host.host_key(),
+        &host.host_key().public_key(),
         "ghcr.io/wasmcloud/components/http-jsonify-rust:0.1.1",
         "example-component",
         None,
         1,
         Vec::new(),
+        tokio::time::Duration::from_secs(10),
     )
     .await
     .context("failed to start component")?;

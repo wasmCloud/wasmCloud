@@ -1,10 +1,10 @@
 name = "KV Redis"
 language = "rust"
 type = "provider"
-version = "0.24.0"
+version = "0.28.2"
 
 [rust]
-target_path = "../../target"
+target_path = "../../../target"
 
 [provider]
 bin_name = "keyvalue-redis-provider"

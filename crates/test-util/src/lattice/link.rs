@@ -1,7 +1,8 @@
 //! Utilities for managing lattice links
 
 use anyhow::{anyhow, Result};
-use wasmcloud_control_interface::InterfaceLinkDefinition;
+use wasmcloud_control_interface::{CtlResponse, Link};
+use wasmcloud_core::KnownConfigName;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn assert_advertise_link(
@@ -12,9 +13,9 @@ pub async fn assert_advertise_link(
     wit_namespace: impl AsRef<str>,
     wit_package: impl AsRef<str>,
     interfaces: Vec<String>,
-    source_config: Vec<String>,
-    target_config: Vec<String>,
-) -> Result<()> {
+    source_config: Vec<KnownConfigName>,
+    target_config: Vec<KnownConfigName>,
+) -> Result<CtlResponse<()>> {
     let client = client.into();
     let source_id = source_id.as_ref();
     let target = target.as_ref();
@@ -22,19 +23,21 @@ pub async fn assert_advertise_link(
     let wit_namespace = wit_namespace.as_ref();
     let wit_package = wit_package.as_ref();
     client
-        .put_link(InterfaceLinkDefinition {
-            source_id: source_id.to_string(),
-            target: target.to_string(),
-            name: link_name.to_string(),
-            wit_namespace: wit_namespace.to_string(),
-            wit_package: wit_package.to_string(),
-            interfaces,
-            source_config,
-            target_config,
-        })
+        .put_link(
+            Link::builder()
+                .source_id(source_id)
+                .target(target)
+                .name(link_name)
+                .wit_namespace(wit_namespace)
+                .wit_package(wit_package)
+                .interfaces(interfaces)
+                .source_config(source_config)
+                .target_config(target_config)
+                .build()
+                .map_err(|e| anyhow!(e).context("failed to build link"))?,
+        )
         .await
-        .map_err(|e| anyhow!(e).context("failed to advertise link"))?;
-    Ok(())
+        .map_err(|e| anyhow!(e).context("failed to advertise link"))
 }
 
 pub async fn assert_remove_link(

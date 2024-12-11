@@ -6,8 +6,8 @@ import (
 	"runtime"
 
 	// Go provider SDK
-	sdk "github.com/wasmCloud/provider-sdk-go"
-	wrpcnats "github.com/wrpc/wrpc/go/nats"
+	sdk "go.wasmcloud.dev/provider"
+	wrpcnats "wrpc.io/go/nats"
 
 	// Generated bindings from the wit world
 	system_info "github.com/wasmCloud/wasmCloud/examples/go/providers/custom-template/bindings/exports/wasmcloud/example/system_info"

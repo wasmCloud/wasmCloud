@@ -1,0 +1,14 @@
+[template]
+
+raw = [
+  "*.wasm",
+  "tests/fixtures/wadm.template.yaml",
+]
+
+exclude = [
+  "build/",
+  # NOTE(joonas): Keep this around until https://github.com/bytecodealliance/wasm-tools-go/issues/213 is resolved.
+  "!gen/.gitkeep",
+  "gen/",
+  "keys/",
+]

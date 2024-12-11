@@ -3,6 +3,7 @@ name: wash
 on:
   push:
     branches: [main]
+  merge_group:
   pull_request:
     branches: [main]
     paths:
@@ -13,11 +14,16 @@ on:
       - crates/wash-lib/**
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  GO_VERSION: '1.23'
+  TINYGO_VERSION: '0.33.0'
+
+permissions:
+  contents: read
 
 jobs:
   unit_tests:
@@ -25,24 +31,37 @@ jobs:
     strategy:
       fail-fast: false # Ensure we can run the full suite even if one OS fails
       matrix:
-        os: [ubuntu-22.04, windows-latest-8-cores, macos-11]
+        os: [ubuntu-latest-4-cores, windows-latest, macos-13]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
         with:
-          node-version: "18.x"
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+          node-version: '18.x'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: rustup show
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
         with:
-          shared-key: "${{ matrix.os }}-shared-cache"
+          shared-key: '${{ matrix.os }}-shared-cache'
       - name: Install nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@ef1f08ff7e5a9451af03151a0e3dc0785d5c9673
+        with:
+          tool: nextest,wit-bindgen-cli
+      - uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
+        with:
+          tinygo-version: ${{ env.TINYGO_VERSION }}
+          install-binaryen: 'false'
 
+      # Run builds and tests only on Linux and macOS for PRs, Windows on `main`
       - name: Build wash
+        if: ${{ matrix.os != 'windows-latest' || github.ref == 'refs/heads/main' }}
         run: make build
         working-directory: ./crates/wash-cli
 
       - name: Run all wash & wash-lib unit tests
+        if: ${{ matrix.os != 'windows-latest' || github.ref == 'refs/heads/main' }}
         run: make test-wash-ci
         working-directory: ./crates/wash-cli
 
@@ -50,25 +69,26 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: rustup show
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
         with:
-          shared-key: "ubuntu-22.04-shared-cache"
-      - uses: actions/setup-go@v5
+          shared-key: 'ubuntu-22.04-shared-cache'
+      - uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed
         with:
-          go-version: '1.22'
-      - uses: acifani/setup-tinygo@v2
+          go-version: ${{ env.GO_VERSION }}
+      - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
         with:
-          tinygo-version: "0.31.0"
-          install-binaryen: "false"
-      - name: Add wasm32-unknown-unknown
-        run: rustup target add wasm32-unknown-unknown
+          tinygo-version: ${{ env.TINYGO_VERSION }}
+          install-binaryen: 'false'
       - name: Launch integration test services
-        uses: sudo-bot/action-docker-compose@latest
+        uses: sudo-bot/action-docker-compose@ef4c4da08a9673f93d4eb8a5da1e942bf24a37ea
         with:
-          cli-args: "-f ./crates/wash-cli/tools/docker-compose.yml up --detach"
+          cli-args: '-f ./crates/wash-cli/tools/docker-compose.yml up --detach'
       - name: Install nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@ef1f08ff7e5a9451af03151a0e3dc0785d5c9673
+        with:
+          tool: nextest,wit-bindgen-cli,wasm-tools
       - name: Run integration tests
         run: make test-integration-ci
         working-directory: ./crates/wash-cli
@@ -81,24 +101,35 @@ jobs:
     strategy:
       matrix:
         wash-version:
-          # TODO: Use this once 0.27.0 is released
-          # - 0.26.0
           - current
         template:
-          - hello-world-rust
+          - name: hello-world-rust
+            lang: rust
+          - name: hello-world-tinygo
+            lang: tinygo
+            lang-version: '1.23'
+          - name: hello-world-typescript
+            lang: typescript
+            lang-version: '22.x'
+          - name: hello-world-python
+            lang: python
+            lang-version: '3.10'
     steps:
-      - uses: actions/checkout@v4
-        if: ${{ matrix.wash-version == 'current' }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # Set up language toolchain
+      - name: Setup WebAssembly toolchains for language
+        uses: ./.github/actions/wasm-lang-toolchain-setup
         with:
-          shared-key: "ubuntu-22.04-shared-cache"
-      - name: install wash (previous version)
-        if: ${{ matrix.wash-version != 'current' }}
-        uses: taiki-e/install-action@v2
+          language: ${{ matrix.template.lang }}
+          language-version: ${{ matrix.template.lang-version }}
+          wash-version: ${{ matrix.wash-version }}
+
+      # Set up Rust & trigger cargo toolchain
+      - run: rustup show
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
         with:
-          tool: wash-cli@${{ matrix.wash-version }}
-      - name: install wash (current)
-        if: ${{ matrix.wash-version == 'current' }}
-        run: cargo install --path ./crates/wash-cli
+          shared-key: 'ubuntu-22.04-shared-cache'
+
       - name: Ensure `wash new` works
-        run: wash new component ${{ matrix.template }}  --template-name ${{ matrix.template }}
+        run: wash new component ${{ matrix.template.name }} --template-name ${{ matrix.template.name }}

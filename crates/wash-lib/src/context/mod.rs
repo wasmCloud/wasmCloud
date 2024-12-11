@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, NoneAsEmptyString};
 
 use crate::{
-    config::{DEFAULT_LATTICE, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS},
+    config::{
+        DEFAULT_COMPONENT_OPERATION_TIMEOUT_MS, DEFAULT_LATTICE, DEFAULT_NATS_HOST,
+        DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
+    },
     id::ClusterSeed,
 };
 
@@ -66,6 +69,8 @@ pub struct WashContext {
     pub ctl_timeout: u64,
     /// TLS CA file to use for CTL
     pub ctl_tls_ca_file: Option<PathBuf>,
+    /// Perform TLS handshake before expecting the server greeting for CTL
+    pub ctl_tls_first: Option<bool>,
 
     // NOTE: lattice_prefix was renamed to lattice in most places, but this alias will need to remain for backwards compatibility with existing context files
     #[serde(alias = "lattice_prefix", default = "default_lattice")]
@@ -87,6 +92,8 @@ pub struct WashContext {
     pub rpc_timeout: u64,
     /// TLS CA file to use for RPC calls
     pub rpc_tls_ca_file: Option<PathBuf>,
+    /// Perform TLS handshake before expecting the server greeting for RPC
+    pub rpc_tls_first: Option<bool>,
 }
 
 impl WashContext {
@@ -112,6 +119,7 @@ impl Default for WashContext {
             ctl_credsfile: None,
             ctl_timeout: DEFAULT_NATS_TIMEOUT_MS,
             ctl_tls_ca_file: None,
+            ctl_tls_first: None,
             lattice: DEFAULT_LATTICE.to_string(),
             js_domain: None,
             rpc_host: DEFAULT_NATS_HOST.to_string(),
@@ -121,6 +129,7 @@ impl Default for WashContext {
             rpc_credsfile: None,
             rpc_timeout: DEFAULT_NATS_TIMEOUT_MS,
             rpc_tls_ca_file: None,
+            rpc_tls_first: None,
         }
     }
 }
@@ -142,4 +151,10 @@ fn default_lattice() -> String {
 #[must_use]
 pub fn default_timeout_ms() -> u64 {
     DEFAULT_NATS_TIMEOUT_MS
+}
+
+/// Default timeout that should be used with operations that manipulate components (ex. scale)
+#[must_use]
+pub fn default_component_operation_timeout_ms() -> u64 {
+    DEFAULT_COMPONENT_OPERATION_TIMEOUT_MS
 }

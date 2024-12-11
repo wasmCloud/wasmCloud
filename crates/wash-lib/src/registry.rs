@@ -1,13 +1,13 @@
 //! Utilities for pulling and pushing artifacts to various registries
 
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     path::{Path, PathBuf},
 };
 
 use anyhow::{bail, Context as _, Result};
-use oci_distribution::manifest::OciImageManifest;
-use oci_distribution::{
+use oci_client::manifest::OciImageManifest;
+use oci_client::{
     client::{Client, ClientConfig, ClientProtocol, Config, ImageLayer},
     secrets::RegistryAuth,
     Reference,
@@ -58,7 +58,9 @@ pub struct OciPushOptions {
     /// Whether or not OCI registry's certificate will be checked for validity. This will make your HTTPS connections insecure.
     pub insecure_skip_tls_verify: bool,
     /// Optional annotations you'd like to add to the pushed artifact
-    pub annotations: Option<HashMap<String, String>>,
+    pub annotations: Option<BTreeMap<String, String>>,
+    /// Whether to use monolithic push instead of chunked push
+    pub monolithic_push: bool,
 }
 
 /// The types of artifacts that wash supports
@@ -228,6 +230,7 @@ pub async fn push_oci_artifact(
         },
         extra_root_certificates: tls::NATIVE_ROOTS_OCI.to_vec(),
         accept_invalid_certificates: options.insecure_skip_tls_verify,
+        use_monolithic_push: options.monolithic_push,
         ..Default::default()
     });
 

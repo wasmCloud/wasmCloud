@@ -10,17 +10,28 @@ metadata:
   name: blobby
   annotations:
     version: v0.0.1
-    description: "wasmCloud Blobby Example"
+    description: 'wasmCloud Blobby Example'
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/blobby/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/blobby/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/blobby
+    wasmcloud.dev/categories: |
+      http,http-server,rust,object-storage,blobstore,example
 spec:
   components:
     - name: blobby
       type: component
       properties:
-        image: wasmcloud.azurecr.io/blobby:0.1.0
+        # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
+        # image: file://./build/blobby_s.wasm
+        image: ghcr.io/wasmcloud/components/blobby-rust:0.4.0
       traits:
         - type: spreadscaler
           properties:
-            replicas: 1
+            instances: 1
+        # Establish a unidirectional link to the blobstore,
+        # so the `blobby` component can make use of blobstore functionality
+        # (i.e. reading/writing data blobs)
         - type: link
           properties:
             target: blobstore
@@ -30,16 +41,21 @@ spec:
             target_config:
               - name: root-directory
                 properties:
-                  root: "/tmp"
+                  root: '/tmp/blobstore'
 
     # Capability Providers
-    - name: httpserver
+    - name: http
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.20.0
+        image: ghcr.io/wasmcloud/http-server:0.23.2
       traits:
         # Link the httpserver to the component, and configure the HTTP server
-        # to listen on port 8080 for incoming requests
+        # to listen on port 8000 for incoming requests
+        #
+        # Since the HTTP server calls the `blobby` component, we establish
+        # a unidirectional link from this `httpserver` provider (the "source")
+        # to the `blobby` component (the "target"), so the server can invoke
+        # the component to handle a request.
         - type: link
           properties:
             target: blobby
@@ -49,8 +65,8 @@ spec:
             source_config:
               - name: default-http
                 properties:
-                  address: 0.0.0.0:8080
+                  address: 0.0.0.0:8000
     - name: blobstore
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/blobstore-fs:0.6.0
+        image: ghcr.io/wasmcloud/blobstore-fs:0.10.1

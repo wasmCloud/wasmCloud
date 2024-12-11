@@ -14,6 +14,9 @@
    \_/\_/ \__,_|___/_| |_| |_|\_____|_|\___/ \__,_|\__,_| |_____/|_| |_|\___|_|_|
 ```
 
+> [!WARNING]
+> This crate is being deprecated in favor of [wash](https://crates.io/crates/wash), where the wash CLI will be published from now on.
+
 - [Why wash](#why-wash)
 - [Installing wash](#installing-wash)
   - [Cargo](#cargo)
@@ -23,6 +26,7 @@
   - [MacOS (brew)](#macos-brew)
   - [Windows (choco)](#windows-choco)
   - [Nix](#nix)
+- [Proxy authentication](#proxy-authentication)
 - [Using wash](#using-wash)
 - [Shell auto-complete](#shell-auto-complete)
 - [Contributing to wash](#contributing-to-wash)
@@ -36,7 +40,13 @@
 ### Cargo
 
 ```bash
-cargo install wash-cli
+cargo install --locked wash-cli
+```
+
+If you have [cargo-binstall](https://github.com/cargo-bins/cargo-binstall?tab=readme-ov-file#installation):
+
+```bash
+cargo binstall wash-cli
 ```
 
 ### Linux (deb/rpm + apt)
@@ -80,6 +90,17 @@ choco install wash
 nix run github:wasmCloud/wash
 ```
 
+## Proxy authentication
+In a scenario where you are behind a proxy, you can set the `HTTP_PROXY` and `HTTPS_PROXY` environment variables to the proxy URL.
+And if your proxy requires authentication, you can set the `WASH_PROXY_USERNAME` and `WASH_PROXY_PASSWORD` environment variables to the username and password, respectively. Since most passwords contain special characters, it's recommended to specify the value for 'WASH_PROXY_PASSWORD' in single quotes.
+
+For example, in a unix environment:
+
+```console
+export WASH_PROXY_USERNAME='username'
+export WASH_PROXY_PASSWORD='p@ssw0rd'
+```
+
 ## Using wash
 
 `wash` has multiple subcommands, each specializing in one specific area of the wasmCloud development process.
@@ -113,7 +134,6 @@ Iterate:
 Publish:
   pull         Pull an artifact from an OCI compliant registry
   push         Push an artifact to an OCI compliant registry
-  reg          Perform operations on an OCI registry
 
 Configure:
   completions  Generate shell completions for wash

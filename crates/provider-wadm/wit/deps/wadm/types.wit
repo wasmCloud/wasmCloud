@@ -1,7 +1,6 @@
-package wasmcloud:wadm@0.1.0;
+package wasmcloud:wadm@0.2.0;
 
 interface types {
-
     record model-summary {
         name: string,
         version: string,
@@ -72,7 +71,8 @@ interface types {
         undeployed,
         reconciling,
         deployed,
-        failed
+        failed,
+        waiting,
     }
 
     enum deploy-result {
@@ -99,13 +99,14 @@ interface types {
     // The specification for this manifest
     record specification {
         components: list<component>,
+        policies: list<policy>
     }
 
     // A component definition
     record component {
         name: string,
         properties: properties,
-        traits: list<trait>,
+        traits: option<list<trait>>,
     }
 
     // Properties that can be defined for a component
@@ -116,22 +117,27 @@ interface types {
 
     // Properties for a component
     record component-properties {
-        image: string,
+        image: option<string>,
+        application: option<shared-application-component-properties>,
         id: option<string>,
         config: list<config-property>,
+        secrets: list<secret-property>,
     }
 
     // Properties for a capability
     record capability-properties {
-        image: string,
+        image: option<string>,
+        application: option<shared-application-component-properties>,
         id: option<string>,
         config: list<config-property>,
+        secrets: list<secret-property>,
     }
 
-    // Properties for the config list associated with components, providers, and links
-    record config-property {
+    // A policy definition
+    record policy {
         name: string,
-        properties: option<list<tuple<string, string>>>,
+        properties: list<tuple<string, string>>,
+        %type: string,
     }
 
     // A trait definition
@@ -149,13 +155,51 @@ interface types {
 
     // Properties for links
     record link-property {
-        target: string,
         namespace: string,
         %package: string,
         interfaces: list<string>,
-        source-config: list<config-property>,
-        target-config: list<config-property>,
+        source: option<config-definition>,
+        target: target-config,
         name: option<string>,
+    }
+
+    // Configuration definition
+    record config-definition {
+        config: list<config-property>,
+        secrets: list<secret-property>,
+    }
+
+    // Configuration properties
+    record config-property {
+        name: string,
+        properties: option<list<tuple<string, string>>>,
+    }
+
+    // Secret properties
+    record secret-property {
+        name: string,
+        properties: secret-source-property,
+    }
+
+    // Secret source properties
+    record secret-source-property {
+        policy: string,
+        key: string,
+        field: option<string>,
+        version: option<string>,
+    }
+
+    // Shared application component properties
+    record shared-application-component-properties {
+        name: string,
+        component: string
+    }
+
+    // Target configuration
+    record target-config {
+        name: string,
+        config: list<config-property>,
+        secrets: list<secret-property>,
     }
 
     // Properties for spread scalers

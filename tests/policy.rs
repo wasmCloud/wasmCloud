@@ -1,3 +1,5 @@
+#![cfg(feature = "wasmcloud")]
+
 use core::time::Duration;
 
 use anyhow::Context as _;
@@ -26,7 +28,7 @@ async fn policy_always_deny() -> anyhow::Result<()> {
         start_nats().await.context("failed to start NATS")?;
 
     // Build client for interacting with the lattice
-    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client.clone())
+    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client)
         .lattice(LATTICE.to_string())
         .build();
 
@@ -47,6 +49,7 @@ async fn policy_always_deny() -> anyhow::Result<()> {
             policy_changes_topic: Some("test-policy-changes".into()),
             policy_timeout_ms: Some(Duration::from_millis(100)),
         }),
+        None,
     )
     .await
     .context("failed to start test host")?;
@@ -55,27 +58,25 @@ async fn policy_always_deny() -> anyhow::Result<()> {
     assert!(
         assert_start_provider(StartProviderArgs {
             client: &ctl_client,
-            lattice: LATTICE,
-            host_key: &host_key,
-            provider_key: &rust_http_client.subject,
+            host_id: &host_key.public_key(),
             provider_id: &rust_http_client_id,
-            url: &rust_http_client_url,
+            provider_ref: rust_http_client_url.as_str(),
             config: vec![],
         })
         .await
         .is_err(),
         "starting providers should fail"
     );
-
     assert!(
         assert_scale_component(
             &ctl_client,
-            &host.host_key(),
+            &host.host_key().public_key(),
             format!("file://{RUST_INTERFACES_REACTOR}"),
             "test-component",
             None,
             5,
             Vec::new(),
+            Duration::from_secs(10),
         )
         .await
         .is_err(),

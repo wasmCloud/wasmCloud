@@ -10,19 +10,22 @@ use crate::context::WashContext;
 
 pub const WASH_DIR: &str = ".wash";
 
+pub const DEV_DIR: &str = "dev";
 pub const DOWNLOADS_DIR: &str = "downloads";
 pub const WASMCLOUD_PID_FILE: &str = "wasmcloud.pid";
+pub const WADM_PID_FILE: &str = "wadm.pid";
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
 pub const DEFAULT_NATS_PORT: &str = "4222";
 pub const DEFAULT_LATTICE: &str = "default";
 pub const DEFAULT_NATS_TIMEOUT_MS: u64 = 2_000;
-pub const DEFAULT_START_ACTOR_TIMEOUT_MS: u64 = 5_000;
+pub const DEFAULT_START_COMPONENT_TIMEOUT_MS: u64 = 10_000;
+pub const DEFAULT_COMPONENT_OPERATION_TIMEOUT_MS: u64 = 5_000;
 pub const DEFAULT_START_PROVIDER_TIMEOUT_MS: u64 = 60_000;
 pub const DEFAULT_CTX_DIR_NAME: &str = "contexts";
 
 /// Get the path to the `.wash` configuration directory. Creates the directory if it does not exist.
 pub fn cfg_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("no home directory found. Please set $HOME")?;
+    let home = etcetera::home_dir().context("no home directory found. Please set $HOME")?;
 
     let wash = home.join(WASH_DIR);
 
@@ -34,12 +37,27 @@ pub fn cfg_dir() -> Result<PathBuf> {
     Ok(wash)
 }
 
+/// The path to the dev sessions directory for wash
+pub fn dev_dir() -> Result<PathBuf> {
+    Ok(cfg_dir()?.join(DEV_DIR))
+}
+
 /// The path to the downloads directory for wash
 pub fn downloads_dir() -> Result<PathBuf> {
     Ok(cfg_dir()?.join(DOWNLOADS_DIR))
 }
 
-#[derive(Clone)]
+/// The path to the running wasmCloud Host PID file for wash
+pub fn host_pid_file() -> Result<PathBuf> {
+    Ok(downloads_dir()?.join(WASMCLOUD_PID_FILE))
+}
+
+/// The path to the running wadm PID file for wash
+pub fn wadm_pid_file() -> Result<PathBuf> {
+    Ok(downloads_dir()?.join(WADM_PID_FILE))
+}
+
+#[derive(Clone, Default)]
 /// Connection options for a Wash instance
 pub struct WashConnectionOptions {
     /// CTL Host for connection, defaults to 127.0.0.1 for local nats
@@ -55,11 +73,14 @@ pub struct WashConnectionOptions {
     pub ctl_seed: Option<String>,
 
     /// Credsfile for CTL authentication. Combines ctl_seed and ctl_jwt.
-    /// See https://docs.nats.io/using-nats/developer/connecting/creds for details.
+    /// See <https://docs.nats.io/using-nats/developer/connecting/creds> for details.
     pub ctl_credsfile: Option<PathBuf>,
 
     /// Path to a file containing a CA certificate to use for TLS connections
     pub ctl_tls_ca_file: Option<PathBuf>,
+
+    /// Perform TLS handshake before expecting the server greeting.
+    pub ctl_tls_first: Option<bool>,
 
     /// JS domain for wasmcloud control interface. Defaults to None
     pub js_domain: Option<String>,
@@ -91,7 +112,9 @@ impl WashConnectionOptions {
         let ctl_tls_ca_file = self
             .ctl_tls_ca_file
             .or_else(|| self.ctx.ctl_tls_ca_file.clone());
-
+        let ctl_tls_first = self
+            .ctl_tls_first
+            .unwrap_or_else(|| self.ctx.ctl_tls_first.unwrap_or(false));
         let auction_timeout_ms = auction_timeout_ms.unwrap_or(self.timeout_ms);
 
         let nc = create_nats_client_from_opts(
@@ -101,6 +124,7 @@ impl WashConnectionOptions {
             ctl_seed,
             ctl_credsfile,
             ctl_tls_ca_file,
+            ctl_tls_first,
         )
         .await
         .context("Failed to create NATS client")?;
@@ -133,7 +157,9 @@ impl WashConnectionOptions {
         let ctl_tls_ca_file = self
             .ctl_tls_ca_file
             .or_else(|| self.ctx.ctl_tls_ca_file.clone());
-
+        let ctl_tls_first = self
+            .ctl_tls_first
+            .unwrap_or_else(|| self.ctx.ctl_tls_first.unwrap_or(false));
         let nc = create_nats_client_from_opts(
             &ctl_host,
             &ctl_port,
@@ -141,6 +167,7 @@ impl WashConnectionOptions {
             ctl_seed,
             ctl_credsfile,
             ctl_tls_ca_file,
+            ctl_tls_first,
         )
         .await?;
 
@@ -178,7 +205,8 @@ pub async fn create_nats_client_from_opts(
     seed: Option<String>,
     credsfile: Option<PathBuf>,
     tls_ca_file: Option<PathBuf>,
-) -> Result<async_nats::Client> {
+    tls_first: bool,
+) -> Result<Client> {
     let nats_url = format!("{host}:{port}");
     use async_nats::ConnectOptions;
 
@@ -207,6 +235,10 @@ pub async fn create_nats_client_from_opts(
             opts = opts.add_root_certificates(ca_file).require_tls(true);
         }
 
+        if tls_first {
+            opts = opts.tls_first();
+        }
+
         opts.connect(&nats_url).await.with_context(|| {
             format!(
                 "Failed to connect to NATS server {}:{} while creating client",
@@ -227,6 +259,10 @@ pub async fn create_nats_client_from_opts(
             opts = opts.add_root_certificates(ca_file).require_tls(true);
         }
 
+        if tls_first {
+            opts = opts.tls_first();
+        }
+
         opts.connect(&nats_url).await.with_context(|| {
             format!(
                 "Failed to connect to NATS {} with credentials file {:?}",
@@ -240,7 +276,13 @@ pub async fn create_nats_client_from_opts(
             opts = opts.add_root_certificates(ca_file).require_tls(true);
         }
 
-        opts.connect(&nats_url).await.with_context(|| format!("Failed to connect to NATS {}\nNo credentials file was provided, you may need one to connect.", &nats_url))?
+        if tls_first {
+            opts = opts.tls_first();
+        }
+
+        opts.connect(&nats_url)
+            .await
+            .with_context(|| format!("Failed to connect to NATS {}", &nats_url))?
     };
     Ok(nc)
 }

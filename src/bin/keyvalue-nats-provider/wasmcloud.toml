@@ -1,0 +1,11 @@
+name = "KV Nats"
+language = "rust"
+type = "provider"
+version = "0.2.0"
+
+[rust]
+target_path = "../../../target"
+
+[provider]
+bin_name = "keyvalue-nats-provider"
+vendor = "wasmCloud"

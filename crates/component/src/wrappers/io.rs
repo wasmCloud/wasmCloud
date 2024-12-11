@@ -1,84 +1,38 @@
 use std::io::{Read, Write};
 
 pub struct InputStreamReader<'a> {
-    stream: &'a mut crate::wasi::io::streams::InputStream,
+    stream: &'a mut ::wasi::io::streams::InputStream,
 }
 
-impl<'a> From<&'a mut crate::wasi::io::streams::InputStream> for InputStreamReader<'a> {
-    fn from(stream: &'a mut crate::wasi::io::streams::InputStream) -> Self {
+impl<'a> From<&'a mut ::wasi::io::streams::InputStream> for InputStreamReader<'a> {
+    fn from(stream: &'a mut ::wasi::io::streams::InputStream) -> Self {
         Self { stream }
     }
 }
 
 impl std::io::Read for InputStreamReader<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        use crate::wasi::io::streams::StreamError;
-        use std::io;
-
-        let n = buf
-            .len()
-            .try_into()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        match self.stream.blocking_read(n) {
-            Ok(chunk) => {
-                let n = chunk.len();
-                if n > buf.len() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "more bytes read than requested",
-                    ));
-                }
-                buf[..n].copy_from_slice(&chunk);
-                Ok(n)
-            }
-            Err(StreamError::Closed) => Ok(0),
-            Err(StreamError::LastOperationFailed(e)) => {
-                Err(io::Error::new(io::ErrorKind::Other, e.to_debug_string()))
-            }
-        }
+        self.stream.read(buf)
     }
 }
 
 pub struct OutputStreamWriter<'a> {
-    stream: &'a mut crate::wasi::io::streams::OutputStream,
+    stream: &'a mut ::wasi::io::streams::OutputStream,
 }
 
-impl<'a> From<&'a mut crate::wasi::io::streams::OutputStream> for OutputStreamWriter<'a> {
-    fn from(stream: &'a mut crate::wasi::io::streams::OutputStream) -> Self {
+impl<'a> From<&'a mut ::wasi::io::streams::OutputStream> for OutputStreamWriter<'a> {
+    fn from(stream: &'a mut ::wasi::io::streams::OutputStream) -> Self {
         Self { stream }
     }
 }
 
 impl std::io::Write for OutputStreamWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        use crate::wasi::io::streams::StreamError;
-        use std::io;
-
-        let n = match self.stream.check_write().map(std::num::NonZeroU64::new) {
-            Ok(Some(n)) => n,
-            Ok(None) | Err(StreamError::Closed) => return Ok(0),
-            Err(StreamError::LastOperationFailed(e)) => {
-                return Err(io::Error::new(io::ErrorKind::Other, e.to_debug_string()))
-            }
-        };
-        let n = n
-            .get()
-            .try_into()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        let n = buf.len().min(n);
-        self.stream.write(&buf[..n]).map_err(|e| match e {
-            StreamError::Closed => io::ErrorKind::UnexpectedEof.into(),
-            StreamError::LastOperationFailed(e) => {
-                io::Error::new(io::ErrorKind::Other, e.to_debug_string())
-            }
-        })?;
-        Ok(n)
+        self.stream.write(buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.stream
-            .blocking_flush()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        self.stream.flush()
     }
 }
 
@@ -116,6 +70,21 @@ impl Default for StdioStream<'_> {
             stdin: std::io::stdin().lock(),
             stdout: std::io::stdout().lock(),
         }
+    }
+}
+
+/// Similar to [`crate::wasi::io::poll::poll`], but polls all `pollables` until they are all ready.
+///
+/// Poll for completion on a set of pollables.
+///
+/// This function takes a list of pollables, which identify I/O sources of interest, and waits until all of the events are ready for I/O.
+pub fn join(pollables: &[&crate::wasi::io::poll::Pollable]) {
+    let mut pollables = pollables.to_vec();
+    while !pollables.is_empty() {
+        let ready_indices = crate::wasi::io::poll::poll(&pollables);
+        ready_indices.iter().rev().for_each(|&i| {
+            pollables.swap_remove(i as usize);
+        });
     }
 }
 

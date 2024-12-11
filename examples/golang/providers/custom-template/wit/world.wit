@@ -1,4 +1,4 @@
-package wasmcloud:example;
+package wasmcloud:example@0.1.0;
 
 // This interface is generic and includes a function to process some
 // data, returning a string result.

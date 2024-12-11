@@ -1,10 +1,15 @@
-name: Check Licenses
+name: check-licenses
+
 on: [push, pull_request]
+
+permissions:
+  contents: read
+
 jobs:
   cargo-deny:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v4
-    - uses: EmbarkStudios/cargo-deny-action@v1
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+    - uses: EmbarkStudios/cargo-deny-action@e2f4ede4a4e60ea15ff31bc0647485d80c66cfba
       with:
         command: check bans licenses

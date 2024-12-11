@@ -1,4 +1,4 @@
-#![cfg(feature = "providers")]
+#![cfg(all(feature = "provider-http-server", feature = "provider-keyvalue-redis",))]
 
 use core::str;
 use core::time::Duration;
@@ -6,7 +6,6 @@ use core::time::Duration;
 use std::net::Ipv4Addr;
 
 use anyhow::Context as _;
-use test_components::RUST_EXAMPLE_HTTP_KEYVALUE_COUNTER;
 use tokio::time::sleep;
 use tokio::{join, try_join};
 use tracing_subscriber::prelude::*;
@@ -17,6 +16,8 @@ use wasmcloud_test_util::{
     component::assert_scale_component, host::WasmCloudTestHost,
     lattice::link::assert_advertise_link,
 };
+
+use test_components::RUST_HTTP_KEYVALUE_COUNTER;
 
 pub mod common;
 use common::free_port;
@@ -59,7 +60,7 @@ async fn example_rust_http_keyvalue_counter() -> anyhow::Result<()> {
     )?;
 
     // Build client for interacting with the lattice
-    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client.clone())
+    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client)
         .lattice(LATTICE.to_string())
         .build();
     // Build the host
@@ -103,23 +104,20 @@ async fn example_rust_http_keyvalue_counter() -> anyhow::Result<()> {
             let host_key = host.host_key();
             let rust_http_server_url = rust_http_server.url();
             let rust_keyvalue_redis_url = rust_keyvalue_redis.url();
+            let host_id = host_key.public_key();
             try_join!(
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_http_server.subject,
+                    host_id: &host_id,
                     provider_id: &rust_http_server_id,
-                    url: &rust_http_server_url,
+                    provider_ref: rust_http_server_url.as_str(),
                     config: vec![],
                 }),
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_keyvalue_redis.subject,
+                    host_id: &host_id,
                     provider_id: &rust_keyvalue_redis_id,
-                    url: &rust_keyvalue_redis_url,
+                    provider_ref: rust_keyvalue_redis_url.as_str(),
                     config: vec![],
                 }),
             )
@@ -128,12 +126,13 @@ async fn example_rust_http_keyvalue_counter() -> anyhow::Result<()> {
         async {
             assert_scale_component(
                 &ctl_client,
-                &host.host_key(),
-                format!("file://{RUST_EXAMPLE_HTTP_KEYVALUE_COUNTER}"),
+                host.host_key().public_key(),
+                format!("file://{RUST_HTTP_KEYVALUE_COUNTER}"),
                 COMPONENT_ID,
                 None,
                 5,
                 Vec::new(),
+                Duration::from_secs(10),
             )
             .await
             .context("failed to scale `rust-http-keyvalue-counter` component")
@@ -194,8 +193,8 @@ async fn example_rust_http_keyvalue_counter() -> anyhow::Result<()> {
     );
 
     assert_eq!(
-        assert_increment(&http_client, http_port, "/foo?bar=baz").await?,
-        "Counter /foo?bar=baz: 1\n"
+        assert_increment(&http_client, http_port, "/foo").await?,
+        "Counter /foo: 1\n"
     );
 
     assert_eq!(

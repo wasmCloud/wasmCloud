@@ -1,0 +1,12 @@
+[template]
+
+raw = [
+  "*.wasm",
+]
+
+exclude = [
+  "build/",
+  "!gen/.gitkeep",
+  "gen/",
+  "keys/",
+]

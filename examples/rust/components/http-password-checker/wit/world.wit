@@ -1,0 +1,30 @@
+package wasmcloud:http-password-checker;
+
+/// This world represents the functionality that makes the http-password-checker component work
+///
+world component {
+  /// The password checker supports using an existing secrets store to
+  /// look up the values for passwords that it checks, via the `/api/v1/secrets/<id>/check` API
+  ///
+  /// For more information on the wasmcloud:secrets interface:
+  ///   https://github.com/wasmCloud/wasmCloud/tree/main/wit/secrets
+  ///
+  import wasmcloud:secrets/store@0.1.0-draft;
+
+  /// As this component also *reads* the values of secrets (rather than just looking them up)
+  /// the reveal interface is also needed.
+  ///
+  /// For more information on the wasmcloud:secrets interface:
+  ///   https://github.com/wasmCloud/wasmCloud/tree/main/wit/secrets
+  ///
+  import wasmcloud:secrets/reveal@0.1.0-draft;
+
+  /// This component acts as a HTTP handler (i.e. it responds to HTTP requests),
+  /// and to do that, it must expose a handler function which invokers (e.g. the wasmCloud host, wasmtime, or another component)
+  /// can use to send in requests (and receive responses).
+  ///
+  /// For more information on the wasmcloud:secrets interface:
+  ///   https://github.com/WebAssembly/wasi-http/tree/v0.2.2/wit
+  ///
+  export wasi:http/incoming-handler@0.2.2;
+}

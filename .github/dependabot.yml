@@ -9,11 +9,19 @@ updates:
       patterns:
       - "wasmtime*"
 - package-ecosystem: "cargo"
-  directory: "/tests/actors/rust"
+  directory: "/tests/components/rust"
+  schedule:
+    interval: "daily"
+- package-ecosystem: "cargo"
+  directory: "/examples/rust/components/http-hello-world"
+  schedule:
+    interval: "daily"
+- package-ecosystem: "cargo"
+  directory: "/examples/rust/components/http-keyvalue-counter"
   schedule:
     interval: "daily"
 - package-ecosystem: npm
-  directory: "/washboard-ui"
+  directory: "/typescript"
   open-pull-requests-limit: 20
   schedule:
     interval: "weekly"
@@ -46,5 +54,9 @@ updates:
     interval: "daily"
 - package-ecosystem: "github-actions"
   directory: "/.github/actions/install-nix"
+  schedule:
+    interval: "daily"
+- package-ecosystem: "docker"
+  directory: "/"
   schedule:
     interval: "daily"

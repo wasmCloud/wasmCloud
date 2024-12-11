@@ -1,9 +1,10 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use wasmcloud_control_interface::HostInventory;
 
 use crate::{
-    actor::update_actor,
     common::{boxed_err_to_anyhow, get_all_inventories},
+    component::update_component,
     config::WashConnectionOptions,
 };
 
@@ -38,7 +39,7 @@ pub struct UpdateComponentCommand {
     pub new_component_ref: String,
 }
 
-pub async fn handle_update_actor(cmd: UpdateComponentCommand) -> Result<CommandOutput> {
+pub async fn handle_update_component(cmd: UpdateComponentCommand) -> Result<CommandOutput> {
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
 
@@ -46,36 +47,60 @@ pub async fn handle_update_actor(cmd: UpdateComponentCommand) -> Result<CommandO
         client
             .get_host_inventory(&host_id)
             .await
-            .map(|inventory| inventory.response)
+            .map(|inventory| inventory.into_data())
             .map_err(boxed_err_to_anyhow)?
             .context(format!(
                 "Supplied host [{}] did not respond to inventory query",
                 host_id
             ))?
     } else {
-        let inventories = get_all_inventories(&client).await?;
-        inventories
+        let mut inventories = get_all_inventories(&client)
+            .await?
             .into_iter()
-            .find(|inv| {
-                inv.components
+            .filter(|inv| {
+                inv.components()
                     .iter()
-                    .any(|component| component.id == cmd.component_id)
+                    .any(|component| component.id() == cmd.component_id)
             })
-            .ok_or_else(|| {
-                anyhow::anyhow!("No host found running component [{}]", cmd.component_id)
-            })?
+            .collect::<Vec<HostInventory>>();
+
+        match inventories[..] {
+            // No hosts
+            [] => {
+                bail!("No host found running component [{}]", cmd.component_id)
+            }
+            // Single host
+            [_] => inventories.remove(0),
+            // Multiple hosts
+            _ => {
+                bail!(
+                    "Component [{}] cannot be updated because multiple hosts are running it: [{}]",
+                    cmd.component_id,
+                    inventories
+                        .iter()
+                        .map(|h| h.host_id().to_string())
+                        .collect::<Vec<String>>()
+                        .join(","),
+                );
+            }
+        }
     };
 
     let Some((host_id, component_ref)) = inventory
-        .components
+        .components()
         .iter()
-        .find(|component| component.id == cmd.component_id)
-        .map(|component| (inventory.host_id.clone(), component.image_ref.clone()))
+        .find(|component| component.id() == cmd.component_id)
+        .map(|component| {
+            (
+                inventory.host_id().to_string(),
+                component.image_ref().to_string(),
+            )
+        })
     else {
         bail!(
             "Component {} not found on host [{}]",
             cmd.component_id,
-            inventory.host_id,
+            inventory.host_id(),
         );
     };
 
@@ -83,18 +108,19 @@ pub async fn handle_update_actor(cmd: UpdateComponentCommand) -> Result<CommandO
         return Ok(CommandOutput::from_key_and_text(
             "result",
             format!(
-                "Component {} already updated to {} on host [{}]",
-                cmd.component_id, cmd.new_component_ref, host_id
+                "Component {} already updated to {} on host [{host_id}]",
+                cmd.component_id, cmd.new_component_ref,
             ),
         ));
     }
 
-    let ack = update_actor(&client, &host_id, &cmd.component_id, &cmd.new_component_ref).await?;
-    if !ack.success {
-        bail!("Operation failed on host [{}]: {}", host_id, ack.message);
+    let ack =
+        update_component(&client, &host_id, &cmd.component_id, &cmd.new_component_ref).await?;
+    if !ack.succeeded() {
+        bail!("Operation failed on host [{host_id}]: {}", ack.message());
     }
 
-    let message = match ack.message {
+    let message = match ack.message().to_string() {
         message if message.is_empty() => format!(
             "component {} updating from {} to {}",
             cmd.component_id, component_ref, cmd.new_component_ref

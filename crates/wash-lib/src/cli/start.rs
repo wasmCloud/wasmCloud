@@ -1,20 +1,18 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use tokio::time::Duration;
 
-use crate::{
-    actor::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
-    cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput},
-    common::{boxed_err_to_anyhow, find_host_id},
-    config::{
-        WashConnectionOptions, DEFAULT_NATS_TIMEOUT_MS, DEFAULT_START_ACTOR_TIMEOUT_MS,
-        DEFAULT_START_PROVIDER_TIMEOUT_MS,
-    },
-    context::default_timeout_ms,
-    wait::{wait_for_provider_start_event, FindEventOutcome, ProviderStartedInfo},
+use crate::cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput};
+use crate::common::{boxed_err_to_anyhow, find_host_id};
+use crate::component::{scale_component, ComponentScaledInfo, ScaleComponentArgs};
+use crate::config::{
+    WashConnectionOptions, DEFAULT_NATS_TIMEOUT_MS, DEFAULT_START_COMPONENT_TIMEOUT_MS,
+    DEFAULT_START_PROVIDER_TIMEOUT_MS,
 };
+use crate::context::default_timeout_ms;
+use crate::wait::{wait_for_provider_start_event, FindEventOutcome, ProviderStartedInfo};
 
 use super::validate_component_id;
 
@@ -78,10 +76,45 @@ pub struct StartComponentCommand {
     pub config: Vec<String>,
 }
 
+/// Utility function for resolving component and provider references
+pub(crate) async fn resolve_ref(s: impl AsRef<str>) -> Result<String> {
+    let resolved = match s.as_ref() {
+        s if s.starts_with('/') => {
+            format!("file://{}", &s) // prefix with file:// if it's an absolute path
+        }
+        s if tokio::fs::try_exists(s).await.is_ok_and(|exists| exists) => {
+            format!(
+                "file://{}",
+                tokio::fs::canonicalize(&s)
+                    .await
+                    .with_context(|| format!("failed to resolve absolute path: {}", s))?
+                    .display()
+            )
+        }
+        // If a URI-formatted relative path was provided, resolve it
+        s if s.starts_with("file://")
+            && tokio::fs::try_exists(s.split_at(7).1)
+                .await
+                .is_ok_and(|exists| exists) =>
+        {
+            format!(
+                "file://{}",
+                tokio::fs::canonicalize(s.split_at(7).1)
+                    .await
+                    .with_context(|| format!("failed to resolve absolute path: {}", s))?
+                    .display()
+            )
+        }
+        // For all other cases, just take the provided string
+        s => s.to_string(),
+    };
+    Ok(resolved)
+}
+
 pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<CommandOutput> {
     // If timeout isn't supplied, override with a longer timeout for starting component
     let timeout_ms = if cmd.opts.timeout_ms == DEFAULT_NATS_TIMEOUT_MS {
-        DEFAULT_START_ACTOR_TIMEOUT_MS
+        DEFAULT_START_COMPONENT_TIMEOUT_MS
     } else {
         cmd.opts.timeout_ms
     };
@@ -89,12 +122,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
         .into_ctl_client(Some(cmd.auction_timeout_ms))
         .await?;
 
-    // TODO: absolutize the path if it's a relative file
-    let component_ref = if cmd.component_ref.starts_with('/') {
-        format!("file://{}", &cmd.component_ref) // prefix with file:// if it's an absolute path
-    } else {
-        cmd.component_ref.to_string()
-    };
+    let component_ref = resolve_ref(&cmd.component_ref).await?;
 
     let host = match cmd.host_id {
         Some(host) => find_host_id(&host, &client).await?.0,
@@ -103,7 +131,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
                 .perform_component_auction(
                     &component_ref,
                     &cmd.component_id,
-                    input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
+                    BTreeMap::from_iter(input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?),
                 )
                 .await
                 .map_err(boxed_err_to_anyhow)
@@ -118,12 +146,12 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
             } else {
                 let acks = suitable_hosts
                     .into_iter()
-                    .filter_map(|h| h.response)
+                    .filter_map(|h| h.into_data())
                     .collect::<Vec<_>>();
                 let ack = acks.first().context("No suitable hosts found")?;
-                ack.host_id
+                ack.host_id()
                     .parse()
-                    .with_context(|| format!("Failed to parse host id: {}", ack.host_id))?
+                    .with_context(|| format!("Failed to parse host id: {}", ack.host_id()))?
             }
         }
     };
@@ -136,7 +164,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
     } = scale_component(ScaleComponentArgs {
         client: &client,
         host_id: &host,
-        component_ref: &cmd.component_ref,
+        component_ref: &component_ref,
         component_id: &cmd.component_id,
         max_instances: cmd.max_instances,
         skip_wait: cmd.skip_wait,
@@ -218,36 +246,7 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
         .await?;
 
     // Attempt to parse the provider_ref from strings that may look lke paths or be OCI references
-    let provider_ref = match cmd.provider_ref {
-        // If provider ref starts with '/', then prefix with 'file://', as it's an absolute path
-        ref s if s.starts_with('/') => format!("file://{}", &cmd.provider_ref),
-        // If the provided ref happens to be an existing path, convert
-        ref s if tokio::fs::try_exists(s).await.is_ok_and(|exists| exists) => {
-            format!(
-                "file://{}",
-                tokio::fs::canonicalize(&s)
-                    .await
-                    .with_context(|| format!("failed to resolve absolute path: {}", s))?
-                    .display()
-            )
-        }
-        // If a URI-formatted relative path was provided, resolve it
-        ref s
-            if s.starts_with("file://")
-                && tokio::fs::try_exists(s.split_at(7).1)
-                    .await
-                    .is_ok_and(|exists| exists) =>
-        {
-            format!(
-                "file://{}",
-                tokio::fs::canonicalize(s.split_at(7).1)
-                    .await
-                    .with_context(|| format!("failed to resolve absolute path: {}", s))?
-                    .display()
-            )
-        }
-        _ => cmd.provider_ref.to_string(),
-    };
+    let provider_ref = resolve_ref(&cmd.provider_ref).await?;
 
     let host = match cmd.host_id {
         Some(host) => find_host_id(&host, &client).await?.0,
@@ -256,7 +255,7 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
                 .perform_provider_auction(
                     &provider_ref,
                     &cmd.link_name,
-                    input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
+                    BTreeMap::from_iter(input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?),
                 )
                 .await
                 .map_err(boxed_err_to_anyhow)
@@ -271,12 +270,12 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
             } else {
                 let acks = suitable_hosts
                     .into_iter()
-                    .filter_map(|h| h.response)
+                    .filter_map(|h| h.into_data())
                     .collect::<Vec<_>>();
                 let ack = acks.first().context("No suitable hosts found")?;
-                ack.host_id
+                ack.host_id()
                     .parse()
-                    .with_context(|| format!("Failed to parse host id: {}", ack.host_id))?
+                    .with_context(|| format!("Failed to parse host id: {}", ack.host_id()))?
             }
         }
     };
@@ -301,8 +300,8 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
             )
         })?;
 
-    if !ack.success {
-        bail!("Start provider ack not accepted: {}", ack.message);
+    if !ack.succeeded() {
+        bail!("Start provider ack not accepted: {}", ack.message());
     }
 
     if cmd.skip_wait {

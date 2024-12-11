@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.28.1"
+version = "0.37.0"
 categories = ["wasm", "command-line-utilities"]
 description = "wasmCloud Shell (wash) CLI tool"
 keywords = ["webassembly", "wasmcloud", "wash", "cli"]
@@ -15,25 +15,36 @@ repository.workspace = true
 maintenance = { status = "actively-developed" }
 
 [dependencies]
+anstyle = { workspace = true }
 anyhow = { workspace = true, features = ["backtrace"] }
 async-compression = { workspace = true, features = ["tokio", "gzip"] }
 async-nats = { workspace = true }
 bytes = { workspace = true }
-clap = { workspace = true, features = ["derive", "env", "string"] }
+chrono = { workspace = true }
+clap = { workspace = true, features = [
+    "cargo",
+    "derive",
+    "env",
+    "std",
+    "string",
+] }
 clap_complete = { workspace = true }
-cloudevents-sdk = { workspace = true }
+clap-markdown = { workspace = true }
 console = { workspace = true }
-dirs = { workspace = true }
+crossterm = { workspace = true, features = ["events", "windows"] }
+docker_credential = { workspace = true }
+etcetera = { workspace = true }
+file-guard = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 indicatif = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
-nkeys = { workspace = true }
+nkeys = { workspace = true, features = ["xkeys"] }
 notify = { workspace = true }
-oci-distribution = { workspace = true, features = ["rustls-tls"] }
-oci-wasm = { workspace = true, features = ["rustls-tls"] }
+oci-client = { workspace = true, features = ["rustls-tls"] }
 once_cell = { workspace = true }
 provider-archive = { workspace = true }
+rand = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 rmp-serde = { workspace = true }
@@ -43,17 +54,16 @@ semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }
-serde_with = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
+sysinfo = { workspace = true }
 tempfile = { workspace = true }
 term-table = { workspace = true }
 termcolor = { workspace = true }
-thiserror = { workspace = true }
+termsize = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-tar = { workspace = true }
 tokio-util = { workspace = true }
-toml = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = [
     "ansi",
@@ -62,10 +72,9 @@ tracing-subscriber = { workspace = true, features = [
     "json",
     "std",
 ] }
-url = { workspace = true }
+wadm-client = { workspace = true }
 wadm-types = { workspace = true }
 warp = { workspace = true }
-wascap = { workspace = true }
 wash-lib = { workspace = true, features = [
     "cli",
     "parser",
@@ -73,24 +82,36 @@ wash-lib = { workspace = true, features = [
     "start",
     "plugin",
 ] }
+wasm-pkg-client = { workspace = true }
+wasm-pkg-core = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true }
-wasmcloud-provider-sdk = { workspace = true }
-weld-codegen = { workspace = true, features = ["wasmbus"] }
+wasmcloud-secrets-types = { workspace = true }
 which = { workspace = true }
-wrpc-interface-http = { workspace = true }
+wit-bindgen-wrpc = { workspace = true }
+wit-parser = { workspace = true }
+wrpc-interface-http = { workspace = true, features = ["http-body"] }
 wrpc-transport = { workspace = true }
-wrpc-types = { workspace = true }
+wrpc-transport-nats = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 notify = { workspace = true, features = ["macos_fsevent"] }
 
 [dev-dependencies]
 assert-json-diff = { workspace = true }
-rand = { workspace = true }
 reqwest = { workspace = true }
 serial_test = { workspace = true }
 sysinfo = { workspace = true }
+wat = { workspace = true }
+wit-component = { workspace = true }
+wasm-pkg-client = { workspace = true }
 
 [build-dependencies]
 tokio = { workspace = true, features = ["macros", "net"] }
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{name}-v{version}/wash-{ target }{ binary-ext }"
+pkg-fmt = "bin"
+
+[package.metadata.cargo-machete]
+ignored = ["serde_bytes"]

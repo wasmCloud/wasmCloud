@@ -1,6 +1,6 @@
 [package]
 name = "opentelemetry-nats"
-version = "0.1.0"
+version = "0.2.0"
 description = "Convenience functions for propagating OpenTelemetry traces on NATS messages"
 
 authors.workspace = true
@@ -13,7 +13,7 @@ repository.workspace = true
 default = []
 
 [dependencies]
-async-nats = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = [
     "trace",

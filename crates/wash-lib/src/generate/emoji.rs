@@ -6,15 +6,16 @@
 //
 use console::Emoji;
 
-pub static ERROR: Emoji<'_, '_> = Emoji("⛔  ", "");
-pub static SPARKLE: Emoji<'_, '_> = Emoji("✨  ", "");
-pub static GREEN_CHECK: Emoji<'_, '_> = Emoji("✅ ", "");
-pub static WARN: Emoji<'_, '_> = Emoji("⚠️  ", "");
-pub static WRENCH: Emoji<'_, '_> = Emoji("🔧  ", "");
+pub static BROOM: Emoji<'_, '_> = Emoji("🧹", "");
+pub static CONSTRUCTION_BARRIER: Emoji<'_, '_> = Emoji("🚧", "");
+pub static EYES: Emoji<'_, '_> = Emoji("👀", "");
+pub static ERROR: Emoji<'_, '_> = Emoji("⛔", "");
+pub static GREEN_CHECK: Emoji<'_, '_> = Emoji("✅", "");
+pub static HOURGLASS_DRAINING: Emoji<'_, '_> = Emoji("⏳", "");
+pub static INFO_SQUARE: Emoji<'_, '_> = Emoji("ℹ️ ", "");
+pub static RECYCLE: Emoji<'_, '_> = Emoji("🔁", "");
 pub static SHRUG: Emoji<'_, '_> = Emoji("🤷  ", "");
-pub static INFO: Emoji<'_, '_> = Emoji("💡  ", "");
-pub static RECYCLE: Emoji<'_, '_> = Emoji("♻️  ", "");
-pub static INFO_SQUARE: Emoji<'_, '_> = Emoji("ℹ️️  ", "");
-pub static HOURGLASS_DRAINING: Emoji<'_, '_> = Emoji("⏳ ", "");
-pub static HOURGLASS_FULL: Emoji<'_, '_> = Emoji("⌛ ", "");
-pub static CONSTRUCTION_BARRIER: Emoji<'_, '_> = Emoji("🚧 ", "");
+pub static SPARKLE: Emoji<'_, '_> = Emoji("✨", "");
+pub static STOP: Emoji<'_, '_> = Emoji("🛑", "");
+pub static WARN: Emoji<'_, '_> = Emoji("🟧️", "");
+pub static WRENCH: Emoji<'_, '_> = Emoji("🔧", "");

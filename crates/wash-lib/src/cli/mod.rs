@@ -19,6 +19,10 @@ use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::info;
+use wasm_pkg_client::{
+    caching::{CachingClient, FileCache},
+    RegistryMapping,
+};
 
 use crate::{
     config::{
@@ -160,6 +164,14 @@ pub struct CliConnectionOpts {
     )]
     pub ctl_tls_ca_file: Option<PathBuf>,
 
+    /// Perform TLS handshake before expecting the server greeting.
+    #[clap(
+        long = "ctl-tls-first",
+        env = "WASH_CTL_TLS_FIRST",
+        hide_env_values = true
+    )]
+    pub ctl_tls_first: Option<bool>,
+
     /// JS domain for wasmcloud control interface. Defaults to None
     #[clap(
         long = "js-domain",
@@ -196,6 +208,7 @@ impl Default for CliConnectionOpts {
             ctl_seed: None,
             ctl_credsfile: None,
             ctl_tls_ca_file: None,
+            ctl_tls_first: None,
             js_domain: None,
             lattice: Some(DEFAULT_LATTICE.to_string()),
             timeout_ms: DEFAULT_NATS_TIMEOUT_MS,
@@ -215,6 +228,7 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
             ctl_seed,
             ctl_credsfile,
             ctl_tls_ca_file,
+            ctl_tls_first,
             js_domain,
             lattice,
             timeout_ms,
@@ -240,11 +254,120 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
             ctl_seed,
             ctl_credsfile,
             ctl_tls_ca_file,
+            ctl_tls_first,
             js_domain,
             lattice,
             timeout_ms,
             ctx,
         })
+    }
+}
+
+// NOTE(thomastaylor312): This is copied from the `wkg` CLI until
+// https://github.com/bytecodealliance/wasm-pkg-tools/issues/98 is worked on
+
+/// Common arguments for wasm package tooling. Because this allows for maximum compatibility, the
+/// environment variables are prefixed with `WKG_` rather than `WASH_`
+#[derive(Args, Debug, Clone, Default)]
+pub struct CommonPackageArgs {
+    /// The path to the configuration file.
+    #[arg(long = "pkg-config", env = "WASH_PACKAGE_CONFIG_FILE")]
+    config: Option<PathBuf>,
+    /// The path to the cache directory. Defaults to the system cache directory.
+    #[arg(long = "pkg-cache", env = "WASH_PACKAGE_CACHE_DIR")]
+    cache: Option<PathBuf>,
+}
+
+impl CommonPackageArgs {
+    /// Helper to load the config from the given path or other default paths
+    pub async fn load_config(&self) -> anyhow::Result<wasm_pkg_client::Config> {
+        // Get the default config so we have the default fallbacks
+        let mut conf = wasm_pkg_client::Config::default();
+
+        // We attempt to load config in the following order of preference:
+        // 1. Path provided by the user via flag
+        // 2. Path provided by the user via `WASH` prefixed environment variable
+        // 3. Path provided by the users via `WKG` prefixed environment variable
+        // 4. Default path to config file in wash dir
+        // 5. Default path to config file from wkg
+        match (self.config.as_ref(), std::env::var_os("WKG_CONFIG_FILE")) {
+            // We have a config file provided by the user flag or WASH env var
+            (Some(path), _) => {
+                let loaded = wasm_pkg_client::Config::from_file(&path)
+                    .await
+                    .context(format!("error loading config file {path:?}"))?;
+                // Merge the two configs
+                conf.merge(loaded);
+            }
+            // We have a config file provided by the user via `WKG` env var
+            (None, Some(path)) => {
+                let loaded = wasm_pkg_client::Config::from_file(&path)
+                    .await
+                    .context(format!("error loading config file from {path:?}"))?;
+                // Merge the two configs
+                conf.merge(loaded);
+            }
+            // Otherwise we got nothing and attempt to load the default config locations
+            (None, None) => {
+                let path = cfg_dir()?.join("package_config.toml");
+                // Check if the config file exists before loading so we can error properly
+                if tokio::fs::metadata(&path).await.is_ok() {
+                    let loaded = wasm_pkg_client::Config::from_file(&path)
+                        .await
+                        .context(format!("error loading config file {path:?}"))?;
+                    // Merge the two configs
+                    conf.merge(loaded);
+                } else if let Ok(Some(c)) = wasm_pkg_client::Config::read_global_config().await {
+                    // This means the global config exists, so we merge that in instead
+                    conf.merge(c);
+                }
+            }
+        };
+        let wasmcloud_label = "wasmcloud".parse().unwrap();
+        // If they don't have a config set for the wasmcloud namespace, set it to the default defined here
+        if conf.namespace_registry(&wasmcloud_label).is_none() {
+            conf.set_namespace_registry(
+                wasmcloud_label,
+                RegistryMapping::Registry("wasmcloud.com".parse().unwrap()),
+            );
+        }
+        // Same for wrpc
+        let wrpc_label = "wrpc".parse().unwrap();
+        if conf.namespace_registry(&wrpc_label).is_none() {
+            conf.set_namespace_registry(
+                wrpc_label,
+                RegistryMapping::Registry("bytecodealliance.org".parse().unwrap()),
+            );
+        }
+        Ok(conf)
+    }
+
+    /// Helper for loading the [`FileCache`]
+    pub async fn load_cache(&self) -> anyhow::Result<FileCache> {
+        // We attempt to setup a cache dir in the following order of preference:
+        // 1. Path provided by the user via flag
+        // 2. Path provided by the user via `WASH` prefixed environment variable
+        // 3. Path provided by the users via `WKG` prefixed environment variable
+        // 4. Default path to cache in wash dir
+        let dir = match (self.cache.as_ref(), std::env::var_os("WKG_CACHE_DIR")) {
+            // We have a cache dir provided by the user flag or WASH env var
+            (Some(path), _) => path.to_owned(),
+            // We have a cache dir provided by the user via `WKG` env var
+            (None, Some(path)) => PathBuf::from(path),
+            // Otherwise we got nothing and attempt to load the default cache dir
+            (None, None) => cfg_dir()?.join("package_cache"),
+        };
+        FileCache::new(dir).await
+    }
+
+    /// Helper for loading a caching client. This should be the most commonly used method for
+    /// loading a client, but if you need to modify the config or use your own cache, you can use
+    /// the [`CommonPackageArgs::load_config`] and [`CommonPackageArgs::load_cache`] methods.
+    pub async fn get_client(&self) -> anyhow::Result<CachingClient<FileCache>> {
+        let config = self.load_config().await?;
+        let cache = self.load_cache().await?;
+        let client = wasm_pkg_client::Client::new(config);
+        Ok(CachingClient::new(Some(client), cache))
     }
 }
 
@@ -426,23 +549,76 @@ fn img_name_to_file_name(img: &str) -> String {
 }
 
 #[cfg(test)]
+#[cfg(not(target_family = "windows"))]
 mod test {
+    use std::{
+        env,
+        ffi::{OsStr, OsString},
+        path::{Path, PathBuf},
+    };
+
     use anyhow::Result;
-    use std::env;
+    use serial_test::serial;
 
     use crate::{
         config::{WashConnectionOptions, DEFAULT_CTX_DIR_NAME, DEFAULT_LATTICE, WASH_DIR},
         context::{fs::ContextDir, ContextManager, WashContext},
     };
 
-    use super::CliConnectionOpts;
+    use super::{CliConnectionOpts, CommonPackageArgs};
+
+    struct CurDir {
+        cwd: PathBuf,
+    }
+
+    impl CurDir {
+        fn cwd(path: impl AsRef<Path>) -> Result<Self> {
+            let cwd = env::current_dir()?;
+            env::set_current_dir(path)?;
+            Ok(Self { cwd })
+        }
+    }
+
+    impl Drop for CurDir {
+        fn drop(&mut self) {
+            env::set_current_dir(&self.cwd).unwrap();
+        }
+    }
+
+    struct EnvVar {
+        key: OsString,
+        value: Option<OsString>,
+    }
+
+    impl EnvVar {
+        fn set(key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
+            let old_val = env::var_os(&key);
+            env::set_var(&key, value);
+            Self {
+                key: key.as_ref().into(),
+                value: old_val,
+            }
+        }
+    }
+
+    impl Drop for EnvVar {
+        fn drop(&mut self) {
+            if let Some(value) = &self.value {
+                env::set_var(&self.key, value);
+            } else {
+                env::remove_var(&self.key);
+            }
+        }
+    }
+
+    // These tests MUST be run serially because they modify the environment and current working dir
 
     #[tokio::test]
-    #[cfg(not(target_family = "windows"))]
+    #[serial]
     async fn test_lattice_name() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
-        env::set_current_dir(&tempdir)?;
-        env::set_var("HOME", tempdir.path());
+        let _dir = CurDir::cwd(&tempdir)?;
+        let _home_var = EnvVar::set("HOME", tempdir.path());
 
         // when opts.lattice.is_none() && opts.context.is_none() && user didn't set a default context, use the lattice from the preset default context...
         let cli_opts = CliConnectionOpts::default();
@@ -492,5 +668,143 @@ mod test {
         assert_eq!(wash_opts.get_lattice(), "iamironman".to_string());
 
         Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_config_loading() {
+        let tempdir = tempfile::tempdir().expect("failed to create tempdir");
+
+        let wash_path = tempdir.path().join(".wash");
+        tokio::fs::create_dir_all(&wash_path)
+            .await
+            .expect("failed to create wash dir");
+        let wkg_conf = tempdir.path().join("wkg");
+        tokio::fs::create_dir_all(&wkg_conf)
+            .await
+            .expect("failed to create wkg dir");
+
+        // First, test a default config with no env vars
+        let mut common = CommonPackageArgs::default();
+
+        let config = common
+            .load_config()
+            .await
+            .expect("Should be able to load a default config");
+        assert_default_registries(&config);
+        assert!(
+            config.namespace_registry(&"foo".parse().unwrap()).is_none(),
+            "Should not have a namespace set for foo"
+        );
+
+        let _home_env = EnvVar::set("HOME", tempdir.path());
+
+        let expected_reg =
+            wasm_pkg_client::RegistryMapping::Registry("hellothere.com".parse().unwrap());
+        // Create some configs for testing
+        let mut config_for_wash = wasm_pkg_client::Config::default();
+        config_for_wash.set_namespace_registry("foo".parse().unwrap(), expected_reg.clone());
+        config_for_wash
+            .to_file(wash_path.join("package_config.toml"))
+            .await
+            .expect("failed to write config");
+
+        let mut config_for_wkg = wasm_pkg_client::Config::default();
+        let wkg_config_path = wkg_conf.join("config.toml");
+        config_for_wkg.set_namespace_registry("bar".parse().unwrap(), expected_reg.clone());
+        config_for_wkg
+            .to_file(&wkg_config_path)
+            .await
+            .expect("failed to write config");
+
+        let mut config_for_home = wasm_pkg_client::Config::default();
+        let home_config_path = tempdir.path().join("config.toml");
+        config_for_home.set_namespace_registry("baz".parse().unwrap(), expected_reg.clone());
+        // Force a custom wasmcloud one
+        config_for_home.set_namespace_registry(
+            "wasmcloud".parse().unwrap(),
+            wasm_pkg_client::RegistryMapping::Registry("adifferentone.com".parse().unwrap()),
+        );
+        config_for_home
+            .to_file(&home_config_path)
+            .await
+            .expect("failed to write config");
+
+        // Now try loading the config again, this time with a config file in the default location
+        let config = common
+            .load_config()
+            .await
+            .expect("Should be able to load a default config");
+        assert_default_registries(&config);
+        let foo_registry = config
+            .namespace_registry(&"foo".parse().unwrap())
+            .expect("Should have a namespace set for foo");
+
+        assert!(
+            assert_registry_mapping(foo_registry, "hellothere.com"),
+            "Should have the proper registry for foo",
+        );
+
+        // Set the WKG env var and make sure it overrides the config file
+        let _wkg_env = EnvVar::set("WKG_CONFIG_FILE", &wkg_config_path);
+        let config = common
+            .load_config()
+            .await
+            .expect("Should be able to load config");
+        assert_default_registries(&config);
+        let bar_registry = config
+            .namespace_registry(&"bar".parse().unwrap())
+            .expect("Should have a namespace set for bar");
+        assert!(
+            assert_registry_mapping(bar_registry, "hellothere.com"),
+            "Should have the proper registry for bar",
+        );
+
+        // Now set an actual path in the common args and make sure that gets loaded, even with other env vars set
+        common.config = Some(home_config_path.clone());
+
+        let config = common
+            .load_config()
+            .await
+            .expect("Should be able to load config");
+        let baz_registry = config
+            .namespace_registry(&"baz".parse().unwrap())
+            .expect("Should have a namespace set for baz");
+        assert!(
+            assert_registry_mapping(baz_registry, "hellothere.com"),
+            "Should have the proper registry for baz",
+        );
+        // Double check that our override of the wasmcloud namespace works
+        let wasmcloud_registry = config
+            .namespace_registry(&"wasmcloud".parse().unwrap())
+            .expect("Should have a namespace set for wasmcloud");
+        assert!(
+            assert_registry_mapping(wasmcloud_registry, "adifferentone.com"),
+            "Should have the proper registry for wasmcloud",
+        );
+    }
+
+    fn assert_registry_mapping(
+        registry_mapping: &wasm_pkg_client::RegistryMapping,
+        expected_registry: &str,
+    ) -> bool {
+        match registry_mapping {
+            wasm_pkg_client::RegistryMapping::Registry(registry) => {
+                registry.to_string() == expected_registry
+            }
+            _ => false,
+        }
+    }
+
+    fn assert_default_registries(config: &wasm_pkg_client::Config) {
+        config
+            .resolve_registry(&"wasi:http".parse().unwrap())
+            .expect("Should have a namespace set for wasi");
+        config
+            .namespace_registry(&"wasmcloud".parse().unwrap())
+            .expect("Should have a namespace set for wasmcloud");
+        config
+            .namespace_registry(&"wrpc".parse().unwrap())
+            .expect("Should have a namespace set for wrpc");
     }
 }

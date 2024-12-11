@@ -6,8 +6,8 @@ use serde_json::json;
 
 use wash_lib::{
     build::{build_project, sign_component_wasm, SignConfig},
-    cli::CommandOutput,
-    parser::{get_config, TypeConfig},
+    cli::{CommandOutput, CommonPackageArgs},
+    parser::{load_config, TypeConfig},
 };
 
 /// Build (and sign) a wasmCloud component, provider, or interface
@@ -17,6 +17,9 @@ pub struct BuildCommand {
     /// Path to the wasmcloud.toml file or parent folder to use for building
     #[clap(short = 'p', long = "config-path")]
     config_path: Option<PathBuf>,
+
+    #[clap(flatten)]
+    pub package_args: CommonPackageArgs,
 
     /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
     #[clap(long = "keys-directory", env = "WASH_KEYS", hide_env_values = true)]
@@ -51,10 +54,15 @@ pub struct BuildCommand {
     /// Skip building the artifact and only use configuration to sign
     #[clap(long = "sign-only", conflicts_with = "build_only")]
     pub sign_only: bool,
+
+    /// Skip wit dependency fetching and use only what is currently present in the wit directory
+    /// (useful for airgapped or disconnected environments)
+    #[clap(long = "skip-fetch")]
+    pub skip_wit_fetch: bool,
 }
 
 pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
-    let config = get_config(command.config_path, Some(true))?;
+    let config = load_config(command.config_path, Some(true)).await?;
 
     match config.project_type {
         TypeConfig::Component(ref component_config) => {
@@ -73,12 +81,15 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
             };
 
             let component_path = if command.sign_only {
-                std::env::set_current_dir(&config.common.path)?;
+                std::env::set_current_dir(&config.common.project_dir)?;
                 let component_wasm_path =
-                    if let Some(path) = component_config.build_artifact.clone() {
-                        path
+                    if let Some(path) = component_config.build_artifact.as_ref() {
+                        path.clone()
                     } else {
-                        PathBuf::from(format!("build/{}.wasm", config.common.wasm_bin_name()))
+                        config
+                            .common
+                            .build_dir
+                            .join(format!("{}.wasm", config.common.wasm_bin_name()))
                     };
                 let signed_path = sign_component_wasm(
                     &config.common,
@@ -87,9 +98,15 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
                     &sign_config.context("cannot supply --build-only and --sign-only")?,
                     component_wasm_path,
                 )?;
-                config.common.path.join(signed_path)
+                config.common.build_dir.join(signed_path)
             } else {
-                build_project(&config, sign_config.as_ref()).await?
+                build_project(
+                    &config,
+                    sign_config.as_ref(),
+                    &command.package_args,
+                    command.skip_wit_fetch,
+                )
+                .await?
             };
 
             let json_output = HashMap::from([
@@ -120,8 +137,11 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
                     subject: command.subject,
                     disable_keygen: command.disable_keygen,
                 }),
+                &command.package_args,
+                command.skip_wit_fetch,
             )
-            .await?;
+            .await
+            .context("failed to build provider")?;
             Ok(CommandOutput::new(
                 format!("Built artifact can be found at {path:?}"),
                 HashMap::from([("path".to_string(), json!(path))]),

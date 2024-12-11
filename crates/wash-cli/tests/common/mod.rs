@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Context, Result};
-use oci_distribution::Reference;
+use oci_client::Reference;
 use rand::{distributions::Alphanumeric, Rng};
 use sysinfo::{ProcessExt, SystemExt};
 use tempfile::TempDir;
@@ -19,12 +19,17 @@ use tokio::{
     time::Duration,
 };
 
+use wash_cli::config::{WADM_VERSION, WASMCLOUD_HOST_VERSION};
 use wash_lib::cli::output::{
-    CallCommandOutput, GetHostsCommandOutput, PullCommandOutput, StartCommandOutput,
-    StopCommandOutput, UpCommandOutput,
+    AppDeleteCommandOutput, AppDeployCommandOutput, AppGetCommandOutput, AppListCommandOutput,
+    AppUndeployCommandOutput, CallCommandOutput, GetHostsCommandOutput, PullCommandOutput,
+    StartCommandOutput, StopCommandOutput, UpCommandOutput,
 };
-use wash_lib::config::{downloads_dir, WASMCLOUD_PID_FILE};
-use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig, WASMCLOUD_HOST_BIN};
+use wash_lib::common::CommandGroupUsage;
+use wash_lib::config::{host_pid_file, wadm_pid_file};
+use wash_lib::start::{
+    ensure_nats_server, start_nats_server, NatsConfig, WADM_BINARY, WASMCLOUD_HOST_BIN,
+};
 use wasmcloud_control_interface::Host;
 
 #[allow(unused)]
@@ -34,12 +39,18 @@ pub const LOCAL_REGISTRY: &str = "localhost:5001";
 pub const HELLO_OCI_REF: &str = "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.1";
 
 #[allow(unused)]
-pub const HTTP_JSONIFY_OCI_REF: &str = "ghcr.io/wasmcloud/components/http-jsonify-rust:0.1.1";
+pub const HTTP_JSONIFY_OCI_REF: &str = "ghcr.io/wasmcloud/components/http-jsonify-rust:0.1.2";
 
 #[allow(unused)]
-pub const PROVIDER_HTTPSERVER_OCI_REF: &str = "ghcr.io/wasmcloud/http-server:0.20.0";
+pub const PROVIDER_HTTPSERVER_OCI_REF: &str = "ghcr.io/wasmcloud/http-server:0.23.2";
+
+#[allow(unused)]
+pub const FERRIS_SAYS_OCI_REF: &str = "ghcr.io/wasmcloud/components/ferris-says-rust:0.1.0";
 
 pub const DEFAULT_WASH_INVOCATION_TIMEOUT_MS_ARG: &str = "40000";
+
+#[allow(unused)]
+const WKG_CONFIG_FILE: &str = "wkg_config.toml";
 
 /// Helper function to create the `wash` binary process
 #[allow(unused)]
@@ -75,8 +86,8 @@ pub async fn fetch_artifact_digest(url: &str) -> Result<String> {
     );
 
     let accept_manifest_media_types = [
-        oci_distribution::manifest::IMAGE_MANIFEST_MEDIA_TYPE,
-        oci_distribution::manifest::OCI_IMAGE_MEDIA_TYPE,
+        oci_client::manifest::IMAGE_MANIFEST_MEDIA_TYPE,
+        oci_client::manifest::OCI_IMAGE_MEDIA_TYPE,
     ]
     .join(",");
 
@@ -150,7 +161,13 @@ pub async fn set_test_file_content(path: &PathBuf, content: &str) -> Result<()> 
 pub async fn start_nats(port: u16, nats_install_dir: &PathBuf) -> Result<Child> {
     let nats_binary = ensure_nats_server("v2.10.7", nats_install_dir).await?;
     let config = NatsConfig::new_standalone("127.0.0.1", port, None);
-    start_nats_server(nats_binary, std::process::Stdio::null(), config).await
+    start_nats_server(
+        nats_binary,
+        std::process::Stdio::null(),
+        config,
+        CommandGroupUsage::UseParent,
+    )
+    .await
 }
 
 /// Returns an open port on the interface, searching within the range endpoints, inclusive
@@ -212,7 +229,7 @@ impl Drop for TestWashInstance {
 }
 
 /// Arguments for creating a new `TestWashInstance`
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
 struct TestWashInstanceNewArgs {
     /// Extra arguments to feed to `wash up`
     pub extra_args: Vec<String>,
@@ -229,13 +246,21 @@ impl TestWashInstance {
     pub async fn create_with_extra_args(
         args: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Result<Self> {
-        Self::new(TestWashInstanceNewArgs {
-            extra_args: args
-                .into_iter()
-                .map(|v| v.as_ref().to_string())
-                .collect::<Vec<String>>(),
-        })
-        .await
+        let mut extra_args = args
+            .into_iter()
+            .map(|v| v.as_ref().to_string())
+            .collect::<Vec<String>>();
+        // we pin the optional wadm and wascloudhost versions
+        // to the current release, to avoid undefined behaviour in tests
+        if !extra_args.contains(&"--wadm-version".to_string()) {
+            extra_args.push("--wadm-version".to_string());
+            extra_args.push(WADM_VERSION.to_string());
+        }
+        if !extra_args.contains(&"--wasmcloud-version".to_string()) {
+            extra_args.push("--wasmcloud-version".to_string());
+            extra_args.push(WASMCLOUD_HOST_VERSION.to_string());
+        }
+        Self::new(TestWashInstanceNewArgs { extra_args }).await
     }
 
     async fn new(args: TestWashInstanceNewArgs) -> Result<Self> {
@@ -282,6 +307,7 @@ impl TestWashInstance {
             host_seed_str,
             "--cluster-seed",
             cluster_seed_str,
+            "--multi-local",
         ]
         .iter()
         .map(ToString::to_string)
@@ -312,8 +338,9 @@ impl TestWashInstance {
             wasmcloud_log,
             deployed_wadm_manifest_path,
             ..
-        } = serde_json::from_str::<UpCommandOutput>(&out)
-            .context("failed to parse wash up cmd output")?;
+        } = serde_json::from_str::<UpCommandOutput>(&out).with_context(|| {
+            format!("failed to parse wash up cmd output, received:===\n{out}\n===")
+        })?;
 
         // Wait until the host starts by checking the logs
         let logs_path = String::from(wasmcloud_log.to_string().trim_matches('"'));
@@ -554,13 +581,109 @@ impl TestWashInstance {
                 "--timeout-ms",
                 DEFAULT_WASH_INVOCATION_TIMEOUT_MS_ARG,
                 "--ctl-port",
-                &self.nats_port.to_string().as_ref(),
+                self.nats_port.to_string().as_ref(),
             ])
             .kill_on_drop(true)
             .output()
             .await
             .context("failed to stop host")?;
         serde_json::from_slice(&output.stdout).context("failed to parse output of `wash stop host`")
+    }
+
+    /// Trigger the equivalent of `wash app deploy` on a [`TestWashInstance`]
+    pub(crate) async fn deploy_app(&self, name_or_path: &str) -> Result<AppDeployCommandOutput> {
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+            .args([
+                "app",
+                "deploy",
+                name_or_path,
+                "--output",
+                "json",
+                "--ctl-port",
+                self.nats_port.to_string().as_ref(),
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("failed to deploy app")?;
+        serde_json::from_slice(&output.stdout)
+            .context("failed to parse output of `wash app deploy`")
+    }
+
+    /// Trigger the equivalent of `wash app list` on a [`TestWashInstance`]
+    pub(crate) async fn list_apps(&self) -> Result<AppListCommandOutput> {
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+            .args([
+                "app",
+                "list",
+                "--output",
+                "json",
+                "--ctl-port",
+                self.nats_port.to_string().as_ref(),
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("failed to list apps")?;
+        serde_json::from_slice(&output.stdout).context("failed to parse output of `wash app get`")
+    }
+
+    /// Trigger the equivalent of `wash app get` on a [`TestWashInstance`]
+    pub(crate) async fn get_apps(&self) -> Result<AppGetCommandOutput> {
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+            .args([
+                "app",
+                "get",
+                "--output",
+                "json",
+                "--ctl-port",
+                self.nats_port.to_string().as_ref(),
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("failed to list apps")?;
+        serde_json::from_slice(&output.stdout).context("failed to parse output of `wash app get`")
+    }
+
+    /// Trigger the equivalent of `wash app undeploy --all` on a [`TestWashInstance`]
+    pub(crate) async fn undeploy_all_apps(&self) -> Result<AppUndeployCommandOutput> {
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+            .args([
+                "app",
+                "undeploy",
+                "--all",
+                "--output",
+                "json",
+                "--ctl-port",
+                self.nats_port.to_string().as_ref(),
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("failed to undeploy all apps")?;
+        serde_json::from_slice(&output.stdout)
+            .context("failed to parse output of `wash app undeploy --all`")
+    }
+
+    /// Trigger the equivalent of `wash app delete --all-undeployed` on a [`TestWashInstance`]
+    pub(crate) async fn delete_all_undeployed_apps(&self) -> Result<AppDeleteCommandOutput> {
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+            .args([
+                "app",
+                "delete",
+                "--all-undeployed",
+                "--output",
+                "json",
+                "--ctl-port",
+                self.nats_port.to_string().as_ref(),
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("failed to undeploy all apps")?;
+        serde_json::from_slice(&output.stdout)
+            .context("failed to parse output of `wash app undeploy --all`")
     }
 }
 
@@ -572,6 +695,34 @@ pub struct TestSetup {
     /// The path to the created component's directory.
     #[allow(dead_code)]
     pub project_dir: PathBuf,
+}
+
+impl TestSetup {
+    #[allow(dead_code)]
+    /// Used to create a new [`TestSetup`] instance. This ensures a default wkg config is used for
+    /// the test as well
+    async fn new(test_dir: TempDir, project_dir: PathBuf) -> Result<Self> {
+        let conf = wasm_pkg_client::Config::default();
+        conf.to_file(test_dir.path().join(WKG_CONFIG_FILE)).await?;
+        Ok(Self {
+            test_dir,
+            project_dir,
+        })
+    }
+
+    #[allow(dead_code)]
+    /// A helper that returns a new `wash` binary command configured to use the project directory
+    /// and other test configuration
+    pub fn base_command(&self) -> Command {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_wash"));
+        cmd.current_dir(&self.project_dir);
+        cmd.env(
+            "WKG_CONFIG_FILE",
+            self.test_dir.path().join(WKG_CONFIG_FILE),
+        );
+        cmd.env("WKG_CACHE_DIR", self.test_dir.path().join("cache"));
+        cmd
+    }
 }
 
 #[allow(dead_code)]
@@ -590,28 +741,49 @@ pub struct WorkspaceTestSetup {
 #[allow(dead_code)]
 pub async fn init(component_name: &str, template_name: &str) -> Result<TestSetup> {
     let test_dir = TempDir::new()?;
-    std::env::set_current_dir(&test_dir)?;
-    let project_dir = init_actor_from_template(component_name, template_name).await?;
-    std::env::set_current_dir(&project_dir)?;
-    Ok(TestSetup {
-        test_dir,
-        project_dir,
-    })
+    // Get the current dir so we can reset it after creating the new component
+    let project_dir =
+        init_component_from_template(component_name, template_name, &test_dir).await?;
+    TestSetup::new(test_dir, project_dir).await
 }
 
-/// Initializes a new component from a wasmCloud example in wasmcloud/wasmcloud, and sets the environment to use the created component's directory.
+/// Same as `init`, but takes a path to a template directory. If the given path is absolute, it is
+/// used as the template directory, otherwise this will use the top level directory of the
+/// repository as the root path it joins the relative path with
 #[allow(dead_code)]
-pub async fn init_actor_from_template(actor_name: &str, template_name: &str) -> Result<PathBuf> {
+pub async fn init_path(component_name: &str, path: impl AsRef<Path>) -> Result<TestSetup> {
+    let test_dir = TempDir::new()?;
+    let joined_path = if path.as_ref().is_absolute() {
+        path.as_ref().to_path_buf()
+    } else {
+        let root = get_workspace_root()
+            .await
+            .context("Couldn't get workspace root")?;
+        root.join(path)
+    };
+    let project_dir =
+        init_component_from_template_path(component_name, joined_path, &test_dir).await?;
+    TestSetup::new(test_dir, project_dir).await
+}
+
+/// Initializes a new component from a wasmCloud example in wasmcloud/wasmcloud
+#[allow(dead_code)]
+pub async fn init_component_from_template(
+    component_name: &str,
+    template_name: &str,
+    parent_dir: impl AsRef<Path>,
+) -> Result<PathBuf> {
     let status = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "new",
             "component",
-            actor_name,
+            component_name,
             "--template-name",
             template_name,
             "--silent",
             "--no-git-init",
         ])
+        .current_dir(parent_dir.as_ref())
         .kill_on_drop(true)
         .status()
         .await
@@ -619,7 +791,115 @@ pub async fn init_actor_from_template(actor_name: &str, template_name: &str) -> 
 
     assert!(status.success());
 
-    let project_dir = std::env::current_dir()?.join(actor_name);
+    let project_dir = parent_dir.as_ref().join(component_name);
+    Ok(project_dir)
+}
+
+/// Initializes a new component from the given path
+pub async fn init_component_from_template_path(
+    component_name: &str,
+    path: impl AsRef<Path>,
+    parent_dir: impl AsRef<Path>,
+) -> Result<PathBuf> {
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .args([
+            "new",
+            "component",
+            component_name,
+            "--path",
+            path.as_ref().as_os_str().to_string_lossy().as_ref(),
+            "--silent",
+            "--no-git-init",
+        ])
+        .current_dir(parent_dir.as_ref())
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to generate project")?;
+    assert!(status.success());
+    let project_dir = parent_dir.as_ref().join(component_name);
+    Ok(project_dir)
+}
+
+#[allow(dead_code)]
+pub async fn init_provider(provider_name: &str, template_name: &str) -> Result<TestSetup> {
+    let test_dir = TempDir::new()?;
+    let project_dir = init_provider_from_template(provider_name, template_name, &test_dir).await?;
+    TestSetup::new(test_dir, project_dir).await
+}
+
+/// Same as `init_provider`, but takes a path to a template directory. If the given path is
+/// absolute, it is used as the template directory, otherwise this will use the top level directory
+/// of the repository as the root path it joins the relative path with
+#[allow(dead_code)]
+pub async fn init_provider_path(provider_name: &str, path: impl AsRef<Path>) -> Result<TestSetup> {
+    let test_dir = TempDir::new()?;
+    let joined_path = if path.as_ref().is_absolute() {
+        path.as_ref().to_path_buf()
+    } else {
+        let root = get_workspace_root()
+            .await
+            .context("Couldn't get workspace root")?;
+        root.join(path)
+    };
+    let project_dir =
+        init_provider_from_template_path(provider_name, joined_path, &test_dir).await?;
+    TestSetup::new(test_dir, project_dir).await
+}
+
+/// Initializes a new provider from a template provider template
+#[allow(dead_code)]
+pub async fn init_provider_from_template(
+    provider_name: &str,
+    template_name: &str,
+    parent_dir: impl AsRef<Path>,
+) -> Result<PathBuf> {
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .args([
+            "new",
+            "provider",
+            provider_name,
+            "--template-name",
+            template_name,
+            "--silent",
+            "--no-git-init",
+        ])
+        .current_dir(parent_dir.as_ref())
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to generate provider")?;
+
+    assert!(status.success());
+
+    let project_dir = parent_dir.as_ref().join(provider_name);
+    Ok(project_dir)
+}
+
+/// Initializes a new provider from the given path
+#[allow(dead_code)]
+pub async fn init_provider_from_template_path(
+    provider_name: &str,
+    path: impl AsRef<Path>,
+    parent_dir: impl AsRef<Path>,
+) -> Result<PathBuf> {
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .args([
+            "new",
+            "provider",
+            provider_name,
+            "--path",
+            path.as_ref().as_os_str().to_string_lossy().as_ref(),
+            "--silent",
+            "--no-git-init",
+        ])
+        .current_dir(parent_dir.as_ref())
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to generate provider")?;
+    assert!(status.success());
+    let project_dir = parent_dir.as_ref().join(provider_name);
     Ok(project_dir)
 }
 
@@ -710,20 +990,20 @@ pub async fn wait_for_single_host(
 /// Inits an component build test by setting up a test directory and creating an component from a template.
 /// Returns the paths of the test directory and component directory.
 #[allow(dead_code)]
-pub async fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTestSetup> {
+pub async fn init_workspace(component_names: Vec<&str>) -> Result<WorkspaceTestSetup> {
     let test_dir = TempDir::new()?;
-    std::env::set_current_dir(&test_dir)?;
 
     let project_dirs: Vec<_> =
-        futures::future::try_join_all(actor_names.iter().map(|actor_name| async {
-            let project_dir = init_actor_from_template(actor_name, "hello-world-rust").await?;
+        futures::future::try_join_all(component_names.iter().map(|component_name| async {
+            let project_dir =
+                init_component_from_template(component_name, "hello-world-rust", &test_dir).await?;
             Result::<PathBuf>::Ok(project_dir)
         }))
         .await?;
 
-    let members = actor_names
+    let members = component_names
         .iter()
-        .map(|actor_name| format!("\"{actor_name}\""))
+        .map(|component_name| format!("\"{component_name}\""))
         .collect::<Vec<_>>()
         .join(",");
     let cargo_toml = format!(
@@ -747,17 +1027,32 @@ pub async fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTestSetup
 /// expecting that the wasmcloud process invocation contains `wasmcloud_host`
 #[allow(dead_code)]
 pub async fn wait_for_no_hosts() -> Result<()> {
+    wait_for_num_hosts(0)
+        .await
+        .context("number of hosts running is still non-zero")?;
+    let lockfile = host_pid_file()?;
+    if wait_for_file_to_be_removed(&lockfile).await.is_err() {
+        // If the PID file wasn't removed, attempt to delete it manually
+        tokio::fs::remove_file(&lockfile).await.with_context(|| {
+            format!(
+                "failed to delete wasmcloud PID file at [{}]",
+                lockfile.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Waits until the number of hosts running matches the expected number
+pub async fn wait_for_num_hosts(num_hosts: usize) -> Result<()> {
     wait_until_process_has_count(
         WASMCLOUD_HOST_BIN,
-        |v| v == 0,
+        |v| v == num_hosts,
         Duration::from_secs(15),
         Duration::from_millis(250),
     )
     .await
-    .context("number of hosts running is still non-zero")?;
-    let install_dir = downloads_dir()?;
-    let lockfile = install_dir.join(WASMCLOUD_PID_FILE);
-    wait_for_file_to_be_removed(&lockfile).await
+    .context(format!("number of hosts running is not [{num_hosts}]"))
 }
 
 /// Wait for a file to be removed.
@@ -771,7 +1066,12 @@ pub async fn wait_for_file_to_be_removed(file_path: &Path) -> Result<()> {
         }
     })
     .await
-    .context("file {file_path} was not removed by previous test")
+    .with_context(|| {
+        format!(
+            "file {} was not removed by previous test",
+            file_path.display()
+        )
+    })
 }
 
 /// Wait for NATS to start running by checking for process names.
@@ -799,4 +1099,99 @@ pub async fn wait_for_no_nats() -> Result<()> {
     )
     .await
     .context("number of nats-server processes should be zero")
+}
+
+#[allow(dead_code)]
+pub async fn wait_for_no_wadm() -> Result<()> {
+    wait_until_process_has_count(
+        WADM_BINARY,
+        |v| v == 0,
+        Duration::from_secs(15),
+        Duration::from_millis(250),
+    )
+    .await
+    .context("number of wadm processes should be zero")?;
+    let lockfile = wadm_pid_file()?;
+    if wait_for_file_to_be_removed(&lockfile).await.is_err() {
+        // If the PID file wasn't removed, attempt to delete it manually
+        tokio::fs::remove_file(&lockfile).await.with_context(|| {
+            format!("failed to delete wadm PID file at [{}]", lockfile.display())
+        })?;
+    }
+    Ok(())
+}
+
+/// Helper that gets the top level directory of a workspace.
+#[allow(dead_code)]
+pub async fn get_workspace_root() -> Result<PathBuf> {
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "locate-project",
+            "--workspace",
+            "-q",
+            "--message-format=plain",
+        ])
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "failed to get workspace root: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(PathBuf::from(String::from_utf8(output.stdout)?)
+        .parent()
+        .unwrap()
+        .to_path_buf())
+}
+
+/// Gets the path to the fixture
+#[allow(dead_code)]
+pub fn fixture_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+}
+
+/// Loads the fixture with the given name into a temporary directory. This will copy the fixture
+/// from the tests/fixtures directory into a temporary directory and return the tempdir containing
+/// that directory (and its path)
+#[allow(dead_code)]
+pub async fn load_fixture(fixture: &str) -> anyhow::Result<TestSetup> {
+    let temp_dir = tempfile::tempdir()?;
+    let fixture_path = fixture_dir().join(fixture);
+    // This will error if it doesn't exist, which is what we want
+    tokio::fs::metadata(&fixture_path).await?;
+    let copied_path = temp_dir.path().join(fixture_path.file_name().unwrap());
+    copy_dir(&fixture_path, &copied_path).await?;
+    TestSetup::new(temp_dir, copied_path).await
+}
+
+#[allow(dead_code)]
+async fn copy_dir(source: impl AsRef<Path>, destination: impl AsRef<Path>) -> anyhow::Result<()> {
+    tokio::fs::create_dir_all(&destination).await?;
+    let mut entries = tokio::fs::read_dir(source).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let filetype = entry.file_type().await?;
+        if filetype.is_dir() {
+            // Skip the deps directory in case it is there from debugging
+            if entry.path().file_name().unwrap_or_default() == "deps" {
+                continue;
+            }
+            Box::pin(copy_dir(
+                entry.path(),
+                destination.as_ref().join(entry.file_name()),
+            ))
+            .await?;
+        } else {
+            let path = entry.path();
+            let extension = path.extension().unwrap_or_default();
+            // Skip any .lock or .wasm files that might be there from debugging
+            if extension == "lock" || extension == "wasm" {
+                continue;
+            }
+            tokio::fs::copy(path, destination.as_ref().join(entry.file_name())).await?;
+        }
+    }
+    Ok(())
 }

@@ -1,0 +1,82 @@
+package wasmcloud:task-manager@0.1.0-draft;
+
+interface types {
+  use wasmcloud:postgres/types@0.1.1-draft.{timestamp-tz};
+
+  /// ID of a given task (set by the task manager)
+  type task-id = string;
+
+  /// ID of a task group that identifies *how* tasks can be used
+  type group-id = string;
+
+  /// ID of a worker
+  type worker-id = string;
+
+  /// ID that uniquely identifies a lease
+  ///
+  /// While this is not stored directly on the task, implementations should create
+  /// lease IDs that can be used.
+  type lease-id = string;
+
+  /// Stringified JSON
+  type json-string = string;
+
+  /// Stringified JSON
+  type failure-reason = string;
+
+  /// Task status
+  enum task-status {
+    /// The task has been created
+    pending,
+    /// The task has been leased by a worker (i.e. in progress)
+    leased,
+    /// The task has been marked completed
+    completed,
+    /// The task has been marked failed
+    failed,
+  }
+
+  /// Options that govern basic offset-based pagination
+  record offset-pagination {
+    /// Offset for pagination
+    offset: u32,
+    /// Size of pages to return
+    page-size: u32,
+  }
+
+  /// A task record
+  record task {
+    /// ID of the given task
+    id: task-id,
+
+    /// Group ID of the given task
+    group-id: group-id,
+
+    /// Status of the task
+    status: task-status,
+
+    /// Data needed to complete the task
+    data-json: option<json-string>,
+
+    /// When the task last failed, if it has
+    last-failed-at: option<timestamp-tz>,
+
+    /// Reason for a failure if the task failed
+    last-failure-reason: option<string>,
+
+    /// When the current worker (if any) started woring on the task
+    leased-at: option<timestamp-tz>,
+
+    /// The ID of the worker that leased this task
+    lease-worker-id: option<worker-id>,
+
+    /// When the task was last updated submitted
+    completed-at: option<timestamp-tz>,
+
+    /// When the task was submitted
+    submitted-at: timestamp-tz,
+
+    /// When the task was last updated submitted
+    last-updated-at: timestamp-tz,
+  }
+}

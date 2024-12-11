@@ -13,10 +13,21 @@ pub use link::*;
 pub mod otel;
 pub use otel::*;
 
+#[cfg(feature = "oci")]
+pub mod oci;
+#[cfg(feature = "oci")]
+pub use oci::*;
+
+pub mod par;
+pub use par::*;
+
+pub mod registry;
+pub use registry::*;
+
 pub mod rpc;
 pub use rpc::*;
 
-pub mod wrpc;
+pub mod secrets;
 
 pub mod wit;
 pub use wit::*;

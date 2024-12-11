@@ -87,7 +87,7 @@ use wasmcloud::postgres::query::{query, PgValue};
 
 // NOTE: Imagine that the `exec` interface is an exported interface with one
 // function with the signature `call: func() -> string`
-use exports::webassembly::examples::call::Guest;
+use exports::wasmcloud::examples::invoke::Guest;
 
 // Implementation of the `exec` interface we're exporting goes here
 struct QueryRunner;

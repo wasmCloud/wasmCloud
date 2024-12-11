@@ -4,6 +4,7 @@ use serde::Deserialize;
 use wasmcloud_control_interface::{Host, HostInventory};
 use wasmcloud_core::{InterfaceLinkDefinition, LinkName};
 
+use wadm_types::api::ModelSummary;
 use wadm_types::validation::ValidationFailure;
 
 /// JSON Output of the `wash start` command
@@ -25,8 +26,8 @@ pub struct StopCommandOutput {
     pub host_id: Option<String>,
     pub result: String,
 
-    pub actor_ref: Option<String>,
-    pub actor_id: Option<String>,
+    pub component_ref: Option<String>,
+    pub component_id: Option<String>,
 
     pub provider_id: Option<String>,
     pub provider_ref: Option<String>,
@@ -113,4 +114,39 @@ pub struct AppValidateOutput {
     pub valid: bool,
     pub warnings: Vec<ValidationFailure>,
     pub errors: Vec<ValidationFailure>,
+}
+
+/// JSON Output representation of the `wash app deploy` command
+#[derive(Debug, Deserialize)]
+pub struct AppDeployCommandOutput {
+    pub success: bool,
+    pub deployed: bool,
+    pub model_name: String,
+    pub model_version: String,
+}
+
+/// JSON Output representation of the `wash app list` command
+#[derive(Debug, Deserialize)]
+pub struct AppListCommandOutput {
+    pub success: bool,
+    pub applications: Vec<ModelSummary>,
+}
+
+/// JSON Output representation of the `wash app get` command
+#[derive(Debug, Deserialize)]
+pub struct AppGetCommandOutput {
+    pub success: bool,
+    pub applications: Vec<ModelSummary>,
+}
+
+/// JSON Output representation of the `wash app undeploy` command
+#[derive(Debug, Deserialize)]
+pub struct AppUndeployCommandOutput {
+    pub success: bool,
+}
+
+/// JSON Output representation of the `wash app delete` command
+#[derive(Debug, Deserialize)]
+pub struct AppDeleteCommandOutput {
+    pub success: bool,
 }

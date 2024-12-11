@@ -15,7 +15,13 @@ metadata:
   name: http-echo-tinygo-component
   annotations:
     version: v0.0.1
-    description: "HTTP Echo demo in Golang (TinyGo), using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)"
+    description: 'HTTP Echo demo in Golang (TinyGo), using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/components/http-echo-tinygo/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/components/http-echo-tinygo/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/golang/components/http-echo-tinygo
+    wasmcloud.dev/categories: |
+      http,outgoing-http,http-server,golang,tinygo,example,golang
 spec:
   components:
     - name: http-echo-tinygo
@@ -26,15 +32,15 @@ spec:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
           properties:
-            replicas: 1
+            instances: 1
 
     # Add a capability provider that mediates HTTP access
     - name: httpserver
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.20.0
+        image: ghcr.io/wasmcloud/http-server:0.23.2
       traits:
-        # Link to Echo, and inform it to listen on port 8080
+        # Link to Echo, and inform it to listen on port 8000
         # on the local machine
         - type: link
           properties:
@@ -45,4 +51,4 @@ spec:
             source_config:
               - name: default-http
                 properties:
-                  port: "8080"
+                  address: '0.0.0.0:8000'

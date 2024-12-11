@@ -4,7 +4,13 @@ metadata:
   name: rust-http-kv
   annotations:
     version: v0.0.1
-    description: "HTTP counter demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)"
+    description: 'HTTP counter demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/http-keyvalue-counter/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/http-keyvalue-counter/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/http-keyvalue-counter
+    wasmcloud.dev/categories: |
+      http,http-server,keyvalue,interactive,rust,example
 spec:
   components:
     - name: counter
@@ -17,8 +23,12 @@ spec:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
           properties:
-            replicas: 1
+            instances: 1
         # Link the component to Redis on the default Redis port
+        #
+        # Establish a unidirectional link to the `kvredis` (the keyvalue capability provider),
+        # so the `counter` component can make use of keyvalue functionality provided by the Redis
+        # (i.e. using a keyvalue cache)            
         - type: link
           properties:
             target: kvredis
@@ -28,21 +38,43 @@ spec:
             target_config:
               - name: redis-url
                 properties:
-                  url: redis://127.0.0.1:6379
+                  url: redis://0.0.0.0:6379
 
     # Add a capability provider that enables Redis access
     - name: kvredis
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/keyvalue-redis:0.24.0
+        image: ghcr.io/wasmcloud/keyvalue-redis:0.28.1
+        ## To configure OTEL integration for this provider specifically, uncomment the lines below
+        # config:
+        #   - name: otel
+        #     properties:
+        #       otel_exporter_otlp_endpoint: "http://all-in-one:4318"
+        #       otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
+        #       otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
+        #       otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"
+
     # Add a capability provider that enables HTTP access
     - name: httpserver
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.20.0
+        image: ghcr.io/wasmcloud/http-server:0.23.2
+        ## To configure OTEL integration for this provider specifically, uncomment the lines below
+        # config:
+        #   - name: otel
+        #     properties:
+        #       otel_exporter_otlp_endpoint: "http://all-in-one:4318"
+        #       otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
+        #       otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
+        #       otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"
       traits:
         # Link the httpserver to the component, and configure the HTTP server
-        # to listen on port 8080 for incoming requests
+        # to listen on port 8000 for incoming requests
+        #
+        # Since the HTTP server calls the `counter` component, we establish
+        # a unidirectional link from this `httpserver` provider (the "source")
+        # to the `counter` component (the "target"), so the server can invoke
+        # the component to handle a request.
         - type: link
           properties:
             target: counter
@@ -52,4 +84,4 @@ spec:
             source_config:
               - name: default-http
                 properties:
-                  address: 127.0.0.1:8080
+                  address: 0.0.0.0:8000

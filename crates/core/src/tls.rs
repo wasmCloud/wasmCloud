@@ -1,23 +1,44 @@
-use std::sync::Arc;
+//! Reusable types related to enabling consistent TLS ([webpki-roots]/[rustls-native-certs]) usage in downstream libraries.
+//!
+//! Downstream libraries can utilize this module to ensure a consistent set of CA roots and/or connectors.
+//!
+//! For example, when building a [`rustls::ClientConfig`]:
+//!
+//! ```rust
+//! use rustls;
+//! use wasmcloud_core::tls;
+//!
+//! let config = rustls::ClientConfig::builder()
+//!     .with_root_certificates(rustls::RootCertStore {
+//!         roots: tls::DEFAULT_ROOTS.roots.clone(),
+//!     })
+//!     .with_no_client_auth();
+//! ```
+//!
+//! [webpki-roots]: https://crates.io/crates/webpki-roots
+//! [rustls-native-certs]: https://crates.io/crates/rustls-native-certs
 
+use std::{path::Path, sync::Arc};
+
+use anyhow::{Context as _, Result};
 use once_cell::sync::Lazy;
 
 #[cfg(feature = "rustls-native-certs")]
 pub static NATIVE_ROOTS: Lazy<Arc<[rustls::pki_types::CertificateDer<'static>]>> =
-    Lazy::new(|| match rustls_native_certs::load_native_certs() {
-        Ok(certs) => certs.into(),
-        Err(err) => {
-            tracing::warn!(?err, "failed to load native root certificate store");
-            Arc::new([])
+    Lazy::new(|| {
+        let res = rustls_native_certs::load_native_certs();
+        if !res.errors.is_empty() {
+            tracing::warn!(errors = ?res.errors, "failed to load native root certificate store");
         }
+        Arc::from(res.certs)
     });
 
-#[cfg(all(feature = "rustls-native-certs", feature = "oci-distribution"))]
-pub static NATIVE_ROOTS_OCI: Lazy<Arc<[oci_distribution::client::Certificate]>> = Lazy::new(|| {
+#[cfg(all(feature = "rustls-native-certs", feature = "oci"))]
+pub static NATIVE_ROOTS_OCI: Lazy<Arc<[oci_client::client::Certificate]>> = Lazy::new(|| {
     NATIVE_ROOTS
         .iter()
-        .map(|cert| oci_distribution::client::Certificate {
-            encoding: oci_distribution::client::CertificateEncoding::Der,
+        .map(|cert| oci_client::client::Certificate {
+            encoding: oci_client::client::CertificateEncoding::Der,
             data: cert.to_vec(),
         })
         .collect()
@@ -86,4 +107,36 @@ impl NativeRootsExt for reqwest::ClientBuilder {
             .cloned()
             .fold(self, reqwest::ClientBuilder::add_root_certificate)
     }
+}
+
+/// Attempt to load certificates from a given array of paths
+pub fn load_certs_from_paths(
+    paths: &[impl AsRef<Path>],
+) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
+    paths
+        .iter()
+        .map(read_certs_from_path)
+        .flat_map(|result| match result {
+            Ok(vec) => vec.into_iter().map(Ok).collect(),
+            Err(er) => vec![Err(er)],
+        })
+        .collect::<Result<Vec<_>, _>>()
+}
+
+/// Read certificates from a given path
+///
+/// At present this function only supports files -- directories will return an empty list
+pub fn read_certs_from_path(
+    path: impl AsRef<Path>,
+) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
+    let path = path.as_ref();
+    // TODO(joonas): Support directories
+    if !path.is_file() {
+        return Ok(Vec::with_capacity(0));
+    }
+    let mut reader =
+        std::io::BufReader::new(std::fs::File::open(path).with_context(|| {
+            format!("failed to open file at provided path: {}", path.display())
+        })?);
+    Ok(rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?)
 }

@@ -66,7 +66,7 @@ async fn integration_update_component_serial() -> Result<()> {
             .inventories
             .into_iter()
             .next()
-            .map(|i| i.components)
+            .map(|i| i.components().clone())
             .unwrap_or_default();
         if components.is_empty() && retries > 4 {
             panic!("Should have started the component")
@@ -75,7 +75,7 @@ async fn integration_update_component_serial() -> Result<()> {
             continue;
         } else {
             assert_eq!(components.len(), 1);
-            assert!(components[0].image_ref == OLD_HELLO_OCI_REF);
+            assert!(components[0].image_ref() == OLD_HELLO_OCI_REF);
             break;
         }
     }
@@ -136,16 +136,16 @@ async fn integration_update_component_serial() -> Result<()> {
             .inventories
             .into_iter()
             .next()
-            .map(|i| i.components)
+            .map(|i| i.components().clone())
             .unwrap_or_default();
-        if components[0].image_ref != HELLO_OCI_REF && retries > 4 {
+        if components[0].image_ref() != HELLO_OCI_REF && retries > 4 {
             panic!("Should have started the component")
         } else if retries <= 4 {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             continue;
         } else {
             assert_eq!(components.len(), 1);
-            assert!(components[0].image_ref == HELLO_OCI_REF);
+            assert!(components[0].image_ref() == HELLO_OCI_REF);
             break;
         }
     }

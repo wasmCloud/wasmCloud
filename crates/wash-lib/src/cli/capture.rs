@@ -318,13 +318,16 @@ async fn get_all_inventory(
         .await
         .map_err(|e| anyhow::anyhow!("{e:?}"))?
         .into_iter()
-        .filter_map(|host| host.response.map(|host| (ctl_client.clone(), host.id)))
+        .filter_map(|host| {
+            host.into_data()
+                .map(|host| (ctl_client.clone(), host.id().to_string()))
+        })
         .map(|(client, host_id)| async move {
             let inventory = client
                 .get_host_inventory(&host_id)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-            Ok(inventory.response)
+            Ok(inventory.into_data())
         });
     futures::future::join_all(futs)
         .await

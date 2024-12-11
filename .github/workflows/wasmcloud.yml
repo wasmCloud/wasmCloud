@@ -9,13 +9,20 @@ on:
         type: choice
         description: crate to smart-release
         options:
-          - wasmcloud
-          - wasmcloud-core
-          - wasmcloud-test-util
-          - wasmcloud-tracing
+          - wascap
           - wash-cli
           - wash-lib
-          - wascap
+          - wasmcloud
+          - wasmcloud-component
+          - wasmcloud-control-interface
+          - wasmcloud-core
+          - wasmcloud-host
+          - wasmcloud-provider-sdk
+          - wasmcloud-runtime
+          - wasmcloud-secrets-client
+          - wasmcloud-secrets-types
+          - wasmcloud-test-util
+          - wasmcloud-tracing
       do-release:
         type: boolean
         description: Leave unchecked to create a pull request with changes for verification, then check to create a release directly with changes
@@ -40,6 +47,8 @@ on:
       - 'opentelemetry-nats-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-archive-v[0-9].[0-9]+.[0-9]+'
       - 'provider-archive-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-blobstore-azure-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-blobstore-azure-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+'
       - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+'
@@ -48,6 +57,8 @@ on:
       - 'provider-http-client-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-http-server-v[0-9].[0-9]+.[0-9]+'
       - 'provider-http-server-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-keyvalue-nats-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-keyvalue-nats-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-keyvalue-redis-v[0-9].[0-9]+.[0-9]+'
       - 'provider-keyvalue-redis-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-keyvalue-vault-v[0-9].[0-9]+.[0-9]+'
@@ -56,12 +67,18 @@ on:
       - 'provider-messaging-kafka-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+'
       - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-sdk-v[0-9].[0-9]+.[0-9]+'
       - 'provider-sdk-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+-*'
       - 'runtime-v[0-9].[0-9]+.[0-9]+'
       - 'runtime-v[0-9].[0-9]+.[0-9]+-*'
+      - 'secrets-client-v[0-9].[0-9]+.[0-9]+'
+      - 'secrets-client-v[0-9].[0-9]+.[0-9]+-*'
+      - 'secrets-types-v[0-9].[0-9]+.[0-9]+'
+      - 'secrets-types-v[0-9].[0-9]+.[0-9]+-*'
+      - 'test-util-v[0-9].[0-9]+.[0-9]+'
+      - 'test-util-v[0-9].[0-9]+.[0-9]+-*'
       - 'tracing-v[0-9].[0-9]+.[0-9]+'
       - 'tracing-v[0-9].[0-9]+.[0-9]+-*'
       - 'v[0-9].[0-9]+.[0-9]+'
@@ -73,8 +90,11 @@ on:
       - 'wash-lib-v[0-9].[0-9]+.[0-9]+'
       - 'wash-lib-v[0-9].[0-9]+.[0-9]+-*'
 
+permissions:
+  contents: read
+
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -132,9 +152,9 @@ jobs:
               docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-x86_64-unknown-linux-musl-oci.imageTag) wasmcloud --version
 
     name: wasmcloud-${{ matrix.config.target }}
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: ./.github/actions/install-nix
         # need to run condition inside job steps so that job will pass if all steps are skipped
         # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
@@ -153,25 +173,28 @@ jobs:
 
   build-windows:
     name: wasmcloud-x86_64-pc-windows-msvc
-    runs-on: windows-latest-8-cores
+    if: startswith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - uses: Swatinem/rust-cache@v2
+      - run: rustup show
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
         with:
           shared-key: windows-latest-8-cores-shared-cache
-        if: ${{ !startswith(github.ref, format('refs/tags')) && github.ref != 'refs/heads/main' }}
+        if: ${{ !startswith(github.ref, 'refs/tags/') }}
 
       - run: cargo build --release -p wash-cli -p wasmcloud
       - run: mkdir "artifact/bin"
 
+      - run: move "target/release/blobstore-azure-provider.exe" "artifact/bin/blobstore-azure-provider.exe"
       - run: move "target/release/blobstore-fs-provider.exe" "artifact/bin/blobstore-fs-provider.exe"
       - run: move "target/release/blobstore-s3-provider.exe" "artifact/bin/blobstore-s3-provider.exe"
       - run: move "target/release/http-client-provider.exe" "artifact/bin/http-client-provider.exe"
       - run: move "target/release/http-server-provider.exe" "artifact/bin/http-server-provider.exe"
+      - run: move "target/release/keyvalue-nats-provider.exe" "artifact/bin/keyvalue-nats-provider.exe"
       - run: move "target/release/keyvalue-redis-provider.exe" "artifact/bin/keyvalue-redis-provider.exe"
       - run: move "target/release/keyvalue-vault-provider.exe" "artifact/bin/keyvalue-vault-provider.exe"
-      - run: move "target/release/lattice-controller-provider.exe" "artifact/bin/lattice-controller-provider.exe"
       - run: move "target/release/messaging-kafka-provider.exe" "artifact/bin/messaging-kafka-provider.exe"
       - run: move "target/release/messaging-nats-provider.exe" "artifact/bin/messaging-nats-provider.exe"
       - run: move "target/release/sqldb-postgres-provider.exe" "artifact/bin/sqldb-postgres-provider.exe"
@@ -179,7 +202,7 @@ jobs:
       - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
       - run: move "target/release/wasmcloud.exe" "artifact/bin/wasmcloud.exe"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         with:
           name: wasmcloud-x86_64-pc-windows-msvc
           path: artifact
@@ -187,13 +210,13 @@ jobs:
   build-lipo:
     name: wasmcloud-universal-darwin
     needs: build-bin
-    runs-on: macos-12
+    runs-on: macos-13
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: wasmcloud-aarch64-apple-darwin
           path: aarch64
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: wasmcloud-x86_64-apple-darwin
           path: x86_64
@@ -211,16 +234,16 @@ jobs:
       - run: chmod +x ./artifact/bin/wasmcloud
       - run: ./artifact/bin/wasmcloud --version
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         with:
           name: wasmcloud-universal-darwin
           path: artifact
 
   test-linux:
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     needs: build-bin
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: wasmcloud-x86_64-unknown-linux-musl
       - run: chmod +x ./bin/wash
@@ -229,10 +252,10 @@ jobs:
       - run: ./bin/wasmcloud --version
 
   test-windows:
-    runs-on: windows-latest-8-cores
+    runs-on: windows-latest
     needs: build-windows
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: wasmcloud-x86_64-pc-windows-msvc
       - run: .\bin\wash.exe --version
@@ -246,20 +269,21 @@ jobs:
           - fmt
           - clippy
           - nextest
+          - doctest
 
     name: cargo ${{ matrix.check }}
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
       - run: nix build -L .#checks.x86_64-linux.${{ matrix.check }}
 
   build-doc:
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
@@ -277,19 +301,26 @@ jobs:
             <meta http-equiv="refresh" content="0; URL=wasmcloud_host/index.html">
             <link rel="canonical" href="https://${{ github.repository_owner }}.github.io/wasmCloud/wasmcloud_host/index.html">
           EOF
-      - uses: actions/upload-pages-artifact@v3.0.1
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
         with:
           path: doc
 
   providers:
+    if: startswith(github.ref, 'refs/tags/provider-')
     strategy:
       matrix:
         include:
+          - name: blobstore-azure
+            subject: BLOBSTORE_AZURE_SUBJECT
+
           - name: blobstore-fs
             subject: BLOBSTORE_FS_SUBJECT
 
           - name: blobstore-s3
             subject: BLOBSTORE_S3_SUBJECT
+
+          - name: keyvalue-nats
+            subject: KEYVALUE_NATS_SUBJECT
 
           - name: keyvalue-redis
             subject: KEYVALUE_REDIS_SUBJECT
@@ -317,6 +348,7 @@ jobs:
       - build-windows
       - test-linux
     permissions:
+      contents: read
       packages: write
     uses: ./.github/workflows/provider.yml
     with:
@@ -328,9 +360,10 @@ jobs:
       azurecr_password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
 
   deploy-doc:
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     needs: build-doc
     permissions:
+      contents: read
       pages: write
       id-token: write
     environment:
@@ -338,33 +371,11 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     if: github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/deploy-pages@v4.0.5
+      - uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
         id: deployment
 
-  docker:
-    runs-on: ubuntu-22.04-16-cores
-    needs:
-      - build-bin
-      - test-linux
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Build wasmCloud
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: false
-          platforms: linux/amd64,linux/arm64
-      - name: Build wash
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./crates/wash-cli/Dockerfile
-          push: false
-          platforms: linux/amd64,linux/arm64
-
   oci:
+    runs-on: ubuntu-latest-8-cores
     strategy:
       matrix:
         include:
@@ -372,15 +383,14 @@ jobs:
 
           - bin: wash
             prefix: wash-cli-
-
-    runs-on: ubuntu-22.04-16-cores
     permissions:
+      contents: read
       packages: write
     needs:
       - build-bin
       - test-linux
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
@@ -402,7 +412,7 @@ jobs:
       - name: Login to AzureCR
         if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) || github.ref == 'refs/heads/main'
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
-        uses: azure/docker-login@v2
+        uses: azure/docker-login@15c4aadf093404726ab2ff205b2cdd33fa6d054c
         with:
           login-server: ${{ secrets.AZURECR_PUSH_URL }}
           username: ${{ secrets.AZURECR_PUSH_USER }}
@@ -410,7 +420,7 @@ jobs:
 
       - name: Login to GitHub Container Registry
         if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) || github.ref == 'refs/heads/main'
-        uses: docker/login-action@v3
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -419,7 +429,7 @@ jobs:
       - name: Login to DockerHub
         if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) || github.ref == 'refs/heads/main'
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
         with:
           username: ${{ secrets.DOCKERHUB_PUSH_USER }}
           password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
@@ -516,12 +526,12 @@ jobs:
       - oci
       - test-linux
       - test-windows
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           path: artifacts
       - run: |
@@ -544,7 +554,7 @@ jobs:
             done
           done
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@01570a1f39cb168c169c802c3bceb9e93fb10974
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           draft: true
@@ -552,7 +562,7 @@ jobs:
           generate_release_notes: true
           files: ./wasmcloud/*
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@01570a1f39cb168c169c802c3bceb9e93fb10974
         if: startsWith(github.ref, 'refs/tags/wash-cli-v')
         with:
           draft: false
@@ -566,7 +576,7 @@ jobs:
           VERSION=$(echo "${GITHUB_REF##*/}" | sed -e 's/wash-cli-v//')
           echo "wash_version=$VERSION" >> $GITHUB_ENV
       - name: Release homebrew
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0
         if: startsWith(github.ref, 'refs/tags/wash-cli-v')
         with:
           token: ${{ secrets.HOMEBREW_CHOCOLATEY_DISPATCH_TOKEN }}
@@ -575,7 +585,7 @@ jobs:
           client-payload: |
             {"tag_prefix": "wash-cli", "tag_version": "${{ env.wash_version }}"}
       - name: Release chocolatey
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0
         if: startsWith(github.ref, 'refs/tags/wash-cli-v')
         with:
           token: ${{ secrets.HOMEBREW_CHOCOLATEY_DISPATCH_TOKEN }}
@@ -583,25 +593,6 @@ jobs:
           event-type: choco-formula-update
           client-payload: |
             {"wash_version": "${{ env.wash_version }}"}
-
-  snapcraft:
-    if: startsWith(github.ref, 'refs/tags/wash-cli-v')
-    needs: cargo
-    runs-on: ubuntu-22.04-16-cores
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: snapcore/action-build@v1
-        id: build
-        with:
-          path: ./crates/wash-cli
-      - uses: snapcore/action-publish@v1
-        continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
-        env:
-          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAP_STORE_LOGIN }}
-        with:
-          snap: ${{ steps.build.outputs.snap }}
-          release: edge
 
   nfpm:
     if: startsWith(github.ref, 'refs/tags/wash-cli-v')
@@ -612,9 +603,9 @@ jobs:
       - cargo
       - build-bin
       - test-linux
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - uses: ./.github/actions/install-nix
         with:
@@ -622,11 +613,11 @@ jobs:
       - name: Install NFPM
         run: nix profile install -L --inputs-from . 'nixpkgs#nfpm'
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: wasmcloud-aarch64-unknown-linux-musl
           path: ./crates/wash-cli/aarch64
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: wasmcloud-x86_64-unknown-linux-musl
           path: ./crates/wash-cli/x86_64
@@ -655,7 +646,7 @@ jobs:
       - name: Push `rpm`
         working-directory: ./crates/wash-cli
         run: |
-          rpms=(194 204 209 216 226 231 236 239 240 244 260 273 279 283)
+          rpms=(194 204 209 216 226 231 236 239 240 244 260 273 279 283 302)
           for distro_version in "${rpms[@]}"; do
             curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash-*.aarch64.rpm)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
             curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash-*.x86_64.rpm)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
@@ -691,7 +682,16 @@ jobs:
           - crate: runtime
             workspace-dependencies: true
 
+          - crate: test-util
+            workspace-dependencies: true
+
           - crate: tracing
+            workspace-dependencies: true
+
+          - crate: secrets-types
+            workspace-dependencies: true
+
+          - crate: secrets-client
             workspace-dependencies: true
 
           - crate: wascap
@@ -704,9 +704,9 @@ jobs:
 
     name: publish ${{ matrix.crate }} to crates.io
     needs: cargo
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Extract tag context
         id: ctx
@@ -725,7 +725,7 @@ jobs:
         working-directory: ./crates/${{ matrix.crate }}
 
       - name: publish ${{ matrix.crate }} to crates.io
-        if: startsWith(github.ref, format('refs/tags/{0}-v', matrix.crate)) && !steps.ctx.outputs.prerelease
+        if: startsWith(github.ref, format('refs/tags/{0}-v', matrix.crate))
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
         run: cargo publish --token ${{ secrets.CRATES_PUBLISH_TOKEN }}
         working-directory: ./crates/${{ matrix.crate }}
@@ -733,34 +733,39 @@ jobs:
   smart-release:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
           fetch-tags: true
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          cache: false
       - name: Install cmake for smart-release
         run: sudo apt update && sudo apt install cmake -y
 
+      - run: rustup show
       - name: install smart-release
         env:
           RUSTFLAGS: ''
         # NOTE(brooksmtownsend): Installing from my fork as updating workspace dependencies is not yet supported in the mainline
         # PR to follow: https://github.com/Byron/cargo-smart-release/pull/17
         run: cargo install cargo-smart-release --git https://github.com/brooksmtownsend/cargo-smart-release --branch feat/update-workspace-dependencies
+
       - name: dry run release
         if: ${{ !inputs.do-release }}
         run: |
           git config --global user.email "automation@wasmcloud.com"
           git config --global user.name "wasmCloud automation"
-          cargo smart-release --update-crates-index --no-publish --execute --no-changelog-preview --no-push ${{ inputs.additional-args }} ${{ inputs.crate }}
+          cargo smart-release --update-crates-index --no-publish --execute --no-changelog-preview --no-push ${{ inputs.additional-args }} ${{ inputs.crate }} --allow-dirty
+
       - name: Create Pull Request
         if: ${{ !inputs.do-release }}
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@5e914681df9dc83aa4e4905692ca88beb2f9e91f
         with:
+          branch: release-${{ inputs.crate }}
           signoff: true
+          committer: wasmCloud Automation <automation@wasmcloud.com>
           title: Release ${{ inputs.crate }}
           commit-message: 'release(${{ inputs.crate }}): release and update CHANGELOG'
 

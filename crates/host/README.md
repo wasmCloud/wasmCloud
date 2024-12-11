@@ -1,18 +1,9 @@
-# 💻 Distributed computing, _simplified_
+# wasmCloud Host
 
-The wasmCloud runtime is a vessel for running applications in the cloud, at the edge, in the browser, on small devices, and anywhere else you can imagine.
+wasmCloud is an open source Cloud Native Computing Foundation (CNCF) project that enables teams to build, manage, and scale polyglot Wasm apps across any cloud, K8s, or edge.
 
-**Move from concept to production without changing your design, architecture, or your programming environment.**
+⚠️ This crate is highly experimental and likely to experience breaking changes frequently. The host itself is relatively stable, but the APIs and public members of this crate are not guaranteed to be stable.
 
-wasmCloud lets you focus on shipping _features_. Build secure, portable, re-usable components. Get rid of the headaches from being smothered by boilerplate, dependency hell, tight coupling, and designs mandated by your infrastructure.
+## Usage
 
-## Core Tenets
-
-- Dead simple distributed applications
-- Run anywhere
-- Secure by default
-- Productivity for both developers and operations
-
-# wasmCloud Host Runtime
-
-This crate contains the host runtime itself. Check out the [top-level project](https://github.com/wasmCloud/wasmCloud) for information about the wasmCloud ecosystem as a whole.
+This crate can be used to embed a wasmCloud host in a Rust application. You can refer to the [main.rs](https://github.com/wasmCloud/wasmCloud/blob/main/src/main.rs) file of the wasmCloud runtime for an example of this.

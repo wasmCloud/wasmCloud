@@ -102,24 +102,19 @@ impl SubcommandRunner {
         let ctx = Data {
             table: wasmtime::component::ResourceTable::default(),
             ctx,
-            http: WasiHttpCtx,
+            http: WasiHttpCtx::new(),
         };
 
         let mut store = wasmtime::Store::new(&self.engine, ctx);
 
         let component = Component::from_file(&self.engine, &path)?;
         let mut linker = Linker::new(&self.engine);
-        wasmtime_wasi::bindings::Command::add_to_linker(&mut linker, |state: &mut Data| state)?;
-        wasmtime_wasi_http::bindings::http::outgoing_handler::add_to_linker(
-            &mut linker,
-            |state: &mut Data| state,
-        )?;
-        wasmtime_wasi_http::bindings::http::types::add_to_linker(
-            &mut linker,
-            |state: &mut Data| state,
-        )?;
+        wasmtime_wasi::add_to_linker_async(&mut linker)
+            .context("failed to link core WASI interfaces")?;
+        wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
+            .context("failed to link `wasi:http`")?;
 
-        let (instance, _) = Subcommands::instantiate_async(&mut store, &component, &linker).await?;
+        let instance = Subcommands::instantiate_async(&mut store, &component, &linker).await?;
         let metadata = instance
             .wasmcloud_wash_subcommand()
             .call_register(&mut store)
@@ -253,7 +248,7 @@ impl SubcommandRunner {
             *matching = str_canonical;
         }
         // Disable socket connections for now. We may gradually open this up later
-        ctx.socket_addr_check(|_, _| false)
+        ctx.socket_addr_check(|_, _| Box::pin(async { false }))
             .inherit_stdio()
             .preopened_dir(plugin_dir, "/", DIRECTORY_ALLOW, FilePerms::all())
             .context("Error when preopening plugin dir")?

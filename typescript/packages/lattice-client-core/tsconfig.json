@@ -1,0 +1,10 @@
+{
+  "extends": "@wasmcloud/tsconfig/configs/base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

@@ -12,10 +12,25 @@ It exposes publish and subscribe functionality to components to operate on Kafka
 
 ## Named Config Settings
 
-| Property | Description                                                                                                                                                                                                                                                                |
-|----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `hosts`  | A comma-separated list of bootstrap server hosts. For example, `HOSTS=127.0.0.1:9092,127.0.0.1:9093`. A single value is accepted as well, and the default value is the Kafka default of `127.0.0.1:9092`. This will be used for both the consumer and producer connections |
-| `topic`  | The Kafka topic you wish to consume. Any messages on this topic will be forwarded to this component for processing
+| Property              | Description                                                                                                                                                                                                                                                                |
+|-----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `hosts`               | A comma-separated list of bootstrap server hosts. For example, `HOSTS=127.0.0.1:9092,127.0.0.1:9093`. A single value is accepted as well, and the default value is the Kafka default of `127.0.0.1:9092`. This will be used for both the consumer and producer connections |
+| `topic`               | The Kafka topic you wish to consume. Any messages on this topic will be forwarded to this component for processing                                                                                                                                                         |
+| `consumer_group`      | Consumer group to use when consuming messages                                                                                                                                                                                                                              |
+| `consumer_partitions` | Comma delimited list of partitions to use when subscribing to the topic specified by the link.                                                                                                                                                                             |
+| `producer_partitions` | Comma delimited list of partitions to use when handling `publish` calls from components (unrelated to the subscription topic)                                                                                                                                              |
+> [!WARNING]
+> While `hosts` *can* be provided as named configuration, it *should* be provided as a secret, since
+> bootstrap server hosts may be considered or contain sensitive information.
+>
+> While both named config and secrets are currently allowed, in a future version sensitive fields *must* be supplied via secrets. 
+
+## Secrets
+
+| Property              | Description                                                                                                                                                                                                                                                                |
+|-----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `hosts`               | A comma-separated list of bootstrap server hosts. For example, `HOSTS=127.0.0.1:9092,127.0.0.1:9093`. A single value is accepted as well, and the default value is the Kafka default of `127.0.0.1:9092`. This will be used for both the consumer and producer connections |
+                                                                                                         |
 
 ## Limitations
 
@@ -120,7 +135,7 @@ spec:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
           properties:
-            replicas: 1
+            instances: 1
         - type: link
           properties:
             target: nats
@@ -136,7 +151,7 @@ spec:
     - name: nats
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/messaging-nats:canary
+        image: ghcr.io/wasmcloud/messaging-nats:0.23.1
 ```
 
 Then, we must set up the named config that we're expecting to see (`simple-subscription`):
@@ -163,7 +178,6 @@ wash app deploy wadm.yaml
 
 Since the `echo-messaging` component returns any message it receives, and this provider adds a `reply_to` of `<topic>.reply`, we can test that our component is working by sending a message over the kafka topic we created earlier `wasmcloud.echo`, and seeing the messaged surfaced on `wasmcloud.echo.reply`.
 
-
 To do this, make sure you have a consumer open for the `wasmcloud.echo.reply` topic:
 
 ```console
@@ -186,7 +200,7 @@ docker exec -it \
     --topic wasmcloud.echo
 ```
 
-Messages you send via the producer will be echoed first in the original consumer (`wasmcloud.echo`) and *also* echoed in `wasmcloud.echo.reply`, which is the work of the `echo-messaging` component and the default functionality of this provider (supplying a generated `reply_to` topic).
+Messages you send via the producer will be echoed first in the original consumer (`wasmcloud.echo`) and _also_ echoed in `wasmcloud.echo.reply`, which is the work of the `echo-messaging` component and the default functionality of this provider (supplying a generated `reply_to` topic).
 
 [docker]: https://docs.docker.com
 [wash]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/wash-cli

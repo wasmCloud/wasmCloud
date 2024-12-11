@@ -5,6 +5,1415 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.37.0 (2024-11-08)
+
+### Chore
+
+ - <csr-id-7bcf972e9403b53c0ae113def6a6e9546157a9d4/> bump dev http-server to v0.24.0
+ - <csr-id-71d2610ff1689fd3dd0278d3164ca6c7703a7ad7/> bump wasmCloud to v1.4.1
+ - <csr-id-6d250ffa473385baae59b6f83b35ff38f119c054/> update `wrpc-transport-nats`
+ - <csr-id-98cd06c1dd448073d8eadef790ee7709a2ccae36/> fix clippy lint
+ - <csr-id-993771423527f8c1e15acf0b5a202206228f790e/> update http-server to v0.23.2
+ - <csr-id-1682afe130cbd2be41cbdb6d3a8e89a2d63e59fc/> Deprecate docker job
+ - <csr-id-8c96324fc0b28a475073974b23451e19736070ae/> remove snap building
+   This commit removes the building of the wash-cli snap -- it was out of
+   use and had fallen behind/was broken, so for now we'll remove it in
+   favor of users downloading and installing `wash-cli` via other means.
+ - <csr-id-ec4ed44b01564f423cc7a615c9ee2860d4f55925/> update all cargo wash-cli install commands to --locked
+
+### New Features
+
+ - <csr-id-22ac2b0cc123f00267dc8be4a55b9fd5f9a00713/> tls-first option for command line
+ - <csr-id-6e113b097402e059ef7e2d5a01d7971e5b139cfa/> Add support for monolithic push
+
+### Bug Fixes
+
+ - <csr-id-940a06d42476a501b090a4bf4eecc90ccbe6c3ce/> Fixes wasmcloud.lock on windows
+   This is a simple dependency bump to pick up the fix from wkg on locking
+   files on windows
+ - <csr-id-be4ea5617776a3c7d4976bd0bc5f901049e021d7/> avoid an immediate reload
+ - <csr-id-b1f9e9a14c2bfed241d741d590fe926b940cfaa2/> prevent duplicate reloads
+ - <csr-id-02bd8dfe82b839732b96d128b008dd83de3ed61a/> wash build tests for tinygo
+
+### Refactor
+
+ - <csr-id-9863a724c43207e282452b09c8f51fdacac44ec0/> deprecate wash app list in favor of wash app get
+ - <csr-id-9bb420c1ff7a706b6ab33b09eb5af6461b63d166/> disallow unnamed links del when multiple present
+   This commit restricts `wash link del` from deleting a link when there
+   are multiple stored that have similar targeting properties except for
+   link name.
+   
+   This situation *can* lead to deleting the *wrong* link or deleting one
+   intentionally, so users must now specify the link name, rather than
+   getting `"default"` set for them.
+
+### Test
+
+ - <csr-id-599c52b358e4ff940fcc9b3d6b0ec27a6bb30ad2/> correct separate path test
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 17 commits contributed to the release over the course of 16 calendar days.
+ - 16 days passed between releases.
+ - 17 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Bump dev http-server to v0.24.0 ([`7bcf972`](https://github.com/wasmCloud/wasmCloud/commit/7bcf972e9403b53c0ae113def6a6e9546157a9d4))
+    - Bump wasmCloud to v1.4.1 ([`71d2610`](https://github.com/wasmCloud/wasmCloud/commit/71d2610ff1689fd3dd0278d3164ca6c7703a7ad7))
+    - Update `wrpc-transport-nats` ([`6d250ff`](https://github.com/wasmCloud/wasmCloud/commit/6d250ffa473385baae59b6f83b35ff38f119c054))
+    - Fixes wasmcloud.lock on windows ([`940a06d`](https://github.com/wasmCloud/wasmCloud/commit/940a06d42476a501b090a4bf4eecc90ccbe6c3ce))
+    - Avoid an immediate reload ([`be4ea56`](https://github.com/wasmCloud/wasmCloud/commit/be4ea5617776a3c7d4976bd0bc5f901049e021d7))
+    - Fix clippy lint ([`98cd06c`](https://github.com/wasmCloud/wasmCloud/commit/98cd06c1dd448073d8eadef790ee7709a2ccae36))
+    - Tls-first option for command line ([`22ac2b0`](https://github.com/wasmCloud/wasmCloud/commit/22ac2b0cc123f00267dc8be4a55b9fd5f9a00713))
+    - Prevent duplicate reloads ([`b1f9e9a`](https://github.com/wasmCloud/wasmCloud/commit/b1f9e9a14c2bfed241d741d590fe926b940cfaa2))
+    - Correct separate path test ([`599c52b`](https://github.com/wasmCloud/wasmCloud/commit/599c52b358e4ff940fcc9b3d6b0ec27a6bb30ad2))
+    - Update http-server to v0.23.2 ([`9937714`](https://github.com/wasmCloud/wasmCloud/commit/993771423527f8c1e15acf0b5a202206228f790e))
+    - Deprecate wash app list in favor of wash app get ([`9863a72`](https://github.com/wasmCloud/wasmCloud/commit/9863a724c43207e282452b09c8f51fdacac44ec0))
+    - Disallow unnamed links del when multiple present ([`9bb420c`](https://github.com/wasmCloud/wasmCloud/commit/9bb420c1ff7a706b6ab33b09eb5af6461b63d166))
+    - Wash build tests for tinygo ([`02bd8df`](https://github.com/wasmCloud/wasmCloud/commit/02bd8dfe82b839732b96d128b008dd83de3ed61a))
+    - Deprecate docker job ([`1682afe`](https://github.com/wasmCloud/wasmCloud/commit/1682afe130cbd2be41cbdb6d3a8e89a2d63e59fc))
+    - Add support for monolithic push ([`6e113b0`](https://github.com/wasmCloud/wasmCloud/commit/6e113b097402e059ef7e2d5a01d7971e5b139cfa))
+    - Remove snap building ([`8c96324`](https://github.com/wasmCloud/wasmCloud/commit/8c96324fc0b28a475073974b23451e19736070ae))
+    - Update all cargo wash-cli install commands to --locked ([`ec4ed44`](https://github.com/wasmCloud/wasmCloud/commit/ec4ed44b01564f423cc7a615c9ee2860d4f55925))
+</details>
+
+## v0.37.1 (2024-10-23)
+
+<csr-id-8e24533a1eed7acda3ccd4e8cf3694e63b6ab680/>
+<csr-id-859d27aea99af1ba655714abb112b1662d9f9b64/>
+<csr-id-c5ba85cfe6ad63227445b0a5e21d58a8f3e15e33/>
+<csr-id-754c9d0cbd28daeb8902196056a35a3b0796e004/>
+<csr-id-b5de009a0c04926d5a953f7eefe6889315cfe30a/>
+<csr-id-46a7f2850a548a6be27e1262cbde105fe02d37be/>
+<csr-id-d86dfe09ba6dbe53fc57e3828ad718bc0d42d679/>
+<csr-id-44bf4c8793b3989aebbbc28c2f2ce3ebbd4d6a0a/>
+<csr-id-28be2bc7f5cba796f46be3ae9e63e89a4614d2a4/>
+<csr-id-ba4f6f407aa5819d18c5a1688fc6cd9a7daef1ee/>
+<csr-id-9df2bb1754fbffc36ed03a00098831eca49f3171/>
+<csr-id-bff14fac85ce4673a1abe432e152067f506fb994/>
+<csr-id-1b52b0f8fd58724929e5239f265641448beb03b6/>
+<csr-id-da7b2cd26cdc4c929e45dc4aee4e5b092c3b26f9/>
+<csr-id-30a7dacf19254c7e0e0762f5c6b007cfc27ad1f0/>
+<csr-id-1592e7d57c08adc420dcbc8407234b84bbf6f3f6/>
+<csr-id-68ce98bfa00a7b270489dd206aa0f237b9e3af77/>
+<csr-id-4d4c8818d1d607ba64d21ca3115d199f3176de77/>
+<csr-id-de73278b2730f19e71d3d08996d00f205d9559cf/>
+
+### Chore
+
+ - <csr-id-8e24533a1eed7acda3ccd4e8cf3694e63b6ab680/> skipping dependency upgrade test
+ - <csr-id-859d27aea99af1ba655714abb112b1662d9f9b64/> bump washboard version
+ - <csr-id-c5ba85cfe6ad63227445b0a5e21d58a8f3e15e33/> bump wascap v0.15.1, wasmcloud-core v0.13.0, wash-lib v0.29.0, wasmcloud-tracing v0.10.0, wasmcloud-provider-sdk v0.11.0, wash-cli v0.36.0, safety bump 7 crates
+   SAFETY BUMP: wash-lib v0.29.0, wasmcloud-tracing v0.10.0, wasmcloud-provider-sdk v0.11.0, wash-cli v0.36.0, wasmcloud-host v0.22.0, wasmcloud-runtime v0.6.0, wasmcloud-test-util v0.14.0
+ - <csr-id-754c9d0cbd28daeb8902196056a35a3b0796e004/> update wasmcloud to 1.4
+ - <csr-id-b5de009a0c04926d5a953f7eefe6889315cfe30a/> NATS doesn't listen on http
+ - <csr-id-46a7f2850a548a6be27e1262cbde105fe02d37be/> add cargo-binstall support for wash-cli
+ - <csr-id-d86dfe09ba6dbe53fc57e3828ad718bc0d42d679/> remove TODOs from wash dev
+ - <csr-id-44bf4c8793b3989aebbbc28c2f2ce3ebbd4d6a0a/> bump wasmcloud-core v0.12.0, wash-lib v0.28.0, wasmcloud-tracing v0.9.0, wasmcloud-provider-sdk v0.10.0, wash-cli v0.35.0, safety bump 7 crates
+   SAFETY BUMP: wash-lib v0.28.0, wasmcloud-tracing v0.9.0, wasmcloud-provider-sdk v0.10.0, wash-cli v0.35.0, wasmcloud-host v0.21.0, wasmcloud-runtime v0.5.0, wasmcloud-test-util v0.13.0
+ - <csr-id-28be2bc7f5cba796f46be3ae9e63e89a4614d2a4/> remove async-nats v0.33.0
+ - <csr-id-ba4f6f407aa5819d18c5a1688fc6cd9a7daef1ee/> dedup wit deps
+ - <csr-id-9df2bb1754fbffc36ed03a00098831eca49f3171/> standardize emoji usage
+
+### New Features
+
+ - <csr-id-347d1e8ad24ba36b7d5f8514f851f94dec177798/> dev ignore gen directory
+ - <csr-id-1b70cfafed45553f62226d8b9644e96ef1e1e3ec/> update wadm to 0.18
+ - <csr-id-c0520722f5b4543f702c0f13fa75630be8008d9c/> Adds support for wasmcloud named things for packages
+   This also integrates the wkg.toml stuff directly into wasmcloud.toml
+ - <csr-id-93f5bc247da89de1fe3fcb1f1ae7efd2af9a4e05/> add wit_path, path, and reg insecure to wasmcloud.toml
+ - <csr-id-f0f3fd7011724137e5f8a4c47a8e4e97be0edbb2/> Updates tests and examples to support the new wkg deps
+   This updates all dependencies to have a wkg.lock but I didn't add to the
+   gitignore for convenience. The deps are still committed in tree for backwards
+   compatibility and they all use the new versioned logging. This looks
+   really chunky bust is mostly dep updates/deletes
+ - <csr-id-c08409adfeac3f6f0b28f3d24a1346899a636b57/> implement interface driven overrides
+ - <csr-id-900e881b0e59457c17a9ef1e8d53ac0f09c046f9/> Adds a wit publish command
+   This is almost exactly the same as `wkg publish` but exposed for
+   convenience within wash
+ - <csr-id-7e3d2d06ec542293b8ed3c86734b5401b4e080cb/> Adds monkey patching for wasi-logging
+   Yep, this is ugly. There is no way to sugar coat it. But this is probably
+   the easiest way around the fact that we can't work with unversioned deps.
+   Good news is we can remove it once we hit 2.0
+ - <csr-id-be905ac395fe42e3c4ac3796ee7acc4d8d76df53/> support loading existing manifests for `wash dev`
+   This commit adds support for loading and using a manifest for use
+   during development with `wash dev`.
+   
+   When manifest overrides are specified, the existing manifest will be
+   used, and no new manifests will be generated.
+ - <csr-id-63896d3b7860c7213d7173cd213498f9f1b87e01/> bump wadm 0.16.1, wasmcloud 1.3, NATS 2.10.20
+ - <csr-id-9769a3c293a70b3b1f326d4589eaab5d1d177ef6/> log NATS config and log path
+
+### Bug Fixes
+
+ - <csr-id-344eeabe210963a5d3e4dbbae1f762941a2aa7ec/> delete manifest when dev stops
+ - <csr-id-08205e519b9a0bb5f08f3d0f7a626db670aa1c08/> ensure dev reloads when deps change
+ - <csr-id-92b210fdfb89be59c45665aa62c130d111748f4f/> use package as package
+ - <csr-id-21bedaf7f1cd45bb19f86ed97ec812426c82ebe3/> Mark doctests for crate-visible methods as ignored
+ - <csr-id-a3a53ea958807a43dc6f288b5d4321923ed19d7c/> Fix leaked wadm process from integration tests
+ - <csr-id-1d3347f342bfb189ea0baf17604438a6ff9411d1/> honor nats settings, change session ID check
+ - <csr-id-f30e6cd11097f3f061de77c0dc2439c4de9d971a/> ignore failed generation of components in `wash dev`
+   This commit allows failure of WADM manifest component generation in wash dev,
+   ignoring it if it occurs.
+   
+   Generation of WADM manifest components is likely to fail for *new*
+   interfaces that may be imported or exported -- likely unknown
+   interfaces that we can't possibly generate a known component for.
+ - <csr-id-c8f39c43ea3d6a72612033e82bc2d974bd142035/> support messaging-nats dev
+ - <csr-id-1a07544c5f8959b4dcb2c7e4078984681ba72437/> differentiate config, support fast-reload
+ - <csr-id-873faa61250bbb2f7913cf1d6213efaf75c94f7f/> continue dev loop when build fails
+ - <csr-id-a59201a2226a3d005c8c98c8a6874f240eb9eaf3/> combine links
+
+### Other
+
+ - <csr-id-bff14fac85ce4673a1abe432e152067f506fb994/> correct tests with new functionality
+ - <csr-id-1b52b0f8fd58724929e5239f265641448beb03b6/> upgrade to 0.17.0
+
+### Refactor
+
+ - <csr-id-da7b2cd26cdc4c929e45dc4aee4e5b092c3b26f9/> address PR nits and clippy warnings
+ - <csr-id-30a7dacf19254c7e0e0762f5c6b007cfc27ad1f0/> remove raw structs, simplify deserialization
+ - <csr-id-1592e7d57c08adc420dcbc8407234b84bbf6f3f6/> refactor the code for wash dev
+ - <csr-id-68ce98bfa00a7b270489dd206aa0f237b9e3af77/> manifest editing
+ - <csr-id-4d4c8818d1d607ba64d21ca3115d199f3176de77/> adjust for control-interface v2.2.0
+
+### Test
+
+ - <csr-id-de73278b2730f19e71d3d08996d00f205d9559cf/> add test for overriding interface
+
+### New Features (BREAKING)
+
+ - <csr-id-cf09c44d4d08bdb9039f51e95320bf2183e3454e/> wash build override build/wit/project dir
+ - <csr-id-644bd35df2a24d1f12aba4d0613a3b667db9c70b/> Adds support for fetching dependencies automatically
+   This uses the newly available wit commands from wasm-pkg-tools to fetch
+   things from upstream registry. I have only updated select examples (that
+   are less likely to be used while we finish the last bits of work) so we
+   could test things.
+   
+   I also fixed the wash build tests so they could run properly in parallel
+   (which hopefully makes them faster too). Once we have all wasi cloud wit
+   in OCI, we can update all deps and roll to a new version of wash. This
+   will involve updating git ignores to ignore the deps directory, but
+   leaving the current deps intact for those on older versions of wash for
+   at least the next version or two. Once we're past that we can remove the
+   deps dirs
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-8fbaab298a5ac5749d89259871d829bf2cbfb1f8/> remove duplicate components, ignore generated paths
+
+## v0.36.1 (2024-10-23)
+
+### Chore
+
+ - <csr-id-8e24533a1eed7acda3ccd4e8cf3694e63b6ab680/> skipping dependency upgrade test
+ - <csr-id-859d27aea99af1ba655714abb112b1662d9f9b64/> bump washboard version
+ - <csr-id-c5ba85cfe6ad63227445b0a5e21d58a8f3e15e33/> bump wascap v0.15.1, wasmcloud-core v0.13.0, wash-lib v0.29.0, wasmcloud-tracing v0.10.0, wasmcloud-provider-sdk v0.11.0, wash-cli v0.36.0, safety bump 7 crates
+   SAFETY BUMP: wash-lib v0.29.0, wasmcloud-tracing v0.10.0, wasmcloud-provider-sdk v0.11.0, wash-cli v0.36.0, wasmcloud-host v0.22.0, wasmcloud-runtime v0.6.0, wasmcloud-test-util v0.14.0
+ - <csr-id-754c9d0cbd28daeb8902196056a35a3b0796e004/> update wasmcloud to 1.4
+ - <csr-id-b5de009a0c04926d5a953f7eefe6889315cfe30a/> NATS doesn't listen on http
+ - <csr-id-46a7f2850a548a6be27e1262cbde105fe02d37be/> add cargo-binstall support for wash-cli
+ - <csr-id-d86dfe09ba6dbe53fc57e3828ad718bc0d42d679/> remove TODOs from wash dev
+ - <csr-id-44bf4c8793b3989aebbbc28c2f2ce3ebbd4d6a0a/> bump wasmcloud-core v0.12.0, wash-lib v0.28.0, wasmcloud-tracing v0.9.0, wasmcloud-provider-sdk v0.10.0, wash-cli v0.35.0, safety bump 7 crates
+   SAFETY BUMP: wash-lib v0.28.0, wasmcloud-tracing v0.9.0, wasmcloud-provider-sdk v0.10.0, wash-cli v0.35.0, wasmcloud-host v0.21.0, wasmcloud-runtime v0.5.0, wasmcloud-test-util v0.13.0
+ - <csr-id-28be2bc7f5cba796f46be3ae9e63e89a4614d2a4/> remove async-nats v0.33.0
+ - <csr-id-ba4f6f407aa5819d18c5a1688fc6cd9a7daef1ee/> dedup wit deps
+ - <csr-id-9df2bb1754fbffc36ed03a00098831eca49f3171/> standardize emoji usage
+
+### New Features
+
+ - <csr-id-347d1e8ad24ba36b7d5f8514f851f94dec177798/> dev ignore gen directory
+ - <csr-id-1b70cfafed45553f62226d8b9644e96ef1e1e3ec/> update wadm to 0.18
+ - <csr-id-c0520722f5b4543f702c0f13fa75630be8008d9c/> Adds support for wasmcloud named things for packages
+   This also integrates the wkg.toml stuff directly into wasmcloud.toml
+ - <csr-id-93f5bc247da89de1fe3fcb1f1ae7efd2af9a4e05/> add wit_path, path, and reg insecure to wasmcloud.toml
+ - <csr-id-f0f3fd7011724137e5f8a4c47a8e4e97be0edbb2/> Updates tests and examples to support the new wkg deps
+   This updates all dependencies to have a wkg.lock but I didn't add to the
+   gitignore for convenience. The deps are still committed in tree for backwards
+   compatibility and they all use the new versioned logging. This looks
+   really chunky bust is mostly dep updates/deletes
+ - <csr-id-c08409adfeac3f6f0b28f3d24a1346899a636b57/> implement interface driven overrides
+ - <csr-id-900e881b0e59457c17a9ef1e8d53ac0f09c046f9/> Adds a wit publish command
+   This is almost exactly the same as `wkg publish` but exposed for
+   convenience within wash
+ - <csr-id-7e3d2d06ec542293b8ed3c86734b5401b4e080cb/> Adds monkey patching for wasi-logging
+   Yep, this is ugly. There is no way to sugar coat it. But this is probably
+   the easiest way around the fact that we can't work with unversioned deps.
+   Good news is we can remove it once we hit 2.0
+ - <csr-id-be905ac395fe42e3c4ac3796ee7acc4d8d76df53/> support loading existing manifests for `wash dev`
+   This commit adds support for loading and using a manifest for use
+   during development with `wash dev`.
+   
+   When manifest overrides are specified, the existing manifest will be
+   used, and no new manifests will be generated.
+ - <csr-id-63896d3b7860c7213d7173cd213498f9f1b87e01/> bump wadm 0.16.1, wasmcloud 1.3, NATS 2.10.20
+ - <csr-id-9769a3c293a70b3b1f326d4589eaab5d1d177ef6/> log NATS config and log path
+
+### Bug Fixes
+
+ - <csr-id-344eeabe210963a5d3e4dbbae1f762941a2aa7ec/> delete manifest when dev stops
+ - <csr-id-08205e519b9a0bb5f08f3d0f7a626db670aa1c08/> ensure dev reloads when deps change
+ - <csr-id-92b210fdfb89be59c45665aa62c130d111748f4f/> use package as package
+ - <csr-id-21bedaf7f1cd45bb19f86ed97ec812426c82ebe3/> Mark doctests for crate-visible methods as ignored
+ - <csr-id-a3a53ea958807a43dc6f288b5d4321923ed19d7c/> Fix leaked wadm process from integration tests
+ - <csr-id-1d3347f342bfb189ea0baf17604438a6ff9411d1/> honor nats settings, change session ID check
+ - <csr-id-f30e6cd11097f3f061de77c0dc2439c4de9d971a/> ignore failed generation of components in `wash dev`
+   This commit allows failure of WADM manifest component generation in wash dev,
+   ignoring it if it occurs.
+   
+   Generation of WADM manifest components is likely to fail for *new*
+   interfaces that may be imported or exported -- likely unknown
+   interfaces that we can't possibly generate a known component for.
+ - <csr-id-c8f39c43ea3d6a72612033e82bc2d974bd142035/> support messaging-nats dev
+ - <csr-id-1a07544c5f8959b4dcb2c7e4078984681ba72437/> differentiate config, support fast-reload
+ - <csr-id-873faa61250bbb2f7913cf1d6213efaf75c94f7f/> continue dev loop when build fails
+ - <csr-id-a59201a2226a3d005c8c98c8a6874f240eb9eaf3/> combine links
+
+### Other
+
+ - <csr-id-452af3e086d8067c5342f545719daf567a2c1c01/> wash-cli v0.36.1
+ - <csr-id-bff14fac85ce4673a1abe432e152067f506fb994/> correct tests with new functionality
+ - <csr-id-1b52b0f8fd58724929e5239f265641448beb03b6/> upgrade to 0.17.0
+
+### Refactor
+
+ - <csr-id-da7b2cd26cdc4c929e45dc4aee4e5b092c3b26f9/> address PR nits and clippy warnings
+ - <csr-id-30a7dacf19254c7e0e0762f5c6b007cfc27ad1f0/> remove raw structs, simplify deserialization
+ - <csr-id-1592e7d57c08adc420dcbc8407234b84bbf6f3f6/> refactor the code for wash dev
+ - <csr-id-68ce98bfa00a7b270489dd206aa0f237b9e3af77/> manifest editing
+ - <csr-id-4d4c8818d1d607ba64d21ca3115d199f3176de77/> adjust for control-interface v2.2.0
+
+### Test
+
+ - <csr-id-de73278b2730f19e71d3d08996d00f205d9559cf/> add test for overriding interface
+
+### New Features (BREAKING)
+
+ - <csr-id-cf09c44d4d08bdb9039f51e95320bf2183e3454e/> wash build override build/wit/project dir
+ - <csr-id-644bd35df2a24d1f12aba4d0613a3b667db9c70b/> Adds support for fetching dependencies automatically
+   This uses the newly available wit commands from wasm-pkg-tools to fetch
+   things from upstream registry. I have only updated select examples (that
+   are less likely to be used while we finish the last bits of work) so we
+   could test things.
+   
+   I also fixed the wash build tests so they could run properly in parallel
+   (which hopefully makes them faster too). Once we have all wasi cloud wit
+   in OCI, we can update all deps and roll to a new version of wash. This
+   will involve updating git ignores to ignore the deps directory, but
+   leaving the current deps intact for those on older versions of wash for
+   at least the next version or two. Once we're past that we can remove the
+   deps dirs
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-8fbaab298a5ac5749d89259871d829bf2cbfb1f8/> remove duplicate components, ignore generated paths
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 45 commits contributed to the release over the course of 21 calendar days.
+ - 23 days passed between releases.
+ - 45 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Wash-cli v0.36.1 ([`452af3e`](https://github.com/wasmCloud/wasmCloud/commit/452af3e086d8067c5342f545719daf567a2c1c01))
+    - Skipping dependency upgrade test ([`8e24533`](https://github.com/wasmCloud/wasmCloud/commit/8e24533a1eed7acda3ccd4e8cf3694e63b6ab680))
+    - Delete manifest when dev stops ([`344eeab`](https://github.com/wasmCloud/wasmCloud/commit/344eeabe210963a5d3e4dbbae1f762941a2aa7ec))
+    - Bump washboard version ([`859d27a`](https://github.com/wasmCloud/wasmCloud/commit/859d27aea99af1ba655714abb112b1662d9f9b64))
+    - Bump wascap v0.15.1, wasmcloud-core v0.13.0, wash-lib v0.29.0, wasmcloud-tracing v0.10.0, wasmcloud-provider-sdk v0.11.0, wash-cli v0.36.0, safety bump 7 crates ([`c5ba85c`](https://github.com/wasmCloud/wasmCloud/commit/c5ba85cfe6ad63227445b0a5e21d58a8f3e15e33))
+    - Ensure dev reloads when deps change ([`08205e5`](https://github.com/wasmCloud/wasmCloud/commit/08205e519b9a0bb5f08f3d0f7a626db670aa1c08))
+    - Use package as package ([`92b210f`](https://github.com/wasmCloud/wasmCloud/commit/92b210fdfb89be59c45665aa62c130d111748f4f))
+    - Dev ignore gen directory ([`347d1e8`](https://github.com/wasmCloud/wasmCloud/commit/347d1e8ad24ba36b7d5f8514f851f94dec177798))
+    - Update wadm to 0.18 ([`1b70cfa`](https://github.com/wasmCloud/wasmCloud/commit/1b70cfafed45553f62226d8b9644e96ef1e1e3ec))
+    - Update wasmcloud to 1.4 ([`754c9d0`](https://github.com/wasmCloud/wasmCloud/commit/754c9d0cbd28daeb8902196056a35a3b0796e004))
+    - Adds support for wasmcloud named things for packages ([`c052072`](https://github.com/wasmCloud/wasmCloud/commit/c0520722f5b4543f702c0f13fa75630be8008d9c))
+    - Mark doctests for crate-visible methods as ignored ([`21bedaf`](https://github.com/wasmCloud/wasmCloud/commit/21bedaf7f1cd45bb19f86ed97ec812426c82ebe3))
+    - Fix leaked wadm process from integration tests ([`a3a53ea`](https://github.com/wasmCloud/wasmCloud/commit/a3a53ea958807a43dc6f288b5d4321923ed19d7c))
+    - Address PR nits and clippy warnings ([`da7b2cd`](https://github.com/wasmCloud/wasmCloud/commit/da7b2cd26cdc4c929e45dc4aee4e5b092c3b26f9))
+    - Correct tests with new functionality ([`bff14fa`](https://github.com/wasmCloud/wasmCloud/commit/bff14fac85ce4673a1abe432e152067f506fb994))
+    - Wash build override build/wit/project dir ([`cf09c44`](https://github.com/wasmCloud/wasmCloud/commit/cf09c44d4d08bdb9039f51e95320bf2183e3454e))
+    - Add wit_path, path, and reg insecure to wasmcloud.toml ([`93f5bc2`](https://github.com/wasmCloud/wasmCloud/commit/93f5bc247da89de1fe3fcb1f1ae7efd2af9a4e05))
+    - Remove raw structs, simplify deserialization ([`30a7dac`](https://github.com/wasmCloud/wasmCloud/commit/30a7dacf19254c7e0e0762f5c6b007cfc27ad1f0))
+    - NATS doesn't listen on http ([`b5de009`](https://github.com/wasmCloud/wasmCloud/commit/b5de009a0c04926d5a953f7eefe6889315cfe30a))
+    - Updates tests and examples to support the new wkg deps ([`f0f3fd7`](https://github.com/wasmCloud/wasmCloud/commit/f0f3fd7011724137e5f8a4c47a8e4e97be0edbb2))
+    - Refactor the code for wash dev ([`1592e7d`](https://github.com/wasmCloud/wasmCloud/commit/1592e7d57c08adc420dcbc8407234b84bbf6f3f6))
+    - Add test for overriding interface ([`de73278`](https://github.com/wasmCloud/wasmCloud/commit/de73278b2730f19e71d3d08996d00f205d9559cf))
+    - Implement interface driven overrides ([`c08409a`](https://github.com/wasmCloud/wasmCloud/commit/c08409adfeac3f6f0b28f3d24a1346899a636b57))
+    - Adds a wit publish command ([`900e881`](https://github.com/wasmCloud/wasmCloud/commit/900e881b0e59457c17a9ef1e8d53ac0f09c046f9))
+    - Add cargo-binstall support for wash-cli ([`46a7f28`](https://github.com/wasmCloud/wasmCloud/commit/46a7f2850a548a6be27e1262cbde105fe02d37be))
+    - Adds monkey patching for wasi-logging ([`7e3d2d0`](https://github.com/wasmCloud/wasmCloud/commit/7e3d2d06ec542293b8ed3c86734b5401b4e080cb))
+    - Adds support for fetching dependencies automatically ([`644bd35`](https://github.com/wasmCloud/wasmCloud/commit/644bd35df2a24d1f12aba4d0613a3b667db9c70b))
+    - Upgrade to 0.17.0 ([`1b52b0f`](https://github.com/wasmCloud/wasmCloud/commit/1b52b0f8fd58724929e5239f265641448beb03b6))
+    - Remove TODOs from wash dev ([`d86dfe0`](https://github.com/wasmCloud/wasmCloud/commit/d86dfe09ba6dbe53fc57e3828ad718bc0d42d679))
+    - Manifest editing ([`68ce98b`](https://github.com/wasmCloud/wasmCloud/commit/68ce98bfa00a7b270489dd206aa0f237b9e3af77))
+    - Honor nats settings, change session ID check ([`1d3347f`](https://github.com/wasmCloud/wasmCloud/commit/1d3347f342bfb189ea0baf17604438a6ff9411d1))
+    - Support loading existing manifests for `wash dev` ([`be905ac`](https://github.com/wasmCloud/wasmCloud/commit/be905ac395fe42e3c4ac3796ee7acc4d8d76df53))
+    - Bump wasmcloud-core v0.12.0, wash-lib v0.28.0, wasmcloud-tracing v0.9.0, wasmcloud-provider-sdk v0.10.0, wash-cli v0.35.0, safety bump 7 crates ([`44bf4c8`](https://github.com/wasmCloud/wasmCloud/commit/44bf4c8793b3989aebbbc28c2f2ce3ebbd4d6a0a))
+    - Bump wadm 0.16.1, wasmcloud 1.3, NATS 2.10.20 ([`63896d3`](https://github.com/wasmCloud/wasmCloud/commit/63896d3b7860c7213d7173cd213498f9f1b87e01))
+    - Log NATS config and log path ([`9769a3c`](https://github.com/wasmCloud/wasmCloud/commit/9769a3c293a70b3b1f326d4589eaab5d1d177ef6))
+    - Adjust for control-interface v2.2.0 ([`4d4c881`](https://github.com/wasmCloud/wasmCloud/commit/4d4c8818d1d607ba64d21ca3115d199f3176de77))
+    - Remove async-nats v0.33.0 ([`28be2bc`](https://github.com/wasmCloud/wasmCloud/commit/28be2bc7f5cba796f46be3ae9e63e89a4614d2a4))
+    - Ignore failed generation of components in `wash dev` ([`f30e6cd`](https://github.com/wasmCloud/wasmCloud/commit/f30e6cd11097f3f061de77c0dc2439c4de9d971a))
+    - Dedup wit deps ([`ba4f6f4`](https://github.com/wasmCloud/wasmCloud/commit/ba4f6f407aa5819d18c5a1688fc6cd9a7daef1ee))
+    - Standardize emoji usage ([`9df2bb1`](https://github.com/wasmCloud/wasmCloud/commit/9df2bb1754fbffc36ed03a00098831eca49f3171))
+    - Support messaging-nats dev ([`c8f39c4`](https://github.com/wasmCloud/wasmCloud/commit/c8f39c43ea3d6a72612033e82bc2d974bd142035))
+    - Differentiate config, support fast-reload ([`1a07544`](https://github.com/wasmCloud/wasmCloud/commit/1a07544c5f8959b4dcb2c7e4078984681ba72437))
+    - Continue dev loop when build fails ([`873faa6`](https://github.com/wasmCloud/wasmCloud/commit/873faa61250bbb2f7913cf1d6213efaf75c94f7f))
+    - Combine links ([`a59201a`](https://github.com/wasmCloud/wasmCloud/commit/a59201a2226a3d005c8c98c8a6874f240eb9eaf3))
+    - Remove duplicate components, ignore generated paths ([`8fbaab2`](https://github.com/wasmCloud/wasmCloud/commit/8fbaab298a5ac5749d89259871d829bf2cbfb1f8))
+</details>
+
+## v0.36.0 (2024-10-23)
+
+<csr-id-754c9d0cbd28daeb8902196056a35a3b0796e004/>
+<csr-id-b5de009a0c04926d5a953f7eefe6889315cfe30a/>
+<csr-id-46a7f2850a548a6be27e1262cbde105fe02d37be/>
+<csr-id-d86dfe09ba6dbe53fc57e3828ad718bc0d42d679/>
+<csr-id-44bf4c8793b3989aebbbc28c2f2ce3ebbd4d6a0a/>
+<csr-id-28be2bc7f5cba796f46be3ae9e63e89a4614d2a4/>
+<csr-id-ba4f6f407aa5819d18c5a1688fc6cd9a7daef1ee/>
+<csr-id-9df2bb1754fbffc36ed03a00098831eca49f3171/>
+<csr-id-bff14fac85ce4673a1abe432e152067f506fb994/>
+<csr-id-1b52b0f8fd58724929e5239f265641448beb03b6/>
+<csr-id-da7b2cd26cdc4c929e45dc4aee4e5b092c3b26f9/>
+<csr-id-30a7dacf19254c7e0e0762f5c6b007cfc27ad1f0/>
+<csr-id-1592e7d57c08adc420dcbc8407234b84bbf6f3f6/>
+<csr-id-68ce98bfa00a7b270489dd206aa0f237b9e3af77/>
+<csr-id-4d4c8818d1d607ba64d21ca3115d199f3176de77/>
+<csr-id-de73278b2730f19e71d3d08996d00f205d9559cf/>
+
+### Chore
+
+ - <csr-id-754c9d0cbd28daeb8902196056a35a3b0796e004/> update wasmcloud to 1.4
+ - <csr-id-b5de009a0c04926d5a953f7eefe6889315cfe30a/> NATS doesn't listen on http
+ - <csr-id-46a7f2850a548a6be27e1262cbde105fe02d37be/> add cargo-binstall support for wash-cli
+ - <csr-id-d86dfe09ba6dbe53fc57e3828ad718bc0d42d679/> remove TODOs from wash dev
+ - <csr-id-44bf4c8793b3989aebbbc28c2f2ce3ebbd4d6a0a/> bump wasmcloud-core v0.12.0, wash-lib v0.28.0, wasmcloud-tracing v0.9.0, wasmcloud-provider-sdk v0.10.0, wash-cli v0.35.0, safety bump 7 crates
+   SAFETY BUMP: wash-lib v0.28.0, wasmcloud-tracing v0.9.0, wasmcloud-provider-sdk v0.10.0, wash-cli v0.35.0, wasmcloud-host v0.21.0, wasmcloud-runtime v0.5.0, wasmcloud-test-util v0.13.0
+ - <csr-id-28be2bc7f5cba796f46be3ae9e63e89a4614d2a4/> remove async-nats v0.33.0
+ - <csr-id-ba4f6f407aa5819d18c5a1688fc6cd9a7daef1ee/> dedup wit deps
+ - <csr-id-9df2bb1754fbffc36ed03a00098831eca49f3171/> standardize emoji usage
+
+### New Features
+
+ - <csr-id-347d1e8ad24ba36b7d5f8514f851f94dec177798/> dev ignore gen directory
+ - <csr-id-1b70cfafed45553f62226d8b9644e96ef1e1e3ec/> update wadm to 0.18
+ - <csr-id-c0520722f5b4543f702c0f13fa75630be8008d9c/> Adds support for wasmcloud named things for packages
+   This also integrates the wkg.toml stuff directly into wasmcloud.toml
+ - <csr-id-93f5bc247da89de1fe3fcb1f1ae7efd2af9a4e05/> add wit_path, path, and reg insecure to wasmcloud.toml
+ - <csr-id-f0f3fd7011724137e5f8a4c47a8e4e97be0edbb2/> Updates tests and examples to support the new wkg deps
+   This updates all dependencies to have a wkg.lock but I didn't add to the
+   gitignore for convenience. The deps are still committed in tree for backwards
+   compatibility and they all use the new versioned logging. This looks
+   really chunky bust is mostly dep updates/deletes
+ - <csr-id-c08409adfeac3f6f0b28f3d24a1346899a636b57/> implement interface driven overrides
+ - <csr-id-900e881b0e59457c17a9ef1e8d53ac0f09c046f9/> Adds a wit publish command
+   This is almost exactly the same as `wkg publish` but exposed for
+   convenience within wash
+ - <csr-id-7e3d2d06ec542293b8ed3c86734b5401b4e080cb/> Adds monkey patching for wasi-logging
+   Yep, this is ugly. There is no way to sugar coat it. But this is probably
+   the easiest way around the fact that we can't work with unversioned deps.
+   Good news is we can remove it once we hit 2.0
+ - <csr-id-be905ac395fe42e3c4ac3796ee7acc4d8d76df53/> support loading existing manifests for `wash dev`
+   This commit adds support for loading and using a manifest for use
+   during development with `wash dev`.
+   
+   When manifest overrides are specified, the existing manifest will be
+   used, and no new manifests will be generated.
+ - <csr-id-63896d3b7860c7213d7173cd213498f9f1b87e01/> bump wadm 0.16.1, wasmcloud 1.3, NATS 2.10.20
+ - <csr-id-9769a3c293a70b3b1f326d4589eaab5d1d177ef6/> log NATS config and log path
+
+### Bug Fixes
+
+ - <csr-id-08205e519b9a0bb5f08f3d0f7a626db670aa1c08/> ensure dev reloads when deps change
+ - <csr-id-92b210fdfb89be59c45665aa62c130d111748f4f/> use package as package
+ - <csr-id-21bedaf7f1cd45bb19f86ed97ec812426c82ebe3/> Mark doctests for crate-visible methods as ignored
+ - <csr-id-a3a53ea958807a43dc6f288b5d4321923ed19d7c/> Fix leaked wadm process from integration tests
+ - <csr-id-1d3347f342bfb189ea0baf17604438a6ff9411d1/> honor nats settings, change session ID check
+ - <csr-id-f30e6cd11097f3f061de77c0dc2439c4de9d971a/> ignore failed generation of components in `wash dev`
+   This commit allows failure of WADM manifest component generation in wash dev,
+   ignoring it if it occurs.
+   
+   Generation of WADM manifest components is likely to fail for *new*
+   interfaces that may be imported or exported -- likely unknown
+   interfaces that we can't possibly generate a known component for.
+ - <csr-id-c8f39c43ea3d6a72612033e82bc2d974bd142035/> support messaging-nats dev
+ - <csr-id-1a07544c5f8959b4dcb2c7e4078984681ba72437/> differentiate config, support fast-reload
+ - <csr-id-873faa61250bbb2f7913cf1d6213efaf75c94f7f/> continue dev loop when build fails
+ - <csr-id-a59201a2226a3d005c8c98c8a6874f240eb9eaf3/> combine links
+
+### Other
+
+ - <csr-id-bff14fac85ce4673a1abe432e152067f506fb994/> correct tests with new functionality
+ - <csr-id-1b52b0f8fd58724929e5239f265641448beb03b6/> upgrade to 0.17.0
+
+### Refactor
+
+ - <csr-id-da7b2cd26cdc4c929e45dc4aee4e5b092c3b26f9/> address PR nits and clippy warnings
+ - <csr-id-30a7dacf19254c7e0e0762f5c6b007cfc27ad1f0/> remove raw structs, simplify deserialization
+ - <csr-id-1592e7d57c08adc420dcbc8407234b84bbf6f3f6/> refactor the code for wash dev
+ - <csr-id-68ce98bfa00a7b270489dd206aa0f237b9e3af77/> manifest editing
+ - <csr-id-4d4c8818d1d607ba64d21ca3115d199f3176de77/> adjust for control-interface v2.2.0
+
+### Test
+
+ - <csr-id-de73278b2730f19e71d3d08996d00f205d9559cf/> add test for overriding interface
+
+### New Features (BREAKING)
+
+ - <csr-id-cf09c44d4d08bdb9039f51e95320bf2183e3454e/> wash build override build/wit/project dir
+ - <csr-id-644bd35df2a24d1f12aba4d0613a3b667db9c70b/> Adds support for fetching dependencies automatically
+   This uses the newly available wit commands from wasm-pkg-tools to fetch
+   things from upstream registry. I have only updated select examples (that
+   are less likely to be used while we finish the last bits of work) so we
+   could test things.
+   
+   I also fixed the wash build tests so they could run properly in parallel
+   (which hopefully makes them faster too). Once we have all wasi cloud wit
+   in OCI, we can update all deps and roll to a new version of wash. This
+   will involve updating git ignores to ignore the deps directory, but
+   leaving the current deps intact for those on older versions of wash for
+   at least the next version or two. Once we're past that we can remove the
+   deps dirs
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-8fbaab298a5ac5749d89259871d829bf2cbfb1f8/> remove duplicate components, ignore generated paths
+
+## v0.35.0 (2024-10-09)
+
+<csr-id-28be2bc7f5cba796f46be3ae9e63e89a4614d2a4/>
+<csr-id-ba4f6f407aa5819d18c5a1688fc6cd9a7daef1ee/>
+<csr-id-9df2bb1754fbffc36ed03a00098831eca49f3171/>
+<csr-id-4d4c8818d1d607ba64d21ca3115d199f3176de77/>
+
+### Chore
+
+ - <csr-id-28be2bc7f5cba796f46be3ae9e63e89a4614d2a4/> remove async-nats v0.33.0
+ - <csr-id-ba4f6f407aa5819d18c5a1688fc6cd9a7daef1ee/> dedup wit deps
+ - <csr-id-9df2bb1754fbffc36ed03a00098831eca49f3171/> standardize emoji usage
+
+### New Features
+
+ - <csr-id-63896d3b7860c7213d7173cd213498f9f1b87e01/> bump wadm 0.16.1, wasmcloud 1.3, NATS 2.10.20
+ - <csr-id-9769a3c293a70b3b1f326d4589eaab5d1d177ef6/> log NATS config and log path
+
+### Bug Fixes
+
+ - <csr-id-f30e6cd11097f3f061de77c0dc2439c4de9d971a/> ignore failed generation of components in `wash dev`
+   This commit allows failure of WADM manifest component generation in wash dev,
+   ignoring it if it occurs.
+   
+   Generation of WADM manifest components is likely to fail for *new*
+   interfaces that may be imported or exported -- likely unknown
+   interfaces that we can't possibly generate a known component for.
+ - <csr-id-c8f39c43ea3d6a72612033e82bc2d974bd142035/> support messaging-nats dev
+ - <csr-id-1a07544c5f8959b4dcb2c7e4078984681ba72437/> differentiate config, support fast-reload
+ - <csr-id-873faa61250bbb2f7913cf1d6213efaf75c94f7f/> continue dev loop when build fails
+ - <csr-id-a59201a2226a3d005c8c98c8a6874f240eb9eaf3/> combine links
+
+### Refactor
+
+ - <csr-id-4d4c8818d1d607ba64d21ca3115d199f3176de77/> adjust for control-interface v2.2.0
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-8fbaab298a5ac5749d89259871d829bf2cbfb1f8/> remove duplicate components, ignore generated paths
+
+## v0.34.1 (2024-09-30)
+
+<csr-id-ce1d5d1ed7c503e2cf357047a4a849f74be7b51e/>
+<csr-id-d28ebe1783c7535ac30cccad1dacc70cb921f371/>
+<csr-id-215eeadc555dfc8a57cee96856febf63113f62a1/>
+<csr-id-e2b6287bde6c9b905d96f93f93a1a7d73940283c/>
+<csr-id-e6936ce5113db8434ffb2cc927e779e677ad0bd4/>
+<csr-id-b382e8669dd31e44855142d2b478421884710e3d/>
+<csr-id-f8de84b251122b3319f7b1c8d86cb749cb4a8e37/>
+<csr-id-6cdcf8ae093a0214787ee99132844d5cb92d8b3d/>
+<csr-id-71fc4b8f60a1f5f469912b712452f1c96a7744ef/>
+<csr-id-8d4c48bed132fd33cc7f4d2aaa33b1999e2ea67a/>
+
+### Chore
+
+ - <csr-id-ce1d5d1ed7c503e2cf357047a4a849f74be7b51e/> update blobstore-fs provider references
+ - <csr-id-d28ebe1783c7535ac30cccad1dacc70cb921f371/> update messaging-nats provider references
+ - <csr-id-215eeadc555dfc8a57cee96856febf63113f62a1/> update keyvalue-nats provider references
+ - <csr-id-e2b6287bde6c9b905d96f93f93a1a7d73940283c/> update http-server provider references
+ - <csr-id-e6936ce5113db8434ffb2cc927e779e677ad0bd4/> update http-client provider references
+ - <csr-id-b382e8669dd31e44855142d2b478421884710e3d/> update wash dev kv provider to keyvalue-nats 0.3.0
+ - <csr-id-f8de84b251122b3319f7b1c8d86cb749cb4a8e37/> update version of keyvalue-nats used to 0.2.0
+
+### Other
+
+ - <csr-id-8d4c48bed132fd33cc7f4d2aaa33b1999e2ea67a/> wash-cli v0.34.1
+
+### New Features
+
+<csr-id-4d299c3f00ab862e0f3deed29b8f29be7099956f/>
+<csr-id-ce1569cb6423f3bc42ff645e8c062287d8b3b78f/>
+<csr-id-f0cb812a2eb719a3f69c14805ab89cdc273754e4/>
+
+ - <csr-id-095b9f448d3ec37fc55050d08f1d861f127336b9/> enable undeploying and deleting multiple apps
+   This commit enables wash to:
+   
+   - Undeploy all applications at the same time
+
+### Bug Fixes
+
+ - <csr-id-9243e5248d73df5b47dff38723027c36bb6be264/> improve error handling, dependency resolution
+
+### Refactor
+
+ - <csr-id-6cdcf8ae093a0214787ee99132844d5cb92d8b3d/> reorganize `wash up` and `wash config`
+   This commit starts the reorganization of `wash-cli` code into the
+   `src/cmd` hierarchy, which should make it easier to separate shared
+   functionality, (sub)command invocation and specific logic.
+
+### Test
+
+ - <csr-id-71fc4b8f60a1f5f469912b712452f1c96a7744ef/> add test for wash app undeploy --all
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 15 commits contributed to the release over the course of 9 calendar days.
+ - 10 days passed between releases.
+ - 15 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Wash-cli v0.34.1 ([`8d4c48b`](https://github.com/wasmCloud/wasmCloud/commit/8d4c48bed132fd33cc7f4d2aaa33b1999e2ea67a))
+    - Improve error handling, dependency resolution ([`9243e52`](https://github.com/wasmCloud/wasmCloud/commit/9243e5248d73df5b47dff38723027c36bb6be264))
+    - Add test for wash app undeploy --all ([`71fc4b8`](https://github.com/wasmCloud/wasmCloud/commit/71fc4b8f60a1f5f469912b712452f1c96a7744ef))
+    - Enable undeploying and deleting multiple apps ([`095b9f4`](https://github.com/wasmCloud/wasmCloud/commit/095b9f448d3ec37fc55050d08f1d861f127336b9))
+    - Update blobstore-fs provider references ([`ce1d5d1`](https://github.com/wasmCloud/wasmCloud/commit/ce1d5d1ed7c503e2cf357047a4a849f74be7b51e))
+    - Update messaging-nats provider references ([`d28ebe1`](https://github.com/wasmCloud/wasmCloud/commit/d28ebe1783c7535ac30cccad1dacc70cb921f371))
+    - Update keyvalue-nats provider references ([`215eead`](https://github.com/wasmCloud/wasmCloud/commit/215eeadc555dfc8a57cee96856febf63113f62a1))
+    - Update http-server provider references ([`e2b6287`](https://github.com/wasmCloud/wasmCloud/commit/e2b6287bde6c9b905d96f93f93a1a7d73940283c))
+    - Update http-client provider references ([`e6936ce`](https://github.com/wasmCloud/wasmCloud/commit/e6936ce5113db8434ffb2cc927e779e677ad0bd4))
+    - Enable using custom wasmCloud host path ([`4d299c3`](https://github.com/wasmCloud/wasmCloud/commit/4d299c3f00ab862e0f3deed29b8f29be7099956f))
+    - Reorganize `wash up` and `wash config` ([`6cdcf8a`](https://github.com/wasmCloud/wasmCloud/commit/6cdcf8ae093a0214787ee99132844d5cb92d8b3d))
+    - Update wash dev kv provider to keyvalue-nats 0.3.0 ([`b382e86`](https://github.com/wasmCloud/wasmCloud/commit/b382e8669dd31e44855142d2b478421884710e3d))
+    - Update version of keyvalue-nats used to 0.2.0 ([`f8de84b`](https://github.com/wasmCloud/wasmCloud/commit/f8de84b251122b3319f7b1c8d86cb749cb4a8e37))
+    - Implemented Humantime duration input for --watch flags ([`ce1569c`](https://github.com/wasmCloud/wasmCloud/commit/ce1569cb6423f3bc42ff645e8c062287d8b3b78f))
+    - Allow wash to re-use registry credentials from Docker ([`f0cb812`](https://github.com/wasmCloud/wasmCloud/commit/f0cb812a2eb719a3f69c14805ab89cdc273754e4))
+</details>
+
+## v0.34.0 (2024-09-19)
+
+<csr-id-84633c20117cab57890a62b7b2e734df78133933/>
+
+### Other
+
+ - <csr-id-84633c20117cab57890a62b7b2e734df78133933/> wash-cli: 0.33.1
+
+### Bug Fixes
+
+ - <csr-id-4680de9d2f1e3a2e672833ccac9c2356ef208145/> multiple generated dependencies collision in project
+   This commit fixes a bug in the workspace-aware project dependency
+   gathering that caused dependencies to override each other under  the
+   same project.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 2 commits contributed to the release.
+ - 1 day passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Wash-cli: 0.33.1 ([`84633c2`](https://github.com/wasmCloud/wasmCloud/commit/84633c20117cab57890a62b7b2e734df78133933))
+    - Multiple generated dependencies collision in project ([`4680de9`](https://github.com/wasmCloud/wasmCloud/commit/4680de9d2f1e3a2e672833ccac9c2356ef208145))
+</details>
+
+## v0.33.0 (2024-09-18)
+
+<csr-id-e18efc72cc56ae5ce5f929eb17660a0d211c0e06/>
+<csr-id-1af6e05f1a47be4e62a4c21d1704aff2e09bef89/>
+<csr-id-9ac2e29babcaa3e9789c42d05d9d3ad4ccd5fcc7/>
+<csr-id-c65d9cab4cc8917eedcad1672812bafad0311ee0/>
+<csr-id-2ee92718a7d4dcef9a31cca42761672b2b69c5dd/>
+<csr-id-1ff476dcd61675a81d747091a1a94f1a4cd5fedb/>
+<csr-id-69039793fe275c35ebf647d52f117c0bbf3bf675/>
+
+### Chore
+
+ - <csr-id-e18efc72cc56ae5ce5f929eb17660a0d211c0e06/> note wash-cli move to wash
+
+### Other
+
+ - <csr-id-1ff476dcd61675a81d747091a1a94f1a4cd5fedb/> tracing v0.8.0, provider-sdk v0.9.0, wash-cli v0.33.0
+
+### Chore
+
+ - <csr-id-69039793fe275c35ebf647d52f117c0bbf3bf675/> Replace dirs dependency with home
+
+### New Features
+
+ - <csr-id-029e2b859ed864707a6780acb3bb08f6b166d288/> enable wash dev for providers
+ - <csr-id-e7f85fd9e1afad79d6dc3512390fefb8642f32b0/> add --host-log-path option
+   This commit adds a `--host-log-path` option to the wasmcloud-related
+   options for `wash up`. With this command, a custom path can be
+   specified to write to when the host is producing logs.
+ - <csr-id-31b4e24ebb11a3b7622825b9c0f1310b69290998/> add hints for default-configured dependencies
+   This commit adds support for printing help text when dependencies are
+   configured close to default ways, to help people easier know how to
+   get started using the relevant application(s).
+ - <csr-id-fc7724c1f0c2046c1a3318477ce58731c3ae2fd6/> write out generated WADM manifest
+   This commit adds support for writing out generated WADM manifests live
+   as they are generated.
+ - <csr-id-b592801565a2e421da653ab5a1b69028522e1efc/> add session management to wash dev
+   This commit adds session management and the ability to run `wash dev`
+   with more than one host in the background.
+ - <csr-id-fd0bbd0a0cb41053d2e90cec8151d0e7c4b0add3/> convert dependencies to WADM manifests
+   This commit implements conversion of detected dependencies during
+   `wash dev` to WADM manifests that can be run when a component is being
+   developed.
+ - <csr-id-7738695b405d20261b92c730329387886d1ba04a/> add ability to check and validate OCI image references in WADM manifests
+
+### Bug Fixes
+
+ - <csr-id-5df02de7b1051d4966e3e94e1ec679d6e5faa637/> boolean flag set incorrectly
+ - <csr-id-7347fa3f4c6d4dde13a27ad112dd7975e59bd1db/> return put_link errors, better link table
+ - <csr-id-9a8ec3d434fecf52181f8853846bf77f4ee46125/> fix hot reloading for wash dev
+
+### Other
+
+ - <csr-id-1af6e05f1a47be4e62a4c21d1704aff2e09bef89/> bump wasmcloud-core v0.10.0, safety bump 5 crates
+   SAFETY BUMP: wasmcloud-runtime v0.3.0, wasmcloud-tracing v0.8.0, wasmcloud-provider-sdk v0.9.0, wash-cli v0.33.0, wash-lib v0.26.0
+ - <csr-id-9ac2e29babcaa3e9789c42d05d9d3ad4ccd5fcc7/> add links integration test
+ - <csr-id-c65d9cab4cc8917eedcad1672812bafad0311ee0/> upgrade to 0.36
+
+### Refactor
+
+ - <csr-id-2ee92718a7d4dcef9a31cca42761672b2b69c5dd/> wash startup process
+   This commit reworks how we manage wasmcloud hosts when running `wash
+   dev`.
+   
+   Due to the nature of signal passing on unix/windows, unlike
+   `wash up --detached`, when a SIGINT is triggered by a
+   terminal (Ctrl-c), the signal is sent to *all* child processes. This
+   means that spawned subprocesses for WADM and NATS immediately exit,
+   making it it impossible for the host to even properly stop.
+   
+   To fix this `wash-lib` and `wash-cli` were updated to do the
+   following:
+   
+   - Use command groups to prevent signal passthrough
+   - Manage `wadm` and `nats` subprocesses much more similarly to `wash up`
+   
+   This commit utilizes the updates to `wash-lib` to ensure that `wash
+   dev` can properly stop started hosts.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 17 commits contributed to the release over the course of 12 calendar days.
+ - 13 days passed between releases.
+ - 17 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Tracing v0.8.0, provider-sdk v0.9.0, wash-cli v0.33.0 ([`1ff476d`](https://github.com/wasmCloud/wasmCloud/commit/1ff476dcd61675a81d747091a1a94f1a4cd5fedb))
+    - Replace dirs dependency with home ([`6903979`](https://github.com/wasmCloud/wasmCloud/commit/69039793fe275c35ebf647d52f117c0bbf3bf675))
+    - Bump wasmcloud-core v0.10.0, safety bump 5 crates ([`1af6e05`](https://github.com/wasmCloud/wasmCloud/commit/1af6e05f1a47be4e62a4c21d1704aff2e09bef89))
+    - Enable wash dev for providers ([`029e2b8`](https://github.com/wasmCloud/wasmCloud/commit/029e2b859ed864707a6780acb3bb08f6b166d288))
+    - Boolean flag set incorrectly ([`5df02de`](https://github.com/wasmCloud/wasmCloud/commit/5df02de7b1051d4966e3e94e1ec679d6e5faa637))
+    - Add --host-log-path option ([`e7f85fd`](https://github.com/wasmCloud/wasmCloud/commit/e7f85fd9e1afad79d6dc3512390fefb8642f32b0))
+    - Wash startup process ([`2ee9271`](https://github.com/wasmCloud/wasmCloud/commit/2ee92718a7d4dcef9a31cca42761672b2b69c5dd))
+    - Note wash-cli move to wash ([`e18efc7`](https://github.com/wasmCloud/wasmCloud/commit/e18efc72cc56ae5ce5f929eb17660a0d211c0e06))
+    - Add links integration test ([`9ac2e29`](https://github.com/wasmCloud/wasmCloud/commit/9ac2e29babcaa3e9789c42d05d9d3ad4ccd5fcc7))
+    - Return put_link errors, better link table ([`7347fa3`](https://github.com/wasmCloud/wasmCloud/commit/7347fa3f4c6d4dde13a27ad112dd7975e59bd1db))
+    - Add hints for default-configured dependencies ([`31b4e24`](https://github.com/wasmCloud/wasmCloud/commit/31b4e24ebb11a3b7622825b9c0f1310b69290998))
+    - Fix hot reloading for wash dev ([`9a8ec3d`](https://github.com/wasmCloud/wasmCloud/commit/9a8ec3d434fecf52181f8853846bf77f4ee46125))
+    - Write out generated WADM manifest ([`fc7724c`](https://github.com/wasmCloud/wasmCloud/commit/fc7724c1f0c2046c1a3318477ce58731c3ae2fd6))
+    - Add session management to wash dev ([`b592801`](https://github.com/wasmCloud/wasmCloud/commit/b592801565a2e421da653ab5a1b69028522e1efc))
+    - Convert dependencies to WADM manifests ([`fd0bbd0`](https://github.com/wasmCloud/wasmCloud/commit/fd0bbd0a0cb41053d2e90cec8151d0e7c4b0add3))
+    - Upgrade to 0.36 ([`c65d9ca`](https://github.com/wasmCloud/wasmCloud/commit/c65d9cab4cc8917eedcad1672812bafad0311ee0))
+    - Add ability to check and validate OCI image references in WADM manifests ([`7738695`](https://github.com/wasmCloud/wasmCloud/commit/7738695b405d20261b92c730329387886d1ba04a))
+</details>
+
+## v0.32.1 (2024-09-05)
+
+<csr-id-2ab6c9a1aa42e79e6ee20d6598a6f97b856af57e/>
+
+### New Features
+
+ - <csr-id-14810d1de464811d76e6a3527b5f159d105803f2/> add basic dependency detection by WIT iface usage
+   This commit introduces basic dependency recognition based on WIT
+   interface usage in `wash dev`.
+ - <csr-id-5dab9201b51f1ca808abc491316772c30686f79b/> implement sorting for outputs of wash get commands
+ - <csr-id-cee789f1b4a04076c38b40bf14cc39be46ad08fe/> Add --watch flag to view live changes in host inventory
+
+### Bug Fixes
+
+ - <csr-id-f9b60e8b7e635c2db6fe7c9a7cb916c013670479/> return a string as the body from wash call
+   This commit changes `wash call` to return the bytes from a request as
+   a string, rather than a `bytes::Bytes`, which was causing output like
+   `"body": [123, 123, 123, 123]` rather than the actual stringified bytes.
+   
+   Since requests that can be satisfied by `wash call` of wasi:http are
+   expected to be quite simple, they can be expected to be strings --
+   when JSON is expected `--extract-json` can be specified.
+
+### Other
+
+ - <csr-id-2ab6c9a1aa42e79e6ee20d6598a6f97b856af57e/> v0.32.1
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 5 commits contributed to the release over the course of 6 calendar days.
+ - 6 days passed between releases.
+ - 5 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - V0.32.1 ([`2ab6c9a`](https://github.com/wasmCloud/wasmCloud/commit/2ab6c9a1aa42e79e6ee20d6598a6f97b856af57e))
+    - Return a string as the body from wash call ([`f9b60e8`](https://github.com/wasmCloud/wasmCloud/commit/f9b60e8b7e635c2db6fe7c9a7cb916c013670479))
+    - Add basic dependency detection by WIT iface usage ([`14810d1`](https://github.com/wasmCloud/wasmCloud/commit/14810d1de464811d76e6a3527b5f159d105803f2))
+    - Implement sorting for outputs of wash get commands ([`5dab920`](https://github.com/wasmCloud/wasmCloud/commit/5dab9201b51f1ca808abc491316772c30686f79b))
+    - Add --watch flag to view live changes in host inventory ([`cee789f`](https://github.com/wasmCloud/wasmCloud/commit/cee789f1b4a04076c38b40bf14cc39be46ad08fe))
+</details>
+
+## v0.32.0 (2024-08-29)
+
+<csr-id-e0d4c09ba7c1176f76a994f32f4c1e3147a3e59b/>
+<csr-id-7448729a1927e4ea48738bbf153533dd60ba2ad1/>
+
+### Chore
+
+ - <csr-id-e0d4c09ba7c1176f76a994f32f4c1e3147a3e59b/> help styling to streamline cli markdown
+
+### Other
+
+ - <csr-id-7448729a1927e4ea48738bbf153533dd60ba2ad1/> wash-lib v0.25.0, wash-cli v0.32.0
+
+### New Features
+
+ - <csr-id-66ac0d86d36509fda0db37fffbf8ce32d81c92c5/> give a nicer error to wash app for no responders
+ - <csr-id-1ac883f9daad78fb2af6842a15fa5bc2ae69c35f/> add CLI styling to wash
+
+### Bug Fixes
+
+ - <csr-id-fa945c6bcc094afda0babfc2255b38a25a129e1b/> wash dev on non-xkeys component IDs
+   This commit fixes an issue wher `wash dev` assumed that component IDs
+   had to be `ModuleId`s (i.e. nkeys).
+   
+   While in the past component IDs *were* nkeys, they are no longer
+   required to be, and can be user-friendly names.
+ - <csr-id-5efa281da43f2b6f4ae29d5ec8c90822b0bc27f5/> remove misleading creds error message
+ - <csr-id-1d7d7c19fc50f1749d9463fcd7cb15f92af3f75e/> add missing feature flag
+ - <csr-id-d021a3bcc2def64f1ec002e4248718f5794fb7c2/> fix lints
+   This commit fixes lints that seem to *only* show up when trying to
+   `cargo publish`
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 8 commits contributed to the release over the course of 2 calendar days.
+ - 6 days passed between releases.
+ - 8 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Add missing feature flag ([`1d7d7c1`](https://github.com/wasmCloud/wasmCloud/commit/1d7d7c19fc50f1749d9463fcd7cb15f92af3f75e))
+    - Fix lints ([`d021a3b`](https://github.com/wasmCloud/wasmCloud/commit/d021a3bcc2def64f1ec002e4248718f5794fb7c2))
+    - Wash-lib v0.25.0, wash-cli v0.32.0 ([`7448729`](https://github.com/wasmCloud/wasmCloud/commit/7448729a1927e4ea48738bbf153533dd60ba2ad1))
+    - Add CLI styling to wash ([`1ac883f`](https://github.com/wasmCloud/wasmCloud/commit/1ac883f9daad78fb2af6842a15fa5bc2ae69c35f))
+    - Wash dev on non-xkeys component IDs ([`fa945c6`](https://github.com/wasmCloud/wasmCloud/commit/fa945c6bcc094afda0babfc2255b38a25a129e1b))
+    - Give a nicer error to wash app for no responders ([`66ac0d8`](https://github.com/wasmCloud/wasmCloud/commit/66ac0d86d36509fda0db37fffbf8ce32d81c92c5))
+    - Remove misleading creds error message ([`5efa281`](https://github.com/wasmCloud/wasmCloud/commit/5efa281da43f2b6f4ae29d5ec8c90822b0bc27f5))
+    - Help styling to streamline cli markdown ([`e0d4c09`](https://github.com/wasmCloud/wasmCloud/commit/e0d4c09ba7c1176f76a994f32f4c1e3147a3e59b))
+</details>
+
+## v0.31.0 (2024-08-23)
+
+<csr-id-82927d995dabea1fdd08b14f10dd2b584b7f393b/>
+<csr-id-4264e444de95e7af88c04dfa48a2ecd072b93fb3/>
+<csr-id-4c41168230f8b78f142f40adf24aaf41c8ae90ca/>
+<csr-id-325a1b038cfb239384f2d433acaf2bb8e43fce58/>
+<csr-id-13fd60edd0c25f38577524d0a950f039a4beb73a/>
+<csr-id-8403350432a2387d4a2bce9c096f002005ba54be/>
+
+### Chore
+
+ - <csr-id-82927d995dabea1fdd08b14f10dd2b584b7f393b/> wasmcloud v1.2.0
+ - <csr-id-4264e444de95e7af88c04dfa48a2ecd072b93fb3/> wadm 0.14.0, wasmcloud v1.2.0-rc.1
+ - <csr-id-4c41168230f8b78f142f40adf24aaf41c8ae90ca/> update NATS to 2.10.18
+ - <csr-id-325a1b038cfb239384f2d433acaf2bb8e43fce58/> consistent casing for FROM/AS in Dockerfiles
+ - <csr-id-13fd60edd0c25f38577524d0a950f039a4beb73a/> more explicit error for failing to build provider
+
+### Other
+
+ - <csr-id-8403350432a2387d4a2bce9c096f002005ba54be/> bump wasmcloud-core v0.9.0, wash-lib v0.24.0, wasmcloud-tracing v0.7.0, wasmcloud-provider-sdk v0.8.0, wasmcloud-secrets-types v0.4.0, wash-cli v0.31.0, safety bump 5 crates
+   SAFETY BUMP: wash-lib v0.24.0, wasmcloud-tracing v0.7.0, wasmcloud-provider-sdk v0.8.0, wash-cli v0.31.0, wasmcloud-secrets-client v0.4.0
+
+### New Features
+
+<csr-id-cab9a620c34ae8fc3b9173c46921ad1273d03789/>
+
+ - <csr-id-fe2963134f2770b63e613edf289f27ff2a9cb495/> restore changes lost in rebase
+ - <csr-id-6f99ed677647a305f7d5ebefc157a377ba60d408/> move clap_markdown logic to avoid double parse
+ - <csr-id-556a6cfb70a6be173a9baf7cb82f2765b12e0395/> exit after help-markdown, conflict with help
+ - <csr-id-cb7b4d67f2cc5adcd5dba5d4f64d994aec93739e/> exit after help-markdown, conflict with help
+ - <csr-id-ee67b1f8281c40ea682c01924510cca5ff7d28bd/> Add clap-markdown to generate CLI docs in Markdown
+ - <csr-id-dc921bd69859327e788aa250778bf258a954377a/> Adds --watch flag to wash app list to show live info
+ - <csr-id-756168465a34f484adaf37ecdb5f677ce82843bd/> Added secrets-topic and policy-topic flags to wash up
+ - <csr-id-4b08262301d6845a71343b4bf0e2928eb956f7d6/> disallow wash drain when host or wadm is running
+   - prevents wash drain all and wash drain downloads when wasmcloud.pid or wadm.pid are present on disk
+
+### New Features (BREAKING)
+
+ - <csr-id-301043bb0f86d15e3afb93e410a3a40242c6317a/> display detailed app status
+ - <csr-id-6f31a97d9aa3b990a59a5b6813ebc87dd6e1ad3d/> show version of to-download binaries
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 17 commits contributed to the release over the course of 17 calendar days.
+ - 21 days passed between releases.
+ - 17 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Bump wasmcloud-core v0.9.0, wash-lib v0.24.0, wasmcloud-tracing v0.7.0, wasmcloud-provider-sdk v0.8.0, wasmcloud-secrets-types v0.4.0, wash-cli v0.31.0, safety bump 5 crates ([`8403350`](https://github.com/wasmCloud/wasmCloud/commit/8403350432a2387d4a2bce9c096f002005ba54be))
+    - Restore changes lost in rebase ([`fe29631`](https://github.com/wasmCloud/wasmCloud/commit/fe2963134f2770b63e613edf289f27ff2a9cb495))
+    - Move clap_markdown logic to avoid double parse ([`6f99ed6`](https://github.com/wasmCloud/wasmCloud/commit/6f99ed677647a305f7d5ebefc157a377ba60d408))
+    - Exit after help-markdown, conflict with help ([`556a6cf`](https://github.com/wasmCloud/wasmCloud/commit/556a6cfb70a6be173a9baf7cb82f2765b12e0395))
+    - Exit after help-markdown, conflict with help ([`cb7b4d6`](https://github.com/wasmCloud/wasmCloud/commit/cb7b4d67f2cc5adcd5dba5d4f64d994aec93739e))
+    - Add clap-markdown to generate CLI docs in Markdown ([`ee67b1f`](https://github.com/wasmCloud/wasmCloud/commit/ee67b1f8281c40ea682c01924510cca5ff7d28bd))
+    - Adds --watch flag to wash app list to show live info ([`dc921bd`](https://github.com/wasmCloud/wasmCloud/commit/dc921bd69859327e788aa250778bf258a954377a))
+    - Wasmcloud v1.2.0 ([`82927d9`](https://github.com/wasmCloud/wasmCloud/commit/82927d995dabea1fdd08b14f10dd2b584b7f393b))
+    - Display detailed app status ([`301043b`](https://github.com/wasmCloud/wasmCloud/commit/301043bb0f86d15e3afb93e410a3a40242c6317a))
+    - Show version of to-download binaries ([`6f31a97`](https://github.com/wasmCloud/wasmCloud/commit/6f31a97d9aa3b990a59a5b6813ebc87dd6e1ad3d))
+    - Wadm 0.14.0, wasmcloud v1.2.0-rc.1 ([`4264e44`](https://github.com/wasmCloud/wasmCloud/commit/4264e444de95e7af88c04dfa48a2ecd072b93fb3))
+    - Update NATS to 2.10.18 ([`4c41168`](https://github.com/wasmCloud/wasmCloud/commit/4c41168230f8b78f142f40adf24aaf41c8ae90ca))
+    - Added secrets-topic and policy-topic flags to wash up ([`7561684`](https://github.com/wasmCloud/wasmCloud/commit/756168465a34f484adaf37ecdb5f677ce82843bd))
+    - Disallow wash drain when host or wadm is running ([`4b08262`](https://github.com/wasmCloud/wasmCloud/commit/4b08262301d6845a71343b4bf0e2928eb956f7d6))
+    - Limit terminal to width ([`cab9a62`](https://github.com/wasmCloud/wasmCloud/commit/cab9a620c34ae8fc3b9173c46921ad1273d03789))
+    - Consistent casing for FROM/AS in Dockerfiles ([`325a1b0`](https://github.com/wasmCloud/wasmCloud/commit/325a1b038cfb239384f2d433acaf2bb8e43fce58))
+    - More explicit error for failing to build provider ([`13fd60e`](https://github.com/wasmCloud/wasmCloud/commit/13fd60edd0c25f38577524d0a950f039a4beb73a))
+</details>
+
+## v0.30.0 (2024-08-02)
+
+<csr-id-e39430bbdba29d70ee0afbb0f62270189d8e74c7/>
+<csr-id-1ec12a7fa8af603a850bb1dbaca03c32d5f36ddd/>
+<csr-id-8199616e5e77d32137a319b54c2e7ee83e3c04b7/>
+<csr-id-7e26ac135ff6e6f9678f21e44e9631734311c264/>
+<csr-id-82cbef77367f1728773268c1ee52b98ac7f31dcf/>
+<csr-id-11cd438cc029c79495a4e50c9dbb3acb73be3df6/>
+<csr-id-94bfb0e23d4f1f58b70500eaa635717a6ba83484/>
+<csr-id-d3c0ca7643beab0fa002c6a4dedf724303bffcaa/>
+<csr-id-24e459251eaff69820180c8aaf7663ecc4e76b35/>
+<csr-id-a886882ae688dc4955c0d74188388f178f3b13dd/>
+<csr-id-af742d076970001af13eaa241927db2ab8f0a9bb/>
+<csr-id-6724e2c3d1e5f1de91827a6e542415cef09a278c/>
+<csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/>
+<csr-id-702514d8db4366c29df8e6e20018af3b22c0446a/>
+<csr-id-aa460011c243f363158f80952b386bb33992d3ea/>
+<csr-id-c666ef50fecc1ee248bf78d486a915ee077e3b4a/>
+<csr-id-2ea22a28ca9fd1838fc03451f33d75690fc28f2a/>
+<csr-id-b56982f437209ecaff4fa6946f8fe4c3068a62cd/>
+<csr-id-03f0ce7d5269c6230ae49812c7d3e71ab30310f9/>
+<csr-id-daed5047dd8b76f248d2d63c18d3f7ff3773f8f6/>
+<csr-id-176150022cc86e98f871a6fcd05df725bd9e3419/>
+<csr-id-1346aa09cabc0418fba1e929c3f6eac6508ee533/>
+<csr-id-1582729d2da6763217ab3106e56f2f2353ae4398/>
+
+### Chore
+
+ - <csr-id-e39430bbdba29d70ee0afbb0f62270189d8e74c7/> Add host_pid_file convenience function for locating wasmcloud host pid
+ - <csr-id-1ec12a7fa8af603a850bb1dbaca03c32d5f36ddd/> use http-server v0.22.0
+ - <csr-id-8199616e5e77d32137a319b54c2e7ee83e3c04b7/> suppress warning for new rust cfg check
+ - <csr-id-7e26ac135ff6e6f9678f21e44e9631734311c264/> update washboard version
+ - <csr-id-82cbef77367f1728773268c1ee52b98ac7f31dcf/> remove unused imports
+ - <csr-id-11cd438cc029c79495a4e50c9dbb3acb73be3df6/> comment-out HttpResponse until `call` is reenabled
+ - <csr-id-94bfb0e23d4f1f58b70500eaa635717a6ba83484/> partially update to NATS 0.35.1
+ - <csr-id-d3c0ca7643beab0fa002c6a4dedf724303bffcaa/> disable `call` functionality
+ - <csr-id-24e459251eaff69820180c8aaf7663ecc4e76b35/> remove warnings on windows
+ - <csr-id-a886882ae688dc4955c0d74188388f178f3b13dd/> Replace actor by component
+
+### Documentation
+
+ - <csr-id-56ef16b2a6d1e5f853e9e6dbe246d37535c2c61e/> Include proxy auth information in wash cli
+
+### New Features
+
+<csr-id-8e4b40218360e4b033f367c413eb6b53c786aca7/>
+<csr-id-9cb1b784fe7a8892d73bdb40d1172b1879fcd932/>
+<csr-id-4eba7f8b738ee83c53040cb22494f5b249cd79af/>
+
+ - <csr-id-832dced17224fc6a8e8cde6cb30cf42ee2c3c2e0/> include simple invocation in wash call tests
+ - <csr-id-1870276d4e99987dd7ba6804c1df078fa44e289e/> support new secret reference structure
+ - <csr-id-abd804417409bf79e41d4d310af1947efa31eca7/> add secrets subcommand for managing secrets references
+   This adds a set of commands for manually managing secrets references in
+   a wasmCloud deployment. It is effectively a wrapper around configuration
+   that properly formats and writes the data type to the config bucket.
+   
+   It also attempts to prevent you from interacting with secrets with the
+   config subcommands by checking the name of the configuration key and
+   redirecting you to the correct subcommand.
+ - <csr-id-77e0db9281aa94fbb253f869356942671c90f7fc/> add test for building rust provider in debug mode
+ - <csr-id-a570a3565e129fc13b437327eb1ba18835c69f57/> add Host level configurability for max_execution_time by flag and env variables
+   - Introduce humantime::Duration for capturing human readable input time.
+
+### Bug Fixes
+
+ - <csr-id-2cee7ba6619a3b861abca87722f462294b78042b/> fix build.rs cfg setting
+ - <csr-id-8491de37f699677f1ebea0f702cf660a177df5c2/> transposed args in call.rs
+   Noticed these were transposed when the output of the
+   `No component responded to your request...` error
+   message claimed the lattice was the component and the
+   component was the lattice.
+ - <csr-id-8329214d91f7b8876b8ced318ca380d262fb44e1/> correct integration test
+ - <csr-id-ef93bef6ee8a6822a07301557f8b18541489071b/> secrets reference representation
+ - <csr-id-82b6a4bcec6d94db3ad89cec3c1653f12b2fb90e/> add comment about use of multiple async-nats
+ - <csr-id-ec9659a915631134064d8e252b6c7d8b6bf322e1/> re-add wash call
+   This commit re-adds `wash call` with the existing functionality (no
+   improvements) that existed prior to the recent wrpc update.
+   
+   With this update, invoking simple components and HTTP components both
+   work, and tests have been re-enabled.
+ - <csr-id-e31d964421bfd2ca5246b9a2eed633c8cc49d7d6/> generate xkey with curve
+ - <csr-id-cc7b37df4892025fc5e6f1ca36d57284dd1c3a18/> better format of optional in error
+ - <csr-id-439ae1b2d38406647cbfe3a5a8effc0df173b890/> install nextest via normal means
+   The "nextest" branch of taiki-e/install-action does nothing but add
+   "nextest" to the default list of tools (see:
+   https://github.com/taiki-e/install-action/commit/cdf91dadbfbcd09d5ec3fe131167d4c7eb6e350b).
+   
+   Rather than maintain a completely different pinned hash, we should
+   just install nextest normally like any other tool.
+ - <csr-id-5df19307560354d3575edd3c6e902c02be6c5aba/> better failure output, optimistic lock file delete
+ - <csr-id-94188ea344d0507510f50f0f8d4e72fd2a204500/> enable `std` feature for `clap`
+ - <csr-id-8562aef2adac2f8471542ac6866bf7867049cae7/> increase windows stack size
+   `clap` has a few bugs that cause stacks to overflow on windows when
+   doing commands like walking the full arg tree (i.e. `--help`).
+   
+   Adopting a fix from one of the
+   issues (https://github.com/clap-rs/clap/issues/5134), we increase the
+   size of stack during build.
+ - <csr-id-81719ba5442b3422880768f9e8fec3f14b4ceede/> remove help about deprecated wash reg #2404
+ - <csr-id-759764db606a168104ef085bc64b947730140980/> avoid repeated downloads of wadm binary #2308
+ - <csr-id-c211e7c3422893ffabfd0cf2d67768644617ab7e/> remove wash up with manifest cleanup
+   This commit removes the cleanup that happens after `wash up
+   --wadm-manifest`, because in the single-host situation by the time
+   ctrl-c is received by `wash` it is *also* receieved by the child
+   process host. When this happens, most of the time the host is *already
+   gone* so all you get is "no responders" when trying to issue an
+   undeploy.
+   
+   There are a few ways around this but they all will likely require
+   modifying the host/other pieces so first we should probably remove the
+   application cleanup code and update the documentation to note that the
+   manifest can be undeployed/deleted manually before shutting down.
+
+### Other
+
+ - <csr-id-af742d076970001af13eaa241927db2ab8f0a9bb/> update wasmcloud to 1.1.0
+ - <csr-id-6724e2c3d1e5f1de91827a6e542415cef09a278c/> update wadm to 0.13.0
+ - <csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/> bump for test-util release
+   Bump wasmcloud-core v0.8.0, opentelemetry-nats v0.1.1, provider-archive v0.12.0, wasmcloud-runtime v0.3.0, wasmcloud-secrets-types v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, safety bump 8 crates
+   
+   SAFETY BUMP: wasmcloud-runtime v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, wasmcloud-provider-sdk v0.7.0, wash-cli v0.30.0, wash-lib v0.23.0
+ - <csr-id-702514d8db4366c29df8e6e20018af3b22c0446a/> use instances for examples
+   Replicas will soon be deprecated.
+
+### Refactor
+
+ - <csr-id-aa460011c243f363158f80952b386bb33992d3ea/> build.rs var naming for host
+ - <csr-id-c666ef50fecc1ee248bf78d486a915ee077e3b4a/> include name with secret config
+ - <csr-id-2ea22a28ca9fd1838fc03451f33d75690fc28f2a/> move SecretConfig into crate
+ - <csr-id-b56982f437209ecaff4fa6946f8fe4c3068a62cd/> address feedback, application name optional
+ - <csr-id-03f0ce7d5269c6230ae49812c7d3e71ab30310f9/> pass timeout to wrpc client
+ - <csr-id-daed5047dd8b76f248d2d63c18d3f7ff3773f8f6/> remove unused Arc
+
+### Test
+
+ - <csr-id-176150022cc86e98f871a6fcd05df725bd9e3419/> fix version assertion
+ - <csr-id-1346aa09cabc0418fba1e929c3f6eac6508ee533/> test config and secrets
+ - <csr-id-1582729d2da6763217ab3106e56f2f2353ae4398/> add test to ensure inventory labels are ordered
+
+### New Features (BREAKING)
+
+ - <csr-id-918d4dd341e33d2a88ef5c7453f735d03b6198a4/> support field on SecretRequest
+ - <csr-id-f027ce1a393f46fbf663277a11a1d81307af1267/> support generating xkeys
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 49 commits contributed to the release over the course of 45 calendar days.
+ - 46 days passed between releases.
+ - 49 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Add host_pid_file convenience function for locating wasmcloud host pid ([`e39430b`](https://github.com/wasmCloud/wasmCloud/commit/e39430bbdba29d70ee0afbb0f62270189d8e74c7))
+    - Update wasmcloud to 1.1.0 ([`af742d0`](https://github.com/wasmCloud/wasmCloud/commit/af742d076970001af13eaa241927db2ab8f0a9bb))
+    - Update wadm to 0.13.0 ([`6724e2c`](https://github.com/wasmCloud/wasmCloud/commit/6724e2c3d1e5f1de91827a6e542415cef09a278c))
+    - Include simple invocation in wash call tests ([`832dced`](https://github.com/wasmCloud/wasmCloud/commit/832dced17224fc6a8e8cde6cb30cf42ee2c3c2e0))
+    - Bump for test-util release ([`7cd2e71`](https://github.com/wasmCloud/wasmCloud/commit/7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4))
+    - Support field on SecretRequest ([`918d4dd`](https://github.com/wasmCloud/wasmCloud/commit/918d4dd341e33d2a88ef5c7453f735d03b6198a4))
+    - Fix build.rs cfg setting ([`2cee7ba`](https://github.com/wasmCloud/wasmCloud/commit/2cee7ba6619a3b861abca87722f462294b78042b))
+    - Build.rs var naming for host ([`aa46001`](https://github.com/wasmCloud/wasmCloud/commit/aa460011c243f363158f80952b386bb33992d3ea))
+    - Use http-server v0.22.0 ([`1ec12a7`](https://github.com/wasmCloud/wasmCloud/commit/1ec12a7fa8af603a850bb1dbaca03c32d5f36ddd))
+    - Suppress warning for new rust cfg check ([`8199616`](https://github.com/wasmCloud/wasmCloud/commit/8199616e5e77d32137a319b54c2e7ee83e3c04b7))
+    - Transposed args in call.rs ([`8491de3`](https://github.com/wasmCloud/wasmCloud/commit/8491de37f699677f1ebea0f702cf660a177df5c2))
+    - Correct integration test ([`8329214`](https://github.com/wasmCloud/wasmCloud/commit/8329214d91f7b8876b8ced318ca380d262fb44e1))
+    - Include name with secret config ([`c666ef5`](https://github.com/wasmCloud/wasmCloud/commit/c666ef50fecc1ee248bf78d486a915ee077e3b4a))
+    - Move SecretConfig into crate ([`2ea22a2`](https://github.com/wasmCloud/wasmCloud/commit/2ea22a28ca9fd1838fc03451f33d75690fc28f2a))
+    - Address feedback, application name optional ([`b56982f`](https://github.com/wasmCloud/wasmCloud/commit/b56982f437209ecaff4fa6946f8fe4c3068a62cd))
+    - Secrets reference representation ([`ef93bef`](https://github.com/wasmCloud/wasmCloud/commit/ef93bef6ee8a6822a07301557f8b18541489071b))
+    - Pass timeout to wrpc client ([`03f0ce7`](https://github.com/wasmCloud/wasmCloud/commit/03f0ce7d5269c6230ae49812c7d3e71ab30310f9))
+    - Remove unused Arc ([`daed504`](https://github.com/wasmCloud/wasmCloud/commit/daed5047dd8b76f248d2d63c18d3f7ff3773f8f6))
+    - Add comment about use of multiple async-nats ([`82b6a4b`](https://github.com/wasmCloud/wasmCloud/commit/82b6a4bcec6d94db3ad89cec3c1653f12b2fb90e))
+    - Re-add wash call ([`ec9659a`](https://github.com/wasmCloud/wasmCloud/commit/ec9659a915631134064d8e252b6c7d8b6bf322e1))
+    - Fix version assertion ([`1761500`](https://github.com/wasmCloud/wasmCloud/commit/176150022cc86e98f871a6fcd05df725bd9e3419))
+    - Generate xkey with curve ([`e31d964`](https://github.com/wasmCloud/wasmCloud/commit/e31d964421bfd2ca5246b9a2eed633c8cc49d7d6))
+    - Support generating xkeys ([`f027ce1`](https://github.com/wasmCloud/wasmCloud/commit/f027ce1a393f46fbf663277a11a1d81307af1267))
+    - Test config and secrets ([`1346aa0`](https://github.com/wasmCloud/wasmCloud/commit/1346aa09cabc0418fba1e929c3f6eac6508ee533))
+    - Support new secret reference structure ([`1870276`](https://github.com/wasmCloud/wasmCloud/commit/1870276d4e99987dd7ba6804c1df078fa44e289e))
+    - Add secrets subcommand for managing secrets references ([`abd8044`](https://github.com/wasmCloud/wasmCloud/commit/abd804417409bf79e41d4d310af1947efa31eca7))
+    - Use instances for examples ([`702514d`](https://github.com/wasmCloud/wasmCloud/commit/702514d8db4366c29df8e6e20018af3b22c0446a))
+    - Add test for building rust provider in debug mode ([`77e0db9`](https://github.com/wasmCloud/wasmCloud/commit/77e0db9281aa94fbb253f869356942671c90f7fc))
+    - Better format of optional in error ([`cc7b37d`](https://github.com/wasmCloud/wasmCloud/commit/cc7b37df4892025fc5e6f1ca36d57284dd1c3a18))
+    - Add Host level configurability for max_execution_time by flag and env variables ([`a570a35`](https://github.com/wasmCloud/wasmCloud/commit/a570a3565e129fc13b437327eb1ba18835c69f57))
+    - Improved the output of wash get inventory command, as outlined in issue #2398. Signed-off-by: ossfellow <masoudbahar@gmail.com> ([`8e4b402`](https://github.com/wasmCloud/wasmCloud/commit/8e4b40218360e4b033f367c413eb6b53c786aca7))
+    - Update washboard version ([`7e26ac1`](https://github.com/wasmCloud/wasmCloud/commit/7e26ac135ff6e6f9678f21e44e9631734311c264))
+    - Install nextest via normal means ([`439ae1b`](https://github.com/wasmCloud/wasmCloud/commit/439ae1b2d38406647cbfe3a5a8effc0df173b890))
+    - Remove unused imports ([`82cbef7`](https://github.com/wasmCloud/wasmCloud/commit/82cbef77367f1728773268c1ee52b98ac7f31dcf))
+    - Comment-out HttpResponse until `call` is reenabled ([`11cd438`](https://github.com/wasmCloud/wasmCloud/commit/11cd438cc029c79495a4e50c9dbb3acb73be3df6))
+    - Better failure output, optimistic lock file delete ([`5df1930`](https://github.com/wasmCloud/wasmCloud/commit/5df19307560354d3575edd3c6e902c02be6c5aba))
+    - Partially update to NATS 0.35.1 ([`94bfb0e`](https://github.com/wasmCloud/wasmCloud/commit/94bfb0e23d4f1f58b70500eaa635717a6ba83484))
+    - Disable `call` functionality ([`d3c0ca7`](https://github.com/wasmCloud/wasmCloud/commit/d3c0ca7643beab0fa002c6a4dedf724303bffcaa))
+    - Enable `std` feature for `clap` ([`94188ea`](https://github.com/wasmCloud/wasmCloud/commit/94188ea344d0507510f50f0f8d4e72fd2a204500))
+    - Upgrade `wrpc`, `async-nats`, `wasmtime` ([`9cb1b78`](https://github.com/wasmCloud/wasmCloud/commit/9cb1b784fe7a8892d73bdb40d1172b1879fcd932))
+    - Increase windows stack size ([`8562aef`](https://github.com/wasmCloud/wasmCloud/commit/8562aef2adac2f8471542ac6866bf7867049cae7))
+    - Adds flag to wash up to allow reading custom NATS config ([`4eba7f8`](https://github.com/wasmCloud/wasmCloud/commit/4eba7f8b738ee83c53040cb22494f5b249cd79af))
+    - Remove help about deprecated wash reg #2404 ([`81719ba`](https://github.com/wasmCloud/wasmCloud/commit/81719ba5442b3422880768f9e8fec3f14b4ceede))
+    - Avoid repeated downloads of wadm binary #2308 ([`759764d`](https://github.com/wasmCloud/wasmCloud/commit/759764db606a168104ef085bc64b947730140980))
+    - Add test to ensure inventory labels are ordered ([`1582729`](https://github.com/wasmCloud/wasmCloud/commit/1582729d2da6763217ab3106e56f2f2353ae4398))
+    - Remove wash up with manifest cleanup ([`c211e7c`](https://github.com/wasmCloud/wasmCloud/commit/c211e7c3422893ffabfd0cf2d67768644617ab7e))
+    - Remove warnings on windows ([`24e4592`](https://github.com/wasmCloud/wasmCloud/commit/24e459251eaff69820180c8aaf7663ecc4e76b35))
+    - Include proxy auth information in wash cli ([`56ef16b`](https://github.com/wasmCloud/wasmCloud/commit/56ef16b2a6d1e5f853e9e6dbe246d37535c2c61e))
+    - Replace actor by component ([`a886882`](https://github.com/wasmCloud/wasmCloud/commit/a886882ae688dc4955c0d74188388f178f3b13dd))
+</details>
+
+## v0.29.2 (2024-06-17)
+
+<csr-id-4100f5841caa80e23db787380e3e64748016e928/>
+<csr-id-8e73b54804e290f24499397f0dd7fc54dbd83a01/>
+<csr-id-353e0ca7761757fbd8f6e7b992d6aaa1d1fa15bd/>
+
+### Chore
+
+ - <csr-id-4100f5841caa80e23db787380e3e64748016e928/> update wadm to v0.12.1
+ - <csr-id-8e73b54804e290f24499397f0dd7fc54dbd83a01/> update to latest provider references
+ - <csr-id-353e0ca7761757fbd8f6e7b992d6aaa1d1fa15bd/> bump to v0.29.2 for wadm-client
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 4 commits contributed to the release over the course of 3 calendar days.
+ - 3 days passed between releases.
+ - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Wash up should inform user that wasmcloud is already running rather than bailing ([`904b499`](https://github.com/wasmCloud/wasmCloud/commit/904b4996544084d22029bbf4142482a1d05a1358))
+    - Update wadm to v0.12.1 ([`4100f58`](https://github.com/wasmCloud/wasmCloud/commit/4100f5841caa80e23db787380e3e64748016e928))
+    - Update to latest provider references ([`8e73b54`](https://github.com/wasmCloud/wasmCloud/commit/8e73b54804e290f24499397f0dd7fc54dbd83a01))
+    - Bump to v0.29.2 for wadm-client ([`353e0ca`](https://github.com/wasmCloud/wasmCloud/commit/353e0ca7761757fbd8f6e7b992d6aaa1d1fa15bd))
+</details>
+
+## v0.29.1 (2024-06-13)
+
+<csr-id-105fdb63b67485bf3de2b49ebc20a1d406a769e7/>
+<csr-id-ac0f3399de80770fd97c1cd2f622697228ddf2b3/>
+<csr-id-3cd6d232ed4359d69973dc6ee5a766115d0823d4/>
+<csr-id-6cc63eb91260bc44c79a7e7c4a208f679ac90792/>
+
+### Chore
+
+ - <csr-id-105fdb63b67485bf3de2b49ebc20a1d406a769e7/> bump wasmcloud to v1.0.4
+ - <csr-id-ac0f3399de80770fd97c1cd2f622697228ddf2b3/> bump to v0.29.1 for release
+ - <csr-id-3cd6d232ed4359d69973dc6ee5a766115d0823d4/> Apply cargo fmt
+ - <csr-id-6cc63eb91260bc44c79a7e7c4a208f679ac90792/> Replace actor references by component in wash-lib crate
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 4 commits contributed to the release.
+ - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Bump wasmcloud to v1.0.4 ([`105fdb6`](https://github.com/wasmCloud/wasmCloud/commit/105fdb63b67485bf3de2b49ebc20a1d406a769e7))
+    - Bump to v0.29.1 for release ([`ac0f339`](https://github.com/wasmCloud/wasmCloud/commit/ac0f3399de80770fd97c1cd2f622697228ddf2b3))
+    - Apply cargo fmt ([`3cd6d23`](https://github.com/wasmCloud/wasmCloud/commit/3cd6d232ed4359d69973dc6ee5a766115d0823d4))
+    - Replace actor references by component in wash-lib crate ([`6cc63eb`](https://github.com/wasmCloud/wasmCloud/commit/6cc63eb91260bc44c79a7e7c4a208f679ac90792))
+</details>
+
+## v0.29.0 (2024-06-12)
+
+<csr-id-7e7cbd74ba6713ebf6b9fab60ef533f46b6a840d/>
+<csr-id-7f0ac03e86a010cbeef3dc4410a40ad58e0c5d88/>
+<csr-id-c26f2096d9f5ad8dd3aaec6de56395dfab1a5a04/>
+<csr-id-d3188d0c9990e39d9f63e0ed154fac7568956af5/>
+<csr-id-ed98b8981bea38b43cf05195adf081dd38f275a1/>
+<csr-id-7b8800121b7112d3ce44a7f4b939a5d654c35a61/>
+<csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/>
+<csr-id-df6551c7990795b92c48b2b8a0062b8949410e7d/>
+<csr-id-c5b3ad049817edab6d809ffafd51d4ca6fe4db79/>
+
+### Chore
+
+ - <csr-id-7e7cbd74ba6713ebf6b9fab60ef533f46b6a840d/> Add an explicit note about leftover wadm processes
+   Sometimes, if a wadm process is leftover after a host exits, it can
+   block the usage of wadm in future starts of an existing host. The
+   symptom for this is wadm failing during wash startup with a "Couldn't
+   download wadm: Text file busy" error.
+   
+   The quickest fix for this issue is stopping the running wadm processes,
+   but it's hard to *know* that might be the problem without intuiting
+   what text file might be busy/what might be wrong.
+   
+   This commit adds a message to the failure to download just in case
+   this specific case occurs.
+ - <csr-id-7f0ac03e86a010cbeef3dc4410a40ad58e0c5d88/> update washboard version
+ - <csr-id-c26f2096d9f5ad8dd3aaec6de56395dfab1a5a04/> bump wasmcloud v1.0.3
+ - <csr-id-d3188d0c9990e39d9f63e0ed154fac7568956af5/> removed Name field from get inventory output and washboard output
+ - <csr-id-ed98b8981bea38b43cf05195adf081dd38f275a1/> update wadm to v0.12.0
+ - <csr-id-7b8800121b7112d3ce44a7f4b939a5d654c35a61/> update nkeys to 0.4
+   Update to nkeys 0.4 in preparation for using xkeys in the host.
+ - <csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/> Replace actor references by component in crates
+   Rename wash-cli wash-build tests name and references
+   
+   Fix nix flake path to Cargo.lock file
+   
+   Fix format
+   
+   Rename in wash-cli tests
+ - <csr-id-df6551c7990795b92c48b2b8a0062b8949410e7d/> bump wadm to v0.11.2
+ - <csr-id-c5b3ad049817edab6d809ffafd51d4ca6fe4db79/> Remove deprecated registry_ping
+
+### Documentation
+
+ - <csr-id-edb7fc7b2bfdb68ef2ecc5effdfcc25ae2ef35dd/> update DEVELOPMENT.md with steps for local testing
+   Added detailed steps to the DEVELOPMENT.md file to guide new contributors on how to build and test their changes locally.
+
+### New Features
+
+<csr-id-2aa6086f5ef482cd596e022f8ef1649238ccb4f4/>
+<csr-id-358a616f4b0e542228ba143aa8c238adf35ad483/>
+<csr-id-6018d3730b3d78e21b064b7c71d5478ed86399b6/>
+<csr-id-4b38dddf2295316677cbe75695eb4bffadfe1d18/>
+<csr-id-ffbd0310c5e35f9e10b29674b1d0f63473687be7/>
+
+ - <csr-id-fd79e99ef8d8ef14f3e7efae0b3904dade4d7fc3/> display max instances count in washboard output
+   feat(wash-cli): display max instances count in wash get inventory output
+ - <csr-id-89e0f5ba79fe4c9d1c2485c2f1e28c28885caa4c/> enable custom TLS CA usage
+ - <csr-id-d859c74dcded69bfbb505663ba2ee1b1429eb465/> Allows for pushing binary wit packages with wash
+   This rounds out a feature I didn't think we'd need for a while
+ - <csr-id-10e1d72fd1e899b01e38f842b9a4c7c3048f2657/> add `wash app validate` subcommand
+   This commit adds a `wash app validate` subcommand which can be used to
+   check and suggest fixes for WADM manifests.
+   
+   As the breadth of possible errors with a manifest is wide, it's
+   difficult to enumerate and check every possible error, but validate
+   serves as a starting point in being able to give users proactive
+   advice on WADM manifests.
+   
+   For now, it checks:
+   - interface names (ex. typos, misnamed host-supported interfaces)
+
+### Bug Fixes
+
+ - <csr-id-bf10b48299bb26a51b0c9181230c672e72a2282c/> continue down if pidfile is missing
+ - <csr-id-5089dd67da8a9b70201ed8d07cc0d6b22c6d5872/> fix reference to http-jsonify-rust component
+
+### New Features (BREAKING)
+
+ - <csr-id-adbced40c06ec035f3f8b5d0fd062f20d622e0ee/> add --skip-wait option to scale subcommand
+   This command changes the default for scale commands, ensuring that
+   waiting is the default and a `--skip-wait` option is present.
+ - <csr-id-ca98cd65d943b3ba5b39d7ece6983635f5a300e4/> fix #1740, support purging with wash down
+ - <csr-id-cd8fc8fcb8c35c18522101736df00804fcb2e56b/> use new wadm-client, update texts
+ - <csr-id-08b5e1e92c411d2d913537937aec3a8ca5ccb405/> Updates wash to use the new OCI spec for wasm
+   This is backwards compatible in that it can still pull the old manifest
+   type, but it now only pushes the new manifest type. For probably all of
+   our current users, they shouldn't notice this change, but it is
+   technically a breaking change to start pushing in a different way
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-c341171ccacc6170bf85fe0267facbb94af534ac/> Removes need for world flag
+   Based on feedback from users, we found out that the world isn't actually
+   needed for pushing binary wit. This was updated in the oci-wasm library
+   that was also updated in this PR. This removes the world flag as it is
+   no longer needed
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 29 commits contributed to the release over the course of 27 calendar days.
+ - 32 days passed between releases.
+ - 26 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Enable undeploying models by file name ([`ffbd031`](https://github.com/wasmCloud/wasmCloud/commit/ffbd0310c5e35f9e10b29674b1d0f63473687be7))
+    - Bump wasmcloud-tracing v0.5.0, wasmcloud-provider-sdk v0.6.0, wash-cli v0.29.0 ([`b22d338`](https://github.com/wasmCloud/wasmCloud/commit/b22d338d0d61f8a438c4d6ea5e8e5cd26116ade5))
+    - Bump wascap v0.15.0, wasmcloud-core v0.7.0, wash-lib v0.22.0, wasmcloud-tracing v0.5.0, wasmcloud-provider-sdk v0.6.0, wash-cli v0.29.0, safety bump 5 crates ([`2e38cd4`](https://github.com/wasmCloud/wasmCloud/commit/2e38cd45adef18d47af71b87ca456a25edb2f53a))
+    - Add --skip-wait option to scale subcommand ([`adbced4`](https://github.com/wasmCloud/wasmCloud/commit/adbced40c06ec035f3f8b5d0fd062f20d622e0ee))
+    - Continue down if pidfile is missing ([`bf10b48`](https://github.com/wasmCloud/wasmCloud/commit/bf10b48299bb26a51b0c9181230c672e72a2282c))
+    - Fix #1740, support purging with wash down ([`ca98cd6`](https://github.com/wasmCloud/wasmCloud/commit/ca98cd65d943b3ba5b39d7ece6983635f5a300e4))
+    - Use new wadm-client, update texts ([`cd8fc8f`](https://github.com/wasmCloud/wasmCloud/commit/cd8fc8fcb8c35c18522101736df00804fcb2e56b))
+    - Add an explicit note about leftover wadm processes ([`7e7cbd7`](https://github.com/wasmCloud/wasmCloud/commit/7e7cbd74ba6713ebf6b9fab60ef533f46b6a840d))
+    - Update washboard version ([`7f0ac03`](https://github.com/wasmCloud/wasmCloud/commit/7f0ac03e86a010cbeef3dc4410a40ad58e0c5d88))
+    - Bump wasmcloud v1.0.3 ([`c26f209`](https://github.com/wasmCloud/wasmCloud/commit/c26f2096d9f5ad8dd3aaec6de56395dfab1a5a04))
+    - Removed Name field from get inventory output and washboard output ([`d3188d0`](https://github.com/wasmCloud/wasmCloud/commit/d3188d0c9990e39d9f63e0ed154fac7568956af5))
+    - Display max instances count in washboard output ([`fd79e99`](https://github.com/wasmCloud/wasmCloud/commit/fd79e99ef8d8ef14f3e7efae0b3904dade4d7fc3))
+    - Enable custom TLS CA usage ([`89e0f5b`](https://github.com/wasmCloud/wasmCloud/commit/89e0f5ba79fe4c9d1c2485c2f1e28c28885caa4c))
+    - Update wadm to v0.12.0 ([`ed98b89`](https://github.com/wasmCloud/wasmCloud/commit/ed98b8981bea38b43cf05195adf081dd38f275a1))
+    - Removes need for world flag ([`c341171`](https://github.com/wasmCloud/wasmCloud/commit/c341171ccacc6170bf85fe0267facbb94af534ac))
+    - Update nkeys to 0.4 ([`7b88001`](https://github.com/wasmCloud/wasmCloud/commit/7b8800121b7112d3ce44a7f4b939a5d654c35a61))
+    - Update DEVELOPMENT.md with steps for local testing ([`edb7fc7`](https://github.com/wasmCloud/wasmCloud/commit/edb7fc7b2bfdb68ef2ecc5effdfcc25ae2ef35dd))
+    - Allows for pushing binary wit packages with wash ([`d859c74`](https://github.com/wasmCloud/wasmCloud/commit/d859c74dcded69bfbb505663ba2ee1b1429eb465))
+    - Add `wash app validate` subcommand ([`10e1d72`](https://github.com/wasmCloud/wasmCloud/commit/10e1d72fd1e899b01e38f842b9a4c7c3048f2657))
+    - Add support for `wash up --wadm-manifest` ([`2aa6086`](https://github.com/wasmCloud/wasmCloud/commit/2aa6086f5ef482cd596e022f8ef1649238ccb4f4))
+    - Add --replace option to `wash app deploy` ([`358a616`](https://github.com/wasmCloud/wasmCloud/commit/358a616f4b0e542228ba143aa8c238adf35ad483))
+    - Replace actor references by component in crates ([`20c72ce`](https://github.com/wasmCloud/wasmCloud/commit/20c72ce0ed423561ae6dbd5a91959bec24ff7cf3))
+    - Enable deleting manifests by file name ([`6018d37`](https://github.com/wasmCloud/wasmCloud/commit/6018d3730b3d78e21b064b7c71d5478ed86399b6))
+    - Fix reference to http-jsonify-rust component ([`5089dd6`](https://github.com/wasmCloud/wasmCloud/commit/5089dd67da8a9b70201ed8d07cc0d6b22c6d5872))
+    - Updates wash to use the new OCI spec for wasm ([`08b5e1e`](https://github.com/wasmCloud/wasmCloud/commit/08b5e1e92c411d2d913537937aec3a8ca5ccb405))
+    - Bump wadm to v0.11.2 ([`df6551c`](https://github.com/wasmCloud/wasmCloud/commit/df6551c7990795b92c48b2b8a0062b8949410e7d))
+    - Add option to skip certificate validation for the OCI registry connection ([`f9aa387`](https://github.com/wasmCloud/wasmCloud/commit/f9aa3879d273ae9b44f5ee09a724f76df9859d7a))
+    - Add support for specifying multiple labels ([`4b38ddd`](https://github.com/wasmCloud/wasmCloud/commit/4b38dddf2295316677cbe75695eb4bffadfe1d18))
+    - Remove deprecated registry_ping ([`c5b3ad0`](https://github.com/wasmCloud/wasmCloud/commit/c5b3ad049817edab6d809ffafd51d4ca6fe4db79))
+</details>
+
+## v0.28.1 (2024-05-10)
+
+<csr-id-a4a772fb475c1f76215b7fe7aece9c2335bd0c69/>
+
+### Chore
+
+ - <csr-id-a4a772fb475c1f76215b7fe7aece9c2335bd0c69/> bump patch for release
+
+### Bug Fixes
+
+ - <csr-id-1b4faabea11ba6b77b75e34f6892f979be0adde5/> Make wash push returned digest based on the pushed manifest
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 2 commits contributed to the release.
+ - 1 day passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Bump patch for release ([`a4a772f`](https://github.com/wasmCloud/wasmCloud/commit/a4a772fb475c1f76215b7fe7aece9c2335bd0c69))
+    - Make wash push returned digest based on the pushed manifest ([`1b4faab`](https://github.com/wasmCloud/wasmCloud/commit/1b4faabea11ba6b77b75e34f6892f979be0adde5))
+</details>
+
 ## v0.28.0 (2024-05-08)
 
 <csr-id-4dc6c775d7780f6811435de0f2cd5401ce21d675/>
@@ -18,6 +1427,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-25eeb94fe4cae339ea6a2a1eddb44c90d2cf84ae/>
 <csr-id-f2d58a462f909d3b1293c43b43a8cbeca154cf99/>
 <csr-id-b2e3158614f3cebf1896c3d5539a69ded97e03fe/>
+<csr-id-ac3ec843f22b2946df8e2b52735a13569eaa78d6/>
 
 ### Chore
 
@@ -111,7 +1521,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 27 commits contributed to the release over the course of 20 calendar days.
+ - 28 commits contributed to the release over the course of 20 calendar days.
  - 20 days passed between releases.
  - 26 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -123,6 +1533,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Bump provider-archive v0.10.2, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0 ([`73c0ef0`](https://github.com/wasmCloud/wasmCloud/commit/73c0ef0bbe2f6b525655939d2cd30740aef4b6bc))
     - Release and update CHANGELOG ([`ac3ec84`](https://github.com/wasmCloud/wasmCloud/commit/ac3ec843f22b2946df8e2b52735a13569eaa78d6))
     - Bump provider-archive v0.10.1, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0, safety bump 5 crates ([`75a2e52`](https://github.com/wasmCloud/wasmCloud/commit/75a2e52f52690ba143679c90237851ebd07e153f))
     - Reg test failure ([`305e9b6`](https://github.com/wasmCloud/wasmCloud/commit/305e9b6615d2a2473caccd3dbcbcacbdec02c3ac))
@@ -181,7 +1592,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-f7582160d5bd9d7f967ada2045239bc94653cb9b/> registry image URL parsing
    When URLs are submitted to `wash push` as the first argument, unless a
    `--registry` is provided, the URL is parsed as an
-   `oci_distribution::Reference`.
+   `oci_client::Reference`.
    
    It is possible for a URL like `ghcr.io/wasmCloud/img:v0.1.0` to
    correctly parse *yet* fail the the `url == image.whole()` test,
@@ -190,7 +1601,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    
    This commit performs the lowercasing of the URL and registry (if
    supplied) consistently in `resolve_artifact_ref()`, ensuring that the
-   comparison works, and `oci_distribution::Reference`s that correctly
+   comparison works, and `oci_client::Reference`s that correctly
    parse are used.
 
 ### Reverted
@@ -994,8 +2405,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 26 commits contributed to the release over the course of 4 calendar days.
- - 25 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 20 commits contributed to the release over the course of 4 calendar days.
+ - 4 days passed between releases.
+ - 19 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -1025,6 +2437,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Bump eslint-plugin-unicorn ([`82e8bc2`](https://github.com/wasmCloud/wasmCloud/commit/82e8bc2e8c2cd6ddcd88232c503241c024dc1ec1))
     - Bump eslint-plugin-react-refresh ([`c5845c0`](https://github.com/wasmCloud/wasmCloud/commit/c5845c0aed2d12174986f6cfa875f89704cb04d7))
     - Merge pull request #807 from rvolosatovs/merge/wash ([`f2bc010`](https://github.com/wasmCloud/wasmCloud/commit/f2bc010110d96fc21bc3502798543b7d5b68b1b5))
+</details>
+
+## v0.0.0-rc1 (2023-10-30)
+
+<csr-id-dfad0be609868cbd0f0ce97d7d9238b41996b5fc/>
+<csr-id-6343ebfdf155cbfb3b70b1f2cbdcf38651946010/>
+<csr-id-413e395b60d3ee0c187ec398a2cb6429fd27d009/>
+<csr-id-3d47e91e7a836ff04fd7bc809a036fadc42c01a7/>
+<csr-id-abc075095e5df96e0b3c155bf1afb8dbeea4a6e5/>
+<csr-id-d1ee13ed7c1668b55f4644b1c1673f521ba9d9f8/>
+
+### Chore
+
+ - <csr-id-dfad0be609868cbd0f0ce97d7d9238b41996b5fc/> integrate `wash` into the workspace
+
+### Other
+
+ - <csr-id-6343ebfdf155cbfb3b70b1f2cbdcf38651946010/> move nextest config to root
+ - <csr-id-413e395b60d3ee0c187ec398a2cb6429fd27d009/> revert to upstream `wash` dev doc
+ - <csr-id-3d47e91e7a836ff04fd7bc809a036fadc42c01a7/> move completion doc to `wash-cli` crate
+ - <csr-id-abc075095e5df96e0b3c155bf1afb8dbeea4a6e5/> build for Windows msvc
+   Unfortunately, `wash` cannot be built for mingw due to
+   https://github.com/rust-lang/rust/issues/92212
+
+### Refactor
+
+ - <csr-id-d1ee13ed7c1668b55f4644b1c1673f521ba9d9f8/> reorder target-specific dep
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 6 commits contributed to the release.
+ - 6 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
     - Move nextest config to root ([`6343ebf`](https://github.com/wasmCloud/wasmCloud/commit/6343ebfdf155cbfb3b70b1f2cbdcf38651946010))
     - Revert to upstream `wash` dev doc ([`413e395`](https://github.com/wasmCloud/wasmCloud/commit/413e395b60d3ee0c187ec398a2cb6429fd27d009))
     - Move completion doc to `wash-cli` crate ([`3d47e91`](https://github.com/wasmCloud/wasmCloud/commit/3d47e91e7a836ff04fd7bc809a036fadc42c01a7))

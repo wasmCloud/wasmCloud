@@ -1,0 +1,20 @@
+package wasi:cli@0.2.1;
+
+interface stdout {
+  use wasi:io/streams@0.2.1.{output-stream};
+
+  get-stdout: func() -> output-stream;
+}
+
+interface stderr {
+  use wasi:io/streams@0.2.1.{output-stream};
+
+  get-stderr: func() -> output-stream;
+}
+
+interface stdin {
+  use wasi:io/streams@0.2.1.{input-stream};
+
+  get-stdin: func() -> input-stream;
+}
+

@@ -5,25 +5,26 @@ use std::collections::HashMap;
 
 use anyhow::Context as _;
 use async_nats::{ConnectOptions, Event};
-use provider::invocation_context;
 use provider::ProviderInitState;
-use tower::ServiceExt;
 use tracing::{error, info, warn};
-use wrpc_transport::{AcceptedInvocation, IncomingInvocation, OutgoingInvocation};
+use wasmcloud_core::secrets::SecretValue;
 
 pub mod error;
-pub mod interfaces;
 pub mod provider;
 
 #[cfg(feature = "otel")]
 pub mod otel;
 
-pub use provider::{get_connection, load_host_data, run_provider, ProviderConnection};
+pub use anyhow;
+pub use provider::{
+    get_connection, load_host_data, run_provider, serve_provider_exports, ProviderConnection,
+};
+pub use tracing_subscriber;
 pub use wasmcloud_core as core;
 /// Re-export of types from [`wasmcloud_core`]
 pub use wasmcloud_core::{
-    HealthCheckRequest, HealthCheckResponse, InterfaceLinkDefinition, WitFunction, WitInterface,
-    WitNamespace, WitPackage,
+    HealthCheckRequest, HealthCheckResponse, HostData, InterfaceLinkDefinition, WitFunction,
+    WitInterface, WitNamespace, WitPackage,
 };
 pub use wasmcloud_tracing;
 
@@ -104,6 +105,23 @@ pub struct Context {
     pub tracing: HashMap<String, String>,
 }
 
+impl Context {
+    /// Get link name from the request.
+    ///
+    /// While link name should in theory *always* be present, it is not natively included in [`Context`] yet,
+    /// so we must retrieve it from headers on the request.
+    ///
+    /// Note that in certain (older) versions of wasmCloud it is possible for the link name to be missing
+    /// though incredibly unlikely (basically, due to a bug). In the event that the link name was *not*
+    /// properly stored on the context 'default' (the default link name) is returned as the link name.
+    #[must_use]
+    pub fn link_name(&self) -> &str {
+        self.tracing
+            .get("link-name")
+            .map_or("default", String::as_str)
+    }
+}
+
 /// Configuration of a link that is passed to a provider
 #[non_exhaustive]
 pub struct LinkConfig<'a> {
@@ -120,6 +138,9 @@ pub struct LinkConfig<'a> {
 
     /// Configuration provided to the provider (either as the target or the source)
     pub config: &'a HashMap<String, String>,
+
+    /// Secrets provided to the provider (either as the target or the source)
+    pub secrets: &'a HashMap<String, SecretValue>,
 
     /// WIT metadata for the link
     pub wit_metadata: (&'a WitNamespace, &'a WitPackage, &'a Vec<WitInterface>),
@@ -140,6 +161,12 @@ pub trait ProviderInitConfig: Send + Sync {
     /// This normally consists of named configuration that were set for the provider,
     /// merged, and received from the host *before* the provider has started initialization.
     fn get_config(&self) -> &HashMap<String, String>;
+
+    /// Retrieve the secrets for the provider available at initialization time.
+    ///
+    /// The return value is a map of secret names to their values and should be treated as
+    /// sensitive information, avoiding logging.
+    fn get_secrets(&self) -> &HashMap<String, SecretValue>;
 }
 
 impl ProviderInitConfig for &ProviderInitState {
@@ -149,6 +176,61 @@ impl ProviderInitConfig for &ProviderInitState {
 
     fn get_config(&self) -> &HashMap<String, String> {
         &self.config
+    }
+
+    fn get_secrets(&self) -> &HashMap<String, SecretValue> {
+        &self.secrets
+    }
+}
+
+/// Objects that can act as provider configuration updates
+pub trait ProviderConfigUpdate: Send + Sync {
+    /// Get the configuration values associated with the configuration update
+    fn get_values(&self) -> &HashMap<String, String>;
+}
+
+impl ProviderConfigUpdate for &HashMap<String, String> {
+    fn get_values(&self) -> &HashMap<String, String> {
+        self
+    }
+}
+
+/// Present information related to a link delete, normally used as part of the [`Provider`] interface,
+/// for providers that must process a link deletion in some way.
+pub trait LinkDeleteInfo: Send + Sync {
+    /// Retrieve the source of the link
+    ///
+    /// If the provider receiving this LinkDeleteInfo is the target, then this is
+    /// the workload that was invoking the provider (most often a component)
+    ///
+    /// If the provider receiving this LinkDeleteInfo is the source, then this is
+    /// the ID of the provider itself.
+    fn get_source_id(&self) -> &str;
+
+    /// Retrieve the target of the link
+    ///
+    /// If the provider receiving this LinkDeleteInfo is the target, then this is the ID of the provider itself.
+    ///
+    /// If the provider receiving this LinkDeleteInfo is the source (ex. a HTTP server provider which
+    /// must invoke other components/providers), then the target in this case is the thing *being invoked*,
+    /// likely a component.
+    fn get_target_id(&self) -> &str;
+
+    /// Retrieve the link name
+    fn get_link_name(&self) -> &str;
+}
+
+impl LinkDeleteInfo for &InterfaceLinkDefinition {
+    fn get_source_id(&self) -> &str {
+        &self.source_id
+    }
+
+    fn get_target_id(&self) -> &str {
+        &self.target
+    }
+
+    fn get_link_name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -164,6 +246,28 @@ pub trait Provider<E = anyhow::Error>: Sync {
         init_config: impl ProviderInitConfig,
     ) -> impl Future<Output = Result<(), E>> + Send {
         let _ = init_config;
+        async { Ok(()) }
+    }
+
+    /// Process a configuration update for the provider
+    ///
+    /// Providers are configured with zero or more config names which the
+    /// host combines into a single config that they are provided with.
+    ///
+    /// As named configurations change over time, the host makes updates to the
+    /// bundles of configuration that are relevant to this provider, and this method
+    /// helps the provider handle those changes.
+    ///
+    /// For more information on *how* these updates are delivered, see `run_provider()`
+    ///
+    /// # Arguments
+    ///
+    /// * `update` - The relevant configuration update
+    fn on_config_update(
+        &self,
+        update: impl ProviderConfigUpdate,
+    ) -> impl Future<Output = Result<(), E>> + Send {
+        let _ = update;
         async { Ok(()) }
     }
 
@@ -197,27 +301,19 @@ pub trait Provider<E = anyhow::Error>: Sync {
         async { Ok(()) }
     }
 
-    /// Notify the provider that the link is dropped
-    fn delete_link(&self, component_id: &str) -> impl Future<Output = Result<(), E>> + Send {
-        let _ = component_id;
-        async { Ok(()) }
-    }
-
     /// Notify the provider that the link is dropped where the provider is the target
     fn delete_link_as_target(
         &self,
-        component_id: &str,
+        _info: impl LinkDeleteInfo,
     ) -> impl Future<Output = Result<(), E>> + Send {
-        let _ = component_id;
         async { Ok(()) }
     }
 
     /// Notify the provider that the link is dropped where the provider is the source
     fn delete_link_as_source(
         &self,
-        component_id: &str,
+        _info: impl LinkDeleteInfo,
     ) -> impl Future<Output = Result<(), E>> + Send {
-        let _ = component_id;
         async { Ok(()) }
     }
 
@@ -238,68 +334,5 @@ pub trait Provider<E = anyhow::Error>: Sync {
     /// Handle system shutdown message
     fn shutdown(&self) -> impl Future<Output = Result<(), E>> + Send {
         async { Ok(()) }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct WrpcClient(pub wasmcloud_core::wrpc::Client);
-
-impl wrpc_transport::Client for WrpcClient {
-    type Context = Option<Context>;
-    type Subject = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Subject;
-    type Subscriber = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Subscriber;
-    type Transmission = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Transmission;
-    type Acceptor = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Acceptor;
-    type Invocation = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Invocation;
-    type InvocationStream<Ctx, T, Tx: wrpc_transport::Transmitter> =
-        <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::InvocationStream<Ctx, T, Tx>;
-
-    fn serve<Ctx, T, Tx, S, Fut>(
-        &self,
-        instance: &str,
-        name: &str,
-        svc: S,
-    ) -> impl Future<Output = anyhow::Result<Self::InvocationStream<Ctx, T, Tx>>>
-    where
-        Tx: wrpc_transport::Transmitter,
-        S: tower::Service<
-                IncomingInvocation<Self::Context, Self::Subscriber, Self::Acceptor>,
-                Future = Fut,
-            > + Send
-            + Clone
-            + 'static,
-        Fut: Future<Output = Result<AcceptedInvocation<Ctx, T, Tx>, anyhow::Error>> + Send,
-    {
-        self.0.serve(
-            instance,
-            name,
-            svc.map_request(
-                |IncomingInvocation {
-                     context,
-                     payload,
-                     param_subject,
-                     error_subject,
-                     handshake_subject,
-                     subscriber,
-                     acceptor,
-                 }: IncomingInvocation<Option<_>, _, _>| {
-                    IncomingInvocation {
-                        context: context.as_ref().map(invocation_context),
-                        payload,
-                        param_subject,
-                        error_subject,
-                        handshake_subject,
-                        subscriber,
-                        acceptor,
-                    }
-                },
-            ),
-        )
-    }
-
-    fn new_invocation(
-        &self,
-    ) -> OutgoingInvocation<Self::Invocation, Self::Subscriber, Self::Subject> {
-        self.0.new_invocation()
     }
 }

@@ -1,2 +1,4 @@
-keyvalue-inmemory
-keyvalue-inmemory.par.gz
+custom-template
+custom-template.par.gz
+build/*
+

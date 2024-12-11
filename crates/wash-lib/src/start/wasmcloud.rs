@@ -250,10 +250,10 @@ fn wasmcloud_url(version: &str) -> String {
     #[cfg(target_os = "macos")]
     let os = "apple-darwin";
 
-    #[cfg(all(target_os = "linux", not(target_arch = "riscv64gc")))]
+    #[cfg(all(target_os = "linux", not(target_arch = "riscv64")))]
     let os = "unknown-linux-musl";
 
-    #[cfg(all(target_os = "linux", target_arch = "riscv64gc"))]
+    #[cfg(all(target_os = "linux", target_arch = "riscv64"))]
     let os = "unknown-linux-gnu";
 
     #[cfg(target_os = "windows")]
@@ -289,6 +289,7 @@ fn check_version(version: &str) -> Result<()> {
 #[cfg(test)]
 mod test {
     use super::{check_version, ensure_wasmcloud, wasmcloud_url, MINIMUM_WASMCLOUD_VERSION};
+    use crate::common::CommandGroupUsage;
     use crate::start::{
         ensure_nats_server, ensure_wasmcloud_for_os_arch_pair, find_wasmcloud_binary,
         is_bin_installed, start_nats_server, start_wasmcloud_host, NatsConfig, NATS_SERVER_BINARY,
@@ -328,8 +329,8 @@ mod test {
 
     #[tokio::test]
     #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
-    async fn can_download_wasmcloud_burrito() {
-        let download_dir = temp_dir().join("can_download_wasmcloud_burrito");
+    async fn can_download_wasmcloud_host() {
+        let download_dir = temp_dir().join("can_download_wasmcloud_host");
         let res = ensure_wasmcloud_for_os_arch_pair(WASMCLOUD_VERSION, &download_dir)
             .await
             .expect("Should be able to download tarball");
@@ -400,15 +401,18 @@ mod test {
 
         // Install and start NATS server for this test
         let nats_port = find_open_port().await?;
+        let nats_ws_port = find_open_port().await?;
         assert!(ensure_nats_server(NATS_SERVER_VERSION, &install_dir)
             .await
             .is_ok());
         assert!(is_bin_installed(&install_dir, NATS_SERVER_BINARY).await);
-        let config = NatsConfig::new_standalone("127.0.0.1", nats_port, None);
+        let mut config = NatsConfig::new_standalone("127.0.0.1", nats_port, None);
+        config.websocket_port = nats_ws_port;
         let mut nats_child = start_nats_server(
             install_dir.join(NATS_SERVER_BINARY),
             std::process::Stdio::null(),
             config,
+            CommandGroupUsage::UseParent,
         )
         .await
         .expect("Unable to start nats process");

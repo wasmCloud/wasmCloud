@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-tracing"
-version = "0.4.0"
+version = "0.11.0"
 description = "wasmCloud tracing functionality"
 
 authors.workspace = true
@@ -17,6 +17,8 @@ otel = [
     "opentelemetry-appender-tracing",
     "tracing-opentelemetry",
     "opentelemetry-otlp",
+    "wasmcloud-core/otel",
+    "wasmcloud-core/rustls-native-certs",
 ]
 
 [dependencies]
@@ -39,9 +41,10 @@ opentelemetry-otlp = { workspace = true, features = [
     "metrics",
     "reqwest-client",
 ], optional = true }
-serde = { workspace = true, features = ["derive"] }
+reqwest-0_11 = { workspace = true, features = ["rustls-tls"] }
 tracing = { workspace = true, features = ["log"] }
-tracing-futures = { workspace = true, features = ["default"] }
+tracing-appender = { workspace = true }
+tracing-flame = { workspace = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, features = [
     "ansi",
@@ -49,4 +52,4 @@ tracing-subscriber = { workspace = true, features = [
     "fmt",
     "json",
 ] }
-wasmcloud-core = { workspace = true, features = ["otel"] }
+wasmcloud-core = { workspace = true }

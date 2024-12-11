@@ -53,13 +53,13 @@ then
 	wash ctl link MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M wasmcloud:httpserver PORT=8080
 
 	echo ""
-	echo "Actors and providers linked and starting, try running one of the following commands to test your KVCounter!"
+	echo "Components and providers linked and starting, try running one of the following commands to test your KVCounter!"
 	echo "curl localhost:8080/mycounter
 wash ctl call MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E HandleRequest '{\"method\": \"GET\", \"path\": \"/mycounter\", \"body\": \"\", \"queryString\":\"\", \"header\":{}}'"
 else
 	echo "No hosts found, please run the wasmcloud binary, or proceed with the following commands in the REPL:"
 	echo ""
-	echo "ctl start actor wasmcloud.azurecr.io/kvcounter:0.2.0
+	echo "ctl start component wasmcloud.azurecr.io/kvcounter:0.2.0
 ctl start provider wasmcloud.azurecr.io/redis:0.10.0
 ctl link MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E VAZVC4RX54J2NVCMCW7BPCAHGGG5XZXDBXFUMDUXGESTMQEJLC3YVZWB wasmcloud:keyvalue URL=redis://localhost:6379
 ctl start provider wasmcloud.azurecr.io/httpserver:0.10.0

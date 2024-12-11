@@ -1,0 +1,49 @@
+[package]
+name = "messaging-image-processor-worker"
+edition = "2021"
+version = "0.1.0"
+description = """
+Worker that reads message queue and performs image processing tasks
+"""
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = { workspace = true, features = [ "default" ] }
+bytes = { workspace = true, features = [ "default", "serde" ] }
+image = { workspace = true, features = [ "bmp", "png", "jpeg", "gif", "webp", "tiff" ] }
+multipart = { workspace = true, features = [ "server" ] }
+serde = { workspace = true, features = [ "std", "derive" ] }
+serde_json = { workspace = true, features = [ "std" ] }
+url = { workspace = true, features = [ "serde" ] }
+uuid = { workspace = true, features = [ "std", "v7" ] }
+wit-bindgen = { workspace = true, features = [ "default" ] }
+
+[dev-dependencies]
+merkle_hash = { workspace = true, features = [ "encode" ] }
+reqwest = { workspace = true, features = ["rustls-tls", "json"] }
+serde = { workspace = true, features = [ "std", "derive", "alloc" ] }
+testcontainers-modules = { workspace = true, features = [ "postgres" ]  }
+tokio = { workspace = true, features = [ "macros", "rt-multi-thread", "process", "io-std", "io-util"] }
+async-nats = { workspace = true, features = [ "ring" ] }
+
+[workspace.dependencies]
+anyhow = { version = "1", default-features = false }
+bytes = { version = "1", default-features = false }
+chrono = { version = "0.4", default-features = false }
+image = { version = "0.25", default-features = false }
+include_dir = { version = "0.7.4", default-features = false}
+merkle_hash = { version = "3.7.0", default-features = false }
+multipart = { version = "0.18", default-features = false }
+reqwest = { version = "0.12", default-features = false }
+serde = { version = "1", default-features = false }
+serde_json = { version = "1", default-features = false }
+testcontainers-modules = { version = "0.9.0", default-features = false }
+tokio = { version = "1", default-features = false }
+url = { version = "2", default-features = false }
+uuid = { version = "1", default-features = false }
+wit-bindgen = { version = "0.32", default-features = false }
+async-nats = { version = "0.35.1", default-features = false }

@@ -1,5 +1,3 @@
-use core::num::NonZeroUsize;
-
 use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Context;
@@ -10,6 +8,7 @@ use tracing::instrument;
 use ulid::Ulid;
 use uuid::Uuid;
 use wascap::jwt;
+use wasmcloud_control_interface::Link;
 
 fn format_component_claims(claims: &jwt::Claims<jwt::Component>) -> serde_json::Value {
     let issuer = &claims.issuer;
@@ -70,7 +69,7 @@ pub fn component_scale_failed(
     host_id: impl AsRef<str>,
     image_ref: impl AsRef<str>,
     component_id: impl AsRef<str>,
-    max_instances: NonZeroUsize,
+    max_instances: u32,
     error: &anyhow::Error,
 ) -> serde_json::Value {
     if let Some(claims) = claims {
@@ -95,33 +94,60 @@ pub fn component_scale_failed(
     }
 }
 
-pub fn linkdef_set(
-    link: &wasmcloud_control_interface::InterfaceLinkDefinition,
-) -> serde_json::Value {
+pub fn linkdef_set(link: &Link) -> serde_json::Value {
     json!({
-        "source_id": link.source_id,
-        "target": link.target,
-        "name": link.name,
-        "wit_namespace": link.wit_namespace,
-        "wit_package": link.wit_package,
-        "interfaces": link.interfaces,
-        "source_config": link.source_config,
-        "target_config": link.target_config,
+        "source_id": link.source_id(),
+        "target": link.target(),
+        "name": link.name(),
+        "wit_namespace": link.wit_namespace(),
+        "wit_package": link.wit_package(),
+        "interfaces": link.interfaces(),
+        "source_config": link.source_config(),
+        "target_config": link.target_config(),
+    })
+}
+
+pub fn linkdef_set_failed(link: &Link, error: &anyhow::Error) -> serde_json::Value {
+    json!({
+        "source_id": link.source_id(),
+        "target": link.target(),
+        "name": link.name(),
+        "wit_namespace": link.wit_namespace(),
+        "wit_package": link.wit_package(),
+        "interfaces": link.interfaces(),
+        "source_config": link.source_config(),
+        "target_config": link.target_config(),
+        "error": format!("{error:#}"),
     })
 }
 
 pub fn linkdef_deleted(
     source_id: impl AsRef<str>,
+    target: Option<&String>,
     name: impl AsRef<str>,
     wit_namespace: impl AsRef<str>,
     wit_package: impl AsRef<str>,
+    interfaces: Option<&Vec<String>>,
 ) -> serde_json::Value {
-    json!({
-        "source_id": source_id.as_ref(),
-        "name": name.as_ref(),
-        "wit_namespace": wit_namespace.as_ref(),
-        "wit_package": wit_package.as_ref(),
-    })
+    // Target and interfaces aren't known if the link didn't exist, so we omit them from the
+    // event data in that case.
+    if let (Some(target), Some(interfaces)) = (target, interfaces) {
+        json!({
+            "source_id": source_id.as_ref(),
+            "target": target,
+            "name": name.as_ref(),
+            "wit_namespace": wit_namespace.as_ref(),
+            "wit_package": wit_package.as_ref(),
+            "interfaces": interfaces,
+        })
+    } else {
+        json!({
+            "source_id": source_id.as_ref(),
+            "name": name.as_ref(),
+            "wit_namespace": wit_namespace.as_ref(),
+            "wit_package": wit_package.as_ref(),
+        })
+    }
 }
 
 pub fn provider_started(

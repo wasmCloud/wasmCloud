@@ -1,0 +1,7 @@
+/// The producer interface is used to send messages to a channel/topic.
+interface producer {
+    use types.{client, message, error, topic};
+    
+    /// Sends the message using the given client.
+    send: func(c: borrow<client>, topic: topic, message: message) -> result<_, error>;
+}

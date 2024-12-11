@@ -9,19 +9,27 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
 use base64::Engine as _;
+use bytes::Bytes;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
 use vaultrs::client::{Client as _, VaultClient, VaultClientSettings};
 use wasmcloud_provider_sdk::{
-    get_connection, propagate_trace_for_ctx, run_provider, Context, LinkConfig, Provider,
+    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
+    LinkDeleteInfo, Provider,
 };
+use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 
 use crate::config::Config;
 
-use exports::wrpc::keyvalue;
-
-wit_bindgen_wrpc::generate!();
+mod bindings {
+    wit_bindgen_wrpc::generate!({
+        with: {
+            "wrpc:keyvalue/store@0.2.0-draft": generate,
+        }
+    });
+}
+use bindings::exports::wrpc::keyvalue;
 
 type Result<T, E = keyvalue::store::Error> = core::result::Result<T, E>;
 
@@ -172,18 +180,29 @@ pub struct KvVaultProvider {
 }
 
 impl KvVaultProvider {
+    pub fn name() -> &'static str {
+        "keyvalue-vault-provider"
+    }
+
     pub async fn run() -> anyhow::Result<()> {
+        let host_data = load_host_data().context("failed to load host data")?;
+        let flamegraph_path = host_data
+            .config
+            .get("FLAMEGRAPH_PATH")
+            .map(String::from)
+            .or_else(|| std::env::var("PROVIDER_KEYVALUE_VAULT_FLAMEGRAPH_PATH").ok());
+        initialize_observability!(Self::name(), flamegraph_path);
         let provider = Self::default();
-        let shutdown = run_provider(provider.clone(), "keyvalue-vault-provider")
+        let shutdown = run_provider(provider.clone(), KvVaultProvider::name())
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        serve(
-            &connection.get_wrpc_client(connection.provider_key()),
-            provider,
-            shutdown,
-        )
-        .await
+        let wrpc = connection
+            .get_wrpc_client(connection.provider_key())
+            .await?;
+        serve_provider_exports(&wrpc, provider, shutdown, bindings::serve)
+            .await
+            .context("failed to serve provider exports")
     }
 
     /// Retrieve a client for a given context (determined by `source_id`)
@@ -208,12 +227,7 @@ impl KvVaultProvider {
     /// If the stored value is a plain string, returns the plain value
     /// All other values are returned as serialized json
     #[instrument(level = "debug", skip(ctx, self))]
-    async fn get(
-        &self,
-        ctx: Option<Context>,
-        path: String,
-        key: String,
-    ) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, ctx: Option<Context>, path: String, key: String) -> Result<Option<Bytes>> {
         propagate_trace_for_ctx!(ctx);
         let client = self.get_client(ctx).await?;
         if let Some(mut secret) = client.read_secret(&path).await? {
@@ -228,7 +242,7 @@ impl KvVaultProvider {
                                 anyhow!(err).context("failed to decode secret value")
                             ))
                         })?;
-                    Ok(Some(value))
+                    Ok(Some(value.into()))
                 }
                 None => Ok(None),
             }
@@ -272,7 +286,7 @@ impl KvVaultProvider {
         ctx: Option<Context>,
         path: String,
         key: String,
-        value: Vec<u8>,
+        value: Bytes,
     ) -> Result<()> {
         propagate_trace_for_ctx!(ctx);
         let client = self.get_client(ctx).await?;
@@ -350,7 +364,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvVaultProvider {
         context: Option<Context>,
         bucket: String,
         key: String,
-    ) -> anyhow::Result<Result<Option<Vec<u8>>>> {
+    ) -> anyhow::Result<Result<Option<Bytes>>> {
         propagate_trace_for_ctx!(context);
         Ok(self.get(context, bucket, key).await)
     }
@@ -361,7 +375,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvVaultProvider {
         context: Option<Context>,
         bucket: String,
         key: String,
-        value: Vec<u8>,
+        value: Bytes,
     ) -> anyhow::Result<Result<()>> {
         propagate_trace_for_ctx!(context);
         Ok(self.set(context, bucket, key, value).await)
@@ -390,20 +404,20 @@ impl Provider for KvVaultProvider {
     #[instrument(level = "debug", skip_all, fields(source_id))]
     async fn receive_link_config_as_target(
         &self,
-        LinkConfig {
+        link_config: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
+        let LinkConfig {
             source_id,
             link_name,
-            config,
             ..
-        }: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
+        } = link_config;
         debug!(
            %source_id,
            %link_name,
             "adding link for component",
         );
 
-        let config = match Config::from_values(config) {
+        let config = match Config::from_link_config(&link_config) {
             Ok(config) => config,
             Err(e) => {
                 error!(
@@ -435,11 +449,12 @@ impl Provider for KvVaultProvider {
     }
 
     /// Handle notification that a link is dropped - close the connection
-    #[instrument(level = "debug", skip(self))]
-    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_source_id();
         let mut aw = self.components.write().await;
-        if let Some(client) = aw.remove(source_id) {
-            debug!("deleting link for component [{source_id}]");
+        if let Some(client) = aw.remove(component_id) {
+            debug!(component_id, "deleting link for component");
             drop(client);
         }
         Ok(())

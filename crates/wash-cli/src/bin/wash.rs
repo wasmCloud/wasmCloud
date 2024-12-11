@@ -1,27 +1,15 @@
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
+use std::io::{stdout, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::bail;
 use clap::{self, Arg, Command, FromArgMatches, Parser, Subcommand};
+use console::style;
+use crossterm::style::Stylize;
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
-use wash_cli::app::{self, AppCliCommand};
-use wash_cli::build::{self, BuildCommand};
-use wash_cli::call::{self, CallCli};
-use wash_cli::common;
-use wash_cli::completions::{self, CompletionOpts};
-use wash_cli::config::{self, ConfigCliCommand};
-use wash_cli::ctx::{self, CtxCommand};
-use wash_cli::dev::{self, DevCommand};
-use wash_cli::down::{self, DownCommand};
-use wash_cli::drain;
-use wash_cli::generate::{self, NewCliCommand};
-use wash_cli::keys::{self, KeysCliCommand};
-use wash_cli::par::{self, ParCliCommand};
-use wash_cli::plugin::{self, PluginCommand};
-use wash_cli::ui::{self, UiCommand};
-use wash_cli::up::{self, UpCommand};
-use wash_cli::util::ensure_plugin_dir;
+use wash_cli::wit::WitCommand;
 use wash_lib::cli::capture::{CaptureCommand, CaptureSubcommand};
 use wash_lib::cli::claims::ClaimsCliCommand;
 use wash_lib::cli::get::GetCommand;
@@ -38,7 +26,74 @@ use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::drain::Drain as DrainSelection;
 use wash_lib::plugin::subcommand::{DirMapping, SubcommandRunner};
 
-const HELP: &str = r"
+use wash_cli::app::{self, AppCliCommand};
+use wash_cli::build::{self, BuildCommand};
+use wash_cli::call::{self, CallCli};
+use wash_cli::cmd::config::{self, ConfigCliCommand};
+use wash_cli::cmd::dev::{self, DevCommand};
+use wash_cli::cmd::up::{self, UpCommand};
+use wash_cli::common;
+use wash_cli::completions::{self, CompletionOpts};
+use wash_cli::config::{NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_HOST_VERSION};
+use wash_cli::ctx::{self, CtxCommand};
+use wash_cli::down::{self, DownCommand};
+use wash_cli::drain;
+use wash_cli::generate::{self, NewCliCommand};
+use wash_cli::keys::{self, KeysCliCommand};
+use wash_cli::par::{self, ParCliCommand};
+use wash_cli::plugin::{self, PluginCommand};
+use wash_cli::secrets::{self, SecretsCliCommand};
+use wash_cli::style::WASH_CLI_STYLE;
+use wash_cli::ui::{self, UiCommand};
+use wash_cli::util::ensure_plugin_dir;
+
+#[derive(Clone)]
+struct HelpTopic {
+    name: &'static str,
+    commands: Vec<(&'static str, &'static str)>,
+}
+
+impl Display for HelpTopic {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        const PADDING_AFTER_LONGEST_SPACES: usize = 3;
+        const DEFAULT_PADDING_START: usize = 25;
+        writeln!(f, "{}", self.name.green().bold())?;
+        let longest_command_length = self
+            .commands
+            .iter()
+            .map(|(name, _)| name.len())
+            .max()
+            .unwrap_or(DEFAULT_PADDING_START)
+            + PADDING_AFTER_LONGEST_SPACES;
+
+        for (name, desc) in &self.commands {
+            let padding = " ".repeat(longest_command_length - name.len());
+            writeln!(f, "  {}{}{}", name.blue(), padding, desc)?;
+        }
+        Ok(())
+    }
+}
+
+struct HelpTopics(Vec<HelpTopic>);
+
+impl Display for HelpTopics {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for topic in &self.0 {
+            writeln!(f, "{}", topic)?;
+        }
+        Ok(())
+    }
+}
+
+impl From<Vec<HelpTopic>> for HelpTopics {
+    fn from(topics: Vec<HelpTopic>) -> Self {
+        HelpTopics(topics)
+    }
+}
+
+fn create_colored_help() -> String {
+    let banner = style(
+        r"
 _________________________________________________________________________________
                                _____ _                 _    _____ _          _ _
                               / ____| |               | |  / ____| |        | | |
@@ -47,58 +102,139 @@ ________________________________________________________________________________
   \ V  V / (_| \__ \ | | | | | |____| | (_) | |_| | (_| |  ____) | | | |  __/ | |
    \_/\_/ \__,_|___/_| |_| |_|\_____|_|\___/ \__,_|\__,_| |_____/|_| |_|\___|_|_|
 _________________________________________________________________________________
+",
+    )
+    .green()
+    .bold();
 
-Interact and manage wasmCloud applications, projects, and runtime environments
+    let description =
+        "Interact and manage wasmCloud applications, projects, and runtime environments".green();
 
-Usage: wash [OPTIONS] <COMMAND>
+    let usage_description = format!("{} {}", "Usage:".green(), "[OPTIONS] <COMMAND>".blue());
 
-Build:
-  new          Create a new project from a template
-  build        Build (and sign) a wasmCloud component or capability provider
-  dev          Start a developer loop to hot-reload a local wasmCloud component
-  inspect      Inspect a capability provider or Wasm component for signing information and interfaces
-  par          Create, inspect, and modify capability provider archive files
+    let command_descriptions = HelpTopics::from([
+        HelpTopic {
+            name: "Build:",
+            commands: vec![
+                ("new", "Create a new project from a template or git repository"),
+                ("build", "Build (and sign) a wasmCloud component or capability provider"),
+                ("dev", "Start a developer loop to hot-reload a local wasmCloud component"),
+                (
+                    "inspect",
+                    "Inspect a Wasm component or capability provider for signing information and interfaces",
+                ),
+                (
+                    "par",
+                    "Create, inspect, and modify capability provider archive files",
+                ),
+                (
+                    "wit",
+                    "Create wit packages and fetch wit dependencies for a component",
+                ),
+            ],
+        },
+        HelpTopic {
+            name: "Run:",
+            commands: vec![
+                ("up", "Bootstrap a local wasmCloud environment"),
+                (
+                    "down",
+                    "Tear down a local wasmCloud environment (launched with wash up)",
+                ),
+                ("app", "Manage declarative applications and deployments (wadm)"),
+                ("spy", "Spy on all invocations a component sends and receives"),
+                ("ui", "Serve a web UI for wasmCloud"),
+            ],
+        },
+        HelpTopic {
+            name: "Iterate:",
+            commands: vec![
+                ("get", "Get information about different running wasmCloud resources"),
+                ("start", "Start a component or capability provider"),
+                (
+                    "scale",
+                    "Scale a component running in a host to a certain level of concurrency",
+                ),
+                ("stop", "Stop a component, capability provider, or host"),
+                (
+                    "update",
+                    "Update a component running in a host to newer image reference",
+                ),
+                ("link", "Link one component to another on a set of interfaces"),
+                ("call", "Invoke a simple function on a component running in a wasmCloud host"),
+                ("label", "Label (or un-label) a host with a key=value label pair"),
+                (
+                    "config",
+                    "Create configuration for components, capability providers and links",
+                ),
+                (
+                    "secrets",
+                    "Create secret references for components, capability providers and links",
+                ),
+            ],
+        },
+        HelpTopic {
+            name: "Publish:",
+            commands: vec![
+                ("pull", "Pull an artifact from an OCI compliant registry"),
+                ("push", "Push an artifact to an OCI compliant registry"),
+            ],
+        },
+        HelpTopic {
+            name: "Configure:",
+            commands: vec![
+                ("completions", "Generate shell completions for wash"),
+                ("ctx", "Manage wasmCloud host configuration contexts"),
+                ("drain", "Manage contents of local wasmCloud caches"),
+                ("keys", "Generate and manage signing keys"),
+                ("claims", "Generate and manage JWTs for wasmCloud components and capability providers"),
+                ("plugin", "Manage wash plugins"),
+            ],
+        },
+        HelpTopic {
+            name: "Options:",
+            commands: vec![
+                (
+                    "-o, --output <OUTPUT>",
+                    "Specify output format (text or json) [default: text]",
+                ),
+                (
+                    "--experimental",
+                    "Whether or not to enable experimental features [default: false]",
+                ),
+                ("-h, --help", "Print help"),
+                ("-V, --version", "Print version"),
+            ],
+        },
+    ].to_vec());
 
-Run:
-  up           Bootstrap a local wasmCloud environment
-  down         Tear down a local wasmCloud environment (launched with wash up)
-  app          Manage declarative applications and deployments (wadm)
-  spy          Spy on all invocations a component sends and receives
-  ui           Serve a web UI for wasmCloud
+    format!(
+        r#"
+{banner}
 
-Iterate:
-  get          Get information about different running wasmCloud resources
-  start        Start a component or capability provider
-  scale        Scale a component running in a host to a certain level of concurrency
-  stop         Stop a component, capability provider, or host
-  update       Update a component running in a host to newer image reference
-  link         Link one component to another on a set of interfaces
-  call         Invoke a simple function on a component running in a wasmCloud host
-  label        Label (or un-label) a host with a key=value label pair
-  config       Create configuration for components, capability providers and links
+{description}
 
-Publish:
-  pull         Pull an artifact from an OCI compliant registry
-  push         Push an artifact to an OCI compliant registry
-  reg          Perform operations on an OCI registry
+{usage_description}
 
-Configure:
-  completions  Generate shell completions for wash
-  ctx          Manage wasmCloud host configuration contexts
-  drain        Manage contents of local wasmCloud caches
-  keys         Utilities for generating and managing signing keys
-  claims       Generate and manage JWTs for wasmCloud components and capability providers
-  plugin       Manage wash plugins
+{command_descriptions}
+"#
+    )
+}
 
-Options:
-  -o, --output <OUTPUT>  Specify output format (text or json) [default: text]
-  --experimental         Whether or not to enable experimental features [default: false]
-  -h, --help             Print help
-  -V, --version          Print version
-";
+/// Helper function to display the version of all the binaries wash runs
+fn version() -> String {
+    format!(
+        "         v{}\n├ nats-server {}\n├ wadm        {}\n└ wasmcloud   {}",
+        clap::crate_version!(),
+        NATS_SERVER_VERSION,
+        WADM_VERSION,
+        WASMCLOUD_HOST_VERSION
+    )
+}
 
 #[derive(Debug, Clone, Parser)]
-#[clap(name = "wash", version, override_help = HELP)]
+#[clap(name = "wash", version = version(), override_help = create_colored_help())]
+#[command(styles = WASH_CLI_STYLE)]
 struct Cli {
     #[clap(
         short = 'o',
@@ -118,6 +254,14 @@ struct Cli {
         global = true
     )]
     pub(crate) experimental: bool,
+
+    #[clap(
+        long = "help-markdown",
+        conflicts_with = "help",
+        hide = true,
+        global = true
+    )]
+    help_markdown: bool,
 
     #[clap(subcommand)]
     command: CliCommand,
@@ -139,7 +283,7 @@ enum CliCommand {
     /// Capture and debug cluster invocations and state
     #[clap(name = "capture")]
     Capture(CaptureCommand),
-    /// Generate shell completions
+    /// Generate shell completions for wash
     #[clap(name = "completions")]
     Completions(CompletionOpts),
     /// Generate and manage JWTs for wasmCloud components and capability providers
@@ -154,7 +298,7 @@ enum CliCommand {
     /// Start a developer loop to hot-reload a local wasmCloud component
     #[clap(name = "dev")]
     Dev(DevCommand),
-    /// Tear down a wasmCloud environment launched with wash up
+    /// Tear down a local wasmCloud environment (launched with wash up)
     #[clap(name = "down")]
     Down(DownCommand),
     /// Manage contents of local wasmCloud caches
@@ -163,16 +307,16 @@ enum CliCommand {
     /// Get information about different running wasmCloud resources
     #[clap(name = "get", subcommand)]
     Get(GetCommand),
-    /// Inspect a capability provider or Wasm component for signing information and interfaces
+    /// Inspect a Wasm component or capability provider for signing information and interfaces
     #[clap(name = "inspect")]
     Inspect(InspectCliCommand),
-    /// Utilities for generating and managing signing keys
+    /// Generate and manage signing keys
     #[clap(name = "keys", alias = "key", subcommand)]
     Keys(KeysCliCommand),
     /// Link one component to another on a set of interfaces
     #[clap(name = "link", alias = "links", subcommand)]
     Link(LinkCommand),
-    /// Create a new project from a template
+    /// Create a new project from a template or git repository
     #[clap(name = "new", subcommand)]
     New(NewCliCommand),
     /// Create, inspect, and modify capability provider archive files
@@ -187,6 +331,9 @@ enum CliCommand {
     /// Pull an artifact from an OCI compliant registry
     #[clap(name = "pull")]
     RegPull(RegistryPullCommand),
+    /// Create secret references for components, capability providers and links
+    #[clap(name = "secrets", alias = "secret", subcommand)]
+    Secrets(SecretsCliCommand),
     /// Spy on all invocations a component sends and receives
     #[clap(name = "spy")]
     Spy(SpyCommand),
@@ -205,12 +352,15 @@ enum CliCommand {
     /// Update a component running in a host to newer image reference
     #[clap(name = "update", subcommand)]
     Update(UpdateCommand),
-    /// Bootstrap a wasmCloud environment
+    /// Bootstrap a local wasmCloud environment
     #[clap(name = "up")]
     Up(UpCommand),
     /// Serve a web UI for wasmCloud
     #[clap(name = "ui")]
     Ui(UiCommand),
+    /// Create wit packages and fetch wit dependencies for a component
+    #[clap(name = "wit", subcommand)]
+    Wit(WitCommand),
 }
 
 #[tokio::main]
@@ -354,6 +504,12 @@ async fn main() {
 
     let output_kind = cli.output;
 
+    // Implements clap_markdown for markdown generation of command line documentation. Most straightforward way to invoke is probably `wash app get --help-markdown > help.md`
+    if cli.help_markdown {
+        clap_markdown::print_help_markdown::<Cli>();
+        std::process::exit(0);
+    };
+
     // Whether or not to append `success: true` to the output JSON. For now, we only omit it for `wash config get`.
     let append_json_success = !matches!(
         cli.command,
@@ -408,6 +564,7 @@ async fn main() {
         CliCommand::Scale(scale_cli) => {
             common::scale_cmd::handle_command(scale_cli, output_kind).await
         }
+        CliCommand::Secrets(secrets_cli) => secrets::handle_command(secrets_cli, output_kind).await,
         CliCommand::Start(start_cli) => {
             common::start_cmd::handle_command(start_cli, output_kind).await
         }
@@ -420,9 +577,14 @@ async fn main() {
         }
         CliCommand::Up(up_cli) => up::handle_command(up_cli, output_kind).await,
         CliCommand::Ui(ui_cli) => ui::handle_command(ui_cli, output_kind).await,
+        CliCommand::Wit(wit_cli) => wit_cli.run().await,
     };
 
-    std::process::exit(match res {
+    // Use buffered writes to stdout preventing a broken pipe error in case this program has been
+    // piped to another program (e.g. 'wash dev | jq') and CTRL^C has been pressed.
+    let mut stdout_buf = BufWriter::new(stdout().lock());
+
+    let exit_code: i32 = match res {
         Ok(out) => {
             match output_kind {
                 OutputKind::Json => {
@@ -432,15 +594,19 @@ async fn main() {
                     if append_json_success {
                         map.insert("success".to_string(), json!(true));
                     }
-                    println!("\n{}", serde_json::to_string_pretty(&map).unwrap());
+                    let _ = writeln!(
+                        stdout_buf,
+                        "\n{}",
+                        serde_json::to_string_pretty(&map).unwrap()
+                    );
                     0
                 }
                 OutputKind::Text => {
-                    println!("\n{}", out.text);
+                    let _ = writeln!(stdout_buf, "\n{}", out.text);
                     // on the first non-error, non-json use of wash, print info about shell completions
                     match completions::first_run_suggestion() {
                         Ok(Some(suggestion)) => {
-                            println!("\n{suggestion}");
+                            let _ = writeln!(stdout_buf, "\n{suggestion}");
                             0
                         }
                         Ok(None) => {
@@ -487,7 +653,10 @@ async fn main() {
             }
             1
         }
-    })
+    };
+
+    let _ = stdout_buf.flush();
+    std::process::exit(exit_code);
 }
 
 fn experimental_error_message(command: &str) -> anyhow::Result<CommandOutput> {

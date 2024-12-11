@@ -11,7 +11,7 @@ impl HostRng {
     #[inline]
     #[must_use]
     pub fn random32() -> u32 {
-        crate::wasi::random::random::get_random_u64() as _
+        ::wasi::random::random::get_random_u64() as _
     }
 
     /// Generate a v4-format guid in the form "nnnnnnnn-nnnn-nnnn-nnnn-nnnnnnnnnnnn"
@@ -19,7 +19,7 @@ impl HostRng {
     #[cfg(feature = "uuid")]
     #[must_use]
     pub fn generate_guid() -> Uuid {
-        let buf = uuid::Bytes::try_from(crate::wasi::random::random::get_random_bytes(16))
+        let buf = uuid::Bytes::try_from(::wasi::random::random::get_random_bytes(16))
             .expect("invalid amount of bytes generated");
         uuid::Builder::from_random_bytes(buf).into_uuid()
     }
@@ -41,16 +41,16 @@ impl crate::RngCore for HostRng {
 
     #[inline]
     fn next_u64(&mut self) -> u64 {
-        crate::wasi::random::random::get_random_u64()
+        ::wasi::random::random::get_random_u64()
     }
 
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         let n = dest.len();
         if usize::BITS <= u64::BITS || n <= u64::MAX as _ {
-            dest.copy_from_slice(&crate::wasi::random::random::get_random_bytes(n as _));
+            dest.copy_from_slice(&::wasi::random::random::get_random_bytes(n as _));
         } else {
             let (head, tail) = dest.split_at_mut(u64::MAX as _);
-            head.copy_from_slice(&crate::wasi::random::random::get_random_bytes(u64::MAX));
+            head.copy_from_slice(&::wasi::random::random::get_random_bytes(u64::MAX));
             // TODO: Optimize
             self.fill_bytes(tail);
         }

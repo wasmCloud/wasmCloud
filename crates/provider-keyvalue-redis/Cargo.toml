@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-keyvalue-redis"
-version = "0.24.1"
+version = "0.28.2"
 
 authors.workspace = true
 categories.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-futures = { workspace = true }
+bytes = { workspace = true }
 redis = { workspace = true, features = [
     "aio",
     "connection-manager",
@@ -23,7 +23,7 @@ wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wit-bindgen-wrpc = { workspace = true }
 
 [dev-dependencies]
-async-nats = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
 tempfile = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true, features = ["v4", "fast-rng"] }

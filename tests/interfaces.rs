@@ -1,4 +1,12 @@
-#![cfg(feature = "providers")]
+#![cfg(all(
+    feature = "provider-blobstore-fs",
+    feature = "provider-blobstore-s3",
+    feature = "provider-http-client",
+    feature = "provider-http-server",
+    feature = "provider-keyvalue-redis",
+    feature = "provider-keyvalue-vault",
+    feature = "provider-messaging-nats",
+))]
 
 use core::str::{self, FromStr as _};
 use core::time::Duration;
@@ -74,7 +82,7 @@ async fn interfaces() -> anyhow::Result<()> {
         .context("failed to construct Redis connection manager")?;
 
     // Build client for interacting with the lattice
-    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client.clone())
+    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client)
         .lattice(LATTICE.to_string())
         .build();
     // Build the host
@@ -195,68 +203,55 @@ async fn interfaces() -> anyhow::Result<()> {
             let rust_keyvalue_redis_url = rust_keyvalue_redis.url();
             let rust_keyvalue_vault_url = rust_keyvalue_vault.url();
             let rust_messaging_nats_url = rust_messaging_nats.url();
+            let host_id = host_key.public_key();
             try_join!(
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_blobstore_fs.subject,
+                    host_id: &host_id,
                     provider_id: &rust_blobstore_fs_id,
-                    url: &rust_blobstore_fs_url,
+                    provider_ref: rust_blobstore_fs_url.as_str(),
                     config: vec![],
                 }),
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_blobstore_s3.subject,
+                    host_id: &host_id,
                     provider_id: &rust_blobstore_s3_id,
-                    url: &rust_blobstore_s3_url,
+                    provider_ref: rust_blobstore_s3_url.as_str(),
                     config: vec![],
                 }),
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_http_client.subject,
+                    host_id: &host_id,
                     provider_id: &rust_http_client_id,
-                    url: &rust_http_client_url,
+                    provider_ref: rust_http_client_url.as_str(),
                     config: vec![],
                 }),
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_http_server.subject,
+                    host_id: &host_id,
                     provider_id: &rust_http_server_id,
-                    url: &rust_http_server_url,
+                    provider_ref: rust_http_server_url.as_str(),
                     config: vec![],
                 }),
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_keyvalue_redis.subject,
+                    host_id: &host_id,
                     provider_id: &rust_keyvalue_redis_id,
-                    url: &rust_keyvalue_redis_url,
+                    provider_ref: rust_keyvalue_redis_url.as_str(),
                     config: vec![],
                 }),
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_keyvalue_vault.subject,
+                    host_id: &host_id,
                     provider_id: &rust_keyvalue_vault_id,
-                    url: &rust_keyvalue_vault_url,
+                    provider_ref: rust_keyvalue_vault_url.as_str(),
                     config: vec![],
                 }),
                 assert_start_provider(StartProviderArgs {
                     client: &ctl_client,
-                    lattice: LATTICE,
-                    host_key: &host_key,
-                    provider_key: &rust_messaging_nats.subject,
+                    host_id: &host_id,
                     provider_id: &rust_messaging_nats_id,
-                    url: &rust_messaging_nats_url,
+                    provider_ref: rust_messaging_nats_url.as_str(),
                     config: vec![],
                 }),
             )
@@ -265,29 +260,29 @@ async fn interfaces() -> anyhow::Result<()> {
         async {
             try_join!(
                 async {
-                    // Scale pinger
                     assert_scale_component(
                         &ctl_client,
-                        &host.host_key(),
+                        &host.host_key().public_key(),
                         format!("file://{RUST_INTERFACES_REACTOR}"),
                         INTERFACES_REACTOR_ID,
                         None,
                         5,
                         Vec::new(),
+                        Duration::from_secs(10),
                     )
                     .await
                     .context("failed to scale `interface_reactor` component")
                 },
                 async {
-                    // Scale ponger
                     assert_scale_component(
                         &ctl_client,
-                        &host.host_key(),
+                        &host.host_key().public_key(),
                         format!("file://{RUST_INTERFACES_HANDLER_REACTOR_PREVIEW2}"),
                         INTERFACES_HANDLER_REACTOR_ID,
                         None,
                         5,
                         Vec::new(),
+                        Duration::from_secs(10),
                     )
                     .await
                     .context("failed to scale `interface_handler_reactor` component")
@@ -346,7 +341,11 @@ async fn interfaces() -> anyhow::Result<()> {
         "default",
         "wasi",
         "keyvalue",
-        vec!["atomics".to_string(), "store".to_string()],
+        vec![
+            "atomics".to_string(),
+            "store".to_string(),
+            "batch".to_string(),
+        ],
         vec![],
         vec![keyvalue_redis_config_name],
     )
@@ -433,7 +432,7 @@ async fn interfaces() -> anyhow::Result<()> {
         r#"{{"min":42,"max":4242,"config_key":"test-config-data","authority":"localhost:{http_port}"}}"#,
     );
     redis::Cmd::set("foo", "bar")
-        .query_async(&mut redis_conn)
+        .query_async::<_, ()>(&mut redis_conn)
         .await
         .context("failed to set `foo` key in Redis")?;
     vaultrs::kv2::set(
@@ -511,7 +510,7 @@ async fn interfaces() -> anyhow::Result<()> {
     ensure!(config_value.is_none());
     ensure!(all_config == []);
     ensure!(ping == "pong");
-    ensure!(long_value == "1234567890".repeat(1000));
+    ensure!(long_value == "1234567890".repeat(10000));
     ensure!(meaning_of_universe == 42);
     ensure!(split == ["hi", "there", "friend"]);
     ensure!(is_same);

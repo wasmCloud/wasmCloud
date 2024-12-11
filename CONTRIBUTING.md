@@ -11,6 +11,7 @@ to help get your contribution accepted.
   - [Pull Requests](#pull-requests)
     - [PR Lifecycle](#pr-lifecycle)
       - [Documentation PRs](#documentation-prs)
+      - [Conventional Commits](#conventional-commits)
   - [Reporting a Security Issue](#reporting-a-security-issue)
   - [Developer Certificate of Origin](#developer-certificate-of-origin)
   - [Support Channels](#support-channels)
@@ -48,6 +49,8 @@ Like any good open source project, we use Pull Requests (PRs) to track code chan
    - It is preferred, but not required, to have a PR tied to a specific issue. There can be
      circumstances where if it is a quick fix then an issue might be overkill. The details provided
      in the PR description would suffice in this case.
+   - It is preferred, but not required, to use [Conventional Commits][conventional-commits]. In the case
+     that your commits do not match the conventional commit standards, maintainers will help where possible.
 2. Triage
    - The maintainer in charge of triaging will apply the proper labels for the issue. This should
      include at least a `bug` or `feature` label once all labels are applied. See the [Labels
@@ -91,6 +94,20 @@ Like any good open source project, we use Pull Requests (PRs) to track code chan
 Documentation PRs will follow the same lifecycle as other PRs. They will also be labeled with the
 `documentation` label. For documentation, special attention will be paid to spelling, grammar, and
 clarity (whereas those things don't matter _as_ much for comments in code).
+
+#### Conventional Commits
+
+[Conventional Commits][conventional-commits] is a standard for creating consistently human and machine
+readable commit messages (in particular commit titles).
+
+To enable better automation and more consistency across codebases, the wasmCloud project encourages 
+the use of Conventional Commits, also introducing checks (ex. via CI) in some projects to enable 
+automated checking of the standard.
+
+We allow multiple conventional commits in a single PR. Maintainers may choose to squash merge PRs to combine
+them into a single conventional commit.
+
+[conventional-commits]: https://www.conventionalcommits.org/en/v1.0.0
 
 ## Reporting a Security Issue
 
@@ -237,21 +254,13 @@ Differences are noted below.
 
 ## Proposing an Idea
 
-Before proposing a new idea to a wasmCloud project, please make sure to write up an [Architectural
-Decision Record](https://wasmcloud.github.io/adr/). An Architectural Decision Record is a design
-document that describes a new feature for a wasmCloud project. The proposal should provide a concise
+Before proposing a new idea to a wasmCloud project, please make sure to write up a [Request For Comments (RFC)]([https://wasmcloud.github.io/adr/](https://github.com/wasmCloud/wasmCloud/issues/new?assignees=&labels=RFC,rfc-proposed&projects=&template=rfc-template.yaml&title=%5BRFC%5D+%3Ctitle%3E)). An RFC is a design document that describes a new feature for a wasmCloud project. The proposal should provide a concise
 technical specification and rationale for the feature.
 
 It is also worth considering vetting your idea with the community via Slack. Vetting an idea
 publicly before going as far as writing a proposal is meant to save the potential author time.
 
-ADRs are submitted to the [wasmcloud/adr repository](https://github.com/wasmCloud/adr/tree/gh-pages)
-(submitted against the `gh-pages` branch). See
-[ADR0000](https://wasmcloud.github.io/adr/0000-use-markdown-architectural-decision-records.html) for
-a the specific structure chosen and the [provided
-template](https://wasmcloud.github.io/adr/template.html) to write your own
-
-After your proposal has been approved, you can go ahead and get started implementing it!
+After your proposal has been approved (with an `rfc-accepted` label), you can go ahead and get started implementing it! Once your RFC is implemented and integrated into wasmCloud, the maintainers may ask you to write an [Architectural Decision Log (ADR)](https://github.com/wasmCloud/wasmCloud/blob/main/adr) that formally captures the RFC. Please refer to [ADR-0012](https://github.com/wasmCloud/wasmCloud/blob/main/adr/0012-rfc-management.md#decision-outcome) for how to write an ADR, and don't hesitate to ask for a template to get started.
 
 ## Labels
 

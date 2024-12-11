@@ -3,9 +3,18 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde_json::json;
 use wash_lib::cli::CommandOutput;
+use wash_lib::config::{host_pid_file, wadm_pid_file};
 use wash_lib::drain::Drain;
 
-pub fn handle_command(cmd: Drain) -> Result<CommandOutput> {
+pub fn handle_command(cmd: Drain) -> Result<CommandOutput, anyhow::Error> {
+    if matches!(cmd, Drain::All | Drain::Downloads) {
+        let wasmcloud_pid_path = host_pid_file().unwrap();
+        let wadm_pid_path = wadm_pid_file().unwrap();
+
+        if wasmcloud_pid_path.exists() || wadm_pid_path.exists() {
+            anyhow::bail!("Cannot clear the caches : wasmcloud and wadm PID files are still present on disk, processes might still be active or were not properly terminated.")
+        }
+    }
     let paths = cmd.drain()?;
     let mut map = HashMap::new();
     map.insert("drained".to_string(), json!(paths));

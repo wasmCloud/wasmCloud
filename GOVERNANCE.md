@@ -2,14 +2,18 @@
 
 The following document outlines how the wasmCloud project governance operates.
 
-- [The wasmCloud Project](#the-wasmcloud-project)
-- [Maintainers Structure](#maintainers-structure)
-  - [wasmCloud Org Maintainers](#wasmcloud-org-maintainers)
-- [Decision Making at the wasmCloud org level](#decision-making-at-the-wasmcloud-org-level)
-- [Decision Making at the wasmCloud project level](#decision-making-at-the-wasmcloud-project-level)
-- [Code of Conduct](#code-of-conduct)
-- [DCO and Licenses](#dco-and-licenses)
-- [Pull Requests and Reviews](#pull-requests)
+- [wasmCloud Governance](#wasmcloud-governance)
+  - [The wasmCloud Project](#the-wasmcloud-project)
+  - [Maintainers Structure](#maintainers-structure)
+    - [wasmCloud Org Maintainers](#wasmcloud-org-maintainers)
+    - [New Maintainer Onboarding](#new-maintainer-onboarding)
+    - [Stepping down as a maintainer](#stepping-down-as-a-maintainer)
+    - [Taking a leave from being a maintainer](#taking-a-leave-from-being-a-maintainer)
+  - [Decision Making at the wasmCloud org level](#decision-making-at-the-wasmcloud-org-level)
+  - [Decision Making at the wasmCloud project level](#decision-making-at-the-wasmcloud-project-level)
+  - [Code of Conduct](#code-of-conduct)
+  - [DCO and Licenses](#dco-and-licenses)
+  - [Pull Requests and Reviews](#pull-requests-and-reviews)
 
 ## The wasmCloud Project
 
@@ -65,6 +69,67 @@ Once an org maintainer is elected, they remain a maintainer until stepping down 
 are removed). Voting for new maintainers occurs when necessary to fill vacancies. Any existing
 project maintainer is eligible to become an org maintainer.
 
+### New Maintainer Onboarding
+
+When a new maintainer is added, a current maintainer should take the following steps:
+
+- Add the new maintainer to the [MAINTAINERS.md](./MAINTAINERS.md) file in this repo or the
+  appropriate subproject repo
+- Add the new maintainer to the appropriate GitHub group for their project
+- Announce the new maintainer to the wasmCloud community via the wasmCloud Slack and during the
+  community call
+
+When adding a new org maintainer, a few additional steps are required:
+
+- Add the new org maintainer to the CNCF
+  [project-maintainers.csv](https://github.com/cncf/foundation/blob/main/project-maintainers.csv)
+  file via PR
+- Once the PR is merged, send an email to cncf-maintainer-changes@cncf.io noting that the new
+  maintainer has been added and that they should be added to the
+  cncf-wasmCloud-maintainers@lists.cncf.io list
+
+### Stepping down as a maintainer
+
+To step down as a maintainer, that maintainer should open a PR to remove themselves (and add
+themselves to the emeritus section) from the MAINTAINERS.md file in this repo or the appropriate
+subproject repo, declaring their intent to step down.
+
+Upon the PR being merged, another maintainer should take the following steps:
+
+- Remove the maintainer from the appropriate GitHub group for their project
+- (Optional, but suggested) Send a thank you message and announcement via the wasmCloud Slack and
+  during the community call
+
+If an org maintainer steps down, the following steps should be taken in addition to the above:
+
+- Remove the maintainer from the CNCF
+  [project-maintainers.csv](https://github.com/cncf/foundation/blob/main/project-maintainers.csv)
+  file via PR
+- Send an email to cncf-maintainer-changes@cncf.io noting that the maintainer has been removed and
+  that they should be removed from the cncf-wasmCloud-maintainers@lists.cncf.io list
+
+### Taking a leave from being a maintainer
+
+There are many reasons why an active maintainer may need to take a break. Any maintainer of a
+wasmCloud project (including org maintainers) are welcome to take leave from being a maintainer, for
+any reason (which they are not required to disclose). At the end of the leave, they can resume their
+duties as a maintainer with no additional votes or governance. The maximum amount of leave is 6
+months (2 times the maximum amount of time a maintainer can be absent before being considered
+inactive). A leave can be extended for an additional 6 months beyond that based on a majority vote
+by the other project maintainers of the project to which they belong (i.e. if someone maintains the
+host, the host maintainers would make the decision). These decisions can be overriden by a
+super-majority of the org maintainers. If a maintainer is marked as being on leave and has not
+contacted other maintainers after 6 months, they will be moved to emeritus status in the same way as
+if they had been inactive.
+
+To take a break from being a maintainer, the maintainer should open a PR to mark themselves as "on
+leave" (in parenthesis next to their name) in the appropriate MAINTAINERS.md file or ask a fellow
+maintainer to do so if circumstances prevent them from doing it themselves. If possible (but not
+required), the maintainer should give an approximate length of leave in the PR. If the time is not
+specified, the "expected" length defaults to 6 months. 
+
+Upon returning from leave, the maintainer should open a PR to remove the "on leave" designation.
+
 ## Decision Making at the wasmCloud org level
 
 When maintainers need to make decisions there are two ways decisions are made, unless described
@@ -109,9 +174,9 @@ and company Y
 
 ## Code of Conduct
 
-The code of conduct is overseen by the wasmCloud org maintainers. Possible code of conduct
-violations should be sent to the org maintainers <!-- TODO: Update this to a mailing list once we
-have one  -->
+This project follows the [CNCF Code of
+Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md). Possible code of conduct
+violations should be sent to the org maintainers.
 
 If the possible violation is against one of the org maintainers that member will be recused from
 voting on the issue. Such issues must be escalated to the appropriate CNCF contact, and CNCF may

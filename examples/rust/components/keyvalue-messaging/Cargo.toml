@@ -1,0 +1,19 @@
+[package]
+name = "keyvalue-messaging"
+description = "The NATS keyvalue store example"
+edition = "2021"
+version = "0.1.0"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.32"
+
+[profile.release]
+# Optimize for small code size
+lto = true
+opt-level = "s"
+strip = true

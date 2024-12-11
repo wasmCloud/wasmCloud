@@ -15,24 +15,20 @@ pub mod policy;
 /// Common registry types
 pub mod registry;
 
-/// Provider archive functionality
-mod par;
+/// Secret management
+pub mod secrets;
 
 /// wasmCloud host metrics
 pub(crate) mod metrics;
 
-/// wRPC interface bindings
-mod bindings {
-    wit_bindgen_wrpc::generate!();
-}
-
 pub use metrics::HostMetrics;
-pub use oci::{Config as OciConfig, Fetcher as OciFetcher};
+pub use oci::Config as OciConfig;
 pub use policy::{
     HostInfo as PolicyHostInfo, Manager as PolicyManager, Response as PolicyResponse,
 };
-pub use registry::{Auth as RegistryAuth, Config as RegistryConfig, Type as RegistryType};
+pub use secrets::Manager as SecretsManager;
 pub use wasmbus::{Host as WasmbusHost, HostConfig as WasmbusHostConfig};
+pub use wasmcloud_core::{OciFetcher, RegistryAuth, RegistryConfig, RegistryType};
 
 pub use url;
 
@@ -49,6 +45,19 @@ use wascap::jwt;
 enum ResourceRef<'a> {
     File(PathBuf),
     Oci(&'a str),
+    Builtin(&'a str),
+}
+
+impl AsRef<str> for ResourceRef<'_> {
+    fn as_ref(&self) -> &str {
+        match self {
+            // Resource ref must have originated from a URL, which can only be constructed from a
+            // valid string
+            ResourceRef::File(path) => path.to_str().expect("invalid file reference URL"),
+            ResourceRef::Oci(s) => s,
+            ResourceRef::Builtin(s) => s,
+        }
+    }
 }
 
 impl<'a> TryFrom<&'a str> for ResourceRef<'a> {
@@ -68,6 +77,10 @@ impl<'a> TryFrom<&'a str> for ResourceRef<'a> {
                             .map(Self::Oci)
                             .context("invalid OCI reference")
                     }
+                    "wasmcloud+builtin" => s
+                        .strip_prefix("wasmcloud+builtin://")
+                        .map(Self::Builtin)
+                        .context("invalid builtin reference"),
                     scheme @ ("http" | "https") => {
                         debug!(%url, "interpreting reference as OCI");
                         s.strip_prefix(&format!("{scheme}://"))
@@ -102,6 +115,7 @@ impl ResourceRef<'_> {
                 let (l, _) = s.split_once('/')?;
                 Some(l)
             }
+            ResourceRef::Builtin(_) => None,
         }
     }
 }
@@ -111,6 +125,7 @@ impl ResourceRef<'_> {
 pub async fn fetch_component(
     component_ref: &str,
     allow_file_load: bool,
+    additional_ca_paths: &Vec<PathBuf>,
     registry_config: &HashMap<String, RegistryConfig>,
 ) -> anyhow::Result<Vec<u8>> {
     match ResourceRef::try_from(component_ref)? {
@@ -126,44 +141,52 @@ pub async fn fetch_component(
         ref oci_ref @ ResourceRef::Oci(component_ref) => oci_ref
             .authority()
             .and_then(|authority| registry_config.get(authority))
-            .map(oci::Fetcher::from)
+            .map(OciFetcher::from)
             .unwrap_or_default()
+            .with_additional_ca_paths(additional_ca_paths)
             .fetch_component(component_ref)
             .await
             .with_context(|| {
                 format!("failed to fetch component under OCI reference `{component_ref}`")
             }),
+        ResourceRef::Builtin(..) => bail!("nothing to fetch for a builtin"),
     }
 }
 
 /// Fetch a provider from a reference.
 #[instrument(skip(registry_config, host_id), fields(provider_ref = %provider_ref.as_ref()))]
 pub async fn fetch_provider(
-    provider_ref: impl AsRef<str>,
+    provider_ref: &ResourceRef<'_>,
     host_id: impl AsRef<str>,
     allow_file_load: bool,
     registry_config: &HashMap<String, RegistryConfig>,
-) -> anyhow::Result<(PathBuf, Option<jwt::Claims<jwt::CapabilityProvider>>)> {
-    match ResourceRef::try_from(provider_ref.as_ref())? {
+) -> anyhow::Result<(PathBuf, Option<jwt::Token<jwt::CapabilityProvider>>)> {
+    match provider_ref {
         ResourceRef::File(provider_path) => {
             ensure!(
                 allow_file_load,
                 "unable to start provider from file, file loading is disabled"
             );
-            par::read(provider_path, host_id, provider_ref)
-                .await
-                .context("failed to read provider")
+            wasmcloud_core::par::read(
+                provider_path,
+                host_id,
+                provider_ref,
+                wasmcloud_core::par::UseParFileCache::Ignore,
+            )
+            .await
+            .context("failed to read provider")
         }
-        ref oci_ref @ ResourceRef::Oci(provider_ref) => oci_ref
+        oci_ref @ ResourceRef::Oci(provider_ref) => oci_ref
             .authority()
             .and_then(|authority| registry_config.get(authority))
-            .map(oci::Fetcher::from)
+            .map(OciFetcher::from)
             .unwrap_or_default()
-            .fetch_provider(&provider_ref, host_id)
+            .fetch_provider(provider_ref, host_id)
             .await
             .with_context(|| {
                 format!("failed to fetch provider under OCI reference `{provider_ref}`")
             }),
+        ResourceRef::Builtin(..) => bail!("nothing to fetch for a builtin"),
     }
 }
 

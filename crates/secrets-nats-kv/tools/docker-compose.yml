@@ -1,0 +1,9 @@
+version: "3"
+services:
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js"]
+    ports:
+      - "6222:6222"
+      - "4222:4222"
+      - "8222:8222"

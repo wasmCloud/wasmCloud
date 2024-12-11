@@ -29,11 +29,7 @@ use base64::prelude::BASE64_STANDARD_NO_PAD;
 use http::Uri;
 use serde::{de, de::Deserializer, de::Visitor, Deserialize, Serialize};
 use tracing::{instrument, trace};
-
-use crate::HttpServerError;
-
-const DEFAULT_ADDR: &str = "127.0.0.1:8000";
-const DEFAULT_LOG_LEVEL: LogLevel = LogLevel::Debug;
+use unicase::UniCase;
 
 const CORS_ALLOWED_ORIGINS: &[&str] = &[];
 const CORS_ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"];
@@ -45,126 +41,96 @@ const CORS_ALLOWED_HEADERS: &[&str] = &[
 ];
 const CORS_EXPOSED_HEADERS: &[&str] = &[];
 const CORS_DEFAULT_MAX_AGE_SECS: u64 = 300;
-// Maximum content length. Can be overridden in settings or link definition
-// Syntax: number, or number followed by 'K', 'M', or 'G'
-// Default value is 100M (100*1024*1024)
-pub const DEFAULT_MAX_CONTENT_LEN: u64 = 100 * 1024 * 1024;
-// max possible value of content length. If sending to wasm32, memory is limited to 2GB,
-// practically this should be quite a bit smaller. Setting to 1GB for now.
-pub const CONTENT_LEN_LIMIT: u64 = 1024 * 1024 * 1024;
+
+pub fn default_listen_address() -> SocketAddr {
+    (Ipv4Addr::UNSPECIFIED, 8000).into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServiceSettings {
     /// Bind address
+    #[serde(default = "default_listen_address")]
+    pub address: SocketAddr,
+    /// cache control options
     #[serde(default)]
-    pub address: Option<SocketAddr>,
-
-    /// tls config
+    pub cache_control: Option<String>,
+    /// Flag for read only mode
     #[serde(default)]
-    pub tls: Tls,
-
-    /// cors config
+    pub readonly_mode: Option<bool>,
+    // cors config
+    pub cors_allowed_origins: Option<AllowedOrigins>,
+    pub cors_allowed_headers: Option<AllowedHeaders>,
+    pub cors_allowed_methods: Option<AllowedMethods>,
+    pub cors_exposed_headers: Option<ExposedHeaders>,
+    pub cors_max_age_secs: Option<u64>,
+    // tls config
     #[serde(default)]
-    pub cors: Cors,
-
-    /// logging
+    /// path to server X.509 cert chain file. Must be PEM-encoded
+    pub tls_cert_file: Option<String>,
     #[serde(default)]
-    pub log: Log,
-
+    pub tls_priv_key_file: Option<String>,
     /// Rpc timeout - how long (milliseconds) to wait for component's response
     /// before returning a status 503 to the http client
     /// If not set, uses the system-wide rpc timeout
     #[serde(default)]
     pub timeout_ms: Option<u64>,
-
-    /// cache control options
-    pub cache_control: Option<String>,
-
-    /// Flag for read only mode
-    pub readonly_mode: Option<bool>,
-
-    /// Max content length. Default "10m" (10MiB = 10485760 bytes)
-    /// Can be overridden by link def value max_content_len
-    /// Accepts number (bytes), or number with suffix 'k', 'm', or 'g', (upper or lower case)
-    /// representing multiples of 1024. For example,
-    /// - "500" = 5000 bytes,
-    /// - "5k" = 5 * 1024 bytes,
-    /// - "5m" = 5 * 1024*1024 bytes,
-    /// - "1g" = 1024*1024*1024 bytes
-    /// The value may not be higher than i32::MAX
-    pub max_content_len: Option<String>,
-
-    /// capture any other configuration values
-    #[serde(flatten)]
-    extra: HashMap<String, serde_json::Value>,
+    // DEPRECATED due to the nested struct being poorly supported by wasmCloud config
+    #[deprecated(since = "0.22.0", note = "Use top-level fields instead")]
+    #[serde(default)]
+    pub tls: Tls,
+    #[deprecated(since = "0.22.0", note = "Use top-level fields instead")]
+    #[serde(default)]
+    pub cors: Cors,
+    #[serde(default)]
+    pub disable_keepalive: Option<bool>,
 }
 
 impl Default for ServiceSettings {
     fn default() -> ServiceSettings {
+        #[allow(deprecated)]
         ServiceSettings {
-            address: Some(SocketAddr::from_str(DEFAULT_ADDR).unwrap()),
-            tls: Tls::default(),
-            cors: Cors::default(),
-            log: Log::default(),
+            address: default_listen_address(),
+            cors_allowed_origins: Some(AllowedOrigins::default()),
+            cors_allowed_headers: Some(AllowedHeaders::default()),
+            cors_allowed_methods: Some(AllowedMethods::default()),
+            cors_exposed_headers: Some(ExposedHeaders::default()),
+            cors_max_age_secs: Some(CORS_DEFAULT_MAX_AGE_SECS),
+            tls_cert_file: None,
+            tls_priv_key_file: None,
             timeout_ms: None,
             cache_control: None,
             readonly_mode: Some(false),
-            max_content_len: Some(DEFAULT_MAX_CONTENT_LEN.to_string()),
-            extra: Default::default(),
+            tls: Tls::default(),
+            cors: Cors::default(),
+            disable_keepalive: None,
         }
     }
-}
-
-macro_rules! merge {
-    ( $self:ident, $other: ident, $( $field:ident),+ ) => {
-        $(
-            if $other.$field.is_some() {
-                $self.$field = $other.$field;
-            }
-        )*
-    };
 }
 
 impl ServiceSettings {
-    /// load Settings from a file with .toml or .json extension
-    fn from_file<P: AsRef<Path>>(fpath: P) -> Result<Self, HttpServerError> {
-        let data = std::fs::read_to_string(&fpath).map_err(|e| {
-            HttpServerError::Settings(format!("reading file {}: {}", &fpath.as_ref().display(), e))
-        })?;
-        if let Some(ext) = fpath.as_ref().extension() {
-            let ext = ext.to_string_lossy();
-            match ext.as_ref() {
-                "json" => ServiceSettings::from_json(&data),
-                "toml" => ServiceSettings::from_toml(&data),
-                _ => Err(HttpServerError::Settings(format!(
-                    "unrecognized extension {ext}"
-                ))),
-            }
-        } else {
-            Err(HttpServerError::Settings(format!(
-                "unrecognized file type {}",
-                &fpath.as_ref().display()
-            )))
-        }
-    }
-
-    /// load settings from json
+    /// load settings from json, flattening nested fields
     fn from_json(data: &str) -> Result<Self, HttpServerError> {
+        #[allow(deprecated)]
         serde_json::from_str(data)
+            // For backwards compatibility, we can pull the values from the `tls` and `cors` fields
+            // and merge them into the top-level fields.
+            .map(|s: ServiceSettings| ServiceSettings {
+                address: s.address,
+                cache_control: s.cache_control,
+                readonly_mode: s.readonly_mode,
+                timeout_ms: s.timeout_ms,
+                tls_cert_file: s.tls_cert_file.or(s.tls.cert_file),
+                tls_priv_key_file: s.tls_priv_key_file.or(s.tls.priv_key_file),
+                cors_allowed_origins: s.cors_allowed_origins.or(s.cors.allowed_origins),
+                cors_allowed_headers: s.cors_allowed_headers.or(s.cors.allowed_headers),
+                cors_allowed_methods: s.cors_allowed_methods.or(s.cors.allowed_methods),
+                cors_exposed_headers: s.cors_exposed_headers.or(s.cors.exposed_headers),
+                cors_max_age_secs: s.cors_max_age_secs.or(s.cors.max_age_secs),
+                tls: Tls::default(),
+                cors: Cors::default(),
+                disable_keepalive: s.disable_keepalive,
+            })
             .map_err(|e| HttpServerError::Settings(format!("invalid json: {e}")))
-    }
-
-    /// load settings from toml file
-    fn from_toml(data: &str) -> Result<Self, HttpServerError> {
-        toml::from_str(data).map_err(HttpServerError::SettingsToml)
-    }
-
-    /// Merge settings from other into self
-    fn merge(&mut self, other: ServiceSettings) {
-        merge!(self, other, address, cache_control, readonly_mode);
-        self.tls.merge(other.tls);
-        self.cors.merge(other.cors);
-        self.log.merge(other.log);
     }
 
     /// perform additional validation checks on settings.
@@ -172,35 +138,33 @@ impl ServiceSettings {
     /// All errors found are combined into a single error message
     fn validate(&self) -> Result<(), HttpServerError> {
         let mut errors = Vec::new();
-        // 1. amke sure address is valid
-        if self.address.is_none() {
-            errors.push("missing bind address".to_string());
-        }
-        match (&self.tls.cert_file, &self.tls.priv_key_file) {
+        // 1. make sure tls config is valid
+        match (&self.tls_cert_file, &self.tls_priv_key_file) {
             (None, None) => {}
             (Some(_), None) | (None, Some(_)) => {
-                errors
-                    .push("for tls, both 'cert_file' and 'priv_key_file' must be set".to_string());
+                errors.push(
+                    "for tls, both 'tls_cert_file' and 'tls_priv_key_file' must be set".to_string(),
+                );
             }
             (Some(cert_file), Some(key_file)) => {
                 for f in &[("cert_file", &cert_file), ("priv_key_file", &key_file)] {
                     let path: &Path = f.1.as_ref();
                     if !path.is_file() {
                         errors.push(format!(
-                            "missing tls.{} '{}'{}",
+                            "missing tls_{} '{}'{}",
                             f.0,
                             &path.display(),
-                            if !path.is_absolute() {
-                                " : perhaps you should make the path absolute"
-                            } else {
+                            if path.is_absolute() {
                                 ""
+                            } else {
+                                " : perhaps you should make the path absolute"
                             }
                         ));
                     }
                 }
             }
         }
-        if let Some(ref methods) = self.cors.allowed_methods {
+        if let Some(ref methods) = self.cors_allowed_methods {
             for m in &methods.0 {
                 if http::Method::try_from(m.as_str()).is_err() {
                     errors.push(format!("invalid CORS method: '{m}'"));
@@ -223,9 +187,18 @@ impl ServiceSettings {
     }
 }
 
+/// Errors generated by this HTTP server
+#[derive(Debug, thiserror::Error)]
+pub enum HttpServerError {
+    #[error("invalid parameter: {0}")]
+    InvalidParameter(String),
+
+    #[error("problem reading settings: {0}")]
+    Settings(String),
+}
+
 /// Load settings provides a flexible means for loading configuration.
 /// Return value is any structure with Deserialize, or for example, HashMap<String,String>
-///   config_file: load from file name. Interprets file as json, toml, yaml, based on file extension.
 ///   config_b64:  base64-encoded json string
 ///   config_json: raw json string
 /// Also accept "address" (a string representing SocketAddr) and "port", a localhost port
@@ -233,61 +206,99 @@ impl ServiceSettings {
 ///   (later names override earlier names in the list)
 ///
 #[instrument]
-pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings, HttpServerError> {
+pub fn load_settings(
+    default_address: Option<SocketAddr>,
+    values: &HashMap<String, String>,
+) -> Result<ServiceSettings, HttpServerError> {
     trace!("load settings");
-    // Allow keys to be UPPERCASE, as an accommodation
-    // for the lost souls who prefer ugly all-caps variable names.
-    let values: HashMap<String, String> = crate::make_case_insensitive(values).ok_or_else(|| HttpServerError::InvalidParameter(
-        "Key collision: httpserver settings (from linkdef.values) has one or more keys that are not unique based on case-insensitivity"
-            .to_string(),
-    ))?;
+    // Allow keys to be case insensitive, as an accommodation
+    // for the lost souls who prefer sPoNgEbOb CaSe variable names.
+    let values: HashMap<UniCase<&str>, &String> = values
+        .iter()
+        .map(|(k, v)| (UniCase::new(k.as_str()), v))
+        .collect();
 
-    let mut settings = ServiceSettings::default();
-
-    if let Some(fpath) = values.get("config_file") {
-        settings.merge(ServiceSettings::from_file(fpath)?);
-    }
-
-    if let Some(str) = values.get("config_b64") {
+    if let Some(str) = values.get(&UniCase::new("config_b64")) {
         let bytes = BASE64_STANDARD_NO_PAD
             .decode(str)
             .map_err(|e| HttpServerError::Settings(format!("invalid base64 encoding: {e}")))?;
-        settings.merge(ServiceSettings::from_json(&String::from_utf8_lossy(
-            &bytes,
-        ))?);
+        return ServiceSettings::from_json(&String::from_utf8_lossy(&bytes));
     }
 
-    if let Some(str) = values.get("config_json") {
-        settings.merge(ServiceSettings::from_json(str)?);
+    if let Some(str) = values.get(&UniCase::new("config_json")) {
+        return ServiceSettings::from_json(str);
     }
 
-    // accept address as value parameter
-    if let Some(addr) = values.get("address") {
-        settings.address =
-            Some(SocketAddr::from_str(addr).map_err(|_| {
-                HttpServerError::InvalidParameter(format!("invalid address: {addr}"))
-            })?);
-    }
+    let mut settings = ServiceSettings::default();
 
     // accept port, for compatibility with previous implementations
-    if let Some(addr) = values.get("port") {
+    if let Some(addr) = values.get(&UniCase::new("port")) {
         let port = addr
             .parse::<u16>()
             .map_err(|_| HttpServerError::InvalidParameter(format!("Invalid port: {addr}")))?;
-        settings.address = Some(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            port,
-        ));
+        settings.address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
     }
+    // accept address as value parameter
+    settings.address = values
+        .get(&UniCase::new("address"))
+        .map(|addr| {
+            SocketAddr::from_str(addr)
+                .map_err(|_| HttpServerError::InvalidParameter(format!("invalid address: {addr}")))
+        })
+        .transpose()?
+        .or(default_address)
+        .unwrap_or_else(default_listen_address);
 
     // accept cache-control header values
-    if let Some(cache_control) = values.get("cache_control") {
+    if let Some(cache_control) = values.get(&UniCase::new("cache_control")) {
         settings.cache_control = Some(cache_control.to_string());
     }
-
     // accept read only mode flag
-    if let Some(readonly_mode) = values.get("readonly_mode") {
+    if let Some(readonly_mode) = values.get(&UniCase::new("readonly_mode")) {
         settings.readonly_mode = Some(readonly_mode.to_string().parse().unwrap_or(false));
+    }
+    // accept timeout_ms flag
+    if let Some(Ok(timeout_ms)) = values.get(&UniCase::new("timeout_ms")).map(|s| s.parse()) {
+        settings.timeout_ms = Some(timeout_ms)
+    }
+
+    // TLS
+    if let Some(tls_cert_file) = values.get(&UniCase::new("tls_cert_file")) {
+        settings.tls_cert_file = Some(tls_cert_file.to_string());
+    }
+    if let Some(tls_priv_key_file) = values.get(&UniCase::new("tls_priv_key_file")) {
+        settings.tls_priv_key_file = Some(tls_priv_key_file.to_string());
+    }
+
+    // CORS
+    if let Some(cors_allowed_origins) = values.get(&UniCase::new("cors_allowed_origins")) {
+        let origins: Vec<CorsOrigin> = serde_json::from_str(cors_allowed_origins)
+            .map_err(|e| HttpServerError::Settings(format!("invalid cors_allowed_origins: {e}")))?;
+        settings.cors_allowed_origins = Some(AllowedOrigins(origins));
+    }
+    if let Some(cors_allowed_headers) = values.get(&UniCase::new("cors_allowed_headers")) {
+        let headers: Vec<String> = serde_json::from_str(cors_allowed_headers)
+            .map_err(|e| HttpServerError::Settings(format!("invalid cors_allowed_headers: {e}")))?;
+        settings.cors_allowed_headers = Some(AllowedHeaders(headers));
+    }
+    if let Some(cors_allowed_methods) = values.get(&UniCase::new("cors_allowed_methods")) {
+        let methods: Vec<String> = serde_json::from_str(cors_allowed_methods)
+            .map_err(|e| HttpServerError::Settings(format!("invalid cors_allowed_methods: {e}")))?;
+        settings.cors_allowed_methods = Some(AllowedMethods(methods));
+    }
+    if let Some(cors_exposed_headers) = values.get(&UniCase::new("cors_exposed_headers")) {
+        let headers: Vec<String> = serde_json::from_str(cors_exposed_headers)
+            .map_err(|e| HttpServerError::Settings(format!("invalid cors_exposed_headers: {e}")))?;
+        settings.cors_exposed_headers = Some(ExposedHeaders(headers));
+    }
+    if let Some(cors_max_age_secs) = values.get(&UniCase::new("cors_max_age_secs")) {
+        let max_age_secs: u64 = cors_max_age_secs.parse().map_err(|_| {
+            HttpServerError::InvalidParameter("Invalid cors_max_age_secs".to_string())
+        })?;
+        settings.cors_max_age_secs = Some(max_age_secs);
+    }
+    if let Some(disable_keepalive) = values.get(&UniCase::new("disable_keepalive")) {
+        settings.disable_keepalive = Some(disable_keepalive.parse().unwrap_or(false));
     }
 
     settings.validate()?;
@@ -298,33 +309,15 @@ pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings
 pub struct Tls {
     /// path to server X.509 cert chain file. Must be PEM-encoded
     pub cert_file: Option<String>,
-
     pub priv_key_file: Option<String>,
-}
-
-impl Tls {
-    fn merge(&mut self, other: Tls) {
-        merge!(self, other, cert_file, priv_key_file);
-    }
-}
-
-impl Tls {
-    pub fn is_set(&self) -> bool {
-        self.cert_file.is_some() && self.priv_key_file.is_some()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Cors {
     pub allowed_origins: Option<AllowedOrigins>,
-
     pub allowed_headers: Option<AllowedHeaders>,
-
     pub allowed_methods: Option<AllowedMethods>,
-
     pub exposed_headers: Option<ExposedHeaders>,
-
-    // TODO: allow_credentials?
     pub max_age_secs: Option<u64>,
 }
 
@@ -337,20 +330,6 @@ impl Default for Cors {
             exposed_headers: Some(ExposedHeaders::default()),
             max_age_secs: Some(CORS_DEFAULT_MAX_AGE_SECS),
         }
-    }
-}
-
-impl Cors {
-    fn merge(&mut self, other: Cors) {
-        merge!(
-            self,
-            other,
-            allowed_origins,
-            allowed_headers,
-            allowed_methods,
-            exposed_headers,
-            max_age_secs
-        );
     }
 }
 
@@ -369,24 +348,13 @@ pub struct AllowedMethods(Vec<String>);
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExposedHeaders(Vec<String>);
 
-/*
-/// parse semicolon-delimited origin names
-fn parse_allowed_origins(arg: &str) -> Result<AllowedOrigins, std::io::Error> {
-    let mut res: Vec<CorsOrigin> = Vec::new();
-    for origin_str in arg.split(';') {
-        res.push(CorsOrigin::from_str(origin_str)?);
-    }
-    Ok(AllowedOrigins(res))
-}
- */
-
 impl<'de> Deserialize<'de> for CorsOrigin {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         struct CorsOriginVisitor;
-        impl<'de> Visitor<'de> for CorsOriginVisitor {
+        impl Visitor<'_> for CorsOriginVisitor {
             type Value = CorsOrigin;
 
             fn expecting(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -516,68 +484,6 @@ impl Default for ExposedHeaders {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum LogLevel {
-    Disabled,
-    Error,
-    Warn,
-    Info,
-    Debug,
-    Trace,
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Log {
-    log_level: Option<LogLevel>,
-}
-
-impl FromStr for LogLevel {
-    type Err = std::io::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "disabled" => Ok(Self::Disabled),
-            "error" => Ok(Self::Error),
-            "warn" => Ok(Self::Warn),
-            "info" => Ok(Self::Info),
-            "debug" => Ok(Self::Debug),
-            "trace" => Ok(Self::Trace),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("{s} is not a valid log level"),
-            )),
-        }
-    }
-}
-
-impl fmt::Display for LogLevel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            Self::Disabled => write!(f, "disabled"),
-            Self::Error => write!(f, "error"),
-            Self::Warn => write!(f, "warn"),
-            Self::Info => write!(f, "info"),
-            Self::Debug => write!(f, "debug"),
-            Self::Trace => write!(f, "trace"),
-        }
-    }
-}
-
-impl Default for LogLevel {
-    fn default() -> Self {
-        DEFAULT_LOG_LEVEL
-    }
-}
-
-impl Log {
-    fn merge(&mut self, other: Log) {
-        if let Some(level) = other.log_level {
-            self.log_level = Some(level);
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum HttpMethod {
     Get,
@@ -654,27 +560,10 @@ mod test {
     #[test]
     fn settings_init() {
         let s = ServiceSettings::default();
-        assert!(s.address.is_some());
-
-        assert!(s.cors.allowed_methods.is_some());
-        assert!(s.cors.allowed_origins.is_some());
-
-        assert!(s.cors.allowed_origins.unwrap().0.is_empty());
-    }
-
-    #[test]
-    fn settings_toml() {
-        let toml = r#"
-    [cors]
-    allowed_methods = [ "GET" ]
-    "#;
-
-        let s = ServiceSettings::from_toml(toml).expect("parse_toml");
-        assert_eq!(s.cors.allowed_methods.as_ref().unwrap().0.len(), 1);
-        assert_eq!(
-            s.cors.allowed_methods.as_ref().unwrap().0.first().unwrap(),
-            "GET"
-        );
+        assert!(s.address.is_ipv4());
+        assert!(s.cors_allowed_methods.is_some());
+        assert!(s.cors_allowed_origins.is_some());
+        assert!(s.cors_allowed_origins.unwrap().0.is_empty());
     }
 
     #[test]
@@ -686,9 +575,9 @@ mod test {
          }"#;
 
         let s = ServiceSettings::from_json(json).expect("parse_json");
-        assert_eq!(s.cors.allowed_headers.as_ref().unwrap().0.len(), 1);
+        assert_eq!(s.cors_allowed_headers.as_ref().unwrap().0.len(), 1);
         assert_eq!(
-            s.cors.allowed_headers.as_ref().unwrap().0.first().unwrap(),
+            s.cors_allowed_headers.as_ref().unwrap().0.first().unwrap(),
             "X-Cookies"
         );
     }

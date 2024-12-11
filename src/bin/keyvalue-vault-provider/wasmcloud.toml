@@ -1,10 +1,10 @@
 name = "KV Vault"
 language = "rust"
 type = "provider"
-version = "0.8.0"
+version = "0.10.0"
 
 [rust]
-target_path = "../../target"
+target_path = "../../../target"
 
 [provider]
 bin_name = "keyvalue-vault-provider"

@@ -5,24 +5,41 @@ on:
     tags:
       - 'wash-plugin-v*'
 
-jobs:
+permissions:
+  contents: read
 
+jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
     - name: Extract tag context
       id: ctx
       run: |
           version=${GITHUB_REF_NAME#wash-plugin-v}
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "version is ${version}"
+    - uses: ./.github/actions/configure-wkg
+      with:
+        oci-username: ${{ github.repository_owner }}
+        oci-password: ${{ secrets.GITHUB_TOKEN }}
     - name: Build
+      working-directory: crates/wash-lib
       run: |
-        cd crates/
+        wkg wit build -o package.wasm
+    - name: Push version-tagged WebAssembly binary to GHCR
+      working-directory: crates/wash-lib
+      run: |
+        wkg publish package.wasm
+    - name: Create tarball for release
+      working-directory: crates
+      run: |
         tar czf wash-plugins-${{ steps.ctx.outputs.version }}.tar.gz wash-lib/wit
     - name: Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@01570a1f39cb168c169c802c3bceb9e93fb10974
       with:
         files: crates/wash-plugins-${{ steps.ctx.outputs.version }}.tar.gz
         make_latest: "false"

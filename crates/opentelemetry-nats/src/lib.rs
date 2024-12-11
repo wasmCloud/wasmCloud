@@ -32,7 +32,7 @@ impl<'a> NatsHeaderExtractor<'a> {
     }
 }
 
-impl<'a> Extractor for NatsHeaderExtractor<'a> {
+impl Extractor for NatsHeaderExtractor<'_> {
     fn get(&self, key: &str) -> Option<&str> {
         self.inner.get(key).map(HeaderValue::as_str)
     }

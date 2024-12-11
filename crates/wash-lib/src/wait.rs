@@ -3,7 +3,7 @@ use cloudevents::event::{AttributesReader, Event};
 use tokio::sync::mpsc::Receiver;
 use tokio::time::{Duration, Instant};
 
-use crate::actor::ComponentScaledInfo;
+use crate::component::ComponentScaledInfo;
 
 /// Useful parts of a `CloudEvent` coming in from the wasmbus.
 #[derive(Debug)]
@@ -113,38 +113,37 @@ async fn find_event<T>(
 pub async fn wait_for_component_scaled_event(
     receiver: &mut Receiver<Event>,
     timeout: Duration,
-    host_id: String,
-    actor_ref: String,
+    host_id: impl AsRef<str>,
+    component_ref: impl AsRef<str>,
 ) -> Result<FindEventOutcome<ComponentScaledInfo>> {
+    let host_id = host_id.as_ref();
+    let component_ref = component_ref.as_ref();
     let check_function = move |event: Event| {
         let cloud_event = get_wasmbus_event_info(event)?;
 
-        if cloud_event.source != host_id.as_str() {
+        if cloud_event.source != host_id {
             return Ok(EventCheckOutcome::NotApplicable);
         }
 
         match cloud_event.event_type.as_str() {
-            "com.wasmcloud.lattice.component_scaled" | "com.wasmcloud.lattice.actor_scaled" => {
+            "com.wasmcloud.lattice.component_scaled" => {
                 let image_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
-                if image_ref == actor_ref {
-                    // NOTE(brooksmtownsend): Temporary handling of both actor_id and component_id
-                    let actor_id = get_string_data_from_json(&cloud_event.data, "actor_id")
-                        .or_else(|_| {
-                            get_string_data_from_json(&cloud_event.data, "component_id")
-                        })?;
+                if image_ref == component_ref {
+                    let component_id =
+                        get_string_data_from_json(&cloud_event.data, "component_id")?;
                     return Ok(EventCheckOutcome::Success(ComponentScaledInfo {
-                        host_id: host_id.as_str().into(),
-                        component_ref: actor_ref.as_str().into(),
-                        component_id: actor_id.as_str().into(),
+                        host_id: host_id.into(),
+                        component_ref: component_ref.into(),
+                        component_id: component_id.as_str().into(),
                     }));
                 }
             }
-            "com.wasmcloud.lattice.component_scale_failed"
-            | "com.wasmcloud.lattice.actor_scale_failed" => {
-                let returned_actor_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
+            "com.wasmcloud.lattice.component_scale_failed" => {
+                let returned_component_ref =
+                    get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
-                if returned_actor_ref == actor_ref {
+                if returned_component_ref == component_ref {
                     let error = anyhow!(
                         "{}",
                         cloud_event
@@ -302,9 +301,9 @@ pub async fn wait_for_provider_stop_event(
 }
 
 /// Information related to an component stop
-pub struct ActorStoppedInfo {
+pub struct ComponentStoppedInfo {
     pub host_id: String,
-    pub actor_id: String,
+    pub component_id: String,
 }
 
 /// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
@@ -313,12 +312,12 @@ pub struct ActorStoppedInfo {
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.
 ///
 /// If the timeout is reached or another error occurs, the `Err` variant of the `Result` will be returned.
-pub async fn wait_for_actor_stop_event(
+pub async fn wait_for_component_stop_event(
     receiver: &mut Receiver<Event>,
     timeout: Duration,
     host_id: String,
-    actor_id: String,
-) -> Result<FindEventOutcome<ActorStoppedInfo>> {
+    component_id: String,
+) -> Result<FindEventOutcome<ComponentStoppedInfo>> {
     let check_function = move |event: Event| {
         let cloud_event = get_wasmbus_event_info(event)?;
 
@@ -327,20 +326,21 @@ pub async fn wait_for_actor_stop_event(
         }
 
         match cloud_event.event_type.as_str() {
-            "com.wasmcloud.lattice.actor_stopped" | "com.wasmcloud.lattice.component_scaled" => {
-                let returned_actor_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
-                if returned_actor_id == actor_id {
-                    return Ok(EventCheckOutcome::Success(ActorStoppedInfo {
+            "com.wasmcloud.lattice.component_scaled" => {
+                let returned_component_id =
+                    get_string_data_from_json(&cloud_event.data, "public_key")?;
+                if returned_component_id == component_id {
+                    return Ok(EventCheckOutcome::Success(ComponentStoppedInfo {
                         host_id: host_id.as_str().into(),
-                        actor_id: returned_actor_id,
+                        component_id: returned_component_id,
                     }));
                 }
             }
-            "com.wasmcloud.lattice.actor_stop_failed"
-            | "com.wasmcloud.lattice.component_scale_failed" => {
-                let returned_actor_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
+            "com.wasmcloud.lattice.component_scale_failed" => {
+                let returned_component_id =
+                    get_string_data_from_json(&cloud_event.data, "public_key")?;
 
-                if returned_actor_id == actor_id {
+                if returned_component_id == component_id {
                     let error = anyhow!(
                         "{}",
                         cloud_event

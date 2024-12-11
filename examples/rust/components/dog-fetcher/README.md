@@ -7,7 +7,7 @@ response. Its purpose is to show how you can use `wasi:http/outgoing-handler` in
 
 - `cargo` 1.75
 - [`wash`](https://wasmcloud.com/docs/installation) 0.27.0
-- `wasmtime` >=19.0.0 (if running with wasmtime)
+- `wasmtime` >=25.0.0 (if running with wasmtime)
 
 ## Building
 
@@ -17,7 +17,7 @@ wash build
 
 ## Running with wasmtime
 
-You must have wasmtime >=19.0.0 for this to work. Make sure to follow the build step above first.
+You must have wasmtime >=25.0.0 for this to work. Make sure to follow the build step above first.
 
 ```bash
 wasmtime serve -Scommon ./build/dog_fetcher_s.wasm
@@ -32,8 +32,8 @@ the application list, you can use `curl` to send a request to the running HTTP s
 ```shell
 wash up -d
 wash app deploy ./wadm.yaml
-wash app list
-curl http://127.0.0.1:8080
+wash app get
+curl http://127.0.0.1:8000
 ```
 
 ## Adding Capabilities

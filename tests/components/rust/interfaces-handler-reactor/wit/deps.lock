@@ -1,9 +1,0 @@
-[messaging]
-url = "https://github.com/wasmCloud/messaging/archive/v0.2.0-rc.1.tar.gz"
-sha256 = "41ada083aceb2b4ba92d9bd16d19b6462cc02b10378c9a49135c3447f9138a44"
-sha512 = "aa9c819dfd9e85b19661f6087ffd824c44fc38c8a4bc1005c4e7fd34fe844633c52cae7a0412e9ea90f71826e0660e8a3b5672a0f0303c524e4139643ae675ac"
-
-[testing]
-path = "../../../wit/testing"
-sha256 = "b59c6b4362fcf0a2af3d2c90a7295b69712fe2ce3fea6ac6bede0a8e99959b04"
-sha512 = "7b62cfd00ed97e6334fe6835b81accd637459befd73d131d47f96bea062b4ece929a12c4b541655ed191043e1fb45c62e849a2828197a525def46ae6516d72c5"

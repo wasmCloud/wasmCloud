@@ -18,7 +18,7 @@ If a wasmcloud host is not running, the script will simply output the above comm
 ```
 No hosts found, please run the wasmcloud binary, or proceed with the following commands in the REPL:
 
-ctl start actor wasmcloud.azurecr.io/kvcounter:0.2.0
+ctl start component wasmcloud.azurecr.io/kvcounter:0.2.0
 ctl start provider wasmcloud.azurecr.io/redis:0.10.0
 ctl link MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E VAZVC4RX54J2NVCMCW7BPCAHGGG5XZXDBXFUMDUXGESTMQEJLC3YVZWB wasmcloud:keyvalue URL=redis://localhost:6379
 ctl start provider wasmcloud.azurecr.io/httpserver:0.10.0

@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use wash_lib::cli::{
-    update::{handle_update_actor, UpdateCommand},
+    update::{handle_update_component, UpdateCommand},
     CommandOutput, OutputKind,
 };
 
@@ -19,7 +19,7 @@ pub async fn handle_command(
                 cmd.component_id, cmd.new_component_ref
             ));
 
-            handle_update_actor(cmd).await?
+            handle_update_component(cmd).await?
         }
     };
 

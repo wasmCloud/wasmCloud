@@ -1,4 +1,4 @@
-wit_bindgen::generate!();
+wit_bindgen::generate!({ generate_all });
 
 use crate::exports::wasmcloud::example::process_data::Data;
 use crate::exports::wasmcloud::example::process_data::Guest;

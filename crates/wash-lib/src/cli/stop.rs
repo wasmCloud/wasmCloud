@@ -6,10 +6,10 @@ use tracing::error;
 use wasmcloud_control_interface::HostInventory;
 
 use crate::{
-    actor::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
     cli::{CliConnectionOpts, CommandOutput},
     common::{boxed_err_to_anyhow, find_host_id, get_all_inventories, FindIdError, Match},
-    config::{downloads_dir, WashConnectionOptions, WASMCLOUD_PID_FILE},
+    component::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
+    config::{host_pid_file, WashConnectionOptions},
     context::default_timeout_ms,
     id::ServerId,
     wait::{wait_for_provider_stop_event, FindEventOutcome, ProviderStoppedInfo},
@@ -101,11 +101,42 @@ pub struct StopHostCommand {
     pub host_shutdown_timeout: u64,
 }
 
-pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
+pub async fn handle_stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
     let timeout_ms = cmd.opts.timeout_ms;
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
-    let client = wco.into_ctl_client(None).await?;
+    let ctl_client = wco.into_ctl_client(None).await?;
+    stop_provider(
+        &ctl_client,
+        cmd.host_id.as_deref(),
+        &cmd.provider_id,
+        cmd.skip_wait,
+        timeout_ms,
+    )
+    .await?;
 
+    let text = if cmd.skip_wait {
+        format!("Provider {} stop request received", &cmd.provider_id)
+    } else {
+        format!("Provider [{}] stopped successfully", &cmd.provider_id)
+    };
+
+    Ok(CommandOutput::new(
+        text.clone(),
+        HashMap::from([
+            ("result".into(), text.into()),
+            ("provider_id".into(), cmd.provider_id.into()),
+            ("host_id".into(), cmd.host_id.into()),
+        ]),
+    ))
+}
+
+pub async fn stop_provider(
+    client: &wasmcloud_control_interface::Client,
+    host_id: Option<&str>,
+    provider_id: &str,
+    skip_wait: bool,
+    timeout_ms: u64,
+) -> Result<()> {
     let mut receiver = client
         .events_receiver(vec![
             "provider_stopped".to_string(),
@@ -114,55 +145,34 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
         .await
         .map_err(boxed_err_to_anyhow)?;
 
-    let host_id = if let Some(host_id) = cmd.host_id {
-        find_host_id(&host_id, &client).await?.0
+    let host_id = if let Some(host_id) = host_id {
+        find_host_id(host_id, client).await?.0
     } else {
-        find_host_with_provider(&cmd.provider_id, &client).await?
+        find_host_with_provider(provider_id, client).await?
     };
 
     let ack = client
-        .stop_provider(&host_id, &cmd.provider_id)
+        .stop_provider(&host_id, provider_id)
         .await
         .map_err(boxed_err_to_anyhow)?;
 
-    if !ack.success {
-        bail!("Operation failed: {}", ack.message);
+    if !ack.succeeded() {
+        bail!("Operation failed: {}", ack.message());
     }
-    if cmd.skip_wait {
-        let text = format!("Provider {} stop request received", cmd.provider_id);
-        return Ok(CommandOutput::new(
-            text.clone(),
-            HashMap::from([
-                ("result".into(), text.into()),
-                ("provider_id".into(), cmd.provider_id.to_string().into()),
-                ("host_id".into(), host_id.to_string().into()),
-            ]),
-        ));
+    if skip_wait {
+        return Ok(());
     }
 
     let event = wait_for_provider_stop_event(
         &mut receiver,
         Duration::from_millis(timeout_ms),
         host_id.to_string(),
-        cmd.provider_id.to_string(),
+        provider_id.to_string(),
     )
     .await?;
 
     match event {
-        FindEventOutcome::Success(ProviderStoppedInfo {
-            host_id,
-            provider_id,
-        }) => {
-            let text = format!("Provider [{}] stopped successfully", &cmd.provider_id);
-            Ok(CommandOutput::new(
-                text.clone(),
-                HashMap::from([
-                    ("result".into(), text.into()),
-                    ("provider_id".into(), provider_id.into()),
-                    ("host_id".into(), host_id.into()),
-                ]),
-            ))
-        }
+        FindEventOutcome::Success(ProviderStoppedInfo { .. }) => Ok(()),
         FindEventOutcome::Failure(err) => bail!("{}", err),
     }
 }
@@ -178,7 +188,7 @@ pub async fn handle_stop_component(cmd: StopComponentCommand) -> Result<CommandO
         client
             .get_host_inventory(&host_id)
             .await
-            .map(|inventory| inventory.response)
+            .map(|inventory| inventory.into_data())
             .map_err(boxed_err_to_anyhow)?
             .context("Supplied host did not respond to inventory query")?
     } else {
@@ -186,22 +196,27 @@ pub async fn handle_stop_component(cmd: StopComponentCommand) -> Result<CommandO
         inventories
             .into_iter()
             .find(|inv| {
-                inv.components
+                inv.components()
                     .iter()
-                    .any(|component| component.id == component_id)
+                    .any(|component| component.id() == component_id)
             })
             .ok_or_else(|| anyhow::anyhow!("No host found running component [{}]", component_id))?
     };
 
     let Some((host_id, component_ref)) = inventory
-        .components
+        .components()
         .iter()
-        .find(|component| component.id == component_id)
-        .map(|component| (inventory.host_id.clone(), component.image_ref.clone()))
+        .find(|component| component.id() == component_id)
+        .map(|component| {
+            (
+                inventory.host_id().to_string(),
+                component.image_ref().to_string(),
+            )
+        })
     else {
         bail!(
             "No component with id [{component_id}] found on host [{}]",
-            inventory.host_id
+            inventory.host_id()
         );
     };
 
@@ -241,11 +256,11 @@ pub async fn handle_stop_component(cmd: StopComponentCommand) -> Result<CommandO
 pub async fn stop_host(cmd: StopHostCommand) -> Result<CommandOutput> {
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
-    let install_dir = downloads_dir()?;
 
     let (_, hosts_remain) = stop_hosts(client, Some(&cmd.host_id), false).await?;
-    if !hosts_remain {
-        tokio::fs::remove_file(install_dir.join(WASMCLOUD_PID_FILE)).await?;
+    let pid_file_exists = tokio::fs::try_exists(host_pid_file()?).await?;
+    if !hosts_remain && pid_file_exists {
+        tokio::fs::remove_file(host_pid_file()?).await?;
     }
 
     Ok(CommandOutput::from_key_and_text(
@@ -259,10 +274,10 @@ async fn find_host_with_provider(
     ctl_client: &wasmcloud_control_interface::Client,
 ) -> Result<ServerId, FindIdError> {
     find_host_with_filter(ctl_client, |inv| {
-        inv.providers
-            .into_iter()
-            .any(|prov| prov.id == provider_id)
-            .then_some((inv.host_id, inv.friendly_name))
+        inv.providers()
+            .iter()
+            .any(|prov| prov.id() == provider_id)
+            .then_some((inv.host_id().to_string(), inv.friendly_name().to_string()))
             .and_then(|(id, friendly_name)| id.parse().ok().map(|i| (i, friendly_name)))
     })
     .await
@@ -311,7 +326,7 @@ pub async fn stop_hosts(
         .await
         .map_err(|e| anyhow!(e))?
         .into_iter()
-        .filter_map(|r| r.response)
+        .filter_map(|r| r.into_data())
         .collect::<Vec<_>>();
 
     // If a host ID was supplied, stop only that host
@@ -328,7 +343,7 @@ pub async fn stop_hosts(
     } else if hosts.is_empty() {
         Ok((vec![], false))
     } else if hosts.len() == 1 {
-        let host_id = &hosts[0].id;
+        let host_id = hosts[0].id();
         client
             .stop_host(host_id, None)
             .await
@@ -338,7 +353,7 @@ pub async fn stop_hosts(
         let host_stops = hosts
             .iter()
             .map(|host| async {
-                let host_id = &host.id;
+                let host_id = host.id();
                 match client.stop_host(host_id, None).await {
                     Ok(_) => Some(host_id.to_owned()),
                     Err(e) => {
@@ -358,8 +373,12 @@ pub async fn stop_hosts(
 
         Ok((host_ids, hosts_remaining))
     } else {
+        let runing_hosts = hosts
+            .into_iter()
+            .map(|h| h.id().to_string())
+            .collect::<Vec<_>>();
         bail!(
-                "More than one host is running, please specify a host ID or use --all\nRunning hosts: {:?}", hosts.into_iter().map(|h| h.id).collect::<Vec<_>>()
-            )
+            "More than one host is running, please specify a host ID or use --all\nRunning hosts: {runing_hosts:?}", 
+        )
     }
 }

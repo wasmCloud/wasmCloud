@@ -1,13 +1,15 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use clap::Parser;
 
-use crate::{
-    actor::{scale_component, ScaleComponentArgs},
-    cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput},
-    common::find_host_id,
-    config::WashConnectionOptions,
-};
+use crate::cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput};
+use crate::common::find_host_id;
+use crate::component::{scale_component, ScaleComponentArgs};
+use crate::config::WashConnectionOptions;
+use crate::context::default_component_operation_timeout_ms;
 
+use super::start::resolve_ref;
 use super::validate_component_id;
 
 #[derive(Debug, Clone, Parser)]
@@ -47,6 +49,16 @@ pub struct ScaleComponentCommand {
     /// List of named configuration to apply to the component, may be empty
     #[clap(long = "config")]
     pub config: Vec<String>,
+
+    /// By default, the command will wait until the component has been scaled.
+    /// If this flag is passed, the command will return immediately after acknowledgement from the host, without waiting for the component to be scaled.
+    /// If this flag is omitted, the command will wait until the scaled event has been acknowledged.
+    #[clap(long = "skip-wait")]
+    pub skip_wait: bool,
+
+    /// Timeout for waiting for scale to occur (normally on an auction response), defaults to 2000 milliseconds
+    #[clap(long = "wait-timeout-ms", default_value_t = default_component_operation_timeout_ms())]
+    pub wait_timeout_ms: u64,
 }
 
 pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<CommandOutput> {
@@ -54,18 +66,19 @@ pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<Comman
     let client = wco.into_ctl_client(None).await?;
 
     let annotations = input_vec_to_hashmap(cmd.annotations)?;
+    let component_ref = resolve_ref(&cmd.component_ref).await?;
 
-    scale_component(ScaleComponentArgs {
+    let info = scale_component(ScaleComponentArgs {
         client: &client,
         // NOTE(thomastaylor312): In the future, we could check if this is interactive and then
         // prompt the user to choose if more than one thing matches
         host_id: &find_host_id(&cmd.host_id, &client).await?.0,
         component_id: &cmd.component_id,
-        component_ref: &cmd.component_ref,
+        component_ref: &component_ref,
         max_instances: cmd.max_instances,
         annotations: Some(annotations),
         config: cmd.config,
-        skip_wait: false,
+        skip_wait: cmd.skip_wait,
         timeout_ms: None,
     })
     .await?;
@@ -76,11 +89,17 @@ pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<Comman
         format!("{} max concurrent instances", cmd.max_instances)
     };
 
-    Ok(CommandOutput::from_key_and_text(
-        "result",
-        format!(
-            "Request to scale component {} to {scale_msg} has been accepted",
-            cmd.component_ref
-        ),
+    let text = format!(
+        "Component [{}] (ref: [{}]) scaled on host [{}] to {scale_msg}",
+        info.component_id, info.component_ref, info.host_id,
+    );
+    Ok(CommandOutput::new(
+        text.clone(),
+        HashMap::from([
+            ("host_id".into(), info.host_id.into()),
+            ("component_id".into(), info.component_id.into()),
+            ("component_ref".into(), info.component_ref.into()),
+            ("result".into(), text.into()),
+        ]),
     ))
 }

@@ -1,10 +1,10 @@
 name = "SQLDB Postgres"
 language = "rust"
 type = "provider"
-version = "0.1.0"
+version = "0.3.0"
 
 [rust]
-target_path = "../../target"
+target_path = "../../../target"
 
 [provider]
 bin_name = "sqldb-postgres-provider"

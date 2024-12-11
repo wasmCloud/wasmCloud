@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-control-interface"
-version = "1.0.0"
+version = "2.2.0"
 homepage = "https://wasmcloud.com"
 description = "A client library for communicating with hosts on a wasmCloud lattice"
 documentation = "https://docs.rs/wasmcloud-control-interface"
@@ -16,11 +16,9 @@ repository.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 async-nats = { workspace = true }
-async-trait = { workspace = true }
-bytes = { workspace = true }
 cloudevents-sdk = { workspace = true }
 futures = { workspace = true }
-oci-distribution = { workspace = true, features = ["rustls-tls"] }
+oci-client = { workspace = true, features = ["rustls-tls"] }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = [
     "trace",
@@ -33,3 +31,6 @@ tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 wasmcloud-core = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["cloudevents-sdk"]

@@ -1,0 +1,11 @@
+package wrpc:blobstore@0.2.0;
+
+world imports {
+	import blobstore;
+}
+
+world interfaces {
+    import blobstore;
+
+    export blobstore;
+}

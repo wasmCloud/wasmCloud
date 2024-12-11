@@ -11,7 +11,7 @@ use url::Url;
 
 use wasmcloud_control_interface::{Client as WasmcloudCtlClient, ClientBuilder};
 use wasmcloud_host::wasmbus::host_config::PolicyService;
-use wasmcloud_host::wasmbus::{Host, HostConfig};
+use wasmcloud_host::wasmbus::{Features, Host, HostConfig};
 
 /// Add a host label, and ensure that it has been added
 pub async fn assert_put_label(
@@ -67,7 +67,7 @@ impl WasmCloudTestHost {
     /// * `nats_url` - URL of the NATS instance to which we should connect (ex. "nats://localhost:4222")
     /// * `lattice_name` - Name of the wasmCloud lattice to which we should connect (ex. "default")
     pub async fn start(nats_url: impl AsRef<str>, lattice_name: impl AsRef<str>) -> Result<Self> {
-        Self::start_custom(nats_url, lattice_name, None, None, None).await
+        Self::start_custom(nats_url, lattice_name, None, None, None, None).await
     }
 
     /// Start a test wasmCloud [`Host`], with customization for the host that is started
@@ -79,12 +79,14 @@ impl WasmCloudTestHost {
     /// * `cluster_key` - An optional `nkeys::KeyPair` to use for the lattice. If not specified, one is generated.
     /// * `host_key` - An optional `nkeys::KeyPair` to use for the host. If not specified, one is generated.
     /// * `policy_service_config` - Configuration for a [Policy Service](https://wasmcloud.com/docs/deployment/security/policy-service) to use with the host
+    /// * `secrets_backend_topic` - Topic for the host to use for secrets requests
     pub async fn start_custom(
         nats_url: impl AsRef<str>,
         lattice_name: impl AsRef<str>,
         cluster_key: Option<KeyPair>,
         host_key: Option<KeyPair>,
         policy_service_config: Option<PolicyService>,
+        secrets_topic_prefix: Option<String>,
     ) -> Result<Self> {
         let nats_url = Url::try_from(nats_url.as_ref()).context("failed to parse NATS URL")?;
         let lattice_name = lattice_name.as_ref();
@@ -98,6 +100,10 @@ impl WasmCloudTestHost {
             host_key: Some(Arc::clone(&host_key)),
             provider_shutdown_delay: Some(Duration::from_millis(300)),
             allow_file_load: true,
+            secrets_topic_prefix,
+            experimental_features: Features::new()
+                .enable_builtin_http()
+                .enable_builtin_messaging(),
             ..Default::default()
         };
         if let Some(psc) = policy_service_config {
@@ -158,5 +164,11 @@ impl WasmCloudTestHost {
     #[must_use]
     pub fn lattice_name(&self) -> &str {
         self.lattice_name.as_ref()
+    }
+
+    /// Get the host ID
+    #[must_use]
+    pub fn host_id(&self) -> String {
+        self.host_key().public_key()
     }
 }

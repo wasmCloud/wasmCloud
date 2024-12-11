@@ -32,11 +32,11 @@ pub struct InspectCliCommand {
     )]
     pub wit: bool,
 
-    /// Digest to verify artifact against (if OCI URL is provided for <target>)
+    /// Digest to verify artifact against (if OCI URL is provided for `<target>`)
     #[clap(short = 'd', long = "digest")]
     pub digest: Option<String>,
 
-    /// Allow latest artifact tags (if OCI URL is provided for <target>)
+    /// Allow latest artifact tags (if OCI URL is provided for `<target>`)
     #[clap(long = "allow-latest")]
     pub allow_latest: bool,
 
@@ -118,7 +118,7 @@ pub async fn handle_command(
             CommandOutput::from_key_and_text(
                 "wit",
                 printer
-                    .print(resolve, main)
+                    .print(resolve, main, &[])
                     .context("should be able to print WIT world from a component")?,
             )
         }

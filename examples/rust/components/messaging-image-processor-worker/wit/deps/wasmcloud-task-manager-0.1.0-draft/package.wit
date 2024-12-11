@@ -1,0 +1,153 @@
+package wasmcloud:task-manager@0.1.0-draft;
+
+interface types {
+  use wasmcloud:postgres/types@0.1.1-draft.{timestamp-tz};
+
+  /// ID of a given task (set by the task manager)
+  type task-id = string;
+
+  /// ID of a task group that identifies *how* tasks can be used
+  type group-id = string;
+
+  /// ID of a worker
+  type worker-id = string;
+
+  /// ID that uniquely identifies a lease
+  ///
+  /// While this is not stored directly on the task, implementations should create
+  /// lease IDs that can be used.
+  type lease-id = string;
+
+  /// Stringified JSON
+  type json-string = string;
+
+  /// Stringified JSON
+  type failure-reason = string;
+
+  /// Task status
+  enum task-status {
+    /// The task has been created
+    pending,
+    /// The task has been leased by a worker (i.e. in progress)
+    leased,
+    /// The task has been marked completed
+    completed,
+    /// The task has been marked failed
+    failed,
+  }
+
+  /// Options that govern basic offset-based pagination
+  record offset-pagination {
+    /// Offset for pagination
+    offset: u32,
+    /// Size of pages to return
+    page-size: u32,
+  }
+
+  /// A task record
+  record task {
+    /// ID of the given task
+    id: task-id,
+    /// Group ID of the given task
+    group-id: group-id,
+    /// Status of the task
+    status: task-status,
+    /// Data needed to complete the task
+    data-json: option<json-string>,
+    /// When the task last failed, if it has
+    last-failed-at: option<timestamp-tz>,
+    /// Reason for a failure if the task failed
+    last-failure-reason: option<string>,
+    /// When the current worker (if any) started woring on the task
+    leased-at: option<timestamp-tz>,
+    /// The ID of the worker that leased this task
+    lease-worker-id: option<worker-id>,
+    /// When the task was last updated submitted
+    completed-at: option<timestamp-tz>,
+    /// When the task was submitted
+    submitted-at: timestamp-tz,
+    /// When the task was last updated submitted
+    last-updated-at: timestamp-tz,
+  }
+}
+
+/// Functionality for working with tasks
+interface tasks {
+  use types.{group-id, task, task-id, worker-id, json-string, lease-id, offset-pagination};
+
+  /// Errors that can occur while performing retrieving tasks
+  variant get-tasks-error {
+    /// Invalid group-id
+    invalid-group-id,
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Errors that can occur while performing retrieving tasks
+  variant get-task-error {
+    /// Invalid task-id
+    invalid-task-id,
+    /// Invalid group-id
+    invalid-group-id,
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Options for performing a tasks query
+  record get-tasks-query-options {
+    /// Include only tasks with the given group-id (if specified)
+    group-id: option<group-id>,
+    /// Settings to use for offset-based pagination
+    pagination: offset-pagination,
+  }
+
+  /// Errors that can occur while submitting a single task
+  variant submit-task-error {
+    /// Invalid task data
+    invalid-task-data(string),
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Errors that can occur while updating a single task
+  variant update-task-error {
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Get all tasks
+  get-tasks: func(options: get-tasks-query-options) -> result<list<task>, get-tasks-error>;
+
+  /// Get a single task under a given group ID
+  get-task: func(task-id: task-id) -> result<task, get-task-error>;
+
+  /// Submit a single task
+  submit-task: func(group-id: string, data: json-string) -> result<task, submit-task-error>;
+
+  /// Lease a task for completion
+  lease-task: func(task-id: task-id, worker-id: worker-id) -> result<lease-id, update-task-error>;
+
+  /// Release a task so that it can be picked up by other workers
+  release-task: func(task-id: task-id, worker-id: worker-id, lease-id: lease-id) -> result<_, update-task-error>;
+
+  /// Mark a single task completed
+  mark-task-completed: func(lease-id: lease-id, worker-id: worker-id) -> result<_, update-task-error>;
+
+  /// Mark a single task failed
+  mark-task-failed: func(lease-id: lease-id, worker-id: worker-id, reason: worker-id) -> result<_, update-task-error>;
+}
+
+world http-task-manager {
+  import wasi:logging/logging@0.1.0-draft;
+  import wasmcloud:postgres/types@0.1.1-draft;
+  import wasmcloud:postgres/query@0.1.1-draft;
+  import types;
+  import wasi:io/poll@0.2.1;
+  import wasi:clocks/monotonic-clock@0.2.1;
+  import wasi:io/error@0.2.1;
+  import wasi:io/streams@0.2.1;
+  import wasi:http/types@0.2.1;
+
+  export tasks;
+  export wasi:http/incoming-handler@0.2.1;
+}

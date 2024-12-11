@@ -1,5 +1,0 @@
-package test-components:foobar;
-
-interface foobar {
-    foobar: func(arg: string) -> string;
-}

@@ -1,0 +1,7 @@
+package wasmcloud:hello;
+
+world hello {
+  import wasmcloud:messaging/request-reply@0.3.0;
+
+  export wasmcloud:messaging/incoming-handler@0.3.0;
+}
