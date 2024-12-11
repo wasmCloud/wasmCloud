@@ -23,11 +23,11 @@ spec:
       traits:
         - type: link
           properties:
+            target:
+              name: test-http-echo-tinygo
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            target:
-              name: test-http-echo-tinygo
             source:
               config:
                 - name: default-http

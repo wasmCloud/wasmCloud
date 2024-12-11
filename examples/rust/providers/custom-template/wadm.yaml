@@ -26,11 +26,11 @@ spec:
         # Link the component to the provider on wasmcloud:example/system-info
         - type: link
           properties:
+            target:
+              name: custom-template
             namespace: wasmcloud
             package: example
             interfaces: [system-info]
-            target:
-              name: custom-template
 
     - name: custom-template
       type: capability
@@ -45,8 +45,8 @@ spec:
         # Link the provider to the component on wasmcloud:example/process-data
         - type: link
           properties:
+            target:
+              name: test-component
             namespace: wasmcloud
             package: example
             interfaces: [process-data]
-            target:
-              name: test-component

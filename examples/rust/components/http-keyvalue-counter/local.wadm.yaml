@@ -23,15 +23,15 @@ spec:
         # (i.e. using a keyvalue cache)
         - type: link
           properties:
-            namespace: wasi
-            package: keyvalue
-            interfaces: [atomics, store]
             target:
               name: kvredis
               config:
                 - name: redis-url
                   properties:
                     url: redis://0.0.0.0:6379
+            namespace: wasi
+            package: keyvalue
+            interfaces: [atomics, store]
 
     # Add a capability provider that enables Redis access
     - name: kvredis
@@ -70,11 +70,11 @@ spec:
         # the component to handle a request.
         - type: link
           properties:
+            target:
+              name: counter
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            target:
-              name: counter
             source:
               config:
                 - name: default-http
