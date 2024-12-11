@@ -4,7 +4,7 @@ metadata:
   name: rust-http-kv
   annotations:
     version: v0.0.1
-    description: "HTTP counter demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)"
+    description: 'HTTP counter demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
 spec:
   components:
     - name: counter

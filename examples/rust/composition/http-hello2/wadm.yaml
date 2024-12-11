@@ -4,7 +4,7 @@ metadata:
   name: http-hello-world
   annotations:
     version: v0.0.2
-    description: "HTTP hello world demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)"
+    description: 'HTTP hello world demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
 spec:
   components:
     - name: http-component
