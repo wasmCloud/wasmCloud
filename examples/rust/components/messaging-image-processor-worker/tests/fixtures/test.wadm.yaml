@@ -47,16 +47,18 @@ spec:
                       root: "/tmp/test-messaging-processor"
         - type: link
           properties:
-            target: http-task-mgr
             namespace: wasmcloud
             package: task-manager
             interfaces: [tasks]
+            target:
+              - name: http-task-mgr
         - type: link
           properties:
-            target: httpclient
             namespace: wasi
             package: http
             interfaces: [outgoing-handler]
+            target:
+              - name: httpclient
 
     - name: httpserver
       type: capability
@@ -65,10 +67,11 @@ spec:
       traits:
         - type: link
           properties:
-            target: http-task-mgr
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
+            target:
+              - name: http-task-mgr
             source:
               config:
                 - name: default-http
@@ -99,10 +102,11 @@ spec:
       traits:
         - type: link
           properties:
-            target: messaging-image-processor
             namespace: wasmcloud
             package: messaging
             interfaces: [handler]
+            target:
+              - name: messaging-image-processor
             source:
               config:
                 - name: test-default-messaging

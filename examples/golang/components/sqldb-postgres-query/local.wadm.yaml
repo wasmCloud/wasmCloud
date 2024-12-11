@@ -33,9 +33,9 @@ spec:
             package: postgres
             interfaces: [query]
             target:
-              - name: sqldb-postgres
-                config:
-                  - name: default-postgres
+              name: sqldb-postgres
+              config:
+                - name: default-postgres
 
     # Add a capability provider that interacts with the filesystem
     - name: sqldb-postgres

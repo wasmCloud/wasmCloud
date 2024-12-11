@@ -27,13 +27,14 @@ spec:
             instances: 1
         # Establish a unidirectional link to the `httpclient` provider,
         # so the `http-component` (dog-fetching) component can make use of httpclient functionality
-        # (i.e. making external web requests)            
+        # (i.e. making external web requests)
         - type: link
           properties:
-            target: httpclient
             namespace: wasi
             package: http
             interfaces: [outgoing-handler]
+            target:
+              name: httpclient
 
     # Add a capability provider that enables HTTP access
     - name: httpserver
@@ -58,10 +59,11 @@ spec:
         # the component to handle an incoming HTTP request.
         - type: link
           properties:
-            target: http-component
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
+            target:
+              name: http-component
             source:
               config:
                 - name: default-http

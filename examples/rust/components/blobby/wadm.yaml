@@ -38,11 +38,11 @@ spec:
             package: blobstore
             interfaces: [blobstore]
             target:
-              - name: blobstore
-                config:
-                  - name: root-directory
-                    properties:
-                      root: '/tmp/blobstore'
+              name: blobstore
+              config:
+                - name: root-directory
+                  properties:
+                    root: '/tmp/blobstore'
 
     # Capability Providers
     - name: http
@@ -59,10 +59,11 @@ spec:
         # the component to handle a request.
         - type: link
           properties:
-            target: blobby
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
+            target:
+              name: blobby
             source:
               config:
                 - name: default-http

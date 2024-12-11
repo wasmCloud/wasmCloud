@@ -4,7 +4,7 @@ metadata:
   name: http-hello-world
   annotations:
     version: v0.0.2
-    description: 'HTTP hello world demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
+    description: "HTTP hello world demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)"
 spec:
   components:
     - name: http-component
@@ -18,10 +18,11 @@ spec:
             instances: 1
         - type: link
           properties:
-            target: pong-component
             namespace: example
             package: pong
             interfaces: [pingpong]
+            target:
+              name: pong-component
 
     - name: pong-component
       type: component
@@ -43,10 +44,11 @@ spec:
         # to listen on port 8000 for incoming requests
         - type: link
           properties:
-            target: http-component
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
+            target:
+              name: http-component
             source:
               config:
                 - name: default-http
