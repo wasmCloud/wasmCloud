@@ -42,7 +42,7 @@ jobs:
           shared-key: "ubuntu-22.04-shared-cache"
       - name: install wash (previous version)
         if: ${{ matrix.wash-version != 'current' }}
-        uses: taiki-e/install-action@ef1f08ff7e5a9451af03151a0e3dc0785d5c9673
+        uses: taiki-e/install-action@8cf90305168a5e4e014d1f8eb7f12eaee6993ffe
         with:
           tool: wash-cli@${{ matrix.wash-version }}
       - name: build wash (current)
@@ -131,7 +131,7 @@ jobs:
         working-directory: examples/${{ matrix.project.lang }}/providers/${{ matrix.project.name }}
 
       # Install wit-bindgen
-      - uses: taiki-e/install-action@ef1f08ff7e5a9451af03151a0e3dc0785d5c9673
+      - uses: taiki-e/install-action@8cf90305168a5e4e014d1f8eb7f12eaee6993ffe
         with:
           tool: wit-bindgen-cli
 
