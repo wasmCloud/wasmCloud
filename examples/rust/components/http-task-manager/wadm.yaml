@@ -33,9 +33,9 @@ spec:
             package: postgres
             interfaces: [query]
             target:
-              - name: sqldb-postgres
-                config:
-                  - name: default-postgres
+              name: sqldb-postgres
+              config:
+                - name: default-postgres
 
     # Add a capability provider that enables HTTP access
     - name: httpserver
@@ -57,10 +57,11 @@ spec:
         # The source (this provider) is configured such that the HTTP server listens on 0.0.0.0:8000
         - type: link
           properties:
-            target: http-task-mgr
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
+            target:
+              name: http-task-mgr
             source:
               config:
                 - name: default-http

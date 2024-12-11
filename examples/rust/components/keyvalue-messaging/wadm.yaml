@@ -34,11 +34,11 @@ spec:
             interfaces: [store, atomics]
             # NOTE: The following is an example of how to configure the NATS Kv capability provider, for an individual component
             target:
-              - name: nats-kv
-                config:
-                  - name: wasmcloud
-                    properties:
-                      bucket: "WASMCLOUD"
+              name: nats-kv
+              config:
+                - name: wasmcloud
+                  properties:
+                    bucket: "WASMCLOUD"
         # # NOTE: The following is an example of how to configure additional named links to the same capability provider
         # - type: link
         #   properties:
@@ -47,17 +47,18 @@ spec:
         #     package: keyvalue
         #     interfaces: [store, atomics]
         #     target:
-        #       - name: nats-kv
-        #         config:
-        #           - name: wasmland
-        #             properties:
-        #               bucket: "WASMLAND"
+        #       name: nats-kv
+        #       config:
+        #         - name: wasmland
+        #           properties:
+        #             bucket: "WASMLAND"
         - type: link
           properties:
-            target: nats-msg
             namespace: wasmcloud
             package: messaging
             interfaces: [consumer]
+            target:
+              name: nats-msg
 
     # Add a capability provider that implements `wasi:keyvalue` using NATS
     - name: nats-kv
@@ -95,10 +96,11 @@ spec:
       traits:
         - type: link
           properties:
-            target: kv-demo
             namespace: wasmcloud
             package: messaging
             interfaces: [handler]
+            target:
+              name: kv-demo
             source:
               config:
                 - name: nats-subscription

@@ -29,11 +29,11 @@ spec:
             package: blobstore
             interfaces: [blobstore]
             target:
-              - name: blobstore-fs
-                config:
-                  - name: root-directory
-                    properties:
-                      root: '/tmp'
+              name: blobstore-fs
+              config:
+                - name: root-directory
+                  properties:
+                    root: '/tmp'
 
     # Capability provider that serves HTTP requests
     - name: httpserver
@@ -59,10 +59,11 @@ spec:
         # the component to handle an incoming HTTP request.
         - type: link
           properties:
-            target: http-blobstore
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
+            target:
+              name: http-blobstore
             source:
               config:
                 - name: default-http
