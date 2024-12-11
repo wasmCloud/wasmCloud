@@ -29,12 +29,13 @@ spec:
         # (i.e. reading/writing to a database)
         - type: link
           properties:
-            target: sqldb-postgres
             namespace: wasmcloud
             package: postgres
             interfaces: [query]
-            target_config:
-              - name: default-postgres
+            target:
+              - name: sqldb-postgres
+                config:
+                  - name: default-postgres
 
     # Add a capability provider that interacts with the filesystem
     - name: sqldb-postgres

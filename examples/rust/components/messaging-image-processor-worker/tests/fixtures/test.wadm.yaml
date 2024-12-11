@@ -18,12 +18,13 @@ spec:
             instances: 1
         - type: link
           properties:
-            target: sqldb-postgres
             namespace: wasmcloud
             package: postgres
             interfaces: [query]
-            target_config:
-              - name: test-default-postgres
+            target:
+              - name: sqldb-postgres
+                config:
+                  - name: test-default-postgres
 
     - name: messaging-image-processor
       type: component
@@ -35,14 +36,15 @@ spec:
             instances: 1
         - type: link
           properties:
-            target: blobstore-fs
             namespace: wasi
             package: blobstore
             interfaces: [blobstore]
-            target_config:
-              - name: root-directory
-                properties:
-                  root: '/tmp/test-messaging-processor'
+            target:
+              - name: blobstore-fs
+                config:
+                  - name: root-directory
+                    properties:
+                      root: "/tmp/test-messaging-processor"
         - type: link
           properties:
             target: http-task-mgr
@@ -103,4 +105,4 @@ spec:
             interfaces: [handler]
             source:
               config:
-              - name: test-default-messaging
+                - name: test-default-messaging

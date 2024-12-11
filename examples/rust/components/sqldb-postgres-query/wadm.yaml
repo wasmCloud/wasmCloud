@@ -30,12 +30,13 @@ spec:
         # (i.e. reading/writing to a database)
         - type: link
           properties:
-            target: sqldb-postgres
             namespace: wasmcloud
             package: postgres
             interfaces: [query]
-            target_config:
-              - name: default-postgres
+            target:
+              - name: sqldb-postgres
+                config:
+                  - name: default-postgres
 
     # Add a capability provider that interacts with the filesystem
     - name: sqldb-postgres
@@ -43,7 +44,7 @@ spec:
       properties:
         image: ghcr.io/wasmcloud/sqldb-postgres:0.7.1
         config:
-          - name: 'default-postgres'
+          - name: default-postgres
           ## To configure OTEL integration for this provider specifically, uncomment the lines below
           # - name: otel
           #   properties:

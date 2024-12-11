@@ -28,17 +28,18 @@ spec:
         #
         # Establish a unidirectional link to the `kvredis` (the keyvalue capability provider),
         # so the `counter` component can make use of keyvalue functionality provided by the Redis
-        # (i.e. using a keyvalue cache)            
+        # (i.e. using a keyvalue cache)
         - type: link
           properties:
-            target: kvredis
             namespace: wasi
             package: keyvalue
             interfaces: [atomics, store]
-            target_config:
-              - name: redis-url
-                properties:
-                  url: redis://0.0.0.0:6379
+            target:
+              - name: kvredis
+                config:
+                  - name: redis-url
+                    properties:
+                      url: redis://0.0.0.0:6379
 
     # Add a capability provider that enables Redis access
     - name: kvredis

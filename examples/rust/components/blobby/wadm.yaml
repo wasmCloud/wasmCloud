@@ -34,14 +34,15 @@ spec:
         # (i.e. reading/writing data blobs)
         - type: link
           properties:
-            target: blobstore
             namespace: wasi
             package: blobstore
             interfaces: [blobstore]
-            target_config:
-              - name: root-directory
-                properties:
-                  root: '/tmp/blobstore'
+            target:
+              - name: blobstore
+                config:
+                  - name: root-directory
+                    properties:
+                      root: '/tmp/blobstore'
 
     # Capability Providers
     - name: http
