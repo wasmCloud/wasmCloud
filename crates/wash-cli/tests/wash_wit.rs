@@ -95,8 +95,6 @@ async fn test_wash_wit_wkg_override() {
 
 /// Succeed on various "extended" configuration pull overrides (valid sources)
 #[tokio::test]
-#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
-#[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
 async fn test_wash_wit_extended_valid_sources() -> Result<()> {
     let test_setup = load_fixture("integrated-wkg-extended").await.unwrap();
 
