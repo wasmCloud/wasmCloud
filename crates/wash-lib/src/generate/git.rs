@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::common::clone_git_repo;
+use crate::common::{clone_git_repo, RepoRef};
 
 pub struct CloneTemplate {
     /// temp folder where project will be cloned - deleted after 'wash new' completes
@@ -27,7 +27,14 @@ pub async fn clone_git_template(
         repo_branch,
     }: CloneTemplate,
 ) -> Result<()> {
-    clone_git_repo(None, &clone_tmp, repo_url, sub_folder, Some(repo_branch)).await
+    clone_git_repo(
+        None,
+        &clone_tmp,
+        repo_url,
+        sub_folder,
+        Some(RepoRef::Branch(repo_branch)),
+    )
+    .await
 }
 
 /// Information to find a specific commit in a Git repository.
