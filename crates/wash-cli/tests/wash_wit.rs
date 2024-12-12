@@ -165,3 +165,49 @@ async fn test_wash_wit_extended_invalid_source() -> Result<()> {
     assert!(!output.status.success(), "Failed to fetch dependencies");
     Ok(())
 }
+
+/// Fail on non-tarball source
+#[tokio::test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+async fn test_wash_wit_extended_invalid_tarball() -> Result<()> {
+    let test_setup = load_fixture("integrated-wkg-extended").await.unwrap();
+
+    let output = test_setup
+        .base_command()
+        .args([
+            "wit",
+            "fetch",
+            "--config-path",
+            "invalid-tarball.wasmcloud.toml",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .expect("Failed to fetch dependencies");
+    assert!(!output.status.success(), "Failed to fetch dependencies");
+    Ok(())
+}
+
+/// Fail on invalid SHA
+#[tokio::test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+async fn test_wash_wit_extended_invalid_sha() -> Result<()> {
+    let test_setup = load_fixture("integrated-wkg-extended").await.unwrap();
+
+    let output = test_setup
+        .base_command()
+        .args([
+            "wit",
+            "fetch",
+            "--config-path",
+            "invalid-sha.wasmcloud.toml",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .expect("Failed to fetch dependencies");
+    assert!(!output.status.success(), "Failed to fetch dependencies");
+    Ok(())
+}
