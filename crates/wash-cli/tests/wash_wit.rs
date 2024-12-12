@@ -104,8 +104,8 @@ async fn test_wash_wit_extended_valid_sources() -> Result<()> {
     let fetch_status = test_setup
         .base_command()
         .args(["wit", "fetch"])
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .status()
         .await
         .expect("Failed to fetch dependencies");

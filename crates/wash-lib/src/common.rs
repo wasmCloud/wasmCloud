@@ -270,14 +270,28 @@ pub enum RepoRef {
     Sha(String),
 }
 
+impl RepoRef {
+    /// Retrieve the git ref for this repo ref
+    #[must_use]
+    pub fn git_ref(&self) -> &str {
+        match self {
+            RepoRef::Unknown(s) => s,
+            RepoRef::Branch(s) => s,
+            RepoRef::Tag(s) => s,
+            RepoRef::Sha(s) if s.starts_with("sha:") => &s[4..],
+            RepoRef::Sha(s) => s,
+        }
+    }
+}
+
 impl FromStr for RepoRef {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        if s.starts_with("sha:") {
-            return Ok(Self::Sha(s[4..].into()));
-        }
-        Ok(Self::Unknown(s.into()))
+        Ok(match s.strip_prefix("sha:") {
+            Some(s) => Self::Sha(s.into()),
+            None => Self::Unknown(s.into()),
+        })
     }
 }
 
@@ -295,12 +309,10 @@ pub async fn clone_git_repo(
         std::env::current_dir().map_err(|e| anyhow!("could not get current directory: {}", e))?;
     std::env::set_current_dir(tmp_dir)
         .map_err(|e| anyhow!("could not cd to tmp dir {}: {}", tmp_dir.display(), e))?;
-    // for convenience, allow omission of prefix 'https://' or 'https://github.com'
+
+    // For convenience, allow omission of prefix 'https://' or 'https://github.com'
     let repo_url = {
-        if repo_url.starts_with("http://")
-            || repo_url.starts_with("https://")
-            || repo_url.starts_with("git+ssh://")
-        {
+        if repo_url.starts_with("http://") || repo_url.starts_with("https://") {
             repo_url
         } else if repo_url.starts_with("git+https://")
             || repo_url.starts_with("git+http://")
@@ -314,12 +326,26 @@ pub async fn clone_git_repo(
         }
     };
 
+    // Ensure the repo URL does not have any query parameters
+    let repo_url = {
+        let mut url = reqwest::Url::parse(&repo_url)?;
+        url.query_pairs_mut().clear();
+        format!(
+            "{}://{}{}",
+            match url.scheme() {
+                "ssh" => "ssh",
+                _ => "https",
+            },
+            url.authority(),
+            url.path()
+        )
+    };
+
     // Build args for git clone command
-    let mut args = vec!["clone", &repo_url, "--depth", "1", "."];
+    let mut args = vec!["clone", &repo_url, "--no-checkout", "--depth", "1", "."];
 
     // If the ref was provided and a branch, we can clone that branch directly
     if let Some(RepoRef::Branch(ref branch)) = repo_ref {
-        args.push("--no-checkout");
         args.push("--branch");
         args.push(branch);
     }
@@ -339,15 +365,11 @@ pub async fn clone_git_repo(
         );
     }
 
-    // If the repo repo reference was a tag or SHA, then we must checkout post-pull
-    if let Some(RepoRef::Tag(ref r) | RepoRef::Sha(ref r)) = repo_ref {
-        let git_ref = match r.as_str() {
-            s if s.starts_with("sha:") => &s[4..],
-            s => s,
-        };
-
+    // If we are pulling a non-branch ref, we need to perform an actual
+    // checkout of the ref (branches use the --branch switch during checkout)
+    if let Some(repo_ref) = repo_ref {
         let checkout_cmd_out = Command::new(&git_cmd)
-            .args(["checkout", &git_ref])
+            .args(["checkout", repo_ref.git_ref()])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
