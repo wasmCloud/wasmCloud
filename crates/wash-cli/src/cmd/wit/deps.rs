@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use anyhow::{bail, Context, Result};
 use async_compression::tokio::bufread::GzipDecoder;
@@ -9,7 +10,7 @@ use reqwest::Url;
 use walkdir::WalkDir;
 use wash_lib::build::{load_lock_file, monkey_patch_fetch_logging};
 use wash_lib::cli::{CommandOutput, CommonPackageArgs};
-use wash_lib::common::clone_git_repo;
+use wash_lib::common::{clone_git_repo, RepoRef};
 use wash_lib::parser::{
     load_config, CommonConfig, ProjectConfig, RegistryConfig, RegistryPullConfig,
     RegistryPullSource, RegistryPullSourceOverride,
@@ -181,6 +182,18 @@ async fn resolve_extended_pull_configs(
                     .with_context(|| format!("failed to create temp dir for downloading [{url}]"))?
                     .into_path();
 
+                // Determine the right git ref to use, based on the submitted query params
+                let git_ref = match (
+                    query_pairs.get("branch"),
+                    query_pairs.get("sha"),
+                    query_pairs.get("ref"),
+                ) {
+                    (Some(branch), _, _) => Some(RepoRef::Branch(String::from(branch.clone()))),
+                    (_, Some(sha), _) => Some(RepoRef::from_str(sha)?),
+                    (_, _, Some(r)) => Some(RepoRef::Unknown(String::from(r.clone()))),
+                    _ => None,
+                };
+
                 clone_git_repo(
                     None,
                     &tempdir,
@@ -188,7 +201,7 @@ async fn resolve_extended_pull_configs(
                     query_pairs
                         .get("subfolder")
                         .map(|s| String::from(s.clone())),
-                    query_pairs.get("branch").map(|s| String::from(s.clone())),
+                    git_ref,
                 )
                 .await
                 .with_context(|| format!("failed to clone repo for pull source git repo [{s}]",))?;
