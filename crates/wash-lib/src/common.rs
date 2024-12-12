@@ -257,13 +257,37 @@ pub async fn get_all_inventories(
         .collect::<anyhow::Result<Vec<HostInventory>>>()
 }
 
+/// Reference that can be used on a cloned Git repo
+#[derive(Debug, Eq, PartialEq)]
+pub enum RepoRef {
+    /// When a reference is unknown/unspecified
+    Unknown(String),
+    /// A git branch (ex. 'main')
+    Branch(String),
+    /// A git tag (ex. 'v0.1.0')
+    Tag(String),
+    /// A git SHA, possibly with the (ex. 'sha256:abcdefgh...', 'abcdefgh...')
+    Sha(String),
+}
+
+impl FromStr for RepoRef {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        if s.starts_with("sha:") {
+            return Ok(Self::Sha(s[4..].into()));
+        }
+        Ok(Self::Unknown(s.into()))
+    }
+}
+
 /// Clone a git repository
 pub async fn clone_git_repo(
     git_cmd: Option<String>,
     tmp_dir: impl AsRef<Path>,
     repo_url: String,
     sub_folder: Option<String>,
-    repo_branch: Option<String>,
+    repo_ref: Option<RepoRef>,
 ) -> Result<()> {
     let git_cmd = git_cmd.unwrap_or_else(|| DEFAULT_GIT_PATH.into());
     let tmp_dir = tmp_dir.as_ref();
@@ -292,7 +316,9 @@ pub async fn clone_git_repo(
 
     // Build args for git clone command
     let mut args = vec!["clone", &repo_url, "--depth", "1", "."];
-    if let Some(ref branch) = repo_branch {
+
+    // If the ref was provided and a branch, we can clone that branch directly
+    if let Some(RepoRef::Branch(ref branch)) = repo_ref {
         args.push("--no-checkout");
         args.push("--branch");
         args.push(branch);
@@ -313,6 +339,30 @@ pub async fn clone_git_repo(
         );
     }
 
+    // If the repo repo reference was a tag or SHA, then we must checkout post-pull
+    if let Some(RepoRef::Tag(ref r) | RepoRef::Sha(ref r)) = repo_ref {
+        let git_ref = match r.as_str() {
+            s if s.starts_with("sha:") => &s[4..],
+            s => s,
+        };
+
+        let checkout_cmd_out = Command::new(&git_cmd)
+            .args(["checkout", &git_ref])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?
+            .wait_with_output()
+            .await?;
+        if !checkout_cmd_out.status.success() {
+            bail!(
+                "git checkout error: {}",
+                String::from_utf8_lossy(&checkout_cmd_out.stderr)
+            );
+        }
+    }
+
+    // After we've pulled the right ref, we can descend into a subfolder if specified
     if let Some(sub_folder) = sub_folder {
         let checkout_cmd_out = Command::new(&git_cmd)
             .args(["sparse-checkout", "set", &sub_folder])
@@ -325,24 +375,6 @@ pub async fn clone_git_repo(
         if !checkout_cmd_out.status.success() {
             bail!(
                 "git sparse-checkout set error: {}",
-                String::from_utf8_lossy(&checkout_cmd_out.stderr)
-            );
-        }
-    }
-
-    // Checkout the branch, if provided
-    if let Some(branch) = repo_branch {
-        let checkout_cmd_out = Command::new(&git_cmd)
-            .args(["checkout", &branch])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?
-            .wait_with_output()
-            .await?;
-        if !checkout_cmd_out.status.success() {
-            bail!(
-                "git checkout error: {}",
                 String::from_utf8_lossy(&checkout_cmd_out.stderr)
             );
         }
