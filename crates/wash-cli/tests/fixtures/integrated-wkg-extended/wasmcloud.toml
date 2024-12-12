@@ -19,4 +19,4 @@ source = "https://github.com/WebAssembly/wasi-config/archive/v0.2.0-draft.tar.gz
 
 [[registry.pull.sources]]
 target = "wasi:blobstore"
-source = "git+https://github.com/WebAssembly/wasi-blobstore.git"
+source = "git+https://github.com/WebAssembly/wasi-blobstore.git?sha=005c4250d6d2c969dbc7d7294210c995b4fb86fd"
