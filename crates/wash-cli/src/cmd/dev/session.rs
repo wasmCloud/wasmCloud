@@ -388,18 +388,25 @@ impl WashDevSession {
                         )
                     })?;
                 let mut lines = tokio::io::BufReader::new(log_file).lines();
+                let re = regex::Regex::new(if wasmcloud_opts.enable_structured_logging {
+                    r#"\"host_id\":\s?\"([A-Z0-9]+)\""#
+                } else {
+                    r#"host_id="([A-Z0-9]+)"#
+                })
+                .context("failed to compile regex")?;
                 loop {
                     if let Some(line) = lines
                         .next_line()
                         .await
                         .context("failed to read line from file")?
                     {
-                        if let Some(host_id) = line
-                            .split_once("host_id=\"")
-                            .map(|(_, rhs)| &rhs[0..rhs.len() - 1])
-                        {
-                            return Ok(host_id.to_string()) as anyhow::Result<String>;
-                        }
+                        return Ok(re
+                            .captures(&line)
+                            .context("failed to capture host ID")?
+                            .get(1)
+                            .context("failed to get capture group")?
+                            .as_str()
+                            .to_string()) as anyhow::Result<String>;
                     }
                 }
             })
