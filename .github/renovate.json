@@ -6,6 +6,7 @@
     "enabledManagers": [
         "custom.regex"
     ],
+    "dependencyDashboard": false,
     "repositories": [
         "wasmCloud/wasmCloud"
     ],
