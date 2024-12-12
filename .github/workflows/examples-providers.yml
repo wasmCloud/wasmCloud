@@ -42,7 +42,7 @@ jobs:
           shared-key: "ubuntu-22.04-shared-cache"
       - name: install wash (previous version)
         if: ${{ matrix.wash-version != 'current' }}
-        uses: taiki-e/install-action@f635080d9c6d032e2de5576897c6878b7dd4c4a9
+        uses: taiki-e/install-action@8cf90305168a5e4e014d1f8eb7f12eaee6993ffe
         with:
           tool: wash-cli@${{ matrix.wash-version }}
       - name: build wash (current)
@@ -99,7 +99,7 @@ jobs:
           echo "$(realpath ./artifacts)" >> "$GITHUB_PATH";
 
       # Language specific setup
-      - uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed
+      - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a
         if: ${{ matrix.project.lang == 'golang' }}
         with:
           go-version: ${{ matrix.project.lang_version }}
@@ -131,7 +131,7 @@ jobs:
         working-directory: examples/${{ matrix.project.lang }}/providers/${{ matrix.project.name }}
 
       # Install wit-bindgen
-      - uses: taiki-e/install-action@f635080d9c6d032e2de5576897c6878b7dd4c4a9
+      - uses: taiki-e/install-action@8cf90305168a5e4e014d1f8eb7f12eaee6993ffe
         with:
           tool: wit-bindgen-cli
 

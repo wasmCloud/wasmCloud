@@ -15,6 +15,7 @@
     "lint:eslint": "eslint src tests --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "lint:eslint:fix": "yarn lint:eslint --fix",
     "test:e2e": "yarn test:playwright:headless",
+    "test:e2e:setup": "yarn playwright install --with-deps chromium",
     "test:playwright:headless": "playwright test",
     "test:playwright:ui": "playwright test --ui",
     "format": "yarn format:prettier",
@@ -50,7 +51,7 @@
     "nats.ws": "^1.29.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-hook-form": "^7.53.2",
+    "react-hook-form": "^7.54.0",
     "react-router-dom": "^6.28.0",
     "tailwind-merge": "^2.5.5",
     "tailwindcss-animate": "^1.0.7",
@@ -78,11 +79,11 @@
     "eslint-plugin-import": "^2.31.0",
     "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-react": "^7.37.2",
-    "eslint-plugin-react-hooks": "^5.0.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-react-refresh": "^0.4.16",
     "eslint-plugin-tailwindcss": "^3.17.5",
     "eslint-plugin-unicorn": "^56.0.1",
-    "execa": "^9.5.1",
+    "execa": "^9.5.2",
     "get-port": "^7.1.0",
     "pino": "^9.5.0",
     "postcss": "^8.4.49",
@@ -94,7 +95,7 @@
     "uuid": "^11.0.3",
     "vite": "^6.0.3",
     "vite-plugin-svgr": "^4.3.0",
-    "vite-tsconfig-paths": "^5.1.3"
+    "vite-tsconfig-paths": "^5.1.4"
   },
   "resolutions": {
     "cross-spawn": "^7.0.5"

@@ -30,7 +30,7 @@ spec:
             target_config:
               - name: redis-url
                 properties:
-                  url: redis://127.0.0.1:6379
+                  url: redis://0.0.0.0:6379
 
     # Add a capability provider that enables Redis access
     - name: kvredis
@@ -76,4 +76,4 @@ spec:
             source_config:
               - name: default-http
                 properties:
-                  address: 127.0.0.1:8000
+                  address: 0.0.0.0:8000
