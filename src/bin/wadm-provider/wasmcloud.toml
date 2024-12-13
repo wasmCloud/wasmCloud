@@ -1,0 +1,7 @@
+name = "WADM"
+language = "rust"
+type = "provider"
+
+[provider]
+bin_name = "wadm-provider"
+vendor = "wasmCloud"
