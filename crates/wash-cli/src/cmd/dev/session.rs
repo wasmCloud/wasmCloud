@@ -378,38 +378,10 @@ impl WashDevSession {
 
             // Read the log until we get output that
             let _wasmcloud_log_path = wasmcloud_log_path.clone();
-            let host_id = tokio::time::timeout(tokio::time::Duration::from_secs(1), async move {
-                let log_file = tokio::fs::File::open(&_wasmcloud_log_path)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "failed to open log file @ [{}]",
-                            _wasmcloud_log_path.display()
-                        )
-                    })?;
-                let mut lines = tokio::io::BufReader::new(log_file).lines();
-                let re = regex::Regex::new(if wasmcloud_opts.enable_structured_logging {
-                    r#"\"host_id\":\s?\"([A-Z0-9]+)\""#
-                } else {
-                    r#"host_id="([A-Z0-9]+)"#
-                })
-                .context("failed to compile regex")?;
-                loop {
-                    if let Some(line) = lines
-                        .next_line()
-                        .await
-                        .context("failed to read line from file")?
-                    {
-                        return Ok(re
-                            .captures(&line)
-                            .context("failed to capture host ID")?
-                            .get(1)
-                            .context("failed to get capture group")?
-                            .as_str()
-                            .to_string()) as anyhow::Result<String>;
-                    }
-                }
-            })
+            let host_id = tokio::time::timeout(
+                tokio::time::Duration::from_secs(1),
+                get_host_id(_wasmcloud_log_path),
+            )
             .await
             .context("timeout expired while reading for Host ID in logs")?
             .context("failed to retrieve host ID from logs")?;
@@ -430,5 +402,57 @@ impl WashDevSession {
         self.host_data = Some((host_id, wasmcloud_log_path));
 
         Ok((nats_child, wadm_child, wasmcloud_child))
+    }
+}
+
+async fn get_host_id(log_path: PathBuf) -> anyhow::Result<String> {
+    let log_file = tokio::fs::File::open(&log_path)
+        .await
+        .with_context(|| format!("failed to open log file @ [{}]", &log_path.display()))?;
+
+    // looks for the two variations of the log line containing the host_id:
+    //   JSON: "host_id":"ABC123"
+    //   LOG:  host_id="ABC123"
+    let re = regex::Regex::new(r#"(?:\"host_id\":\s?\"|host_id=\")([A-Z0-9]+)\""#)
+        .context("failed to compile regex")?;
+
+    let mut lines = tokio::io::BufReader::new(log_file).lines();
+    loop {
+        if let Some(line) = lines
+            .next_line()
+            .await
+            .context("failed to read line from file")?
+        {
+            // if there's no captures, this line doesn't contain the host_id, keep looking
+            if let Some(captures) = re.captures(&line) {
+                return Ok(captures
+                    .get(1)
+                    .context("failed to get capture group")?
+                    .as_str()
+                    .to_string());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[tokio::test]
+    async fn test_get_host_id_from_standard_logging_pattern() {
+        let log_path = NamedTempFile::new().unwrap().path().to_path_buf();
+        tokio::fs::write(&log_path, "2024-12-13T17:17:07.287574Z  INFO wasmcloud_host::wasmbus: wasmCloud host started host_id=\"ABC123\"").await.unwrap();
+        let host_id = get_host_id(log_path.clone()).await.unwrap();
+        assert_eq!(host_id, "ABC123");
+    }
+
+    #[tokio::test]
+    async fn test_get_host_id_from_structured_logging_pattern() {
+        let log_path = NamedTempFile::new().unwrap().path().to_path_buf();
+        tokio::fs::write(&log_path, "{{\"timestamp\":\"2024-12-12T01:43:53.749961Z\",\"level\":\"INFO\",\"fields\":{{\"message\":\"wasmCloud host started\",\"host_id\":\"DEF456\"}},\"target\":\"wasmcloud_host::wasmbus\",\"span\":{{\"name\":\"new\"}},\"spans\":[{{\"name\":\"new\"}}]}}").await.unwrap();
+        let host_id = get_host_id(log_path.clone()).await.unwrap();
+        assert_eq!(host_id, "DEF456");
     }
 }
