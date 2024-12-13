@@ -53,7 +53,7 @@ jobs:
         uses: ./.github/actions/ts-setup
 
       - name: Install `wash` CLI
-        uses: taiki-e/install-action@8cf90305168a5e4e014d1f8eb7f12eaee6993ffe
+        uses: taiki-e/install-action@a2ff97ae7a403b9e691f3d5d5e214415068a681b
         with:
           tool: wash-cli@${{ matrix.wash.version }}
 
