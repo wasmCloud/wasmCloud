@@ -40,6 +40,8 @@ on:
       - component-http-password-checker-rust-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-password-checker-rust-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-task-manager-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-messaging-image-processor-worker-v[0-9]+.[0-9]+.[0-9]+*
+      - component-messaging-image-processor-worker-v[0-9]+.[0-9]+.[0-9]+-*
   pull_request:
     branches: [main]
     paths:
@@ -217,6 +219,12 @@ jobs:
             wasm-bin: 'http_password_checker_s.wasm'
             test-deploy: local.wadm.yaml
 
+          - folder: "messaging-image-processor-worker"
+            tag-prefix: 'component-messaging-image-processor-worker-rust-v'
+            lang: "rust"
+            wasm-bin: 'messaging_image_processor_worker_s.wasm'
+            test-deploy: local.wadm.yaml
+
           # Python example components
           - folder: 'http-hello-world'
             tag-prefix: 'component-http-hello-world-python-v'
@@ -384,6 +392,11 @@ jobs:
             tag-prefix: 'component-http-password-checker-rust-v'
             lang: 'rust'
             wasm-bin: 'http_password_checker_s.wasm'
+
+          - folder: 'messaging-image-processor-worker'
+            tag-prefix: 'component-messaging-image-processor-worker-rust-v'
+            lang: 'rust'
+            wasm-bin: 'messaging_image_processor_worker_s.wasm'
 
           # Typescript
           - folder: 'http-hello-world'
