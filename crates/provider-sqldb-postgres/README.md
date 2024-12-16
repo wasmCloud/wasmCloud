@@ -51,7 +51,7 @@ spec:
     - name: todo-app
       type: component
       properties:
-        image: ghcr.io/wasmcloud/component-todoapp-postgres-rust:0.1.0
+        image: file://build/todo_app_s.wasm
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
