@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 
 use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};
+use opentelemetry::trace::TraceContextExt;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -63,6 +64,22 @@ impl TraceContextInjector {
     pub fn new_with_span(headers: TraceContext) -> Self {
         let mut header_map = Self::new(headers);
         header_map.inject_context();
+        header_map
+    }
+
+    // Creates a new injector with the context extracted from the given extractor. If the context is empty, it will use the current span's context
+    pub fn new_with_extractor(extractor: &dyn Extractor) -> Self {
+        let mut header_map = Self::default();
+        let ctx_propagator = TraceContextPropagator::new();
+        let context = ctx_propagator.extract(extractor);
+
+        // Check if the extracted context is empty and use the current span's context if necessary
+        if !context.span().span_context().is_valid() {
+            ctx_propagator.inject_context(&Span::current().context(), &mut header_map);
+        } else {
+            ctx_propagator.inject_context(&context, &mut header_map);
+        }
+
         header_map
     }
 

@@ -157,6 +157,8 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
         >,
     > {
         propagate_trace_for_ctx!(cx);
+        wasmcloud_provider_sdk::wasmcloud_tracing::http::HeaderInjector(&mut request.headers_mut())
+            .inject_context();
 
         // TODO: Use opts
         let _ = options;
