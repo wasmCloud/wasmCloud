@@ -42,7 +42,11 @@ export function LinksTable(): React.ReactElement {
 
   return (
     <div>
-      <DataTable columns={columns as ColumnDef<WasmCloudLink>[]} data={data} />
+      <DataTable
+        columns={columns as ColumnDef<WasmCloudLink>[]}
+        data={data}
+        rowProps={{'data-testid': 'link'}}
+      />
     </div>
   );
 }

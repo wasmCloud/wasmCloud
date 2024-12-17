@@ -21,6 +21,17 @@ const config = {
       },
     },
   },
+  overrides: [
+    {
+      files: ['*.spec.ts?(x)', '*.fixture.ts?(x)', '*.test.ts?(x)'],
+      rules: {
+        // the 'use' function is not a react hook
+        'react-hooks/rules-of-hooks': 'off',
+        // playwright Locators do not have the dataset property
+        'unicorn/prefer-dom-node-dataset': 'off',
+      },
+    },
+  ],
 };
 
 module.exports = config;

@@ -178,7 +178,7 @@ const ProviderTableBody = (table: ReactTable<WasmCloudProvider>) => {
     <TableBody>
       {table.getRowModel().rows?.length ? (
         table.getRowModel().rows.map((row) => (
-          <Collapsible key={row.id} asChild>
+          <Collapsible key={row.id} asChild data-testid="provider">
             <>
               <ProvidersTableMainRow {...row} />
               <CollapsibleContent asChild>

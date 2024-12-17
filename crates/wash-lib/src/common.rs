@@ -1,13 +1,19 @@
-use std::{
-    fmt::{Debug, Display},
-    str::FromStr,
-};
+use std::fmt::{Debug, Display};
+use std::path::Path;
+use std::process::Stdio;
+use std::str::FromStr;
+
+use anyhow::{anyhow, bail, Result};
+use tokio::process::Command;
 
 use anyhow::Context;
 use tracing::error;
 use wasmcloud_control_interface::HostInventory;
 
 use crate::id::{ModuleId, ServerId, ServiceId};
+
+/// Default path to the `git` command (assumes it exists on PATH)
+const DEFAULT_GIT_PATH: &str = "git";
 
 const CLAIMS_CALL_ALIAS: &str = "call_alias";
 pub(crate) const CLAIMS_NAME: &str = "name";
@@ -249,4 +255,153 @@ pub async fn get_all_inventories(
         .into_iter()
         .filter_map(Result::transpose)
         .collect::<anyhow::Result<Vec<HostInventory>>>()
+}
+
+/// Reference that can be used on a cloned Git repo
+#[derive(Debug, Eq, PartialEq)]
+pub enum RepoRef {
+    /// When a reference is unknown/unspecified
+    Unknown(String),
+    /// A git branch (ex. 'main')
+    Branch(String),
+    /// A git tag (ex. 'v0.1.0')
+    Tag(String),
+    /// A git SHA, possibly with the (ex. 'sha256:abcdefgh...', 'abcdefgh...')
+    Sha(String),
+}
+
+impl RepoRef {
+    /// Retrieve the git ref for this repo ref
+    #[must_use]
+    pub fn git_ref(&self) -> &str {
+        match self {
+            RepoRef::Unknown(s) => s,
+            RepoRef::Branch(s) => s,
+            RepoRef::Tag(s) => s,
+            RepoRef::Sha(s) if s.starts_with("sha:") => &s[4..],
+            RepoRef::Sha(s) => s,
+        }
+    }
+}
+
+impl FromStr for RepoRef {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(match s.strip_prefix("sha:") {
+            Some(s) => Self::Sha(s.into()),
+            None => Self::Unknown(s.into()),
+        })
+    }
+}
+
+/// Clone a git repository
+pub async fn clone_git_repo(
+    git_cmd: Option<String>,
+    tmp_dir: impl AsRef<Path>,
+    repo_url: String,
+    sub_folder: Option<String>,
+    repo_ref: Option<RepoRef>,
+) -> Result<()> {
+    let git_cmd = git_cmd.unwrap_or_else(|| DEFAULT_GIT_PATH.into());
+    let tmp_dir = tmp_dir.as_ref();
+    let cwd =
+        std::env::current_dir().map_err(|e| anyhow!("could not get current directory: {}", e))?;
+    std::env::set_current_dir(tmp_dir)
+        .map_err(|e| anyhow!("could not cd to tmp dir {}: {}", tmp_dir.display(), e))?;
+
+    // For convenience, allow omission of prefix 'https://' or 'https://github.com'
+    let repo_url = {
+        if repo_url.starts_with("http://") || repo_url.starts_with("https://") {
+            repo_url
+        } else if repo_url.starts_with("git+https://")
+            || repo_url.starts_with("git+http://")
+            || repo_url.starts_with("git+ssh")
+        {
+            repo_url.replace("git+", "")
+        } else if repo_url.starts_with("github.com/") {
+            format!("https://{}", &repo_url)
+        } else {
+            format!("https://github.com/{}", repo_url.trim_start_matches('/'))
+        }
+    };
+
+    // Ensure the repo URL does not have any query parameters
+    let repo_url = {
+        let mut url = reqwest::Url::parse(&repo_url)?;
+        url.query_pairs_mut().clear();
+        format!(
+            "{}://{}{}",
+            match url.scheme() {
+                "ssh" => "ssh",
+                _ => "https",
+            },
+            url.authority(),
+            url.path()
+        )
+    };
+
+    // Build args for git clone command
+    let mut args = vec!["clone", &repo_url, "--no-checkout", "--depth", "1", "."];
+
+    // If the ref was provided and a branch, we can clone that branch directly
+    if let Some(RepoRef::Branch(ref branch)) = repo_ref {
+        args.push("--branch");
+        args.push(branch);
+    }
+
+    let clone_cmd_out = Command::new(&git_cmd)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?
+        .wait_with_output()
+        .await?;
+    if !clone_cmd_out.status.success() {
+        bail!(
+            "git clone error: {}",
+            String::from_utf8_lossy(&clone_cmd_out.stderr)
+        );
+    }
+
+    // If we are pulling a non-branch ref, we need to perform an actual
+    // checkout of the ref (branches use the --branch switch during checkout)
+    if let Some(repo_ref) = repo_ref {
+        let checkout_cmd_out = Command::new(&git_cmd)
+            .args(["checkout", repo_ref.git_ref()])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?
+            .wait_with_output()
+            .await?;
+        if !checkout_cmd_out.status.success() {
+            bail!(
+                "git checkout error: {}",
+                String::from_utf8_lossy(&checkout_cmd_out.stderr)
+            );
+        }
+    }
+
+    // After we've pulled the right ref, we can descend into a subfolder if specified
+    if let Some(sub_folder) = sub_folder {
+        let checkout_cmd_out = Command::new(&git_cmd)
+            .args(["sparse-checkout", "set", &sub_folder])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?
+            .wait_with_output()
+            .await?;
+        if !checkout_cmd_out.status.success() {
+            bail!(
+                "git sparse-checkout set error: {}",
+                String::from_utf8_lossy(&checkout_cmd_out.stderr)
+            );
+        }
+    }
+
+    std::env::set_current_dir(cwd)?;
+    Ok(())
 }
