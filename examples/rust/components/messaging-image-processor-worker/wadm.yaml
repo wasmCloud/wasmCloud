@@ -72,7 +72,7 @@ spec:
     - name: httpserver
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.23.2
+        image: ghcr.io/wasmcloud/http-server:0.25.0
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
@@ -109,7 +109,7 @@ spec:
     - name: blobstore-fs
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/blobstore-fs:0.10.1
+        image: ghcr.io/wasmcloud/blobstore-fs:0.10.2
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
@@ -122,7 +122,7 @@ spec:
     - name: sqldb-postgres
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/sqldb-postgres:0.7.1
+        image: ghcr.io/wasmcloud/sqldb-postgres:0.7.2
         config:
           - name: default-postgres
           ## To configure OTEL integration for this provider specifically, uncomment the lines below
@@ -136,7 +136,7 @@ spec:
     - name: messaging-nats
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/messaging-nats:0.23.1
+        image: ghcr.io/wasmcloud/messaging-nats:0.24.0
           ## To configure OTEL integration for this provider specifically, uncomment the lines below
           # - name: otel
           #   properties:
