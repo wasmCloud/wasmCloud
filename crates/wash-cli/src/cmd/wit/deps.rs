@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use crate::cmd::config::path::ProjectPaths;
 use anyhow::{bail, Context, Result};
 use async_compression::tokio::bufread::GzipDecoder;
 use clap::Args;
@@ -66,8 +67,8 @@ pub async fn invoke(
         None => wasm_pkg_core::config::Config::load().await?,
     };
 
-    let mut lock_file =
-        load_lock_file(std::env::current_dir().context("failed to get current directory")?).await?;
+    let project_paths = ProjectPaths::from_current_dir()?;
+    let mut lock_file = load_lock_file(project_paths.project_dir()).await?;
 
     // Start building the wkg client config
     let mut wkg_client_config = common.load_config().await?;
