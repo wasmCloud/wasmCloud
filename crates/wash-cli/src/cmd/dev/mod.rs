@@ -17,8 +17,9 @@ use wash_lib::generate::emoji;
 use wash_lib::id::ServerId;
 use wash_lib::parser::load_config;
 
-use crate::cmd::up::{
-    nats_client_from_wasmcloud_opts, remove_wadm_pidfile, NatsOpts, WadmOpts, WasmcloudOpts,
+use crate::cmd::{
+    config::path::ProjectPaths,
+    up::{nats_client_from_wasmcloud_opts, remove_wadm_pidfile, NatsOpts, WadmOpts, WasmcloudOpts},
 };
 
 mod deps;
@@ -126,8 +127,10 @@ pub async fn handle_command(
     cmd: DevCommand,
     output_kind: wash_lib::cli::OutputKind,
 ) -> Result<CommandOutput> {
-    let current_dir = std::env::current_dir()?;
-    let project_path = cmd.code_dir.unwrap_or(current_dir);
+    let project_paths = ProjectPaths::from_current_dir()?;
+    let project_path = cmd
+        .code_dir
+        .unwrap_or_else(|| project_paths.project_dir().to_path_buf());
     let project_cfg = load_config(Some(project_path.clone()), Some(true)).await?;
 
     let mut wash_dev_session = WashDevSession::from_sessions_file(&project_path)
