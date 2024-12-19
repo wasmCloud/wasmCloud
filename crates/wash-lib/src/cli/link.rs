@@ -12,20 +12,28 @@ pub struct LinkDelCommand {
     pub opts: CliConnectionOpts,
 
     /// Component ID or name of the source of the link.
-    #[clap(name = "source-id", value_parser = validate_component_id)]
-    pub source_id: String,
+    #[clap(name = "source-id", value_parser = validate_component_id, required_unless_present("all"))]
+    pub source_id: Option<String>,
 
     /// Link name, defaults to "default"
-    #[clap(short = 'l', long = "link-name")]
+    #[clap(short = 'l', long = "link-name", required_unless_present("all"))]
     pub link_name: Option<String>,
 
     /// WIT namespace of the link
-    #[clap(name = "wit-namespace")]
-    pub wit_namespace: String,
+    #[clap(name = "wit-namespace", required_unless_present("all"))]
+    pub wit_namespace: Option<String>,
 
     /// WIT package of the link
-    #[clap(name = "wit-package")]
-    pub wit_package: String,
+    #[clap(name = "wit-package", required_unless_present("all"))]
+    pub wit_package: Option<String>,
+
+    /// Delete all links present in the cluster (with prompt)
+    #[clap(long = "all", default_value = "false")]
+    pub all: bool,
+
+    /// Force an operation that is otherwise seen as risky
+    #[clap(long = "force", default_value = "false")]
+    pub force: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
