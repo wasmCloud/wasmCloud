@@ -61,7 +61,7 @@ components:
   - name: httpserver
     type: capability
     properties:
-      image: ghcr.io/wasmcloud/http-server:0.23.2
+      image: ghcr.io/wasmcloud/http-server:0.25.0
       config:
         - name: http-config
           properties:
