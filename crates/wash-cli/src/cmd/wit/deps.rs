@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
+use anyhow::{bail, Context, Result};
+use async_compression::tokio::bufread::GzipDecoder;
 use clap::Args;
 use wash_lib::build::load_lock_file;
 use wash_lib::cli::{CommandOutput, CommonPackageArgs};
@@ -38,7 +40,7 @@ pub async fn invoke(
     }: DepsArgs,
 ) -> anyhow::Result<CommandOutput> {
     // Load wasmcloud.toml configuration, if present
-    let project_config = match load_config(config_path, Some(true)).await {
+    let project_config = match load_config(config_path.clone(), Some(true)).await {
         Ok(v) => Some(v),
         Err(e) => {
             eprintln!("failed to load project configuration: {e}");
@@ -54,8 +56,8 @@ pub async fn invoke(
         None => wasm_pkg_core::config::Config::load().await?,
     };
 
-    let mut lock_file =
-        load_lock_file(std::env::current_dir().context("failed to get current directory")?).await?;
+    let project_cfg = load_config(config_path, Some(true)).await?;
+    let mut lock_file = load_lock_file(&project_cfg.wasmcloud_toml_dir).await?;
 
     // Start building the wkg client config
     let mut wkg = wash_lib::deps::WkgFetcher::from_common(&common, wkg_config).await?;
