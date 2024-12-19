@@ -51,6 +51,8 @@ on:
       - 'provider-blobstore-azure-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+'
       - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-blobstore-nats-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-blobstore-nats-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+'
       - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-http-client-v[0-9].[0-9]+.[0-9]+'
@@ -189,6 +191,7 @@ jobs:
 
       - run: move "target/release/blobstore-azure-provider.exe" "artifact/bin/blobstore-azure-provider.exe"
       - run: move "target/release/blobstore-fs-provider.exe" "artifact/bin/blobstore-fs-provider.exe"
+      - run: move "target/release/blobstore-nats-provider.exe" "artifact/bin/blobstore-nats-provider.exe"
       - run: move "target/release/blobstore-s3-provider.exe" "artifact/bin/blobstore-s3-provider.exe"
       - run: move "target/release/http-client-provider.exe" "artifact/bin/http-client-provider.exe"
       - run: move "target/release/http-server-provider.exe" "artifact/bin/http-server-provider.exe"
@@ -315,6 +318,9 @@ jobs:
 
           - name: blobstore-fs
             subject: BLOBSTORE_FS_SUBJECT
+
+          - name: blobstore-nats
+            subject: BLOBSTORE_NATS_SUBJECT
 
           - name: blobstore-s3
             subject: BLOBSTORE_S3_SUBJECT

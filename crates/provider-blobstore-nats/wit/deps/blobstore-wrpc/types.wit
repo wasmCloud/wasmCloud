@@ -1,0 +1,28 @@
+interface types {
+    use wasi:blobstore/types@0.2.0-draft.{
+        container-metadata as wasi-container-metadata,
+        container-name as wasi-container-name,
+        object-id as wasi-object-id,
+        object-metadata as wasi-object-metadata,
+        timestamp,
+        object-size,
+    };
+    
+    // information about a container
+    record container-metadata {
+      // date and time container was created
+      created-at: timestamp,
+    }
+
+    type container-name = wasi-container-name;
+    type object-id = wasi-object-id;
+
+    // information about an object
+    record object-metadata {
+        // date and time the object was created
+        created-at: timestamp,
+        // size of the object, in bytes
+        size: object-size,
+    }
+}
+
