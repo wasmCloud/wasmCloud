@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Context;
+use crate::cmd::config::path::ProjectPaths;
 use clap::Args;
 use wash_lib::build::load_lock_file;
 use wash_lib::cli::{CommandOutput, CommonPackageArgs};
@@ -45,8 +45,8 @@ pub async fn invoke(
         wasm_pkg_core::config::Config::load().await?
     };
 
-    let mut lock_file =
-        load_lock_file(std::env::current_dir().context("failed to get current directory")?).await?;
+    let project_paths = ProjectPaths::from_current_dir()?;
+    let mut lock_file = load_lock_file(project_paths.project_dir()).await?;
 
     // Build the WIT package
     let (pkg_ref, version, bytes) =
