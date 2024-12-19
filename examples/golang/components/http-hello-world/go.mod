@@ -1,4 +1,4 @@
-module github.com/wasmcloud/wasmcloud/examples/golang/components/http-hello-world
+module {{project-name}}
 
 go 1.23.0
 
