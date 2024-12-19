@@ -8,6 +8,7 @@ use crate::secrets::ensure_not_secret;
 
 pub(crate) mod delete;
 pub(crate) mod get;
+pub(crate) mod path;
 pub(crate) mod put;
 
 #[derive(Debug, Clone, Subcommand)]
