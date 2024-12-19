@@ -126,8 +126,10 @@ pub async fn handle_command(
     cmd: DevCommand,
     output_kind: wash_lib::cli::OutputKind,
 ) -> Result<CommandOutput> {
-    let current_dir = std::env::current_dir()?;
-    let project_path = cmd.code_dir.unwrap_or(current_dir);
+    let project_cfg = load_config(cmd.package_args.config_path().cloned(), Some(true)).await?;
+    let project_path = cmd
+        .code_dir
+        .unwrap_or_else(|| project_cfg.wasmcloud_toml_dir.clone());
     let project_cfg = load_config(Some(project_path.clone()), Some(true)).await?;
 
     let mut wash_dev_session = WashDevSession::from_sessions_file(&project_path)
