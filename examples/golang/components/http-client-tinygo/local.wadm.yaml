@@ -27,7 +27,8 @@ spec:
         # (i.e. making external web requests)
         - type: link
           properties:
-            target: httpclient
+            target:
+              name: httpclient
             namespace: wasi
             package: http
             interfaces: [outgoing-handler]
@@ -55,14 +56,16 @@ spec:
         # the component to handle a request.
         - type: link
           properties:
-            target: http-component
+            target:
+              name: http-component
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            source_config:
-              - name: default-http
-                properties:
-                  address: 0.0.0.0:8000
+            source:
+              config:
+                - name: default-http
+                  properties:
+                    address: 0.0.0.0:8000
 
     - name: httpclient
       type: capability

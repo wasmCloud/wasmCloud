@@ -18,7 +18,8 @@ spec:
             instances: 1
         - type: link
           properties:
-            target: pong-component
+            target:
+              name: pong-component
             namespace: example
             package: pong
             interfaces: [pingpong]
@@ -43,11 +44,13 @@ spec:
         # to listen on port 8000 for incoming requests
         - type: link
           properties:
-            target: http-component
+            target:
+              name: http-component
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            source_config:
-              - name: default-http
-                properties:
-                  address: 0.0.0.0:8000
+            source:
+              config:
+                - name: default-http
+                  properties:
+                    address: 0.0.0.0:8000
