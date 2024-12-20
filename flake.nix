@@ -23,173 +23,181 @@
   inputs.wit-deps.inputs.nixlib.follows = "nixlib";
   inputs.wit-deps.url = "github:bytecodealliance/wit-deps/v0.4.0";
 
-  outputs = {
-    nixify,
-    nixlib,
-    wit-deps,
-    ...
-  }:
+  outputs =
+    {
+      nixify,
+      nixlib,
+      wit-deps,
+      ...
+    }:
     with builtins;
     with nixlib.lib;
     with nixify.lib;
-      rust.mkFlake {
-        src = ./.;
+    rust.mkFlake {
+      src = ./.;
 
-        nixpkgsConfig.allowUnfree = true;
+      nixpkgsConfig.allowUnfree = true;
 
-        overlays = [
-          wit-deps.overlays.default
-        ];
+      overlays = [
+        wit-deps.overlays.default
+      ];
 
-        excludePaths = let
-          washboardExclude = map (name: "typescript/${name}") (remove "dist" (attrNames (readDir ./typescript)));
+      excludePaths =
+        let
+          washboardExclude = map (name: "typescript/${name}") (
+            remove "dist" (attrNames (readDir ./typescript))
+          );
         in
-          [
-            ".devcontainer"
-            ".dockerignore"
-            ".envrc"
-            ".github"
-            ".gitignore"
-            "ADOPTERS.md"
-            "adr"
-            "awesome-wasmcloud"
-            "brand"
-            "CHANGELOG.md"
-            "chart"
-            "charts"
-            "CODE_OF_CONDUCT.md"
-            "CODEOWNERS"
-            "CONTRIBUTING.md"
-            "CONTRIBUTION_LADDER.md"
-            "crates/wash-cli/.devcontainer"
-            "crates/wash-cli/build"
-            "crates/wash-cli/Completions.md"
-            "crates/wash-cli/CONTRIBUTING.md"
-            "crates/wash-cli/Dockerfile"
-            "crates/wash-cli/docs"
-            "crates/wash-cli/Makefile"
-            "crates/wash-cli/snap"
-            "crates/wash-cli/tools"
-            "Dockerfile"
-            "flake.nix"
-            "garnix.yaml"
-            "GOVERNANCE.md"
-            "LICENSE"
-            "MAINTAINERS.md"
-            "nix"
-            "OWNERS"
-            "performance.md"
-            "README.md"
-            "RELEASE.md"
-            "RELEASE_RUNBOOK.md"
-            "ROADMAP.md"
-            "rust-toolchain.toml"
-            "SECURITY.md"
-          ]
-          ++ washboardExclude;
+        [
+          ".devcontainer"
+          ".dockerignore"
+          ".envrc"
+          ".github"
+          ".gitignore"
+          "ADOPTERS.md"
+          "adr"
+          "awesome-wasmcloud"
+          "brand"
+          "CHANGELOG.md"
+          "chart"
+          "charts"
+          "CODE_OF_CONDUCT.md"
+          "CODEOWNERS"
+          "CONTRIBUTING.md"
+          "CONTRIBUTION_LADDER.md"
+          "crates/wash-cli/.devcontainer"
+          "crates/wash-cli/build"
+          "crates/wash-cli/Completions.md"
+          "crates/wash-cli/CONTRIBUTING.md"
+          "crates/wash-cli/Dockerfile"
+          "crates/wash-cli/docs"
+          "crates/wash-cli/Makefile"
+          "crates/wash-cli/snap"
+          "crates/wash-cli/tools"
+          "Dockerfile"
+          "flake.nix"
+          "garnix.yaml"
+          "GOVERNANCE.md"
+          "LICENSE"
+          "MAINTAINERS.md"
+          "nix"
+          "OWNERS"
+          "performance.md"
+          "README.md"
+          "RELEASE.md"
+          "RELEASE_RUNBOOK.md"
+          "ROADMAP.md"
+          "rust-toolchain.toml"
+          "SECURITY.md"
+        ]
+        ++ washboardExclude;
 
-        doCheck = false; # testing is performed in checks via `nextest`
+      doCheck = false; # testing is performed in checks via `nextest`
 
-        targets.arm-unknown-linux-gnueabihf = false;
-        targets.arm-unknown-linux-musleabihf = false;
-        targets.armv7-unknown-linux-gnueabihf = false;
-        targets.armv7-unknown-linux-musleabihf = false;
-        targets.powerpc64le-unknown-linux-gnu = false;
-        targets.s390x-unknown-linux-gnu = false;
-        targets.wasm32-unknown-unknown = false;
-        targets.wasm32-wasip1 = false;
+      targets.arm-unknown-linux-gnueabihf = false;
+      targets.arm-unknown-linux-musleabihf = false;
+      targets.armv7-unknown-linux-gnueabihf = false;
+      targets.armv7-unknown-linux-musleabihf = false;
+      targets.powerpc64le-unknown-linux-gnu = false;
+      targets.s390x-unknown-linux-gnu = false;
+      targets.wasm32-unknown-unknown = false;
+      targets.wasm32-wasip1 = false;
 
-        build.packages = [
-          "wash-cli"
-          "wasmcloud"
-        ];
+      build.packages = [
+        "wash-cli"
+        "wasmcloud"
+      ];
 
-        clippy.allTargets = true;
-        clippy.deny = ["warnings"];
-        clippy.workspace = true;
+      clippy.allTargets = true;
+      clippy.deny = [ "warnings" ];
+      clippy.workspace = true;
 
-        test.allTargets = true;
-        test.excludes = [
-          "secrets-nats-kv"
-          "wash-cli"
-          "wash-lib"
-          "wasmcloud-provider-blobstore-s3" # TODO: Make the test self-contained and reenable
-          "wasmcloud-provider-messaging-nats" # tests appear to be broken
-        ];
-        test.workspace = true;
+      test.allTargets = true;
+      test.excludes = [
+        "secrets-nats-kv"
+        "wash-cli"
+        "wash-lib"
+        "wasmcloud-provider-blobstore-s3" # TODO: Make the test self-contained and reenable
+        "wasmcloud-provider-messaging-nats" # tests appear to be broken
+      ];
+      test.workspace = true;
 
-        buildOverrides = {
+      buildOverrides =
+        {
           pkgs,
           pkgsCross ? pkgs,
           ...
-        }: {nativeCheckInputs ? [], ...} @ args:
-          with pkgs.lib; let
-            cargoLock.root = readTOML ./Cargo.lock;
-            cargoLock.tests = readTOML ./tests/components/rust/Cargo.lock;
+        }:
+        {
+          nativeCheckInputs ? [ ],
+          ...
+        }@args:
+        with pkgs.lib;
+        let
+          cargoLock.root = readTOML ./Cargo.lock;
+          cargoLock.tests = readTOML ./tests/components/rust/Cargo.lock;
 
-            cargoLock.examples.http-hello-world = readTOML ./examples/rust/components/http-hello-world/Cargo.lock;
-            cargoLock.examples.http-keyvalue-counter = readTOML ./examples/rust/components/http-keyvalue-counter/Cargo.lock;
+          cargoLock.examples.http-hello-world = readTOML ./examples/rust/components/http-hello-world/Cargo.lock;
+          cargoLock.examples.http-keyvalue-counter = readTOML ./examples/rust/components/http-keyvalue-counter/Cargo.lock;
 
-            lockPackages =
-              cargoLock.examples.http-hello-world.package
-              ++ cargoLock.examples.http-keyvalue-counter.package
-              ++ cargoLock.tests.package
-              ++ cargoLock.root.package;
+          lockPackages =
+            cargoLock.examples.http-hello-world.package
+            ++ cargoLock.examples.http-keyvalue-counter.package
+            ++ cargoLock.tests.package
+            ++ cargoLock.root.package;
 
-            # deduplicate lockPackages by $name:$version:$checksum
-            lockPackages' = listToAttrs (
-              map (
-                {
-                  name,
-                  version,
-                  checksum ? "no-hash",
-                  ...
-                } @ pkg:
-                  nameValuePair "${name}:${version}:${checksum}" pkg
-              )
-              lockPackages
-            );
+          # deduplicate lockPackages by $name:$version:$checksum
+          lockPackages' = listToAttrs (
+            map (
+              {
+                name,
+                version,
+                checksum ? "no-hash",
+                ...
+              }@pkg:
+              nameValuePair "${name}:${version}:${checksum}" pkg
+            ) lockPackages
+          );
 
-            cargoLockParsed =
-              cargoLock.root
-              // {
-                package = attrValues lockPackages';
-              };
-          in
-            {
-              inherit
-                cargoLockParsed
-                ;
-              cargoExtraArgs = ""; # disable `--locked` passed by default by crane
-            }
-            // optionalAttrs (args ? cargoArtifacts) {
-              nativeCheckInputs =
-                nativeCheckInputs
-                ++ [
-                  pkgs.nats-server
-                  pkgs.redis
-                  pkgs.minio
-                  pkgs.vault
-                ];
-            };
+          cargoLockParsed = cargoLock.root // {
+            package = attrValues lockPackages';
+          };
+        in
+        {
+          inherit
+            cargoLockParsed
+            ;
+          cargoExtraArgs = ""; # disable `--locked` passed by default by crane
+        }
+        // optionalAttrs (args ? cargoArtifacts) {
+          nativeCheckInputs = nativeCheckInputs ++ [
+            pkgs.nats-server
+            pkgs.redis
+            pkgs.minio
+            pkgs.vault
+          ];
+        };
 
-        withPackages = {
+      withPackages =
+        {
           hostRustToolchain,
           packages,
           pkgs,
           ...
-        }: let
+        }:
+        let
           interpreters.aarch64-unknown-linux-gnu = "/lib/ld-linux-aarch64.so.1";
           interpreters.riscv64gc-unknown-linux-gnu = "/lib/ld-linux-riscv64-lp64d.so.1";
           interpreters.x86_64-unknown-linux-gnu = "/lib64/ld-linux-x86-64.so.2";
 
           images = mapAttrs (_: pkgs.dockerTools.pullImage) (import ./nix/images);
 
-          mkFHS = {
-            name,
-            src,
-            interpreter,
-          }:
+          mkFHS =
+            {
+              name,
+              src,
+              interpreter,
+            }:
             pkgs.stdenv.mkDerivation {
               inherit
                 name
@@ -239,39 +247,42 @@
             interpreter = interpreters.x86_64-unknown-linux-gnu;
           };
 
-          buildImage = {
-            fromImage ? null,
-            pkg,
-            name,
-            architecture,
-            description,
-          }: let
-            # ensure that only the binary corresponding to `$name` is copied to the image
-            bin = pkgs.runCommandLocal name {} ''
-              mkdir -p $out/bin
-              cp ${pkg}/bin/${name} $out/bin/${name}
-            '';
-
-            copyToRoot = pkgs.buildEnv {
-              inherit name;
-              extraPrefix = "/usr"; # /bin is a symlink to /usr/bin on Debian, add a prefix to avoid replacing original `/bin`
-              paths = [
-                bin
-
-                pkgs.dockerTools.caCertificates
-              ];
-              postBuild = ''
-                mv $out/usr/etc $out/etc
+          buildImage =
+            {
+              fromImage ? null,
+              pkg,
+              name,
+              architecture,
+              description,
+            }:
+            let
+              # ensure that only the binary corresponding to `$name` is copied to the image
+              bin = pkgs.runCommandLocal name { } ''
+                mkdir -p $out/bin
+                cp ${pkg}/bin/${name} $out/bin/${name}
               '';
-            };
 
-            version =
-              if name == "wasmcloud"
-              then (readTOML ./Cargo.toml).package.version
-              else if name == "wash"
-              then (readTOML ./crates/wash-cli/Cargo.toml).package.version
-              else throw "unsupported binary `${name}`";
-          in
+              copyToRoot = pkgs.buildEnv {
+                inherit name;
+                extraPrefix = "/usr"; # /bin is a symlink to /usr/bin on Debian, add a prefix to avoid replacing original `/bin`
+                paths = [
+                  bin
+
+                  pkgs.dockerTools.caCertificates
+                ];
+                postBuild = ''
+                  mv $out/usr/etc $out/etc
+                '';
+              };
+
+              version =
+                if name == "wasmcloud" then
+                  (readTOML ./Cargo.toml).package.version
+                else if name == "wash" then
+                  (readTOML ./crates/wash-cli/Cargo.toml).package.version
+                else
+                  throw "unsupported binary `${name}`";
+            in
             pkgs.dockerTools.buildImage {
               inherit
                 architecture
@@ -281,7 +292,7 @@
                 ;
               tag = architecture;
 
-              config.Cmd = [name];
+              config.Cmd = [ name ];
               config.Labels."org.opencontainers.image.description" = description;
               config.Labels."org.opencontainers.image.source" = "https://github.com/wasmCloud/wasmCloud";
               config.Labels."org.opencontainers.image.title" = name;
@@ -289,11 +300,12 @@
               config.Labels."org.opencontainers.image.version" = version;
             };
 
-          buildWashImage = {
-            pkg,
-            fromImage,
-            architecture,
-          }:
+          buildWashImage =
+            {
+              pkg,
+              fromImage,
+              architecture,
+            }:
             buildImage {
               inherit
                 architecture
@@ -324,11 +336,12 @@
             architecture = "amd64";
           };
 
-          buildWasmcloudImage = {
-            pkg,
-            fromImage,
-            architecture,
-          }:
+          buildWasmcloudImage =
+            {
+              pkg,
+              fromImage,
+              architecture,
+            }:
             buildImage {
               inherit
                 architecture
@@ -416,51 +429,51 @@
             build "''${1:-wasmcloud:wolfi}"
           '';
         in
-          packages
-          // {
-            inherit
-              build-wash-oci-debian
-              build-wash-oci-wolfi
-              build-wasmcloud-oci-debian
-              build-wasmcloud-oci-wolfi
-              wash-aarch64-unknown-linux-musl-oci-debian
-              wash-aarch64-unknown-linux-musl-oci-wolfi
-              wash-x86_64-unknown-linux-musl-oci-debian
-              wash-x86_64-unknown-linux-musl-oci-wolfi
-              wasmcloud-aarch64-unknown-linux-gnu-fhs
-              wasmcloud-aarch64-unknown-linux-musl-oci-debian
-              wasmcloud-aarch64-unknown-linux-musl-oci-wolfi
-              wasmcloud-riscv64gc-unknown-linux-gnu-fhs
-              wasmcloud-x86_64-unknown-linux-gnu-fhs
-              wasmcloud-x86_64-unknown-linux-musl-oci-debian
-              wasmcloud-x86_64-unknown-linux-musl-oci-wolfi
-              ;
+        packages
+        // {
+          inherit
+            build-wash-oci-debian
+            build-wash-oci-wolfi
+            build-wasmcloud-oci-debian
+            build-wasmcloud-oci-wolfi
+            wash-aarch64-unknown-linux-musl-oci-debian
+            wash-aarch64-unknown-linux-musl-oci-wolfi
+            wash-x86_64-unknown-linux-musl-oci-debian
+            wash-x86_64-unknown-linux-musl-oci-wolfi
+            wasmcloud-aarch64-unknown-linux-gnu-fhs
+            wasmcloud-aarch64-unknown-linux-musl-oci-debian
+            wasmcloud-aarch64-unknown-linux-musl-oci-wolfi
+            wasmcloud-riscv64gc-unknown-linux-gnu-fhs
+            wasmcloud-x86_64-unknown-linux-gnu-fhs
+            wasmcloud-x86_64-unknown-linux-musl-oci-debian
+            wasmcloud-x86_64-unknown-linux-musl-oci-wolfi
+            ;
 
-            rust = hostRustToolchain;
-            wash = pkgs.runCommandLocal "wash" {} ''
-              mkdir -p $out/bin
-              cp ${packages.wasmcloud}/bin/wash $out/bin/wash
-            '';
-          };
+          rust = hostRustToolchain;
+          wash = pkgs.runCommandLocal "wash" { } ''
+            mkdir -p $out/bin
+            cp ${packages.wasmcloud}/bin/wash $out/bin/wash
+          '';
+        };
 
-        withDevShells = {
+      withDevShells =
+        {
           devShells,
           pkgs,
           ...
         }:
-          extendDerivations {
-            buildInputs = [
-              pkgs.buildah
-              pkgs.cargo-audit
-              pkgs.minio
-              pkgs.nats-server
-              pkgs.redis
-              pkgs.skopeo
-              pkgs.tinygo
-              pkgs.vault
-              pkgs.wit-deps
-            ];
-          }
-          devShells;
-      };
+        extendDerivations {
+          buildInputs = [
+            pkgs.buildah
+            pkgs.cargo-audit
+            pkgs.minio
+            pkgs.nats-server
+            pkgs.redis
+            pkgs.skopeo
+            pkgs.tinygo
+            pkgs.vault
+            pkgs.wit-deps
+          ];
+        } devShells;
+    };
 }
