@@ -30,6 +30,7 @@ use wash_cli::build::{self, BuildCommand};
 use wash_cli::call::{self, CallCli};
 use wash_cli::cmd::config::{self, ConfigCliCommand};
 use wash_cli::cmd::dev::{self, DevCommand};
+use wash_cli::cmd::link;
 use wash_cli::cmd::up::{self, UpCommand};
 use wash_cli::cmd::wit::{self, WitCommand};
 use wash_cli::common;
@@ -544,7 +545,7 @@ async fn main() {
             wash_lib::cli::inspect::handle_command(inspect_cli, output_kind).await
         }
         CliCommand::Keys(keys_cli) => keys::handle_command(keys_cli),
-        CliCommand::Link(link_cli) => common::link_cmd::handle_command(link_cli, output_kind).await,
+        CliCommand::Link(link_cli) => link::invoke(link_cli, output_kind).await,
         CliCommand::New(new_cli) => generate::handle_command(new_cli).await,
         CliCommand::Par(par_cli) => par::handle_command(par_cli, output_kind).await,
         CliCommand::Plugin(plugin_cli) => plugin::handle_command(plugin_cli, output_kind).await,
