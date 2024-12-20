@@ -21,8 +21,8 @@ subfolder = "examples/rust/components/http-hello-world"
 [[component]]
 name = "hello-world-tinygo"
 description = "a hello-world component (in TinyGo) that responds over an HTTP connection"
-git = "wasmCloud/wasmCloud"
-subfolder = "examples/golang/components/http-hello-world"
+git = "wasmCloud/go"
+subfolder = "templates/component/http-hello-world"
 
 [[component]]
 name = "hello-world-typescript"
