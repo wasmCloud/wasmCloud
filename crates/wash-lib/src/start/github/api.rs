@@ -31,7 +31,8 @@ async fn get_chronologically_sorted_releases(
     Ok(releases_of_repo)
 }
 
-async fn new_patch_releases_of_after(
+/// Get a full list of github patch releases that exist after the provided version.
+pub async fn new_patch_releases_after(
     owner: &str,
     repo: &str,
     after_version: &Version,
@@ -49,6 +50,7 @@ async fn new_patch_releases_of_after(
     Ok(main_releases)
 }
 
+/// Returns the latest patch version of the provided version.
 pub async fn new_patch_version_of_after_string(
     owner: &str,
     repo: &str,
@@ -59,7 +61,7 @@ pub async fn new_patch_version_of_after_string(
         Ok(v) => v,
         Err(_) => return Ok(None),
     };
-    match new_patch_releases_of_after(owner, repo, &after_version).await {
+    match new_patch_releases_after(owner, repo, &after_version).await {
         Ok(patches) => match patches.first() {
             Some(patch) => Ok(patch.get_main_artifact_release()),
             None => Ok(None),
@@ -296,37 +298,5 @@ mod tests {
         };
         let version = release_with_prefix.get_main_artifact_release();
         assert!(version.is_none());
-    }
-
-    /// Test if the GitHubRelease struct is parsed correctly from the raw string.
-    /// Using an already "outdated" patch version to test if the sorting works correctly and comparable to the current version.
-    #[tokio::test]
-    #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
-    async fn test_fetching_wasm_cloud_patch_versions_after_v_1_0_3() {
-        let owner = &"wasmCloud";
-        let repo = &"wasmCloud";
-        let latest_version = semver::Version::new(1, 0, 3);
-        // Use 1.0.3 as the latest version, since there is a newer version
-        let releases = get_chronologically_sorted_releases(owner, repo, &latest_version).await;
-        assert!(releases.is_ok());
-        let patch_releases = new_patch_releases_of_after(owner, repo, &latest_version).await;
-        assert!(patch_releases.is_ok());
-        let patch_releases = patch_releases.unwrap();
-        for new_path_release in patch_releases {
-            let version_of_new_release = new_path_release.get_main_artifact_release();
-            assert!(
-                version_of_new_release.is_some(),
-                "new patch version is semver conventional versions"
-            );
-            let semver::Version {
-                major,
-                minor,
-                patch,
-                ..
-            } = version_of_new_release.unwrap();
-            assert_eq!(latest_version.major, major, "major version is not changed");
-            assert_eq!(latest_version.minor, minor, "minor version is not changed");
-            assert!(latest_version.patch < patch, "patch version is bigger");
-        }
     }
 }

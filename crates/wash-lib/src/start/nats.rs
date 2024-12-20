@@ -228,7 +228,7 @@ impl NatsConfig {
         }
     }
 
-    async fn write_to_path<P>(self, path: P) -> Result<()>
+    pub async fn write_to_path<P>(self, path: P) -> Result<()>
     where
         P: AsRef<Path>,
     {
@@ -382,156 +382,13 @@ fn nats_url(os: &str, arch: &str, version: &str) -> String {
 
 #[cfg(test)]
 mod test {
-    use anyhow::{Context as _, Result};
-    use std::{
-        env::temp_dir,
-        net::{Ipv4Addr, SocketAddrV4},
-    };
-    use tokio::{
-        fs::{create_dir_all, remove_dir_all},
-        io::AsyncReadExt,
-        net::TcpListener,
-    };
+    use anyhow::Result;
+    use tokio::io::AsyncReadExt;
 
-    use crate::common::CommandGroupUsage;
-    use crate::start::{
-        ensure_nats_server, is_bin_installed, start_nats_server, NatsConfig, NATS_SERVER_BINARY,
-    };
-
-    const NATS_SERVER_VERSION: &str = "v2.10.7";
-
-    /// Returns an open port on the interface, searching within the range endpoints, inclusive
-    async fn find_open_port() -> Result<u16> {
-        TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
-            .await
-            .context("failed to bind random port")?
-            .local_addr()
-            .map(|addr| addr.port())
-            .context("failed to get local address from opened TCP socket")
-    }
+    use crate::start::NatsConfig;
 
     #[tokio::test]
-    #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
-    async fn can_handle_missing_nats_version() -> Result<()> {
-        let install_dir = temp_dir().join("can_handle_missing_nats_version");
-        let _ = remove_dir_all(&install_dir).await;
-        create_dir_all(&install_dir).await?;
-        assert!(!is_bin_installed(&install_dir, NATS_SERVER_BINARY).await);
-
-        let res = ensure_nats_server("v300.22.1111223", &install_dir).await;
-        assert!(res.is_err());
-
-        let _ = remove_dir_all(install_dir).await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
-    async fn can_download_and_start_nats() -> Result<()> {
-        let install_dir = temp_dir().join("can_download_and_start_nats");
-        let _ = remove_dir_all(&install_dir).await;
-        create_dir_all(&install_dir).await?;
-        assert!(!is_bin_installed(&install_dir, NATS_SERVER_BINARY).await);
-
-        let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir).await;
-        assert!(res.is_ok());
-
-        let log_path = install_dir.join("nats.log");
-        let log_file = tokio::fs::File::create(&log_path).await?.into_std().await;
-
-        let nats_port = find_open_port().await?;
-        let nats_ws_port = find_open_port().await?;
-        let mut config = NatsConfig::new_standalone("127.0.0.1", nats_port, None);
-        config.websocket_port = nats_ws_port;
-        let child_res = start_nats_server(
-            &install_dir.join(NATS_SERVER_BINARY),
-            log_file,
-            config,
-            CommandGroupUsage::UseParent,
-        )
-        .await;
-        assert!(child_res.is_ok());
-
-        // Give NATS max 5 seconds to start up
-        for _ in 0..4 {
-            let log_contents = tokio::fs::read_to_string(&log_path).await?;
-            if log_contents.is_empty() {
-                println!("NATS server hasn't started up yet, waiting 1 second");
-                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-            } else {
-                // Give just a little bit of time for the startup logs to flow in
-                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-
-                assert!(log_contents.contains("Starting nats-server"));
-                assert!(log_contents.contains("Starting JetStream"));
-                assert!(log_contents.contains("Server is ready"));
-                break;
-            }
-        }
-
-        child_res.unwrap().kill().await?;
-        let _ = remove_dir_all(install_dir).await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
-    async fn can_gracefully_fail_running_nats() -> Result<()> {
-        let install_dir = temp_dir().join("can_gracefully_fail_running_nats");
-        let _ = remove_dir_all(&install_dir).await;
-        create_dir_all(&install_dir).await?;
-        assert!(!is_bin_installed(&install_dir, NATS_SERVER_BINARY).await);
-
-        let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir).await;
-        assert!(res.is_ok());
-
-        let nats_port = find_open_port().await?;
-        let nats_ws_port = find_open_port().await?;
-        let mut config =
-            NatsConfig::new_standalone("127.0.0.1", nats_port, Some("extender".to_string()));
-        config.websocket_port = nats_ws_port;
-        let nats_one = start_nats_server(
-            &install_dir.join(NATS_SERVER_BINARY),
-            std::process::Stdio::null(),
-            config.clone(),
-            CommandGroupUsage::UseParent,
-        )
-        .await;
-        assert!(nats_one.is_ok());
-
-        // Give NATS a few seconds to start up and listen
-        tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
-        let log_path = install_dir.join("nats.log");
-        let log = std::fs::File::create(&log_path)?;
-        let nats_two = start_nats_server(
-            &install_dir.join(NATS_SERVER_BINARY),
-            log,
-            config,
-            CommandGroupUsage::UseParent,
-        )
-        .await;
-        assert!(nats_two.is_err());
-
-        nats_one.unwrap().kill().await?;
-        let _ = remove_dir_all(install_dir).await;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
     async fn can_write_properly_formed_credsfile() -> Result<()> {
-        let install_dir = temp_dir().join("can_write_properly_formed_credsfile");
-        let _ = remove_dir_all(&install_dir).await;
-        create_dir_all(&install_dir).await?;
-        assert!(
-            !is_bin_installed(&install_dir, NATS_SERVER_BINARY).await,
-            "NATS should not be installed"
-        );
-
-        let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir).await;
-        assert!(res.is_ok(), "NATS should be able to start");
-
         let creds = etcetera::home_dir().unwrap().join("nats.creds");
         let config: NatsConfig = NatsConfig::new_leaf(
             "127.0.0.1",
@@ -554,7 +411,6 @@ mod test {
         #[cfg(target_family = "windows")]
         assert!(creds.to_string_lossy().contains('\\'));
 
-        let _ = remove_dir_all(install_dir).await;
         Ok(())
     }
 }
