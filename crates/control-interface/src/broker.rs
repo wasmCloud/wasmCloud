@@ -1,5 +1,6 @@
 const DEFAULT_TOPIC_PREFIX: &str = "wasmbus.ctl";
 // Copied from https://docs.rs/wasmcloud-core/0.15.0/wasmcloud_core/constant.CTL_API_VERSION_1.html
+// to avoid a dependency on a crate for one constant
 const CTL_API_VERSION_1: &str = "v1";
 
 fn prefix(topic_prefix: &Option<String>, lattice: &str, version: &str) -> String {
