@@ -612,6 +612,7 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
     }
 
     // Delete multiple objects in the specified NATS Blobstore Container
+    // Objects are deleted concurrently in batches for improved performance
     #[instrument(level = "trace", skip(self))]
     async fn delete_objects(
         &self,
@@ -622,24 +623,56 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
         Ok(async {
             propagate_trace_for_ctx!(context);
 
-            let result: Result<(), String> = {
-                // Iterate over the list of objects and delete each object using the delete_object method
-                for object in objects {
-                    self.delete_object(
-                        context.clone(),
-                        bindings::wrpc::blobstore::types::ObjectId {
-                            container: name.clone(),
-                            object: object.clone(),
-                        },
-                    )
-                    .await
-                    .map_err(|err| err.to_string())??; // Handle both levels of Result
-                }
+            // Create deletion tasks in batches of 50 to prevent overwhelming the server
+            const BATCH_SIZE: usize = 50;
+            let mut handles = Vec::with_capacity(objects.len());
+
+            // Process objects in chunks to maintain reasonable resource usage
+            for chunk in objects.chunks(BATCH_SIZE) {
+                let mut chunk_handles = chunk
+                    .iter()
+                    .map(|object| {
+                        let ctx = context.clone();
+                        let container = name.clone();
+                        let object = object.clone();
+                        let this = self.clone();
+
+                        tokio::spawn(async move {
+                            this.delete_object(
+                                ctx,
+                                bindings::wrpc::blobstore::types::ObjectId { container, object },
+                            )
+                            .await
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                handles.append(&mut chunk_handles);
+            }
+
+            // Wait for all deletion tasks to complete
+            let results = futures::future::join_all(handles).await;
+
+            // Process results and collect any errors
+            let errors: Vec<String> = results
+                .into_iter()
+                .filter_map(|r| match r {
+                    Ok(Ok(Ok(()))) => None,                               // Successful deletion
+                    Ok(Ok(Err(e))) => Some(e),                            // Operation error
+                    Ok(Err(e)) => Some(format!("Provider error: {e:#}")), // Provider error
+                    Err(e) => Some(format!("Task join error: {e:#}")),    // Task execution error
+                })
+                .collect();
+
+            if errors.is_empty() {
                 Ok(())
-            };
-            result
+            } else {
+                Err(format!(
+                    "Failed to delete some objects: {}",
+                    errors.join("; ")
+                ))
+            }
         }
         .await
-        .map_err(|err: String| format!("{err:#}")))
+        .map_err(|err| format!("{err:#}")))
     }
 }
