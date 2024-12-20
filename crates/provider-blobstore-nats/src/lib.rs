@@ -15,6 +15,7 @@ pub(crate) struct NatsBlobstore {
 /// components' established NATS JetStream connections.
 #[derive(Default, Clone)]
 pub struct NatsBlobstoreProvider {
+    /// Map of component_id -> link_name -> NATS Object Store JetStream Context (supports multiple links per component)
     consumer_components: Arc<RwLock<HashMap<String, HashMap<String, NatsBlobstore>>>>,
     default_config: NatsConnectionConfig,
 }

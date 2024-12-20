@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 use wasmcloud_provider_sdk::core::secrets::SecretValue;
 
-const DEFAULT_NATS_URI: &str = "nats://0.0.0.0:4222";
+pub(crate) const DEFAULT_NATS_URI: &str = "nats://0.0.0.0:4222";
 
 const CONFIG_NATS_URI: &str = "cluster_uri";
 const CONFIG_NATS_JETSTREAM_DOMAIN: &str = "js_domain";
@@ -52,6 +52,7 @@ pub struct NatsConnectionConfig {
     pub storage_config: Option<StorageConfig>,
 
     /// Write operation timeout configuration
+    #[serde(default)]
     pub max_write_wait: Option<u64>,
 }
 
@@ -67,14 +68,19 @@ pub struct NatsConnectionConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct StorageConfig {
     /// Maximum age of any object in the container, expressed in nanoseconds
+    #[serde(default)]
     pub max_age: Option<core::time::Duration>,
     /// Maximum size of the object store container, expressed in bytes
+    #[serde(default)]
     pub max_bytes: Option<i64>,
     /// The type of storage backend, File (default) and Memory
+    #[serde(default)]
     pub storage_type: Option<StorageType>,
     /// How many replicas to keep for each object in a cluster, maximum 5
+    #[serde(default)]
     pub num_replicas: Option<usize>,
     /// Whether the underlying stream should be compressed
+    #[serde(default)]
     pub compression: Option<bool>,
 }
 
