@@ -459,6 +459,7 @@
               pkgs.tinygo
               pkgs.vault
               pkgs.wit-deps
+              pkgs.go
             ];
           }
           devShells;

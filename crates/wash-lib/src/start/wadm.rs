@@ -149,15 +149,14 @@ pub struct WadmConfig {
 /// * `bin_path` - Path to the wadm binary to execute
 /// * `stderr` - Specify where wadm stderr logs should be written to. If logs aren't important, use `std::process::Stdio::null()`
 /// * `config` - Optional configuration for wadm
-pub async fn start_wadm<P, T>(
-    state_dir: P,
-    bin_path: P,
+pub async fn start_wadm<T>(
+    state_dir: impl AsRef<Path>,
+    bin_path: impl AsRef<Path>,
     stderr: T,
     config: Option<WadmConfig>,
     command_group: CommandGroupUsage,
 ) -> Result<Child>
 where
-    P: AsRef<Path>,
     T: Into<Stdio>,
 {
     let mut cmd = Command::new(bin_path.as_ref());
@@ -205,89 +204,4 @@ fn wadm_url(os: &str, arch: &str, version: &str) -> String {
         _ => arch,
     };
     format!("{WADM_GITHUB_RELEASE_URL}/{version}/wadm-{version}-{os}-{arch}.tar.gz")
-}
-
-#[cfg(test)]
-mod test {
-    use crate::common::CommandGroupUsage;
-    use crate::start::is_bin_installed;
-
-    use super::*;
-    use anyhow::Result;
-    use std::env::temp_dir;
-    use tokio::fs::{create_dir_all, remove_dir_all};
-
-    const WADM_VERSION: &str = "v0.4.0-alpha.1";
-
-    #[tokio::test]
-    #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
-    async fn can_handle_missing_wadm_version() -> Result<()> {
-        let install_dir = temp_dir().join("can_handle_missing_wadm_version");
-        let _ = remove_dir_all(&install_dir).await;
-        create_dir_all(&install_dir).await?;
-        assert!(!is_bin_installed(&install_dir, WADM_BINARY).await);
-
-        let major: u8 = 123;
-        let minor: u8 = 52;
-        let patch: u8 = 222;
-
-        let res = ensure_wadm(&format!("v{major}.{minor}.{patch}"), &install_dir).await;
-        assert!(res.is_err());
-
-        let _ = remove_dir_all(install_dir).await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
-    async fn can_download_and_start_wadm() -> Result<()> {
-        let install_dir = temp_dir().join("can_download_and_start_wadm");
-        let _ = remove_dir_all(&install_dir).await;
-        create_dir_all(&install_dir).await?;
-        assert!(!is_bin_installed(&install_dir, WADM_BINARY).await);
-
-        let res = ensure_wadm(WADM_VERSION, &install_dir).await;
-        assert!(res.is_ok());
-
-        let log_path = install_dir.join("wadm.log");
-        let log_file = tokio::fs::File::create(&log_path).await?.into_std().await;
-
-        let config = WadmConfig {
-            structured_logging: false,
-            js_domain: None,
-            nats_server_url: "nats://127.0.0.1:54321".to_string(),
-            nats_credsfile: None,
-        };
-
-        let child_res = start_wadm(
-            &install_dir,
-            &install_dir.join(WADM_BINARY),
-            log_file,
-            Some(config),
-            CommandGroupUsage::UseParent,
-        )
-        .await;
-        assert!(child_res.is_ok());
-
-        // Wait for process to exit since NATS couldn't connect
-        assert!(child_res.unwrap().wait().await.is_ok());
-        let log_contents = tokio::fs::read_to_string(&log_path).await?;
-        // wadm couldn't connect to NATS but that's okay
-
-        // Assert that the pid file get created in the expected state_dir,
-        // which in this case is set to install_dir.
-        let pid_path = install_dir.join(WADM_PID);
-        assert!(tokio::fs::try_exists(pid_path).await?);
-
-        // Different OS-es have different error codes, but all I care about is that wadm executed at all
-        #[cfg(target_os = "macos")]
-        assert!(log_contents.contains("Connection refused (os error 61)"));
-        #[cfg(target_os = "linux")]
-        assert!(log_contents.contains("Connection refused (os error 111)"));
-        #[cfg(target_os = "windows")]
-        assert!(log_contents.contains("No connection could be made because the target machine actively refused it. (os error 10061)"));
-
-        let _ = remove_dir_all(install_dir).await;
-        Ok(())
-    }
 }

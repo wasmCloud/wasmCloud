@@ -1,52 +1,21 @@
 use std::path::PathBuf;
 
-use tokio::process::Command;
 use wash_lib::plugin::subcommand::DirMapping;
-
-/// Builds the plugin in the given directory. It must exist inside of tests/plugins/ and the
-/// directory name must match the name of the built binary. Returns the path to the built binary.
-async fn build_plugin(plugin_dir_name: &str) -> PathBuf {
-    let wash_dir =
-        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("Unable to find Cargo dir"));
-    // Make sure wash is built
-    let status = Command::new("cargo")
-        .arg("build")
-        .current_dir(wash_dir.join("..").join("wash-cli"))
-        .status()
-        .await
-        .expect("Unable to build wash");
-    assert!(status.success(), "Unable to build wash");
-    // All of the joins are to avoid path separator issues on windows
-    let plugin_dir = wash_dir.join("tests").join("plugins").join(plugin_dir_name);
-    // Yes this is hacky and we can change later
-    let status = Command::new(
-        wash_dir
-            .join("..")
-            .join("..")
-            .join("target")
-            .join("debug")
-            .join("wash"),
-    )
-    .arg("build")
-    // TODO: Remove this once we've converted everything to the new deps style
-    .arg("--skip-fetch")
-    .current_dir(&plugin_dir)
-    .status()
-    .await
-    .expect("Unable to build plugin");
-    assert!(status.success(), "Unable to build plugin");
-    plugin_dir
-        .join("build")
-        .join(format!("{plugin_dir_name}.wasm"))
-}
 
 #[tokio::test]
 async fn test_subcommand() {
-    let plugin_path = build_plugin("hello_plugin").await;
-
     let mut subcommand = wash_lib::plugin::subcommand::SubcommandRunner::new().unwrap();
+    // NOTE: All the joins are to avoid any problems with cross-platform paths
+    let plugin_path =
+        // This is pre-compiled to save on test time. To rebuild this plugin when changes are needed
+        // (assuming relative paths from this file) run:
+        // `pushd plugins/hello_plugin && wash build && cp build/hello_plugin_s.wasm ../../fixtures/hello_plugin_s.wasm && popd`
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("Unable to find manifest dir"))
+            .join("tests")
+            .join("fixtures")
+            .join("hello_plugin_s.wasm");
     let metadata = subcommand
-        .add_plugin(&plugin_path)
+        .add_plugin(plugin_path)
         .await
         .expect("Should be able to add plugin");
     assert_eq!(metadata.name, "Hello Plugin");

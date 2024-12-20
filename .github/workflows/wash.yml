@@ -20,7 +20,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   GO_VERSION: '1.23'
-  TINYGO_VERSION: '0.33.0'
+  TINYGO_VERSION: '0.34.0'
 
 permissions:
   contents: read

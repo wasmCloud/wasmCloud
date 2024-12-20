@@ -423,7 +423,7 @@ async fn integration_build_rust_component_signed_with_signing_keys_directory_con
     name = "Hello World"
     language = "rust"
     type = "component"
-    
+
     [component]
     claims = ["wasmcloud:httpserver"]
     key_directory = "./haljordankeys"
@@ -576,12 +576,12 @@ async fn integration_build_tinygo_component_unsigned() -> Result<()> {
         .context("Failed to build project")?;
 
     assert!(status.success());
-    let unsigned_file = project_dir.join("build/http-hello-world.wasm");
+    let unsigned_file = project_dir.join("build/hello-world-tinygo.wasm");
     assert!(
         tokio::fs::try_exists(unsigned_file).await.unwrap(),
         "unsigned file not found!"
     );
-    let signed_file = project_dir.join("build/http_hello_world_s.wasm");
+    let signed_file = project_dir.join("build/hello_world_tinygo_s.wasm");
     assert!(
         !tokio::fs::try_exists(signed_file).await.unwrap(),
         "signed file should not exist when using --build-only!"
@@ -743,7 +743,7 @@ async fn integration_build_tinygo_component_separate_paths() -> Result<()> {
     path = "../"
     wit = "../wow"
     build = "artifacts"
-    
+
     [component]
     wit_world = "hello"
     wasm_target = "wasm32-wasip2"
