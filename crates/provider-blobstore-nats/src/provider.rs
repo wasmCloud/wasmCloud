@@ -21,7 +21,7 @@ use wasmcloud_provider_sdk::{
     Context, HostData, LinkConfig, LinkDeleteInfo, Provider, ProviderConfigUpdate,
 };
 
-use crate::config::NatsConnectionConfig;
+use crate::config::{NatsConnectionConfig, DEFAULT_NATS_URI};
 use crate::{NatsBlobstore, NatsBlobstoreProvider};
 // Import the wrpc interface bindings
 use wrpc_interface_blobstore::bindings;
@@ -93,12 +93,12 @@ impl NatsBlobstoreProvider {
             opts = add_tls_ca(&ca, opts)?;
         }
 
-        // Get the cluster_uri
-        let uri = cfg.cluster_uri.unwrap_or_default();
+        // Get the cluster_uri with proper default
+        let uri = cfg.cluster_uri.unwrap_or(DEFAULT_NATS_URI.to_string());
 
         // Connect to the NATS server
         let client = opts
-            .name("NATS Object Store Provider") // allow this to show up uniquely in a NATS connection list
+            .name("NATS Object Store Provider")
             .connect(uri.clone())
             .await?;
 
@@ -124,19 +124,13 @@ impl NatsBlobstoreProvider {
         context: Option<Context>,
     ) -> anyhow::Result<NatsBlobstore> {
         if let Some((component_id, link_name)) =
-            context.as_ref().and_then(|Context { component, .. }| {
-                // Clone component and provide a placeholder default value for link_name if it's None,
-                // which will be replaced by the last link name set by the consumer.
-                let link_name = context
-                    .clone()
-                    .context("missing context")
-                    .unwrap()
-                    .link_name()
-                    .to_string();
-                component
-                    .clone()
-                    .map(|component_id| (component_id, link_name))
-            })
+            context
+                .as_ref()
+                .and_then(|ctx @ Context { component, .. }| {
+                    component
+                        .clone()
+                        .map(|component_id| (component_id, ctx.link_name().to_string()))
+                })
         {
             // Acquire a read lock on the consumer components and attempt to find the specified component_id
             let components = self.consumer_components.read().await;

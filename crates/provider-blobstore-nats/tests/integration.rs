@@ -132,7 +132,7 @@ impl TestEnv {
     pub async fn delete_object_store(&self, nats_container: &str) -> Result<()> {
         let client = self.nats_client().await?;
         let jetstream = async_nats::jetstream::new(client);
-        let _ = jetstream
+        jetstream
             .delete_object_store(nats_container.to_string())
             .await?;
         Ok(())
