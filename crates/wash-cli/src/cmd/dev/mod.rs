@@ -18,7 +18,7 @@ use wash_lib::id::ServerId;
 use wash_lib::parser::load_config;
 
 use crate::cmd::{
-    config::path::ProjectPaths,
+    // config::path::ProjectPaths,
     up::{nats_client_from_wasmcloud_opts, remove_wadm_pidfile, NatsOpts, WadmOpts, WasmcloudOpts},
 };
 
@@ -127,10 +127,10 @@ pub async fn handle_command(
     cmd: DevCommand,
     output_kind: wash_lib::cli::OutputKind,
 ) -> Result<CommandOutput> {
-    let project_paths = ProjectPaths::from_current_dir()?;
+    let project_cfg = load_config(cmd.package_args.config_path().cloned(), Some(true)).await?;
     let project_path = cmd
         .code_dir
-        .unwrap_or_else(|| project_paths.project_dir().to_path_buf());
+        .unwrap_or_else(|| project_cfg.wasmcloud_toml_dir.clone());
     let project_cfg = load_config(Some(project_path.clone()), Some(true)).await?;
 
     let mut wash_dev_session = WashDevSession::from_sessions_file(&project_path)
