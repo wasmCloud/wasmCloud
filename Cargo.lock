@@ -810,6 +810,9 @@ dependencies = [
  "pin-project-lite",
  "rustversion",
  "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_urlencoded",
  "sync_wrapper 1.0.2",
  "tokio",
  "tower 0.5.1",
@@ -6205,6 +6208,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_path_to_error"
+version = "0.1.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af99884400da37c88f5e9146b7f1fd0fbcae8f6eec4e9da38b67d05486f814a6"
+dependencies = [
+ "itoa",
+ "serde",
+]
+
+[[package]]
 name = "serde_qs"
 version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7320,6 +7333,7 @@ dependencies = [
  "tokio",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -8475,6 +8489,7 @@ version = "1.5.0"
 dependencies = [
  "anyhow",
  "async-nats",
+ "axum 0.7.9",
  "base64 0.22.1",
  "bytes",
  "clap",
