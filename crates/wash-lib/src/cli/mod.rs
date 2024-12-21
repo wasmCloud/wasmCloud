@@ -378,6 +378,10 @@ impl CommonPackageArgs {
         let client = wasm_pkg_client::Client::new(config);
         Ok(CachingClient::new(Some(client), cache))
     }
+
+    pub fn config_path(&self) -> Option<&PathBuf> {
+        self.config.as_ref()
+    }
 }
 
 /// Helper function to locate and extract keypair from user input and generate a key for the user if
