@@ -35,7 +35,7 @@ spec:
     - name: messaging-image-processor
       type: component
       properties:
-        image: ghcr.io/wasmcloud/components/messaging-image-processor-worker:0.1.0
+        image: ghcr.io/wasmcloud/components/messaging-image-processor-worker-rust:0.1.0
       traits:
         - type: spreadscaler
           properties:
