@@ -1,19 +1,17 @@
 # CODEOWNERS
 
-## Default to org or maintainer
+## Organization/repository management, top level documentation
 
-* @wasmCloud/org-maintainers @wasmCloud/host-maintainers
-
-## .github CI
-
-.github @wasmCloud/ci-maintainers
 .github/CODEOWNERS @wasmCloud/org-maintainers
+.gitignore @wasmCloud/org-maintainers
+LICENSE @wasmCloud/org-maintainers
+*.md @wasmCloud/org-maintainers
 
-## nix
+## CI and nix
 
 .github/actions/build-nix @wasmCloud/ci-maintainers
 .github/actions/install-nix @wasmCloud/ci-maintainers
-.github/workflows/nix.yml @wasmCloud/ci-maintainers
+.github/workflows/*.yml @wasmCloud/ci-maintainers
 flake.* @wasmCloud/ci-maintainers
 garnix.yaml @wasmCloud/ci-maintainers
 nix @wasmCloud/ci-maintainers
@@ -48,6 +46,12 @@ crates/provider-* @wasmCloud/capability-provider-maintainers
 crates/wash-cli @wasmCloud/wash-maintainers
 crates/wash-lib @wasmCloud/wash-maintainers
 examples @wasmCloud/examples-maintainers
-vendor/capability-providers @wasmCloud/capability-provider-maintainers
-examples/typescript @wasmCloud/typescript-maintainers
+
+## Language specific folders
+
+### Golang
 examples/golang @wasmCloud/go-maintainers
+
+### TyeScript
+typescript @wasmCloud/washboard-maintainers
+examples/typescript @wasmCloud/typescript-maintainers
