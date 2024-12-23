@@ -67,7 +67,6 @@ pub async fn invoke(
         None => wasm_pkg_core::config::Config::load().await?,
     };
 
-    // let project_paths = ProjectPaths::from_current_dir()?;
     let project_cfg = load_config(config_path, Some(true)).await?;
     let mut lock_file = load_lock_file(&project_cfg.wasmcloud_toml_dir).await?;
 

@@ -17,9 +17,8 @@ use wash_lib::generate::emoji;
 use wash_lib::id::ServerId;
 use wash_lib::parser::load_config;
 
-use crate::cmd::{
-    // config::path::ProjectPaths,
-    up::{nats_client_from_wasmcloud_opts, remove_wadm_pidfile, NatsOpts, WadmOpts, WasmcloudOpts},
+use crate::cmd::up::{
+    nats_client_from_wasmcloud_opts, remove_wadm_pidfile, NatsOpts, WadmOpts, WasmcloudOpts,
 };
 
 mod deps;

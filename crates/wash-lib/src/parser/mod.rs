@@ -914,16 +914,6 @@ pub async fn load_config(
         None => std::env::current_dir().context("failed to get current directory")?,
     };
 
-    // let mut path = opt_path
-    //     .or_else(|| std::env::current_dir().ok())
-    //     .unwrap_or_else(|| PathBuf::from("."));
-
-    // if !path.exists() {
-    //     bail!("path {} does not exist", path.display());
-    // }
-
-    // path = fs::canonicalize(path).context("failed to canonicalize project path")?;
-
     let path = if !project_dir.exists() {
         bail!("path {} does not exist", project_dir.display());
     } else {

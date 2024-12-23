@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-// use crate::cmd::config::path::ProjectPaths;
 use clap::Args;
 use wash_lib::build::load_lock_file;
 use wash_lib::cli::{CommandOutput, CommonPackageArgs};
@@ -45,7 +44,6 @@ pub async fn invoke(
         wasm_pkg_core::config::Config::load().await?
     };
 
-    // let project_paths = ProjectPaths::from_current_dir()?;
     let project_cfg = load_config(config_path, Some(true)).await?;
     let mut lock_file = load_lock_file(&project_cfg.wasmcloud_toml_dir).await?;
 
