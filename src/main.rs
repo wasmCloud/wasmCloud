@@ -1,3 +1,5 @@
+use core::net::SocketAddr;
+
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::PathBuf;
@@ -344,6 +346,10 @@ struct Args {
         hide = true
     )]
     help_markdown: bool,
+
+    #[clap(long = "http-admin", env = "WASMCLOUD_HTTP_ADMIN")]
+    /// HTTP administration endpoint address
+    http_admin: Option<SocketAddr>,
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -510,6 +516,7 @@ async fn main() -> anyhow::Result<()> {
         heartbeat_interval: args.heartbeat_interval,
         // NOTE(brooks): Summing the feature flags "OR"s the multiple flags together.
         experimental_features: args.experimental_features.into_iter().sum(),
+        http_admin: args.http_admin,
     }))
     .await
     .context("failed to initialize host")?;
