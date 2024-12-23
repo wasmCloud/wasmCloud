@@ -98,7 +98,7 @@ The **w**asmCloud **A**pplication **D**eployment **M**anager [wadm](https://gith
 
 ## Language Support & SDKs
 
-wasmCloud is compatible with any language that supports the [WebAssembly Component Model](https://component-model.bytecodealliance.org/language-support.html). We provide first-party examples in [Rust](./examples/rust/), [Go](./examples/golang/), [Python](./examples/python), and [TypeScript](./examples/typescript/). If your language isn't listed yet, let us know with the [language support form](https://share.hsforms.com/1cedPVcwwQd6dQePZ3BWccQccyup).
+wasmCloud is compatible with any language that supports the [WebAssembly Component Model](https://component-model.bytecodealliance.org/language-support.html). We provide first-party examples in [Rust](./examples/rust/), [Go](./examples/golang/), [Python](./examples/python), and [TypeScript](https://github.com/wasmCloud/typescript/tree/main/examples). If your language isn't listed yet, let us know with the [language support form](https://share.hsforms.com/1cedPVcwwQd6dQePZ3BWccQccyup).
 
 ### Capability Provider SDK
 

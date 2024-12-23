@@ -1,1 +1,0 @@
-# @wasmcloud/lattice-client-core
