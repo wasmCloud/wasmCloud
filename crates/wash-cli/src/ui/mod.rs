@@ -69,6 +69,9 @@ async fn ensure_washboard(version: &str, base_dir: PathBuf) -> Result<PathBuf> {
 async fn download_washboard(version: &str, install_dir: &PathBuf) -> Result<()> {
     let urls = vec![
         format!(
+            "https://github.com/wasmCloud/typescript/releases/download/washboard-ui%40{version}/washboard.tar.gz"
+        ),
+        format!(
             "https://github.com/wasmCloud/wasmCloud/releases/download/typescript%2Fapps%2Fwashboard-ui%2F{version}/washboard.tar.gz"
         ),
         format!(
