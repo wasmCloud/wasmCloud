@@ -98,7 +98,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      wasmcloud_modified: ${{ steps.wasmcloud_changes.outputs.any_changed }}
+      providers_modified: ${{ steps.provider_changes.outputs.any_changed }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: tj-actions/changed-files@7ac5902a02bbf88c426878d792c0728b55bb97ae
+        id: wasmcloud_changes
+        with:
+          # Consider wasmCloud changed if any Rust file other than
+          # capability providers change
+          files: |
+            ./.github/actions/build-nix/action.yml
+            ./.github/actions/install-nix/action.yml
+            ./.github/workflows/wasmcloud.yml
+            ./.config/nextest.toml
+            nix/images/default.nix
+            flake.lock
+            flake.nix
+            Cargo.lock
+            Cargo.toml
+            rust-toolchain.toml
+            crates/**/*.{rs,toml,wit}
+            src/**/*.{rs,toml,wit}
+            tests/**/*.{rs,toml,wit}
+            wit/**/*.wit
+          # Somewhat naive assumption that providers will be under `crates/provider-<interface>-<vendor>`
+          # as that is our naming convention for providers.
+          files_ignore: |
+            !crates/provider-*-*
+            !crates/wash-*
+      - uses: tj-actions/changed-files@7ac5902a02bbf88c426878d792c0728b55bb97ae
+        id: provider_changes
+        with:
+          # Consider providers changed if any file in the providers change
+          files: |
+            Cargo.lock
+            Cargo.toml
+            crates/provider-*/*.{rs,toml,wit}
+          files_ignore: |
+            !crates/**/*.md
+
   build-bin:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-cli-v')}}
     strategy:
       matrix:
         config:
@@ -172,8 +217,8 @@ jobs:
         if: ${{ !endsWith(matrix.config.target, 'fhs') }}
 
   build-windows:
+    if: ${{ startswith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'}}
     name: wasmcloud-x86_64-pc-windows-msvc
-    if: startswith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -262,6 +307,8 @@ jobs:
       - run: .\bin\wasmcloud.exe --version
 
   cargo:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-cli-v')}}
     strategy:
       matrix:
         check:
@@ -281,6 +328,9 @@ jobs:
       - run: nix build -L .#checks.x86_64-linux.${{ matrix.check }}
 
   build-doc:
+    needs: [meta]
+    # TODO: maybe we just need this for wasmcloud_host changes
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -306,7 +356,7 @@ jobs:
           path: doc
 
   providers:
-    if: startswith(github.ref, 'refs/tags/provider-')
+    if: ${{ needs.meta.outputs.providers_modified == 'true' || startswith(github.ref, 'refs/tags/provider-') }}
     strategy:
       matrix:
         include:
@@ -344,6 +394,7 @@ jobs:
             subject: SQLDB_POSTGRES_SUBJECT
 
     needs:
+      - meta
       - build-bin
       - build-windows
       - test-linux
@@ -778,3 +829,34 @@ jobs:
           git config --global user.email "automation@wasmcloud.com"
           git config --global user.name "wasmCloud automation"
           cargo smart-release --update-crates-index --execute --no-changelog-preview --no-changelog ${{ inputs.additional-args }} ${{ inputs.crate }}
+
+  # This check always runs, and succeeds either if no relevant wasmCloud files were modified or jobs are successful.
+  wasmcloud_successful_checks:
+    needs:
+      - meta
+      - build-bin
+      - build-lipo
+      - test-linux
+      - cargo
+      - build-doc
+      - providers
+      - deploy-doc
+      - oci
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Results
+        run: |
+          echo 'needs.integration_tests.result: ${{ needs.integration_tests.result }}'
+          echo 'needs.build-bin.result: ${{ needs.build-bin.result }}'
+          echo 'needs.build-lipo.result: ${{ needs.build-lipo.result }}'
+          echo 'needs.test-linux.result: ${{ needs.test-linux.result }}'
+          echo 'needs.cargo.result: ${{ needs.cargo.result }}'
+          echo 'needs.build-doc.result: ${{ needs.build-doc.result }}'
+          echo 'needs.providers.result: ${{ needs.providers.result }}'
+          echo 'needs.deploy-doc.result: ${{ needs.deploy-doc.result }}'
+          echo 'needs.oci.result: ${{ needs.oci.result }}'
+      - name: Verify jobs
+        # All jobs must succeed or be skipped.
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
