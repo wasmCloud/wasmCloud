@@ -20,15 +20,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      modified: ${{ steps.changes.outputs.typescript }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            typescript:
+              - './.github/workflows/typescript.yml'
+              - 'typescript/**'
+              - '!typescript/**/*.md'
+
+  # TS actions will run if typescript files are modified or if a tag triggers a release
   build:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.modified == 'true' || startswith(github.ref, 'refs/tags/typescript/') }}
     uses: ./.github/workflows/ts-build.yml
 
   test:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.modified == 'true' || startswith(github.ref, 'refs/tags/typescript/') }}
     uses: ./.github/workflows/ts-test.yml
 
   release:
-    if: startswith(github.ref, 'refs/tags/typescript/')
-    needs: [build, test]
+    if: ${{ needs.meta.outputs.modified == 'true' || startswith(github.ref, 'refs/tags/typescript/') }}
+    needs: [meta, build, test]
     permissions:
       contents: write
     uses: ./.github/workflows/ts-release.yml
+
+  # This check always runs, and only succeeds if wash tests should run and they pass
+  typescript_successful_checks:
+    needs:
+      - meta
+      - build
+      - test
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Results
+        run: |
+          echo 'needs.build.result: ${{ needs.build.result }}'
+          echo 'needs.test.result: ${{ needs.test.result }}'
+      - name: Verify jobs
+        # All jobs must succeed or be skipped.
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
