@@ -39,6 +39,8 @@ jobs:
               - 'crates/secrets-types/**'
               - 'crates/wash-cli/**'
               - 'crates/wash-lib/**'
+              - '!crates/wash-*/**/*.md'
+              - '!crates/wash-cli/.devcontainer'
 
   unit_tests:
     needs: [meta]
