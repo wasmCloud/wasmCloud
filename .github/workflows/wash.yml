@@ -23,24 +23,29 @@ jobs:
   meta:
     runs-on: ubuntu-latest
     outputs:
-      modified: ${{ steps.changes.outputs.wash }}
+      modified: ${{ steps.changes.outputs.any_changed }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: dorny/paths-filter@v3
+      - uses: tj-actions/changed-files@7ac5902a02bbf88c426878d792c0728b55bb97ae
         id: changes
         with:
-          filters: |
-            wash:
-              - './.github/workflows/wash.yml'
-              - 'Cargo.lock'
-              - 'Cargo.toml'
-              - 'crates/control-interface/**'
-              - 'crates/core/**'
-              - 'crates/secrets-types/**'
-              - 'crates/wash-cli/**'
-              - 'crates/wash-lib/**'
-              - '!crates/wash-*/**/*.md'
-              - '!crates/wash-cli/.devcontainer'
+          files: |
+            ./.github/workflows/wash.yml
+            Cargo.lock
+            Cargo.toml
+            crates/control-interface/**
+            crates/core/**
+            crates/secrets-types/**
+            crates/tracing/**
+            crates/wash-cli/**
+            crates/wash-lib/**
+          files_ignore: |
+            !crates/**/*.md
+            !crates/wash-cli/.devcontainer
+      - name: Changed files
+        run: |
+          echo "Changed file(s) (${{ steps.changes.outputs.all_changed_files_count}})"
+          echo "${{ steps.changes.outputs.all_changed_files }}"
 
   unit_tests:
     needs: [meta]
