@@ -435,25 +435,6 @@ async fn valid_and_invalid() -> anyhow::Result<()> {
     )
     .await?;
 
-    // NOTE: Defining one-at-a-time actually doesn't work. We need to be able to handle this
-    // TODO: disjoint sets issue
-    // define_link(
-    //     &ctl_client,
-    //     component_three,
-    //     component_one,
-    //     link_name_one,
-    //     vec![interface_two],
-    // )
-    // .await?;
-    // define_link(
-    //     &ctl_client,
-    //     component_three,
-    //     &component_one,
-    //     link_name_one,
-    //     vec![interface_three],
-    // )
-    // .await?;
-
     // Ensure links were validly created
     let resp = ctl_client
         .get_links()
@@ -498,6 +479,24 @@ async fn valid_and_invalid() -> anyhow::Result<()> {
         component_two,
         link_name_three,
         vec![interface_one, interface_two, interface_three],
+    )
+    .await?;
+
+    // Components can be linked to different targets on different interfaces
+    define_link(
+        &ctl_client,
+        component_three,
+        component_one,
+        link_name_two,
+        vec![interface_two],
+    )
+    .await?;
+    define_link(
+        &ctl_client,
+        component_three,
+        component_two,
+        link_name_two,
+        vec![interface_three],
     )
     .await?;
 
