@@ -22,8 +22,6 @@ on:
       - component-http-hello-world-tinygo-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-hello-world-python-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-hello-world-python-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-http-hello-world-typescript-v[0-9]+.[0-9]+.[0-9]+*
-      - component-http-hello-world-typescript-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-keyvalue-counter-v[0-9]+.[0-9]+.[0-9]+*
@@ -35,8 +33,6 @@ on:
       - component-sqldb-postgres-query-tinygo-v[0-9]+.[0-9]+.[0-9]+*
       - component-sqldb-postgres-query-tinygo-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-task-manager-v[0-9]+.[0-9]+.[0-9]+*
-      - component-http-password-checker-typescript-v[0-9]+.[0-9]+.[0-9]+*
-      - component-http-password-checker-typescript-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-password-checker-rust-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-password-checker-rust-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-task-manager-v[0-9]+.[0-9]+.[0-9]+-*
@@ -52,7 +48,6 @@ on:
       - examples/golang/components/**
       - examples/tinygo/components/**
       - examples/python/components/**
-      - examples/typescript/components/**
 
 permissions:
   contents: read
@@ -397,17 +392,6 @@ jobs:
             tag-prefix: 'component-messaging-image-processor-worker-rust-v'
             lang: 'rust'
             wasm-bin: 'messaging_image_processor_worker_s.wasm'
-
-          # Typescript
-          - folder: 'http-hello-world'
-            tag-prefix: 'component-http-hello-world-typescript-v'
-            lang: 'typescript'
-            wasm-bin: 'http_hello_world_s.wasm'
-
-          - folder: 'http-password-checker'
-            tag-prefix: 'component-http-password-checker-typescript-v'
-            lang: 'typescript'
-            wasm-bin: 'http_password_checker_s.wasm'
 
           # Python
           - folder: 'http-hello-world'

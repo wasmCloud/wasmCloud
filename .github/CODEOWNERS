@@ -52,6 +52,9 @@ examples @wasmCloud/examples-maintainers
 ### Golang
 examples/golang @wasmCloud/go-maintainers
 
-### TyeScript
-typescript @wasmCloud/washboard-maintainers
-examples/typescript @wasmCloud/typescript-maintainers
+### TypeScript
+# TODO(lachieh): remove once new release of wash (> 0.38.0) is released
+# Everything typescript related has moved to the wasmcloud/typescript repo. The
+# only thing left in this folder is the http-hello-world example which is a
+# dependency of `wash` version 0.37.0 and lower.
+typescript @wasmCloud/wash-maintainers
