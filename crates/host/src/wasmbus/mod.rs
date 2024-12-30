@@ -2912,6 +2912,8 @@ impl Host {
                     && link.wit_namespace() == wit_namespace
                     && link.wit_package() == wit_package
                     && link.name() == name
+                    // Check if interfaces have no intersection
+                    && link.interfaces().iter().all(|i| !interfaces.contains(i))
                     && link.target() != target
             }) {
                 error!(
