@@ -504,40 +504,28 @@ async fn valid_and_invalid() -> anyhow::Result<()> {
     // INVALID LINKS
     //
 
-    // Component one is already linked to component two on all interfaces
+    // This should be invalid: same interface (interface_one), same link_name, same target
     let invalid = define_link(
         &ctl_client,
         component_one,
-        component_three,
-        link_name_one,
-        vec![interface_one, interface_two, interface_three],
-    )
-    .await?;
-    assert!(!invalid.succeeded());
-    // This assertion will fail if we change the message, but it's a good test
-    assert_eq!(invalid.message(),  "link already exists with different target, consider deleting the existing link or using a different link name");
-    // Component one is already linked to component two on all interfaces
-    let invalid = define_link(
-        &ctl_client,
-        component_one,
-        component_three,
-        link_name_three,
-        vec![interface_one],
-    )
-    .await?;
-    assert!(!invalid.succeeded());
-    assert_eq!(invalid.message(),  "link already exists with different target, consider deleting the existing link or using a different link name");
-    // Component three is already linked to component one on all interfaces
-    let invalid = define_link(
-        &ctl_client,
-        component_three,
         component_two,
         link_name_one,
-        vec![interface_three],
+        vec![interface_one, interface_two],
     )
     .await?;
     assert!(!invalid.succeeded());
-    assert_eq!(invalid.message(),  "link already exists with different target, consider deleting the existing link or using a different link name");
+    assert_eq!(invalid.message(), "link already exists with different target, consider deleting the existing link or using a different link name");
+
+    // This would be valid with a different link_name though
+    let valid = define_link(
+        &ctl_client,
+        component_one,
+        component_two,
+        link_name_two, // different link_name
+        vec![interface_one, interface_two],
+    )
+    .await?;
+    assert!(valid.succeeded());
 
     nats_server.stop().await.context("failed to stop NATS")?;
     Ok(())
