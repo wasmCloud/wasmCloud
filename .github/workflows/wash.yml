@@ -13,8 +13,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  GO_VERSION: '1.23'
-  TINYGO_VERSION: '0.34.0'
+  GO_VERSION: "1.23"
+  TINYGO_VERSION: "0.34.0"
 
 permissions:
   contents: read
@@ -60,12 +60,12 @@ jobs:
     steps:
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
         with:
-          node-version: '18.x'
+          node-version: "18.x"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - run: rustup show
       - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
         with:
-          shared-key: '${{ matrix.os }}-shared-cache'
+          shared-key: "${{ matrix.os }}-shared-cache"
       - name: Install nextest
         uses: taiki-e/install-action@2c3c8dfabf5933531aca0613c6b0c173fa51745e
         with:
@@ -76,14 +76,13 @@ jobs:
       - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
         with:
           tinygo-version: ${{ env.TINYGO_VERSION }}
-          install-binaryen: 'false'
+          install-binaryen: "false"
 
       # Run builds and tests only on Linux and macOS for PRs, Windows on `main`
       - name: Build wash
         if: ${{ matrix.os != 'windows-latest' || github.ref == 'refs/heads/main' }}
         run: make build
         working-directory: ./crates/wash-cli
-
       - name: Run all wash & wash-lib unit tests
         if: ${{ matrix.os != 'windows-latest' || github.ref == 'refs/heads/main' }}
         run: make test-wash-ci
@@ -99,18 +98,18 @@ jobs:
       - run: rustup show
       - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
         with:
-          shared-key: 'ubuntu-22.04-shared-cache'
+          shared-key: "ubuntu-22.04-shared-cache"
       - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a
         with:
           go-version: ${{ env.GO_VERSION }}
       - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
         with:
           tinygo-version: ${{ env.TINYGO_VERSION }}
-          install-binaryen: 'false'
+          install-binaryen: "false"
       - name: Launch integration test services
         uses: sudo-bot/action-docker-compose@ef4c4da08a9673f93d4eb8a5da1e942bf24a37ea
         with:
-          cli-args: '-f ./crates/wash-cli/tools/docker-compose.yml up --detach'
+          cli-args: "-f ./crates/wash-cli/tools/docker-compose.yml up --detach"
       - name: Install nextest
         uses: taiki-e/install-action@2c3c8dfabf5933531aca0613c6b0c173fa51745e
         with:
@@ -119,10 +118,18 @@ jobs:
         run: make test-integration-ci
         working-directory: ./crates/wash-cli
 
+  # This ensures we only build the `wash` binary once for all e2e tests
+  build_current:
+    name: Build `wash` for e2e tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/install-cached-wash-cli
+
   # Regression E2E tests to ensure that `wash new component` works consistently,
   # including older (released) versions of `wash`
-  e2e_tests_wash_new_actor:
-    needs: [meta]
+  e2e_tests_wash_new:
+    needs: [meta, build_current]
     if: ${{ needs.meta.outputs.modified == 'true' }}
     name: E2E Tests (`wash new`)
     runs-on: ubuntu-22.04
@@ -130,18 +137,19 @@ jobs:
       matrix:
         wash-version:
           - current
+          - 0.37.0
         template:
           - name: hello-world-rust
             lang: rust
           - name: hello-world-tinygo
             lang: tinygo
-            lang-version: '1.23'
+            lang-version: "1.23"
           - name: hello-world-typescript
             lang: typescript
-            lang-version: '22.x'
+            lang-version: "22.x"
           - name: hello-world-python
             lang: python
-            lang-version: '3.10'
+            lang-version: "3.10"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
@@ -155,9 +163,6 @@ jobs:
 
       # Set up Rust & trigger cargo toolchain
       - run: rustup show
-      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
-        with:
-          shared-key: 'ubuntu-22.04-shared-cache'
 
       - name: Ensure `wash new` works
         run: wash new component ${{ matrix.template.name }} --template-name ${{ matrix.template.name }}
@@ -168,7 +173,7 @@ jobs:
       - meta
       - unit_tests
       - integration_tests
-      - e2e_tests_wash_new_actor
+      - e2e_tests_wash_new
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -176,7 +181,7 @@ jobs:
         run: |
           echo 'needs.unit_tests.result: ${{ needs.unit_tests.result }}'
           echo 'needs.integration_tests.result: ${{ needs.integration_tests.result }}'
-          echo 'needs.e2e_tests_wash_new_actor.result: ${{ needs.e2e_tests_wash_new_actor.result }}'
+          echo 'needs.e2e_tests_wash_new.result: ${{ needs.e2e_tests_wash_new.result }}'
       - name: Verify jobs
         # All jobs must succeed or be skipped.
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
