@@ -27,8 +27,8 @@ subfolder = "templates/component/http-hello-world"
 [[component]]
 name = "hello-world-typescript"
 description = "a hello-world component (in TypeScript) that responds over an HTTP connection"
-git = "wasmCloud/wasmCloud"
-subfolder = "examples/typescript/components/http-hello-world"
+git = "wasmCloud/typescript"
+subfolder = "examples/components/http-hello-world"
 
 [[component]]
 name = "hello-world-python"

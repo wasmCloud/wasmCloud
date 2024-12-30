@@ -31,6 +31,7 @@ You can get started quickly by trying out of our example projects:
 | [Rust][rust]              | [`./rust/components/http-hello-world`](./rust/components/http-hello-world)           | `ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0`      |
 | [Rust][rust]              | [`./rust/components/http-jsonify`](./rust/components/http-jsonify)                   | `ghcr.io/wasmcloud/components/http-jsonify-rust:0.1.1`          |
 | [Rust][rust]              | [`./rust/components/http-keyvalue-counter`](./rust/components/http-keyvalue-counter) | `ghcr.io/wasmcloud/components/http-keyvalue-counter-rust:0.1.0` |
+| [TypeScript][typescript]  | [`wasmCloud/typescript#examples/components/http-hello-world`](https://github.com/wasmCloud/typescript/tree/main/examples/components/http-hello-world) |  |
 
 Start components with `wash`, either from file or OCI reference (if available):
 
@@ -50,6 +51,7 @@ wash start component ghcr.io/wasmcloud/components/http-jsonify-rust:0.1.1 http-j
 [rust]: https://rust-lang.org
 [tinygo]: https://tinygo.org
 [python]: https://python.org
+[typescript]: https://typescriptlang.org
 
 ## Try out Capability Providers
 

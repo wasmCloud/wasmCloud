@@ -2,12 +2,8 @@ name: nix
 
 on:
   pull_request:
-    paths-ignore:
-      - typescript/**
   merge_group:
   push:
-    paths-ignore:
-      - typescript/**
 
 permissions:
   contents: read
