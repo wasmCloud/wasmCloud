@@ -434,6 +434,7 @@ async fn valid_and_invalid() -> anyhow::Result<()> {
         vec![interface_one, interface_two, interface_three],
     )
     .await?;
+
     // NOTE: Defining one-at-a-time actually doesn't work. We need to be able to handle this
     // TODO: disjoint sets issue
     // define_link(
