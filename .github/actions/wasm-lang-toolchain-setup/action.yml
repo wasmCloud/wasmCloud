@@ -82,11 +82,14 @@ runs:
     # Install wash
     - name: install wash (previous version)
       if: ${{ inputs.wash-version && inputs.wash-version != 'current' }}
-      uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
+      uses: taiki-e/install-action@acd25891978b4cdaebd139d3efef606d26513b14 # v2.47.0
       with:
-        tool: wash-cli@${{ inputs.wash-version }}
+        tool: wash@${{ inputs.wash-version }}
 
     - name: install wash (current)
       if: ${{ inputs.wash-version && inputs.wash-version == 'current' }}
-      shell: bash
-      run: cargo install --path ./crates/wash-cli
+      uses: taiki-e/cache-cargo-install-action@caa6f48d18d42462f9c30df89e2b4f71a42b7c2c # v2.0.1
+      with:
+        tool: wash-cli
+        git: https://github.com/${{ github.repository }}
+        rev: ${{ github.sha }}

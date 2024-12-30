@@ -61,7 +61,7 @@ env:
 
 jobs:
   build-wash-cli:
-    name: build wash-cli
+    name: build wash-cli (${{ matrix.wash-version }})
     runs-on: ubuntu-22.04
     strategy:
       matrix:
@@ -72,34 +72,23 @@ jobs:
           # Once a new version of wash is out we can use prebuilt versions again (>= 35.0)
           - current
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        if: ${{ matrix.wash-version == 'current' }}
-      - run: rustup show
-      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
-        with:
-          shared-key: 'ubuntu-22.04-shared-cache'
-      - name: install wash (previous version)
-        if: ${{ matrix.wash-version != 'current' }}
-        uses: taiki-e/install-action@2c3c8dfabf5933531aca0613c6b0c173fa51745e
-        with:
-          tool: wash-cli@${{ matrix.wash-version }}
-      - name: build wash (current)
-        if: ${{ matrix.wash-version == 'current' }}
-        run: cargo build -p wash-cli --release
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        if: ${{ matrix.wash-version == 'current' }}
-        with:
-          name: wash-${{ matrix.wash-version }}
-          path: ./target/release/wash
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        if: ${{ matrix.wash-version != 'current' }}
-        with:
-          name: wash-${{ matrix.wash-version }}
-          path: ~/.cargo/bin/wash
+    - name: install wash (${{ matrix.wash-version }})
+      if: ${{ matrix.wash-version && matrix.wash-version != 'current' }}
+      uses: taiki-e/install-action@acd25891978b4cdaebd139d3efef606d26513b14 # v2.47.0
+      with:
+        tool: wash@${{ matrix.wash-version }}
+
+    - name: install wash (current)
+      if: ${{ matrix.wash-version && matrix.wash-version == 'current' }}
+      uses: taiki-e/cache-cargo-install-action@caa6f48d18d42462f9c30df89e2b4f71a42b7c2c # v2.0.1
+      with:
+        tool: wash-cli
+        git: https://github.com/${{ github.repository }}
+        rev: ${{ github.sha }}
 
   # Ensure that `wash build` and `wash app validate` works for all example projects below
   wash-build:
-    name: example-component-build
+    name: ${{ matrix.project.folder }}:${{ matrix.project.lang_version && format('{0}@{1}', matrix.project.lang, matrix.project.lang_version) || matrix.project.lang }} (wash@${{ matrix.wash-version }})
     runs-on: ubuntu-22.04
     needs: [build-wash-cli]
     strategy:
@@ -299,7 +288,7 @@ jobs:
 
   # Publish components relevant components if they've been tagged
   publish:
-    name: publish
+    name: ${{ matrix.project.folder }}:${{ matrix.project.lang_version && format('{0}@{1}', matrix.project.lang, matrix.project.lang_version) || matrix.project.lang }}
     runs-on: ubuntu-22.04
     needs: [wash-build]
     if: ${{ startswith(github.ref, 'refs/tags/component-') }}
@@ -413,15 +402,16 @@ jobs:
           echo "bin-name=wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.folder }}/${{ matrix.project.wasm-bin }}" >> $GITHUB_OUTPUT;
           echo "ref-prefix=$REF_PREFIX" >> $GITHUB_OUTPUT;
           echo "wasmcloud-toml-path=examples/${{ matrix.project.lang }}/components/${{ matrix.project.folder }}/wasmcloud.toml" >> $GITHUB_OUTPUT;
-      # Download all artifacts (wash binary and example component binaries) to work dir
+      # Download all artifacts (example component binaries) to work dir
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           path: artifacts
-      - name: install wash binary to PATH # Some build tools expect wash to be on the PATH
-        shell: bash
-        run: |
-          chmod +x ./artifacts/wash-${{ matrix.wash-version }}/wash;
-          echo "$(realpath ./artifacts/wash-${{ matrix.wash-version }})" >> "$GITHUB_PATH";
+      - name: install wash (current)
+        uses: taiki-e/cache-cargo-install-action@caa6f48d18d42462f9c30df89e2b4f71a42b7c2c # v2.0.1
+        with:
+          tool: wash-cli
+          git: https://github.com/${{ github.repository }}
+          rev: ${{ github.sha }}
       # Push the project to GitHub Container Registry under various tags, if this is a release tag
       - name: Push SHA-tagged WebAssembly binary to GHCR
         if: ${{ startsWith(github.ref, steps.meta.outputs.ref-prefix) }}
