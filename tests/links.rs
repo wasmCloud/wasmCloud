@@ -500,6 +500,33 @@ async fn valid_and_invalid() -> anyhow::Result<()> {
     )
     .await?;
 
+    //
+    // INVALID LINKS
+    //
+
+    // This should be invalid: same interface (interface_one), same link_name, same target
+    let invalid = define_link(
+        &ctl_client,
+        component_one,
+        component_two,
+        link_name_one,
+        vec![interface_one, interface_two],
+    )
+    .await?;
+    assert!(!invalid.succeeded());
+    assert_eq!(invalid.message(), "link already exists with different target, consider deleting the existing link or using a different link name");
+
+    // This would be valid with a different link_name though
+    let valid = define_link(
+        &ctl_client,
+        component_one,
+        component_two,
+        link_name_two, // different link_name
+        vec![interface_one, interface_two],
+    )
+    .await?;
+    assert!(valid.succeeded());
+
     nats_server.stop().await.context("failed to stop NATS")?;
     Ok(())
 }
