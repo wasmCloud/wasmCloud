@@ -1,0 +1,44 @@
+name: Install Cached Wash CLI
+
+description: |
+  This action will install the Wash CLI from a given repository and revision. If there are no changes that might affect the build, the action will build and install the Wash CLI from the current commit. Otherwise, it will build and install the Wash CLI from the base ref.
+
+runs:
+  using: composite
+  steps:
+    - name: Check for changes that might affect the build for wash
+      if: ${{ github.event_name == 'pull_request' }}
+      # It'd be a little nicer if we calculated if wash was affected by the changes, but this will do for now
+      id: changed-files
+      uses: tj-actions/changed-files@bab30c2299617f6615ec02a68b9a40d10bd21366 # v45.0.5
+      with:
+        files_ignore: |
+          adr/**
+          brand/**
+          examples/**
+          **/*.md
+
+    - name: Set wash revision to build/cache
+      id: base-ref
+      shell: bash
+      run: |
+        # Determine the revision to build from
+        if [ ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha }} == null ]; then
+          echo "No base ref, building from the current commit"
+          REVISION=${{ github.sha }}
+        elif [ ${{ steps.changed-files.outputs.all_changed_and_modified_files_count }} -eq 0 ]; then
+          echo "Something changed that might affect the build, building from the current commit"
+          REVISION=${{ github.sha }}
+        else
+          echo "Building from the base ref"
+          REVISION=${{ github.event.pull_request.base.sha }}
+        fi
+        echo "target_revision=$REVISION" >> $GITHUB_OUTPUT
+        echo "Using $REVISION as the target revision"
+
+    - name: Build wash
+      uses: taiki-e/cache-cargo-install-action@caa6f48d18d42462f9c30df89e2b4f71a42b7c2c # v2.0.1
+      with:
+        tool: wash-cli
+        git: https://github.com/${{ github.repository }}
+        rev: ${{ steps.base-ref.outputs.target_revision }}
