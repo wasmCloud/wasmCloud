@@ -46,8 +46,11 @@ pub async fn invoke(
 
     let wkg = WkgFetcher::from_common(&common, wkg_config).await?;
 
-    let project_cfg = load_config(config_path, Some(true)).await?;
-    let mut lock_file = load_lock_file(&project_cfg.wasmcloud_toml_dir).await?;
+    let project_cfg_dir = load_config(config_path, Some(true))
+        .await
+        .map(|cfg| cfg.wasmcloud_toml_dir)
+        .unwrap_or(dir.clone());
+    let mut lock_file = load_lock_file(&project_cfg_dir).await?;
 
     // Build the WIT package
     let (pkg_ref, version, bytes) = wit::build_package(
