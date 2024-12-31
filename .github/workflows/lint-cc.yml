@@ -4,26 +4,116 @@ on: [pull_request]
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
+    outputs:
+      raw_output: ${{ steps.cc-lint.outputs.raw_output }}
+      raw_errors: ${{ steps.cc-lint.outputs.raw_errors }}
+      json_output: ${{ steps.cc-lint.outputs.json_output }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          fetch-depth: 0
+      - name: Action Meta
+        id: meta
+        run: |
+          # build action meta
+          echo "fetch_depth=$(( ${{ github.event.pull_request.commits }} + 100 ))" >> "$GITHUB_OUTPUT"
 
-      - name: Install commitsar
-        uses: jaxxstorm/action-install-gh-release@cd6b2b78ad38bdd294341cda064ec0692b06215b
+      - name: Checkout PR branch & commits
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          repo: aevea/commitsar
-          tag: v0.20.2
-          cache: enable
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: ${{ steps.meta.outputs.fetch_depth }}
 
-      - name: Check commits
+      - name: Fetch Base commit
+        run: |
+          git fetch origin ${{ github.event.pull_request.base.ref }}
+
+      - name: Install convco
+        uses: taiki-e/install-action@77b010ce7843a10f653ccb6b0967bda4c3d81091 # v2.47.1
+        with:
+          tool: convco@0.6.1
+
+      - name: Check commits for formatting
         id: cc-lint
         run: |
-          commitsar -v -s=false
+          set +e
+          OUTPUT=$(convco check ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }})
+          set -e
+
+          # output results
+          if [[ $OUTPUT =~ FAIL ]]; then
+            echo '---- errors found ----'
+            RAW_ERRORS=$(echo "$OUTPUT" | grep -x '^FAIL.*$')
+            echo "$RAW_ERRORS"
+            JSON_OUTPUT=$(echo "$RAW_ERRORS" | jq -R -c 'split("\n") | map(split("  ") | { "key": .[1], "value": .[2] }) | { "commits": from_entries, "errors": length }')
+            echo '-------- json --------'
+            echo "$JSON_OUTPUT"
+            echo '----------------------'
+            {
+              echo "json_output=$JSON_OUTPUT"
+              echo "raw_output<<EOF"
+              echo "$OUTPUT"
+              echo "EOF"
+              echo "raw_errors=$RAW_ERRORS"
+            } >> "$GITHUB_OUTPUT"
+            exit 1
+          else
+            echo '---- no errors found ----'
+            {
+              echo "json_output=$(jq -n -c '{ "commits": {}, "count": 0 }')" >> "$GITHUB_OUTPUT"
+              echo 'raw_errors=""'
+              echo "raw_output<<EOF" 
+              echo "$OUTPUT"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+      - name: Job Summary
+        if: always()
+        env:
+          JOB_OUTPUT: ${{ steps.cc-lint.outputs.raw_output }}
+          JOB_STATUS: ${{ steps.cc-lint.outcome == 'success' && '✅' || steps.cc-lint.outcome == 'failure' && '❌' || steps.cc-lint.outcome == 'cancelled' && '🚫' }}
+        run: |
+          {
+            echo "## $JOB_STATUS Conventional Commits"
+            echo '```'
+            echo "$JOB_OUTPUT"
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+
+  comment:
+    if: always() && (needs.lint.result == 'success' || needs.lint.result == 'failure')
+    runs-on: ubuntu-latest
+    needs: [lint]
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Parse errors from lint-cc
+        id: parse
+        env:
+          JSON_OUTPUT: ${{ needs.lint.outputs.json_output }}
+        run: |
+          export MD_ERRORS_ROWS=$(echo "$JSON_OUTPUT" | jq -r '.commits | to_entries | map("| **\(.key)** | \(.value) |") | join("\n")')
+          export MD_ERRORS_COUNT=${{ fromJson(needs.lint.outputs.json_output).count || 0 }}
+          envsubst < .github/templates/conventional-commit.md > ./conventional-commit.md
+
+      - name: Explain conventional commits in comment
+        uses: marocchino/sticky-pull-request-comment@daa4a82a0a3f6c162c02b83fa44b3ab83946f7cb
+        with:
+          # Since lint-conventional-commits runs on pull requests, we should have exactly one
+          # pull request on the original workflow run, which we can reference the number of
+          number: ${{ github.event.pull_request.number }}
+          header: tip-conventional-commits
+          # If the workflow is now successful, we can delete the original message
+          delete: ${{ needs.lint.result == 'success' }}
+          # If the workflow failed, we should create the message
+          recreate: ${{ needs.lint.result == 'failure' }}
+          message: ./conventional-commit.md

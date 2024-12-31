@@ -1,0 +1,17 @@
+
+### :warning: It looks like your commit is not formatted in line with [Conventional Commits][cc]
+
+The [wasmCloud][wasmcloud] project uses Conventional Commits to enable automation and ensure consistent commit messages across the project.
+
+### Errors
+
+|hello|
+
+### How to fix this issue
+
+yes
+
+If you don't feel comfortable doing this, don't worry -- a project maintainer will help correct this for you, before merging.
+
+[cc]: https://www.conventionalcommits.org/en/v1.0.0
+[wasmcloud]: https://github.com/wasmCloud
