@@ -569,7 +569,9 @@ impl MessagingHostMessage0_3 for Message {
             }) => {
                 *headers = headers
                     .iter()
-                    .filter(|(k, ..)| (k.as_ref() != key))
+                    // NOTE(brooksmtownsend): The funky construction here is to provide a concrete type
+                    // to the `as_ref()` call, which is necessary to satisfy the type inference on Windows.
+                    .filter(|(k, ..)| (<&async_nats::HeaderName as AsRef<str>>::as_ref(k) != key))
                     .flat_map(|(k, vs)| zip(repeat(k.clone()), vs.iter().cloned()))
                     .collect();
                 Ok(())
