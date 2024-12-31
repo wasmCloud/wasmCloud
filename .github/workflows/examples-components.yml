@@ -60,37 +60,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-wash-cli:
-    name: build wash-cli (${{ matrix.wash-version }})
+  # build/cache wash-cli so following steps can use the cached version
+  prepare-wash-cache:
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        wash-version:
-          # NOTE(2024/10/23): we need to use the current version of wash *only*
-          # due to all the new WIT package retrieval goodness
-          #
-          # Once a new version of wash is out we can use prebuilt versions again (>= 35.0)
-          - current
     steps:
-    - name: install wash (${{ matrix.wash-version }})
-      if: ${{ matrix.wash-version && matrix.wash-version != 'current' }}
-      uses: taiki-e/install-action@acd25891978b4cdaebd139d3efef606d26513b14 # v2.47.0
-      with:
-        tool: wash@${{ matrix.wash-version }}
-
-    - name: install wash (current)
-      if: ${{ matrix.wash-version && matrix.wash-version == 'current' }}
-      uses: taiki-e/cache-cargo-install-action@caa6f48d18d42462f9c30df89e2b4f71a42b7c2c # v2.0.1
-      with:
-        tool: wash-cli
-        git: https://github.com/${{ github.repository }}
-        rev: ${{ github.sha }}
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+    - uses: ./.github/actions/install-cached-wash-cli
 
   # Ensure that `wash build` and `wash app validate` works for all example projects below
   wash-build:
     name: ${{ matrix.project.folder }}:${{ matrix.project.lang_version && format('{0}@{1}', matrix.project.lang, matrix.project.lang_version) || matrix.project.lang }} (wash@${{ matrix.wash-version }})
     runs-on: ubuntu-22.04
-    needs: [build-wash-cli]
+    needs: [prepare-wash-cache]
     strategy:
       fail-fast: false
       matrix:

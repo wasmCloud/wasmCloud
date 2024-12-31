@@ -88,8 +88,4 @@ runs:
 
     - name: install wash (current)
       if: ${{ inputs.wash-version && inputs.wash-version == 'current' }}
-      uses: taiki-e/cache-cargo-install-action@caa6f48d18d42462f9c30df89e2b4f71a42b7c2c # v2.0.1
-      with:
-        tool: wash-cli
-        git: https://github.com/${{ github.repository }}
-        rev: ${{ github.sha }}
+      uses: ./.github/actions/install-cached-wash-cli
