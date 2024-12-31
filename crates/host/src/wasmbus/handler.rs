@@ -26,7 +26,7 @@ use wasmcloud_tracing::context::TraceContextInjector;
 use wrpc_transport::InvokeExt as _;
 
 use super::config::ConfigBundle;
-use super::injector_to_headers;
+use super::{injector_to_headers, Features};
 
 #[derive(Clone, Debug)]
 pub struct Handler {
@@ -62,6 +62,8 @@ pub struct Handler {
     pub messaging_links: Arc<RwLock<HashMap<Box<str>, async_nats::Client>>>,
 
     pub invocation_timeout: Duration,
+    /// Experimental features enabled in the host for gating handler functionality
+    pub experimental_features: Features,
 }
 
 impl Handler {
@@ -78,6 +80,7 @@ impl Handler {
             instance_links: self.instance_links.clone(),
             messaging_links: self.messaging_links.clone(),
             invocation_timeout: self.invocation_timeout,
+            experimental_features: self.experimental_features,
         }
     }
 }
@@ -585,6 +588,7 @@ impl MessagingHostMessage0_3 for Message {
 }
 
 impl Messaging0_3 for Handler {
+    #[instrument(level = "debug", skip_all)]
     async fn connect(
         &self,
         name: String,
@@ -596,6 +600,7 @@ impl Messaging0_3 for Handler {
         })))
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn send(
         &self,
         client: &(dyn MessagingClient0_3 + Send + Sync),
@@ -741,6 +746,7 @@ impl Messaging0_3 for Handler {
         }
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn request(
         &self,
         client: &(dyn MessagingClient0_3 + Send + Sync),
@@ -906,6 +912,7 @@ impl Messaging0_3 for Handler {
         }
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn reply(
         &self,
         reply_to: &messaging0_3_0::types::Message,

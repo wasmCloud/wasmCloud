@@ -27,10 +27,11 @@ spec:
             instances: 1
         # Establish a unidirectional link to the messaging capability provider (powered by NATS),
         # so the `echo` component can make use of messaging interface functionality
-        # (i.e. making interacting with the messaging system, in this case NATS)            
+        # (i.e. making interacting with the messaging system, in this case NATS)
         - type: link
           properties:
-            target: nats
+            target:
+              name: nats
             namespace: wasmcloud
             package: messaging
             interfaces: [consumer]
@@ -39,7 +40,7 @@ spec:
     - name: nats
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/messaging-nats:0.23.1
+        image: ghcr.io/wasmcloud/messaging-nats:0.24.0
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
@@ -49,19 +50,21 @@ spec:
         #       otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
         #       otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"
       traits:
-        # Since the `nats` capability provider calls an component to handle messages 
+        # Since the `nats` capability provider calls an component to handle messages
         # coming over subscriptions, this provider needs a unidirectional link to the
         # component that wil be called.
-        # 
+        #
         # Here we link the `nats` provider (the "source"), to the `echo` component (the "target"),
         # so that so the provider can deliver messages to the component (by invoking the wasmcloud:messaging/handler interface) .
         - type: link
           properties:
-            target: echo
+            target:
+              name: echo
             namespace: wasmcloud
             package: messaging
             interfaces: [handler]
-            source_config:
-              - name: simple-subscription
-                properties:
-                  subscriptions: wasmcloud.echo
+            source:
+              config:
+                - name: simple-subscription
+                  properties:
+                    subscriptions: wasmcloud.echo

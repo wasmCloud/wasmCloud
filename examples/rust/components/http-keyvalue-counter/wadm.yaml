@@ -28,23 +28,24 @@ spec:
         #
         # Establish a unidirectional link to the `kvredis` (the keyvalue capability provider),
         # so the `counter` component can make use of keyvalue functionality provided by the Redis
-        # (i.e. using a keyvalue cache)            
+        # (i.e. using a keyvalue cache)
         - type: link
           properties:
-            target: kvredis
+            target:
+              name: kvredis
+              config:
+                - name: redis-url
+                  properties:
+                    url: redis://0.0.0.0:6379
             namespace: wasi
             package: keyvalue
             interfaces: [atomics, store]
-            target_config:
-              - name: redis-url
-                properties:
-                  url: redis://0.0.0.0:6379
 
     # Add a capability provider that enables Redis access
     - name: kvredis
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/keyvalue-redis:0.28.1
+        image: ghcr.io/wasmcloud/keyvalue-redis:0.28.2
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
@@ -58,7 +59,7 @@ spec:
     - name: httpserver
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.23.2
+        image: ghcr.io/wasmcloud/http-server:0.25.0
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
@@ -77,11 +78,13 @@ spec:
         # the component to handle a request.
         - type: link
           properties:
-            target: counter
+            target:
+              name: counter
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            source_config:
-              - name: default-http
-                properties:
-                  address: 0.0.0.0:8000
+            source:
+              config:
+                - name: default-http
+                  properties:
+                    address: 0.0.0.0:8000

@@ -28,7 +28,8 @@ spec:
         # can make use of outgoing handler functionality (i.e. calling functions in the system-info interface)            
         - type: link
           properties:
-            target: custom-template
+            target:
+              name: custom-template
             namespace: wasmcloud
             package: example
             interfaces: [system-info]
@@ -50,7 +51,8 @@ spec:
         # wasmcloud:example/process-data interface on `test-component`.
         - type: link
           properties:
-            target: test-component
+            target:
+              name: test-component
             namespace: wasmcloud
             package: example
             interfaces: [process-data]

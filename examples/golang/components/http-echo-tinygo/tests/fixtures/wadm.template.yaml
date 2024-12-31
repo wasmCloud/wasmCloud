@@ -23,11 +23,13 @@ spec:
       traits:
         - type: link
           properties:
-            target: test-http-echo-tinygo
+            target:
+              name: test-http-echo-tinygo
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            source_config:
-              - name: default-http
-                properties:
-                  address: '{{.HttpServerHost}}:{{.HttpServerPort}}'
+            source:
+              config:
+                - name: default-http
+                  properties:
+                    address: "{{.HttpServerHost}}:{{.HttpServerPort}}"

@@ -1,15 +1,16 @@
-mod common;
+use anyhow::{Context as _, Result};
 
+mod common;
 use common::{output_to_string, wash};
 
 // The purpose of this text is to ensure we don't remove subcommands from the help text without knowing.
 #[test]
-fn integration_help_subcommand_check() {
+fn integration_help_subcommand_check() -> Result<()> {
     let help_output = wash()
         .args(["--help"])
         .output()
-        .expect("failed to display help text");
-    let output = output_to_string(help_output).unwrap();
+        .context("failed to display help text")?;
+    let output = output_to_string(help_output).context("failed to convert output to string")?;
 
     assert!(output.contains("new"));
     assert!(output.contains("build"));
@@ -38,4 +39,30 @@ fn integration_help_subcommand_check() {
     assert!(output.contains("drain"));
     assert!(output.contains("keys"));
     assert!(output.contains("claims"));
+    Ok(())
+}
+
+/// Ensure `wash -h` works
+#[test]
+fn integration_help_short_works() -> Result<()> {
+    let stdout = wash()
+        .args(["-h"])
+        .output()
+        .context("failed to display wash help text")
+        .and_then(|output| output_to_string(output).context("failed to extract stdout"))?;
+    assert!(stdout.contains("new"));
+    assert!(stdout.contains("build"));
+    Ok(())
+}
+
+/// Ensure `wash up --help-markdown` works
+#[test]
+fn integration_help_up_markdown_works() -> Result<()> {
+    let stdout = wash()
+        .args(["up", "--help-markdown"])
+        .output()
+        .context("failed to display wash up help text markdown")
+        .and_then(|output| output_to_string(output).context("failed to extract stdout"))?;
+    assert!(stdout.contains("## `wash up`"));
+    Ok(())
 }

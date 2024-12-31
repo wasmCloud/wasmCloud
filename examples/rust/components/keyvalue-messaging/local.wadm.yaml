@@ -26,34 +26,37 @@ spec:
         # Link the component to the local NATS server
         - type: link
           properties:
+            # NOTE: The following is an example of how to configure the NATS Kv capability provider, for an individual component
+            target:
+              name: nats-kv
+              config:
+                - name: wasmcloud
+                  properties:
+                    bucket: "WASMCLOUD"
+                    enable_bucket_auto_create: "true"
             name: bucket-id1
-            target: nats-kv
             namespace: wasi
             package: keyvalue
             interfaces: [store, atomics]
-            # NOTE: The following is an example of how to configure the NATS Kv capability provider, for an individual component
-            target_config:
-              - name: wasmcloud
-                properties:
-                  bucket: "WASMCLOUD"
-                  enable_bucket_auto_create: "true"
 
         # # NOTE: The following is an example of how to configure additional named links to the same capability provider
         # - type: link
         #   properties:
+        #     target:
+        #       name: nats-kv
+        #       config:
+        #         - name: wasmland
+        #           properties:
+        #             bucket: "WASMLAND"
         #     name: bucket-id2
-        #     target: nats-kv
         #     namespace: wasi
         #     package: keyvalue
         #     interfaces: [store, atomics]
-        #     target_config:
-        #       - name: wasmland
-        #         properties:
-        #           bucket: "WASMLAND"
 
         - type: link
           properties:
-            target: nats-msg
+            target:
+              name: nats-msg
             namespace: wasmcloud
             package: messaging
             interfaces: [consumer]
@@ -82,7 +85,7 @@ spec:
     - name: nats-msg
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/messaging-nats:0.23.1
+        image: ghcr.io/wasmcloud/messaging-nats:0.24.0
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
@@ -94,11 +97,13 @@ spec:
       traits:
         - type: link
           properties:
-            target: kv-demo
+            target:
+              name: kv-demo
             namespace: wasmcloud
             package: messaging
             interfaces: [handler]
-            source_config:
-              - name: nats-subscription
-                properties:
-                  subscriptions: nats.atomic.delta
+            source:
+              config:
+                - name: nats-subscription
+                  properties:
+                    subscriptions: nats.atomic.delta

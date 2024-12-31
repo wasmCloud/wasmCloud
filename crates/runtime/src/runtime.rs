@@ -1,4 +1,4 @@
-use crate::ComponentConfig;
+use crate::{experimental::Features, ComponentConfig};
 
 use core::fmt;
 use core::fmt::Debug;
@@ -26,6 +26,7 @@ pub struct RuntimeBuilder {
     max_execution_time: Duration,
     component_config: ComponentConfig,
     force_pooling_allocator: bool,
+    experimental_features: Features,
 }
 
 impl RuntimeBuilder {
@@ -47,6 +48,7 @@ impl RuntimeBuilder {
             max_execution_time: Duration::from_secs(10 * 60),
             component_config: ComponentConfig::default(),
             force_pooling_allocator: false,
+            experimental_features: Features::default(),
         }
     }
 
@@ -102,6 +104,15 @@ impl RuntimeBuilder {
     pub fn force_pooling_allocator(self) -> Self {
         Self {
             force_pooling_allocator: true,
+            ..self
+        }
+    }
+
+    /// Set the experimental features to enable in the runtime
+    #[must_use]
+    pub fn experimental_features(self, experimental_features: Features) -> Self {
+        Self {
+            experimental_features,
             ..self
         }
     }
@@ -180,6 +191,7 @@ impl RuntimeBuilder {
                 engine,
                 component_config: self.component_config,
                 max_execution_time: self.max_execution_time,
+                experimental_features: self.experimental_features,
             },
             epoch,
         ))
@@ -200,6 +212,7 @@ pub struct Runtime {
     pub(crate) engine: wasmtime::Engine,
     pub(crate) component_config: ComponentConfig,
     pub(crate) max_execution_time: Duration,
+    pub(crate) experimental_features: Features,
 }
 
 impl Debug for Runtime {
@@ -233,5 +246,15 @@ impl Runtime {
     #[must_use]
     pub fn version(&self) -> &str {
         env!("CARGO_PKG_VERSION")
+    }
+
+    /// Returns a boolean indicating whether the runtime should skip linking a feature-gated instance
+    pub(crate) fn skip_feature_gated_instance(&self, instance: &str) -> bool {
+        matches!(
+            instance,
+            "wasmcloud:messaging/producer@0.3.0"
+                | "wasmcloud:messaging/request-reply@0.3.0"
+                | "wasmcloud:messaging/types@0.3.0"
+                if self.experimental_features.wasmcloud_messaging_v3)
     }
 }

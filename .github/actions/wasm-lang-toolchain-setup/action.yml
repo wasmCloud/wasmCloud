@@ -25,6 +25,7 @@ runs:
   using: composite
 
   steps:
+    # Go / TinyGo
     - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
       if: ${{ inputs.language == 'golang' || inputs.language == 'tinygo' }}
       with:
@@ -38,6 +39,8 @@ runs:
       with:
         tinygo-version: '0.33.0'
         install-binaryen: 'false'
+
+    # Python
     - uses: actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3
       if: ${{ inputs.language == 'python' }}
       with:
@@ -47,6 +50,8 @@ runs:
       shell: bash
       run: |
         pip install componentize-py==0.14.0
+    
+    # TypeScript
     - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6
       if: ${{ inputs.language == 'typescript' }}
       with:
@@ -57,15 +62,34 @@ runs:
       run: |
         npm install -g @bytecodealliance/jco
         npm install -g @bytecodealliance/componentize-js
+    - name: clone typescript examples
+      if: ${{ inputs.language == 'typescript' }}
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      with:
+        repository: 'wasmCloud/typescript'
+        path: 'wasmcloud-typescript'
+    - name: copy typescript examples
+      if: ${{ inputs.language == 'typescript' }}
+      shell: bash
+      run: |
+        mkdir -p ./examples/typescript/components
+        cp -r ./wasmcloud-typescript/examples/components/* ./examples/typescript/components/
+        echo "::group::Typescript Examples"
+        ls -l ./examples/typescript/components
+        echo "::endgroup::"
 
+    # All Languages
     # Install wash
     - name: install wash (previous version)
       if: ${{ inputs.wash-version && inputs.wash-version != 'current' }}
-      uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
+      uses: taiki-e/install-action@acd25891978b4cdaebd139d3efef606d26513b14 # v2.47.0
       with:
-        tool: wash-cli@${{ inputs.wash-version }}
+        tool: wash@${{ inputs.wash-version }}
 
     - name: install wash (current)
       if: ${{ inputs.wash-version && inputs.wash-version == 'current' }}
-      shell: bash
-      run: cargo install --path ./crates/wash-cli
+      uses: taiki-e/cache-cargo-install-action@caa6f48d18d42462f9c30df89e2b4f71a42b7c2c # v2.0.1
+      with:
+        tool: wash-cli
+        git: https://github.com/${{ github.repository }}
+        rev: ${{ github.sha }}

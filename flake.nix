@@ -41,52 +41,48 @@
           wit-deps.overlays.default
         ];
 
-        excludePaths = let
-          washboardExclude = map (name: "typescript/${name}") (remove "dist" (attrNames (readDir ./typescript)));
-        in
-          [
-            ".devcontainer"
-            ".dockerignore"
-            ".envrc"
-            ".github"
-            ".gitignore"
-            "ADOPTERS.md"
-            "adr"
-            "awesome-wasmcloud"
-            "brand"
-            "CHANGELOG.md"
-            "chart"
-            "charts"
-            "CODE_OF_CONDUCT.md"
-            "CODEOWNERS"
-            "CONTRIBUTING.md"
-            "CONTRIBUTION_LADDER.md"
-            "crates/wash-cli/.devcontainer"
-            "crates/wash-cli/build"
-            "crates/wash-cli/Completions.md"
-            "crates/wash-cli/CONTRIBUTING.md"
-            "crates/wash-cli/Dockerfile"
-            "crates/wash-cli/docs"
-            "crates/wash-cli/Makefile"
-            "crates/wash-cli/snap"
-            "crates/wash-cli/tools"
-            "Dockerfile"
-            "flake.nix"
-            "garnix.yaml"
-            "GOVERNANCE.md"
-            "LICENSE"
-            "MAINTAINERS.md"
-            "nix"
-            "OWNERS"
-            "performance.md"
-            "README.md"
-            "RELEASE.md"
-            "RELEASE_RUNBOOK.md"
-            "ROADMAP.md"
-            "rust-toolchain.toml"
-            "SECURITY.md"
-          ]
-          ++ washboardExclude;
+        excludePaths = [
+          ".devcontainer"
+          ".dockerignore"
+          ".envrc"
+          ".github"
+          ".gitignore"
+          "ADOPTERS.md"
+          "adr"
+          "awesome-wasmcloud"
+          "brand"
+          "CHANGELOG.md"
+          "chart"
+          "charts"
+          "CODE_OF_CONDUCT.md"
+          "CODEOWNERS"
+          "CONTRIBUTING.md"
+          "CONTRIBUTION_LADDER.md"
+          "crates/wash-cli/.devcontainer"
+          "crates/wash-cli/build"
+          "crates/wash-cli/Completions.md"
+          "crates/wash-cli/CONTRIBUTING.md"
+          "crates/wash-cli/Dockerfile"
+          "crates/wash-cli/docs"
+          "crates/wash-cli/Makefile"
+          "crates/wash-cli/snap"
+          "crates/wash-cli/tools"
+          "Dockerfile"
+          "flake.nix"
+          "garnix.yaml"
+          "GOVERNANCE.md"
+          "LICENSE"
+          "MAINTAINERS.md"
+          "nix"
+          "OWNERS"
+          "performance.md"
+          "README.md"
+          "RELEASE.md"
+          "RELEASE_RUNBOOK.md"
+          "ROADMAP.md"
+          "rust-toolchain.toml"
+          "SECURITY.md"
+        ];
 
         doCheck = false; # testing is performed in checks via `nextest`
 
@@ -459,6 +455,7 @@
               pkgs.tinygo
               pkgs.vault
               pkgs.wit-deps
+              pkgs.go
             ];
           }
           devShells;

@@ -1,5 +1,7 @@
 use crate::OciConfig;
 
+use core::net::SocketAddr;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,6 +78,8 @@ pub struct Host {
     pub heartbeat_interval: Option<Duration>,
     /// Experimental features that can be enabled in the host
     pub experimental_features: Features,
+    /// HTTP administration endpoint address
+    pub http_admin: Option<SocketAddr>,
 }
 
 /// Configuration for wasmCloud policy service
@@ -126,6 +130,7 @@ impl Default for Host {
             max_components: MAX_COMPONENTS,
             heartbeat_interval: None,
             experimental_features: Features::default(),
+            http_admin: None,
         }
     }
 }

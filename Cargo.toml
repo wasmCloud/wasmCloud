@@ -1,7 +1,7 @@
 [package]
 name = "wasmcloud"
 version = "1.5.0"
-description = "wasmCloud host runtime"
+description = "wasmCloud is a Cloud Native Computing Foundation (CNCF) project that enables teams to build polyglot applications composed of reusable Wasm components and run them—resiliently and efficiently—across any cloud, Kubernetes, datacenter, or edge."
 default-run = "wasmcloud"
 readme = "README.md"
 
@@ -13,7 +13,7 @@ repository.workspace = true
 
 [workspace.package]
 authors = ["The wasmCloud Team"]
-categories = ["wasm"]
+categories = ["wasm", "platform"]
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/wasmCloud/wasmCloud"
@@ -209,7 +209,7 @@ async-compression = { version = "0.3", default-features = false }
 async-nats = { version = "0.36", default-features = false }
 async-trait = { version = "0.1", default-features = false }
 aws-config = { version = "1.5", default-features = false }
-aws-sdk-s3 = { version = "1.65", default-features = false }
+aws-sdk-s3 = { version = "1.66", default-features = false }
 aws-smithy-runtime = { version = "1.7", default-features = false }
 axum = { version = "0.7", default-features = false }
 axum-server = { version = "0.6", default-features = false }
@@ -331,7 +331,7 @@ tracing-futures = { version = "0.2", default-features = false }
 tracing-opentelemetry = { version = "0.24", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
 ulid = { version = "1", default-features = false }
-unicase = { version = "2.8.0", default-features = false }
+unicase = { version = "2.8.1", default-features = false }
 # We enable default features for URL by default here to help with the no-std
 # transition for url. We should be able to remove default features and explicitly
 # enable "std" above soon (tm).
@@ -349,8 +349,8 @@ wascap = { version = "^0.15.2", path = "./crates/wascap", default-features = fal
 wash-cli = { version = "0", path = "./crates/wash-cli", default-features = false }
 wash-lib = { version = "^0.31.1", path = "./crates/wash-lib", default-features = false }
 wasi = { version = "0.13.3", default-features = false }
-wasm-pkg-client = { version = "0.8.5", default-features = false }
-wasm-pkg-core = { version = "0.8.5", default-features = false }
+wasm-pkg-client = { version = "0.9.0", default-features = false }
+wasm-pkg-core = { version = "0.9.0", default-features = false }
 wasi-preview1-component-adapter-provider = { version = "25", default-features = false }
 wasm-encoder = { version = "0.221", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }

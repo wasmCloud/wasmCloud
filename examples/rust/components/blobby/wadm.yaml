@@ -34,20 +34,21 @@ spec:
         # (i.e. reading/writing data blobs)
         - type: link
           properties:
-            target: blobstore
+            target:
+              name: blobstore
+              config:
+                - name: root-directory
+                  properties:
+                    root: '/tmp/blobstore'
             namespace: wasi
             package: blobstore
             interfaces: [blobstore]
-            target_config:
-              - name: root-directory
-                properties:
-                  root: '/tmp/blobstore'
 
     # Capability Providers
     - name: http
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.23.2
+        image: ghcr.io/wasmcloud/http-server:0.25.0
       traits:
         # Link the httpserver to the component, and configure the HTTP server
         # to listen on port 8000 for incoming requests
@@ -58,15 +59,17 @@ spec:
         # the component to handle a request.
         - type: link
           properties:
-            target: blobby
+            target:
+              name: blobby
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            source_config:
-              - name: default-http
-                properties:
-                  address: 0.0.0.0:8000
+            source:
+              config:
+                - name: default-http
+                  properties:
+                    address: 0.0.0.0:8000
     - name: blobstore
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/blobstore-fs:0.10.1
+        image: ghcr.io/wasmcloud/blobstore-fs:0.10.2

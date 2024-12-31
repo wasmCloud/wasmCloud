@@ -38,17 +38,19 @@ spec:
     - name: httpserver
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.23.2
+        image: ghcr.io/wasmcloud/http-server:0.25.0
       traits:
         # Link to Echo, and inform it to listen on port 8000
         # on the local machine
         - type: link
           properties:
-            target: http-echo-tinygo
+            target:
+              name: http-echo-tinygo
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            source_config:
-              - name: default-http
-                properties:
-                  address: '0.0.0.0:8000'
+            source:
+              config:
+                - name: default-http
+                  properties:
+                    address: "0.0.0.0:8000"

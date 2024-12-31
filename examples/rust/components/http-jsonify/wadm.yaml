@@ -20,7 +20,7 @@ spec:
       properties:
         # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
         # image: file://./build/http_jsonify_s.wasm
-        image: ghcr.io/wasmcloud/components/http-jsonify-rust:0.1.1
+        image: ghcr.io/wasmcloud/components/http-jsonify-rust:0.1.2
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
@@ -31,7 +31,7 @@ spec:
     - name: httpserver
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.23.2
+        image: ghcr.io/wasmcloud/http-server:0.25.0
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
@@ -50,11 +50,13 @@ spec:
         # the component to handle a request.
         - type: link
           properties:
-            target: http-component
+            target:
+              name: http-component
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            source_config:
-              - name: default-http
-                properties:
-                  address: 0.0.0.0:8000
+            source:
+              config:
+                - name: default-http
+                  properties:
+                    address: 0.0.0.0:8000

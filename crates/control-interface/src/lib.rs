@@ -34,9 +34,26 @@ pub use types::provider::*;
 pub use types::registry::*;
 pub use types::rpc::*;
 
-pub use wasmcloud_core::{
-    ComponentId, KnownConfigName, LatticeTarget, LinkName, WitInterface, WitNamespace, WitPackage,
-};
+// NOTE(brooksmtownsend): These are included to avoid a major breaking change
+// in this crate by removing the public type aliases. They should be removed
+// when we release 3.0.0 of this crate.
+#[deprecated(
+    since = "2.3.0",
+    note = "String type aliases are deprecated, use Strings instead"
+)]
+#[allow(dead_code)]
+mod aliases {
+    type ComponentId = String;
+    type KnownConfigName = String;
+    type LatticeTarget = String;
+    type LinkName = String;
+    type WitInterface = String;
+    type WitNamespace = String;
+    type WitPackage = String;
+}
+#[allow(unused_imports)]
+#[allow(deprecated)]
+pub use aliases::*;
 
 /// Generic result
 type Result<T> = ::core::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;

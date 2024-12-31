@@ -33,14 +33,15 @@ spec:
         # (i.e. reading/writing blobs)
         - type: link
           properties:
-            target: blobstore-fs
+            target:
+              name: blobstore-fs
+              config:
+                - name: root-directory
+                  properties:
+                    root: '/tmp'
             namespace: wasi
             package: blobstore
             interfaces: [blobstore]
-            target_config:
-              - name: root-directory
-                properties:
-                  root: '/tmp'
 
     # Capability provider that serves HTTP requests
     - name: httpserver
@@ -50,7 +51,7 @@ spec:
         # (and ensure that you've used `wash par crate` to create the par file below)
         #
         # image: file://../../../../crates/provider-http-server/provider-http-server.par.gz
-        image: ghcr.io/wasmcloud/http-server:0.23.2
+        image: ghcr.io/wasmcloud/http-server:0.25.0
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
@@ -66,14 +67,16 @@ spec:
         # the component to handle an incoming HTTP request.
         - type: link
           properties:
-            target: http-blobstore
+            target:
+              name: http-blobstore
             namespace: wasi
             package: http
             interfaces: [incoming-handler]
-            source_config:
-              - name: default-http
-                properties:
-                  address: 0.0.0.0:8000
+            source:
+              config:
+                - name: default-http
+                  properties:
+                    address: 0.0.0.0:8000
 
     # Capability provider that exposes a blobstore with the filesystem
     - name: blobstore-fs
@@ -83,7 +86,7 @@ spec:
         # (and ensure that you've used `wash par crate` to create the par file below)
         #
         # image: file://../../../../crates/provider-blobstore-fs/provider-blobstore-fs.par.gz
-        image: ghcr.io/wasmcloud/blobstore-fs:0.10.1
+        image: ghcr.io/wasmcloud/blobstore-fs:0.10.2
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
