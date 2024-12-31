@@ -308,7 +308,7 @@ jobs:
 
   cargo:
     needs: [meta]
-    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-cli-v')}}
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || needs.meta.outputs.providers_modified == 'true' || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-cli-v')}}
     strategy:
       matrix:
         check:
