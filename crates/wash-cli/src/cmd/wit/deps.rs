@@ -1,8 +1,5 @@
 use std::path::PathBuf;
 
-use anyhow::Context;
-use anyhow::{bail, Context, Result};
-use async_compression::tokio::bufread::GzipDecoder;
 use clap::Args;
 use wash_lib::build::load_lock_file;
 use wash_lib::cli::{CommandOutput, CommonPackageArgs};
