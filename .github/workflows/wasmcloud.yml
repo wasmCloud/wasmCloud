@@ -131,6 +131,12 @@ jobs:
             !crates/provider-*-*/**/*.{rs,toml,wit}
             !crates/wash-*/**/*.{rs,toml,wit}
       - uses: tj-actions/changed-files@7ac5902a02bbf88c426878d792c0728b55bb97ae
+        id: wash_changes
+        with:
+          # Used to run cargo workspace checks if any file in the wash-cli or wash-lib changes
+          files: |
+            crates/wash-*/**/*.{rs,toml,wit}
+      - uses: tj-actions/changed-files@7ac5902a02bbf88c426878d792c0728b55bb97ae
         id: provider_changes
         with:
           # Consider providers changed if any file in the providers change
