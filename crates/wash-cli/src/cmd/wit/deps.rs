@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-// use crate::cmd::config::path::ProjectPaths;
 use anyhow::{bail, Context, Result};
 use async_compression::tokio::bufread::GzipDecoder;
 use clap::Args;
