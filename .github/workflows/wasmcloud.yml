@@ -128,8 +128,8 @@ jobs:
           # Somewhat naive assumption that providers will be under `crates/provider-<interface>-<vendor>`
           # as that is our naming convention for providers.
           files_ignore: |
-            !crates/provider-*-*
-            !crates/wash-*
+            !crates/provider-*-*/**/*.{rs,toml,wit}
+            !crates/wash-*/**/*.{rs,toml,wit}
       - uses: tj-actions/changed-files@7ac5902a02bbf88c426878d792c0728b55bb97ae
         id: provider_changes
         with:
