@@ -96,8 +96,7 @@ pub struct ScaleComponentCommand {
     pub(crate) annotations: Option<BTreeMap<String, String>>,
     /// The maximum number of concurrent executing instances of this component. Setting this to `0` will
     /// stop the component.
-    // NOTE: renaming to `count` lets us remain backwards compatible for a few minor versions
-    #[serde(default, alias = "count", rename = "count")]
+    #[serde(default, alias = "count")]
     pub(crate) max_instances: u32,
     /// Host ID on which to scale this component
     #[serde(default)]
