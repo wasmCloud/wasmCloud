@@ -12,6 +12,7 @@ LICENSE @wasmCloud/org-maintainers
 .github/actions/build-nix @wasmCloud/ci-maintainers
 .github/actions/install-nix @wasmCloud/ci-maintainers
 .github/workflows/*.yml @wasmCloud/ci-maintainers
+.github/templates/* @wasmCloud/ci-maintainers
 flake.* @wasmCloud/ci-maintainers
 garnix.yaml @wasmCloud/ci-maintainers
 nix @wasmCloud/ci-maintainers
