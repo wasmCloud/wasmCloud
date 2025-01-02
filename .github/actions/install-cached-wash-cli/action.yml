@@ -25,7 +25,7 @@ runs:
         # Determine the revision to build from
         if [[ ${{ github.event_name == 'pull_request' }} == false ]]; then
           echo "Not a pull-request. Building from the base ref."
-          REVISION=${{ github.event.pull_request.base.sha }}
+          REVISION=${{ github.sha }}
         elif [ ${{ github.event.pull_request.base.sha }} == null ]; then
           echo "No base ref, building from the current commit"
           REVISION=${{ github.sha }}
