@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use clap::Args;
-use wash_lib::cli::{CommandOutput, CommonPackageArgs};
+use wash_lib::{
+    cli::{CommandOutput, CommonPackageArgs},
+    deps::WkgFetcher,
+};
 use wasm_pkg_client::{PublishOpts, Registry};
 
 /// Arguments for invoking `wash wit publish`
@@ -26,7 +29,9 @@ pub async fn invoke(
         common,
     }: PublishArgs,
 ) -> anyhow::Result<CommandOutput> {
-    let client = common.get_client().await?;
+    let client = WkgFetcher::from_common(&common, wasm_pkg_core::config::Config::default())
+        .await?
+        .into_client();
 
     let (package, version) = client
         .client()?
