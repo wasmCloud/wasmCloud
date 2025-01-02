@@ -190,11 +190,13 @@ pub fn provider_started(
 pub fn provider_start_failed(
     provider_ref: impl AsRef<str>,
     provider_id: impl AsRef<str>,
+    host_id: impl AsRef<str>,
     error: &anyhow::Error,
 ) -> serde_json::Value {
     json!({
         "provider_ref": provider_ref.as_ref(),
         "provider_id": provider_id.as_ref(),
+        "host_id": host_id.as_ref(),
         "error": format!("{error:#}"),
         // TODO(#1548): remove this field when we don't depend on it
         "link_name": "default",
