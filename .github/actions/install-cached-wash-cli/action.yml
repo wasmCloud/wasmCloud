@@ -23,10 +23,13 @@ runs:
       shell: bash
       run: |
         # Determine the revision to build from
-        if [ ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha }} == null ]; then
+        if [[ ${{ github.event_name == 'pull_request' }} == false ]]; then
+          echo "Not a pull-request. Building from the base ref."
+          REVISION=${{ github.event.pull_request.base.sha }}
+        elif [ ${{ github.event.pull_request.base.sha }} == null ]; then
           echo "No base ref, building from the current commit"
           REVISION=${{ github.sha }}
-        elif [ ${{ steps.changed-files.outputs.all_changed_and_modified_files_count }} -eq 0 ]; then
+        elif [ ${{ steps.changed-files.outcome == 'success' && steps.changed-files.outputs.all_changed_and_modified_files_count || 0 }} -eq 0 ]; then
           echo "Something changed that might affect the build, building from the current commit"
           REVISION=${{ github.sha }}
         else
