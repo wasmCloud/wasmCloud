@@ -25,7 +25,7 @@ const DEFAULT_HTTP_HOST: &str = "localhost";
 const DEFAULT_HTTP_PORT: u16 = 8080;
 
 #[derive(Deserialize)]
-struct TestResult {
+struct TestResult<'a> {
     /// test case name
     #[serde(default)]
     pub name: String,
@@ -37,8 +37,8 @@ struct TestResult {
     /// failed tests should have a firsts-level key called "error".
     #[serde(rename = "snapData")]
     #[serde(with = "serde_bytes")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub snap_data: Option<Vec<u8>>,
+    #[serde(default)]
+    pub snap_data: &'a [u8],
 }
 
 /// Prints test results (with handy color!) to the terminal
@@ -70,14 +70,8 @@ fn print_test_results(results: &[TestResult]) {
             writeln!(&mut stdout, ": {}", test.name).unwrap();
             passed += 1;
         } else {
-            let error_msg = test
-                .snap_data
-                .as_ref()
-                .map(|bytes| {
-                    serde_json::from_slice::<ErrorReport>(bytes)
-                        .map(|r| r.error)
-                        .unwrap_or_default()
-                })
+            let error_msg = serde_json::from_slice::<ErrorReport>(test.snap_data)
+                .map(|r| r.error)
                 .unwrap_or_default();
             let _ = stdout.set_color(&red);
             write!(&mut stdout, "Fail").unwrap();
