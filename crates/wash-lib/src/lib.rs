@@ -22,6 +22,8 @@ pub mod build;
 #[cfg(feature = "cli")]
 pub mod cli;
 #[cfg(feature = "cli")]
+pub mod deps;
+#[cfg(feature = "cli")]
 pub mod generate;
 #[cfg(feature = "parser")]
 pub mod parser;

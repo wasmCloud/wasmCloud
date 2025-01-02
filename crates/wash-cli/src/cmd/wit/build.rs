@@ -4,6 +4,7 @@ use anyhow::Context;
 use clap::Args;
 use wash_lib::build::load_lock_file;
 use wash_lib::cli::{CommandOutput, CommonPackageArgs};
+use wash_lib::deps::WkgFetcher;
 use wash_lib::parser::load_config;
 
 use wasm_pkg_core::wit::{self};
@@ -37,7 +38,6 @@ pub async fn invoke(
         config_path,
     }: BuildArgs,
 ) -> anyhow::Result<CommandOutput> {
-    let client = common.get_client().await?;
     // Attempt to load wasmcloud.toml. If it doesn't work, attempt to load wkg.toml
     let wkg_config = if let Ok(proj) = load_config(config_path, Some(true)).await {
         proj.package_config
@@ -45,12 +45,19 @@ pub async fn invoke(
         wasm_pkg_core::config::Config::load().await?
     };
 
+    let wkg = WkgFetcher::from_common(&common, wkg_config).await?;
+
     let mut lock_file =
         load_lock_file(std::env::current_dir().context("failed to get current directory")?).await?;
 
     // Build the WIT package
-    let (pkg_ref, version, bytes) =
-        wit::build_package(&wkg_config, dir, &mut lock_file, client).await?;
+    let (pkg_ref, version, bytes) = wit::build_package(
+        &wkg.get_config().to_owned(),
+        dir,
+        &mut lock_file,
+        wkg.into_client(),
+    )
+    .await?;
 
     // Resolve the output path
     let output_path = match output_file {
