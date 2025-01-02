@@ -20,3 +20,4 @@ target/
 **/build/
 examples/**/Cargo.lock
 *-workspace
+!crates/wash-lib/src/build/
