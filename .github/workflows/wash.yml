@@ -31,6 +31,7 @@ jobs:
         with:
           files: |
             ./.github/workflows/wash.yml
+            ./.github/actions/install-cached-wash-cli/action.yml
             Cargo.lock
             Cargo.toml
             crates/control-interface/**
