@@ -19,6 +19,10 @@ FROM debian:bullseye-slim@sha256:60a596681410bd31a48e5975806a24cd78328f3fd6b9ee5
 
 WORKDIR /app
 
+# Install CA certificates
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+
 # Copy the binary from the first stage
 COPY --from=builder /app/target/release/secrets-nats-kv .
 
