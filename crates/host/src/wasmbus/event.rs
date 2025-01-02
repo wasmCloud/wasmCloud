@@ -12,8 +12,14 @@ use wasmcloud_control_interface::Link;
 
 fn format_component_claims(claims: &jwt::Claims<jwt::Component>) -> serde_json::Value {
     let issuer = &claims.issuer;
-    let not_before_human = "TODO";
-    let expires_human = "TODO";
+    let not_before_human = claims
+        .not_before
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| "never".to_string());
+    let expires_human = claims
+        .expires
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| "never".to_string());
     if let Some(component) = &claims.metadata {
         json!({
             "call_alias": component.call_alias,
@@ -158,6 +164,14 @@ pub fn provider_started(
     provider_id: impl AsRef<str>,
 ) -> serde_json::Value {
     if let Some(claims) = claims {
+        let not_before_human = claims
+            .not_before
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "never".to_string());
+        let expires_human = claims
+            .expires
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "never".to_string());
         let metadata = claims.metadata.as_ref();
         json!({
             "host_id": host_id.as_ref(),
@@ -169,8 +183,8 @@ pub fn provider_started(
                 "tags": None::<Vec<()>>, // present in OTP, but hardcoded to `None`
                 "name": metadata.map(|jwt::CapabilityProvider { name, .. }| name),
                 "version": metadata.map(|jwt::CapabilityProvider { ver, .. }| ver),
-                "not_before_human": "TODO",
-                "expires_human": "TODO",
+                "not_before_human": not_before_human,
+                "expires_human": expires_human,
             },
             // TODO(#1548): remove these fields when we don't depend on them
             "instance_id": provider_id.as_ref(),
