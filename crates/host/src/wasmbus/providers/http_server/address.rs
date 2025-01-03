@@ -8,11 +8,10 @@ use http::header::HOST;
 use http::uri::Scheme;
 use http::Uri;
 use http_body_util::BodyExt as _;
-use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::sync::{Mutex, RwLock};
-use tokio::task::JoinSet;
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use tracing::{error, info_span, instrument, trace_span, Instrument as _, Span};
+use tracing::{info_span, instrument, trace_span, Instrument as _, Span};
 use wasmcloud_provider_http_server::{load_settings, ServiceSettings};
 use wasmcloud_provider_sdk::{LinkConfig, LinkDeleteInfo};
 use wasmcloud_tracing::KeyValue;
@@ -20,10 +19,12 @@ use wrpc_interface_http::ServeIncomingHandlerWasmtime as _;
 
 use crate::wasmbus::{Component, InvocationContext};
 
+use super::listen;
+
 pub(crate) struct Provider {
     pub(crate) address: SocketAddr,
     pub(crate) components: Arc<RwLock<HashMap<String, Arc<Component>>>>,
-    pub(crate) links: Mutex<HashMap<Arc<str>, HashMap<Box<str>, JoinSet<()>>>>,
+    pub(crate) links: Mutex<HashMap<Arc<str>, HashMap<Box<str>, JoinHandle<()>>>>,
     pub(crate) lattice_id: Arc<str>,
     pub(crate) host_id: Arc<str>,
 }
@@ -42,24 +43,15 @@ impl wasmcloud_provider_sdk::Provider for Provider {
         let ServiceSettings { address, .. } =
             load_settings(Some(self.address), config).context("failed to load settings")?;
 
-        let socket = match &address {
-            SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
-            SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
-        };
-        socket.set_reuseaddr(!cfg!(windows))?;
-        socket.set_nodelay(true)?;
-        socket.bind(address)?;
-        let listener = socket.listen(8196)?;
-
-        let mut tasks = JoinSet::new();
+        let lattice_id = Arc::clone(&self.lattice_id);
+        let host_id = Arc::clone(&self.host_id);
+        let components = Arc::clone(&self.components);
         let target_id: Arc<str> = Arc::from(target_id);
-        let svc = hyper::service::service_fn({
-            let target_id = Arc::clone(&target_id);
-            let lattice_id = Arc::clone(&self.lattice_id);
-            let host_id = Arc::clone(&self.host_id);
-            let components = Arc::clone(&self.components);
+        let target_id_fn = Arc::clone(&target_id);
+        let task = listen(
+            address,
             move |req: hyper::Request<hyper::body::Incoming>| {
-                let target_id = Arc::clone(&target_id);
+                let target_id = Arc::clone(&target_id_fn);
                 let lattice_id = Arc::clone(&lattice_id);
                 let host_id = Arc::clone(&host_id);
                 let components = Arc::clone(&components);
@@ -137,40 +129,17 @@ impl wasmcloud_provider_sdk::Provider for Provider {
                     anyhow::Ok(res)
                 }
                 .instrument(info_span!("handle"))
-            }
-        });
+            },
+        )
+        .await?;
 
-        let srv = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
-        let srv = Arc::new(srv);
-
-        tasks.spawn(async move {
-            loop {
-                let stream = match listener.accept().await {
-                    Ok((stream, _)) => stream,
-                    Err(err) => {
-                        error!(?err, "failed to accept HTTP server connection");
-                        continue;
-                    }
-                };
-                let svc = svc.clone();
-                tokio::spawn({
-                    let srv = Arc::clone(&srv);
-                    let svc = svc.clone();
-                    async move {
-                        if let Err(err) = srv.serve_connection(TokioIo::new(stream), svc).await {
-                            error!(?err, "failed to serve connection");
-                        }
-                    }
-                });
-            }
-        });
         self.links
             .lock()
             .instrument(trace_span!("insert_link"))
             .await
             .entry(target_id)
             .or_default()
-            .insert(link_name.into(), tasks);
+            .insert(link_name.into(), task);
         Ok(())
     }
 
