@@ -2,12 +2,14 @@ use core::net::SocketAddr;
 use core::str::FromStr as _;
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::{bail, Context as _};
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use nkeys::XKey;
 use tokio::sync::{broadcast, Mutex};
-use tokio::task::JoinSet;
+use tokio::task::{JoinHandle, JoinSet};
 use tracing::{error, instrument};
 use wasmcloud_core::InterfaceLinkDefinition;
 use wasmcloud_provider_http_server::default_listen_address;
@@ -53,7 +55,15 @@ impl crate::wasmbus::Host {
                 lattice_id: Arc::clone(&self.host_config.lattice),
             }),
             // Run provider in path mode
-            Some("path") => HttpServerProvider::Path(path::Provider {}),
+            Some("path") => HttpServerProvider::Path(
+                path::Provider::new(
+                    default_address,
+                    Arc::clone(&self.components),
+                    Arc::from(host_id),
+                    Arc::clone(&self.host_config.lattice),
+                )
+                .await?,
+            ),
             Some(other) => bail!("unknown routing_mode: {other}"),
         };
 
@@ -110,4 +120,49 @@ impl crate::wasmbus::Host {
         }
         Ok(())
     }
+}
+
+pub(crate) async fn listen<F, S>(address: SocketAddr, svc: F) -> anyhow::Result<JoinHandle<()>>
+where
+    F: Fn(hyper::Request<hyper::body::Incoming>) -> S,
+    F: Clone + Send + Sync + 'static,
+    S: Future<Output = anyhow::Result<http::Response<wasmtime_wasi_http::body::HyperOutgoingBody>>>,
+    S: Send + 'static,
+{
+    let socket = match &address {
+        SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
+        SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
+    };
+    socket.set_reuseaddr(!cfg!(windows))?;
+    socket.set_nodelay(true)?;
+    socket.bind(address)?;
+    let listener = socket.listen(8196)?;
+
+    let svc = hyper::service::service_fn(svc);
+    let srv = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+    let srv = Arc::new(srv);
+
+    let task = tokio::spawn(async move {
+        loop {
+            let stream = match listener.accept().await {
+                Ok((stream, _)) => stream,
+                Err(err) => {
+                    error!(?err, "failed to accept HTTP server connection");
+                    continue;
+                }
+            };
+            let svc = svc.clone();
+            tokio::spawn({
+                let srv = Arc::clone(&srv);
+                let svc = svc.clone();
+                async move {
+                    if let Err(err) = srv.serve_connection(TokioIo::new(stream), svc).await {
+                        error!(?err, "failed to serve connection");
+                    }
+                }
+            });
+        }
+    });
+
+    Ok(task)
 }
