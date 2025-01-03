@@ -2665,6 +2665,7 @@ impl Host {
                             host_id,
                         )
                         .await?
+                        // TODO: need to publish event that it started
                     }
                     "http-server" => {
                         bail!("feature `builtin-http-server` is not enabled, denying start")
