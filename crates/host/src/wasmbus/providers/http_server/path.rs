@@ -37,22 +37,50 @@ pub(crate) struct Provider {
     pub(crate) path_router: Arc<RwLock<Router>>,
 }
 
+// Implementations of put and delete link are done in the `impl Provider` block to aid in testing
 impl wasmcloud_provider_sdk::Provider for Provider {
     #[instrument(level = "debug", skip_all)]
-    async fn receive_link_config_as_source(
+    async fn receive_link_config_as_source(&self, link: LinkConfig<'_>) -> anyhow::Result<()> {
+        self.put_link(link.target_id, link.link_name, link.config)
+            .await
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        self.delete_link(
+            info.get_source_id(),
+            info.get_target_id(),
+            info.get_link_name(),
+        )
+        .await
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn shutdown(&self) -> anyhow::Result<()> {
+        self.handle.abort();
+        Ok(())
+    }
+}
+
+impl Provider {
+    #[instrument(level = "debug", skip(self))]
+    async fn put_link(
         &self,
-        link_config: LinkConfig<'_>,
+        target_id: &str,
+        link_name: &str,
+        config: &HashMap<String, String>,
     ) -> anyhow::Result<()> {
-        let Some(path) = link_config.config.get("path") else {
-            error!(?link_config.config, ?link_config.target_id, "path not found in link config, cannot register path");
-            bail!(
-                "path not found in link config, cannot register path for component {}",
-                link_config.target_id
+        let Some(path) = config.get("path") else {
+            error!(
+                ?config,
+                ?target_id,
+                "path not found in link config, cannot register path"
             );
+            bail!("path not found in link config, cannot register path for component {target_id}",);
         };
 
-        let target = Arc::from(link_config.target_id);
-        let name = Arc::from(link_config.link_name);
+        let target = Arc::from(target_id);
+        let name = Arc::from(link_name);
         let key = (Arc::clone(&target), Arc::clone(&name));
 
         let mut path_router = self.path_router.write().await;
@@ -71,31 +99,28 @@ impl wasmcloud_provider_sdk::Provider for Provider {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip_all)]
-    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+    #[instrument(level = "debug", skip(self))]
+    async fn delete_link(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        link_name: &str,
+    ) -> anyhow::Result<()> {
         debug!(
-            source = info.get_source_id(),
-            target = info.get_target_id(),
-            link = info.get_link_name(),
+            source = source_id,
+            target = target_id,
+            link = link_name,
             "deleting http path link"
         );
-        let component_id = info.get_target_id();
-        let link_name = info.get_link_name();
 
         let mut path_router = self.path_router.write().await;
         let path = path_router
             .components
-            .remove(&(Arc::from(component_id), Arc::from(link_name)));
+            .remove(&(Arc::from(target_id), Arc::from(link_name)));
         if let Some(path) = path {
             path_router.paths.remove(&path);
         }
 
-        Ok(())
-    }
-
-    #[instrument(level = "debug", skip_all)]
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        self.handle.abort();
         Ok(())
     }
 }
@@ -225,5 +250,125 @@ impl Provider {
             handle,
             path_router,
         })
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{collections::HashMap, sync::Arc};
+
+    use anyhow::Context as _;
+
+    /// Ensure we can register and deregister a bunch of paths properly
+    #[tokio::test]
+    async fn can_manage_paths() -> anyhow::Result<()> {
+        let provider = super::Provider {
+            handle: tokio::spawn(async move {}),
+            path_router: Arc::default(),
+        };
+
+        // Put path registrations:
+        // /foo -> foo
+        // /api/bar -> bar
+        // /foo/api/baz -> baz
+        provider
+            .put_link(
+                "foo",
+                "default",
+                &HashMap::from([("path".to_string(), "/foo".to_string())]),
+            )
+            .await
+            .context("should register foo path")?;
+        provider
+            .put_link(
+                "bar",
+                "default",
+                &HashMap::from([("path".to_string(), "/api/bar".to_string())]),
+            )
+            .await
+            .context("should register bar path")?;
+        provider
+            .put_link(
+                "baz",
+                "default",
+                &HashMap::from([("path".to_string(), "/foo/api/baz".to_string())]),
+            )
+            .await
+            .context("should register baz path")?;
+
+        {
+            let router = provider.path_router.read().await;
+            assert_eq!(router.paths.len(), 3);
+            assert_eq!(router.components.len(), 3);
+            assert!(router
+                .paths
+                .get("/foo")
+                .is_some_and(|target| &target.to_string() == "foo"));
+            assert!(router
+                .components
+                .get(&(Arc::from("foo"), Arc::from("default")))
+                .is_some_and(|p| &p.to_string() == "/foo"));
+            assert!(router
+                .paths
+                .get("/api/bar")
+                .is_some_and(|target| &target.to_string() == "bar"));
+            assert!(router
+                .components
+                .get(&(Arc::from("bar"), Arc::from("default")))
+                .is_some_and(|p| &p.to_string() == "/api/bar"));
+            assert!(router
+                .paths
+                .get("/foo/api/baz")
+                .is_some_and(|target| &target.to_string() == "baz"));
+            assert!(router
+                .components
+                .get(&(Arc::from("baz"), Arc::from("default")))
+                .is_some_and(|p| &p.to_string() == "/foo/api/baz"));
+        }
+
+        // Rejecting reserved paths / linked components
+        assert!(
+            provider
+                .put_link(
+                    "notbaz",
+                    "default",
+                    &HashMap::from([("path".to_string(), "/foo/api/baz".to_string())]),
+                )
+                .await
+                .is_err(),
+            "should fail to register a path that's already registered"
+        );
+        assert!(
+            provider
+                .put_link(
+                    "baz",
+                    "default",
+                    &HashMap::from([("path".to_string(), "/foo/api/notbaz".to_string())]),
+                )
+                .await
+                .is_err(),
+            "should fail to register a path to a component that already has a path"
+        );
+
+        // Delete path registrations
+        provider
+            .delete_link("builtin", "foo", "default")
+            .await
+            .context("should delete link")?;
+        provider
+            .delete_link("builtin", "bar", "default")
+            .await
+            .context("should delete link")?;
+        provider
+            .delete_link("builtin", "baz", "default")
+            .await
+            .context("should delete link")?;
+        {
+            let router = provider.path_router.read().await;
+            assert!(router.paths.is_empty());
+            assert!(router.components.is_empty());
+        }
+
+        Ok(())
     }
 }
