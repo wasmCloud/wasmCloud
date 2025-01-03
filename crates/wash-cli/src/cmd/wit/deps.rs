@@ -50,7 +50,7 @@ pub async fn invoke(
     }: DepsArgs,
 ) -> anyhow::Result<CommandOutput> {
     // Load wasmcloud.toml configuration, if present
-    let project_config = match load_config(config_path, Some(true)).await {
+    let project_config = match load_config(config_path.clone(), Some(true)).await {
         Ok(v) => Some(v),
         Err(e) => {
             eprintln!("failed to load project configuration: {e}");
@@ -66,8 +66,8 @@ pub async fn invoke(
         None => wasm_pkg_core::config::Config::load().await?,
     };
 
-    let mut lock_file =
-        load_lock_file(std::env::current_dir().context("failed to get current directory")?).await?;
+    let project_cfg = load_config(config_path, Some(true)).await?;
+    let mut lock_file = load_lock_file(&project_cfg.wasmcloud_toml_dir).await?;
 
     // Start building the wkg client config
     let mut wkg_client_config = common.load_config().await?;

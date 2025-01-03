@@ -909,15 +909,17 @@ pub async fn load_config(
     opt_path: Option<PathBuf>,
     use_env: Option<bool>,
 ) -> Result<ProjectConfig> {
-    let mut path = opt_path
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."));
+    let project_dir = match opt_path.clone() {
+        Some(p) => p,
+        None => std::env::current_dir().context("failed to get current directory")?,
+    };
 
-    if !path.exists() {
-        bail!("path {} does not exist", path.display());
-    }
+    let path = if !project_dir.exists() {
+        bail!("path {} does not exist", project_dir.display());
+    } else {
+        fs::canonicalize(&project_dir).context("failed to canonicalize project path")?
+    };
 
-    path = fs::canonicalize(path).context("failed to canonicalize project path")?;
     let (wasmcloud_toml_dir, wasmcloud_toml_path) = if path.is_dir() {
         let wasmcloud_path = path.join("wasmcloud.toml");
         if !wasmcloud_path.is_file() {

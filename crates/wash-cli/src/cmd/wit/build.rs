@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use anyhow::Context;
 use clap::Args;
 use wash_lib::build::load_lock_file;
 use wash_lib::cli::{CommandOutput, CommonPackageArgs};
@@ -39,14 +38,14 @@ pub async fn invoke(
 ) -> anyhow::Result<CommandOutput> {
     let client = common.get_client().await?;
     // Attempt to load wasmcloud.toml. If it doesn't work, attempt to load wkg.toml
-    let wkg_config = if let Ok(proj) = load_config(config_path, Some(true)).await {
+    let wkg_config = if let Ok(proj) = load_config(config_path.clone(), Some(true)).await {
         proj.package_config
     } else {
         wasm_pkg_core::config::Config::load().await?
     };
 
-    let mut lock_file =
-        load_lock_file(std::env::current_dir().context("failed to get current directory")?).await?;
+    let project_cfg = load_config(config_path, Some(true)).await?;
+    let mut lock_file = load_lock_file(&project_cfg.wasmcloud_toml_dir).await?;
 
     // Build the WIT package
     let (pkg_ref, version, bytes) =
