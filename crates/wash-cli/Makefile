@@ -6,6 +6,7 @@ CARGO ?= cargo
 DOCKER ?= docker
 PYTHON ?= python3
 NPM ?= npm
+INTEGRATION_BINARY_DIR = "/tmp/wash_integration_test_temp"
 
 ##@ Helpers
 
@@ -39,7 +40,18 @@ test-wash-ci:
 test-watch: ## Run unit tests continously, can optionally specify a target test filter.
 	@$(CARGO) watch -- $(CARGO) nextest run $(TARGET)
 
-test-integration: ## Run the entire integration test suite (with docker compose)
+foo:
+	echo $(INTEGRATION_BINARY_DIR)
+
+test-integration: build ## Run the entire integration test suite (with docker compose)
+	@# We always want to stop this in case things were left running. Otherwise the populate step will fail because the nats server is already running
+	@$(DOCKER) compose -f ./tools/docker-compose.yml down
+	@echo "Downloading initial binaries for wash up"
+	rm -rf $(INTEGRATION_BINARY_DIR)
+	mkdir -p $(INTEGRATION_BINARY_DIR)
+	HOME=$(INTEGRATION_BINARY_DIR) ../../target/debug/wash up --detached
+	@HOME=$(INTEGRATION_BINARY_DIR) ../../target/debug/wash down --all
+ 
 	@$(DOCKER) compose -f ./tools/docker-compose.yml up --detach
 	@$(CARGO) nextest run $(TARGET) --profile integration -E 'kind(test)' --nocapture
 	@$(DOCKER) compose -f ./tools/docker-compose.yml down

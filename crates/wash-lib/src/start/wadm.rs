@@ -160,7 +160,9 @@ where
     T: Into<Stdio>,
 {
     let mut cmd = Command::new(bin_path.as_ref());
-    cmd.stderr(stderr).stdin(Stdio::null());
+    cmd.stderr(stderr)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null());
 
     if let Some(wadm_config) = config {
         cmd.arg("--nats-server");
