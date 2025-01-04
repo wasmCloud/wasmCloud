@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use serial_test::serial;
 use tokio::process::Command;
 use wadm_types::api::StatusType;
 use wash_lib::app::validate_manifest_file;
@@ -131,7 +130,6 @@ fn test_parse_watch_interval_invalid_input() {
 
 /// Ensure that `wash app undeploy --all` and `wash app --delete-undeployed` work
 #[tokio::test]
-#[serial]
 async fn test_undeploy_all_and_delete_undeployed() -> Result<()> {
     let instance = TestWashInstance::create().await?;
     // Deploy the application
@@ -209,7 +207,6 @@ async fn test_undeploy_all_and_delete_undeployed() -> Result<()> {
 /// Ensure that `wash app undeploy --all` and `wash app --delete-undeployed` work
 // Should break when we deprecate the `wash app list` command
 #[tokio::test]
-#[serial]
 async fn test_app_without_name_is_same_as_wash_app_list() -> Result<()> {
     let instance = TestWashInstance::create().await?;
     // Deploy the application
