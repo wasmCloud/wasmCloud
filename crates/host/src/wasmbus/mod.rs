@@ -2163,7 +2163,7 @@ impl Host {
                 if let Err(err) = self
                     .publish_event(
                         "provider_start_failed",
-                        event::provider_start_failed(provider_ref, provider_id, &err),
+                        event::provider_start_failed(provider_ref, provider_id, host_id, &err),
                     )
                     .await
                 {
