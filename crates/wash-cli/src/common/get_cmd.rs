@@ -13,7 +13,7 @@ use wash_lib::cli::link::{LinkCommand, LinkQueryCommand};
 use wash_lib::cli::{CommandOutput, OutputKind};
 
 use crate::appearance::spinner::Spinner;
-use crate::common::link_cmd::handle_command as handle_link_command;
+use crate::cmd::link::invoke as invoke_link_cmd;
 use crate::ctl::{
     get_claims_output, get_host_inventories_output, get_hosts_output, host_inventories_table,
 };
@@ -21,7 +21,7 @@ use crate::ctl::{
 pub async fn handle_command(command: GetCommand, output_kind: OutputKind) -> Result<CommandOutput> {
     let out: CommandOutput = match command {
         GetCommand::Links(GetLinksCommand { opts }) => {
-            handle_link_command(LinkCommand::Query(LinkQueryCommand { opts }), output_kind).await?
+            invoke_link_cmd(LinkCommand::Query(LinkQueryCommand { opts }), output_kind).await?
         }
         GetCommand::Claims(cmd) => {
             let sp: Spinner = Spinner::new(&output_kind)?;
