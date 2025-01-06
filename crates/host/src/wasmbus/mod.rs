@@ -146,17 +146,16 @@ impl Queue {
         topic_prefix: &str,
         lattice: &str,
         host_key: &KeyPair,
+        component_auction: bool,
+        provider_auction: bool,
     ) -> anyhow::Result<Self> {
         let host_id = host_key.public_key();
-        let streams = futures::future::join_all([
+        let mut subs = vec![
             Either::Left(nats.subscribe(format!(
                 "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.registry.put",
             ))),
             Either::Left(nats.subscribe(format!(
                 "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.host.ping",
-            ))),
-            Either::Left(nats.subscribe(format!(
-                "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.*.auction",
             ))),
             Either::Right(nats.queue_subscribe(
                 format!("{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.link.*"),
@@ -182,11 +181,22 @@ impl Queue {
                 format!("{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.config.>"),
                 format!("{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.config"),
             )),
-        ])
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, async_nats::SubscribeError>>()
-        .context("failed to subscribe to queues")?;
+        ];
+        if component_auction {
+            subs.push(Either::Left(nats.subscribe(format!(
+                "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.component.auction",
+            ))));
+        }
+        if provider_auction {
+            subs.push(Either::Left(nats.subscribe(format!(
+                "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.provider.auction",
+            ))));
+        }
+        let streams = futures::future::join_all(subs)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, async_nats::SubscribeError>>()
+            .context("failed to subscribe to queues")?;
         Ok(Self {
             all_streams: futures::stream::select_all(streams),
         })
@@ -784,6 +794,8 @@ impl Host {
                     &config.ctl_topic_prefix,
                     &config.lattice,
                     &host_key,
+                    config.enable_component_auction,
+                    config.enable_provider_auction,
                 )
                 .await
                 .context("failed to initialize queue")?;
