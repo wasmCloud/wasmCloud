@@ -80,6 +80,10 @@ pub struct Host {
     pub experimental_features: Features,
     /// HTTP administration endpoint address
     pub http_admin: Option<SocketAddr>,
+    /// Whether component auctions are enabled
+    pub enable_component_auction: bool,
+    /// Whether capability provider auctions are enabled
+    pub enable_provider_auction: bool,
 }
 
 /// Configuration for wasmCloud policy service
@@ -131,6 +135,8 @@ impl Default for Host {
             heartbeat_interval: None,
             experimental_features: Features::default(),
             http_admin: None,
+            enable_component_auction: true,
+            enable_provider_auction: true,
         }
     }
 }

@@ -350,6 +350,20 @@ struct Args {
     #[clap(long = "http-admin", env = "WASMCLOUD_HTTP_ADMIN")]
     /// HTTP administration endpoint address
     http_admin: Option<SocketAddr>,
+
+    #[clap(
+        long = "enable-component-auction",
+        env = "WASMCLOUD_COMPONENT_AUCTION_ENABLED"
+    )]
+    /// Determines whether component auctions should be enabled (defaults to true)
+    enable_component_auction: Option<bool>,
+
+    #[clap(
+        long = "enable-provider-auction",
+        env = "WASMCLOUD_PROVIDER_AUCTION_ENABLED"
+    )]
+    /// Determines whether capability provider auctions should be enabled (defaults to true)
+    enable_provider_auction: Option<bool>,
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -517,6 +531,8 @@ async fn main() -> anyhow::Result<()> {
         // NOTE(brooks): Summing the feature flags "OR"s the multiple flags together.
         experimental_features: args.experimental_features.into_iter().sum(),
         http_admin: args.http_admin,
+        enable_component_auction: args.enable_component_auction.unwrap_or(true),
+        enable_provider_auction: args.enable_provider_auction.unwrap_or(true),
     }))
     .await
     .context("failed to initialize host")?;
