@@ -8,7 +8,7 @@ use std::sync::Arc;
 #[cfg(feature = "otel")]
 use anyhow::Context as _;
 #[cfg(feature = "otel")]
-use opentelemetry_otlp::{LogExporterBuilder, SpanExporterBuilder, WithExportConfig};
+use opentelemetry_otlp::WithExportConfig;
 use tracing::{Event, Subscriber};
 use tracing_flame::FlameLayer;
 use tracing_subscriber::filter::LevelFilter;
@@ -207,26 +207,30 @@ where
     S: Subscriber,
     S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
-    use opentelemetry_sdk::trace::{BatchConfigBuilder, Config as TraceConfig, Sampler};
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_otlp::WithHttpConfig;
+    use opentelemetry_sdk::trace::{BatchConfigBuilder, Sampler};
     use tracing_opentelemetry::OpenTelemetryLayer;
 
-    let builder: SpanExporterBuilder = match otel_config.protocol {
+    let exporter = match otel_config.protocol {
         OtelProtocol::Http => {
             let client = crate::get_http_client(otel_config)
                 .context("failed to get an http client for otel tracing exporter")?;
-            opentelemetry_otlp::new_exporter()
-                .http()
-                .with_endpoint(otel_config.traces_endpoint())
+            opentelemetry_otlp::SpanExporter::builder()
+                .with_http()
                 .with_http_client(client)
+                .with_endpoint(otel_config.traces_endpoint())
                 .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
-                .into()
+                .build()
+                .context("failed to build OTEL span exporter")?
         }
         OtelProtocol::Grpc => {
             // TODO(joonas): Configure tonic::transport::ClientTlsConfig via .with_tls_config(...), passing in additional certificates.
-            opentelemetry_otlp::new_exporter()
-                .tonic()
+            opentelemetry_otlp::SpanExporter::builder()
+                .with_tonic()
                 .with_endpoint(otel_config.traces_endpoint())
-                .into()
+                .build()
+                .context("failed to build OTEL span exporter")?
         }
     };
 
@@ -234,51 +238,42 @@ where
     // currently need this because providers map config back into the vars needed to configure the
     // SDK. When we update providers to be managed externally and remove host-managed ones, we can
     // remove this. But for now we need to parse all the possible options
-    let mut config = TraceConfig::default().with_resource(opentelemetry_sdk::Resource::new(vec![
-        opentelemetry::KeyValue::new("service.name", service_name),
-    ])); // This loads from the env vars by default and then we set the service name
-    if let Some(sampler) = otel_config.traces_sampler.as_deref() {
-        config.sampler = match sampler {
-            "always_on" => Box::new(Sampler::AlwaysOn),
-            "always_off" => Box::new(Sampler::AlwaysOff),
-            "traceidratio" => {
-                let ratio = otel_config
-                    .traces_sampler_arg
-                    .as_ref()
-                    .and_then(|r| r.parse::<f64>().ok());
-                if let Some(r) = ratio {
-                    Box::new(Sampler::TraceIdRatioBased(r))
-                } else {
-                    eprintln!("Missing or invalid OTEL_TRACES_SAMPLER_ARG value. Falling back to default: 1.0");
-                    Box::new(Sampler::TraceIdRatioBased(1.0))
-                }
+    let sampler = match otel_config.traces_sampler.as_deref() {
+        Some("always_on") => Sampler::AlwaysOn,
+        Some("always_off") => Sampler::AlwaysOff,
+        Some("traceidratio") => {
+            let ratio = otel_config
+                .traces_sampler_arg
+                .as_ref()
+                .and_then(|r| r.parse::<f64>().ok());
+            if let Some(r) = ratio {
+                Sampler::TraceIdRatioBased(r)
+            } else {
+                eprintln!("Missing or invalid OTEL_TRACES_SAMPLER_ARG value. Falling back to default: 1.0");
+                Sampler::TraceIdRatioBased(1.0)
             }
-            "parentbased_always_on" => Box::new(Sampler::ParentBased(Box::new(Sampler::AlwaysOn))),
-            "parentbased_always_off" => {
-                Box::new(Sampler::ParentBased(Box::new(Sampler::AlwaysOff)))
+        }
+        Some("parentbased_always_on") => Sampler::ParentBased(Box::new(Sampler::AlwaysOn)),
+        Some("parentbased_always_off") => Sampler::ParentBased(Box::new(Sampler::AlwaysOff)),
+        Some("parentbased_traceidratio") => {
+            let ratio = otel_config
+                .traces_sampler_arg
+                .as_ref()
+                .and_then(|r| r.parse::<f64>().ok());
+            if let Some(r) = ratio {
+                Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(r)))
+            } else {
+                eprintln!("Missing or invalid OTEL_TRACES_SAMPLER_ARG value. Falling back to default: 1.0");
+                Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(1.0)))
             }
-            "parentbased_traceidratio" => {
-                let ratio = otel_config
-                    .traces_sampler_arg
-                    .as_ref()
-                    .and_then(|r| r.parse::<f64>().ok());
-                if let Some(r) = ratio {
-                    Box::new(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
-                        r,
-                    ))))
-                } else {
-                    eprintln!("Missing or invalid OTEL_TRACES_SAMPLER_ARG value. Falling back to default: 1.0");
-                    Box::new(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
-                        1.0,
-                    ))))
-                }
-            }
-            s => {
-                eprintln!("Unrecognised or unimplemented OTEL_TRACES_SAMPLER value: {s}. Falling back to default: parentbased_always_on");
-                Box::new(Sampler::ParentBased(Box::new(Sampler::AlwaysOn)))
-            }
-        };
-    }
+        }
+        Some(s) => {
+            eprintln!("Unrecognised or unimplemented OTEL_TRACES_SAMPLER value: {s}. Falling back to default: parentbased_always_on");
+            Sampler::ParentBased(Box::new(Sampler::AlwaysOn))
+        }
+        None => Sampler::ParentBased(Box::new(Sampler::AlwaysOn)),
+    };
+
     let mut batch_builder = BatchConfigBuilder::default();
     if let Some(max_batch_queue_size) = otel_config.max_batch_queue_size {
         batch_builder = batch_builder.with_max_queue_size(max_batch_queue_size);
@@ -288,13 +283,21 @@ where
     }
     let batch_config = batch_builder.build();
 
-    let tracer = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(builder)
-        .with_trace_config(config)
-        .with_batch_config(batch_config)
-        .install_batch(opentelemetry_sdk::runtime::Tokio)
-        .context("failed to create OTEL tracer")?;
+    let processor = opentelemetry_sdk::trace::BatchSpanProcessor::builder(
+        exporter,
+        opentelemetry_sdk::runtime::Tokio,
+    )
+    .with_batch_config(batch_config)
+    .build();
+
+    let tracer = opentelemetry_sdk::trace::TracerProvider::builder()
+        .with_sampler(sampler)
+        .with_resource(opentelemetry_sdk::Resource::new(vec![
+            opentelemetry::KeyValue::new("service.name", service_name),
+        ]))
+        .with_span_processor(processor)
+        .build()
+        .tracer("wasmcloud-tracing");
 
     Ok(OpenTelemetryLayer::new(tracer).with_filter(trace_level_filter))
 }
@@ -309,37 +312,42 @@ where
     S: Subscriber,
     S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
-    let builder: LogExporterBuilder = match otel_config.protocol {
+    use opentelemetry_otlp::WithHttpConfig;
+
+    let exporter = match otel_config.protocol {
         OtelProtocol::Http => {
             let client = crate::get_http_client(otel_config)
                 .context("failed to get an http client for otel logging exporter")?;
-            opentelemetry_otlp::new_exporter()
-                .http()
-                .with_endpoint(otel_config.logs_endpoint())
+            opentelemetry_otlp::LogExporter::builder()
+                .with_http()
                 .with_http_client(client)
+                .with_endpoint(otel_config.logs_endpoint())
                 .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
-                .into()
+                .build()
+                .context("failed to create OTEL http log exporter")?
         }
         OtelProtocol::Grpc => {
             // TODO(joonas): Configure tonic::transport::ClientTlsConfig via .with_tls_config(...), passing in additional certificates.
-            opentelemetry_otlp::new_exporter()
-                .tonic()
+            opentelemetry_otlp::LogExporter::builder()
+                .with_tonic()
                 .with_endpoint(otel_config.logs_endpoint())
-                .into()
+                .build()
+                .context("failed to create OTEL http log exporter")?
         }
     };
 
-    let log_provider = opentelemetry_otlp::new_pipeline()
-        .logging()
-        .with_log_config(opentelemetry_sdk::logs::Config::default().with_resource(
-            opentelemetry_sdk::Resource::new(vec![opentelemetry::KeyValue::new(
-                "service.name",
-                service_name,
-            )]),
-        ))
-        .with_exporter(builder)
-        .install_batch(opentelemetry_sdk::runtime::Tokio)
-        .context("failed to create OTEL logger provider")?;
+    let processor = opentelemetry_sdk::logs::BatchLogProcessor::builder(
+        exporter,
+        opentelemetry_sdk::runtime::Tokio,
+    )
+    .build();
+
+    let log_provider = opentelemetry_sdk::logs::LoggerProvider::builder()
+        .with_resource(opentelemetry_sdk::Resource::new(vec![
+            opentelemetry::KeyValue::new("service.name", service_name),
+        ]))
+        .with_log_processor(processor)
+        .build();
 
     // Prevent the exporter/provider from being dropped
     LOG_PROVIDER

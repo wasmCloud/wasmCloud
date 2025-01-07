@@ -59,7 +59,7 @@ use wasmcloud_runtime::component::WrpcServeEvent;
 use wasmcloud_runtime::Runtime;
 use wasmcloud_secrets_types::SECRET_PREFIX;
 use wasmcloud_tracing::context::TraceContextInjector;
-use wasmcloud_tracing::{global, KeyValue};
+use wasmcloud_tracing::{global, InstrumentationScope, KeyValue};
 
 use crate::registry::RegistryCredentialExt;
 use crate::{
@@ -883,15 +883,14 @@ impl Host {
             &ctl_nats,
         ));
 
-        let meter = global::meter_with_version(
-            "wasmcloud-host",
-            Some(config.version.clone()),
-            None::<&str>,
-            Some(vec![
+        let scope = InstrumentationScope::builder("wasmcloud-host")
+            .with_version(config.version.clone())
+            .with_attributes(vec![
                 KeyValue::new("host.id", host_key.public_key()),
                 KeyValue::new("host.version", config.version.clone()),
-            ]),
-        );
+            ])
+            .build();
+        let meter = global::meter_with_scope(scope);
         let metrics = HostMetrics::new(&meter, host_key.public_key(), config.lattice.to_string());
 
         let config_generator = BundleGenerator::new(config_data.clone());
