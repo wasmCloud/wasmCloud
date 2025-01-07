@@ -1,4 +1,4 @@
-use wasmcloud_tracing::{Counter, Histogram, KeyValue, Meter, Unit};
+use wasmcloud_tracing::{Counter, Histogram, KeyValue, Meter};
 
 /// `HostMetrics` encapsulates the set of metrics emitted by the wasmcloud host
 #[derive(Clone, Debug)]
@@ -29,18 +29,18 @@ impl HostMetrics {
         let wasmcloud_host_handle_rpc_message_duration_ns = meter
             .u64_histogram("wasmcloud_host.handle_rpc_message.duration")
             .with_description("Duration in nanoseconds each handle_rpc_message operation took")
-            .with_unit(Unit::new("nanoseconds"))
-            .init();
+            .with_unit("nanoseconds")
+            .build();
 
         let component_invocation_count = meter
             .u64_counter("wasmcloud_host.component.invocations")
             .with_description("Number of component invocations")
-            .init();
+            .build();
 
         let component_error_count = meter
             .u64_counter("wasmcloud_host.component.invocation.errors")
             .with_description("Number of component errors")
-            .init();
+            .build();
 
         Self {
             handle_rpc_message_duration_ns: wasmcloud_host_handle_rpc_message_duration_ns,

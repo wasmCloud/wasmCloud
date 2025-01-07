@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-tracing"
-version = "0.11.0"
+version = "0.12.0"
 description = "wasmCloud tracing functionality"
 
 authors.workspace = true
@@ -42,7 +42,7 @@ opentelemetry-otlp = { workspace = true, features = [
     "metrics",
     "reqwest-client",
 ], optional = true }
-reqwest-0_11 = { workspace = true, features = ["rustls-tls"] }
+reqwest = { workspace = true, features = ["rustls-tls"] }
 tracing = { workspace = true, features = ["log"] }
 tracing-appender = { workspace = true }
 tracing-flame = { workspace = true }

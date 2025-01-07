@@ -5,8 +5,8 @@ use heck::ToKebabCase;
 #[cfg(feature = "otel")]
 pub use opentelemetry::{
     global,
-    metrics::{Counter, Histogram, Meter, Unit},
-    KeyValue,
+    metrics::{Counter, Histogram, Meter},
+    InstrumentationScope, KeyValue,
 };
 use wasmcloud_core::logging::Level;
 #[cfg(feature = "otel")]
@@ -70,17 +70,9 @@ pub fn configure_observability(
     )
 }
 
-// This method builds a custom reqwest 0.11 Client, because the HttpClient trait
-// defined in the `opentelemetry-http` crate is defined against reqwest 0.11 types:
-// * https://github.com/open-telemetry/opentelemetry-rust/blob/opentelemetry-otlp-0.16.0/opentelemetry-http/src/lib.rs#L50-L65
-// * https://github.com/open-telemetry/opentelemetry-rust/blob/opentelemetry-otlp-0.16.0/opentelemetry-http/src/lib.rs#L67-L100
-//
-// The HttpClient trait is used by the `opentelemetry-otlp` when setting up http
-// exporter that is used by to communicate with the OpenTelemetry endpoints:
-// * https://github.com/open-telemetry/opentelemetry-rust/blob/opentelemetry-otlp-0.16.0/opentelemetry-otlp/src/exporter/http/mod.rs#L10
-// * https://github.com/open-telemetry/opentelemetry-rust/blob/opentelemetry-otlp-0.16.0/opentelemetry-otlp/src/exporter/http/mod.rs#l130-l134
+/// Configures a reqwest http client with additional certificates
 #[cfg(feature = "otel")]
-pub(crate) fn get_http_client(otel_config: &OtelConfig) -> anyhow::Result<reqwest_0_11::Client> {
+pub(crate) fn get_http_client(otel_config: &OtelConfig) -> anyhow::Result<reqwest::Client> {
     let mut certs = tls::NATIVE_ROOTS.to_vec();
     if !otel_config.additional_ca_paths.is_empty() {
         let additional_certs =
@@ -91,8 +83,8 @@ pub(crate) fn get_http_client(otel_config: &OtelConfig) -> anyhow::Result<reqwes
 
     let builder = certs
         .iter()
-        .filter_map(|cert| reqwest_0_11::tls::Certificate::from_der(cert.as_ref()).ok())
-        .fold(reqwest_0_11::ClientBuilder::default(), |builder, cert| {
+        .filter_map(|cert| reqwest::tls::Certificate::from_der(cert.as_ref()).ok())
+        .fold(reqwest::ClientBuilder::default(), |builder, cert| {
             builder.add_root_certificate(cert)
         });
 
