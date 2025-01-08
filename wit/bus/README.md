@@ -70,8 +70,8 @@ interface invoke {
 }
 
 world component {
-  import wasmcloud:bus/lattice;
-  import wasi:keyvalue/store;
+  import wasmcloud:bus/lattice@1.0.0;
+  import wasi:keyvalue/store@0.2.0-draft;
   export invoke;
 }
 ```
