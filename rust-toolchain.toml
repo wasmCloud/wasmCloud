@@ -3,7 +3,6 @@ channel = "stable"
 components = ["clippy", "rust-src", "rustfmt"]
 targets = [
     "wasm32-unknown-unknown",
-    "wasm32-wasi",
     "wasm32-wasip1",
     "wasm32-wasip2",
 ]

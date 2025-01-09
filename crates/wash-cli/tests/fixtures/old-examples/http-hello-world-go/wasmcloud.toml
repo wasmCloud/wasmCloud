@@ -5,5 +5,5 @@ version = "0.1.0"
 
 [component]
 wit_world = "hello"
-wasm_target = "wasm32-wasi"
+wasm_target = "wasm32-wasip1"
 destination = "build/http_hello_world_s.wasm"
