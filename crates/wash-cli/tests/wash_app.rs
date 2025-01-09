@@ -169,7 +169,6 @@ async fn test_undeploy_all_and_delete_undeployed() -> Result<()> {
     // Wait until the app is deployed via wash app get
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            eprintln!("resp: {:#?}", instance.list_apps().await);
             if instance.list_apps().await.is_ok_and(|output| {
                 output.applications.iter().any(|a| {
                     a.name == "sample"
