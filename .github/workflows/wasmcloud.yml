@@ -502,13 +502,17 @@ jobs:
       - name: Push `${{ matrix.bin }}` commit rev tag
         if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) || github.ref == 'refs/heads/main'
         run: |
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}-debian
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}-debian
           buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}-wolfi
           buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}-wolfi
 
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }} ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }} ${{ matrix.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}-debian ${{ matrix.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}-debian ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}-wolfi ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}-wolfi ${{ matrix.bin }} --version
 
@@ -516,9 +520,12 @@ jobs:
         if: github.ref == 'refs/heads/main'
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
         run: |
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-debian
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-debian
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-debian
           buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi
           buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi
           buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi
@@ -526,6 +533,9 @@ jobs:
           docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary ${{ matrix.bin }} --version
           docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary ${{ matrix.bin }} --version
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-debian ${{ matrix.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-debian ${{ matrix.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-debian ${{ matrix.bin }} --version
           docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi ${{ matrix.bin }} --version
           docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi ${{ matrix.bin }} --version
@@ -534,9 +544,12 @@ jobs:
         if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix))
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
         run: |
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-debian
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-debian
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-debian
           buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi
           buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi
           buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi
@@ -544,6 +557,9 @@ jobs:
           docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }} ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }} ${{ matrix.bin }} --version
           docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }} ${{ matrix.bin }} --version
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-debian ${{ matrix.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-debian ${{ matrix.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-debian ${{ matrix.bin }} --version
           docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi ${{ matrix.bin }} --version
           docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi ${{ matrix.bin }} --version
@@ -552,9 +568,12 @@ jobs:
         if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) && !steps.ctx.outputs.prerelease
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
         run: |
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-debian
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-debian
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-debian
           buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi
           buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi
           buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi
@@ -562,6 +581,9 @@ jobs:
           docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest ${{ matrix.bin }} --version
           docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest ${{ matrix.bin }} --version
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-debian ${{ matrix.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-debian ${{ matrix.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-debian ${{ matrix.bin }} --version
           docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi ${{ matrix.bin }} --version
           docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi ${{ matrix.bin }} --version
