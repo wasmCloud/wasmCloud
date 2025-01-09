@@ -275,6 +275,7 @@
                 fromImage
                 name
                 ;
+              created = "now";
               tag = architecture;
 
               config.Cmd = [name];
