@@ -1198,6 +1198,7 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
     // Test setup
     // ========================================================================
     // Create the 'wash dev' process using a piped stdout
+    #[allow(clippy::zombie_processes)]
     let mut proc1 = Command::new(env!("CARGO_BIN_EXE_wash"))
         .env("RUST_BACKTRACE", "full")
         .args([
@@ -1220,6 +1221,7 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
     let pid1 = proc1.id();
 
     // Create the 'wc -l' process and use the piped stdout of wash dev as stdin
+    #[allow(clippy::zombie_processes)]
     let mut proc2 = Command::new("wc")
         .arg("-l")
         .stdin(
@@ -1276,6 +1278,7 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
             nix::sys::signal::Signal::SIGINT,
         )
         .expect("cannot send ctrl-c to piped proc(`wc -l`)");
+        proc2.wait()?;
     }
 
     // Give the first process some time to do its job/damage
@@ -1289,6 +1292,7 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
             nix::sys::signal::Signal::SIGINT,
         )
         .expect("cannot send ctrl-c to proc(`wash dev`)");
+        proc1.wait()?;
     }
 
     // Wait for the processes to complete
