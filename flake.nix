@@ -241,6 +241,7 @@
             name,
             architecture,
             description,
+            user ? null,
           }: let
             # ensure that only the binary corresponding to `$name` is copied to the image
             bin = pkgs.runCommandLocal name {} ''
@@ -267,94 +268,107 @@
               else if name == "wash"
               then (readTOML ./crates/wash-cli/Cargo.toml).package.version
               else throw "unsupported binary `${name}`";
+
+            config =
+              {
+                Cmd = [name];
+                Labels."org.opencontainers.image.description" = description;
+                Labels."org.opencontainers.image.source" = "https://github.com/wasmCloud/wasmCloud";
+                Labels."org.opencontainers.image.title" = name;
+                Labels."org.opencontainers.image.vendor" = "wasmCloud";
+                Labels."org.opencontainers.image.version" = version;
+              }
+              // optionalAttrs (user != null) {
+                User = user;
+              };
           in
             pkgs.dockerTools.buildImage {
               inherit
                 architecture
+                config
                 copyToRoot
                 fromImage
                 name
                 ;
               created = "now";
               tag = architecture;
-
-              config.Cmd = [name];
-              config.Labels."org.opencontainers.image.description" = description;
-              config.Labels."org.opencontainers.image.source" = "https://github.com/wasmCloud/wasmCloud";
-              config.Labels."org.opencontainers.image.title" = name;
-              config.Labels."org.opencontainers.image.vendor" = "wasmCloud";
-              config.Labels."org.opencontainers.image.version" = version;
             };
 
-          buildWashImage = {
-            pkg,
-            fromImage,
-            architecture,
-          }:
-            buildImage {
-              inherit
-                architecture
-                fromImage
-                pkg
-                ;
-              name = "wash";
-              description = "WAsmcloud SHell";
-            };
-          wash-aarch64-unknown-linux-musl-oci-debian = buildWashImage {
-            pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
-            fromImage = images.debian-arm64;
-            architecture = "arm64";
-          };
-          wash-x86_64-unknown-linux-musl-oci-debian = buildWashImage {
-            pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
-            fromImage = images.debian-amd64;
-            architecture = "amd64";
-          };
-          wash-aarch64-unknown-linux-musl-oci-wolfi = buildWashImage {
-            pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
-            fromImage = images.wolfi-arm64;
-            architecture = "arm64";
-          };
-          wash-x86_64-unknown-linux-musl-oci-wolfi = buildWashImage {
-            pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
-            fromImage = images.wolfi-amd64;
-            architecture = "amd64";
-          };
+          imageArgs.bin.wash.description = "WAsmcloud SHell";
+          imageArgs.bin.wash.name = "wash";
+          imageArgs.bin.wasmcloud.description = "wasmCloud host";
+          imageArgs.bin.wasmcloud.name = "wasmcloud";
+          imageArgs.config.wolfi.user = "65532:65532"; # nonroot:x:65532:65532
+          imageArgs.image.debian-amd64.architecture = "amd64";
+          imageArgs.image.debian-amd64.fromImage = images.debian-amd64;
+          imageArgs.image.debian-arm64.architecture = "arm64";
+          imageArgs.image.debian-arm64.fromImage = images.debian-arm64;
+          imageArgs.image.wolfi-amd64.architecture = "amd64";
+          imageArgs.image.wolfi-amd64.fromImage = images.wolfi-amd64;
+          imageArgs.image.wolfi-arm64.architecture = "arm64";
+          imageArgs.image.wolfi-arm64.fromImage = images.wolfi-arm64;
 
-          buildWasmcloudImage = {
-            pkg,
-            fromImage,
-            architecture,
-          }:
-            buildImage {
-              inherit
-                architecture
-                fromImage
-                pkg
-                ;
-              name = "wasmcloud";
-              description = "wasmCloud host";
-            };
-          wasmcloud-aarch64-unknown-linux-musl-oci-debian = buildWasmcloudImage {
-            pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
-            fromImage = images.debian-arm64;
-            architecture = "arm64";
-          };
-          wasmcloud-x86_64-unknown-linux-musl-oci-debian = buildWasmcloudImage {
-            pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
-            fromImage = images.debian-amd64;
-            architecture = "amd64";
-          };
-          wasmcloud-aarch64-unknown-linux-musl-oci-wolfi = buildWasmcloudImage {
-            pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
-            fromImage = images.wolfi-arm64;
-            architecture = "arm64";
-          };
-          wasmcloud-x86_64-unknown-linux-musl-oci-wolfi = buildWasmcloudImage {
-            pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
-            fromImage = images.wolfi-amd64;
-            architecture = "amd64";
-          };
+          wash-aarch64-unknown-linux-musl-oci-debian = buildImage (
+            {
+              pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
+            }
+            // imageArgs.bin.wash
+            // imageArgs.image.debian-arm64
+          );
+          wash-x86_64-unknown-linux-musl-oci-debian = buildImage (
+            {
+              pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
+            }
+            // imageArgs.bin.wash
+            // imageArgs.image.debian-amd64
+          );
+          wash-aarch64-unknown-linux-musl-oci-wolfi = buildImage (
+            {
+              pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
+            }
+            // imageArgs.bin.wash
+            // imageArgs.config.wolfi
+            // imageArgs.image.wolfi-arm64
+          );
+          wash-x86_64-unknown-linux-musl-oci-wolfi = buildImage (
+            {
+              pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
+            }
+            // imageArgs.bin.wash
+            // imageArgs.config.wolfi
+            // imageArgs.image.wolfi-amd64
+          );
+
+          wasmcloud-aarch64-unknown-linux-musl-oci-debian = buildImage (
+            {
+              pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
+            }
+            // imageArgs.bin.wasmcloud
+            // imageArgs.image.debian-arm64
+          );
+          wasmcloud-x86_64-unknown-linux-musl-oci-debian = buildImage (
+            {
+              pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
+            }
+            // imageArgs.bin.wasmcloud
+            // imageArgs.image.debian-amd64
+          );
+          wasmcloud-aarch64-unknown-linux-musl-oci-wolfi = buildImage (
+            {
+              pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
+            }
+            // imageArgs.bin.wasmcloud
+            // imageArgs.config.wolfi
+            // imageArgs.image.wolfi-arm64
+          );
+          wasmcloud-x86_64-unknown-linux-musl-oci-wolfi = buildImage (
+            {
+              pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
+            }
+            // imageArgs.bin.wasmcloud
+            // imageArgs.config.wolfi
+            // imageArgs.image.wolfi-amd64
+          );
 
           build-wash-oci-debian = pkgs.writeShellScriptBin "build-wash-oci-debian" ''
             set -xe
