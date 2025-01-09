@@ -851,9 +851,9 @@ func main() {}
 
     #[test]
     fn can_parse_custom_command() {
-        let cargo_component_build = "cargo component build --release --target wasm32-wasi";
+        let cargo_component_build = "cargo component build --release --target wasm32-wasip1";
         let tinygo_build =
-            "tinygo build -o build/test.wasm -target wasm32-wasi -scheduler none -no-debug .";
+            "tinygo build -o build/test.wasm -target wasm32-wasip1 -scheduler none -no-debug .";
         // Raw strings because backslashes are used and shouldn't trigger escape sequences
         let some_other_language = r"zig build-exe .\tiny-hello.zig -O ReleaseSmall -fstrip -fsingle-threaded -target aarch64-linux";
 
@@ -862,7 +862,13 @@ func main() {}
         assert_eq!(command, "cargo");
         assert_eq!(
             args,
-            vec!["component", "build", "--release", "--target", "wasm32-wasi"]
+            vec![
+                "component",
+                "build",
+                "--release",
+                "--target",
+                "wasm32-wasip1"
+            ]
         );
 
         let (command, args) = super::parse_custom_command(tinygo_build)
@@ -875,7 +881,7 @@ func main() {}
                 "-o",
                 "build/test.wasm",
                 "-target",
-                "wasm32-wasi",
+                "wasm32-wasip1",
                 "-scheduler",
                 "none",
                 "-no-debug",

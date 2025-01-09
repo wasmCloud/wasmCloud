@@ -53,7 +53,7 @@ wash build
 Note that if you'd like to build with `cargo` you need to specify the `--target` option:
 
 ```console
-cargo build --target=wasm32-wasi
+cargo build --target=wasm32-wasip1
 ```
 
 [wash]: https://wasmcloud.com/docs/cli

@@ -172,7 +172,7 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> Result<()
                     "--manifest-path={}/{manifest_path}",
                     env!("CARGO_MANIFEST_DIR")
                 ),
-                "--target=wasm32-wasi".to_string(),
+                "--target=wasm32-wasip1".to_string(),
                 // We use dashes for packages, since they're still always
                 format!("-p={package}"),
             ],
