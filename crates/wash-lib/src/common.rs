@@ -342,7 +342,13 @@ pub async fn clone_git_repo(
     };
 
     // Build args for git clone command
-    let mut args = vec!["clone", &repo_url, "--no-checkout", "--depth", "1", "."];
+    let mut args = vec!["clone", &repo_url, "--no-checkout", "."];
+    // Only perform a shallow clone if we're dealing with a branch or tag checkout
+    // All other forms *may* need to access arbitrarily old commits
+    if let Some(RepoRef::Branch(_) | RepoRef::Tag(_)) = repo_ref {
+        args.push("--depth");
+        args.push("1");
+    }
 
     // If the ref was provided and a branch, we can clone that branch directly
     if let Some(RepoRef::Branch(ref branch)) = repo_ref {
