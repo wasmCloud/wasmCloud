@@ -1446,7 +1446,7 @@ impl Host {
     async fn start_component<'a>(
         &self,
         entry: hash_map::VacantEntry<'a, String, Arc<Component>>,
-        wasm: Vec<u8>,
+        wasm: &Vec<u8>,
         claims: Option<jwt::Claims<jwt::Component>>,
         component_ref: Arc<str>,
         component_id: Arc<str>,
@@ -1751,9 +1751,9 @@ impl Host {
                             wasmcloud_runtime::component::claims_token(&component_bytes);
                         (component_bytes, claims_token)
                     });
-            let (wasm, claims_token) = match component_and_claims {
-                Ok((wasm, Ok(claims_token))) => (wasm, claims_token),
-                Err(e) | Ok((_, Err(e))) => {
+            let (wasm, claims_token, retrieval_error) = match component_and_claims {
+                Ok((wasm, Ok(claims_token))) => (Some(wasm), claims_token, None),
+                Ok((_, Err(e))) => {
                     if let Err(e) = self
                         .publish_event(
                             "component_scale_failed",
@@ -1772,6 +1772,9 @@ impl Host {
                         error!(%component_ref, %component_id, err = ?e, "failed to publish component scale failed event");
                     }
                     return;
+                },
+                Err(e) => {
+                    (None, None, Some(e))
                 }
             };
             // Scale the component
@@ -1783,7 +1786,7 @@ impl Host {
                     max_instances,
                     &annotations,
                     config,
-                    wasm,
+                    wasm.ok_or_else(|| retrieval_error.unwrap_or(anyhow!("unexpected retrieval error"))),
                     claims_token.as_ref(),
                 )
                 .await
@@ -1839,7 +1842,7 @@ impl Host {
         max_instances: u32,
         annotations: &Annotations,
         config: Vec<String>,
-        wasm: Vec<u8>,
+        wasm: anyhow::Result<Vec<u8>>,
         claims_token: Option<&jwt::Token<jwt::Component>>,
     ) -> anyhow::Result<()> {
         trace!(?component_ref, max_instances, "scale component task");
@@ -1895,28 +1898,54 @@ impl Host {
                         annotations.get("wasmcloud.dev/appspec"),
                     )
                     .await?;
+                match &wasm {
+                    Ok(wasm) => {
 
-                self.start_component(
-                    entry,
-                    wasm,
-                    claims.clone(),
-                    Arc::clone(&component_ref),
-                    Arc::clone(&component_id),
-                    max,
-                    annotations,
-                    config,
-                    secrets,
-                )
-                .await?;
+                        self.start_component(
+                            entry,
+                            wasm,
+                            claims.clone(),
+                            Arc::clone(&component_ref),
+                            Arc::clone(&component_id),
+                            max,
+                            annotations,
+                            config,
+                            secrets,
+                        )
+                        .await?;
+        
+                        event::component_scaled(
+                            claims.as_ref(),
+                            annotations,
+                            host_id,
+                            max,
+                            &component_ref,
+                            &component_id,
+                        )
+                    },
+                    Err(e) => {
+                        error!(%component_ref, %component_id, err = ?e, "failed to scale component");
+                        if let Err(e) = self
+                            .publish_event(
+                                "component_scale_failed",
+                                event::component_scale_failed(
+                                    claims_token.map(|c| c.claims.clone()).as_ref(),
+                                    &annotations,
+                                    host_id,
+                                    &component_ref,
+                                    &component_id,
+                                    max_instances,
+                                    &e,
+                                ),
+                            )
+                            .await
+                        {
+                            error!(%component_ref, %component_id, err = ?e, "failed to publish component scale failed event");
+                        }
+                        return Ok(())
+                    },
 
-                event::component_scaled(
-                    claims.as_ref(),
-                    annotations,
-                    host_id,
-                    max,
-                    &component_ref,
-                    &component_id,
-                )
+                }
             }
             // Component is running and we requested to scale to zero instances, stop component
             (hash_map::Entry::Occupied(entry), None) => {
