@@ -92,8 +92,8 @@ jobs:
           envsubst < .github/templates/conventional-commit.md > ./conventional-commit.md
 
       - name: Create PR Comment
-        # If the workflow failed, create a comment on the PR with the errors
-        if: steps.lint.outcome == 'failure'
+        # If the workflow failed and the error parsing was successful, create a comment on the PR with the errors
+        if: failure() && steps.parse.outcome == 'success'
         uses: marocchino/sticky-pull-request-comment@331f8f5b4215f0445d3c07b4967662a32a2d3e31 # v2.9.0
         with:
           number: ${{ github.event.pull_request.number }}
@@ -104,7 +104,7 @@ jobs:
 
       - name: Hide PR Comment
         # If the workflow is now successful, we can resolve the original comment
-        if: steps.lint.outcome == 'success'
+        if: success()
         uses: marocchino/sticky-pull-request-comment@331f8f5b4215f0445d3c07b4967662a32a2d3e31 # v2.9.0
         with:
           number: ${{ github.event.pull_request.number }}
