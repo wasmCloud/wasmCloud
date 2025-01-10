@@ -1,19 +1,48 @@
-# Number of days of inactivity before an issue becomes stale
-daysUntilStale: 60
-# Number of days of inactivity before a stale issue is closed
-daysUntilClose: 7
-# Issues with these labels will never be considered stale
-exemptLabels:
-  - pinned # Pinned issues should stick around
-  - security # Security issues need to be resolved
-  - roadmap # Issue is captured on the wasmCloud roadmap and won't be lost
-# Label to use when marking an issue as stale
-staleLabel: stale
-# Comment to post when marking an issue as stale. Set to `false` to disable
-markComment: >
-  This issue has been automatically marked as stale because it has not had
-  recent activity. It will be closed if no further activity occurs. If this 
-  has been closed too eagerly, please feel free to tag a maintainer so we can
-  keep working on the issue. Thank you for contributing to wasmCloud!
-# Comment to post when closing a stale issue. Set to `false` to disable
-closeComment: false
+name: 'Automation - Stale issues and PRs'
+
+on:
+  schedule:
+    - cron: '00 8 * * *'
+
+env:
+  DAYS_BEFORE_STALE: 60
+  DAYS_BEFORE_CLOSE: 7
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@28ca1036281a5e5922ead5184a1bbf96e5fc984e # v9.0.0
+        with:
+          # -= Timing =-
+          # Number of days of inactivity before an issue becomes stale
+          days-before-stale: ${{ env.DAYS_BEFORE_STALE }}
+          # Number of days of inactivity before a stale issue is closed
+          days-before-close: ${{ env.DAYS_BEFORE_CLOSE }}
+
+          # -= Labels and Exemptions =- 
+          # Don't close issues with a milestone
+          exempt-all-milestones: true
+          # Issues with these labels will never be considered stale
+          #   - Pinned issues should stick around
+          #   - Security issues need to be resolved
+          exempt-issue-labels: 'pinned,security'
+          exempt-pr-labels: 'pinned,security'
+          # Label to use when marking an issue as stale
+          stale-issue-label: stale
+          stale-pr-label: stale
+
+          # -= Messages =-
+          # Comment to post when marking an issue as stale
+          stale-issue-message: >
+            Hi! This issue hasn't had any action for a while, so we're marking
+            it as stale. It will close in ${{ env.DAYS_BEFORE_CLOSE }} days
+            unless something changes. Thanks for helping keep our project tidy!
+          # Comment to post when closing a stale pull request
+          stale-pr-message: |
+            Hi! This pull request hasn't had any activity for a while, so we're
+            marking it as stale. It will close in ${{ env.DAYS_BEFORE_CLOSE }}
+            days unless something changes. Thanks for contributing!
+          # Disable messages when closing an issue/pull request
+          close-issue-message: false
+          close-pr-message: false
