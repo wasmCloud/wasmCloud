@@ -17,13 +17,12 @@ wash build
 ```
 
 ## Running with wasmCloud
-
-Ensuring you've built your component with `wash build`, you can launch wasmCloud and deploy the full hello world application with the following commands. Once the application reports as **Deployed** in the application list, you can use `curl` to send a request to the running HTTP server.
+Ensuring you've built your component with `wash build`, you can launch wasmCloud and deploy the full hello world application with the following commands. Once the application reports as **Deployed** in the application list, you can use `wash call` to call the exported function `invoke`.
 
 ```shell
 wash up -d
 wash app deploy ./wadm.yaml
-wash call ferris-says wasmcloud:example-ferris-says/invoke.say
+wash call ferris_says-ferris_says wasmcloud:example-ferris-says/invoke.say
 ```
 
 You should see output that looks like the following:
