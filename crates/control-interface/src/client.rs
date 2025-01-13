@@ -23,7 +23,9 @@ use crate::types::rpc::{
     ComponentAuctionAck, ComponentAuctionRequest, DeleteInterfaceLinkDefinitionRequest,
     ProviderAuctionAck, ProviderAuctionRequest,
 };
-use crate::{broker, json_deserialize, json_serialize, otel, IdentifierKind, Result};
+use crate::{
+    broker, json_deserialize, json_serialize, otel, HostLabelIdentifier, IdentifierKind, Result,
+};
 
 /// A client builder that can be used to fluently provide configuration settings used to construct
 /// the control interface client
@@ -568,9 +570,8 @@ impl Client {
     pub async fn delete_label(&self, host_id: &str, key: &str) -> Result<CtlResponse<()>> {
         let subject = broker::v1::delete_label(&self.topic_prefix, &self.lattice, host_id);
         debug!(%subject, "removing label");
-        let bytes = json_serialize(HostLabel {
+        let bytes = json_serialize(HostLabelIdentifier {
             key: key.to_string(),
-            value: String::new(), // value isn't parsed by the host
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),

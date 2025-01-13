@@ -409,6 +409,26 @@ impl HostLabel {
     }
 }
 
+/// An identifier that represents a label on a given host (ex. "arch" in "arch=amd64")
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct HostLabelIdentifier {
+    /// Key of the label (`arch` in `arch=amd64`)
+    pub(crate) key: String,
+}
+
+impl HostLabelIdentifier {
+    /// Create a [`HostLabelIdentifier`] from a key
+    pub fn from_key(key: &str) -> Self {
+        Self { key: key.into() }
+    }
+
+    /// Get the host label key
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
