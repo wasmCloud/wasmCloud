@@ -1,0 +1,40 @@
+apiVersion: k6.io/v1alpha1
+kind: TestRun
+metadata:
+  name: {{ include "benchmark.fullname" . }}-test
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+spec:
+  arguments: "-o experimental-opentelemetry"
+  parallelism: {{ .Values.test.parallelism }}
+  separate: {{ .Values.test.separate }}
+  script:
+    configMap:
+      name: {{ include "benchmark.fullname" . }}-test-config
+      file: test.js
+  runner:
+    # TODO: tolerations
+    # tolerations:
+    #   - effect: NoSchedule
+    #     key: pool
+    #     operator: Equal
+    #     value: "k6"
+    # nodeSelector:
+    #   pool: k6
+    env:
+      - name: K6_OTEL_GRPC_EXPORTER_INSECURE
+        value: "true"
+      - name: K6_OTEL_GRPC_EXPORTER_ENDPOINT
+        value: "{{ .Release.Name }}-opentelemetry-collector:4317"
+      - name: K6_OTEL_METRIC_PREFIX
+        value: "k6_"
+      - name: K6_NO_USAGE_REPORT
+        value: "true"
+      - name: GOMEMLIMIT
+        valueFrom:
+          resourceFieldRef:
+            resource: limits.memory
+      - name: GOMAXPROCS
+        valueFrom:
+          resourceFieldRef:
+            resource: limits.cpu

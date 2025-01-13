@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-collector-config
+  labels:
+    {{- include "benchmark.labels" . | nindent 4 }}
+data:
+  relay: |-
+    exporters:
+      loki:
+        endpoint: "http://{{ include "benchmark.fullname" . }}-loki:3100/loki/api/v1/push"
+        default_labels_enabled:
+          exporter: false
+          job: true
+      prometheusremotewrite:
+        endpoint: http://{{ .Release.Name }}-prometheus-server/api/v1/write
+        tls:
+          insecure: true
+      otlphttp/tempo:
+        endpoint: http://{{ .Release.Name }}-tempo:4318
+
+    extensions:
+      health_check:
+        endpoint: ${env:MY_POD_IP}:13133
+
+    processors:
+      batch:
+        send_batch_max_size: 32768
+        send_batch_size: 8192
+        timeout: 5s
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 20
+      probabilistic_sampler:
+        sampling_percentage: 100
+
+    receivers:
+      jaeger:
+        protocols:
+          grpc:
+            endpoint: ${env:MY_POD_IP}:14250
+          thrift_compact:
+            endpoint: ${env:MY_POD_IP}:6831
+          thrift_http:
+            endpoint: ${env:MY_POD_IP}:14268
+      otlp:
+        protocols:
+          grpc:
+              endpoint: ${env:MY_POD_IP}:4317
+          http:
+              endpoint: ${env:MY_POD_IP}:4318
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: opentelemetry-collector
+              scrape_interval: 10s
+              static_configs:
+                - targets:
+                    - ${env:MY_POD_IP}:8888
+      zipkin:
+        endpoint: ${env:MY_POD_IP}:9411
+    service:
+      extensions:
+        - health_check
+      pipelines:
+        logs:
+          exporters:
+            - loki
+          processors:
+            - memory_limiter
+            - batch
+          receivers:
+            - otlp
+        metrics:
+          exporters:
+            - prometheusremotewrite
+          processors:
+            - batch
+            - memory_limiter
+          receivers:
+            - otlp
+        traces:
+          exporters:
+            - otlphttp/tempo
+          processors:
+            - probabilistic_sampler
+            - batch
+          receivers:
+            - otlp
+      telemetry:
+        metrics:
+          address: ${env:MY_POD_IP}:8888
