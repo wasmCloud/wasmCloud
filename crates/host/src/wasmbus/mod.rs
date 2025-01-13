@@ -46,9 +46,10 @@ use uuid::Uuid;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
     ComponentAuctionAck, ComponentAuctionRequest, ComponentDescription, CtlResponse,
-    DeleteInterfaceLinkDefinitionRequest, HostInventory, HostLabel, Link, ProviderAuctionAck,
-    ProviderAuctionRequest, ProviderDescription, RegistryCredential, ScaleComponentCommand,
-    StartProviderCommand, StopHostCommand, StopProviderCommand, UpdateComponentCommand,
+    DeleteInterfaceLinkDefinitionRequest, HostInventory, HostLabel, HostLabelIdentifier, Link,
+    ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription, RegistryCredential,
+    ScaleComponentCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
+    UpdateComponentCommand,
 };
 use wasmcloud_core::{
     provider_config_update_subject, ComponentId, HealthCheckResponse, HostData,
@@ -2837,7 +2838,7 @@ impl Host {
         host_id: &str,
         payload: impl AsRef<[u8]>,
     ) -> anyhow::Result<CtlResponse<()>> {
-        let label = serde_json::from_slice::<HostLabel>(payload.as_ref())
+        let label = serde_json::from_slice::<HostLabelIdentifier>(payload.as_ref())
             .context("failed to deserialize delete label request")?;
         let key = label.key();
         let mut labels = self.labels.write().await;
