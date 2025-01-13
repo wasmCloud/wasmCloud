@@ -8026,7 +8026,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.37.0"
+version = "0.38.0"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -8083,7 +8083,7 @@ dependencies = [
  "wasm-pkg-client",
  "wasm-pkg-core",
  "wasmcloud-control-interface 2.2.0",
- "wasmcloud-core 0.15.0",
+ "wasmcloud-core 0.16.0",
  "wasmcloud-secrets-types 0.5.0",
  "wat",
  "which",
@@ -8097,7 +8097,7 @@ dependencies = [
 
 [[package]]
 name = "wash-lib"
-version = "0.31.1"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -8157,7 +8157,7 @@ dependencies = [
  "wasm-pkg-client",
  "wasm-pkg-core",
  "wasmcloud-control-interface 2.2.0",
- "wasmcloud-core 0.15.0",
+ "wasmcloud-core 0.16.0",
  "wasmcloud-test-util",
  "wasmparser 0.221.2",
  "wasmtime",
@@ -8524,7 +8524,7 @@ dependencies = [
  "vaultrs",
  "wascap 0.15.2",
  "wasmcloud-control-interface 2.2.0",
- "wasmcloud-core 0.15.0",
+ "wasmcloud-core 0.16.0",
  "wasmcloud-host",
  "wasmcloud-provider-blobstore-azure",
  "wasmcloud-provider-blobstore-fs",
@@ -8630,7 +8630,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-core"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8656,7 +8656,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-host"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8686,7 +8686,7 @@ dependencies = [
  "uuid 1.11.0",
  "wascap 0.15.2",
  "wasmcloud-control-interface 2.2.0",
- "wasmcloud-core 0.15.0",
+ "wasmcloud-core 0.16.0",
  "wasmcloud-provider-http-server",
  "wasmcloud-provider-messaging-nats",
  "wasmcloud-provider-sdk",
@@ -8923,7 +8923,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sdk"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8942,7 +8942,7 @@ dependencies = [
  "tracing-futures",
  "tracing-opentelemetry 0.28.0",
  "tracing-subscriber",
- "wasmcloud-core 0.15.0",
+ "wasmcloud-core 0.16.0",
  "wasmcloud-tracing",
  "wrpc-transport",
  "wrpc-transport-nats",
@@ -8978,7 +8978,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-runtime"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8998,7 +8998,7 @@ dependencies = [
  "wascap 0.15.2",
  "wasi-preview1-component-adapter-provider",
  "wasmcloud-component",
- "wasmcloud-core 0.15.0",
+ "wasmcloud-core 0.16.0",
  "wasmparser 0.221.2",
  "wasmtime",
  "wasmtime-wasi",
@@ -9054,7 +9054,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-test-util"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9070,7 +9070,7 @@ dependencies = [
  "url",
  "wascap 0.15.2",
  "wasmcloud-control-interface 2.2.0",
- "wasmcloud-core 0.15.0",
+ "wasmcloud-core 0.16.0",
  "wasmcloud-host",
  "wasmcloud-secrets-types 0.5.0",
 ]
@@ -9094,7 +9094,7 @@ dependencies = [
  "tracing-flame",
  "tracing-opentelemetry 0.28.0",
  "tracing-subscriber",
- "wasmcloud-core 0.15.0",
+ "wasmcloud-core 0.16.0",
 ]
 
 [[package]]
