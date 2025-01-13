@@ -1,0 +1,147 @@
+# Configuration for the k6 test
+test:
+  url: http://hello-world:8000
+  # The number of parallel test runners to use
+  parallelism: 3
+  # Whether each test runner should be run on a separate node
+  separate: false
+  # These scenarios will be converted to JSON and added to the k6 test
+  scenarios:
+    default:
+      executor: "constant-arrival-rate"
+      timeUnit: "1s"
+      duration: "1m"
+      preAllocatedVUs: 50
+      maxVUs: 1000
+      rate: 5000
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+loki:
+  image:
+    repository: grafana/loki
+    tag: "3.0.1"
+    pullPolicy: IfNotPresent
+  config:
+    auth_enabled: false
+
+    server:
+      http_listen_port: 3100
+
+    common:
+      path_prefix: /data
+      storage:
+        filesystem:
+          chunks_directory: /data/chunks
+          rules_directory: /data/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+
+    ruler:
+      alertmanager_url: http://localhost:9093
+
+    # By default, Loki will send anonymous, but uniquely-identifiable usage and configuration
+    # analytics to Grafana Labs. These statistics are sent to https://stats.grafana.org/
+    #
+    # If you would like to enable reporting, comment out the following lines:
+    analytics:
+      reporting_enabled: false
+
+# All values below here are specific configs for the dependent charts. They can be overridden as
+# well but generally do not need to be configured
+prometheus:
+  configmapReloader:
+    prometheus:
+      enabled: false
+  server:
+    statefulSet:
+      enabled: true
+    extraFlags:
+      - web.enable-remote-write-receiver
+    extraArgs:
+      enable-feature: native-histograms,auto-gomemlimit
+    # NOTE(thomastaylor312): We're using the default config with the chart as it is pretty much the
+    # same as what we had in our original benchmarking setup. The only thing missing from the
+    # scrape_configs was metric_relabel_configs, which I think we can get away with for now.
+  alertmanager:
+    enabled: false
+  prometheus-node-exporter:
+    enabled: false
+  prometheus-pushgateway:
+    enabled: false
+opentelemetry-collector:
+  mode: deployment
+  image:
+    repository: otel/opentelemetry-collector-contrib
+  configMap:
+    create: false
+    existingName: "{{ .Release.Name }}-collector-config"
+
+tempo:
+  persistence:
+    enabled: true
+  tempo:
+    global_overrides:
+      defaults:
+        ingestion:
+          max_traces_per_user: 0
+    storage:
+      trace:
+        block:
+          v2_encoding: zstd
+        wal:
+          v2_encoding: none
+    server:
+      grpc_server_max_recv_msg_size: 29000000
+      grpc_server_max_send_msg_size: 29000000
+grafana:
+  env:
+    GF_AUTH_ANONYMOUS_ENABLED: "true"
+    GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    GF_AUTH_DISABLE_LOGIN_FORM: "true"
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Loki
+          type: loki
+          access: proxy
+          orgId: 1
+          url: http://{{ include "benchmark.fullname" . }}-loki:3100
+          basicAuth: false
+          version: 1
+          editable: false
+        - name: Prometheus
+          type: prometheus
+          url: http://{{ .Release.Name }}-prometheus-server
+          access: proxy
+          editable: true
+        - name: Tempo
+          type: tempo
+          access: proxy
+          url: http://{{ .Release.Name }}-tempo:3100
+          version: 1
+          editable: false
+          uid: tempo
+  dashboardsConfigMaps:
+    default: "{{ .Release.Name }}-benchmark-grafana-dashboards"
+  extraConfigmapMounts:
+    - name: "{{ .Release.Name }}-dashboard-provider"
+      configMap: "{{ .Release.Name }}-benchmark-dashboard-provider"
+      mountPath: /etc/grafana/provisioning/dashboards

@@ -1,0 +1,8 @@
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: {{ include "benchmark.fullname" . }}-test-config
+data:
+  test.js: |-
+    {{ tpl (.Files.Get "k6/test.js.tpl") .  | nindent 4 }}
+  

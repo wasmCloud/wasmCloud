@@ -471,6 +471,8 @@
               pkgs.vault
               pkgs.wit-deps
               pkgs.go
+              pkgs.kubernetes-helm
+              pkgs.kubectl
             ];
           }
           devShells;
