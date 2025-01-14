@@ -1,0 +1,22 @@
+# An example of running the benchmark test on a different node pool with dedicated resources for
+# load generation and benchmarking.
+tolerations:
+  - effect: NoSchedule
+    key: pool
+    operator: Equal
+    value: benchmark
+nodeSelector:
+  pool: benchmark
+# This is how you can override the default scenario and add another one
+test:
+  scenarios:
+    default:
+      rate: 4000
+    10k:
+      executor: "constant-arrival-rate"
+      timeUnit: "1s"
+      duration: "1m"
+      startTime: "1m"
+      preAllocatedVUs: 50
+      maxVUs: 1000
+      rate: 8000
