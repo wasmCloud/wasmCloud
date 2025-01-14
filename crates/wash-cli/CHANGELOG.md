@@ -5,59 +5,123 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v0.37.0 (2024-11-08)
+## v0.38.0 (2025-01-14)
 
 ### Chore
 
- - <csr-id-7bcf972e9403b53c0ae113def6a6e9546157a9d4/> bump dev http-server to v0.24.0
- - <csr-id-71d2610ff1689fd3dd0278d3164ca6c7703a7ad7/> bump wasmCloud to v1.4.1
- - <csr-id-6d250ffa473385baae59b6f83b35ff38f119c054/> update `wrpc-transport-nats`
- - <csr-id-98cd06c1dd448073d8eadef790ee7709a2ccae36/> fix clippy lint
- - <csr-id-993771423527f8c1e15acf0b5a202206228f790e/> update http-server to v0.23.2
- - <csr-id-1682afe130cbd2be41cbdb6d3a8e89a2d63e59fc/> Deprecate docker job
- - <csr-id-8c96324fc0b28a475073974b23451e19736070ae/> remove snap building
-   This commit removes the building of the wash-cli snap -- it was out of
-   use and had fallen behind/was broken, so for now we'll remove it in
-   favor of users downloading and installing `wash-cli` via other means.
- - <csr-id-ec4ed44b01564f423cc7a615c9ee2860d4f55925/> update all cargo wash-cli install commands to --locked
+ - <csr-id-b47fc3357bc4f07358a6801114ff47c2b67d2357/> add wasmCloud/typescript repo as source for washboard downloads
+ - <csr-id-da5da3686be4f750435d859250abe5db7fb5d4f6/> fix clippy
+ - <csr-id-174d9628f3297884d8815d86c00f622045859fef/> name default padding variable for commands
+ - <csr-id-eedfc79794cdfd5d366dabc6e1d782f32e96e8ea/> increase verbosity to trace in example providers
+ - <csr-id-eb52eca817fe24b33e7f1a65c1ba5c46c50bef4e/> removed unused dependencies
+   A batch scanning all crates and remove unused dependencies by running 'cargo machete'.
+ - <csr-id-bc23421b78dcf5d9f017fe2f877ae026b5f96269/> release package updates
+ - <csr-id-57ff6d1067a6584aacfc614e594ce9c20e9c92b1/> add curve to keys gen help
+ - <csr-id-6210e5de93001cc9611e81bd89f7e2b5ab26d4d3/> reword some help text
+ - <csr-id-9622399aeff74d2a79c3bed5980780fc57d98967/> Remove weld-codegen dependency
+
+### Documentation
+
+ - <csr-id-184bf2a59d6ce7e5d022f8b48379eaec85ef0aca/> update wasmcloudOpts and wadmOpts for wash up command
 
 ### New Features
 
- - <csr-id-22ac2b0cc123f00267dc8be4a55b9fd5f9a00713/> tls-first option for command line
- - <csr-id-6e113b097402e059ef7e2d5a01d7971e5b139cfa/> Add support for monolithic push
+ - <csr-id-da3a0f39914e3d2bc96100d118daeb66c24a9132/> update wadm to 0.19
+ - <csr-id-563f2dd5d0558fce33445bb3f0f80a494a722e51/> regression test for buffered stdout writes
+ - <csr-id-f251e8fd773a6896b51040317e26fd3c70df2010/> test wash dev uses buffered writes after ctrl-c
+ - <csr-id-8a3a47298647bbcd1d3a46f6b29df542f5dc4a7c/> add support for deleting all links
+ - <csr-id-bdaa78f92872bce526b515785f3fe66984a68e6d/> add extended wkg config  git repo support
+ - <csr-id-401ec48c169bbd88f624122a1d9b43b30971e694/> implement pulling from HTTP
+ - <csr-id-cbd84402474d3db44641267d470e573c71059288/> support enhanced wkg pull config
+   This commit adds support to `wash` for using the "enhanced" wkg config
+   -- the new configuration method breaks out configuration for pulling
+   into it's own sub-section, and adds support for different kinds of
+   WIT pulling that we'd want to see upstream but want to implement
+   locally for now.
+ - <csr-id-13e0053c19bec4d6775dabc816d068ec1911a0cf/> add version to ui command output
+ - <csr-id-5a377bcba1bf8a1907a457b78ca503a81202debf/> wash up is trying to fetch wadm and wasmcloud patch versions to download
+ - <csr-id-8bd6b09fb3bcd956c7ab2b7ded3fe91813800fa0/> configure nats-kv policy for secrets
+ - <csr-id-286aa22076d4fe58592c85f381954923a55c9e3b/> support wildcard interface overrides
+ - <csr-id-a3bff20215cea20116e427da92bb5ad7abf85690/> support interface wildcard overrides
+ - <csr-id-70bc37b9628e0f21648285c18c752ce966d0e167/> use spinner to indicate build progress
 
 ### Bug Fixes
 
- - <csr-id-940a06d42476a501b090a4bf4eecc90ccbe6c3ce/> Fixes wasmcloud.lock on windows
-   This is a simple dependency bump to pick up the fix from wkg on locking
-   files on windows
- - <csr-id-be4ea5617776a3c7d4976bd0bc5f901049e021d7/> avoid an immediate reload
- - <csr-id-b1f9e9a14c2bfed241d741d590fe926b940cfaa2/> prevent duplicate reloads
- - <csr-id-02bd8dfe82b839732b96d128b008dd83de3ed61a/> wash build tests for tinygo
+ - <csr-id-8eb0865699e9d45bf2769df84a5bfe2e2ec4e579/> deserialize snap_data as borrowed slice
+ - <csr-id-7ae88df089785ebd85dff23f936a4d90bc5f69c9/> remove extra print statement
+ - <csr-id-3d086ab544bd82973a9206940e77edf86970bc8a/> ignore clippy zombie process warning
+   This commit ignores the clippy process warning but also adds a wait to
+   ensure that tests will hang if processes don't get terminated properly.
+ - <csr-id-fd3d77646f8fc8c644cd225303ab1e2855c44c70/> convert usages of wasm32-wasi to wasm32-wasip1
+ - <csr-id-24789dff476f3ed3a64faefa2222d8ea4fe77bdd/> improve tests for help usage
+ - <csr-id-02b001c5b221c9748f9c969911a5ec16d47c2ca7/> spinner rendering error
+   Fixed the spinner rendering inconsistencies by separating out the logic to the match statement
+ - <csr-id-d11aae89f227308786153e85e876f7166a0f1e0a/> correct regex and add tests
+ - <csr-id-1540eb02a9cf5acba52bce1a84003141fd43adda/> detect host_id from structured logs
+ - <csr-id-13026fdd3cf6348b72a8cb0d046fdd49307280fb/> remove query params from git repo URL if present
+ - <csr-id-ed17160abcfabbe9dc4d1e5702a26f5398e6f2e3/> dont require NATS to start
+ - <csr-id-ed28fa64363508ecc29c91e99a3d57af56645f2d/> corrected formatting
+ - <csr-id-d51e9f24292b850188b5212cc06169a4464a6545/> wash dev with JSON output will panic when piped into jq
+ - <csr-id-0245805d560aed6cd667c891a245cee9c08e0d77/> use existing get_download_client method
+ - <csr-id-844589f49ce16876a067ac580a0e59c84f751cb9/> add new url to check for washboard releases
+ - <csr-id-709d9b1e35e051b5b987e4d4205548af37174048/> wadm fetch new version can fail
+ - <csr-id-36d6dfdb619b40dc581e353038b5dc07f026ff7e/> don't fail on removing host pid
+ - <csr-id-0005eb551f5692fdce83cc9cc0613d4fef85fc33/> kill wadm even if CTRL+c doesn't propagate
+ - <csr-id-5fcdfca3373cef428d9820d2ed015b1addc5a81a/> ensure dev uses a single running host
+
+### Other
+
+ - <csr-id-6d7b07dd411e2b5f9692c95c3ee807f7206da5dd/> Removes network calls from unit tests
+   We've had several tests for a while that were in unit tests doing things
+   like network calls. All network call tests have been moved to integration
+   tests and some cleanup and refactoring was done as well.
+   
+   I also changed the plugin test to just use a committed wash plugin binary.
+   The code is still in the repo (and updated to use the new wkg fetching),
+   but it added a significant delay because it compiled both `wash` and the
+   plugin. With a committed binary, it becomes much faster
+ - <csr-id-d075c5518a4089938e1c316881846e04f931743b/> add more tests for wkg fetching
 
 ### Refactor
 
- - <csr-id-9863a724c43207e282452b09c8f51fdacac44ec0/> deprecate wash app list in favor of wash app get
- - <csr-id-9bb420c1ff7a706b6ab33b09eb5af6461b63d166/> disallow unnamed links del when multiple present
-   This commit restricts `wash link del` from deleting a link when there
-   are multiple stored that have similar targeting properties except for
-   link name.
-   
-   This situation *can* lead to deleting the *wrong* link or deleting one
-   intentionally, so users must now specify the link name, rather than
-   getting `"default"` set for them.
+ - <csr-id-d07aded12c5672d136209cbd81c3fe7f3c6c8aed/> refactor link management commands
+   This commit moves the link management commands (get, put, query) into
+   the new cmd/ structure.
+ - <csr-id-40d48e707ff5e9d2cb71f9eed574264e592830bc/> update deps to use RepoRef
+ - <csr-id-0b47bfecfe649d4776ec8758a927f3db9ea20dc0/> create helper for file override update
+ - <csr-id-122a3d4c6979d53e4e62dcb3db7eae0bd4659687/> manipulate wkg config directly
+ - <csr-id-f65c2aa4d2238b46365ec8d449a547b17fa5eef0/> rename interface to target in config
+ - <csr-id-6b52904092f2218567e8eeb0d7dea7f6ae79805f/> remove redundant string mapping of version opts
+ - <csr-id-caabfee08e8d61a162c19030fd039f5da9553a27/> get wadm_version the same way as wasmcloud_version
+ - <csr-id-7ac230063453c2f4b4e3c3c48af1895af6b508d0/> use wildcard-supporting core parser
+ - <csr-id-e5c38a85f4625a97eaea0863b90b0e9c7eac455a/> add help-markdown
+ - <csr-id-45428ea8dc9f66c99ce53f50b4d40e0a63a3e7bd/> reorder dev printlns for consistent output
+
+### Style
+
+ - <csr-id-1f7ddbfaa2eb2cbb6098ef1676ecca45c8b8bb26/> top level help is colorized with dynamic length
 
 ### Test
 
- - <csr-id-599c52b358e4ff940fcc9b3d6b0ec27a6bb30ad2/> correct separate path test
+ - <csr-id-16fba55577311b3030a93c2c7d870903283d1cce/> add tests for wash help short and help markdown
+ - <csr-id-8afedb358b84da36a4760c908dc72de60619cf58/> override multiple interface integration
+ - <csr-id-59c10a0f16540368e473bc47aef447881376d76e/> dev integration tests for multiple hosts
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-408bfb002630e8742fe64e2773d5149f28cacc3d/> use extended interface overrides everywhere
+ - <csr-id-4be0d9d47190b34dbd20590a70fc40cb7482ba1f/> disable loading from stdin
+   This option was evidently confusing, and would cause `wash app deploy`
+   to hang for a bit while waiting for STDIN. It is likely better to
+   force users to pass `-` directly to read from STDIN.
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 17 commits contributed to the release over the course of 16 calendar days.
- - 16 days passed between releases.
- - 17 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 59 commits contributed to the release over the course of 55 calendar days.
+ - 62 days passed between releases.
+ - 59 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -67,23 +131,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
-    - Bump dev http-server to v0.24.0 ([`7bcf972`](https://github.com/wasmCloud/wasmCloud/commit/7bcf972e9403b53c0ae113def6a6e9546157a9d4))
-    - Bump wasmCloud to v1.4.1 ([`71d2610`](https://github.com/wasmCloud/wasmCloud/commit/71d2610ff1689fd3dd0278d3164ca6c7703a7ad7))
-    - Update `wrpc-transport-nats` ([`6d250ff`](https://github.com/wasmCloud/wasmCloud/commit/6d250ffa473385baae59b6f83b35ff38f119c054))
-    - Fixes wasmcloud.lock on windows ([`940a06d`](https://github.com/wasmCloud/wasmCloud/commit/940a06d42476a501b090a4bf4eecc90ccbe6c3ce))
-    - Avoid an immediate reload ([`be4ea56`](https://github.com/wasmCloud/wasmCloud/commit/be4ea5617776a3c7d4976bd0bc5f901049e021d7))
-    - Fix clippy lint ([`98cd06c`](https://github.com/wasmCloud/wasmCloud/commit/98cd06c1dd448073d8eadef790ee7709a2ccae36))
-    - Tls-first option for command line ([`22ac2b0`](https://github.com/wasmCloud/wasmCloud/commit/22ac2b0cc123f00267dc8be4a55b9fd5f9a00713))
-    - Prevent duplicate reloads ([`b1f9e9a`](https://github.com/wasmCloud/wasmCloud/commit/b1f9e9a14c2bfed241d741d590fe926b940cfaa2))
-    - Correct separate path test ([`599c52b`](https://github.com/wasmCloud/wasmCloud/commit/599c52b358e4ff940fcc9b3d6b0ec27a6bb30ad2))
-    - Update http-server to v0.23.2 ([`9937714`](https://github.com/wasmCloud/wasmCloud/commit/993771423527f8c1e15acf0b5a202206228f790e))
-    - Deprecate wash app list in favor of wash app get ([`9863a72`](https://github.com/wasmCloud/wasmCloud/commit/9863a724c43207e282452b09c8f51fdacac44ec0))
-    - Disallow unnamed links del when multiple present ([`9bb420c`](https://github.com/wasmCloud/wasmCloud/commit/9bb420c1ff7a706b6ab33b09eb5af6461b63d166))
-    - Wash build tests for tinygo ([`02bd8df`](https://github.com/wasmCloud/wasmCloud/commit/02bd8dfe82b839732b96d128b008dd83de3ed61a))
-    - Deprecate docker job ([`1682afe`](https://github.com/wasmCloud/wasmCloud/commit/1682afe130cbd2be41cbdb6d3a8e89a2d63e59fc))
-    - Add support for monolithic push ([`6e113b0`](https://github.com/wasmCloud/wasmCloud/commit/6e113b097402e059ef7e2d5a01d7971e5b139cfa))
-    - Remove snap building ([`8c96324`](https://github.com/wasmCloud/wasmCloud/commit/8c96324fc0b28a475073974b23451e19736070ae))
-    - Update all cargo wash-cli install commands to --locked ([`ec4ed44`](https://github.com/wasmCloud/wasmCloud/commit/ec4ed44b01564f423cc7a615c9ee2860d4f55925))
+    - Deserialize snap_data as borrowed slice ([`8eb0865`](https://github.com/wasmCloud/wasmCloud/commit/8eb0865699e9d45bf2769df84a5bfe2e2ec4e579))
+    - Update wadm to 0.19 ([`da3a0f3`](https://github.com/wasmCloud/wasmCloud/commit/da3a0f39914e3d2bc96100d118daeb66c24a9132))
+    - Remove extra print statement ([`7ae88df`](https://github.com/wasmCloud/wasmCloud/commit/7ae88df089785ebd85dff23f936a4d90bc5f69c9))
+    - Ignore clippy zombie process warning ([`3d086ab`](https://github.com/wasmCloud/wasmCloud/commit/3d086ab544bd82973a9206940e77edf86970bc8a))
+    - Regression test for buffered stdout writes ([`563f2dd`](https://github.com/wasmCloud/wasmCloud/commit/563f2dd5d0558fce33445bb3f0f80a494a722e51))
+    - Test wash dev uses buffered writes after ctrl-c ([`f251e8f`](https://github.com/wasmCloud/wasmCloud/commit/f251e8fd773a6896b51040317e26fd3c70df2010))
+    - Convert usages of wasm32-wasi to wasm32-wasip1 ([`fd3d776`](https://github.com/wasmCloud/wasmCloud/commit/fd3d77646f8fc8c644cd225303ab1e2855c44c70))
+    - Add support for deleting all links ([`8a3a472`](https://github.com/wasmCloud/wasmCloud/commit/8a3a47298647bbcd1d3a46f6b29df542f5dc4a7c))
+    - Refactor link management commands ([`d07aded`](https://github.com/wasmCloud/wasmCloud/commit/d07aded12c5672d136209cbd81c3fe7f3c6c8aed))
+    - Use extended interface overrides everywhere ([`408bfb0`](https://github.com/wasmCloud/wasmCloud/commit/408bfb002630e8742fe64e2773d5149f28cacc3d))
+    - Add wasmCloud/typescript repo as source for washboard downloads ([`b47fc33`](https://github.com/wasmCloud/wasmCloud/commit/b47fc3357bc4f07358a6801114ff47c2b67d2357))
+    - Removes network calls from unit tests ([`6d7b07d`](https://github.com/wasmCloud/wasmCloud/commit/6d7b07dd411e2b5f9692c95c3ee807f7206da5dd))
+    - Improve tests for help usage ([`24789df`](https://github.com/wasmCloud/wasmCloud/commit/24789dff476f3ed3a64faefa2222d8ea4fe77bdd))
+    - Add tests for wash help short and help markdown ([`16fba55`](https://github.com/wasmCloud/wasmCloud/commit/16fba55577311b3030a93c2c7d870903283d1cce))
+    - Spinner rendering error ([`02b001c`](https://github.com/wasmCloud/wasmCloud/commit/02b001c5b221c9748f9c969911a5ec16d47c2ca7))
+    - Correct regex and add tests ([`d11aae8`](https://github.com/wasmCloud/wasmCloud/commit/d11aae89f227308786153e85e876f7166a0f1e0a))
+    - Detect host_id from structured logs ([`1540eb0`](https://github.com/wasmCloud/wasmCloud/commit/1540eb02a9cf5acba52bce1a84003141fd43adda))
+    - Fix clippy ([`da5da36`](https://github.com/wasmCloud/wasmCloud/commit/da5da3686be4f750435d859250abe5db7fb5d4f6))
+    - Remove query params from git repo URL if present ([`13026fd`](https://github.com/wasmCloud/wasmCloud/commit/13026fdd3cf6348b72a8cb0d046fdd49307280fb))
+    - Add more tests for wkg fetching ([`d075c55`](https://github.com/wasmCloud/wasmCloud/commit/d075c5518a4089938e1c316881846e04f931743b))
+    - Update deps to use RepoRef ([`40d48e7`](https://github.com/wasmCloud/wasmCloud/commit/40d48e707ff5e9d2cb71f9eed574264e592830bc))
+    - Create helper for file override update ([`0b47bfe`](https://github.com/wasmCloud/wasmCloud/commit/0b47bfecfe649d4776ec8758a927f3db9ea20dc0))
+    - Manipulate wkg config directly ([`122a3d4`](https://github.com/wasmCloud/wasmCloud/commit/122a3d4c6979d53e4e62dcb3db7eae0bd4659687))
+    - Rename interface to target in config ([`f65c2aa`](https://github.com/wasmCloud/wasmCloud/commit/f65c2aa4d2238b46365ec8d449a547b17fa5eef0))
+    - Add extended wkg config  git repo support ([`bdaa78f`](https://github.com/wasmCloud/wasmCloud/commit/bdaa78f92872bce526b515785f3fe66984a68e6d))
+    - Implement pulling from HTTP ([`401ec48`](https://github.com/wasmCloud/wasmCloud/commit/401ec48c169bbd88f624122a1d9b43b30971e694))
+    - Support enhanced wkg pull config ([`cbd8440`](https://github.com/wasmCloud/wasmCloud/commit/cbd84402474d3db44641267d470e573c71059288))
+    - Disable loading from stdin ([`4be0d9d`](https://github.com/wasmCloud/wasmCloud/commit/4be0d9d47190b34dbd20590a70fc40cb7482ba1f))
+    - Dont require NATS to start ([`ed17160`](https://github.com/wasmCloud/wasmCloud/commit/ed17160abcfabbe9dc4d1e5702a26f5398e6f2e3))
+    - Name default padding variable for commands ([`174d962`](https://github.com/wasmCloud/wasmCloud/commit/174d9628f3297884d8815d86c00f622045859fef))
+    - Top level help is colorized with dynamic length ([`1f7ddbf`](https://github.com/wasmCloud/wasmCloud/commit/1f7ddbfaa2eb2cbb6098ef1676ecca45c8b8bb26))
+    - Corrected formatting ([`ed28fa6`](https://github.com/wasmCloud/wasmCloud/commit/ed28fa64363508ecc29c91e99a3d57af56645f2d))
+    - Wash dev with JSON output will panic when piped into jq ([`d51e9f2`](https://github.com/wasmCloud/wasmCloud/commit/d51e9f24292b850188b5212cc06169a4464a6545))
+    - Add version to ui command output ([`13e0053`](https://github.com/wasmCloud/wasmCloud/commit/13e0053c19bec4d6775dabc816d068ec1911a0cf))
+    - Use existing get_download_client method ([`0245805`](https://github.com/wasmCloud/wasmCloud/commit/0245805d560aed6cd667c891a245cee9c08e0d77))
+    - Add new url to check for washboard releases ([`844589f`](https://github.com/wasmCloud/wasmCloud/commit/844589f49ce16876a067ac580a0e59c84f751cb9))
+    - Remove redundant string mapping of version opts ([`6b52904`](https://github.com/wasmCloud/wasmCloud/commit/6b52904092f2218567e8eeb0d7dea7f6ae79805f))
+    - Get wadm_version the same way as wasmcloud_version ([`caabfee`](https://github.com/wasmCloud/wasmCloud/commit/caabfee08e8d61a162c19030fd039f5da9553a27))
+    - Update wasmcloudOpts and wadmOpts for wash up command ([`184bf2a`](https://github.com/wasmCloud/wasmCloud/commit/184bf2a59d6ce7e5d022f8b48379eaec85ef0aca))
+    - Increase verbosity to trace in example providers ([`eedfc79`](https://github.com/wasmCloud/wasmCloud/commit/eedfc79794cdfd5d366dabc6e1d782f32e96e8ea))
+    - Wadm fetch new version can fail ([`709d9b1`](https://github.com/wasmCloud/wasmCloud/commit/709d9b1e35e051b5b987e4d4205548af37174048))
+    - Wash up is trying to fetch wadm and wasmcloud patch versions to download ([`5a377bc`](https://github.com/wasmCloud/wasmCloud/commit/5a377bcba1bf8a1907a457b78ca503a81202debf))
+    - Removed unused dependencies ([`eb52eca`](https://github.com/wasmCloud/wasmCloud/commit/eb52eca817fe24b33e7f1a65c1ba5c46c50bef4e))
+    - Override multiple interface integration ([`8afedb3`](https://github.com/wasmCloud/wasmCloud/commit/8afedb358b84da36a4760c908dc72de60619cf58))
+    - Use wildcard-supporting core parser ([`7ac2300`](https://github.com/wasmCloud/wasmCloud/commit/7ac230063453c2f4b4e3c3c48af1895af6b508d0))
+    - Configure nats-kv policy for secrets ([`8bd6b09`](https://github.com/wasmCloud/wasmCloud/commit/8bd6b09fb3bcd956c7ab2b7ded3fe91813800fa0))
+    - Support wildcard interface overrides ([`286aa22`](https://github.com/wasmCloud/wasmCloud/commit/286aa22076d4fe58592c85f381954923a55c9e3b))
+    - Support interface wildcard overrides ([`a3bff20`](https://github.com/wasmCloud/wasmCloud/commit/a3bff20215cea20116e427da92bb5ad7abf85690))
+    - Add help-markdown ([`e5c38a8`](https://github.com/wasmCloud/wasmCloud/commit/e5c38a85f4625a97eaea0863b90b0e9c7eac455a))
+    - Release package updates ([`bc23421`](https://github.com/wasmCloud/wasmCloud/commit/bc23421b78dcf5d9f017fe2f877ae026b5f96269))
+    - Add curve to keys gen help ([`57ff6d1`](https://github.com/wasmCloud/wasmCloud/commit/57ff6d1067a6584aacfc614e594ce9c20e9c92b1))
+    - Dev integration tests for multiple hosts ([`59c10a0`](https://github.com/wasmCloud/wasmCloud/commit/59c10a0f16540368e473bc47aef447881376d76e))
+    - Don't fail on removing host pid ([`36d6dfd`](https://github.com/wasmCloud/wasmCloud/commit/36d6dfdb619b40dc581e353038b5dc07f026ff7e))
+    - Kill wadm even if CTRL+c doesn't propagate ([`0005eb5`](https://github.com/wasmCloud/wasmCloud/commit/0005eb551f5692fdce83cc9cc0613d4fef85fc33))
+    - Use spinner to indicate build progress ([`70bc37b`](https://github.com/wasmCloud/wasmCloud/commit/70bc37b9628e0f21648285c18c752ce966d0e167))
+    - Ensure dev uses a single running host ([`5fcdfca`](https://github.com/wasmCloud/wasmCloud/commit/5fcdfca3373cef428d9820d2ed015b1addc5a81a))
+    - Reorder dev printlns for consistent output ([`45428ea`](https://github.com/wasmCloud/wasmCloud/commit/45428ea8dc9f66c99ce53f50b4d40e0a63a3e7bd))
+    - Reword some help text ([`6210e5d`](https://github.com/wasmCloud/wasmCloud/commit/6210e5de93001cc9611e81bd89f7e2b5ab26d4d3))
+    - Remove weld-codegen dependency ([`9622399`](https://github.com/wasmCloud/wasmCloud/commit/9622399aeff74d2a79c3bed5980780fc57d98967))
 </details>
 
 ## v0.37.1 (2024-10-23)
@@ -211,7 +317,134 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
  - <csr-id-8fbaab298a5ac5749d89259871d829bf2cbfb1f8/> remove duplicate components, ignore generated paths
 
+## v0.37.0 (2024-11-12)
+
+<csr-id-7bcf972e9403b53c0ae113def6a6e9546157a9d4/>
+<csr-id-71d2610ff1689fd3dd0278d3164ca6c7703a7ad7/>
+<csr-id-6d250ffa473385baae59b6f83b35ff38f119c054/>
+<csr-id-98cd06c1dd448073d8eadef790ee7709a2ccae36/>
+<csr-id-993771423527f8c1e15acf0b5a202206228f790e/>
+<csr-id-1682afe130cbd2be41cbdb6d3a8e89a2d63e59fc/>
+<csr-id-8c96324fc0b28a475073974b23451e19736070ae/>
+<csr-id-ec4ed44b01564f423cc7a615c9ee2860d4f55925/>
+<csr-id-9863a724c43207e282452b09c8f51fdacac44ec0/>
+<csr-id-9bb420c1ff7a706b6ab33b09eb5af6461b63d166/>
+<csr-id-599c52b358e4ff940fcc9b3d6b0ec27a6bb30ad2/>
+
+### Chore
+
+ - <csr-id-7bcf972e9403b53c0ae113def6a6e9546157a9d4/> bump dev http-server to v0.24.0
+ - <csr-id-71d2610ff1689fd3dd0278d3164ca6c7703a7ad7/> bump wasmCloud to v1.4.1
+ - <csr-id-6d250ffa473385baae59b6f83b35ff38f119c054/> update `wrpc-transport-nats`
+ - <csr-id-98cd06c1dd448073d8eadef790ee7709a2ccae36/> fix clippy lint
+ - <csr-id-993771423527f8c1e15acf0b5a202206228f790e/> update http-server to v0.23.2
+ - <csr-id-1682afe130cbd2be41cbdb6d3a8e89a2d63e59fc/> Deprecate docker job
+ - <csr-id-8c96324fc0b28a475073974b23451e19736070ae/> remove snap building
+   This commit removes the building of the wash-cli snap -- it was out of
+   use and had fallen behind/was broken, so for now we'll remove it in
+   favor of users downloading and installing `wash-cli` via other means.
+ - <csr-id-ec4ed44b01564f423cc7a615c9ee2860d4f55925/> update all cargo wash-cli install commands to --locked
+
+### Other
+
+ - <csr-id-641c34e063faf30308e1bdaf914cb312456fa55f/> download wasmcloud 1.4.2
+ - <csr-id-ef45f597710929d41be989110fc3c51621c9ee62/> bump wascap v0.15.2, provider-archive v0.14.0, wasmcloud-core v0.15.0, wash-lib v0.31.0, wasmcloud-tracing v0.11.0, wasmcloud-provider-sdk v0.12.0, wasmcloud-secrets-types v0.5.0, wash-cli v0.37.0, safety bump 9 crates
+   SAFETY BUMP: wasmcloud-core v0.15.0, wash-lib v0.31.0, wasmcloud-tracing v0.11.0, wasmcloud-provider-sdk v0.12.0, wash-cli v0.37.0, wasmcloud-host v0.23.0, wasmcloud-runtime v0.7.0, wasmcloud-test-util v0.15.0, wasmcloud-secrets-client v0.6.0
+
+### Chore
+
+ - <csr-id-e555a1e8291e2282cda1b25893c78a129c230a52/> Remove unnecessary dependency on wasmcloud-provider-sdk
+
+### New Features
+
+ - <csr-id-22ac2b0cc123f00267dc8be4a55b9fd5f9a00713/> tls-first option for command line
+ - <csr-id-6e113b097402e059ef7e2d5a01d7971e5b139cfa/> Add support for monolithic push
+
+### Bug Fixes
+
+ - <csr-id-940a06d42476a501b090a4bf4eecc90ccbe6c3ce/> Fixes wasmcloud.lock on windows
+   This is a simple dependency bump to pick up the fix from wkg on locking
+   files on windows
+ - <csr-id-be4ea5617776a3c7d4976bd0bc5f901049e021d7/> avoid an immediate reload
+ - <csr-id-b1f9e9a14c2bfed241d741d590fe926b940cfaa2/> prevent duplicate reloads
+ - <csr-id-02bd8dfe82b839732b96d128b008dd83de3ed61a/> wash build tests for tinygo
+
+### Refactor
+
+ - <csr-id-9863a724c43207e282452b09c8f51fdacac44ec0/> deprecate wash app list in favor of wash app get
+ - <csr-id-9bb420c1ff7a706b6ab33b09eb5af6461b63d166/> disallow unnamed links del when multiple present
+   This commit restricts `wash link del` from deleting a link when there
+   are multiple stored that have similar targeting properties except for
+   link name.
+   
+   This situation *can* lead to deleting the *wrong* link or deleting one
+   intentionally, so users must now specify the link name, rather than
+   getting `"default"` set for them.
+
+### Test
+
+ - <csr-id-599c52b358e4ff940fcc9b3d6b0ec27a6bb30ad2/> correct separate path test
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 20 commits contributed to the release over the course of 19 calendar days.
+ - 19 days passed between releases.
+ - 20 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Remove unnecessary dependency on wasmcloud-provider-sdk ([`e555a1e`](https://github.com/wasmCloud/wasmCloud/commit/e555a1e8291e2282cda1b25893c78a129c230a52))
+    - Download wasmcloud 1.4.2 ([`641c34e`](https://github.com/wasmCloud/wasmCloud/commit/641c34e063faf30308e1bdaf914cb312456fa55f))
+    - Bump wascap v0.15.2, provider-archive v0.14.0, wasmcloud-core v0.15.0, wash-lib v0.31.0, wasmcloud-tracing v0.11.0, wasmcloud-provider-sdk v0.12.0, wasmcloud-secrets-types v0.5.0, wash-cli v0.37.0, safety bump 9 crates ([`ef45f59`](https://github.com/wasmCloud/wasmCloud/commit/ef45f597710929d41be989110fc3c51621c9ee62))
+    - Bump dev http-server to v0.24.0 ([`7bcf972`](https://github.com/wasmCloud/wasmCloud/commit/7bcf972e9403b53c0ae113def6a6e9546157a9d4))
+    - Bump wasmCloud to v1.4.1 ([`71d2610`](https://github.com/wasmCloud/wasmCloud/commit/71d2610ff1689fd3dd0278d3164ca6c7703a7ad7))
+    - Update `wrpc-transport-nats` ([`6d250ff`](https://github.com/wasmCloud/wasmCloud/commit/6d250ffa473385baae59b6f83b35ff38f119c054))
+    - Fixes wasmcloud.lock on windows ([`940a06d`](https://github.com/wasmCloud/wasmCloud/commit/940a06d42476a501b090a4bf4eecc90ccbe6c3ce))
+    - Avoid an immediate reload ([`be4ea56`](https://github.com/wasmCloud/wasmCloud/commit/be4ea5617776a3c7d4976bd0bc5f901049e021d7))
+    - Fix clippy lint ([`98cd06c`](https://github.com/wasmCloud/wasmCloud/commit/98cd06c1dd448073d8eadef790ee7709a2ccae36))
+    - Tls-first option for command line ([`22ac2b0`](https://github.com/wasmCloud/wasmCloud/commit/22ac2b0cc123f00267dc8be4a55b9fd5f9a00713))
+    - Prevent duplicate reloads ([`b1f9e9a`](https://github.com/wasmCloud/wasmCloud/commit/b1f9e9a14c2bfed241d741d590fe926b940cfaa2))
+    - Correct separate path test ([`599c52b`](https://github.com/wasmCloud/wasmCloud/commit/599c52b358e4ff940fcc9b3d6b0ec27a6bb30ad2))
+    - Update http-server to v0.23.2 ([`9937714`](https://github.com/wasmCloud/wasmCloud/commit/993771423527f8c1e15acf0b5a202206228f790e))
+    - Deprecate wash app list in favor of wash app get ([`9863a72`](https://github.com/wasmCloud/wasmCloud/commit/9863a724c43207e282452b09c8f51fdacac44ec0))
+    - Disallow unnamed links del when multiple present ([`9bb420c`](https://github.com/wasmCloud/wasmCloud/commit/9bb420c1ff7a706b6ab33b09eb5af6461b63d166))
+    - Wash build tests for tinygo ([`02bd8df`](https://github.com/wasmCloud/wasmCloud/commit/02bd8dfe82b839732b96d128b008dd83de3ed61a))
+    - Deprecate docker job ([`1682afe`](https://github.com/wasmCloud/wasmCloud/commit/1682afe130cbd2be41cbdb6d3a8e89a2d63e59fc))
+    - Add support for monolithic push ([`6e113b0`](https://github.com/wasmCloud/wasmCloud/commit/6e113b097402e059ef7e2d5a01d7971e5b139cfa))
+    - Remove snap building ([`8c96324`](https://github.com/wasmCloud/wasmCloud/commit/8c96324fc0b28a475073974b23451e19736070ae))
+    - Update all cargo wash-cli install commands to --locked ([`ec4ed44`](https://github.com/wasmCloud/wasmCloud/commit/ec4ed44b01564f423cc7a615c9ee2860d4f55925))
+</details>
+
 ## v0.36.1 (2024-10-23)
+
+<csr-id-8e24533a1eed7acda3ccd4e8cf3694e63b6ab680/>
+<csr-id-859d27aea99af1ba655714abb112b1662d9f9b64/>
+<csr-id-c5ba85cfe6ad63227445b0a5e21d58a8f3e15e33/>
+<csr-id-754c9d0cbd28daeb8902196056a35a3b0796e004/>
+<csr-id-b5de009a0c04926d5a953f7eefe6889315cfe30a/>
+<csr-id-46a7f2850a548a6be27e1262cbde105fe02d37be/>
+<csr-id-d86dfe09ba6dbe53fc57e3828ad718bc0d42d679/>
+<csr-id-44bf4c8793b3989aebbbc28c2f2ce3ebbd4d6a0a/>
+<csr-id-28be2bc7f5cba796f46be3ae9e63e89a4614d2a4/>
+<csr-id-ba4f6f407aa5819d18c5a1688fc6cd9a7daef1ee/>
+<csr-id-9df2bb1754fbffc36ed03a00098831eca49f3171/>
+<csr-id-452af3e086d8067c5342f545719daf567a2c1c01/>
+<csr-id-bff14fac85ce4673a1abe432e152067f506fb994/>
+<csr-id-1b52b0f8fd58724929e5239f265641448beb03b6/>
+<csr-id-da7b2cd26cdc4c929e45dc4aee4e5b092c3b26f9/>
+<csr-id-30a7dacf19254c7e0e0762f5c6b007cfc27ad1f0/>
+<csr-id-1592e7d57c08adc420dcbc8407234b84bbf6f3f6/>
+<csr-id-68ce98bfa00a7b270489dd206aa0f237b9e3af77/>
+<csr-id-4d4c8818d1d607ba64d21ca3115d199f3176de77/>
+<csr-id-de73278b2730f19e71d3d08996d00f205d9559cf/>
 
 ### Chore
 
