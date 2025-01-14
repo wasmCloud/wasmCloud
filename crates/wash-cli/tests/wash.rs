@@ -1,4 +1,6 @@
 use anyhow::{Context as _, Result};
+use std::collections::HashMap;
+use wash_cli::config::{NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_HOST_VERSION};
 
 mod common;
 use common::{output_to_string, wash};
@@ -64,5 +66,47 @@ fn integration_help_up_markdown_works() -> Result<()> {
         .context("failed to display wash up help text markdown")
         .and_then(|output| output_to_string(output).context("failed to extract stdout"))?;
     assert!(stdout.contains("## `wash up`"));
+    Ok(())
+}
+
+/// Ensure `wash --version` works
+#[test]
+fn integration_version_works() -> Result<()> {
+    let stdout = wash()
+        .args(["--version"])
+        .output()
+        .context("failed to display wash version")
+        .and_then(|output| output_to_string(output).context("failed to extract stdout"))?;
+    assert!(stdout.contains(format!("wash          v{}", clap::crate_version!()).as_str()));
+    assert!(stdout.contains(format!("├ nats-server {}", NATS_SERVER_VERSION).as_str()));
+    assert!(stdout.contains(format!("├ wadm        {}", WADM_VERSION).as_str()));
+    assert!(stdout.contains(format!("└ wasmcloud   {}", WASMCLOUD_HOST_VERSION).as_str()));
+    Ok(())
+}
+
+/// Ensure `wash --version -o json` works
+#[test]
+fn integration_version_json_works() -> Result<()> {
+    let stdout = wash()
+        .args(["--version", "-o", "json"])
+        .output()
+        .context("failed to display wash version")
+        .and_then(|output| output_to_string(output).context("failed to extract stdout"))?;
+    let version: serde_json::Result<HashMap<String, String>> = serde_json::from_str(&stdout);
+    assert!(version.is_ok());
+    let version = version.unwrap();
+    assert_eq!(
+        version.get("wash"),
+        Some(&format!("v{}", clap::crate_version!()))
+    );
+    assert_eq!(
+        version.get("nats-server"),
+        Some(&NATS_SERVER_VERSION.to_string())
+    );
+    assert_eq!(version.get("wadm"), Some(&WADM_VERSION.to_string()));
+    assert_eq!(
+        version.get("wasmcloud"),
+        Some(&WASMCLOUD_HOST_VERSION.to_string())
+    );
     Ok(())
 }
