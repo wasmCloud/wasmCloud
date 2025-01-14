@@ -9,7 +9,7 @@ use http::uri::Scheme;
 use http::Uri;
 use http_body_util::BodyExt as _;
 use tokio::sync::{Mutex, RwLock};
-use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tracing::{info_span, instrument, trace_span, Instrument as _, Span};
 use wasmcloud_provider_http_server::{load_settings, ServiceSettings};
@@ -22,9 +22,12 @@ use crate::wasmbus::{Component, InvocationContext};
 use super::listen;
 
 pub(crate) struct Provider {
+    /// Default address for the provider to try to listen on if no address is provided
     pub(crate) address: SocketAddr,
+    /// Map of components that the provider can instantiate, keyed by component ID
     pub(crate) components: Arc<RwLock<HashMap<String, Arc<Component>>>>,
-    pub(crate) links: Mutex<HashMap<Arc<str>, HashMap<Box<str>, JoinHandle<()>>>>,
+    /// Map of links that the provider has established, component ID -> link name -> listener task
+    pub(crate) links: Mutex<HashMap<Arc<str>, HashMap<Box<str>, JoinSet<()>>>>,
     pub(crate) lattice_id: Arc<str>,
     pub(crate) host_id: Arc<str>,
 }

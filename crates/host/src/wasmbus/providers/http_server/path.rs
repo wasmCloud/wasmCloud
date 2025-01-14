@@ -8,9 +8,8 @@ use http::header::HOST;
 use http::uri::Scheme;
 use http::Uri;
 use http_body_util::BodyExt as _;
-use tokio::sync::RwLock;
-use tokio::task::JoinHandle;
 use tokio::time::Instant;
+use tokio::{sync::RwLock, task::JoinSet};
 use tracing::{debug, error, info_span, instrument, trace_span, warn, Instrument as _, Span};
 use wasmcloud_provider_sdk::{LinkConfig, LinkDeleteInfo};
 use wasmcloud_tracing::KeyValue;
@@ -31,8 +30,10 @@ pub(crate) struct Router {
 }
 
 pub(crate) struct Provider {
-    /// Handle to the server task
-    pub(crate) handle: JoinHandle<()>,
+    /// Handle to the server task. The use of the [`JoinSet`] allows for the server to be
+    /// gracefully shutdown when the provider is shutdown
+    #[allow(unused)]
+    pub(crate) handle: JoinSet<()>,
     /// Struct that holds the routing information based on path/component_id
     pub(crate) path_router: Arc<RwLock<Router>>,
 }
@@ -53,12 +54,6 @@ impl wasmcloud_provider_sdk::Provider for Provider {
             info.get_link_name(),
         )
         .await
-    }
-
-    #[instrument(level = "debug", skip_all)]
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        self.handle.abort();
-        Ok(())
     }
 }
 
@@ -258,12 +253,13 @@ mod test {
     use std::{collections::HashMap, sync::Arc};
 
     use anyhow::Context as _;
+    use tokio::task::JoinSet;
 
     /// Ensure we can register and deregister a bunch of paths properly
     #[tokio::test]
     async fn can_manage_paths() -> anyhow::Result<()> {
         let provider = super::Provider {
-            handle: tokio::spawn(async move {}),
+            handle: JoinSet::new(),
             path_router: Arc::default(),
         };
 

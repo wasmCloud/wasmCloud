@@ -17,7 +17,9 @@ use tracing_subscriber::prelude::*;
 use wasmcloud_core::tls::NativeRootsExt as _;
 use wasmcloud_test_util::lattice::config::assert_config_put;
 use wasmcloud_test_util::lattice::link::assert_remove_link;
-use wasmcloud_test_util::provider::{assert_start_provider, StartProviderArgs};
+use wasmcloud_test_util::provider::{
+    assert_start_provider, assert_stop_provider, StartProviderArgs,
+};
 use wasmcloud_test_util::{
     component::assert_scale_component, host::WasmCloudTestHost,
     lattice::link::assert_advertise_link,
@@ -239,6 +241,34 @@ async fn builtin_http_path_routing() -> anyhow::Result<()> {
 
     let reregistered_two_hundred = http_client.get(format!("{base_url}/three")).send().await?;
     assert_eq!(reregistered_two_hundred.status().as_u16(), 200);
+
+    // Stop the builtin provider
+    assert!(
+        assert_stop_provider(wasmcloud_test_util::provider::StopProviderArgs {
+            client: &ctl_client,
+            host_id: &host.host_key().public_key(),
+            provider_id: &http_server_id
+        })
+        .await
+        .is_ok()
+    );
+
+    // Requests should fail entirely, not just 404, since the provider is stopped
+    assert!(http_client
+        .get(format!("{base_url}/one"))
+        .send()
+        .await
+        .is_err());
+    assert!(http_client
+        .get(format!("{base_url}/two"))
+        .send()
+        .await
+        .is_err());
+    assert!(http_client
+        .get(format!("{base_url}/three"))
+        .send()
+        .await
+        .is_err());
 
     nats_server.stop().await.context("failed to stop NATS")?;
     Ok(())
