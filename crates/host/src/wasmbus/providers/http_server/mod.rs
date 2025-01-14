@@ -9,7 +9,7 @@ use anyhow::{bail, Context as _};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use nkeys::XKey;
 use tokio::sync::{broadcast, Mutex};
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinSet;
 use tracing::{error, instrument};
 use wasmcloud_core::InterfaceLinkDefinition;
 use wasmcloud_provider_http_server::default_listen_address;
@@ -122,7 +122,7 @@ impl crate::wasmbus::Host {
     }
 }
 
-pub(crate) async fn listen<F, S>(address: SocketAddr, svc: F) -> anyhow::Result<JoinHandle<()>>
+pub(crate) async fn listen<F, S>(address: SocketAddr, svc: F) -> anyhow::Result<JoinSet<()>>
 where
     F: Fn(hyper::Request<hyper::body::Incoming>) -> S,
     F: Clone + Send + Sync + 'static,
@@ -142,7 +142,8 @@ where
     let srv = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
     let srv = Arc::new(srv);
 
-    let task = tokio::spawn(async move {
+    let mut task = JoinSet::new();
+    task.spawn(async move {
         loop {
             let stream = match listener.accept().await {
                 Ok((stream, _)) => stream,

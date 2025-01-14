@@ -115,20 +115,16 @@ pub async fn assert_stop_provider(
         .map_err(|e| anyhow!(e).context("failed to start provider"))?;
     ensure!(resp.succeeded());
 
-    let res = pin!(IntervalStream::new(interval(Duration::from_secs(1)))
+    pin!(IntervalStream::new(interval(Duration::from_secs(1)))
         .take(30)
         .then(|_| rpc_client.request(health_subject(lattice, provider_id), "".into(),))
         .filter_map(|res| {
             // Return a `Some()` if the request failed, indicating the provider is no longer running.
-            match res {
-                Err(_) => Some(()),
-                Ok(_) => None,
-            }
+            res.is_err().then_some(())
         }))
     .next()
     .await
     .context("provider did not stop and continued to respond to health check requests")?;
 
-    ensure!(res == ());
     Ok(())
 }
