@@ -13,14 +13,18 @@ spec:
       name: {{ include "benchmark.fullname" . }}-test-config
       file: test.js
   runner:
-    # TODO: tolerations
-    # tolerations:
-    #   - effect: NoSchedule
-    #     key: pool
-    #     operator: Equal
-    #     value: "k6"
-    # nodeSelector:
-    #   pool: k6
+    {{- with .Values.nodeSelector }}
+    nodeSelector:
+      {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.affinity }}
+    affinity:
+      {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.tolerations }}
+    tolerations:
+      {{- toYaml . | nindent 8 }}
+    {{- end }}
     env:
       - name: K6_OTEL_GRPC_EXPORTER_INSECURE
         value: "true"
