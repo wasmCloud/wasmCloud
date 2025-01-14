@@ -913,7 +913,7 @@ impl Host {
         debug!("Feature flags: {:?}", config.experimental_features);
 
         let mut tasks = JoinSet::new();
-        let ready = Arc::<AtomicBool>::default();
+        let ready = Arc::new(AtomicBool::new(true));
         if let Some(addr) = config.http_admin {
             let socket = TcpListener::bind(addr)
                 .await
@@ -1120,7 +1120,6 @@ impl Host {
             })
             .await;
 
-        ready.store(true, Ordering::Relaxed);
         host.publish_event("host_started", start_evt)
             .await
             .context("failed to publish start event")?;
