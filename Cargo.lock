@@ -7744,7 +7744,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.37.0"
+version = "0.38.0"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -7815,7 +7815,7 @@ dependencies = [
 
 [[package]]
 name = "wash-lib"
-version = "0.31.1"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -8322,7 +8322,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-core"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8348,7 +8348,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-host"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8615,7 +8615,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sdk"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8670,7 +8670,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-runtime"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8730,7 +8730,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-test-util"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "async-nats",
