@@ -1,3 +1,4 @@
+{{- if .Values.test.enabled }}
 apiVersion: k6.io/v1alpha1
 kind: TestRun
 metadata:
@@ -42,3 +43,4 @@ spec:
         valueFrom:
           resourceFieldRef:
             resource: limits.cpu
+{{- end }}

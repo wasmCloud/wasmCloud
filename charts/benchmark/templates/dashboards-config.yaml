@@ -1,7 +1,8 @@
 kind: ConfigMap
 apiVersion: v1
 metadata:
-  name: {{ include "benchmark.fullname" . }}-grafana-dashboards
+  # Uses just the release name because this name gets passed into the subchart which has different values
+  name: {{ .Release.Name }}-grafana-dashboards
   labels:
     {{- include "benchmark.labels" . | nindent 4 }}
 data:
