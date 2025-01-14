@@ -30,6 +30,16 @@ pub struct StartProviderArgs<'a> {
     pub config: Vec<String>,
 }
 
+/// Arguments to [`assert_stop_provider`]
+pub struct StopProviderArgs<'a> {
+    /// [`wasmcloud_control_interface::Client`] to use when stopping the provider
+    pub client: &'a wasmcloud_control_interface::Client,
+    /// ID of the host on which the provider should be stopped
+    pub host_id: &'a str,
+    /// ID of the provider that should be stopped
+    pub provider_id: &'a str,
+}
+
 /// Response expected from a successful healthcheck
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -82,5 +92,43 @@ pub async fn assert_start_provider(
         .map_err(|e| anyhow!(e).context("failed to decode health check response"))?;
     ensure!(message == None);
     ensure!(healthy);
+    Ok(())
+}
+
+/// Stop a provider, ensuring that the provider stops properly
+///
+/// # Errors
+///
+/// Returns an `Err` if the provider fails to stop
+pub async fn assert_stop_provider(
+    StopProviderArgs {
+        client,
+        host_id,
+        provider_id,
+    }: StopProviderArgs<'_>,
+) -> Result<()> {
+    let lattice = client.lattice();
+    let rpc_client = client.nats_client();
+    let resp = client
+        .stop_provider(host_id, provider_id)
+        .await
+        .map_err(|e| anyhow!(e).context("failed to start provider"))?;
+    ensure!(resp.succeeded());
+
+    let res = pin!(IntervalStream::new(interval(Duration::from_secs(1)))
+        .take(30)
+        .then(|_| rpc_client.request(health_subject(lattice, provider_id), "".into(),))
+        .filter_map(|res| {
+            // Return a `Some()` if the request failed, indicating the provider is no longer running.
+            match res {
+                Err(_) => Some(()),
+                Ok(_) => None,
+            }
+        }))
+    .next()
+    .await
+    .context("provider did not stop and continued to respond to health check requests")?;
+
+    ensure!(res == ());
     Ok(())
 }
