@@ -917,7 +917,7 @@ impl Host {
         if let Some(addr) = config.http_admin {
             let socket = TcpListener::bind(addr)
                 .await
-                .context("failed to start health endpoint")?;
+                .context("failed to bind on HTTP administation endpoint")?;
             let ready = Arc::clone(&ready);
             let svc = hyper::service::service_fn(move |req| {
                 const OK: &str = r#"{"status":"ok"}"#;
@@ -953,13 +953,13 @@ impl Host {
                     let stream = match socket.accept().await {
                         Ok((stream, _)) => stream,
                         Err(err) => {
-                            error!(?err, "failed to accept health endpoint connection");
+                            error!(?err, "failed to accept HTTP administration connection");
                             continue;
                         }
                     };
                     let svc = svc.clone();
                     if let Err(err) = srv.serve_connection(TokioIo::new(stream), svc).await {
-                        error!(?err, "failed to serve connection");
+                        error!(?err, "failed to serve HTTP administration connection");
                     }
                 }
             });
