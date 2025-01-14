@@ -223,18 +223,29 @@ ________________________________________________________________________________
 }
 
 /// Helper function to display the version of all the binaries wash runs
-fn version() -> String {
-    format!(
-        "         v{}\n├ nats-server {}\n├ wadm        {}\n└ wasmcloud   {}",
-        clap::crate_version!(),
-        NATS_SERVER_VERSION,
-        WADM_VERSION,
-        WASMCLOUD_HOST_VERSION
-    )
+fn version(output: OutputKind) -> String {
+    match output {
+        OutputKind::Text => format!(
+            "wash          v{}\n├ nats-server {}\n├ wadm        {}\n└ wasmcloud   {}",
+            clap::crate_version!(),
+            NATS_SERVER_VERSION,
+            WADM_VERSION,
+            WASMCLOUD_HOST_VERSION
+        ),
+        OutputKind::Json => {
+            let versions = serde_json::json!({
+                "wash": format!("v{}", clap::crate_version!()),
+                "nats-server": NATS_SERVER_VERSION,
+                "wadm": WADM_VERSION,
+                "wasmcloud": WASMCLOUD_HOST_VERSION,
+            });
+            serde_json::to_string_pretty(&versions).unwrap()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Parser)]
-#[clap(name = "wash", version = version(), override_help = create_colored_help())]
+#[clap(name = "wash", disable_version_flag = true, override_help = create_colored_help())]
 #[command(styles = WASH_CLI_STYLE)]
 struct Cli {
     #[clap(
@@ -264,8 +275,11 @@ struct Cli {
     )]
     help_markdown: bool,
 
+    #[clap(short = 'V', long = "version", help = "Print version")]
+    version: bool,
+
     #[clap(subcommand)]
-    command: CliCommand,
+    command: Option<CliCommand>,
 }
 
 // NOTE: If you change the description here, ensure you also change it in the help text constant above
@@ -440,7 +454,7 @@ async fn main() {
 
     command.build();
 
-    let matches = command.get_matches();
+    let matches = command.get_matches_mut();
 
     let cli = match (Cli::from_arg_matches(&matches), plugins) {
         (Ok(cli), _) => cli,
@@ -511,12 +525,22 @@ async fn main() {
         std::process::exit(0);
     };
 
+    if cli.version {
+        println!("{}", version(cli.output));
+        std::process::exit(0);
+    }
+
+    let cli_command = cli.command.unwrap_or_else(|| {
+        eprintln!("{}", command.render_help());
+        std::process::exit(2);
+    });
+
     // Whether or not to append `success: true` to the output JSON. For now, we only omit it for `wash config get`.
     let append_json_success = !matches!(
-        cli.command,
+        cli_command,
         CliCommand::Config(ConfigCliCommand::GetCommand { .. }),
     );
-    let res: anyhow::Result<CommandOutput> = match cli.command {
+    let res: anyhow::Result<CommandOutput> = match cli_command {
         CliCommand::App(app_cli) => app::handle_command(app_cli, output_kind).await,
         CliCommand::Build(build_cli) => build::handle_command(build_cli).await,
         CliCommand::Call(call_cli) => call::handle_command(call_cli.command()).await,
