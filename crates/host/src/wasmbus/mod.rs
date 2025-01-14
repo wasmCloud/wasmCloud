@@ -925,25 +925,46 @@ impl Host {
                 let ready = Arc::clone(&ready);
                 async move {
                     let (http::request::Parts { method, uri, .. }, _) = req.into_parts();
-                    match (method.as_str(), uri.path_and_query().map(|pq| pq.as_str())) {
-                        ("GET", Some("/livez")) => Ok(http::Response::new(
-                            http_body_util::Full::new(Bytes::from(OK)),
-                        )),
-                        ("GET", Some("/readyz")) => {
+                    match (method.as_str(), uri.path()) {
+                        ("HEAD", "/livez") => Ok(http::Response::default()),
+                        ("GET", "/livez") => Ok(http::Response::new(http_body_util::Full::new(
+                            Bytes::from(OK),
+                        ))),
+                        (method, "/livez") => http::Response::builder()
+                            .status(http::StatusCode::METHOD_NOT_ALLOWED)
+                            .body(http_body_util::Full::new(Bytes::from(format!(
+                                "method `{method}` not supported for path `/livez`"
+                            )))),
+                        ("HEAD", "/readyz") => {
+                            if ready.load(Ordering::Relaxed) {
+                                Ok(http::Response::default())
+                            } else {
+                                http::Response::builder()
+                                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                                    .body(http_body_util::Full::default())
+                            }
+                        }
+                        ("GET", "/readyz") => {
                             if ready.load(Ordering::Relaxed) {
                                 Ok(http::Response::new(http_body_util::Full::new(Bytes::from(
                                     OK,
                                 ))))
                             } else {
-                                Ok(http::Response::new(http_body_util::Full::new(Bytes::from(
-                                    FAIL,
-                                ))))
+                                http::Response::builder()
+                                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                                    .body(http_body_util::Full::new(Bytes::from(FAIL)))
                             }
                         }
-                        (method, Some(path)) => {
-                            Err(format!("method `{method}` not supported for path `{path}`"))
-                        }
-                        (method, None) => Err(format!("method `{method}` not supported")),
+                        (method, "/readyz") => http::Response::builder()
+                            .status(http::StatusCode::METHOD_NOT_ALLOWED)
+                            .body(http_body_util::Full::new(Bytes::from(format!(
+                                "method `{method}` not supported for path `/readyz`"
+                            )))),
+                        (.., path) => http::Response::builder()
+                            .status(http::StatusCode::NOT_FOUND)
+                            .body(http_body_util::Full::new(Bytes::from(format!(
+                                "unknown endpoint `{path}`"
+                            )))),
                     }
                 }
             });
