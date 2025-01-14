@@ -1121,9 +1121,9 @@ impl ProviderConnection {
     /// based on if the provider is the source or target of the link
     pub async fn delete_link(&self, source_id: &str, target: &str) {
         if source_id == &*self.provider_id {
-            self.source_links.write().await.remove(source_id);
+            self.source_links.write().await.remove(target);
         } else if target == &*self.provider_id {
-            self.target_links.write().await.remove(target);
+            self.target_links.write().await.remove(source_id);
         }
     }
 
