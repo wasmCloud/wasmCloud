@@ -129,17 +129,15 @@ impl Provider {
     ) -> anyhow::Result<Self> {
         let path_router: Arc<RwLock<Router>> = Arc::default();
 
-        let lattice_id_fn = Arc::clone(&lattice_id);
-        let host_id_fn = Arc::clone(&host_id);
-        let components_fn = Arc::clone(&components);
-        let path_router_fn = Arc::clone(&path_router);
+        // Annoyingly, we have to declare a separate clone of the path_router for the closure
+        let path_router_closure = Arc::clone(&path_router);
         let handle = listen(
             address,
             move |req: hyper::Request<hyper::body::Incoming>| {
-                let lattice_id = Arc::clone(&lattice_id_fn);
-                let host_id = Arc::clone(&host_id_fn);
-                let components = Arc::clone(&components_fn);
-                let path_router = Arc::clone(&path_router_fn);
+                let lattice_id = Arc::clone(&lattice_id);
+                let host_id = Arc::clone(&host_id);
+                let components = Arc::clone(&components);
+                let path_router = Arc::clone(&path_router_closure);
                 async move {
                     let (
                         http::request::Parts {
