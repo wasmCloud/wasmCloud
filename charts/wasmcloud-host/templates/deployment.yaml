@@ -154,7 +154,11 @@ spec:
               subPath: "nats.conf"
               readOnly: true
           {{- if .Values.config.natsCredentialsSecret }}
+          {{- if kindIs "string" .Values.config.natsCredentialsSecret }}
             - name: {{ .Values.config.natsCredentialsSecret }}
+          {{- else }}
+            - name: {{ required "natsCredentialsSecret must specify a name" .Values.config.natsCredentialsSecret.name }}
+          {{- end }}
               mountPath: /nats/nats.creds
               subPath: "nats.creds"
               readOnly: true
@@ -164,11 +168,21 @@ spec:
           configMap:
             name: {{ include "wasmcloud-host.nats-config-name" . }}
       {{- if .Values.config.natsCredentialsSecret }}
+      {{- if kindIs "string" .Values.config.natsCredentialsSecret }}
         - name: {{ .Values.config.natsCredentialsSecret }}
+      {{- else }}
+        - name: {{ required "natsCredentialsSecret must specify a name" .Values.config.natsCredentialsSecret.name }}
+      {{- end }}
           secret:
+          {{- if kindIs "string" .Values.config.natsCredentialsSecret }}
             secretName: {{ .Values.config.natsCredentialsSecret }}
             items:
-              - key: nats.creds
+              - key: "nats.creds"
+          {{- else }}
+            secretName: {{ required "natsCredentialsSecret must specify a name" .Values.config.natsCredentialsSecret.name }}
+            items:
+              - key: {{ .Values.config.natsCredentialsSecret.key | default "nats.creds" }}
+          {{- end }}
                 path: nats.creds
       {{- end }}
       {{- with .Values.nodeSelector }}

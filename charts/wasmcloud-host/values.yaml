@@ -19,7 +19,9 @@ config:
   # Optional: Additional labels to apply to the host other than the defaults set by the host
   hostLabels: {}
   # Optional. The name of a secret containing a set of NATS credentials under 'nats.creds' key.
-  natsCredentialsSecret: ""
+  # natsCredentialsSecret:
+  #   name: ""
+  #   key: "nats.creds"
   # Optional: The name of a secret containing the registry credentials.
   # See https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/#create-a-secret-by-providing-credentials-on-the-command-line
   registryCredentialsSecret: "wasmcloud-pull-secret"
