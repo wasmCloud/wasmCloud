@@ -50,11 +50,12 @@ impl wasmcloud_provider_sdk::Provider for Provider {
         let host_id = Arc::clone(&self.host_id);
         let components = Arc::clone(&self.components);
         let target_id: Arc<str> = Arc::from(target_id);
-        let target_id_fn = Arc::clone(&target_id);
-        let task = listen(
+        // Annoyingly, we have to declare a separate clone of the target_id for the closure
+        let target_id_closure = Arc::clone(&target_id);
+        let tasks = listen(
             address,
             move |req: hyper::Request<hyper::body::Incoming>| {
-                let target_id = Arc::clone(&target_id_fn);
+                let target_id = Arc::clone(&target_id_closure);
                 let lattice_id = Arc::clone(&lattice_id);
                 let host_id = Arc::clone(&host_id);
                 let components = Arc::clone(&components);
@@ -142,7 +143,7 @@ impl wasmcloud_provider_sdk::Provider for Provider {
             .await
             .entry(target_id)
             .or_default()
-            .insert(link_name.into(), task);
+            .insert(link_name.into(), tasks);
         Ok(())
     }
 
