@@ -1765,7 +1765,7 @@ impl Host {
                     &annotations,
                     config,
                     wasm.ok_or_else(|| {
-                        retrieval_error.unwrap_or(anyhow!("unexpected retrieval error"))
+                        retrieval_error.unwrap_or_else(|| anyhow!("unexpected retrieval error"))
                     }),
                     claims_token.as_ref(),
                 )
