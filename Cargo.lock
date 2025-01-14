@@ -497,7 +497,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "tracing",
- "uuid 1.11.0",
+ "uuid 1.12.0",
 ]
 
 [[package]]
@@ -859,7 +859,7 @@ dependencies = [
  "time",
  "tracing",
  "url",
- "uuid 1.11.0",
+ "uuid 1.12.0",
 ]
 
 [[package]]
@@ -878,7 +878,7 @@ dependencies = [
  "time",
  "tracing",
  "url",
- "uuid 1.11.0",
+ "uuid 1.12.0",
 ]
 
 [[package]]
@@ -899,7 +899,7 @@ dependencies = [
  "time",
  "tracing",
  "url",
- "uuid 1.11.0",
+ "uuid 1.12.0",
 ]
 
 [[package]]
@@ -1450,7 +1450,7 @@ dependencies = [
  "serde_json",
  "snafu",
  "url",
- "uuid 1.11.0",
+ "uuid 1.12.0",
  "web-sys",
 ]
 
@@ -4845,7 +4845,7 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid 0.8.2",
- "uuid 1.11.0",
+ "uuid 1.12.0",
 ]
 
 [[package]]
@@ -7260,7 +7260,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.8.5",
+ "rand 0.7.3",
  "static_assertions",
 ]
 
@@ -7454,9 +7454,9 @@ checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
 
 [[package]]
 name = "uuid"
-version = "1.11.0"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8c5f0a0af699448548ad1a2fbf920fb4bee257eae39953ba95cb84891a0446a"
+checksum = "744018581f9a3454a9e15beb8a33b017183f1e7c0cd170232a2d1453b23a51c4"
 dependencies = [
  "getrandom 0.2.15",
  "rand 0.8.5",
@@ -8264,7 +8264,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
- "uuid 1.11.0",
+ "uuid 1.12.0",
  "vaultrs",
  "wascap",
  "wasmcloud-control-interface",
@@ -8297,7 +8297,7 @@ dependencies = [
  "http 1.2.0",
  "rand 0.8.5",
  "tokio",
- "uuid 1.11.0",
+ "uuid 1.12.0",
  "wasi 0.13.3+wasi-0.2.2",
  "wit-bindgen 0.32.0",
 ]
@@ -8375,7 +8375,7 @@ dependencies = [
  "tracing-opentelemetry",
  "ulid",
  "url",
- "uuid 1.11.0",
+ "uuid 1.12.0",
  "wascap",
  "wasmcloud-control-interface",
  "wasmcloud-core",
@@ -8543,7 +8543,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
- "uuid 1.11.0",
+ "uuid 1.12.0",
  "wasmcloud-control-interface",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
@@ -8662,7 +8662,7 @@ dependencies = [
  "tokio-postgres-rustls",
  "tracing",
  "ulid",
- "uuid 1.11.0",
+ "uuid 1.12.0",
  "wasmcloud-provider-sdk",
  "webpki-roots",
  "wit-bindgen-wrpc",
@@ -9865,7 +9865,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "uuid 1.11.0",
+ "uuid 1.12.0",
  "wasm-tokio",
  "wasmtime",
  "wasmtime-wasi",
