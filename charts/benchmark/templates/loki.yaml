@@ -111,7 +111,8 @@ kind: Service
 metadata:
   labels:
     {{- include "benchmark.lokiLabels" . | nindent 4 }}
-  name: {{ include "benchmark.fullname" . }}-loki
+  # Uses just the release name because this name gets passed into the subchart which has different values
+  name: {{ .Release.Name }}-loki
 spec:
   internalTrafficPolicy: Cluster
   ports:

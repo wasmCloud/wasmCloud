@@ -43,7 +43,7 @@ export function teardown() {
 //   };
 // }
 
-const url = "{{ .Values.test.url }}";
+const url = {{ required "A test URL must be set" .Values.test.url | quote }};
 export default function () {
   http.get(url);
 }
