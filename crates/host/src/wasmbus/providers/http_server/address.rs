@@ -46,19 +46,17 @@ impl wasmcloud_provider_sdk::Provider for Provider {
         let ServiceSettings { address, .. } =
             load_settings(Some(self.address), config).context("failed to load settings")?;
 
-        let lattice_id = Arc::clone(&self.lattice_id);
-        let host_id = Arc::clone(&self.host_id);
         let components = Arc::clone(&self.components);
+        let host_id = Arc::clone(&self.host_id);
+        let lattice_id = Arc::clone(&self.lattice_id);
         let target_id: Arc<str> = Arc::from(target_id);
-        // Annoyingly, we have to declare a separate clone of the target_id for the closure
-        let target_id_closure = Arc::clone(&target_id);
-        let tasks = listen(
-            address,
+        let tasks = listen(address, {
+            let target_id = Arc::clone(&target_id);
             move |req: hyper::Request<hyper::body::Incoming>| {
-                let target_id = Arc::clone(&target_id_closure);
-                let lattice_id = Arc::clone(&lattice_id);
-                let host_id = Arc::clone(&host_id);
                 let components = Arc::clone(&components);
+                let host_id = Arc::clone(&host_id);
+                let lattice_id = Arc::clone(&lattice_id);
+                let target_id = Arc::clone(&target_id);
                 async move {
                     let component = {
                         let components = components.read().await;
@@ -133,8 +131,8 @@ impl wasmcloud_provider_sdk::Provider for Provider {
                     anyhow::Ok(res)
                 }
                 .instrument(info_span!("handle"))
-            },
-        )
+            }
+        })
         .await?;
 
         self.links
