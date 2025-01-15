@@ -128,16 +128,13 @@ impl Provider {
         host_id: Arc<str>,
     ) -> anyhow::Result<Self> {
         let path_router: Arc<RwLock<Router>> = Arc::default();
-
-        // Annoyingly, we have to declare a separate clone of the path_router for the closure
-        let path_router_closure = Arc::clone(&path_router);
-        let handle = listen(
-            address,
+        let handle = listen(address, {
+            let path_router = Arc::clone(&path_router);
             move |req: hyper::Request<hyper::body::Incoming>| {
                 let lattice_id = Arc::clone(&lattice_id);
                 let host_id = Arc::clone(&host_id);
                 let components = Arc::clone(&components);
-                let path_router = Arc::clone(&path_router_closure);
+                let path_router = Arc::clone(&path_router);
                 async move {
                     let (
                         http::request::Parts {
@@ -234,8 +231,8 @@ impl Provider {
                     anyhow::Ok(res)
                 }
                 .instrument(info_span!("handle"))
-            },
-        )
+            }
+        })
         .await
         .context("failed to listen on address for path based http server")?;
 
