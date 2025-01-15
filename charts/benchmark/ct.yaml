@@ -1,0 +1,17 @@
+validate-maintainers: false
+# If we don't set an existing namespace, things just...fail. With nothing set it gets an error that
+# the namespace cannot be imported into the current release (this also happens when you do `kubectl
+# create ns` beforehand). When you set one that doesn't exist, it doesn't create it for you and
+# trying to pass the --create-namespace flag causes other problems
+namespace: default
+# We are only testing that everything installs and the k6 tests start. The k6 tests will just get
+# errors because the endpoint doesn't exist, which is fine for making sure everything deploys. We
+# can come back and do a full app deploy with wasmCloud and check results later.
+helm-lint-extra-args: --set=test.url=http://fake-url:8000
+helm-extra-args: --timeout 180s
+chart-repos:
+  - prometheus=https://prometheus-community.github.io/helm-charts
+  - grafana=https://grafana.github.io/helm-charts
+  - opentelemetry=https://open-telemetry.github.io/opentelemetry-helm-charts
+charts:
+  - charts/benchmark
