@@ -6618,7 +6618,7 @@ dependencies = [
  "url",
  "wascap",
  "wasi-preview1-component-adapter-provider",
- "wit-component 0.219.1",
+ "wit-component 0.220.0",
 ]
 
 [[package]]
@@ -7806,7 +7806,7 @@ dependencies = [
  "wat",
  "which",
  "wit-bindgen-wrpc",
- "wit-component 0.219.1",
+ "wit-component 0.220.0",
  "wit-parser 0.219.1",
  "wrpc-interface-http",
  "wrpc-transport",
@@ -7882,7 +7882,7 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "wat",
- "wit-component 0.219.1",
+ "wit-component 0.220.0",
  "wit-parser 0.219.1",
 ]
 
@@ -8696,7 +8696,7 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "wit-bindgen-wrpc",
- "wit-component 0.219.1",
+ "wit-component 0.220.0",
  "wrpc-interface-blobstore",
  "wrpc-interface-http",
  "wrpc-runtime-wasmtime",
