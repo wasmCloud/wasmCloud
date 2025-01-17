@@ -30,7 +30,7 @@ impl Guest for FerrisSayer {
     }
 }
 
-/// Reusable functionality for calling  funcitonality
+/// Reusable functionality for calling  functionality
 fn make_ferris_say(phrase: &str) -> String {
     let mut w = Vec::new();
     if let Err(e) = say(phrase, MAX_TERM_WIDTH, &mut w) {

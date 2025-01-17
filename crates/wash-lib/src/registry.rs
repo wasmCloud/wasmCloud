@@ -124,7 +124,7 @@ pub async fn pull_oci_artifact(image_ref: &Reference, options: OciPullOptions) -
     if !options.allow_latest {
         if let Some(tag) = input_tag {
             if tag == "latest" {
-                bail!("Pulling artifacts with tag 'latest' is prohibited. This can be overriden with the flag '--allow-latest'.");
+                bail!("Pulling artifacts with tag 'latest' is prohibited. This can be overridden with the flag '--allow-latest'.");
             }
         } else {
             bail!("Registry URLs must have explicit tag. To default missing tags to 'latest', use the flag '--allow-latest'.");

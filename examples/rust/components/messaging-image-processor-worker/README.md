@@ -28,7 +28,7 @@ If deploying with the [wasmCloud Application Deployment Manager (`wadm`)][wadm],
 
 By default, the `blobstore-fs` and `messaging-nats` providers are used as they require no extra dependencies (ex. docker containers) to run infrastructure.
 
-This component (the image processor) and the HTTP task manager component communicate via [wRPC][wrpc] (and the [NATS messaging system powering wasmCloud][nats]), so there's no need ot hit the external API, WebAssembly function calls are automatically transformed into low-latency distributed RPC invocations to the HTTP task manager.
+This component (the image processor) and the HTTP task manager component communicate via [wRPC][wrpc] (and the [NATS messaging system powering wasmCloud][nats]), so there's no need to hit the external API, WebAssembly function calls are automatically transformed into low-latency distributed RPC invocations to the HTTP task manager.
 
 [nats]: https://wasmcloud.com/docs/deployment/nats/cluster-config
 [wasmcloud-wrpc]: https://wasmcloud.com/docs/reference/glossary#wrpc

@@ -465,7 +465,7 @@ async fn wrpc_invoke_simple(
        Ok((result,)) => {
                Ok(CommandOutput::new(result.clone(), HashMap::from([("result".to_string(), json!(result))])))
        }
-       Err(e) if e.to_string().contains("transmission failed") => bail!("No component responsed to your request, ensure component {component_id} is running in lattice {lattice}"),
+       Err(e) if e.to_string().contains("transmission failed") => bail!("No component responded to your request, ensure component {component_id} is running in lattice {lattice}"),
        Err(e) => bail!("Error invoking component: {e}"),
    }
 }

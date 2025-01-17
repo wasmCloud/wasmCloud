@@ -199,7 +199,7 @@ pub async fn setup_test_env() -> Result<TestEnv> {
         .context("failed to run wash app deploy")?;
     assert!(output.status.success(), "wash app deploy succeeded");
 
-    // Wait until the application is accessible, this can take a whlie for multiple reasons:
+    // Wait until the application is accessible, this can take a while for multiple reasons:
     // - sqldb provider download and start
     // - http server provider setup
     tokio::time::timeout(Duration::from_secs(20), async move {

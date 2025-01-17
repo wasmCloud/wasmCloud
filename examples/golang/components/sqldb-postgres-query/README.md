@@ -20,7 +20,7 @@ This folder contains a WebAssembly component that makes use of:
 
 ## 👟 Quickstart
 
-As with all other examples, you can get started quickly by using whe [Wasmcloud SHell (`wash`)][wash].
+As with all other examples, you can get started quickly by using the [Wasmcloud SHell (`wash`)][wash].
 
 Since `wash` supports declarative deployments (powered by [Wasmcloud Application Deployment Manager (`wadm`)][wadm]), you can get started quickly using the `local.wadm.yaml` manifest in this folder:
 

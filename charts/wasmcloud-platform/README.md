@@ -12,7 +12,7 @@ The wasmCloud Platform Helm Chart provides a turnkey solution, for running WebAs
 
 *   Helm: `>=3.8.0`
 
-*   If installing the NATS server - a StatefulSet - the means of provisioing PVCs (e.g. a CSI driver)
+*   If installing the NATS server - a StatefulSet - the means of provisioning PVCs (e.g. a CSI driver)
 
 ## Getting Started
 

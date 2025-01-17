@@ -245,7 +245,7 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
         .into_ctl_client(Some(cmd.auction_timeout_ms))
         .await?;
 
-    // Attempt to parse the provider_ref from strings that may look lke paths or be OCI references
+    // Attempt to parse the provider_ref from strings that may look like paths or be OCI references
     let provider_ref = resolve_ref(&cmd.provider_ref).await?;
 
     let host = match cmd.host_id {

@@ -1,7 +1,7 @@
 name: Wasm / Language Toolchain Setup
 
 description: |
-  Setup WebAssembly toolchain for a given langauge
+  Setup WebAssembly toolchain for a given language
 
 branding:
   icon: settings
