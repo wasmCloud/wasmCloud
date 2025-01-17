@@ -71,7 +71,7 @@ First, edit `wadm.yaml` to include the absolute path to the signed WebAssembly m
     - name: http-echo-tinygo
       type: component
       properties:
--        # TODO: you must replace the path below to match your genreated code in build
+-        # TODO: you must replace the path below to match your generated code in build
 -       image: file:///absolute/path/to/this/repo/build/http-echo-tinygo_s.wasm
 +       image: file:///the/absolute/path/to/build/http-echo-tinygo-component_s.wasm
       traits:

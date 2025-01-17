@@ -124,7 +124,7 @@ struct ShutdownMessage {
 /// Process subscription, until closed or exhausted, or value is received on the channel.
 /// `sub` is a mutable Subscriber (regular or queue subscription)
 /// `channel` may be either tokio mpsc::Receiver or broadcast::Receiver, and is considered signaled
-/// when a value is sent or the chanel is closed.
+/// when a value is sent or the channel is closed.
 /// `msg` is the variable name to be used in the handler
 /// `on_item` is an async handler
 macro_rules! process_until_quit {

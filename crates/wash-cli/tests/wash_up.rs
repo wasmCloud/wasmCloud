@@ -56,7 +56,7 @@ async fn integration_up_can_start_wasmcloud_and_component_serial() -> Result<()>
     assert!(status.success(), "failed to complete up command");
     let out = read_to_string(&path).expect("could not read output of wash up");
 
-    // Extract kill comamnd for later
+    // Extract kill command for later
     let (kill_cmd, _wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
         Ok(v) => (v["kill_cmd"].clone(), v["wasmcloud_log"].clone()),
         Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
@@ -313,7 +313,7 @@ async fn integration_up_works_with_new_patch_version_if_possible() -> Result<()>
     Ok(())
 }
 
-/// Ensure that wash up is starting a secific version
+/// Ensure that wash up is starting a specific version
 ///  of wasmcloud host if wasmcloud parameter is specified
 #[tokio::test]
 #[serial]

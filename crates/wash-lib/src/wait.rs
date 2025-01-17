@@ -40,7 +40,7 @@ fn get_wasmbus_event_info(event: Event) -> Result<CloudEventData> {
 
 /// The potential outcomes of an event that has been found.
 /// It can either succeed or fail. This enum should only be returned if we found the applicable event.
-/// If we did not find the event or another error occured, use the `Err` variant of a `Result` wrapping around this enum.
+/// If we did not find the event or another error occurred, use the `Err` variant of a `Result` wrapping around this enum.
 pub enum FindEventOutcome<T> {
     Success(T),
     Failure(anyhow::Error),
@@ -54,9 +54,9 @@ pub enum EventCheckOutcome<T> {
     NotApplicable,
 }
 
-/// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
+/// Uses the NATS receiver to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
-/// Takes a `check_function`, which recieves each event coming in from the receiver. This function must return a `Result<EventCheckOutcome>`.
+/// Takes a `check_function`, which receives each event coming in from the receiver. This function must return a `Result<EventCheckOutcome>`.
 ///
 /// If the applicable response event is found (either started or failed to start), the `Ok` variant of the `Result` will be returned,
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.
@@ -104,7 +104,7 @@ async fn find_event<T>(
     }
 }
 
-/// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
+/// Uses the NATS receiver to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
 /// If the applicable component start response event is found (either started or failed to start), the `Ok` variant of the `Result` will be returned,
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.
@@ -174,7 +174,7 @@ pub struct ProviderStartedInfo {
     pub provider_id: String,
 }
 
-/// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
+/// Uses the NATS receiver to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
 /// If the applicable provider start response event is found (either started or failed to start), the `Ok` variant of the `Result` will be returned,
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.
@@ -241,7 +241,7 @@ pub struct ProviderStoppedInfo {
     pub provider_id: String,
 }
 
-/// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
+/// Uses the NATS receiver to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
 /// If the applicable provider stop response event is found (either stopped or failed to stop), the `Ok` variant of the `Result` will be returned,
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.
@@ -306,7 +306,7 @@ pub struct ComponentStoppedInfo {
     pub component_id: String,
 }
 
-/// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
+/// Uses the NATS receiver to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
 /// If the applicable stop component response event is found (either started or failed to start), the `Ok` variant of the `Result` will be returned,
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.

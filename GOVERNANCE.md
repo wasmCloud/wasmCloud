@@ -116,7 +116,7 @@ duties as a maintainer with no additional votes or governance. The maximum amoun
 months (2 times the maximum amount of time a maintainer can be absent before being considered
 inactive). A leave can be extended for an additional 6 months beyond that based on a majority vote
 by the other project maintainers of the project to which they belong (i.e. if someone maintains the
-host, the host maintainers would make the decision). These decisions can be overriden by a
+host, the host maintainers would make the decision). These decisions can be overridden by a
 super-majority of the org maintainers. If a maintainer is marked as being on leave and has not
 contacted other maintainers after 6 months, they will be moved to emeritus status in the same way as
 if they had been inactive.

@@ -270,7 +270,7 @@ impl DependencySpec {
         self.inner_mut().override_with(other.inner())
     }
 
-    /// Derive which local component should be used given a WIT interface to be satisified
+    /// Derive which local component should be used given a WIT interface to be satisfied
     ///
     /// # Examples
     ///
@@ -422,7 +422,7 @@ impl DependencySpec {
         }
     }
 
-    /// Derive which local component should be used given a WIT interface to be satisified
+    /// Derive which local component should be used given a WIT interface to be satisfied
     ///
     /// # Examples
     ///

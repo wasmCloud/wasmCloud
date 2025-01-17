@@ -16,7 +16,7 @@
 //!   - bind path/address
 //!   - TLS
 //!   - Cors
-//! - Flexible confiuration loading: from host, or from local toml or json file.
+//! - Flexible configuration loading: from host, or from local toml or json file.
 //! - Fully asynchronous, using tokio lightweight "green" threads
 //! - Thread pool (for managing a pool of OS threads). The default
 //!   thread pool has one thread per cpu core.

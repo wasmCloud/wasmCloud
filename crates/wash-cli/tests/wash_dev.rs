@@ -1162,7 +1162,7 @@ async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
 /// any further writes to the stdout of the first process(`wash dev`).
 ///
 /// ### EXPECTED RESULT
-/// Both processses should exit cleanly, the 2nd should report SIGINT(2) as exit reason and the first
+/// Both processes should exit cleanly, the 2nd should report SIGINT(2) as exit reason and the first
 /// process should exit with code 0 without any broken pipe errors.
 ///
 #[tokio::test]
