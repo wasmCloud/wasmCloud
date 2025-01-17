@@ -44,7 +44,7 @@ jobs:
             echo '---- errors found ----'
             RAW_ERRORS=$(echo "$OUTPUT" | grep -x '^FAIL.*$')
             echo "$RAW_ERRORS"
-            JSON_OUTPUT=$(echo "$RAW_ERRORS" | jq -R -c 'split("\n") | map(split("  ") | { "sha": .[1], "error": .[2], "message": .[3] }) | { "commits": ., "errors": length }')
+            JSON_OUTPUT=$(echo "$RAW_ERRORS" | jq -R -c -s 'split("\n") | map(split("  ") | { "sha": .[1], "error": .[2], "message": .[3] }) | { "commits": ., "errors": length }')
             echo '-------- json --------'
             echo "$JSON_OUTPUT"
             echo '----------------------'
@@ -61,7 +61,7 @@ jobs:
             {
               echo "json_output=$(jq -n -c '{ "commits": [], "count": 0 }')" >> "$GITHUB_OUTPUT"
               echo 'raw_errors=""'
-              echo "raw_output<<EOF" 
+              echo "raw_output<<EOF"
               echo "$OUTPUT"
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
@@ -87,6 +87,11 @@ jobs:
         env:
           JSON_OUTPUT: ${{ steps.lint.outputs.json_output }}
         run: |
+          if [[ -z "$JSON_OUTPUT" ]]; then
+            echo "Failed to parse errors"
+            exit 1
+          fi
+
           export MD_ERRORS_ROWS=$(echo "$JSON_OUTPUT" | jq -r '.commits | map("| **\(.sha)** | \(.error) | \(.message) |") | join("\n")')
           export MD_ERRORS_COUNT=${{ fromJson(steps.lint.outputs.json_output).count || 0 }}
           envsubst < .github/templates/conventional-commit.md > ./conventional-commit.md
