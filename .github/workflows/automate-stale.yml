@@ -8,9 +8,14 @@ env:
   DAYS_BEFORE_STALE: 60
   DAYS_BEFORE_CLOSE: 7
 
+permissions: {}
+
 jobs:
   stale:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write # required by stale-issue-label, stale-issue-message options and closing issues
+      pull-requests: write # required by stale-pr-label, stale-pr-message options and closing PRs
     steps:
       - uses: actions/stale@28ca1036281a5e5922ead5184a1bbf96e5fc984e # v9.0.0
         with:
