@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud"
-version = "1.5.0"
+version = "1.5.1"
 description = "wasmCloud is a Cloud Native Computing Foundation (CNCF) project that enables teams to build polyglot applications composed of reusable Wasm components and run them—resiliently and efficiently—across any cloud, Kubernetes, datacenter, or edge."
 default-run = "wasmcloud"
 readme = "README.md"
