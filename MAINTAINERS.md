@@ -204,10 +204,31 @@ Name: Jordan Rash
 GitHub: @jordan-rash  
 Organization: Synadia
 
+## @wasmCloud/triage-maintainers
+
+Name: Jiaxiao Zhou
+GitHub: @Mossaka
+Organization: Microsoft
+
+Name: Masoud Baharlouie
+GitHub: @ossfellow
+Organization: Operatik Inc.
+
+Name: Aditya Salunkhe
+Github: @Aditya1404Sal
+Organization: Self
+
+Name: Márk Kővári
+GitHub: @markkovari
+Organization: commercetools
+
+Name: Luke Jones
+GitHub: @LUK3ARK
+Organization: Lattica
+
 ## Emeritus Maintainers
 
 These individuals have contributed significantly to the project but are no longer actively maintaining it.
-
 
 Name: Kevin Hoffman  
 GitHub: @autodidaddict  
