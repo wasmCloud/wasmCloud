@@ -9,6 +9,13 @@ Grafana or OTEL stacks. This setup is purely for capturing data for the test. By
 "push button" chart that will install the stack and run the benchmark for you. It can then be
 uninstalled so as to not take up resources.
 
+## Prerequisites
+
+Before running this chart, you should have a working wasmCloud install running in your cluster.
+Please follow the [docs](https://wasmcloud.com/docs/deployment/k8s/) for information on how to do
+this. Once you have wasmCloud running and you have a component deployed and accessible via a
+Kubernetes `Service` resource, you can proceed with installing this chart.
+
 ## Basic Usage
 
 A simple install command looks like below:
@@ -18,9 +25,10 @@ helm upgrade --install my-benchmark --version 0.1.0 oci://ghcr.io/wasmcloud/char
 ```
 
 Please note that the `test.url` value is required. This is the URL that the benchmark will use to
-test against. This should be a URL that is accessible from within the Kubernetes cluster. The
-`--wait` flag should also be used so the k6 CRD and controller can start up before running the
-benchmark.
+test against. This should be a URL that is accessible from within the Kubernetes cluster. Generally
+speaking, this should be a component you have deployed and exposed with either the built-in HTTP
+provider or the HTTP server provider. The `--wait` flag should also be used so the k6 CRD and
+controller can start up before running the benchmark.
 
 The output from the helm install has instructions for how to view results and the dashboard. For the
 install command above, the output would look like this:
@@ -135,3 +143,13 @@ spec:
 
 If creating your own test, use this as reference for how to connect to the configured OTEL
 collector.
+
+## Local Development
+
+If running/testing the chart locally, the steps are mostly the same as the [basic
+usage](#basic-usage) section. However, you need to fetch the dependencies for the chart first:
+
+```bash
+helm dependency update
+helm upgrade --install my-benchmark . --wait --set test.url=http://hello-world:8000
+```
