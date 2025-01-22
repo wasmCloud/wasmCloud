@@ -166,6 +166,7 @@ async fn connect(cfg: &ConnectionConfig) -> Result<async_nats::Client> {
                 other => debug!("NATS client other event occurred: {other}"),
             }
         })
+        .name("provider-lattice-controller")
         .connect(url)
         .await
         .with_context(|| format!("Nats connection to {url}"))?;
