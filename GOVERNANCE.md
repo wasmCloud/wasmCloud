@@ -11,6 +11,7 @@ The following document outlines how the wasmCloud project governance operates.
     - [Taking a leave from being a maintainer](#taking-a-leave-from-being-a-maintainer)
   - [Decision Making at the wasmCloud org level](#decision-making-at-the-wasmcloud-org-level)
   - [Decision Making at the wasmCloud project level](#decision-making-at-the-wasmcloud-project-level)
+  - [Communications](#communications)
   - [Code of Conduct](#code-of-conduct)
   - [DCO and Licenses](#dco-and-licenses)
   - [Pull Requests and Reviews](#pull-requests-and-reviews)
@@ -28,8 +29,6 @@ codebases, a service (e.g., a website), or project to support the other projects
 community management). For example, the provider maintainers manage the capability providers
 repository. See the [Contributor Ladder](./CONTRIBUTION_LADDER.md) for more detailed information on
 responsibilities.
-
-<!-- TODO: We should choose a canonical communication mechanism (like a mailing list) an require -->
 
 ### wasmCloud Org Maintainers
 
@@ -171,6 +170,16 @@ done with a [simple majority](https://en.wikipedia.org/wiki/Majority) vote. Howe
 recommended to make sure and have a vote from all interested parties. For example, if you have 2
 maintainers from company X and 1 from company Y, you should have at least 1 vote from both company X
 and company Y
+
+## Communications
+
+There are 2 primary methods of communications used by the wasmCloud project:
+
+- GitHub Issues/PRs/Discussions
+- The wasmCloud Slack: slack.wasmcloud.com
+
+If you need to reach the org maintainers, they can be contacted via the wasmCloud Slack or using the
+email list: cncf-wasmCloud-maintainers@lists.cncf.io
 
 ## Code of Conduct
 
