@@ -4,14 +4,12 @@ use core::sync::atomic::Ordering;
 
 use std::collections::hash_map::Entry;
 use std::collections::{hash_map, BTreeMap, HashMap};
-use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
 use std::future::Future;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::process::Stdio;
 use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -20,8 +18,6 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Context as _};
 use async_nats::jetstream::kv::Store;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
 use bytes::{BufMut, Bytes, BytesMut};
 use claims::{Claims, StoredClaims};
 use cloudevents::{EventBuilder, EventBuilderV10};
@@ -31,15 +27,16 @@ use futures::stream::{AbortHandle, Abortable, SelectAll};
 use futures::{join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use nkeys::{KeyPair, KeyPairType, XKey};
+use providers::{start_binary_provider, Provider};
 use secrecy::Secret;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
-use tokio::sync::{broadcast, mpsc, watch, RwLock, Semaphore};
+use tokio::spawn;
+use tokio::sync::{mpsc, watch, RwLock, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{interval_at, Instant};
-use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, debug_span, error, info, instrument, trace, warn, Instrument as _};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -53,8 +50,7 @@ use wasmcloud_control_interface::{
     UpdateComponentCommand,
 };
 use wasmcloud_core::{
-    provider_config_update_subject, ComponentId, HealthCheckResponse, HostData,
-    InterfaceLinkDefinition, OtelConfig, CTL_API_VERSION_1,
+    ComponentId, HostData, InterfaceLinkDefinition, OtelConfig, CTL_API_VERSION_1,
 };
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_runtime::component::WrpcServeEvent;
@@ -357,20 +353,6 @@ impl wrpc_transport::Serve for WrpcServer {
             }
         }))
     }
-}
-
-/// An Provider instance
-#[derive(Debug)]
-struct Provider {
-    image_ref: String,
-    claims_token: Option<jwt::Token<jwt::CapabilityProvider>>,
-    xkey: XKey,
-    annotations: Annotations,
-    #[allow(unused)]
-    /// Config bundle for the aggregated configuration being watched by the provider
-    config: Arc<RwLock<ConfigBundle>>,
-    #[allow(unused)]
-    tasks: JoinSet<()>,
 }
 
 /// wasmCloud Host
@@ -1827,14 +1809,6 @@ impl Host {
         provider_id: &str,
         host_id: &str,
     ) -> anyhow::Result<()> {
-        let health_subject = async_nats::Subject::from(format!(
-            "wasmbus.rpc.{}.{provider_id}.health",
-            &self.host_config.lattice
-        ));
-
-        let event_builder = self.event_builder.clone();
-        let ctl_nats = self.ctl_nats.clone();
-
         let lattice_rpc_user_seed = self
             .host_config
             .rpc_key
@@ -1899,210 +1873,20 @@ impl Host {
         let host_data =
             serde_json::to_vec(&host_data).context("failed to serialize provider data")?;
 
-        trace!("spawn provider process");
+        start_binary_provider(
+            tasks,
+            self.rpc_nats.clone(),
+            self.ctl_nats.clone(),
+            self.event_builder.clone(),
+            self.host_config.lattice.clone(),
+            host_id,
+            provider_id,
+            path,
+            host_data,
+            config,
+        )
+        .await?;
 
-        let mut child_cmd = process::Command::new(&path);
-        // Prevent the provider from inheriting the host's environment, with the exception of
-        // the following variables we manually add back
-        child_cmd.env_clear();
-
-        if cfg!(windows) {
-            // Proxy SYSTEMROOT to providers. Without this, providers on Windows won't be able to start
-            child_cmd.env(
-                "SYSTEMROOT",
-                env::var("SYSTEMROOT")
-                    .context("SYSTEMROOT is not set. Providers cannot be started")?,
-            );
-        }
-
-        // Proxy RUST_LOG to (Rust) providers, so they can use the same module-level directives
-        if let Ok(rust_log) = env::var("RUST_LOG") {
-            let _ = child_cmd.env("RUST_LOG", rust_log);
-        }
-
-        let mut child = child_cmd
-            .stdin(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .context("failed to spawn provider process")?;
-        let mut stdin = child.stdin.take().context("failed to take stdin")?;
-        stdin
-            .write_all(STANDARD.encode(&host_data).as_bytes())
-            .await
-            .context("failed to write provider data")?;
-        stdin
-            .write_all(b"\r\n")
-            .await
-            .context("failed to write newline")?;
-        stdin.shutdown().await.context("failed to close stdin")?;
-
-        // Create a channel for watching for child process exit
-        let (exit_tx, exit_rx) = broadcast::channel::<()>(1);
-
-        spawn(async move {
-            match child.wait().await {
-                Ok(status) => {
-                    debug!("provider @ [{}] exited with `{status:?}`", path.display());
-                }
-                Err(e) => {
-                    error!(
-                        "failed to wait for provider @ [{}] to execute: {e}",
-                        path.display()
-                    );
-                }
-            }
-            if let Err(err) = exit_tx.send(()) {
-                warn!(%err, "failed to send exit tx");
-            }
-        });
-        let mut exit_health_rx = exit_rx.resubscribe();
-
-        let lattice = Arc::clone(&self.host_config.lattice);
-        let rpc_nats = Arc::clone(&self.rpc_nats);
-        let host_id = host_id.to_string();
-        let provider_id: Arc<str> = provider_id.into();
-        tasks.spawn({
-            let rpc_nats = Arc::clone(&rpc_nats);
-            let provider_id = Arc::clone(&provider_id);
-            async move {
-                // Check the health of the provider every 30 seconds
-                let mut health_check = tokio::time::interval(Duration::from_secs(30));
-                let mut previous_healthy = false;
-                // Allow the provider 5 seconds to initialize
-                health_check.reset_after(Duration::from_secs(5));
-                // TODO: Refactor this logic to simplify nesting
-                loop {
-                    select! {
-                        _ = health_check.tick() => {
-                            trace!(?provider_id, "performing provider health check");
-                            let request = async_nats::Request::new()
-                                .payload(Bytes::new())
-                                .headers(injector_to_headers(&TraceContextInjector::default_with_span()));
-                            if let Ok(async_nats::Message { payload, ..}) = rpc_nats.send_request(
-                                health_subject.clone(),
-                                request,
-                                ).await {
-                                    match (serde_json::from_slice::<HealthCheckResponse>(&payload), previous_healthy) {
-                                        (Ok(HealthCheckResponse { healthy: true, ..}), false) => {
-                                            trace!(?provider_id, "provider health check succeeded");
-                                            previous_healthy = true;
-                                            if let Err(e) = event::publish(
-                                                &event_builder,
-                                                &ctl_nats,
-                                                &lattice,
-                                                "health_check_passed",
-                                                event::provider_health_check(
-                                                    &host_id,
-                                                    &provider_id,
-                                                )
-                                            ).await {
-                                                warn!(
-                                                    ?e,
-                                                    ?provider_id,
-                                                    "failed to publish provider health check succeeded event",
-                                                );
-                                            }
-                                        },
-                                        (Ok(HealthCheckResponse { healthy: false, ..}), true) => {
-                                            trace!(?provider_id, "provider health check failed");
-                                            previous_healthy = false;
-                                            if let Err(e) = event::publish(
-                                                &event_builder,
-                                                &ctl_nats,
-                                                &lattice,
-                                                "health_check_failed",
-                                                event::provider_health_check(
-                                                    &host_id,
-                                                    &provider_id,
-                                                )
-                                            ).await {
-                                                warn!(
-                                                    ?e,
-                                                    ?provider_id,
-                                                    "failed to publish provider health check failed event",
-                                                );
-                                            }
-                                        }
-                                        // If the provider health status didn't change, we simply publish a health check status event
-                                        (Ok(_), _) => {
-                                            if let Err(e) = event::publish(
-                                                &event_builder,
-                                                &ctl_nats,
-                                                &lattice,
-                                                "health_check_status",
-                                                event::provider_health_check(
-                                                    &host_id,
-                                                    &provider_id,
-                                                )
-                                            ).await {
-                                                warn!(
-                                                    ?e,
-                                                    ?provider_id,
-                                                    "failed to publish provider health check status event",
-                                                );
-                                            }
-                                        },
-                                        _ => warn!(
-                                            ?provider_id,
-                                            "failed to deserialize provider health check response"
-                                        ),
-                                    }
-                                }
-                                else {
-                                    warn!(?provider_id, "failed to request provider health, retrying in 30 seconds");
-                                }
-                        }
-                        exit = exit_health_rx.recv() => {
-                            if let Err(err) = exit {
-                                warn!(%err, ?provider_id, "failed to receive exit in health check task");
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-
-        // Spawn off a task to watch for config bundle updates and forward them to
-        // the provider that we're spawning and managing
-        let mut exit_config_tx = exit_rx;
-        let provider_id = Arc::clone(&provider_id);
-        let lattice = Arc::clone(&self.host_config.lattice);
-        tasks.spawn({
-             let config = Arc::clone(&config);
-             async move {
-                 let subject = provider_config_update_subject(&lattice, &provider_id);
-                 trace!(?provider_id, "starting config update listener");
-                 loop {
-                     let mut config = config.write().await;
-                     select! {
-                         maybe_update = config.changed() => {
-                             let Ok(update) = maybe_update else {
-                                 break;
-                             };
-                             trace!(?provider_id, "provider config bundle changed");
-                             let bytes = match serde_json::to_vec(&*update) {
-                                 Ok(bytes) => bytes,
-                                 Err(err) => {
-                                     error!(%err, ?provider_id, ?lattice, "failed to serialize configuration update ");
-                                     continue;
-                                 }
-                             };
-                             trace!(?provider_id, subject, "publishing config bundle bytes");
-                             if let Err(err) = rpc_nats.publish(subject.clone(), Bytes::from(bytes)).await {
-                                 error!(%err, ?provider_id, ?lattice, "failed to publish configuration update bytes to component");
-                             }
-                         }
-                         exit = exit_config_tx.recv() => {
-                             if let Err(err) = exit {
-                                 warn!(%err, ?provider_id, "failed to receive exit in config update task");
-                             }
-                             break;
-                         }
-                     }
-                 }
-             }
-         });
         Ok(())
     }
 
