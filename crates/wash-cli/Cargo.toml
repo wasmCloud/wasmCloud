@@ -39,6 +39,7 @@ futures = { workspace = true }
 http = { workspace = true }
 indicatif = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
+names = { workspace = true }
 nkeys = { workspace = true, features = ["xkeys"] }
 notify = { workspace = true }
 oci-client = { workspace = true, features = ["rustls-tls"] }
