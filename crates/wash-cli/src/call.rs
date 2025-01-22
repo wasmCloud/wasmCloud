@@ -564,12 +564,15 @@ async fn create_client_from_opts_wrpc(opts: &ConnectionOpts) -> Result<async_nat
                 .require_tls(true);
         }
 
-        opts.connect(&nats_url).await.with_context(|| {
-            format!(
-                "Failed to connect to NATS server {}:{} while creating client",
-                &host, &port
-            )
-        })?
+        opts.name("wash-cli")
+            .connect(&nats_url)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to connect to NATS server {}:{} while creating client",
+                    &host, &port
+                )
+            })?
     } else if let Some(credsfile_path) = credsfile {
         let mut opts = ConnectOptions::with_credentials_file(credsfile_path.clone())
             .await
@@ -586,12 +589,15 @@ async fn create_client_from_opts_wrpc(opts: &ConnectionOpts) -> Result<async_nat
                 .require_tls(true);
         }
 
-        opts.connect(&nats_url).await.with_context(|| {
-            format!(
-                "Failed to connect to NATS {} with credentials file {:?}",
-                &nats_url, &credsfile_path
-            )
-        })?
+        opts.name("wash-cli")
+            .connect(&nats_url)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to connect to NATS {} with credentials file {:?}",
+                    &nats_url, &credsfile_path
+                )
+            })?
     } else {
         let mut opts = ConnectOptions::new();
 
@@ -601,7 +607,8 @@ async fn create_client_from_opts_wrpc(opts: &ConnectionOpts) -> Result<async_nat
                 .require_tls(true);
         }
 
-        opts.connect(&nats_url)
+        opts.name("wash-cli")
+            .connect(&nats_url)
             .await
             .with_context(|| format!("Failed to connect to NATS {}", &nats_url))?
     };
