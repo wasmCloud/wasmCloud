@@ -196,8 +196,14 @@ async fn run(args: RunCommand) -> anyhow::Result<()> {
     let encryption_xkey = XKey::from_seed(&args.encryption_xkey_seed)
         .context("failed to create encryption key from seed")?;
 
+    let nats_name =
+        names::Generator::new(&["wasmcloud"], &["secretsnatskv"], names::Name::Numbered)
+            .next()
+            .context("failed to generate name")?;
+
     let nats_client = match args.global.nats_creds_file {
         Some(creds_file) => async_nats::ConnectOptions::new()
+            .name(nats_name)
             .credentials_file(creds_file.clone())
             .await
             .context(format!(
@@ -237,6 +243,11 @@ async fn put(args: PutCommand) -> anyhow::Result<()> {
     let server_xkey = XKey::from_seed(&args.transit_xkey_seed)
         .context("failed to create server key from seed")?;
 
+    let nats_name =
+        names::Generator::new(&["wasmcloud"], &["secretsnatskv"], names::Name::Numbered)
+            .next()
+            .context("failed to generate name")?;
+
     let nats_client = match args.global.nats_creds_file {
         Some(creds_file) => async_nats::ConnectOptions::new()
             .credentials_file(creds_file.clone())
@@ -245,6 +256,7 @@ async fn put(args: PutCommand) -> anyhow::Result<()> {
                 "failed to read NATS credentials file '{}'",
                 &creds_file
             ))?
+            .name(nats_name)
             .connect(&args.nats_address)
             .await
             .with_context(|| {
@@ -254,6 +266,7 @@ async fn put(args: PutCommand) -> anyhow::Result<()> {
                 )
             })?,
         None => async_nats::connect(&args.nats_address)
+            .name(nats_name)
             .await
             .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?,
     };
@@ -285,6 +298,11 @@ async fn put(args: PutCommand) -> anyhow::Result<()> {
 }
 
 async fn get(args: GetCommand) -> anyhow::Result<()> {
+    let nats_name =
+        names::Generator::new(&["wasmcloud"], &["secretsnatskv"], names::Name::Numbered)
+            .next()
+            .context("failed to generate name")?;
+
     let nats_client = match args.global.nats_creds_file {
         Some(creds_file) => async_nats::ConnectOptions::new()
             .credentials_file(creds_file.clone())
@@ -293,6 +311,7 @@ async fn get(args: GetCommand) -> anyhow::Result<()> {
                 "failed to read NATS credentials file '{}'",
                 &creds_file
             ))?
+            .name(nats_name)
             .connect(&args.nats_address)
             .await
             .with_context(|| {
@@ -302,6 +321,7 @@ async fn get(args: GetCommand) -> anyhow::Result<()> {
                 )
             })?,
         None => async_nats::connect(&args.nats_address)
+            .name(nats_name)
             .await
             .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?,
     };
@@ -341,6 +361,11 @@ async fn add_mapping(args: AddSecretMappingCommand) -> anyhow::Result<()> {
         "at least one secret must be provided to add a mapping"
     );
 
+    let nats_name =
+        names::Generator::new(&["wasmcloud"], &["secretsnatskv"], names::Name::Numbered)
+            .next()
+            .context("failed to generate name")?;
+
     let nats_client = match args.global.nats_creds_file {
         Some(creds_file) => async_nats::ConnectOptions::new()
             .credentials_file(creds_file.clone())
@@ -349,6 +374,7 @@ async fn add_mapping(args: AddSecretMappingCommand) -> anyhow::Result<()> {
                 "failed to read NATS credentials file '{}'",
                 &creds_file
             ))?
+            .name(nats_name)
             .connect(&args.nats_address)
             .await
             .with_context(|| {
@@ -358,6 +384,7 @@ async fn add_mapping(args: AddSecretMappingCommand) -> anyhow::Result<()> {
                 )
             })?,
         None => async_nats::connect(&args.nats_address)
+            .name(nats_name)
             .await
             .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?,
     };
@@ -382,6 +409,11 @@ async fn remove_mapping(args: RemoveSecretMappingCommand) -> anyhow::Result<()> 
         "at least one secret must be provided to remove a mapping"
     );
 
+    let nats_name =
+        names::Generator::new(&["wasmcloud"], &["secretsnatskv"], names::Name::Numbered)
+            .next()
+            .context("failed to generate name")?;
+
     let nats_client = match args.global.nats_creds_file {
         Some(creds_file) => async_nats::ConnectOptions::new()
             .credentials_file(creds_file.clone())
@@ -390,6 +422,7 @@ async fn remove_mapping(args: RemoveSecretMappingCommand) -> anyhow::Result<()> 
                 "failed to read NATS credentials file '{}'",
                 &creds_file
             ))?
+            .name(nats_name)
             .connect(&args.nats_address)
             .await
             .with_context(|| {
@@ -399,6 +432,7 @@ async fn remove_mapping(args: RemoveSecretMappingCommand) -> anyhow::Result<()> 
                 )
             })?,
         None => async_nats::connect(&args.nats_address)
+            .name(nats_name)
             .await
             .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?,
     };

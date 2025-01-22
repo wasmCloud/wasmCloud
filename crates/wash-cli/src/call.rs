@@ -539,6 +539,10 @@ async fn create_client_from_opts_wrpc(opts: &ConnectionOpts) -> Result<async_nat
     let nats_url = format!("{host}:{port}");
     use async_nats::ConnectOptions;
 
+    let nats_name = names::Generator::new(&["wasmcloud"], &["washclicall"], names::Name::Numbered)
+        .next()
+        .context("failed to generate name")?;
+
     let nc = if let Some(jwt_file) = jwt {
         let jwt_contents = extract_arg_value(jwt_file)
             .with_context(|| format!("Failed to extract jwt contents from {}", &jwt_file))?;
@@ -564,12 +568,15 @@ async fn create_client_from_opts_wrpc(opts: &ConnectionOpts) -> Result<async_nat
                 .require_tls(true);
         }
 
-        opts.connect(&nats_url).await.with_context(|| {
-            format!(
-                "Failed to connect to NATS server {}:{} while creating client",
-                &host, &port
-            )
-        })?
+        opts.name(nats_name)
+            .connect(&nats_url)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to connect to NATS server {}:{} while creating client",
+                    &host, &port
+                )
+            })?
     } else if let Some(credsfile_path) = credsfile {
         let mut opts = ConnectOptions::with_credentials_file(credsfile_path.clone())
             .await
@@ -586,12 +593,15 @@ async fn create_client_from_opts_wrpc(opts: &ConnectionOpts) -> Result<async_nat
                 .require_tls(true);
         }
 
-        opts.connect(&nats_url).await.with_context(|| {
-            format!(
-                "Failed to connect to NATS {} with credentials file {:?}",
-                &nats_url, &credsfile_path
-            )
-        })?
+        opts.name(nats_name)
+            .connect(&nats_url)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to connect to NATS {} with credentials file {:?}",
+                    &nats_url, &credsfile_path
+                )
+            })?
     } else {
         let mut opts = ConnectOptions::new();
 
@@ -601,7 +611,8 @@ async fn create_client_from_opts_wrpc(opts: &ConnectionOpts) -> Result<async_nat
                 .require_tls(true);
         }
 
-        opts.connect(&nats_url)
+        opts.name(nats_name)
+            .connect(&nats_url)
             .await
             .with_context(|| format!("Failed to connect to NATS {}", &nats_url))?
     };

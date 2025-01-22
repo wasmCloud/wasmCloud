@@ -60,6 +60,7 @@ heck = { workspace = true, optional = true }
 humantime = { workspace = true }
 ignore = { workspace = true, optional = true }
 indicatif = { workspace = true, optional = true }
+names = { workspace = true }
 nkeys = { workspace = true }
 normpath = { workspace = true }
 oci-client = { workspace = true, features = ["rustls-tls"] }
