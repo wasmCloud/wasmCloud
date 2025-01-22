@@ -426,6 +426,7 @@ pub async fn connect_nats(
                 let key = key.clone();
                 async move { key.sign(&nonce).map_err(async_nats::AuthError::new) }
             })
+            .name("wasmbus")
         }
         (Some(_), None, _) | (None, Some(_), _) => {
             bail!("cannot authenticate if only one of jwt or seed is specified")
@@ -433,7 +434,7 @@ pub async fn connect_nats(
         (jwt, key, Some(wid_cfg)) => {
             setup_workload_identity_nats_connect_options(jwt, key, wid_cfg).await?
         }
-        _ => async_nats::ConnectOptions::new(),
+        _ => async_nats::ConnectOptions::new().name("wasmbus"),
     };
     let opts = if let Some(timeout) = request_timeout {
         opts.request_timeout(Some(timeout))
@@ -460,8 +461,8 @@ async fn setup_workload_identity_nats_connect_options(
     // NATS connection needs to be (re-)established. This is
     // necessary to ensure that we always provide a recently
     // issued JWT-SVID.
-    Ok(async_nats::ConnectOptions::with_auth_callback(
-        move |nonce| {
+    Ok(
+        async_nats::ConnectOptions::with_auth_callback(move |nonce| {
             let key = key.clone();
             let jwt = jwt.clone();
             let wid_cfg = wid_cfg.clone();
@@ -493,8 +494,9 @@ async fn setup_workload_identity_nats_connect_options(
                 auth.token = Some(svid.token().into());
                 Ok(auth)
             }
-        },
-    ))
+        })
+        .name("wasmbus"),
+    )
 }
 
 #[cfg(target_family = "windows")]
