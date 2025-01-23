@@ -1,0 +1,6 @@
+FROM grafana/xk6:0.13.4 AS builder
+
+RUN xk6 build v0.56.0 --with github.com/grafana/xk6-kubernetes@v0.10.0
+
+FROM grafana/k6:0.56.0
+COPY --from=builder /xk6/k6 /usr/bin/k6
