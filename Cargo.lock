@@ -8294,7 +8294,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "async-nats",
