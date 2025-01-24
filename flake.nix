@@ -370,70 +370,112 @@
             // imageArgs.image.wolfi-amd64
           );
 
-          build-wash-oci-debian = pkgs.writeShellScriptBin "build-wash-oci-debian" ''
-            set -xe
-
-            build() {
-              ${pkgs.buildah}/bin/buildah manifest create "''${1}"
-
-              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wash-aarch64-unknown-linux-musl-oci-debian}
-              ${pkgs.buildah}/bin/buildah pull docker-archive:${wash-aarch64-unknown-linux-musl-oci-debian}
-
-              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wash-x86_64-unknown-linux-musl-oci-debian}
-              ${pkgs.buildah}/bin/buildah pull docker-archive:${wash-x86_64-unknown-linux-musl-oci-debian}
+          buildImageManifest = pkg:
+            pkgs.runCommand "${pkg.imageName}-${pkg.imageTag}-manifest.json"
+            {
+              nativeBuildInputs = [pkgs.skopeo];
             }
-            build "''${1:-wash:debian}"
-          '';
-          build-wash-oci-wolfi = pkgs.writeShellScriptBin "build-wash-oci-wolfi" ''
-            set -xe
+            ''
+              skopeo inspect --raw --tmpdir="$(mktemp -d)" docker-archive://${pkg} > $out
+            '';
 
-            build() {
-              ${pkgs.buildah}/bin/buildah manifest create "''${1}"
-
-              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wash-aarch64-unknown-linux-musl-oci-wolfi}
-              ${pkgs.buildah}/bin/buildah pull docker-archive:${wash-aarch64-unknown-linux-musl-oci-wolfi}
-
-              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wash-x86_64-unknown-linux-musl-oci-wolfi}
-              ${pkgs.buildah}/bin/buildah pull docker-archive:${wash-x86_64-unknown-linux-musl-oci-wolfi}
+          buildImageDir = pkg:
+            pkgs.runCommand "${pkg.imageName}-${pkg.imageTag}-dir"
+            {
+              nativeBuildInputs = [pkgs.skopeo];
             }
-            build "''${1:-wash:wolfi}"
-          '';
-          build-wasmcloud-oci-debian = pkgs.writeShellScriptBin "build-wasmcloud-oci-debian" ''
-            set -xe
+            ''
+              skopeo copy --insecure-policy --tmpdir="$(mktemp -d)" docker-archive://${pkg} dir:$out
+            '';
 
-            build() {
-              ${pkgs.buildah}/bin/buildah manifest create "''${1}"
+          buildMultiArchImage = {
+            name,
+            base,
+            amd64,
+            arm64,
+          }: let
+            manifests.amd64 = buildImageManifest amd64;
+            manifests.arm64 = buildImageManifest arm64;
 
-              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wasmcloud-aarch64-unknown-linux-musl-oci-debian}
-              ${pkgs.buildah}/bin/buildah pull docker-archive:${wasmcloud-aarch64-unknown-linux-musl-oci-debian}
+            manifest = pkgs.writeText "${name}-oci-${base}-manifest.json" (toJSON {
+              schemaVersion = 2;
+              mediaType = "application/vnd.docker.distribution.manifest.list.v2+json";
+              manifests = [
+                {
+                  mediaType = "application/vnd.docker.distribution.manifest.v2+json";
+                  size = stringLength "${readFile manifests.amd64}";
+                  digest = "sha256:${hashFile "sha256" manifests.amd64}";
+                  platform.architecture = "amd64";
+                  platform.os = "linux";
+                }
+                {
+                  mediaType = "application/vnd.docker.distribution.manifest.v2+json";
+                  size = stringLength "${readFile manifests.arm64}";
+                  digest = "sha256:${hashFile "sha256" manifests.arm64}";
+                  platform.architecture = "arm64";
+                  platform.os = "linux";
+                }
+              ];
+            });
 
-              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wasmcloud-x86_64-unknown-linux-musl-oci-debian}
-              ${pkgs.buildah}/bin/buildah pull docker-archive:${wasmcloud-x86_64-unknown-linux-musl-oci-debian}
+            dirs.amd64 = buildImageDir amd64;
+            dirs.arm64 = buildImageDir arm64;
+
+            dir =
+              pkgs.runCommand "${name}-oci-${base}-dir" {}
+              ''
+                mkdir -p $out
+                cp ${dirs.amd64}/* $out/
+                mv $out/manifest.json $out/${hashFile "sha256" manifests.amd64}.manifest.json
+                cp ${dirs.arm64}/* $out/
+                mv $out/manifest.json $out/${hashFile "sha256" manifests.arm64}.manifest.json
+                rm -f $out/version
+                cp ${manifest} $out/manifest.json
+              '';
+          in
+            pkgs.runCommand "${name}-oci-${base}"
+            {
+              nativeBuildInputs = [pkgs.skopeo];
             }
-            build "''${1:-wasmcloud:debian}"
-          '';
-          build-wasmcloud-oci-wolfi = pkgs.writeShellScriptBin "build-wasmcloud-oci-wolfi" ''
-            set -xe
+            ''
+              skopeo copy --all --insecure-policy --tmpdir="$(mktemp -d)" dir:${dir} "oci-archive:$out:${name}:${base}"
+            '';
 
-            build() {
-              ${pkgs.buildah}/bin/buildah manifest create "''${1}"
+          wash-oci-debian = buildMultiArchImage {
+            name = "wash";
+            base = "debian";
+            amd64 = wash-x86_64-unknown-linux-musl-oci-debian;
+            arm64 = wash-aarch64-unknown-linux-musl-oci-debian;
+          };
 
-              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wasmcloud-aarch64-unknown-linux-musl-oci-wolfi}
-              ${pkgs.buildah}/bin/buildah pull docker-archive:${wasmcloud-aarch64-unknown-linux-musl-oci-wolfi}
+          wash-oci-wolfi = buildMultiArchImage {
+            name = "wash";
+            base = "wolfi";
+            amd64 = wash-x86_64-unknown-linux-musl-oci-wolfi;
+            arm64 = wash-aarch64-unknown-linux-musl-oci-wolfi;
+          };
 
-              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wasmcloud-x86_64-unknown-linux-musl-oci-wolfi}
-              ${pkgs.buildah}/bin/buildah pull docker-archive:${wasmcloud-x86_64-unknown-linux-musl-oci-wolfi}
-            }
-            build "''${1:-wasmcloud:wolfi}"
-          '';
+          wasmcloud-oci-debian = buildMultiArchImage {
+            name = "wasmcloud";
+            base = "debian";
+            amd64 = wasmcloud-x86_64-unknown-linux-musl-oci-debian;
+            arm64 = wasmcloud-aarch64-unknown-linux-musl-oci-debian;
+          };
+
+          wasmcloud-oci-wolfi = buildMultiArchImage {
+            name = "wasmcloud";
+            base = "wolfi";
+            amd64 = wasmcloud-x86_64-unknown-linux-musl-oci-wolfi;
+            arm64 = wasmcloud-aarch64-unknown-linux-musl-oci-wolfi;
+          };
         in
           packages
           // {
             inherit
-              build-wash-oci-debian
-              build-wash-oci-wolfi
-              build-wasmcloud-oci-debian
-              build-wasmcloud-oci-wolfi
+              wash-oci-debian
+              wash-oci-wolfi
+              wasmcloud-oci-debian
+              wasmcloud-oci-wolfi
               wash-aarch64-unknown-linux-musl-oci-debian
               wash-aarch64-unknown-linux-musl-oci-wolfi
               wash-x86_64-unknown-linux-musl-oci-debian
