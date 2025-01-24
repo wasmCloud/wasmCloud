@@ -546,16 +546,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1727963723,
-        "narHash": "sha256-urAGMGMH5ousEeVTZ5AaLPfowXaYQoISNXiutV00iQo=",
+        "lastModified": 1737050201,
+        "narHash": "sha256-tbHAvdDN2qkJRRfy9L3apBULRVttb7Jh00bDlb1OKJ4=",
         "owner": "bytecodealliance",
         "repo": "wit-deps",
-        "rev": "eb7c84564acfe13a4197bb15052fd2e2b3d29775",
+        "rev": "9b389783986ec8861ad9b3d6354da2c451a1ca83",
         "type": "github"
       },
       "original": {
         "owner": "bytecodealliance",
-        "ref": "v0.4.0",
+        "ref": "v0.5.0",
         "repo": "wit-deps",
         "type": "github"
       }
