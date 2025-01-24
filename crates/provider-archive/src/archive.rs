@@ -334,7 +334,7 @@ impl ProviderArchive {
 
         let mut header = tokio_tar::Header::new_gnu();
         header.set_path(CLAIMS_JWT_FILE)?;
-        header.set_size(claims_jwt.as_bytes().len() as u64);
+        header.set_size(claims_jwt.len() as u64);
         header.set_cksum();
         par.append_data(&mut header, CLAIMS_JWT_FILE, Cursor::new(claims_jwt))
             .await?;

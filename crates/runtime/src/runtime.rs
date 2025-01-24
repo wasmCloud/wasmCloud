@@ -244,7 +244,7 @@ impl Runtime {
 
     /// [Runtime] version
     #[must_use]
-    pub fn version(&self) -> &str {
+    pub fn version(&self) -> &'static str {
         env!("CARGO_PKG_VERSION")
     }
 

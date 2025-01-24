@@ -98,7 +98,7 @@ impl HttpClientProvider {
         // Load native certificates
         if config
             .get(LOAD_NATIVE_CERTS)
-            .map(|v| v.to_ascii_lowercase() == "true")
+            .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(true)
         {
             let (added, ignored) = ca.add_parsable_certificates(tls::NATIVE_ROOTS.iter().cloned());
@@ -108,7 +108,7 @@ impl HttpClientProvider {
         // Load Mozilla trusted root certificates
         if config
             .get(LOAD_WEBPKI_CERTS)
-            .map(|v| v.to_ascii_lowercase() == "true")
+            .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(true)
         {
             ca.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());

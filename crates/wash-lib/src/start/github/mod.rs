@@ -95,7 +95,7 @@ where
 {
     metadata(dir.as_ref().join(bin_name))
         .await
-        .map_or(false, |m| m.is_file())
+        .is_ok_and(|m| m.is_file())
 }
 
 /// Helper function to set up a reqwest client for performing the download
