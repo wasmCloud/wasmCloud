@@ -54,7 +54,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 Loki labels
 */}}
 {{- define "benchmark.lokiLabels" -}}
-helm.sh/chart: {{ include "benchmark.chart" . }}
+helm.sh/chart: {{ include "benchmark.fullname" . }}
 {{ include "benchmark.lokiSelectorLabels" . }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
