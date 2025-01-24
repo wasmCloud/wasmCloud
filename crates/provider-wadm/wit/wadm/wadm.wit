@@ -1,0 +1,164 @@
+package wasmcloud:wadm@0.1.0;
+
+interface wadm-types {
+    use oam-types.{oam-manifest};
+    
+    record deploy-response {
+        %result: deploy-result,
+        message: string
+    }
+    
+    record put-model-response {
+        %result: put-result,
+        total-versions: u32,
+        current-version: string,
+        message: string,
+        name: string
+    }
+
+    record version-response {
+        %result: get-result,
+        message: string,
+        versions: list<version-info>
+    }
+
+    record status-response {
+        %result: status-result,
+        message: string,
+        status: option<status>
+    }
+
+    record get-model-response {
+        %result: get-result,
+        message: string,
+        manifest: option<oam-manifest>
+    }
+
+    record delete-model-response {
+        %result: delete-result,
+        message: string,
+        undeploy: bool
+    }
+
+    record model-summary {
+        name: string,
+        version: string,
+        description: option<string>,
+        deployed-version: option<string>,
+        status: status-type,
+        status-message: option<string>
+    }
+
+    record version-info {
+        version: string,
+        deployed: bool
+    }
+
+    record status {
+        version: string,
+        info: status-info,
+        components: list<component-status>
+    }
+
+    record component-status {
+        name: string,
+        component-type: string,
+        info: status-info,
+        traits: list<trait-status>
+    }
+
+    record trait-status {
+        trait-type: string,
+        info: status-info
+    }
+
+    record status-info {
+        status-type: status-type,
+        message: string
+    }
+
+    enum put-result {
+        error,
+        created,
+        new-version
+    }
+
+    enum get-result {
+        error,
+        success,
+        not-found
+    }
+
+    enum status-result {
+        error,
+        ok,
+        not-found
+    }
+
+    enum delete-result {
+        deleted,
+        error,
+        noop
+    }
+
+    enum status-type {
+        undeployed,
+        reconciling,
+        deployed,
+        failed
+    }
+
+    enum deploy-result {
+        error,
+        acknowledged,
+        not-found
+    }
+}
+
+interface wadm-client {
+    use oam-types.{oam-manifest};
+    use wadm-types.{
+        deploy-response,
+        put-model-response,
+        version-response,
+        status-response,
+        get-model-response,
+        delete-model-response,
+        model-summary
+    };
+
+    // Deploys a model to the WADM system.
+    // If no lattice is provided, the default lattice name 'default' is used.
+    deploy-model: func(model-name: string, version: option<string>, lattice: option<string>) -> result<deploy-response, string>;
+
+    // Undeploys a model from the WADM system.
+    undeploy-model: func(model-name: string, lattice: option<string>, non-destructive: bool) -> result<deploy-response, string>;
+
+    // Stores the application manifest for later deploys.
+    // Model is the full YAML or JSON string in this case
+    put-model: func(model: string, lattice: option<string>) -> result<put-model-response, string>;
+    
+    /// Store an oam manifest directly for later deploys.
+    put-manifest: func(manifest: oam-manifest, lattice: option<string>) -> result<put-model-response, string>;
+
+    // Retrieves the history of a given model name.
+    get-model-history: func(model-name: string, lattice: option<string>) -> result<version-response, string>;
+
+    // Retrieves the status of a given model by name.
+    get-model-status: func(model-name: string, lattice: option<string>) -> result<status-response, string>;
+
+    // Retrieves details on a given model.
+    get-model-details: func(model-name: string, version: option<string>, lattice: option<string>) -> result<get-model-response, string>;
+
+    // Deletes a model version from the WADM system.
+    delete-model-version: func(model-name: string, version: option<string>, delete-all: bool, lattice: option<string>) -> result<delete-model-response, string>;
+
+    // Retrieves all application manifests.
+    get-models: func(lattice: option<string>) -> result<list<model-summary>, string>;
+}
+
+world imports {
+    import wadm-client;
+    import wadm-types;
+    import oam-types;
+}
