@@ -21,7 +21,7 @@
   inputs.nixlib.url = "github:nix-community/nixpkgs.lib";
   inputs.wit-deps.inputs.nixify.follows = "nixify";
   inputs.wit-deps.inputs.nixlib.follows = "nixlib";
-  inputs.wit-deps.url = "github:bytecodealliance/wit-deps/v0.4.0";
+  inputs.wit-deps.url = "github:bytecodealliance/wit-deps/v0.5.0";
 
   outputs = {
     nixify,
