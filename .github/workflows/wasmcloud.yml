@@ -484,30 +484,30 @@ jobs:
           username: ${{ secrets.DOCKERHUB_PUSH_USER }}
           password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
 
-      - name: Install `buildah`
-        run: nix profile install --inputs-from . 'nixpkgs#buildah'
+      - name: Install `skopeo`
+        run: nix profile install --inputs-from . 'nixpkgs#skopeo'
 
       - name: Build `${{ matrix.bin }}` image
         run: |
-          nix run -L .#build-${{ matrix.bin }}-oci-debian ${{ matrix.bin }}:debian
-          nix run -L .#build-${{ matrix.bin }}-oci-wolfi ${{ matrix.bin }}:wolfi
+          nix build -L .#${{ matrix.bin }}-oci-debian -o ./oci-debian
+          nix build -L .#${{ matrix.bin }}-oci-wolfi -o ./oci-wolfi
 
       - name: Test `${{ matrix.bin }}` image
         run: |
-          buildah push ${{ matrix.bin }}:debian docker-daemon:${{ matrix.bin }}:debian-test
-          buildah push ${{ matrix.bin }}:wolfi docker-daemon:${{ matrix.bin }}:wolfi-test
+          skopeo copy oci-archive:./oci-debian docker-daemon:${{ matrix.bin }}:debian-test
+          skopeo copy oci-archive:./oci-wolfi docker-daemon:${{ matrix.bin }}:wolfi-test
           docker run --rm ${{ matrix.bin }}:debian-test ${{ matrix.bin }} --version
           docker run --rm ${{ matrix.bin }}:wolfi-test ${{ matrix.bin }} --version
 
       - name: Push `${{ matrix.bin }}` commit rev tag
         if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) || github.ref == 'refs/heads/main'
         run: |
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}-debian
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}-debian
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}-wolfi
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}
+          skopeo copy --all oci-archive:./oci-debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}-debian
+          skopeo copy --all oci-archive:./oci-debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}-debian
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}-wolfi
 
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }} ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }} ${{ matrix.bin }} --version
@@ -520,15 +520,15 @@ jobs:
         if: github.ref == 'refs/heads/main'
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
         run: |
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-debian
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-debian
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-debian
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+          skopeo copy --all oci-archive:./oci-wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+          skopeo copy --all oci-archive:./oci-debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-debian
+          skopeo copy --all oci-archive:./oci-debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-debian
+          skopeo copy --all oci-archive:./oci-debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-debian
+          skopeo copy --all oci-archive:./oci-wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi
 
           docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary ${{ matrix.bin }} --version
@@ -544,15 +544,15 @@ jobs:
         if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix))
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
         run: |
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-debian
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-debian
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-debian
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+          skopeo copy --all oci-archive:./oci-wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+          skopeo copy --all oci-archive:./oci-debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-debian
+          skopeo copy --all oci-archive:./oci-debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-debian
+          skopeo copy --all oci-archive:./oci-debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-debian
+          skopeo copy --all oci-archive:./oci-wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi
 
           docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }} ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }} ${{ matrix.bin }} --version
@@ -568,15 +568,15 @@ jobs:
         if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) && !steps.ctx.outputs.prerelease
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
         run: |
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-debian
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-debian
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-debian
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+          skopeo copy --all oci-archive:./oci-wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+          skopeo copy --all oci-archive:./oci-debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-debian
+          skopeo copy --all oci-archive:./oci-debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-debian
+          skopeo copy --all oci-archive:./oci-debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-debian
+          skopeo copy --all oci-archive:./oci-wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi
 
           docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest ${{ matrix.bin }} --version
