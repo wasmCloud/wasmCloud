@@ -1,0 +1,11 @@
+name = "WADM"
+language = "rust"
+type = "provider"
+version = "0.1.0"
+
+[rust]
+target_path = "../../../target"
+
+[provider]
+bin_name = "wadm-provider"
+vendor = "wasmCloud"
