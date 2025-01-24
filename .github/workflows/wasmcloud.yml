@@ -425,7 +425,7 @@ jobs:
         id: deployment
 
   oci:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest-8-cores
     strategy:
       matrix:
         include:
