@@ -427,6 +427,7 @@
                 mkdir -p $out
                 cp ${dirs.amd64}/* $out/
                 mv $out/manifest.json $out/${hashFile "sha256" manifests.amd64}.manifest.json
+                rm -f $out/version
                 cp ${dirs.arm64}/* $out/
                 mv $out/manifest.json $out/${hashFile "sha256" manifests.arm64}.manifest.json
                 rm -f $out/version
