@@ -14,6 +14,8 @@ spec:
       name: {{ include "benchmark.fullname" . }}-test-config
       file: test.js
   runner:
+    image: {{ .Values.test.image.repository }}:{{ .Values.test.image.tag }}
+    serviceAccountName: {{ include "benchmark.fullname" . }}-test
     {{- with .Values.nodeSelector }}
     nodeSelector:
       {{- toYaml . | nindent 8 }}
@@ -43,4 +45,10 @@ spec:
         valueFrom:
           resourceFieldRef:
             resource: limits.cpu
+      - name: MY_POD_NAME
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.name
+      - name: TEST_UUID
+        value: {{ uuidv4 | quote }}
 {{- end }}
