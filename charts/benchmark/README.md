@@ -36,14 +36,51 @@ install command above, the output would look like this:
 ```
 The k6 benchmark should now be running! To get the logs and output of the test, you can run:
 
-kubectl logs -n default -l k6_cr=my-benchmark-test,runner=true --tail=-1
+    kubectl logs -n default -l k6_cr=foobar-benchmark-test,runner=true --tail=-1
+
+To wait for the tests to complete, you can run:
+
+    kubectl wait -n default --timeout 90s --for=jsonpath='{.status.stage}'=finished testruns/foobar-benchmark-test
+
+Note that you may need to change the timeout value to a value that is longer than the test duration if you speciify a longer duration in the test.
+
+The test results will be output to ConfigMaps in the default namespace. To fetch all results and combine them into a single JSON array, you can run:
+
+    kubectl get cm -n default -o json -l chart-revision=1,k6-result=true,k6-test-name=foobar-benchmark-test | jq  '[.items[].data.results | fromjson ]'
+
+To clear all test results for this chart, you can run:
+
+    kubectl delete cm -n default -l k6-result=true,k6-test-name=foobar-benchmark-test
 
 If you'd like to view dashboards during or after your tests, port-forward to the Grafana instance:
 
-kubectl port-forward -n default svc/my-benchmark-grafana 3000:80
+    kubectl port-forward -n default svc/foobar-grafana 3000:80
 
 Then open http://localhost:3000 in your browser and navigate to the "Test Environment" dashboard in the dashboards section.
 ```
+
+### Getting the aggregated results
+
+As of chart version 0.2.0, each running test will output a ConfigMap containing the results of the
+test. This ConfigMap will have a name matching the name of the test pod. The best way to get the
+results is to filter configmaps by label. Each ConfigMap has the following labels set:
+
+- `k6-result=true`
+- `k6-test-name=<chart-fullname>-test`
+- `chart-revision=<chart-release-revision>`
+  - This is used to separate different helm upgrade runs in case you run multiple different tests
+
+Each ConfigMap will have a key named `results` which is a JSON object containing the summary
+results. To get all of the results as JSON array, you can run the following command:
+
+```bash
+kubectl get cm -n default -o json -l chart-revision=1,k6-result=true,k6-test-name=foobar-benchmark-test | jq  '[.items[].data.results | fromjson ]'
+```
+
+Please note that this command is output as part of the Helm release notes and can be copy/pasted
+from there. These results can then be aggregated and stored wherever you see fit. To see an example
+aggregation script, see the one we use for CI in the [wasmCloud
+repo](https://github.com/wasmCloud/wasmCloud/blob/main/ci/aggregate_data.py).
 
 ## Advanced Usage
 
