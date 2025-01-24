@@ -1,0 +1,91 @@
+interface oam-types {
+    // The overall structure of an OAM manifest.
+    record oam-manifest {
+        api-version: string,
+        kind: string,
+        metadata: metadata,
+        spec: specification,
+    }
+
+    // Metadata describing the manifest
+    record metadata {
+        name: string,
+        annotations: list<tuple<string, string>>,
+        labels: list<tuple<string, string>>,
+    }
+
+    // The specification for this manifest
+    record specification {
+        components: list<component>,
+    }
+
+    // A component definition
+    record component {
+        name: string,
+        properties: properties,
+        traits: option<list<trait>>,
+    }
+
+    // Properties that can be defined for a component
+    variant properties {
+        component(component-properties),
+        capability(capability-properties),
+    }
+
+    // Properties for a component
+    record component-properties {
+        image: string,
+        id: option<string>,
+        config: list<config-property>,
+    }
+
+    // Properties for a capability
+    record capability-properties {
+        image: string,
+        id: option<string>,
+        config: list<config-property>,
+    }
+
+    // Properties for the config list associated with components, providers, and links
+    record config-property {
+        name: string,
+        properties: option<list<tuple<string, string>>>,
+    }
+
+    // A trait definition
+    record trait {
+        trait-type: string,
+        properties: trait-property,
+    }
+
+    // Properties for defining traits
+    variant trait-property {
+        link(link-property),
+        spreadscaler(spreadscaler-property),
+        custom(string),
+    }
+
+    // Properties for links
+    record link-property {
+        target: string,
+        namespace: string,
+        %package: string,
+        interfaces: list<string>,
+        source-config: list<config-property>,
+        target-config: list<config-property>,
+        name: option<string>,
+    }
+
+    // Properties for spread scalers
+    record spreadscaler-property {
+        instances: u32,
+        spread: list<spread>,
+    }
+
+    // Configuration for various spreading requirements
+    record spread {
+        name: string,
+        requirements: list<tuple<string, string>>,
+        weight: option<u32>,
+    }
+}
