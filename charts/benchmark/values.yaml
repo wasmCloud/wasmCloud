@@ -9,6 +9,10 @@ test:
   parallelism: 3
   # Whether each test runner should be run on a separate node
   separate: false
+  # The image to use for the k6 test runner
+  image:
+    repository: ghcr.io/wasmcloud/k6runner
+    tag: "0.1.0"
   # These scenarios will be converted to JSON and added to the k6 test. These are the exact same
   # structure as the JSON scenarios in the k6 docs:
   # https://grafana.com/docs/k6/latest/using-k6/scenarios/
