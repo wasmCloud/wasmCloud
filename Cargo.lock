@@ -780,6 +780,7 @@ dependencies = [
  "pin-project-lite",
  "rustversion",
  "serde",
+ "serde_urlencoded",
  "sync_wrapper 1.0.2",
  "tokio",
  "tower 0.5.1",
@@ -8236,6 +8237,7 @@ version = "1.5.1"
 dependencies = [
  "anyhow",
  "async-nats",
+ "axum",
  "base64 0.22.1",
  "bytes",
  "clap",

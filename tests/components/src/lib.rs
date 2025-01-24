@@ -2,6 +2,10 @@ pub const ISSUER: &str = env!("ISSUER");
 
 pub const RUST_HTTP_KEYVALUE_COUNTER: &str =
     concat!(env!("OUT_DIR"), "/rust-http-keyvalue-counter.wasm");
+
+pub const RUST_HTTP_KEYVALUE_WATCHER: &str =
+    concat!(env!("OUT_DIR"), "/rust-http-keyvalue-watcher.wasm");
+
 pub const RUST_HTTP_KEYVALUE_COUNTER_PREVIEW2: &str =
     concat!(env!("OUT_DIR"), "/rust-http-keyvalue-counter-preview2.wasm");
 pub const RUST_HTTP_KEYVALUE_COUNTER_PREVIEW2_SIGNED: &str = concat!(
