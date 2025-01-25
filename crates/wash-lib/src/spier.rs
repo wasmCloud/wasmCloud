@@ -25,7 +25,7 @@ pub struct ObservedInvocation {
 /// parsed value if it was a format we recognized.
 ///
 /// Please note that this struct is meant for debugging, so its `Display` implementation does some
-/// heavier lifting like contructing strings from the raw bytes.
+/// heavier lifting like constructing strings from the raw bytes.
 #[derive(Debug)]
 pub enum ObservedMessage {
     Raw(Vec<u8>),

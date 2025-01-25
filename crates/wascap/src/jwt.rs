@@ -90,7 +90,7 @@ pub struct CapabilityProvider {
     /// Indicates a human-friendly version string. Optional.
     #[serde(rename = "ver", skip_serializing_if = "Option::is_none")]
     pub ver: Option<String>,
-    /// The file hashes that correspond to the achitecture-OS target triples for this provider.
+    /// The file hashes that correspond to the architecture-OS target triples for this provider.
     pub target_hashes: HashMap<String, String>,
     /// If the provider chooses, it can supply a JSON schma that describes its expected link configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]

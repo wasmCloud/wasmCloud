@@ -17,7 +17,7 @@ spec:
     - name: http-task-mgr
       type: component
       properties:
-        # To use the locally compiled version of this compnent, see local.wadm.yaml
+        # To use the locally compiled version of this component, see local.wadm.yaml
         image: ghcr.io/wasmcloud/components/http-task-manager-rust:0.1.0
       traits:
         # Govern the spread/scheduling of the component

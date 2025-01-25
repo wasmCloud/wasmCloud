@@ -6,7 +6,7 @@
 //! ```
 //! package wasmcloud:task-manager@0.1.0-draft;
 //!
-//! world http-task-mangaer {
+//! world http-task-manager {
 //!   import wasmcloud:postgres/query@0.1.1-draft;
 //!
 //!   export tasks;

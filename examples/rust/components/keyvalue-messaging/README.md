@@ -48,7 +48,7 @@ wash up --detach
 nats kv add WASMCLOUD
 nats kv add WASMLAND
 
-# Deply the example
+# Deploy the example
 wash app deploy ./wadm.yaml
 wash app get
 

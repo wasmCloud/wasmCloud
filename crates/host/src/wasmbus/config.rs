@@ -230,7 +230,7 @@ impl BundleGenerator {
 
         // We need to actually try and fetch the config here. If we don't do this, then a watch will
         // just blindly watch even if the key doesn't exist. We should return an error if the config
-        // doesn't exist or has data issues. It also allows us to set the intitial value
+        // doesn't exist or has data issues. It also allows us to set the initial value
         let config: HashMap<String, String> = match self.store.get(&name).await {
             Ok(Some(data)) => serde_json::from_slice(&data)
                 .context("Data corruption error, unable to decode data from store")?,

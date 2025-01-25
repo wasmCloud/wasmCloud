@@ -108,7 +108,7 @@ impl Guest for SecretLenChecker {
         // Retrieve a secret
         let secret = match secrets::store::get(SECRET_KEY.into()) {
             Ok(s) => s,
-            Err(err) => return format!("ERROR: failed to retreive secret [{SECRET_KEY}]: {err}"),
+            Err(err) => return format!("ERROR: failed to retrieve secret [{SECRET_KEY}]: {err}"),
         };
         // Reveal the contents of the secret
         match secrets::reveal::reveal(&secret) {

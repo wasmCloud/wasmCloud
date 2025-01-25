@@ -51,7 +51,7 @@ pub struct ConnectionConfig {
     #[serde(default)]
     pub tls_ca: Option<Box<str>>,
 
-    /// TLS Certifiate Authority, as a path on disk
+    /// TLS Certificate Authority, as a path on disk
     #[serde(default)]
     pub tls_ca_file: Option<Box<str>>,
 

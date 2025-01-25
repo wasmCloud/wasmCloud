@@ -353,7 +353,7 @@ async fn release_task(
     let body = resp
         .json::<ApiResponse<()>>()
         .await
-        .context("failed to parse json body from releaase task")?;
+        .context("failed to parse json body from release task")?;
     assert_eq!(body.status, "success", "releasing task failed");
     assert!(
         body.data.is_none(),

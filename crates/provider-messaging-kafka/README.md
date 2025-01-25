@@ -190,7 +190,7 @@ docker exec -it \
     --from-beginning
 ```
 
-Then, you should be able to send a message using the kafka container (note that this comamnd will not return, but will instead produce a prompt):
+Then, you should be able to send a message using the kafka container (note that this command will not return, but will instead produce a prompt):
 
 ```console
 docker exec -it \

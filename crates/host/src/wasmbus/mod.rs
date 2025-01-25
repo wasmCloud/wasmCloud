@@ -647,7 +647,7 @@ async fn merge_registry_config(
         match registry_config.entry(reg.clone()) {
             Entry::Occupied(_entry) => {
                 // note we don't update config here, since the config service should take priority
-                warn!(oci_registry_url = %reg, "ignoring OCI registry config, overriden by config service");
+                warn!(oci_registry_url = %reg, "ignoring OCI registry config, overridden by config service");
             }
             Entry::Vacant(entry) => {
                 debug!(oci_registry_url = %reg, "set registry config");
@@ -917,7 +917,7 @@ impl Host {
         if let Some(addr) = config.http_admin {
             let socket = TcpListener::bind(addr)
                 .await
-                .context("failed to bind on HTTP administation endpoint")?;
+                .context("failed to bind on HTTP administration endpoint")?;
             let ready = Arc::clone(&ready);
             let svc = hyper::service::service_fn(move |req| {
                 const OK: &str = r#"{"status":"ok"}"#;
@@ -2923,7 +2923,7 @@ impl Host {
         ))
     }
 
-    /// Handle a new link by modifying the relevant source [ComponentSpeficication]. Once
+    /// Handle a new link by modifying the relevant source [ComponentSpecification]. Once
     /// the change is written to the LATTICEDATA store, each host in the lattice (including this one)
     /// will handle the new specification and update their own internal link maps via [process_component_spec_put].
     #[instrument(level = "debug", skip_all)]

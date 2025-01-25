@@ -81,7 +81,7 @@ pub struct Project {
     /// Optional path for template project (alternative to --git)
     pub path: Option<PathBuf>,
 
-    /// Github repository url. Requires 'git' to be installed in PATH.
+    /// GitHub repository url. Requires 'git' to be installed in PATH.
     pub git: Option<String>,
 
     /// Optional subfolder of the git repository

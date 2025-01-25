@@ -43,7 +43,7 @@ pub async fn run() -> anyhow::Result<()> {
 /// [`NatsClientBundle`]s hold a NATS client and information (subscriptions)
 /// related to it.
 ///
-/// This struct is necssary because subscriptions are *not* automatically removed on client drop,
+/// This struct is necessary because subscriptions are *not* automatically removed on client drop,
 /// meaning that we must keep track of all subscriptions to close once the client is done
 #[derive(Debug)]
 struct NatsClientBundle {
@@ -198,7 +198,7 @@ impl NatsMessagingProvider {
             };
             // Listen for NATS message(s)
             while let Some(msg) = subscriber.next().await {
-                debug!(?msg, ?component_id, "received messsage");
+                debug!(?msg, ?component_id, "received message");
                 // Set up tracing context for the NATS message
                 let span = tracing::debug_span!("handle_message", ?component_id);
 
@@ -336,7 +336,7 @@ impl Provider for NatsMessagingProvider {
             let client = &bundle.client;
             debug!(
                 component_id,
-                "droping NATS client [{}] for (consumer) component",
+                "dropping NATS client [{}] for (consumer) component",
                 format!(
                     "{}:{}",
                     client.server_info().server_id,
@@ -363,7 +363,7 @@ impl Provider for NatsMessagingProvider {
             let client = &bundle.client;
             debug!(
                 component_id,
-                "droping NATS client [{}] and associated subscriptions [{}] for (handler) component",
+                "dropping NATS client [{}] and associated subscriptions [{}] for (handler) component",
                 format!(
                     "{}:{}",
                     client.server_info().server_id,

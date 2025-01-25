@@ -373,12 +373,12 @@ pub async fn stop_hosts(
 
         Ok((host_ids, hosts_remaining))
     } else {
-        let runing_hosts = hosts
+        let running_hosts = hosts
             .into_iter()
             .map(|h| h.id().to_string())
             .collect::<Vec<_>>();
         bail!(
-            "More than one host is running, please specify a host ID or use --all\nRunning hosts: {runing_hosts:?}", 
+            "More than one host is running, please specify a host ID or use --all\nRunning hosts: {running_hosts:?}", 
         )
     }
 }

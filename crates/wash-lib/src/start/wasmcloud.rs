@@ -65,7 +65,7 @@ where
 /// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`. Must be
 ///   at least v0.63.0.
 /// * `dir` - Where to unpack the wasmCloud host contents into. This should be the root level
-///   directory where to store hosts. Each host will be stored in a directory maching its version
+///   directory where to store hosts. Each host will be stored in a directory matching its version
 ///   (e.g. "/tmp/wasmcloud/v0.63.0")
 /// # Examples
 ///
@@ -100,7 +100,7 @@ where
 ///
 /// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`
 /// * `dir` - Where to unpack the wasmCloud host contents into. This should be the root level
-///   directory where to store hosts. Each host will be stored in a directory maching its version
+///   directory where to store hosts. Each host will be stored in a directory matching its version
 /// # Examples
 ///
 /// ```no_run
@@ -129,7 +129,7 @@ where
 /// * `arch` - Specifies the architecture of the binary to download, e.g. `amd64`
 /// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`
 /// * `dir` - Where to unpack the wasmCloud host contents into. This should be the root level
-///   directory where to store hosts. Each host will be stored in a directory maching its version
+///   directory where to store hosts. Each host will be stored in a directory matching its version
 /// # Examples
 ///
 /// ```rust,ignore

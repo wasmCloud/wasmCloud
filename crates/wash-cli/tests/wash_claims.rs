@@ -90,7 +90,7 @@ fn integration_claims_sign() {
         ])
         .stderr(std::process::Stdio::piped())
         .output()
-        .expect("faile to run sign command");
+        .expect("failed to run sign command");
     assert!(!sign_echo.status.success());
 
     let sign_echo = wash()
@@ -114,7 +114,7 @@ fn integration_claims_sign() {
         ])
         .stderr(std::process::Stdio::piped())
         .output()
-        .expect("faile to run sign command");
+        .expect("failed to run sign command");
     assert!(!sign_echo.status.success());
 
     let sign_echo = wash()
@@ -134,7 +134,7 @@ fn integration_claims_sign() {
         ])
         .stderr(std::process::Stdio::piped())
         .output()
-        .expect("faile to run sign command");
+        .expect("failed to run sign command");
     assert!(!sign_echo.status.success());
 
     remove_dir_all(sign_dir).unwrap();

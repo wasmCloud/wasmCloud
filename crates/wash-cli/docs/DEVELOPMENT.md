@@ -3,7 +3,7 @@
 This document serves as a guide and reference for people looking to develop `wash`.
 
 - [Developer guide](#developer-guide)
-  - [Development Prerequistes](#development-prerequistes)
+  - [Development Prerequisites](#development-prerequisites)
     - [`build` Integration Tests](#build-integration-tests)
     - [Dependency Check Script](#dependency-check-script)
     - [Optional Tools](#optional-tools)
@@ -11,7 +11,7 @@ This document serves as a guide and reference for people looking to develop `was
   - [Testing the project](#testing-the-project)
   - [Making Commits](#making-commits)
 
-## Development Prerequistes
+## Development Prerequisites
 
 To contribute to `wash`, you just need [Rust](https://rustup.rs/) installed. To run any `wash` tests, you need to install [`nextest`](https://nexte.st/index.html). With a Rust toolchain already installed, you can simply install this with:
 

@@ -524,7 +524,7 @@ fn from_defaults<'d, T>(d: &[&'d str]) -> Vec<T>
 where
     T: std::convert::From<&'d str>,
 {
-    // unwrap ok here bacause this is only used for default values
+    // unwrap ok here because this is only used for default values
     d.iter().map(|s| T::from(*s)).collect::<Vec<_>>()
 }
 

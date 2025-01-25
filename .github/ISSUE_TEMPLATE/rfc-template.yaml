@@ -46,7 +46,7 @@ body:
       label: Backwards Compatibility
       description: Discuss how your proposal will affect existing parts of your project. Will it introduce breaking changes? How will you mitigate these issues?
       placeholder: |
-        This proposal will introduce breaking changes. The wasmCloud host will no longer be able to communicate with other hosts over NATS. If backwards compatibiltiy is required, a NATS-to-pigeon breeding program can be established.
+        This proposal will introduce breaking changes. The wasmCloud host will no longer be able to communicate with other hosts over NATS. If backwards compatibility is required, a NATS-to-pigeon breeding program can be established.
     validations:
       required: true
   - type: textarea

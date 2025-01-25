@@ -13,7 +13,7 @@ pub struct HostMetrics {
 
     /// The host's ID.
     // TODO this is actually configured as an InstrumentationScope attribute on the global meter,
-    // but we don't really hve a way of getting at those. We should figure out a way to get at that
+    // but we don't really have a way of getting at those. We should figure out a way to get at that
     // information so we don't have to duplicate it here.
     pub host_id: String,
     /// The host's lattice ID.

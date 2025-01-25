@@ -187,7 +187,7 @@ Whether you are a user or contributor, official support channels include:
 
 - The GitHub Issues in each subproject repository
 - [Slack](https://slack.wasmcloud.com/)
-  - Please note that Slack is meant for help in discussing specific problems or asyncronous
+  - Please note that Slack is meant for help in discussing specific problems or asynchronous
     debugging/help. If you are reporting a specific bug, please do so it in GitHub Issues
 
 Before opening a new issue or submitting a new pull request, it's helpful to search the project -

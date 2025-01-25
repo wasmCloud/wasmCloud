@@ -687,7 +687,7 @@ fn sanitize_alias(call_alias: Option<String>) -> Result<Option<String>> {
     }
 }
 
-/// Retreive claims from a given wasmCloud instance
+/// Retrieve claims from a given wasmCloud instance
 pub async fn get_claims(
     GetClaimsCommand { opts }: GetClaimsCommand,
 ) -> Result<Vec<HashMap<String, String>>> {

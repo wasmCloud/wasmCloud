@@ -78,7 +78,7 @@ spec:
             namespace: wasmcloud
             package: sqldb-postgres
             interfaces: [query, prepared]
-            # NOTE: When configuraiton is specified below only by name, it references a named configuration
+            # NOTE: When configuration is specified below only by name, it references a named configuration
             # (ex. one set via `wash config put`)
             target_config:
               - name: pg
@@ -134,7 +134,7 @@ The `querier` component in the snippet above specifies a link to a `sqldb-postgr
 
 ## 🔐 Secret Settings
 
-While most values can be specified via named configuration, sensitive values like the `POSTGRES_PASSWORD` should be speicified via *secrets*.
+While most values can be specified via named configuration, sensitive values like the `POSTGRES_PASSWORD` should be specified via *secrets*.
 
 New secrets be specified by using `wash secrets put`.
 

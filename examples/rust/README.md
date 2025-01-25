@@ -2,7 +2,7 @@
 
 This folder contains examples that can be run with [wasmcloud][wasmcloud] which are written in [Rust][rust].
 
-As much of WebAssembly tooling is written in Rust, Rust currently posseses the best support for WebAssembly and it's emerging standards.
+As much of WebAssembly tooling is written in Rust, Rust currently possesses the best support for WebAssembly and it's emerging standards.
 
 ## Building individual example components
 

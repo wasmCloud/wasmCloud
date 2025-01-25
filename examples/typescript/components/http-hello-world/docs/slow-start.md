@@ -4,7 +4,7 @@ Want to do more of the steps manually without using `wash dev`? You've come to t
 
 ## Install NodeJS dependencies
 
-If you have the basic dependencies installed, you can install NodeJS-level dependcies:
+If you have the basic dependencies installed, you can install NodeJS-level dependencies:
 
 ```console
 npm install

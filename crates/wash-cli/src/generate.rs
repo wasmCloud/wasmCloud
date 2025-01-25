@@ -26,7 +26,7 @@ pub struct NewProjectArgs {
     #[clap(help = "Project name")]
     pub project_name: Option<String>,
 
-    /// Github repository url. Requires 'git' to be installed in PATH.
+    /// GitHub repository url. Requires 'git' to be installed in PATH.
     #[clap(long)]
     pub git: Option<String>,
 

@@ -356,7 +356,7 @@ impl TryFrom<RegistryPullSource> for RegistryMapping {
     }
 }
 
-/// Configuration common amoung all project types & languages.
+/// Configuration common among all project types & languages.
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct CommonConfig {
     /// Name of the project.
@@ -605,10 +605,10 @@ pub struct InterfaceComponentOverride {
     #[serde(alias = "interface")]
     pub interface_spec: String,
 
-    /// Configuration that should be provided to the overriden component
+    /// Configuration that should be provided to the overridden component
     pub config: Option<OneOrMore<DevConfigSpec>>,
 
-    /// Secrets that should be provided to the overriden component
+    /// Secrets that should be provided to the overridden component
     pub secrets: Option<OneOrMore<DevSecretSpec>>,
 
     /// Reference to the component
@@ -858,14 +858,14 @@ impl<'a, T> Iterator for OneOrMoreIterator<'a, T> {
     }
 }
 
-/// Configuration for imports that should be overriden
+/// Configuration for imports that should be overridden
 #[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
 pub struct InterfaceOverrides {
-    /// Imports that should be overriden
+    /// Imports that should be overridden
     #[serde(default)]
     pub imports: Vec<InterfaceComponentOverride>,
 
-    /// Exports that should be overriden
+    /// Exports that should be overridden
     #[serde(default)]
     pub exports: Vec<InterfaceComponentOverride>,
 }

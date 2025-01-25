@@ -239,7 +239,7 @@ impl WkgFetcher {
         // this to get the list of packages from the package
         let (_, packages) = wasm_pkg_core::wit::get_packages(&wit_dir)
             .context("failed to get packages from wit dir")?;
-        // If there is a depenency on unversioned wasi:logging, add an override (if not present)
+        // If there is a dependency on unversioned wasi:logging, add an override (if not present)
         let patch_dir = if packages.contains(&(wasi_logging_name.clone(), VersionReq::STAR)) {
             // copy all top level wit files to a temp dir. All the stuff people should be doing at the top
             // level so this is fine

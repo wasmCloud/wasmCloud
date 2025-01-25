@@ -60,7 +60,7 @@ pub async fn load_plugins(plugin_dir: impl AsRef<Path>) -> anyhow::Result<Subcom
         .await
         .context("Unable to read plugin directory")?;
 
-    let mut plugins = SubcommandRunner::new().context("Could not inititalize plugin runner")?;
+    let mut plugins = SubcommandRunner::new().context("Could not initialize plugin runner")?;
 
     // We load each plugin separately so we only warn if a plugin fails to load
     while let Some(entry) = readdir.next_entry().await.transpose() {

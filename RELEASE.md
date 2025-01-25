@@ -78,7 +78,7 @@ communicate and decide on a release date, and sometimes requests for releasing a
 sooner (often tied to a newly released Wasm feature) come from the community.
 
 As Wasm continues to stabilize, we will be switching to a release train style with scheduled release
-dates (preferrably monthly)
+dates (preferably monthly)
 
 ## Versioning
 

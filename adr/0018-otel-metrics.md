@@ -12,7 +12,7 @@ After much development and refinement, [OpenTelemetry][otel] has become *the* st
 - Tracing
 - Metrics
 
-While wasmCloud has supported logs and tracing for a long time with the integration of the [`tracing`][crates-tracing], metrics has not been suported natively by the wasmCloud host, and thus not supported by wasmCloud as a whole.
+While wasmCloud has supported logs and tracing for a long time with the integration of the [`tracing`][crates-tracing], metrics has not been supported natively by the wasmCloud host, and thus not supported by wasmCloud as a whole.
 
 Logs and tracing are sufficient to solve *most* problems that actually occur with a running host, but metrics are important to ease the burden of operators of any given service, so implementing them is important. Tools like [Prometheus][prom] and [Grafana][grafana] have become industry standards, and are used by DevOps practitioners and operations people at large extensively across the industry.
 

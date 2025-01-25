@@ -10,7 +10,7 @@ from different components configured with different access roles and policies.
 
 The primary means of configuring Blobstore-S3 to work on a per-link basis is with a Base64 encoded JSON value that is set as link configuration.
 
-This option, like the 'env' file, allows for settings to be specific to a link, however it is not as secure, because of the additional processing required to generate the encoded structure and pass it into either `wash`, or via a wadm application manfiest.
+This option, like the 'env' file, allows for settings to be specific to a link, however it is not as secure, because of the additional processing required to generate the encoded structure and pass it into either `wash`, or via a wadm application manifest.
 
 > ![NOTE]
 > The field names in the JSON structure that is encoded are defined by `StorageConfig` in src/config.rs, they are different from the environment variable names in other sections.

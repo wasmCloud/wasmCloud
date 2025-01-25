@@ -34,7 +34,7 @@ pub struct UpdateComponentCommand {
     #[clap(name = "component-id", value_parser = validate_component_id)]
     pub component_id: String,
 
-    /// Component reference to replace the current running comonent with, e.g. the absolute file path or OCI URL.
+    /// Component reference to replace the current running component with, e.g. the absolute file path or OCI URL.
     #[clap(name = "new-component-ref")]
     pub new_component_ref: String,
 }

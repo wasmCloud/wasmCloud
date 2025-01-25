@@ -215,7 +215,7 @@ GitHub: @ossfellow
 Organization: Operatik Inc.
 
 Name: Aditya Salunkhe
-Github: @Aditya1404Sal
+GitHub: @Aditya1404Sal
 Organization: Self
 
 Name: Márk Kővári

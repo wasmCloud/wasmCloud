@@ -228,7 +228,7 @@ async fn augment_existing_manifests(
                     .await
                     .with_context(|| {
                         format!(
-                            "failed to update secret proeprties for component [{}]",
+                            "failed to update secret properties for component [{}]",
                             component.name
                         )
                     })?;
@@ -240,7 +240,7 @@ async fn augment_existing_manifests(
                     .await
                     .with_context(|| {
                         format!(
-                            "failed to update secret proeprties for component [{}]",
+                            "failed to update secret properties for component [{}]",
                             component.name
                         )
                     })?;

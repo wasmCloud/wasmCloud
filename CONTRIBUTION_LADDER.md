@@ -34,7 +34,7 @@ As a community member you must follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 ## Contributor
 
 You can be a contributor to multiple wasmCloud repositories. This role will be assigned basic
-privileges on the wasmCloud respositories where they are contributors. Contributors have the
+privileges on the wasmCloud repositories where they are contributors. Contributors have the
 following capabilities:
 
 * Have issues and pull requests assigned to them
@@ -91,7 +91,7 @@ more of the maintainers.
 
 We know that not all people want to manage code in a project! To that end, we also recognize that
 some maintainers/contributors may also want to take on a "community management" role. A community
-managment maintainer will have other types of responsibilities:
+management maintainer will have other types of responsibilities:
 
 * Managing Slack and other communication channels
 * Planning community meetups/events
