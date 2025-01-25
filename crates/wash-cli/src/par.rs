@@ -12,6 +12,7 @@ use wash_lib::cli::par::{
     convert_error, create_provider_archive, detect_arch, insert_provider_binary,
 };
 use wash_lib::cli::{extract_keypair, inspect, par, CommandOutput, OutputKind};
+use wash_lib::common::create_dummy_provider_wasm;
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
@@ -101,6 +102,14 @@ pub struct CreateCommand {
     /// Disables autogeneration of signing keys
     #[clap(long = "disable-keygen")]
     disable_keygen: bool,
+
+    /// Optional WIT world for the provider archive, e.g. `imports`
+    #[clap(long = "wit-world")]
+    wit_world: Option<String>,
+
+    /// Location of project directory containing WIT
+    #[clap(long = "wit-directory")]
+    wit_dir: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -276,8 +285,15 @@ pub async fn handle_create(cmd: CreateCommand, output_kind: OutputKind) -> Resul
         ),
     };
 
+    let wit_interface_bytes = match (cmd.wit_world.as_deref(), cmd.wit_dir.as_ref()) {
+        (Some(_), None) => bail!("Both --wit-world and --wit-directory must be provided together"),
+        (None, Some(_)) => bail!("Both --wit-world and --wit-directory must be provided together"),
+        (Some(world), Some(dir)) => create_dummy_provider_wasm(dir, world)?,
+        (None, None) => None,
+    };
+
     let compress = cmd.compress;
-    let mut par = create_provider_archive(cmd.into(), &lib)
+    let mut par = create_provider_archive(cmd.into(), &lib, wit_interface_bytes.as_deref())
         .context("failed to create provider archive with built provider")?;
     par.write(&outfile, &issuer, &subject, compress)
         .await

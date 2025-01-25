@@ -7,8 +7,10 @@ use anyhow::{anyhow, bail, Result};
 use tokio::process::Command;
 
 use anyhow::Context;
-use tracing::error;
+use tracing::{error, info};
 use wasmcloud_control_interface::HostInventory;
+use wit_component::dummy_module;
+use wit_parser::{ManglingAndAbi, Resolve, WorldId};
 
 use crate::id::{ModuleId, ServerId, ServiceId};
 
@@ -410,4 +412,44 @@ pub async fn clone_git_repo(
 
     std::env::set_current_dir(cwd)?;
     Ok(())
+}
+
+/// Creaetes a dummy wasm module which encodes the WIT resolve and world for the provider
+pub fn create_dummy_provider_wasm(
+    wit_dir: impl AsRef<Path>,
+    world_name: &str,
+) -> Result<Option<Vec<u8>>> {
+    let (resolve, world_id) = convert_wit_dir_to_world(&wit_dir, world_name)
+        .context("No WIT interface found or could not resolve world")?;
+
+    // Wasm can contain either a set of WIT package(s) or a component. We
+    // need to treat providers like a component however it is not a wasm module,
+    // therefore we need to make a blank component implementation of the provider
+    // which encodes the world.
+    Ok(Some(dummy_module(
+        &resolve,
+        world_id,
+        ManglingAndAbi::Standard32,
+    )))
+}
+
+/// Build a [`wit_parser::Resolve`] from a provided directory
+/// and select a given world
+pub fn convert_wit_dir_to_world(
+    dir: impl AsRef<Path>,
+    world: impl AsRef<str>,
+) -> Result<(Resolve, WorldId)> {
+    // Resolve the WIT directory packages & worlds
+    let mut resolve = wit_parser::Resolve::default();
+    let (package_id, _paths) = resolve
+        .push_dir(dir.as_ref())
+        .with_context(|| format!("failed to add WIT directory @ [{}]", dir.as_ref().display()))?;
+    info!("successfully loaded WIT @ [{}]", dir.as_ref().display());
+
+    // Select the target world that was specified by the user
+    let world_id = resolve
+        .select_world(package_id, world.as_ref().into())
+        .context("failed to select world from built resolver")?;
+
+    Ok((resolve, world_id))
 }

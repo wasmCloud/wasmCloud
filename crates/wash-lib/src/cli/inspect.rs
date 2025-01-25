@@ -115,12 +115,10 @@ pub async fn handle_command(
             let resolve = witty.resolve();
             let main = witty.package();
             let mut printer = wit_component::WitPrinter::default();
-            CommandOutput::from_key_and_text(
-                "wit",
-                printer
-                    .print(resolve, main, &[])
-                    .context("should be able to print WIT world from a component")?,
-            )
+            printer
+                .print(resolve, main, &[])
+                .context("should be able to print WIT world from a component")?;
+            CommandOutput::from_key_and_text("wit", printer.output.to_string())
         }
         // Catch trying to inspect a WIT from a WASI Preview 1 module
         Some(Ok(wasmparser::Payload::Version {
@@ -129,8 +127,6 @@ pub async fn handle_command(
         })) if command.wit => {
             bail!("No WIT present in Wasm, this looks like a WASI Preview 1 module")
         }
-        // Fail to inspect wit from a non-wasm file
-        _ if command.wit => bail!("Invalid Wasm, could not parse WIT"),
         // Inspect claims inside of Wasm
         Some(Ok(_)) => {
             let module_name = command.target.clone();
@@ -154,7 +150,26 @@ pub async fn handle_command(
             }
         }
         //  Fallback to inspecting a provider archive
-        _ => render_provider_claims(command.clone(), &buf).await?,
+        _ => {
+            let artifact = ProviderArchive::try_load(&buf)
+                .await
+                .map_err(|e| anyhow!("{}", e))?;
+            if command.wit {
+                let wit_bytes = artifact
+                    .wit_world()
+                    .ok_or_else(|| anyhow!("No wit encoded in PAR"))?;
+                let witty = wit_component::decode(wit_bytes).context("Failed to decode WIT")?;
+                let resolve = witty.resolve();
+                let main = witty.package();
+                let mut printer = wit_component::WitPrinter::default();
+                printer
+                    .print(resolve, main, &[])
+                    .context("should be able to print WIT world from provider archive")?;
+                CommandOutput::from_key_and_text("wit", printer.output.to_string())
+            } else {
+                render_provider_claims(command.clone(), &artifact).await?
+            }
+        }
     };
     Ok(output)
 }
@@ -287,12 +302,9 @@ where
 /// Inspects a provider archive
 pub(crate) async fn render_provider_claims(
     cmd: InspectCliCommand,
-    artifact_bytes: &[u8],
+    artifact: &ProviderArchive,
 ) -> Result<CommandOutput> {
     let _cache_file = (!cmd.no_cache).then(|| cached_oci_file(&cmd.target));
-    let artifact = ProviderArchive::try_load(artifact_bytes)
-        .await
-        .map_err(|e| anyhow!("{}", e))?;
     let claims = artifact
         .claims()
         .ok_or_else(|| anyhow!("No claims found in artifact"))?;

@@ -9,6 +9,7 @@ use tracing::{trace, warn};
 use crate::build::SignConfig;
 use crate::cli::par::{create_provider_archive, detect_arch, ParCreateArgs};
 use crate::cli::{extract_keypair, OutputKind};
+use crate::common::create_dummy_provider_wasm;
 use crate::parser::{CommonConfig, GoConfig, LanguageConfig, ProviderConfig, RustConfig};
 
 /// Build a capability provider for the current machine's architecture
@@ -19,6 +20,12 @@ pub(crate) async fn build_provider(
     common_config: &CommonConfig,
     signing_config: Option<&SignConfig>,
 ) -> Result<PathBuf> {
+    let wit_interface_bytes = if let Some(world) = provider_config.wit_world.as_deref() {
+        create_dummy_provider_wasm(&common_config.project_dir, world)?
+    } else {
+        None
+    };
+
     let (provider_path_buf, bin_name) = match language_config {
         LanguageConfig::Rust(rust_config) => {
             build_rust_provider(provider_config, rust_config, common_config)?
@@ -50,6 +57,7 @@ pub(crate) async fn build_provider(
             arch: detect_arch(),
         },
         &provider_bytes,
+        wit_interface_bytes.as_deref(),
     )
     .context("failed to create initial provider archive with built provider")?;
 

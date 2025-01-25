@@ -27,9 +27,13 @@ pub fn create_provider_archive(
         arch,
     }: ParCreateArgs,
     binary_bytes: &[u8],
+    wit_bytes: Option<&[u8]>,
 ) -> Result<ProviderArchive> {
     let mut par = ProviderArchive::new(&name, &vendor, revision, version);
 
+    if let Some(wit) = wit_bytes {
+        par.add_wit_world(wit).map_err(convert_error)?;
+    }
     par.add_library(&arch, binary_bytes)
         .map_err(convert_error)?;
 
