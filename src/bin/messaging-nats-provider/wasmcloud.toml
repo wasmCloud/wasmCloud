@@ -9,3 +9,4 @@ target_dir = "../../../"
 [provider]
 bin_name = "messaging-nats-provider"
 vendor = "wasmCloud"
+wit_world = "interfaces"

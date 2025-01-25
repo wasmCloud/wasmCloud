@@ -22,6 +22,7 @@ use wascap::{
 };
 
 const CLAIMS_JWT_FILE: &str = "claims.jwt";
+const WIT_WORLD_FILE: &str = "world.wasm";
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
@@ -36,6 +37,7 @@ pub struct ProviderArchive {
     ver: Option<String>,
     token: Option<Token<CapabilityProvider>>,
     json_schema: Option<serde_json::Value>,
+    wit: Option<Vec<u8>>,
 }
 
 impl ProviderArchive {
@@ -50,12 +52,20 @@ impl ProviderArchive {
             ver,
             token: None,
             json_schema: None,
+            wit: None,
         }
     }
 
     /// Adds a native library file (.so, .dylib, .dll) to the archive for a given target string
     pub fn add_library(&mut self, target: &str, input: &[u8]) -> Result<()> {
         self.libraries.insert(target.to_string(), input.to_vec());
+
+        Ok(())
+    }
+
+    /// Adds a WIT file encoded as a wasm module to the archive
+    pub fn add_wit_world(&mut self, world: &[u8]) -> Result<()> {
+        self.wit = Some(world.to_vec());
 
         Ok(())
     }
@@ -100,6 +110,12 @@ impl ProviderArchive {
     #[must_use]
     pub fn schema(&self) -> Option<serde_json::Value> {
         self.json_schema.clone()
+    }
+
+    /// Returns the WIT embedded in this provider archive.
+    #[must_use]
+    pub fn wit_world(&self) -> Option<&[u8]> {
+        self.wit.as_deref()
     }
 
     /// Attempts to read a Provider Archive (PAR) file's bytes to analyze and verify its contents.
@@ -195,6 +211,7 @@ impl ProviderArchive {
         target: Option<&str>,
     ) -> Result<ProviderArchive> {
         let mut libraries = HashMap::new();
+        let mut wit_world = None;
 
         let mut magic = [0; 2];
         if let Err(e) = input.read_exact(&mut magic).await {
@@ -236,6 +253,9 @@ impl ProviderArchive {
                     jwt: jwt.to_string(),
                     claims,
                 });
+            } else if file_target == "world" {
+                tokio::io::copy(&mut entry, &mut bytes).await?;
+                wit_world = Some(bytes);
             } else if let Some(t) = target {
                 // If loading only a specific target, only copy in bytes if it is the target. We still
                 // need to iterate through the rest so we can be sure to find the claims
@@ -267,7 +287,7 @@ impl ProviderArchive {
             let ver = metadata.ver.clone();
             let json_schema = metadata.config_schema.clone();
 
-            validate_hashes(&libraries, cl)?;
+            validate_hashes(&libraries, &wit_world, cl)?;
 
             Ok(ProviderArchive {
                 libraries,
@@ -277,6 +297,7 @@ impl ProviderArchive {
                 ver,
                 token,
                 json_schema,
+                wit: wit_world,
             })
         } else {
             Err("No claims found embedded in provider archive.".into())
@@ -320,7 +341,7 @@ impl ProviderArchive {
             self.vendor.to_string(),
             self.rev,
             self.ver.clone(),
-            generate_hashes(&self.libraries),
+            generate_hashes(&self.libraries, &self.wit),
         );
         if let Some(schema) = self.json_schema.clone() {
             claims.metadata.as_mut().unwrap().config_schema = Some(schema);
@@ -338,6 +359,15 @@ impl ProviderArchive {
         header.set_cksum();
         par.append_data(&mut header, CLAIMS_JWT_FILE, Cursor::new(claims_jwt))
             .await?;
+
+        if let Some(world) = &self.wit {
+            let mut header = tokio_tar::Header::new_gnu();
+            header.set_path(WIT_WORLD_FILE)?;
+            header.set_size(world.len() as u64);
+            header.set_cksum();
+            par.append_data(&mut header, WIT_WORLD_FILE, Cursor::new(world))
+                .await?;
+        }
 
         for (tgt, lib) in &self.libraries {
             let mut header = tokio_tar::Header::new_gnu();
@@ -361,6 +391,7 @@ impl ProviderArchive {
 
 fn validate_hashes(
     libraries: &HashMap<String, Vec<u8>>,
+    wit: &Option<Vec<u8>>,
     claims: &Claims<CapabilityProvider>,
 ) -> Result<()> {
     let file_hashes = claims.metadata.as_ref().unwrap().target_hashes.clone();
@@ -372,14 +403,33 @@ fn validate_hashes(
             return Err(format!("File hash and verify hash do not match for '{tgt}'").into());
         }
     }
+
+    if let Some(interface) = wit {
+        if let Some(wit_hash) = file_hashes.get(WIT_WORLD_FILE) {
+            let check_hash = hash_bytes(interface);
+            if wit_hash != &check_hash {
+                return Err("WIT interface hash does not match".into());
+            }
+        } else if wit.is_some() {
+            return Err("WIT interface present but no hash found in claims".into());
+        }
+    }
     Ok(())
 }
 
-fn generate_hashes(libraries: &HashMap<String, Vec<u8>>) -> HashMap<String, String> {
+fn generate_hashes(
+    libraries: &HashMap<String, Vec<u8>>,
+    wit: &Option<Vec<u8>>,
+) -> HashMap<String, String> {
     let mut hm = HashMap::new();
     for (target, lib) in libraries {
         let hash = hash_bytes(lib);
         hm.insert(target.to_string(), hash);
+    }
+
+    if let Some(interface) = wit {
+        let hash = hash_bytes(interface);
+        hm.insert(WIT_WORLD_FILE.to_string(), hash);
     }
 
     hm

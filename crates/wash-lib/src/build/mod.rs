@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use tracing::info;
 use wasm_pkg_core::lock::LockFile;
-use wit_parser::{Resolve, WorldId};
 
 use crate::{
     cli::CommonPackageArgs,
@@ -164,25 +163,4 @@ pub async fn build_project(
             build_provider(provider_config, &config.language, &config.common, signing).await
         }
     }
-}
-
-/// Build a [`wit_parser::Resolve`] from a provided directory
-/// and select a given world
-fn convert_wit_dir_to_world(
-    dir: impl AsRef<Path>,
-    world: impl AsRef<str>,
-) -> Result<(Resolve, WorldId)> {
-    // Resolve the WIT directory packages & worlds
-    let mut resolve = wit_parser::Resolve::default();
-    let (package_id, _paths) = resolve
-        .push_dir(dir.as_ref())
-        .with_context(|| format!("failed to add WIT directory @ [{}]", dir.as_ref().display()))?;
-    info!("successfully loaded WIT @ [{}]", dir.as_ref().display());
-
-    // Select the target world that was specified by the user
-    let world_id = resolve
-        .select_world(package_id, world.as_ref().into())
-        .context("failed to select world from built resolver")?;
-
-    Ok((resolve, world_id))
 }
