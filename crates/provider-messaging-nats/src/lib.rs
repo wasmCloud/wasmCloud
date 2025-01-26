@@ -353,7 +353,7 @@ impl Provider for NatsMessagingProvider {
         Ok(())
     }
 
-    #[instrument(level = "info", skip_all, fields(target_id = info.get_source_id()))]
+    #[instrument(level = "info", skip_all, fields(target_id = info.get_target_id()))]
     async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
         // If we were the source, then the component we're invoking is the target
         let component_id = info.get_target_id();
