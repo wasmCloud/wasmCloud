@@ -2,6 +2,7 @@ name = "SQLDB Postgres"
 language = "rust"
 type = "provider"
 version = "0.3.0"
+wit = "../../../crates/provider-sqldb-postgres/wit"
 
 [rust]
 target_path = "../../../target"

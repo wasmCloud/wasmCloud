@@ -531,8 +531,8 @@ fn embed_wasm_component_metadata(
         );
     };
 
-    let (resolver, world_id) =
-        convert_wit_dir_to_world(wit_dir, wit_world).context("failed to resolve WIT world")?;
+    let (resolver, world_id) = convert_wit_dir_to_world(wit_dir, Some(wit_world.as_ref()))
+        .context("failed to resolve WIT world")?;
 
     // Encode the metadata
     let encoded_metadata =
