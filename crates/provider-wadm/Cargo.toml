@@ -27,7 +27,6 @@ tracing-futures = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 wascap = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
-wadm = { workspace = true }
 wit-bindgen-wrpc = { workspace = true }
 wadm-client = { workspace = true }
 wadm-types = { workspace = true, features = ["wit"] }
