@@ -2,6 +2,7 @@ name = "Blobstore FS"
 language = "rust"
 type = "provider"
 version = "0.9.0"
+wit = "../../../crates/provider-blobstore-fs/wit"
 
 [rust]
 target_dir = "../../"

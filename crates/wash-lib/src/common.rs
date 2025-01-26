@@ -7,9 +7,9 @@ use anyhow::{anyhow, bail, Result};
 use tokio::process::Command;
 
 use anyhow::Context;
-use tracing::{error, info};
+use tracing::error;
 use wasmcloud_control_interface::HostInventory;
-use wit_component::dummy_module;
+use wit_component::{dummy_module, StringEncoding};
 use wit_parser::{ManglingAndAbi, Resolve, WorldId};
 
 use crate::id::{ModuleId, ServerId, ServiceId};
@@ -415,41 +415,54 @@ pub async fn clone_git_repo(
 }
 
 /// Creaetes a dummy wasm module which encodes the WIT resolve and world for the provider
+/// Wasm can contain either a set of WIT package(s) or a component. We
+/// need to treat providers like a component however it is not a wasm module,
+/// therefore we need to make a blank component implementation of the provider
+/// which encodes the world.
 pub fn create_dummy_provider_wasm(
     wit_dir: impl AsRef<Path>,
-    world_name: &str,
+    world_name: Option<&str>,
 ) -> Result<Option<Vec<u8>>> {
     let (resolve, world_id) = convert_wit_dir_to_world(&wit_dir, world_name)
         .context("No WIT interface found or could not resolve world")?;
 
-    // Wasm can contain either a set of WIT package(s) or a component. We
-    // need to treat providers like a component however it is not a wasm module,
-    // therefore we need to make a blank component implementation of the provider
-    // which encodes the world.
-    Ok(Some(dummy_module(
+    // Create core module
+    let mut module_bytes = dummy_module(&resolve, world_id, ManglingAndAbi::Standard32);
+
+    // Embed the WIT metadata directly into the module
+    wit_component::embed_component_metadata(
+        &mut module_bytes,
         &resolve,
         world_id,
-        ManglingAndAbi::Standard32,
-    )))
+        StringEncoding::UTF8,
+    )
+    .context("Failed to embed WIT metadata")?;
+
+    // Create the final component
+    let component = wit_component::ComponentEncoder::default()
+        .validate(true)
+        .module(&module_bytes)?
+        .encode()
+        .context("Failed to encode component")?;
+
+    Ok(Some(component))
 }
 
 /// Build a [`wit_parser::Resolve`] from a provided directory
 /// and select a given world
 pub fn convert_wit_dir_to_world(
     dir: impl AsRef<Path>,
-    world: impl AsRef<str>,
+    world: Option<&str>,
 ) -> Result<(Resolve, WorldId)> {
     // Resolve the WIT directory packages & worlds
     let mut resolve = wit_parser::Resolve::default();
     let (package_id, _paths) = resolve
         .push_dir(dir.as_ref())
         .with_context(|| format!("failed to add WIT directory @ [{}]", dir.as_ref().display()))?;
-    info!("successfully loaded WIT @ [{}]", dir.as_ref().display());
 
-    // Select the target world that was specified by the user
     let world_id = resolve
-        .select_world(package_id, world.as_ref().into())
-        .context("failed to select world from built resolver")?;
+        .select_world(package_id, world)
+        .context("failed to select world - if multiple worlds exist, please specify one")?;
 
     Ok((resolve, world_id))
 }
