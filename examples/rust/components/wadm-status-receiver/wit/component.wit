@@ -1,0 +1,6 @@
+package wasmcloud:examples;
+
+world component {
+  import wasi:logging/logging;
+  export wasmcloud:wadm/handler@0.2.0;
+}

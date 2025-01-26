@@ -1,157 +1,231 @@
-use std::collections::HashMap;
-
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use tracing::warn;
+use wasmcloud_provider_sdk::{core::secrets::SecretValue, LinkConfig};
 
-const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
+const DEFAULT_CTL_HOST: &str = "0.0.0.0";
+const DEFAULT_CTL_PORT: u16 = 4222;
 const DEFAULT_LATTICE: &str = "default";
 
-const CONFIG_NATS_URI: &str = "cluster_uris";
-const CONFIG_NATS_CLIENT_JWT: &str = "client_jwt";
-const CONFIG_NATS_CLIENT_SEED: &str = "client_seed";
-const CONFIG_NATS_TLS_CA: &str = "tls_ca";
-const CONFIG_NATS_TLS_CA_FILE: &str = "tls_ca_file";
-const CONFIG_NATS_PING_INTERVAL_SEC: &str = "ping_interval_sec";
-const CONFIG_CUSTOM_INBOX_PREFIX: &str = "custom_inbox_prefix";
+// Configuration keys
 const CONFIG_LATTICE: &str = "lattice";
 const CONFIG_APP_NAME: &str = "app_name";
+const CONFIG_CTL_HOST: &str = "ctl_host";
+const CONFIG_CTL_PORT: &str = "ctl_port";
+const CONFIG_CTL_JWT: &str = "ctl_jwt";
+const CONFIG_CTL_SEED: &str = "ctl_seed";
+const CONFIG_CTL_CREDSFILE: &str = "ctl_credsfile";
+const CONFIG_CTL_TLS_CA_FILE: &str = "ctl_tls_ca_file";
+const CONFIG_CTL_TLS_FIRST: &str = "ctl_tls_first";
+const CONFIG_JS_DOMAIN: &str = "js_domain";
 
 fn default_lattice() -> String {
     DEFAULT_LATTICE.to_string()
 }
 
-/// Configuration for interacting with WADM over NATS.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct WadmConfig {
-    /// Lattice to subscribe to
-    #[serde(default = "default_lattice")]
-    pub lattice: String,
-
-    /// Application name to subscribe to updates for
-    #[serde(default)]
-    pub app_name: String,
-
-    /// Cluster(s) to make a subscription on and connect to
-    #[serde(default)]
-    pub cluster_uris: Vec<String>,
-
-    /// Auth JWT to use (if necessary)
-    #[serde(default)]
-    pub auth_jwt: Option<String>,
-
-    /// Auth seed to use (if necessary)
-    #[serde(default)]
-    pub auth_seed: Option<String>,
-
-    /// TLS Certificate Authority, encoded as a string
-    #[serde(default)]
-    pub tls_ca: Option<String>,
-
-    /// TLS Certificate Authority, as a path on disk
-    #[serde(default)]
-    pub tls_ca_file: Option<String>,
-
-    /// Ping interval in seconds
-    #[serde(default)]
-    pub ping_interval_sec: Option<u16>,
-
-    /// Inbox prefix to use (by default)
-    #[serde(default)]
-    pub custom_inbox_prefix: Option<String>,
+fn default_ctl_host() -> String {
+    DEFAULT_CTL_HOST.to_string()
 }
 
-impl Default for WadmConfig {
+fn default_ctl_port() -> u16 {
+    DEFAULT_CTL_PORT
+}
+
+/// Configuration when subscribing a component with the
+/// WADM provider as a source along a link.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct ClientConfig {
+    /// The lattice this subscription is on.
+    #[serde(default = "default_lattice")]
+    pub lattice: String,
+    /// Application name to subscribe to updates for.
+    /// Cannot be empty if this is a subscription config.
+    #[serde(default)]
+    pub app_name: Option<String>,
+    /// Control host for connection
+    #[serde(default = "default_ctl_host")]
+    pub ctl_host: String,
+    /// Control port for connection
+    #[serde(default = "default_ctl_port")]
+    pub ctl_port: u16,
+    /// JWT file for authentication
+    #[serde(default)]
+    pub ctl_jwt: Option<String>,
+    /// Seed file/literal for authentication
+    #[serde(default)]
+    pub ctl_seed: Option<String>,
+    /// Credentials file combining seed and JWT
+    #[serde(default)]
+    pub ctl_credsfile: Option<String>,
+    /// TLS CA certificate file
+    #[serde(default)]
+    pub ctl_tls_ca_file: Option<String>,
+    /// Perform TLS handshake first
+    #[serde(default)]
+    pub ctl_tls_first: bool,
+    /// JetStream domain
+    #[serde(default)]
+    pub js_domain: Option<String>,
+}
+
+impl Default for ClientConfig {
     fn default() -> Self {
-        WadmConfig {
+        ClientConfig {
             lattice: default_lattice(),
-            app_name: String::new(),
-            cluster_uris: vec![DEFAULT_NATS_URI.to_string()],
-            auth_jwt: None,
-            auth_seed: None,
-            tls_ca: None,
-            tls_ca_file: None,
-            ping_interval_sec: None,
-            custom_inbox_prefix: None,
+            app_name: None,
+            ctl_host: String::new(),
+            ctl_port: 0,
+            ctl_jwt: None,
+            ctl_seed: None,
+            ctl_credsfile: None,
+            ctl_tls_ca_file: None,
+            ctl_tls_first: false,
+            js_domain: None,
         }
     }
 }
 
-impl TryFrom<HashMap<String, String>> for WadmConfig {
+impl TryFrom<HashMap<String, String>> for ClientConfig {
     type Error = anyhow::Error;
 
     fn try_from(values: HashMap<String, String>) -> Result<Self> {
-        let mut config = WadmConfig::default();
+        let mut config = ClientConfig::default();
 
-        if let Some(cluster_uris) = values.get(CONFIG_NATS_URI) {
-            config.cluster_uris = cluster_uris.split(',').map(String::from).collect();
+        if let Some(ctl_host) = values.get(CONFIG_CTL_HOST) {
+            config.ctl_host = ctl_host.clone();
         }
-        if let Some(auth_jwt) = values.get(CONFIG_NATS_CLIENT_JWT) {
-            config.auth_jwt = Some(auth_jwt.clone());
+        if let Some(ctl_port) = values.get(CONFIG_CTL_PORT) {
+            config.ctl_port = ctl_port.parse().map_err(|_| anyhow!("Invalid ctl_port"))?;
         }
-        if let Some(auth_seed) = values.get(CONFIG_NATS_CLIENT_SEED) {
-            config.auth_seed = Some(auth_seed.clone());
+        if let Some(ctl_jwt) = values.get(CONFIG_CTL_JWT) {
+            config.ctl_jwt = Some(ctl_jwt.clone());
         }
-        if let Some(tls_ca) = values.get(CONFIG_NATS_TLS_CA) {
-            config.tls_ca = Some(tls_ca.clone());
+        if let Some(ctl_seed) = values.get(CONFIG_CTL_SEED) {
+            config.ctl_seed = Some(ctl_seed.clone());
         }
-        if let Some(tls_ca_file) = values.get(CONFIG_NATS_TLS_CA_FILE) {
-            config.tls_ca_file = Some(tls_ca_file.clone());
+        if let Some(ctl_credsfile) = values.get(CONFIG_CTL_CREDSFILE) {
+            config.ctl_credsfile = Some(ctl_credsfile.clone());
         }
-        if let Some(ping_interval_sec) = values.get(CONFIG_NATS_PING_INTERVAL_SEC) {
-            config.ping_interval_sec = Some(
-                ping_interval_sec
-                    .parse()
-                    .map_err(|_| anyhow!("Unable to parse ping_interval_sec"))?,
-            );
+        if let Some(ctl_tls_ca_file) = values.get(CONFIG_CTL_TLS_CA_FILE) {
+            config.ctl_tls_ca_file = Some(ctl_tls_ca_file.clone());
         }
-        if let Some(custom_inbox_prefix) = values.get(CONFIG_CUSTOM_INBOX_PREFIX) {
-            config.custom_inbox_prefix = Some(custom_inbox_prefix.clone());
+        if let Some(ctl_tls_first) = values.get(CONFIG_CTL_TLS_FIRST) {
+            config.ctl_tls_first = ctl_tls_first
+                .parse()
+                .map_err(|_| anyhow!("Invalid ctl_tls_first value"))?;
+        }
+        if let Some(js_domain) = values.get(CONFIG_JS_DOMAIN) {
+            config.js_domain = Some(js_domain.clone());
         }
         if let Some(lattice) = values.get(CONFIG_LATTICE) {
             config.lattice = lattice.clone();
         }
         if let Some(app_name) = values.get(CONFIG_APP_NAME) {
-            config.app_name = app_name.clone();
+            config.app_name = Some(app_name.clone());
         }
 
         Ok(config)
     }
 }
 
-impl WadmConfig {
-    /// Merge a given [`WadmConfig`] with another, coalescing fields and overriding
-    /// where necessary
-    pub fn merge(&self, extra: &WadmConfig) -> WadmConfig {
+impl ClientConfig {
+    pub fn merge(&self, extra: &ClientConfig) -> ClientConfig {
         let mut out = self.clone();
 
-        if !extra.cluster_uris.is_empty() {
-            out.cluster_uris = extra.cluster_uris.clone();
+        if !extra.ctl_host.is_empty() {
+            out.ctl_host = extra.ctl_host.clone();
         }
-        if extra.auth_jwt.is_some() {
-            out.auth_jwt = extra.auth_jwt.clone();
+        if extra.ctl_port != 0 {
+            out.ctl_port = extra.ctl_port;
         }
-        if extra.auth_seed.is_some() {
-            out.auth_seed = extra.auth_seed.clone();
+        if extra.ctl_jwt.is_some() {
+            out.ctl_jwt = extra.ctl_jwt.clone();
         }
-        if extra.tls_ca.is_some() {
-            out.tls_ca = extra.tls_ca.clone();
+        if extra.ctl_seed.is_some() {
+            out.ctl_seed = extra.ctl_seed.clone();
         }
-        if extra.tls_ca_file.is_some() {
-            out.tls_ca_file = extra.tls_ca_file.clone();
+        if extra.ctl_credsfile.is_some() {
+            out.ctl_credsfile = extra.ctl_credsfile.clone();
         }
-        if extra.ping_interval_sec.is_some() {
-            out.ping_interval_sec = extra.ping_interval_sec;
+        if extra.ctl_tls_ca_file.is_some() {
+            out.ctl_tls_ca_file = extra.ctl_tls_ca_file.clone();
         }
-        if extra.custom_inbox_prefix.is_some() {
-            out.custom_inbox_prefix = extra.custom_inbox_prefix.clone();
+        if extra.ctl_tls_first {
+            out.ctl_tls_first = extra.ctl_tls_first;
+        }
+        if extra.js_domain.is_some() {
+            out.js_domain = extra.js_domain.clone();
         }
         if !extra.lattice.is_empty() {
             out.lattice = extra.lattice.clone();
         }
-        if !extra.app_name.is_empty() {
+        if extra.app_name.is_some() {
             out.app_name = extra.app_name.clone();
         }
 
         out
     }
+}
+
+pub(crate) fn extract_wadm_config(
+    link_config: &LinkConfig,
+    is_subscription: bool,
+) -> Option<ClientConfig> {
+    let LinkConfig {
+        config, secrets, ..
+    } = link_config;
+    let mut client_config = ClientConfig::default();
+
+    // For subscriptions we need app_name
+    if is_subscription {
+        let app_name = config.get(CONFIG_APP_NAME);
+        if app_name.is_none() {
+            warn!("Subscription config missing required app_name field");
+            return None;
+        }
+        client_config.app_name = app_name.cloned();
+    }
+
+    if let Some(host) = config.get(CONFIG_CTL_HOST) {
+        client_config.ctl_host = host.clone();
+    }
+    if let Some(port) = config.get(CONFIG_CTL_PORT) {
+        if let Ok(port_num) = port.parse() {
+            client_config.ctl_port = port_num;
+        }
+    }
+
+    if let Some(jwt_val) = config.get(CONFIG_CTL_JWT) {
+        client_config.ctl_jwt = Some(jwt_val.clone());
+    }
+
+    // Handle seed (prefer secrets)
+    if let Some(seed_secret) = secrets
+        .get(CONFIG_CTL_SEED)
+        .and_then(SecretValue::as_string)
+    {
+        client_config.ctl_seed = Some(seed_secret.to_string());
+    } else if let Some(seed_val) = config.get(CONFIG_CTL_SEED) {
+        warn!("Seed found in config instead of secrets - consider moving to secrets");
+        client_config.ctl_seed = Some(seed_val.clone());
+    }
+
+    if let Some(lattice) = config.get(CONFIG_LATTICE) {
+        client_config.lattice = lattice.clone();
+    }
+    if let Some(credsfile) = config.get(CONFIG_CTL_CREDSFILE) {
+        client_config.ctl_credsfile = Some(credsfile.clone());
+    }
+    if let Some(tls_ca_file) = config.get(CONFIG_CTL_TLS_CA_FILE) {
+        client_config.ctl_tls_ca_file = Some(tls_ca_file.clone());
+    }
+    if let Some(tls_first) = config.get(CONFIG_CTL_TLS_FIRST) {
+        client_config.ctl_tls_first = matches!(tls_first.to_lowercase().as_str(), "true" | "yes");
+    }
+    if let Some(js_domain) = config.get(CONFIG_JS_DOMAIN) {
+        client_config.js_domain = Some(js_domain.clone());
+    }
+
+    Some(client_config)
 }

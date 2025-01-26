@@ -7595,7 +7595,7 @@ dependencies = [
  "tracing-futures",
  "ulid",
  "uuid 1.12.1",
- "wadm-types",
+ "wadm-types 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "wasmcloud-control-interface 2.3.0",
  "wasmcloud-secrets-types 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -7603,8 +7603,7 @@ dependencies = [
 [[package]]
 name = "wadm-client"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6a888ed0f5c7bb1b6c253ef3efb806f533e965861abd7eb7d86de5c6f896deb"
+source = "git+https://github.com/LUK3ARK/wadm.git?branch=fix/status-sub-topic#28e83c80614ec1c4e92d9cf7621e7018dad023f8"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -7614,7 +7613,7 @@ dependencies = [
  "serde_yaml",
  "thiserror 2.0.11",
  "tokio",
- "wadm-types",
+ "wadm-types 0.8.0 (git+https://github.com/LUK3ARK/wadm.git?branch=fix/status-sub-topic)",
 ]
 
 [[package]]
@@ -7622,6 +7621,23 @@ name = "wadm-types"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d637c3a9ecbd4183d509edd1c8daf6f0e341f213c2ab78d7dab3d1438b9326f"
+dependencies = [
+ "anyhow",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+ "utoipa",
+ "wit-bindgen 0.36.0",
+ "wit-bindgen-wrpc",
+]
+
+[[package]]
+name = "wadm-types"
+version = "0.8.0"
+source = "git+https://github.com/LUK3ARK/wadm.git?branch=fix/status-sub-topic#28e83c80614ec1c4e92d9cf7621e7018dad023f8"
 dependencies = [
  "anyhow",
  "regex",
@@ -7911,7 +7927,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wadm-client",
- "wadm-types",
+ "wadm-types 0.8.0 (git+https://github.com/LUK3ARK/wadm.git?branch=fix/status-sub-topic)",
  "walkdir",
  "warp",
  "wash-lib",
@@ -7984,7 +8000,7 @@ dependencies = [
  "tracing",
  "url",
  "wadm-client",
- "wadm-types",
+ "wadm-types 0.8.0 (git+https://github.com/LUK3ARK/wadm.git?branch=fix/status-sub-topic)",
  "walkdir",
  "wascap 0.15.3",
  "wasi-preview1-component-adapter-provider",
@@ -8839,7 +8855,7 @@ dependencies = [
  "tracing-opentelemetry",
  "wadm",
  "wadm-client",
- "wadm-types",
+ "wadm-types 0.8.0 (git+https://github.com/LUK3ARK/wadm.git?branch=fix/status-sub-topic)",
  "wascap 0.15.3",
  "wash-lib",
  "wasmcloud-provider-sdk",

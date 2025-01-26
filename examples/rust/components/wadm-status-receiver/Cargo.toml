@@ -1,0 +1,15 @@
+[package]
+name = "wadm-status-receiver"
+edition = "2021"
+version = "0.1.0"
+description = """
+An example component that is triggered upon a status update of an application in wadm
+"""
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.32"
