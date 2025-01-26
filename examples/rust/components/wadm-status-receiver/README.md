@@ -39,9 +39,6 @@ This will create a folder called `build` which contains `wadm_status_receiver_s.
 wash up
 ```
 
-> [!NOTE]
-> `wash up` will run as long as the host is running (you can cancel it with `Ctrl-C`)
-
 ### Deploy the status receiver application
 
 First, deploy our status receiver component that will listen for updates:
@@ -69,18 +66,16 @@ wash get inventory
 To test status changes, you can:
 1. Undeploy the example application:
    ```console
-   wash app undeploy example-app
+   wash app undeploy rust-hello-world
    ```
 2. Redeploy it:
    ```console
-   wash app deploy example.wadm.yaml
+   wash app deploy rust-hello-world
    ```
 
 Each of these actions will generate status updates that our receiver will log.
 
 ## ⌨️ Code guide
-
-With [wasmCloud][wasmcloud], you write only the important bits of your business logic, so the code for this component is short, with the important bits highlighted below:
 
 ```rust
 impl Guest for StatusReceiver {
