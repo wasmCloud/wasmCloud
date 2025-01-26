@@ -2,6 +2,7 @@
 name = "wasmcloud-provider-wadm"
 version = "0.1.0"
 description = """
+Interact and manage lattices and apps with wadm
 """
 
 authors = { workspace = true }
@@ -25,7 +26,7 @@ tracing = { workspace = true }
 tracing-futures = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 wascap = { workspace = true }
-wasmcloud-provider-sdk = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wash-lib = { workspace = true, features = ["nats"] }
 wadm = { workspace = true }
 wit-bindgen-wrpc = { workspace = true }

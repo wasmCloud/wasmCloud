@@ -7591,16 +7591,15 @@ dependencies = [
  "tracing-futures",
  "ulid",
  "uuid 1.13.1",
- "wadm-types",
+ "wadm-types 0.8.1",
  "wasmcloud-control-interface 2.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "wasmcloud-secrets-types 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "wadm-client"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b8ffccc039370445f7b7296aed8f09e676a0478881770b34a3075630b044ad6"
+version = "0.8.0"
+source = "git+https://github.com/LUK3ARK/wadm.git?branch=fix/status-sub-topic#28e83c80614ec1c4e92d9cf7621e7018dad023f8"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -7610,7 +7609,24 @@ dependencies = [
  "serde_yaml",
  "thiserror 2.0.11",
  "tokio",
- "wadm-types",
+ "wadm-types 0.8.0",
+]
+
+[[package]]
+name = "wadm-types"
+version = "0.8.0"
+source = "git+https://github.com/LUK3ARK/wadm.git?branch=fix/status-sub-topic#28e83c80614ec1c4e92d9cf7621e7018dad023f8"
+dependencies = [
+ "anyhow",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+ "utoipa",
+ "wit-bindgen 0.36.0",
+ "wit-bindgen-wrpc",
 ]
 
 [[package]]
@@ -7907,7 +7923,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wadm-client",
- "wadm-types",
+ "wadm-types 0.8.0",
  "walkdir",
  "warp",
  "wash-lib",
@@ -7980,7 +7996,7 @@ dependencies = [
  "tracing",
  "url",
  "wadm-client",
- "wadm-types",
+ "wadm-types 0.8.0",
  "walkdir",
  "wascap 0.15.3",
  "wasi-preview1-component-adapter-provider",
@@ -8836,7 +8852,7 @@ dependencies = [
  "tracing-opentelemetry",
  "wadm",
  "wadm-client",
- "wadm-types",
+ "wadm-types 0.8.0",
  "wascap 0.15.3",
  "wash-lib",
  "wasmcloud-provider-sdk",
