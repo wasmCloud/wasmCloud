@@ -20,11 +20,8 @@ pub(crate) async fn build_provider(
     common_config: &CommonConfig,
     signing_config: Option<&SignConfig>,
 ) -> Result<PathBuf> {
-    let wit_interface_bytes = if let Some(world) = provider_config.wit_world.as_deref() {
-        create_dummy_provider_wasm(&common_config.project_dir, world)?
-    } else {
-        None
-    };
+    let wit_interface_bytes =
+        create_dummy_provider_wasm(&common_config.wit_dir, provider_config.wit_world.as_deref())?;
 
     let (provider_path_buf, bin_name) = match language_config {
         LanguageConfig::Rust(rust_config) => {
