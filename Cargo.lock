@@ -8822,7 +8822,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-wadm"
-version = "0.20.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8838,6 +8838,8 @@ dependencies = [
  "tracing-futures",
  "tracing-opentelemetry",
  "wadm",
+ "wadm-client",
+ "wadm-types",
  "wascap 0.15.3",
  "wash-lib",
  "wasmcloud-provider-sdk",
