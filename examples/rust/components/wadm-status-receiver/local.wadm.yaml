@@ -1,0 +1,57 @@
+---
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: rust-wadm-status-receiver
+  annotations:
+    version: v0.1.0
+    description: |
+      Demo WebAssembly component using the wasmCloud WADM provider via the wasmcloud:wadm/client WIT interface
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/wadm-status-receiver/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/wadm-status-receiver/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/wadm-status-receiver
+    wasmcloud.dev/categories: |
+      wadm,cicd,rust,example
+spec:
+  components:
+    - name: status-receiver
+      type: component
+      properties:
+        image: file://./build/wadm_status_receiver_s.wasm
+      traits:
+        # Govern the spread/scheduling of the actor
+        - type: spreadscaler
+          properties:
+            instances: 1
+
+    # WADM provider configuration with link to the status receiver
+    - name: wadm-client
+      type: capability
+      properties:
+        image: file://../../../../src/bin/wadm-provider/build/wadm-provider.par.gz
+        config:
+          - name: default-wadm
+            properties:
+              ctl_host: "127.0.0.1"
+              ctl_port: "4222"
+              lattice: "default"
+      traits:
+        - type: link
+          properties:
+            target:
+              name: status-receiver # Link to our component
+            namespace: wasmcloud
+            package: wadm
+            interfaces: [handler] # Implemented by the receiver status updates
+            source:
+              config:
+                - name: default-wadm-sub
+                  properties:
+                    app_name: "rust-hello-world" # The application to receive status updates for
+                    # Uncomment these to override values on top of the default config provided
+                    # This allows mutiple subscriptions to use different clients
+                    # for different lattices
+                    # ctl_host: "127.0.0.1"
+                    # ctl_port: "4222"
+                    # lattice: "default"

@@ -1,0 +1,261 @@
+package wasmcloud:wadm@0.2.0;
+
+interface types {
+  record version-info {
+    version: string,
+    deployed: bool,
+  }
+
+  enum put-result {
+    error,
+    created,
+    new-version,
+  }
+
+  enum get-result {
+    error,
+    success,
+    not-found,
+  }
+
+  enum status-result {
+    error,
+    ok,
+    not-found,
+  }
+
+  enum delete-result {
+    deleted,
+    error,
+    noop,
+  }
+
+  enum status-type {
+    undeployed,
+    reconciling,
+    deployed,
+    failed,
+    waiting,
+    unhealthy,
+  }
+
+  record model-summary {
+    name: string,
+    version: string,
+    description: option<string>,
+    deployed-version: option<string>,
+    status: status-type,
+    status-message: option<string>,
+  }
+
+  record status-info {
+    status-type: status-type,
+    message: string,
+  }
+
+  record trait-status {
+    trait-type: string,
+    info: status-info,
+  }
+
+  record component-status {
+    name: string,
+    component-type: string,
+    info: status-info,
+    traits: list<trait-status>,
+  }
+
+  record status {
+    version: string,
+    info: status-info,
+    components: list<component-status>,
+  }
+
+  record status-update {
+    app: string,
+    status: status,
+  }
+
+  enum deploy-result {
+    error,
+    acknowledged,
+    not-found,
+  }
+
+  /// Metadata describing the manifest
+  record metadata {
+    name: string,
+    annotations: list<tuple<string, string>>,
+    labels: list<tuple<string, string>>,
+  }
+
+  /// A policy definition
+  record policy {
+    name: string,
+    properties: list<tuple<string, string>>,
+    %type: string,
+  }
+
+  /// Configuration properties
+  record config-property {
+    name: string,
+    properties: option<list<tuple<string, string>>>,
+  }
+
+  /// Secret source properties
+  record secret-source-property {
+    policy: string,
+    key: string,
+    field: option<string>,
+    version: option<string>,
+  }
+
+  /// Secret properties
+  record secret-property {
+    name: string,
+    properties: secret-source-property,
+  }
+
+  /// Configuration definition
+  record config-definition {
+    config: list<config-property>,
+    secrets: list<secret-property>,
+  }
+
+  /// Shared application component properties
+  record shared-application-component-properties {
+    name: string,
+    component: string,
+  }
+
+  /// Properties for a component
+  record component-properties {
+    image: option<string>,
+    application: option<shared-application-component-properties>,
+    id: option<string>,
+    config: list<config-property>,
+    secrets: list<secret-property>,
+  }
+
+  /// Properties for a capability
+  record capability-properties {
+    image: option<string>,
+    application: option<shared-application-component-properties>,
+    id: option<string>,
+    config: list<config-property>,
+    secrets: list<secret-property>,
+  }
+
+  /// Properties that can be defined for a component
+  variant properties {
+    component(component-properties),
+    capability(capability-properties),
+  }
+
+  /// Target configuration
+  record target-config {
+    name: string,
+    config: list<config-property>,
+    secrets: list<secret-property>,
+  }
+
+  /// Properties for links
+  record link-property {
+    namespace: string,
+    %package: string,
+    interfaces: list<string>,
+    source: option<config-definition>,
+    target: target-config,
+    name: option<string>,
+  }
+
+  /// Configuration for various spreading requirements
+  record spread {
+    name: string,
+    requirements: list<tuple<string, string>>,
+    weight: option<u32>,
+  }
+
+  /// Properties for spread scalers
+  record spreadscaler-property {
+    instances: u32,
+    spread: list<spread>,
+  }
+
+  /// Properties for defining traits
+  variant trait-property {
+    link(link-property),
+    spreadscaler(spreadscaler-property),
+    custom(string),
+  }
+
+  /// A trait definition
+  record trait {
+    trait-type: string,
+    properties: trait-property,
+  }
+
+  /// A component definition
+  record component {
+    name: string,
+    properties: properties,
+    traits: option<list<trait>>,
+  }
+
+  /// The specification for this manifest
+  record specification {
+    components: list<component>,
+    policies: list<policy>,
+  }
+
+  /// The overall structure of an OAM manifest.
+  record oam-manifest {
+    api-version: string,
+    kind: string,
+    metadata: metadata,
+    spec: specification,
+  }
+}
+
+/// A Wadm client which interacts with the wadm api
+interface client {
+  use types.{version-info, status, model-summary, oam-manifest};
+
+  /// Deploys a model to the WADM system.
+  /// If no lattice is provided, the default lattice name 'default' is used.
+  deploy-model: func(model-name: string, version: option<string>, lattice: option<string>) -> result<string, string>;
+
+  /// Undeploys a model from the WADM system.
+  undeploy-model: func(model-name: string, lattice: option<string>, non-destructive: bool) -> result<_, string>;
+
+  /// Stores the application manifest for later deploys.
+  /// Model is the full YAML or JSON string in this case
+  /// Returns the model name and version respectively.
+  put-model: func(model: string, lattice: option<string>) -> result<tuple<string, string>, string>;
+
+  /// Store an oam manifest directly for later deploys.
+  put-manifest: func(manifest: oam-manifest, lattice: option<string>) -> result<tuple<string, string>, string>;
+
+  /// Retrieves the history of a given model name.
+  get-model-history: func(model-name: string, lattice: option<string>) -> result<list<version-info>, string>;
+
+  /// Retrieves the status of a given model by name.
+  get-model-status: func(model-name: string, lattice: option<string>) -> result<status, string>;
+
+  /// Retrieves details on a given model.
+  get-model-details: func(model-name: string, version: option<string>, lattice: option<string>) -> result<oam-manifest, string>;
+
+  /// Deletes a model version from the WADM system.
+  delete-model-version: func(model-name: string, version: option<string>, lattice: option<string>) -> result<bool, string>;
+
+  /// Retrieves all application manifests.
+  get-models: func(lattice: option<string>) -> result<list<model-summary>, string>;
+}
+
+interface handler {
+  use types.{status-update};
+
+  /// Callback handled to invoke a function when an update is received from a app status subscription
+  handle-status-update: func(msg: status-update) -> result<_, string>;
+}
+

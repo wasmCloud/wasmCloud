@@ -3,39 +3,36 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
+use async_nats::HeaderMap;
 use futures::stream::{AbortHandle, Abortable};
 use futures::StreamExt;
+use opentelemetry_nats::NatsHeaderInjector;
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument as _;
 use wadm_client::{Client, ClientConnectOptions};
-use wadm_types::{
-    api::{StatusResponse, StatusResult},
-    wasmcloud::wadm::handler::StatusUpdate,
-};
+use wadm_types::wasmcloud::wadm::handler::StatusUpdate;
 use wasmcloud_provider_sdk::{
-    core::HostData, get_connection, load_host_data, run_provider, Context, LinkConfig, Provider,
+    core::HostData, get_connection, load_host_data, provider::WrpcClient, run_provider, Context,
+    LinkConfig, Provider,
 };
+use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports, LinkDeleteInfo};
 
 use crate::exports::wasmcloud::wadm::client::{ModelSummary, OamManifest, Status, VersionInfo};
 
 mod config;
 
-use config::WadmConfig;
-use config::{WadmConfig, WADM_STATUS_API_PREFIX};
+use config::{extract_wadm_config, ClientConfig};
 
 wit_bindgen_wrpc::generate!({
-    with: {
-        "wasmcloud:messaging/types@0.2.0": generate,
-        "wasmcloud:messaging/handler@0.2.0": generate,
-         "wasmcloud:wadm/oam-types@0.1.0": generate
-    },
     additional_derives: [
         serde::Serialize,
         serde::Deserialize,
     ],
     with: {
-        "wasmcloud:wadm/types@0.1.0": wadm_types::wasmcloud::wadm::types
+        "wasmcloud:wadm/types@0.2.0": wadm_types::wasmcloud::wadm::types,
+        "wasmcloud:wadm/handler@0.2.0": generate,
+        "wasmcloud:wadm/client@0.2.0": generate
     }
 });
 
@@ -58,7 +55,7 @@ impl Drop for WadmClientBundle {
 
 #[derive(Clone)]
 pub struct WadmProvider {
-    default_config: WadmConfig,
+    default_config: ClientConfig,
     handler_components: Arc<RwLock<HashMap<String, WadmClientBundle>>>,
     consumer_components: Arc<RwLock<HashMap<String, WadmClientBundle>>>,
 }
@@ -74,24 +71,33 @@ impl Default for WadmProvider {
 }
 
 impl WadmProvider {
+    fn name() -> &'static str {
+        "wadm-provider"
+    }
+
     pub async fn run() -> anyhow::Result<()> {
+        initialize_observability!(
+            WadmProvider::name(),
+            std::env::var_os("PROVIDER_SQLDB_POSTGRES_FLAMEGRAPH_PATH")
+        );
+
         let host_data = load_host_data().context("failed to load host data")?;
         let provider = Self::from_host_data(host_data);
-        let shutdown = run_provider(provider.clone(), "wadm-provider")
+        let shutdown = run_provider(provider.clone(), WadmProvider::name())
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        serve(
-            &connection.get_wrpc_client(connection.provider_key()),
-            provider,
-            shutdown,
-        )
-        .await
+        let wrpc = connection
+            .get_wrpc_client(connection.provider_key())
+            .await?;
+        serve_provider_exports(&wrpc, provider, shutdown, serve)
+            .await
+            .context("failed to serve provider exports")
     }
 
     /// Build a [`WadmProvider`] from [`HostData`]
     pub fn from_host_data(host_data: &HostData) -> WadmProvider {
-        let config = WadmConfig::try_from(host_data.config.clone());
+        let config = ClientConfig::try_from(host_data.config.clone());
         if let Ok(config) = config {
             WadmProvider {
                 default_config: config,
@@ -108,29 +114,31 @@ impl WadmProvider {
     /// wadm status updates for this component
     async fn connect(
         &self,
-        cfg: WadmConfig,
+        cfg: ClientConfig,
         component_id: &str,
         make_status_sub: bool,
     ) -> anyhow::Result<WadmClientBundle> {
-        let ca_path: Option<PathBuf> = cfg.tls_ca_file.as_ref().map(PathBuf::from);
+        let ca_path: Option<PathBuf> = cfg.ctl_tls_ca_file.as_ref().map(PathBuf::from);
+
+        let url = format!("{}:{}", cfg.ctl_host, cfg.ctl_port);
         let client_opts = ClientConnectOptions {
-            url: cfg.cluster_uris.first().cloned(),
-            seed: cfg.auth_seed.clone(),
-            jwt: cfg.auth_jwt.clone(),
-            creds_path: None,
+            url: Some(url),
+            seed: cfg.ctl_seed,
+            jwt: cfg.ctl_jwt,
+            creds_path: cfg.ctl_credsfile.as_ref().map(PathBuf::from),
             ca_path,
         };
 
-        // Create the Wadm Client from the NATS client
-        let client = Client::new(&cfg.lattice, None, client_opts).await?;
-        // let client_arc = Arc::new(client);
+        let client = Client::new(&cfg.lattice, Some(&cfg.lattice), client_opts).await?;
 
         let mut sub_handles = Vec::new();
         if make_status_sub {
-            let handle = self
-                .handle_status(&client, component_id, &cfg.app_name)
-                .await?;
-            sub_handles.push(("wadm.status".into(), handle));
+            if let Some(app_name) = &cfg.app_name {
+                let handle = self.handle_status(&client, component_id, app_name).await?;
+                sub_handles.push(("wadm.status".into(), handle));
+            } else {
+                bail!("app_name is required for status subscription");
+            }
         }
 
         Ok(WadmClientBundle {
@@ -147,7 +155,12 @@ impl WadmProvider {
         component_id: &str,
         app_name: &str,
     ) -> anyhow::Result<AbortHandle> {
-        debug!(?component_id, "spawning listener for component");
+        debug!(
+            ?component_id,
+            ?app_name,
+            "spawning listener for component and app"
+        );
+
         let mut subscriber = client
             .subscribe_to_status(app_name)
             .await
@@ -160,49 +173,45 @@ impl WadmProvider {
         tokio::task::spawn(Abortable::new(
             {
                 let semaphore = Arc::new(Semaphore::new(75));
+                let wrpc = match get_connection().get_wrpc_client(&component_id).await {
+                    Ok(wrpc) => Arc::new(wrpc),
+                    Err(err) => {
+                        error!(?err, "failed to construct wRPC client");
+                        return Err(anyhow!("Failed to construct wRPC client: {:?}", err));
+                    }
+                };
                 async move {
                     // Listen for NATS message(s)
                     while let Some(msg) = subscriber.next().await {
                         // Parse the message into a StatusResponse
-                        match serde_json::from_slice::<StatusResponse>(&msg.payload) {
-                            Ok(status_response) => match status_response.result {
-                                StatusResult::Error => {
-                                    warn!("Received error status: {}", status_response.message);
-                                }
-                                StatusResult::NotFound => {
-                                    warn!("Status not found for: {}", app_name.clone());
-                                }
-                                StatusResult::Ok => {
-                                    if let Some(status) = status_response.status {
-                                        debug!(?status, ?component_id, "received status");
+                        match serde_json::from_slice::<wadm_types::api::Status>(&msg.payload) {
+                            Ok(status) => {
+                                debug!(?status, ?component_id, "received status");
 
-                                        let span =
-                                            tracing::debug_span!("handle_message", ?component_id);
-                                        let permit = match semaphore.clone().acquire_owned().await {
-                                            Ok(p) => p,
-                                            Err(_) => {
-                                                warn!("Work pool has been closed, exiting queue subscribe");
-                                                break;
-                                            }
-                                        };
-
-                                        let component_id = Arc::clone(&component_id);
-                                        let app_name = Arc::clone(&app_name);
-                                        tokio::spawn(async move {
-                                            dispatch_status_update(
-                                                component_id.as_str(),
-                                                &app_name,
-                                                status.into(),
-                                                permit,
-                                            )
-                                            .instrument(span)
-                                            .await;
-                                        });
-                                    } else {
-                                        warn!("Received status OK but no status provided");
+                                let span = tracing::debug_span!("handle_message", ?component_id);
+                                let permit = match semaphore.clone().acquire_owned().await {
+                                    Ok(p) => p,
+                                    Err(_) => {
+                                        warn!("Work pool has been closed, exiting queue subscribe");
+                                        break;
                                     }
-                                }
-                            },
+                                };
+
+                                let component_id = Arc::clone(&component_id);
+                                let wrpc = Arc::clone(&wrpc);
+                                let app_name = Arc::clone(&app_name);
+                                tokio::spawn(async move {
+                                    dispatch_status_update(
+                                        &wrpc,
+                                        component_id.as_str(),
+                                        &app_name,
+                                        status.into(),
+                                        permit,
+                                    )
+                                    .instrument(span)
+                                    .await;
+                                });
+                            }
                             Err(e) => {
                                 warn!("Failed to deserialize message: {}", e);
                             }
@@ -222,24 +231,25 @@ impl WadmProvider {
             .as_ref()
             .and_then(|Context { component, .. }| component.clone())
         {
-            let actors = self.consumer_components.read().await;
-            let wadm_bundle = match actors.get(source_id) {
+            let components = self.consumer_components.read().await;
+            let wadm_bundle = match components.get(source_id) {
                 Some(wadm_bundle) => wadm_bundle,
                 None => {
-                    error!("actor not linked: {source_id}");
-                    bail!("actor not linked: {source_id}")
+                    error!("component not linked: {source_id}");
+                    bail!("component not linked: {source_id}")
                 }
             };
             Ok(wadm_bundle.client.clone())
         } else {
-            error!("no actor in request");
-            bail!("no actor in request")
+            error!("no component in request");
+            bail!("no component in request")
         }
     }
 }
 
 #[instrument(level = "debug", skip_all, fields(component_id = %component_id, app_name = %app))]
 async fn dispatch_status_update(
+    wrpc: &WrpcClient,
     component_id: &str,
     app: &str,
     status: Status,
@@ -254,12 +264,10 @@ async fn dispatch_status_update(
         component_id = component_id,
         "sending status to component",
     );
-    if let Err(e) = wasmcloud::wadm::handler::handle_status_update(
-        &get_connection().get_wrpc_client(component_id),
-        &update,
-    )
-    .await
-    {
+
+    let cx: HeaderMap = NatsHeaderInjector::default_with_span().into();
+
+    if let Err(e) = wasmcloud::wadm::handler::handle_status_update(wrpc, Some(cx), &update).await {
         error!(
             error = %e,
             "Unable to send message"
@@ -271,124 +279,62 @@ impl Provider for WadmProvider {
     #[instrument(level = "debug", skip_all, fields(source_id))]
     async fn receive_link_config_as_target(
         &self,
-        LinkConfig {
-            source_id, config, ..
-        }: LinkConfig<'_>,
+        link_config @ LinkConfig { source_id, .. }: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
-        let config = if config.is_empty() {
-            self.default_config.clone()
-        } else {
-            match WadmConfig::try_from(config.clone()) {
-                Ok(cc) => self.default_config.merge(&WadmConfig { ..cc }),
-                Err(e) => {
-                    error!("Failed to build WADM configuration: {e:?}");
-                    return Err(anyhow!(e).context("failed to build WADM config"));
-                }
-            }
-        };
+        let config = extract_wadm_config(&link_config, false)
+            .ok_or_else(|| anyhow!("Failed to extract WADM configuration"))?;
+
+        let merged_config = self.default_config.merge(&config);
 
         let mut update_map = self.consumer_components.write().await;
-        let bundle = match self.connect(config, source_id, false).await {
-            Ok(b) => b,
-            Err(e) => {
-                error!("Failed to connect to NATS: {e:?}");
-                bail!(anyhow!(e).context("failed to connect to NATS"))
-            }
-        };
-        update_map.insert(source_id.into(), bundle);
+        let bundle = self
+            .connect(merged_config, source_id, false)
+            .await
+            .context("Failed to connect to NATS")?;
 
+        update_map.insert(source_id.into(), bundle);
         Ok(())
     }
 
     #[instrument(level = "debug", skip_all, fields(target_id))]
     async fn receive_link_config_as_source(
         &self,
-        LinkConfig {
-            target_id, config, ..
-        }: LinkConfig<'_>,
+        link_config @ LinkConfig { target_id, .. }: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
-        let config = if config.is_empty() {
-            self.default_config.clone()
-        } else {
-            // create a config from the supplied values and merge that with the existing default
-            match WadmConfig::try_from(config.clone()) {
-                Ok(cc) => self.default_config.merge(&cc),
-                Err(e) => {
-                    error!("Failed to build connection configuration: {e:?}");
-                    return Err(anyhow!(e).context("failed to build connection config"));
-                }
-            }
-        };
+        let config = extract_wadm_config(&link_config, true)
+            .ok_or_else(|| anyhow!("Failed to extract WADM configuration"))?;
+
+        let merged_config = self.default_config.merge(&config);
 
         let mut update_map = self.handler_components.write().await;
-        let bundle = match self.connect(config, target_id, true).await {
-            Ok(b) => b,
-            Err(e) => {
-                error!("Failed to connect to NATS: {e:?}");
-                bail!(anyhow!(e).context("failed to connect to NATS"))
-            }
-        };
+        let bundle = self
+            .connect(merged_config, target_id, true)
+            .await
+            .context("Failed to connect to NATS")?;
+
         update_map.insert(target_id.into(), bundle);
-
         Ok(())
     }
 
-    /// Handle notification that a link is dropped: close the connection
-    #[instrument(level = "info", skip(self))]
-    async fn delete_link(&self, component_id: &str) -> anyhow::Result<()> {
-        if component_id == get_connection().provider_key() {
-            return self.delete_link_as_source(component_id).await;
-        }
-
-        self.delete_link_as_target(component_id).await
-    }
-
-    #[instrument(level = "info", skip(self))]
-    async fn delete_link_as_source(&self, target_id: &str) -> anyhow::Result<()> {
-        let mut links = self.handler_components.write().await;
-        if let Some(bundle) = links.remove(target_id) {
-            // Note: subscriptions will be closed via Drop on the WadmClientBundle
-            debug!(
-                "dropping Wadm client and associated subscriptions [{}] for (handler) component [{}]...",
-                &bundle.sub_handles.len(),
-                target_id
-            );
-        }
-
-        debug!(
-            "finished processing (handler) link deletion for component [{}]",
-            target_id
-        );
-
+    #[instrument(level = "info", skip_all, fields(target_id = info.get_target_id()))]
+    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_target_id();
+        self.handler_components.write().await.remove(component_id);
         Ok(())
     }
 
-    #[instrument(level = "info", skip(self))]
-    async fn delete_link_as_target(&self, source_id: &str) -> anyhow::Result<()> {
-        let mut links = self.consumer_components.write().await;
-        if let Some(bundle) = links.remove(source_id) {
-            debug!(
-                "dropping Wadm client and associated subscriptions [{}] for (consumer) component [{}]...",
-                &bundle.sub_handles.len(),
-                source_id
-            );
-        }
-
-        debug!(
-            "finished processing (consumer) link deletion for component [{}]",
-            source_id
-        );
-
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_source_id();
+        self.consumer_components.write().await.remove(component_id);
         Ok(())
     }
 
     /// Handle shutdown request by closing all connections
     async fn shutdown(&self) -> anyhow::Result<()> {
-        // clear the handler components
         let mut handlers = self.handler_components.write().await;
         handlers.clear();
 
-        // clear the consumer components
         let mut consumers = self.consumer_components.write().await;
         consumers.clear();
 
@@ -398,7 +344,6 @@ impl Provider for WadmProvider {
     }
 }
 
-/// Implement the 'wasmcloud:wadm' capability provider interface
 impl exports::wasmcloud::wadm::client::Handler<Option<Context>> for WadmProvider {
     #[instrument(level = "debug", skip(self, ctx), fields(model_name = %model_name))]
     async fn deploy_model(
@@ -407,13 +352,13 @@ impl exports::wasmcloud::wadm::client::Handler<Option<Context>> for WadmProvider
         model_name: String,
         version: Option<String>,
         lattice: Option<String>,
-    ) -> anyhow::Result<Result<(), String>> {
+    ) -> anyhow::Result<Result<String, String>> {
         let client = self.get_client(ctx).await?;
         match client
             .deploy_manifest(&model_name, version.as_deref())
             .await
         {
-            Ok(_) => Ok(Ok(())),
+            Ok((name, _version)) => Ok(Ok(name)),
             Err(err) => {
                 error!("Deployment failed: {err}");
                 Ok(Err(format!("Deployment failed: {err}")))
@@ -465,15 +410,10 @@ impl exports::wasmcloud::wadm::client::Handler<Option<Context>> for WadmProvider
     ) -> anyhow::Result<Result<(String, String), String>> {
         let client = self.get_client(ctx).await?;
 
-        // Serialize the OamManifest into bytes
         let manifest_bytes =
             serde_json::to_vec(&manifest).context("Failed to serialize OAM manifest")?;
 
-        // Convert the bytes into a string
-        let manifest_string = String::from_utf8(manifest_bytes)
-            .context("Failed to convert OAM manifest bytes to string")?;
-
-        match client.put_manifest(&manifest_string).await {
+        match client.put_manifest(manifest_bytes).await {
             Ok(response) => Ok(Ok(response)),
             Err(err) => {
                 error!("Failed to store manifest: {err}");
@@ -492,7 +432,6 @@ impl exports::wasmcloud::wadm::client::Handler<Option<Context>> for WadmProvider
         let client = self.get_client(ctx).await?;
         match client.list_versions(&model_name).await {
             Ok(history) => {
-                // Use map to convert each item in the history list
                 let converted_history: Vec<_> =
                     history.into_iter().map(|item| item.into()).collect();
                 Ok(Ok(converted_history))
