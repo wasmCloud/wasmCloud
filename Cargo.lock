@@ -7718,7 +7718,7 @@ dependencies = [
 
 [[package]]
 name = "wascap"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "data-encoding",
  "humantime",
