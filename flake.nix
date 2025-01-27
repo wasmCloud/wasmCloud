@@ -31,9 +31,23 @@
   }:
     with builtins;
     with nixlib.lib;
-    with nixify.lib;
+    with nixify.lib; let
+      targets.arm-unknown-linux-gnueabihf = false;
+      targets.arm-unknown-linux-musleabihf = false;
+      targets.armv7-unknown-linux-gnueabihf = false;
+      targets.armv7-unknown-linux-musleabihf = false;
+      targets.powerpc64le-unknown-linux-gnu = false;
+      targets.s390x-unknown-linux-gnu = false;
+      targets.wasm32-unknown-unknown = false;
+      targets.wasm32-wasip1 = false;
+      targets.wasm32-wasip2 = false;
+    in
       rust.mkFlake {
+        inherit
+          targets
+          ;
         src = ./.;
+        name = "workspace";
 
         nixpkgsConfig.allowUnfree = true;
 
@@ -86,19 +100,7 @@
 
         doCheck = false; # testing is performed in checks via `nextest`
 
-        targets.arm-unknown-linux-gnueabihf = false;
-        targets.arm-unknown-linux-musleabihf = false;
-        targets.armv7-unknown-linux-gnueabihf = false;
-        targets.armv7-unknown-linux-musleabihf = false;
-        targets.powerpc64le-unknown-linux-gnu = false;
-        targets.s390x-unknown-linux-gnu = false;
-        targets.wasm32-unknown-unknown = false;
-        targets.wasm32-wasip1 = false;
-
-        build.packages = [
-          "wash-cli"
-          "wasmcloud"
-        ];
+        build.workspace = true;
 
         clippy.allTargets = true;
         clippy.deny = ["warnings"];
@@ -171,10 +173,77 @@
 
         withPackages = {
           hostRustToolchain,
-          packages,
           pkgs,
+          src,
           ...
         }: let
+          attrs = let
+            binDir = readDir ./src/bin;
+            providers = concatMapAttrs (name: typ:
+              optionalAttrs (hasSuffix "-provider" name && typ == "directory") {
+                "${name}" =
+                  rust.mkAttrs {
+                    inherit
+                      src
+                      targets
+                      ;
+                    pname = name;
+                    doCheck = false;
+                    build.bins = [
+                      name
+                    ];
+                    build.features = [
+                      "provider-${removeSuffix "-provider" name}"
+                    ];
+                    build.noDefaultFeatures = true;
+                    build.packages = [
+                      "wasmcloud"
+                    ];
+                  }
+                  pkgs;
+              })
+            binDir;
+          in
+            providers
+            // {
+              wash =
+                rust.mkAttrs {
+                  inherit
+                    src
+                    targets
+                    ;
+                  pname = "wash";
+                  doCheck = false;
+                  build.bins = [
+                    "wash"
+                  ];
+                  build.packages = [
+                    "wash-cli"
+                  ];
+                }
+                pkgs;
+              wasmcloud =
+                rust.mkAttrs {
+                  inherit
+                    src
+                    targets
+                    ;
+                  pname = "wasmcloud";
+                  doCheck = false;
+                  build.bins = [
+                    "wasmcloud"
+                  ];
+                  build.features = [
+                    "wasmcloud"
+                  ];
+                  build.noDefaultFeatures = true;
+                  build.packages = [
+                    "wasmcloud"
+                  ];
+                }
+                pkgs;
+            };
+
           interpreters.aarch64-unknown-linux-gnu = "/lib/ld-linux-aarch64.so.1";
           interpreters.riscv64gc-unknown-linux-gnu = "/lib/ld-linux-riscv64-lp64d.so.1";
           interpreters.x86_64-unknown-linux-gnu = "/lib64/ld-linux-x86-64.so.2";
@@ -217,21 +286,39 @@
               '';
             };
 
+          wash-aarch64-unknown-linux-gnu-fhs = mkFHS {
+            name = "wash-aarch64-unknown-linux-gnu-fhs";
+            src = attrs.wash.packages.wash-aarch64-unknown-linux-gnu;
+            interpreter = interpreters.aarch64-unknown-linux-gnu;
+          };
+
+          wash-riscv64gc-unknown-linux-gnu-fhs = mkFHS {
+            name = "wash-riscv64gc-unknown-linux-gnu-fhs";
+            src = attrs.wash.packages.wash-riscv64gc-unknown-linux-gnu;
+            interpreter = interpreters.riscv64gc-unknown-linux-gnu;
+          };
+
+          wash-x86_64-unknown-linux-gnu-fhs = mkFHS {
+            name = "wash-x86_64-unknown-linux-gnu-fhs";
+            src = attrs.wash.packages.wash-x86_64-unknown-linux-gnu;
+            interpreter = interpreters.x86_64-unknown-linux-gnu;
+          };
+
           wasmcloud-aarch64-unknown-linux-gnu-fhs = mkFHS {
             name = "wasmcloud-aarch64-unknown-linux-gnu-fhs";
-            src = packages.wasmcloud-aarch64-unknown-linux-gnu;
+            src = attrs.wasmcloud.packages.wasmcloud-aarch64-unknown-linux-gnu;
             interpreter = interpreters.aarch64-unknown-linux-gnu;
           };
 
           wasmcloud-riscv64gc-unknown-linux-gnu-fhs = mkFHS {
             name = "wasmcloud-riscv64gc-unknown-linux-gnu-fhs";
-            src = packages.wasmcloud-riscv64gc-unknown-linux-gnu;
+            src = attrs.wasmcloud.packages.wasmcloud-riscv64gc-unknown-linux-gnu;
             interpreter = interpreters.riscv64gc-unknown-linux-gnu;
           };
 
           wasmcloud-x86_64-unknown-linux-gnu-fhs = mkFHS {
             name = "wasmcloud-x86_64-unknown-linux-gnu-fhs";
-            src = packages.wasmcloud-x86_64-unknown-linux-gnu;
+            src = attrs.wasmcloud.packages.wasmcloud-x86_64-unknown-linux-gnu;
             interpreter = interpreters.x86_64-unknown-linux-gnu;
           };
 
@@ -310,21 +397,21 @@
 
           wash-aarch64-unknown-linux-musl-oci-debian = buildImage (
             {
-              pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
+              pkg = attrs.wash.packages.wash-aarch64-unknown-linux-musl;
             }
             // imageArgs.bin.wash
             // imageArgs.image.debian-arm64
           );
           wash-x86_64-unknown-linux-musl-oci-debian = buildImage (
             {
-              pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
+              pkg = attrs.wash.packages.wash-x86_64-unknown-linux-musl;
             }
             // imageArgs.bin.wash
             // imageArgs.image.debian-amd64
           );
           wash-aarch64-unknown-linux-musl-oci-wolfi = buildImage (
             {
-              pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
+              pkg = attrs.wash.packages.wash-aarch64-unknown-linux-musl;
             }
             // imageArgs.bin.wash
             // imageArgs.config.wolfi
@@ -332,7 +419,7 @@
           );
           wash-x86_64-unknown-linux-musl-oci-wolfi = buildImage (
             {
-              pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
+              pkg = attrs.wash.packages.wash-x86_64-unknown-linux-musl;
             }
             // imageArgs.bin.wash
             // imageArgs.config.wolfi
@@ -341,21 +428,21 @@
 
           wasmcloud-aarch64-unknown-linux-musl-oci-debian = buildImage (
             {
-              pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
+              pkg = attrs.wasmcloud.packages.wasmcloud-aarch64-unknown-linux-musl;
             }
             // imageArgs.bin.wasmcloud
             // imageArgs.image.debian-arm64
           );
           wasmcloud-x86_64-unknown-linux-musl-oci-debian = buildImage (
             {
-              pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
+              pkg = attrs.wasmcloud.packages.wasmcloud-x86_64-unknown-linux-musl;
             }
             // imageArgs.bin.wasmcloud
             // imageArgs.image.debian-amd64
           );
           wasmcloud-aarch64-unknown-linux-musl-oci-wolfi = buildImage (
             {
-              pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
+              pkg = attrs.wasmcloud.packages.wasmcloud-aarch64-unknown-linux-musl;
             }
             // imageArgs.bin.wasmcloud
             // imageArgs.config.wolfi
@@ -470,31 +557,31 @@
             arm64 = wasmcloud-aarch64-unknown-linux-musl-oci-wolfi;
           };
         in
-          packages
+          (concatMapAttrs (_: {packages, ...}: packages) attrs)
           // {
             inherit
-              wash-oci-debian
-              wash-oci-wolfi
-              wasmcloud-oci-debian
-              wasmcloud-oci-wolfi
+              wash-aarch64-unknown-linux-gnu-fhs
               wash-aarch64-unknown-linux-musl-oci-debian
               wash-aarch64-unknown-linux-musl-oci-wolfi
+              wash-oci-debian
+              wash-oci-wolfi
+              wash-riscv64gc-unknown-linux-gnu-fhs
+              wash-x86_64-unknown-linux-gnu-fhs
               wash-x86_64-unknown-linux-musl-oci-debian
               wash-x86_64-unknown-linux-musl-oci-wolfi
               wasmcloud-aarch64-unknown-linux-gnu-fhs
               wasmcloud-aarch64-unknown-linux-musl-oci-debian
               wasmcloud-aarch64-unknown-linux-musl-oci-wolfi
+              wasmcloud-oci-debian
+              wasmcloud-oci-wolfi
               wasmcloud-riscv64gc-unknown-linux-gnu-fhs
               wasmcloud-x86_64-unknown-linux-gnu-fhs
               wasmcloud-x86_64-unknown-linux-musl-oci-debian
               wasmcloud-x86_64-unknown-linux-musl-oci-wolfi
               ;
 
+            default = attrs.wasmcloud.packages.wasmcloud;
             rust = hostRustToolchain;
-            wash = pkgs.runCommandLocal "wash" {} ''
-              mkdir -p $out/bin
-              cp ${packages.wasmcloud}/bin/wash $out/bin/wash
-            '';
           };
 
         withDevShells = {
