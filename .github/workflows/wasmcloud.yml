@@ -135,6 +135,10 @@ jobs:
         with:
           # Consider providers changed if any file in the providers change
           files: |
+            ./.github/actions/build-nix/action.yml
+            ./.github/actions/install-nix/action.yml
+            ./.github/workflows/provider.yml
+            ./.github/workflows/wasmcloud.yml
             Cargo.lock
             Cargo.toml
             crates/provider-*/*.{rs,toml,wit}
