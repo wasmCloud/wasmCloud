@@ -378,7 +378,7 @@ wasmtime-wit-bindgen = { version = "26", default-features = false }
 wat = { version = "1", default-features = false }
 webpki-roots = { version = "0.26", default-features = false }
 which = { version = "4", default-features = false }
-wit-bindgen = { version = "0.32", default-features = false }
+wit-bindgen = { version = "0.36", default-features = false }
 wit-bindgen-core = { version = "0.33", default-features = false }
 wit-bindgen-go = { version = "0.32", default-features = false }
 wit-bindgen-wrpc = { version = "0.9", default-features = false }
