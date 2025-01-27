@@ -62,7 +62,10 @@ impl NatsMessagingProvider {
             .context("failed to run provider")?;
         let connection = get_connection();
         serve_provider_exports(
-            &connection.get_wrpc_client(connection.provider_key()),
+            &connection
+                .get_wrpc_client(connection.provider_key())
+                .await
+                .context("failed to get wrpc client")?,
             provider,
             shutdown,
             bindings::serve,
