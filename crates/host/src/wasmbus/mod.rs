@@ -2552,8 +2552,13 @@ impl Host {
             return Ok(CtlResponse::error("provider with that ID is not running"));
         };
         let Provider {
-            ref annotations, ..
+            ref annotations,
+            mut tasks,
+            ..
         } = entry.remove();
+
+        // Stop monitoring for provider exits, health checks, and config changes
+        tasks.abort_all();
 
         // Send a request to the provider, requesting a graceful shutdown
         let req = serde_json::to_vec(&json!({ "host_id": host_id }))
@@ -2580,6 +2585,7 @@ impl Host {
                 provider_id,
                 "provider did not gracefully shut down in time, shutting down forcefully"
             );
+            // TODO: actually forcefully stop the provider
         }
         info!(provider_id, "provider stopped");
         self.publish_event(
