@@ -1,6 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,6 +38,8 @@ pub(crate) struct Provider {
     #[allow(unused)]
     /// Config bundle for the aggregated configuration being watched by the provider
     pub(crate) config: Arc<RwLock<ConfigBundle>>,
+    /// Whether the provider should be restarted on exit
+    pub(crate) restart_on_exit: Arc<AtomicBool>,
     pub(crate) tasks: JoinSet<()>,
 }
 
@@ -46,7 +49,6 @@ pub(crate) struct Provider {
     skip(rpc_nats, ctl_nats, event_builder, host_data, config)
 )]
 pub(crate) async fn start_binary_provider(
-    tasks: &mut JoinSet<()>,
     // Clients
     rpc_nats: Arc<Client>,
     ctl_nats: Client,
@@ -59,13 +61,16 @@ pub(crate) async fn start_binary_provider(
     path: PathBuf,
     host_data: Vec<u8>,
     config: Arc<RwLock<ConfigBundle>>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<(JoinSet<()>, Arc<AtomicBool>)> {
     trace!("spawn provider process");
+
+    let mut tasks = JoinSet::new();
 
     // Create a channel for watching for child process exit
     let (exit_tx, exit_rx) = broadcast::channel::<()>(1);
 
-    tasks.spawn(run_provider(path, host_data, exit_tx).await?);
+    let boo = Arc::new(AtomicBool::new(true));
+    tasks.spawn(run_provider(path, host_data, boo.clone(), exit_tx).await?);
 
     // Spawn off a task to check the health of the provider every 30 seconds
     tasks.spawn(check_health(
@@ -88,13 +93,14 @@ pub(crate) async fn start_binary_provider(
         exit_rx,
     ));
 
-    Ok(())
+    Ok((tasks, boo))
 }
 
 /// Run and supervise a binary provider, restarting it if it exits prematurely.
 async fn run_provider(
     path: PathBuf,
     host_data: Vec<u8>,
+    restart_on_exit: Arc<AtomicBool>,
     exit_tx: broadcast::Sender<()>,
 ) -> anyhow::Result<impl Future<Output = ()>> {
     // If there's any issues starting the provider, we want to exit immediately
@@ -108,6 +114,16 @@ async fn run_provider(
             let mut child = child.write().await;
             match child.wait().await {
                 Ok(status) => {
+                    if restart_on_exit.load(Ordering::Relaxed) {
+                        trace!(
+                            "provider @ [{}] exited with `{status:?}` but will not be restarted",
+                            path.display()
+                        );
+                        // Avoid a hot loop by waiting 100ms before checking the status again
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+
                     warn!(
                         "restarting provider @ [{}] that exited with `{status:?}`",
                         path.display()

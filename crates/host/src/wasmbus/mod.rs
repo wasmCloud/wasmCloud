@@ -1799,7 +1799,6 @@ impl Host {
     #[instrument(level = "debug", skip_all)]
     async fn start_binary_provider(
         &self,
-        tasks: &mut JoinSet<()>,
         link_definitions: Vec<InterfaceLinkDefinition>,
         provider_xkey: XKey,
         secrets: HashMap<String, wasmcloud_core::secrets::SecretValue>,
@@ -1808,7 +1807,7 @@ impl Host {
         path: PathBuf,
         provider_id: &str,
         host_id: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<(JoinSet<()>, Arc<AtomicBool>)> {
         let lattice_rpc_user_seed = self
             .host_config
             .rpc_key
@@ -1874,7 +1873,6 @@ impl Host {
             serde_json::to_vec(&host_data).context("failed to serialize provider data")?;
 
         start_binary_provider(
-            tasks,
             self.rpc_nats.clone(),
             self.ctl_nats.clone(),
             self.event_builder.clone(),
@@ -1885,9 +1883,7 @@ impl Host {
             host_data,
             config,
         )
-        .await?;
-
-        Ok(())
+        .await
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2027,11 +2023,9 @@ impl Host {
             };
             let host_config = config.get_config().await.clone();
             let config = Arc::new(RwLock::new(config));
-            let mut tasks = JoinSet::new();
-            match (path, &provider_ref) {
+            let (tasks, restart_on_exit) = match (path, &provider_ref) {
                 (Some(path), ..) => {
                     self.start_binary_provider(
-                        &mut tasks,
                         link_definitions,
                         provider_xkey,
                         secrets,
@@ -2044,31 +2038,31 @@ impl Host {
                     .await?
                 }
                 (None, ResourceRef::Builtin(name)) => match *name {
-                    "http-server" if self.experimental_features.builtin_http_server => {
+                    "http-server" if self.experimental_features.builtin_http_server => (
                         self.start_http_server_provider(
-                            &mut tasks,
                             link_definitions,
                             provider_xkey,
                             host_config,
                             provider_id,
                             host_id,
                         )
-                        .await?
-                    }
+                        .await?,
+                        Arc::new(AtomicBool::new(false)),
+                    ),
                     "http-server" => {
                         bail!("feature `builtin-http-server` is not enabled, denying start")
                     }
-                    "messaging-nats" if self.experimental_features.builtin_messaging_nats => {
+                    "messaging-nats" if self.experimental_features.builtin_messaging_nats => (
                         self.start_messaging_nats_provider(
-                            &mut tasks,
                             link_definitions,
                             provider_xkey,
                             host_config,
                             provider_id,
                             host_id,
                         )
-                        .await?
-                    }
+                        .await?,
+                        Arc::new(AtomicBool::new(false)),
+                    ),
                     "messaging-nats" => {
                         bail!("feature `builtin-messaging-nats` is not enabled, denying start")
                     }
@@ -2101,6 +2095,7 @@ impl Host {
                 image_ref: provider_ref.as_ref().to_string(),
                 xkey,
                 config,
+                restart_on_exit,
             });
         } else {
             bail!("provider is already running with that ID")
