@@ -450,7 +450,7 @@
           );
           wasmcloud-x86_64-unknown-linux-musl-oci-wolfi = buildImage (
             {
-              pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
+              pkg = attrs.wasmcloud.packages.wasmcloud-x86_64-unknown-linux-musl;
             }
             // imageArgs.bin.wasmcloud
             // imageArgs.config.wolfi

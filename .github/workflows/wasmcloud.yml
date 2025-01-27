@@ -141,9 +141,9 @@ jobs:
           files_ignore: |
             !crates/**/*.md
 
-  build-bin:
+  build-wash-bin:
     needs: [meta]
-    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-cli-v')}}
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || startsWith(github.ref, 'refs/tags/wash-cli-v') }}
     strategy:
       matrix:
         config:
@@ -151,19 +151,84 @@ jobs:
             test-bin: |
               nix profile install --inputs-from . 'nixpkgs#qemu'
               qemu-aarch64 ./result/bin/wash --version
-              qemu-aarch64 ./result/bin/wasmcloud --version
             test-oci: docker load < ./result
             # TODO: Run aarch64 binary within OCI
 
           - target: aarch64-apple-darwin
             test-bin: |
               file ./result/bin/wash
-              file ./result/bin/wasmcloud
             test-oci: docker load < ./result
 
           - target: aarch64-linux-android
             test-bin: |
               file ./result/bin/wash
+            test-oci: docker load < ./result
+
+          - target: riscv64gc-unknown-linux-gnu-fhs
+            test-bin: |
+              nix build -L '.#wash-riscv64gc-unknown-linux-gnu'
+              nix shell --inputs-from . 'nixpkgs#qemu' -c qemu-riscv64 ./result/bin/wash --version
+
+          - target: x86_64-apple-darwin
+            test-bin: |
+              file ./result/bin/wash
+            test-oci: docker load < ./result
+
+          # TODO: Build for GNU once https://github.com/rust-lang/rust/issues/92212 is resolved
+          #- target: x86_64-pc-windows-gnu
+          #  test-bin: |
+          #    nix profile install --inputs-from . 'nixpkgs#wine64'
+          #    wine64 ./result/bin/wash.exe --version
+          #  test-oci: docker load < ./result
+          #  # TODO: Run win64 binary within OCI
+
+          - target: x86_64-unknown-linux-musl
+            test-bin: |
+              ./result/bin/wash --version
+            test-oci: |
+              docker load < ./result
+              docker run --rm wash:$(nix eval --raw .#wash-x86_64-unknown-linux-musl-oci.imageTag) wash --version
+
+    name: wash-${{ matrix.config.target }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        # need to run condition inside job steps so that job will pass if all steps are skipped
+        # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: ./.github/actions/build-nix
+        with:
+          package: wash-${{ matrix.config.target }}
+      - run: ${{ matrix.config.test-bin }}
+      - uses: ./.github/actions/build-nix
+        if: ${{ !endsWith(matrix.config.target, 'fhs') }}
+        with:
+          package: wash-${{ matrix.config.target }}-oci
+      - run: ${{ matrix.config.test-oci }}
+        if: ${{ !endsWith(matrix.config.target, 'fhs') }}
+
+  build-wasmcloud-bin:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || startsWith(github.ref, 'refs/tags/v') }}
+    strategy:
+      matrix:
+        config:
+          - target: aarch64-unknown-linux-musl
+            test-bin: |
+              nix profile install --inputs-from . 'nixpkgs#qemu'
+              qemu-aarch64 ./result/bin/wasmcloud --version
+            test-oci: docker load < ./result
+            # TODO: Run aarch64 binary within OCI
+
+          - target: aarch64-apple-darwin
+            test-bin: |
+              file ./result/bin/wasmcloud
+            test-oci: docker load < ./result
+
+          - target: aarch64-linux-android
+            test-bin: |
               file ./result/bin/wasmcloud
             test-oci: docker load < ./result
 
@@ -174,7 +239,6 @@ jobs:
 
           - target: x86_64-apple-darwin
             test-bin: |
-              file ./result/bin/wash
               file ./result/bin/wasmcloud
             test-oci: docker load < ./result
 
@@ -189,11 +253,9 @@ jobs:
 
           - target: x86_64-unknown-linux-musl
             test-bin: |
-              ./result/bin/wash --version
               ./result/bin/wasmcloud --version
             test-oci: |
               docker load < ./result
-              docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-x86_64-unknown-linux-musl-oci.imageTag) wash --version
               docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-x86_64-unknown-linux-musl-oci.imageTag) wasmcloud --version
 
     name: wasmcloud-${{ matrix.config.target }}
@@ -216,6 +278,124 @@ jobs:
       - run: ${{ matrix.config.test-oci }}
         if: ${{ !endsWith(matrix.config.target, 'fhs') }}
 
+  build-provider-bin:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.providers_modified == 'true' || startswith(github.ref, 'refs/tags/provider-') }}
+    strategy:
+      matrix:
+        config:
+          - name: blobstore-azure
+            target: aarch64-apple-darwin
+          - name: blobstore-azure
+            target: aarch64-unknown-linux-musl
+          - name: blobstore-azure
+            target: x86_64-apple-darwin
+          - name: blobstore-azure
+            target: x86_64-unknown-linux-musl
+
+          - name: blobstore-fs
+            target: aarch64-apple-darwin
+          - name: blobstore-fs
+            target: aarch64-unknown-linux-musl
+          - name: blobstore-fs
+            target: x86_64-apple-darwin
+          - name: blobstore-fs
+            target: x86_64-unknown-linux-musl
+
+          - name: blobstore-s3
+            target: aarch64-apple-darwin
+          - name: blobstore-s3
+            target: aarch64-unknown-linux-musl
+          - name: blobstore-s3
+            target: x86_64-apple-darwin
+          - name: blobstore-s3
+            target: x86_64-unknown-linux-musl
+
+          - name: keyvalue-nats
+            target: aarch64-apple-darwin
+          - name: keyvalue-nats
+            target: aarch64-unknown-linux-musl
+          - name: keyvalue-nats
+            target: x86_64-apple-darwin
+          - name: keyvalue-nats
+            target: x86_64-unknown-linux-musl
+
+          - name: keyvalue-redis
+            target: aarch64-apple-darwin
+          - name: keyvalue-redis
+            target: aarch64-unknown-linux-musl
+          - name: keyvalue-redis
+            target: x86_64-apple-darwin
+          - name: keyvalue-redis
+            target: x86_64-unknown-linux-musl
+
+          - name: keyvalue-vault
+            target: aarch64-apple-darwin
+          - name: keyvalue-vault
+            target: aarch64-unknown-linux-musl
+          - name: keyvalue-vault
+            target: x86_64-apple-darwin
+          - name: keyvalue-vault
+            target: x86_64-unknown-linux-musl
+
+          - name: http-client
+            target: aarch64-apple-darwin
+          - name: http-client
+            target: aarch64-unknown-linux-musl
+          - name: http-client
+            target: x86_64-apple-darwin
+          - name: http-client
+            target: x86_64-unknown-linux-musl
+
+          - name: http-server
+            target: aarch64-apple-darwin
+          - name: http-server
+            target: aarch64-unknown-linux-musl
+          - name: http-server
+            target: x86_64-apple-darwin
+          - name: http-server
+            target: x86_64-unknown-linux-musl
+
+          - name: messaging-kafka
+            target: aarch64-apple-darwin
+          - name: messaging-kafka
+            target: aarch64-unknown-linux-musl
+          - name: messaging-kafka
+            target: x86_64-apple-darwin
+          - name: messaging-kafka
+            target: x86_64-unknown-linux-musl
+
+          - name: messaging-nats
+            target: aarch64-apple-darwin
+          - name: messaging-nats
+            target: aarch64-unknown-linux-musl
+          - name: messaging-nats
+            target: x86_64-apple-darwin
+          - name: messaging-nats
+            target: x86_64-unknown-linux-musl
+
+          - name: sqldb-postgres
+            target: aarch64-apple-darwin
+          - name: sqldb-postgres
+            target: aarch64-unknown-linux-musl
+          - name: sqldb-postgres
+            target: x86_64-apple-darwin
+          - name: sqldb-postgres
+            target: x86_64-unknown-linux-musl
+
+    name: ${{ matrix.config.name }}-provider-${{ matrix.config.target }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        # need to run condition inside job steps so that job will pass if all steps are skipped
+        # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: ./.github/actions/build-nix
+        with:
+          package: ${{ matrix.config.name }}-provider-${{ matrix.config.target }}
+
   build-windows:
     if: ${{ startswith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'}}
     name: wasmcloud-x86_64-pc-windows-msvc
@@ -230,31 +410,133 @@ jobs:
         if: ${{ !startswith(github.ref, 'refs/tags/') }}
 
       - run: cargo build --release -p wash-cli -p wasmcloud
-      - run: mkdir "artifact/bin"
 
-      - run: move "target/release/blobstore-azure-provider.exe" "artifact/bin/blobstore-azure-provider.exe"
-      - run: move "target/release/blobstore-fs-provider.exe" "artifact/bin/blobstore-fs-provider.exe"
-      - run: move "target/release/blobstore-s3-provider.exe" "artifact/bin/blobstore-s3-provider.exe"
-      - run: move "target/release/http-client-provider.exe" "artifact/bin/http-client-provider.exe"
-      - run: move "target/release/http-server-provider.exe" "artifact/bin/http-server-provider.exe"
-      - run: move "target/release/keyvalue-nats-provider.exe" "artifact/bin/keyvalue-nats-provider.exe"
-      - run: move "target/release/keyvalue-redis-provider.exe" "artifact/bin/keyvalue-redis-provider.exe"
-      - run: move "target/release/keyvalue-vault-provider.exe" "artifact/bin/keyvalue-vault-provider.exe"
-      - run: move "target/release/messaging-kafka-provider.exe" "artifact/bin/messaging-kafka-provider.exe"
-      - run: move "target/release/messaging-nats-provider.exe" "artifact/bin/messaging-nats-provider.exe"
-      - run: move "target/release/sqldb-postgres-provider.exe" "artifact/bin/sqldb-postgres-provider.exe"
+      - run: mkdir "wash/bin"
+      - run: mkdir "wasmcloud/bin"
 
-      - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
-      - run: move "target/release/wasmcloud.exe" "artifact/bin/wasmcloud.exe"
+      - run: mkdir "blobstore-azure-provider/bin"
+      - run: mkdir "blobstore-fs-provider/bin"
+      - run: mkdir "blobstore-s3-provider/bin"
+      - run: mkdir "http-client-provider/bin"
+      - run: mkdir "http-server-provider/bin"
+      - run: mkdir "keyvalue-nats-provider/bin"
+      - run: mkdir "keyvalue-redis-provider/bin"
+      - run: mkdir "keyvalue-vault-provider/bin"
+      - run: mkdir "messaging-kafka-provider/bin"
+      - run: mkdir "messaging-nats-provider/bin"
+      - run: mkdir "sqldb-postgres-provider/bin"
+
+      - run: move "target/release/wash.exe" "wash/bin/wash.exe"
+      - run: move "target/release/wasmcloud.exe" "wasmcloud/bin/wasmcloud.exe"
+
+      - run: move "target/release/blobstore-azure-provider.exe" "blobstore-azure-provider/bin/blobstore-azure-provider.exe"
+      - run: move "target/release/blobstore-fs-provider.exe" "blobstore-fs-provider/bin/blobstore-fs-provider.exe"
+      - run: move "target/release/blobstore-s3-provider.exe" "blobstore-s3-provider/bin/blobstore-s3-provider.exe"
+      - run: move "target/release/http-client-provider.exe" "http-client-provider/bin/http-client-provider.exe"
+      - run: move "target/release/http-server-provider.exe" "http-server-provider/bin/http-server-provider.exe"
+      - run: move "target/release/keyvalue-nats-provider.exe" "keyvalue-nats-provider/bin/keyvalue-nats-provider.exe"
+      - run: move "target/release/keyvalue-redis-provider.exe" "keyvalue-redis-provider/bin/keyvalue-redis-provider.exe"
+      - run: move "target/release/keyvalue-vault-provider.exe" "keyvalue-vault-provider/bin/keyvalue-vault-provider.exe"
+      - run: move "target/release/messaging-kafka-provider.exe" "messaging-kafka-provider/bin/messaging-kafka-provider.exe"
+      - run: move "target/release/messaging-nats-provider.exe" "messaging-nats-provider/bin/messaging-nats-provider.exe"
+      - run: move "target/release/sqldb-postgres-provider.exe" "sqldb-postgres-provider/bin/sqldb-postgres-provider.exe"
+
+      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+        with:
+          name: wash-x86_64-pc-windows-msvc
+          path: wash
 
       - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
         with:
           name: wasmcloud-x86_64-pc-windows-msvc
+          path: wasmcloud
+
+      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+        with:
+          name: blobstore-azure-provider-x86_64-pc-windows-msvc
+          path: blobstore-azure-provider
+
+      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+        with:
+          name: blobstore-fs-provider-x86_64-pc-windows-msvc
+          path: blobstore-fs-provider
+
+      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+        with:
+          name: blobstore-s3-provider-x86_64-pc-windows-msvc
+          path: blobstore-s3-provider
+
+      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+        with:
+          name: http-client-provider-x86_64-pc-windows-msvc
+          path: http-client-provider
+
+      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+        with:
+          name: http-server-provider-x86_64-pc-windows-msvc
+          path: http-server-provider
+
+      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+        with:
+          name: keyvalue-nats-provider-x86_64-pc-windows-msvc
+          path: keyvalue-nats-provider
+
+      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+        with:
+          name: keyvalue-redis-provider-x86_64-pc-windows-msvc
+          path: keyvalue-redis-provider
+
+      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+        with:
+          name: keyvalue-vault-provider-x86_64-pc-windows-msvc
+          path: keyvalue-vault-provider
+
+      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+        with:
+          name: messaging-kafka-provider-x86_64-pc-windows-msvc
+          path: messaging-kafka-provider
+
+      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+        with:
+          name: messaging-nats-provider-x86_64-pc-windows-msvc
+          path: messaging-nats-provider
+
+      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+        with:
+          name: sqldb-postgres-provider-x86_64-pc-windows-msvc
+          path: sqldb-postgres-provider
+
+  build-wash-lipo:
+    name: wash-universal-darwin
+    needs: build-wash-bin
+    runs-on: macos-13
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: wash-aarch64-apple-darwin
+          path: aarch64
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: wash-x86_64-apple-darwin
+          path: x86_64
+
+      - run: chmod +x ./x86_64/bin/*
+      - run: ./x86_64/bin/wash --version
+
+      - run: mkdir -p ./artifact/bin
+      - run: lipo -create ./aarch64/bin/wash ./x86_64/bin/wash -output ./artifact/bin/wash
+
+      - run: chmod +x ./artifact/bin/wash
+      - run: ./artifact/bin/wash --version
+
+      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+        with:
+          name: wash-universal-darwin
           path: artifact
 
-  build-lipo:
+  build-wasmcloud-lipo:
     name: wasmcloud-universal-darwin
-    needs: build-bin
+    needs: build-wasmcloud-bin
     runs-on: macos-13
     steps:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
@@ -267,15 +549,11 @@ jobs:
           path: x86_64
 
       - run: chmod +x ./x86_64/bin/*
-      - run: ./x86_64/bin/wash --version
       - run: ./x86_64/bin/wasmcloud --version
 
       - run: mkdir -p ./artifact/bin
-      - run: lipo -create ./aarch64/bin/wash ./x86_64/bin/wash -output ./artifact/bin/wash
       - run: lipo -create ./aarch64/bin/wasmcloud ./x86_64/bin/wasmcloud -output ./artifact/bin/wasmcloud
 
-      - run: chmod +x ./artifact/bin/wash
-      - run: ./artifact/bin/wash --version
       - run: chmod +x ./artifact/bin/wasmcloud
       - run: ./artifact/bin/wasmcloud --version
 
@@ -284,16 +562,24 @@ jobs:
           name: wasmcloud-universal-darwin
           path: artifact
 
-  test-linux:
+  test-wash-linux:
     runs-on: ubuntu-22.04
-    needs: build-bin
+    needs: build-wash-bin
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: wash-x86_64-unknown-linux-musl
+      - run: chmod +x ./bin/wash
+      - run: ./bin/wash --version
+
+  test-wasmcloud-linux:
+    runs-on: ubuntu-22.04
+    needs: build-wasmcloud-bin
     steps:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: wasmcloud-x86_64-unknown-linux-musl
-      - run: chmod +x ./bin/wash
       - run: chmod +x ./bin/wasmcloud
-      - run: ./bin/wash --version
       - run: ./bin/wasmcloud --version
 
   test-windows:
@@ -394,9 +680,10 @@ jobs:
 
     needs:
       - meta
-      - build-bin
+      - build-wash-bin
+      - build-provider-bin
       - build-windows
-      - test-linux
+      - test-wash-linux
     permissions:
       contents: read
       packages: write
@@ -437,8 +724,10 @@ jobs:
       contents: read
       packages: write
     needs:
-      - build-bin
-      - test-linux
+      - build-wash-bin
+      - build-wasmcloud-bin
+      - test-wash-linux
+      - test-wasmcloud-linux
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: ./.github/actions/install-nix
@@ -591,12 +880,15 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-cli-v')
     needs:
-      - build-bin
       - build-doc
-      - build-lipo
+      - build-wash-bin
+      - build-wash-lipo
+      - build-wasmcloud-bin
+      - build-wasmcloud-lipo
       - cargo
       - oci
-      - test-linux
+      - test-wash-linux
+      - test-wasmcloud-linux
       - test-windows
     runs-on: ubuntu-22.04
     permissions:
@@ -606,9 +898,32 @@ jobs:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           path: artifacts
-      - run: |
+
+      - if: startsWith(github.ref, 'refs/tags/v')
+        run: |
           for dir in ./artifacts/wasmcloud-*; do
             target=${dir#./artifacts/wasmcloud-}
+            for bin_path in $(find ${dir}/bin -type f); do
+              chmod +x ${bin_path}
+              bin=$(basename ${bin_path})
+              case "$bin" in
+                *.exe)
+                  bin="${bin%.exe}"
+                  mkdir -p ./${bin}
+                  mv ${bin_path} ./${bin}/${bin}-${target}.exe
+                ;;
+                *)
+                  mkdir -p ./${bin}
+                  mv ${bin_path} ./${bin}/${bin}-${target%-fhs}
+                ;;
+              esac
+            done
+          done
+
+      - if: startsWith(github.ref, 'refs/tags/wash-cli-v')
+        run: |
+          for dir in ./artifacts/wash-*; do
+            target=${dir#./artifacts/wash-}
             for bin_path in $(find ${dir}/bin -type f); do
               chmod +x ${bin_path}
               bin=$(basename ${bin_path})
@@ -673,8 +988,8 @@ jobs:
       PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_API_TOKEN }}
     needs:
       - cargo
-      - build-bin
-      - test-linux
+      - build-wash-bin
+      - test-wash-linux
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -687,11 +1002,11 @@ jobs:
 
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
-          name: wasmcloud-aarch64-unknown-linux-musl
+          name: wash-aarch64-unknown-linux-musl
           path: ./crates/wash-cli/aarch64
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
-          name: wasmcloud-x86_64-unknown-linux-musl
+          name: wash-x86_64-unknown-linux-musl
           path: ./crates/wash-cli/x86_64
       - name: Make wash executable
         working-directory: ./crates/wash-cli
@@ -855,9 +1170,13 @@ jobs:
   wasmcloud_successful_checks:
     needs:
       - meta
-      - build-bin
-      - build-lipo
-      - test-linux
+      - build-provider-bin
+      - build-wash-bin
+      - build-wash-lipo
+      - build-wasmcloud-bin
+      - build-wasmcloud-lipo
+      - test-wasmcloud-linux
+      - test-wash-linux
       - cargo
       - build-doc
       - providers
@@ -869,9 +1188,13 @@ jobs:
       - name: Results
         run: |
           echo 'needs.integration_tests.result: ${{ needs.integration_tests.result }}'
-          echo 'needs.build-bin.result: ${{ needs.build-bin.result }}'
-          echo 'needs.build-lipo.result: ${{ needs.build-lipo.result }}'
-          echo 'needs.test-linux.result: ${{ needs.test-linux.result }}'
+          echo 'needs.build-provider-bin.result: ${{ needs.build-provider-bin.result }}'
+          echo 'needs.build-wash-bin.result: ${{ needs.build-wash-bin.result }}'
+          echo 'needs.build-wash-lipo.result: ${{ needs.build-wash-lipo.result }}'
+          echo 'needs.build-wasmcloud-bin.result: ${{ needs.build-wasmcloud-bin.result }}'
+          echo 'needs.build-wasmcloud-lipo.result: ${{ needs.build-wasmcloud-lipo.result }}'
+          echo 'needs.test-wash-linux.result: ${{ needs.test-wash-linux.result }}'
+          echo 'needs.test-wasmcloud-linux.result: ${{ needs.test-wasmcloud-linux.result }}'
           echo 'needs.cargo.result: ${{ needs.cargo.result }}'
           echo 'needs.build-doc.result: ${{ needs.build-doc.result }}'
           echo 'needs.providers.result: ${{ needs.providers.result }}'
