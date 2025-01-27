@@ -138,6 +138,9 @@ jobs:
             Cargo.lock
             Cargo.toml
             crates/provider-*/*.{rs,toml,wit}
+            flake.lock
+            flake.nix
+            rust-toolchain.toml
           files_ignore: |
             !crates/**/*.md
 
