@@ -31,13 +31,13 @@ impl crate::wasmbus::Host {
     #[instrument(level = "debug", skip_all)]
     pub(crate) async fn start_http_server_provider(
         &self,
-        tasks: &mut JoinSet<()>,
         link_definitions: impl IntoIterator<Item = InterfaceLinkDefinition>,
         provider_xkey: XKey,
         host_config: HashMap<String, String>,
         provider_id: &str,
         host_id: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<JoinSet<()>> {
+        let mut tasks = JoinSet::new();
         let default_address = host_config
             .get("default_address")
             .map(|s| SocketAddr::from_str(s))
@@ -118,7 +118,8 @@ impl crate::wasmbus::Host {
                 });
             }
         }
-        Ok(())
+
+        Ok(tasks)
     }
 }
 

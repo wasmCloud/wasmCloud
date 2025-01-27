@@ -291,13 +291,13 @@ impl crate::wasmbus::Host {
     #[instrument(level = "debug", skip_all)]
     pub(crate) async fn start_messaging_nats_provider(
         &self,
-        tasks: &mut JoinSet<()>,
         link_definitions: impl IntoIterator<Item = InterfaceLinkDefinition>,
         provider_xkey: XKey,
         host_config: HashMap<String, String>,
         provider_id: &str,
         host_id: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<JoinSet<()>> {
+        let mut tasks = JoinSet::new();
         let config = ConnectionConfig::from_map(&host_config).context("failed to parse config")?;
 
         let (quit_tx, quit_rx) = broadcast::channel(1);
@@ -339,6 +339,7 @@ impl crate::wasmbus::Host {
         tasks.spawn(async move {
             handle_provider_commands(provider, &conn, quit_rx, quit_tx, commands).await
         });
-        Ok(())
+
+        Ok(tasks)
     }
 }
