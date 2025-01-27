@@ -62,7 +62,10 @@ impl CustomTemplateProvider {
         // This is a generated function based on the contents in your `wit/world.wit` file.
         let connection = wasmcloud_provider_sdk::get_connection();
         serve_provider_exports(
-            &connection.get_wrpc_client(connection.provider_key()),
+            &connection
+                .get_wrpc_client(connection.provider_key())
+                .await
+                .context("failed to get wrpc client")?,
             provider,
             shutdown,
             bindings::serve,
@@ -122,7 +125,10 @@ impl Handler<Option<Context>> for CustomTemplateProvider {
                 name: "sup".to_string(),
                 count: 3,
             };
-            let client = wasmcloud_provider_sdk::get_connection().get_wrpc_client(component_id);
+            let client = wasmcloud_provider_sdk::get_connection()
+                .get_wrpc_client(component_id)
+                .await
+                .context("failed to get wrpc client")?;
             match process_data::process(&client, None, &sample_data).await {
                 Ok(response) => {
                     last_response = Some(response);
