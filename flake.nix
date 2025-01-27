@@ -591,8 +591,10 @@
         }:
           extendDerivations {
             buildInputs = [
-              pkgs.buildah
               pkgs.cargo-audit
+              pkgs.go
+              pkgs.kubectl
+              pkgs.kubernetes-helm
               pkgs.minio
               pkgs.nats-server
               pkgs.redis
@@ -600,9 +602,6 @@
               pkgs.tinygo
               pkgs.vault
               pkgs.wit-deps
-              pkgs.go
-              pkgs.kubernetes-helm
-              pkgs.kubectl
             ];
           }
           devShells;
