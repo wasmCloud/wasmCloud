@@ -217,40 +217,50 @@ jobs:
         if: ${{ !endsWith(matrix.config.target, 'fhs') }}
 
   build-windows:
-    if: ${{ startswith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'}}
+    # if: ${{ startswith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'}}
     name: wasmcloud-x86_64-pc-windows-msvc
-    runs-on: windows-latest
+    strategy:
+      matrix:
+        steps:
+          - os: windows-latest
+            cmd: cargo build --release -p wash-cli -p wasmcloud
+          - os: ubuntu-latest
+            cmd: rustup target add x86_64-pc-windows-msvc && cargo zigbuild --release -p wash-cli -p wasmcloud --target x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.steps.os }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - run: rustup show
-      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
-        with:
-          shared-key: windows-latest-8-cores-shared-cache
-        if: ${{ !startswith(github.ref, 'refs/tags/') }}
+      # - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
+      #   with:
+      #     shared-key: windows-latest-8-cores-shared-cache
+      #   if: ${{ !startswith(github.ref, 'refs/tags/') }}
 
-      - run: cargo build --release -p wash-cli -p wasmcloud
-      - run: mkdir "artifact/bin"
+      - run: cargo install --locked cargo-zigbuild
 
-      - run: move "target/release/blobstore-azure-provider.exe" "artifact/bin/blobstore-azure-provider.exe"
-      - run: move "target/release/blobstore-fs-provider.exe" "artifact/bin/blobstore-fs-provider.exe"
-      - run: move "target/release/blobstore-s3-provider.exe" "artifact/bin/blobstore-s3-provider.exe"
-      - run: move "target/release/http-client-provider.exe" "artifact/bin/http-client-provider.exe"
-      - run: move "target/release/http-server-provider.exe" "artifact/bin/http-server-provider.exe"
-      - run: move "target/release/keyvalue-nats-provider.exe" "artifact/bin/keyvalue-nats-provider.exe"
-      - run: move "target/release/keyvalue-redis-provider.exe" "artifact/bin/keyvalue-redis-provider.exe"
-      - run: move "target/release/keyvalue-vault-provider.exe" "artifact/bin/keyvalue-vault-provider.exe"
-      - run: move "target/release/messaging-kafka-provider.exe" "artifact/bin/messaging-kafka-provider.exe"
-      - run: move "target/release/messaging-nats-provider.exe" "artifact/bin/messaging-nats-provider.exe"
-      - run: move "target/release/sqldb-postgres-provider.exe" "artifact/bin/sqldb-postgres-provider.exe"
+      - run: |
+          ${{ matrix.steps.cmd }}
+      # - run: mkdir "artifact/bin"
 
-      - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
-      - run: move "target/release/wasmcloud.exe" "artifact/bin/wasmcloud.exe"
+      # - run: move "target/release/blobstore-azure-provider.exe" "artifact/bin/blobstore-azure-provider.exe"
+      # - run: move "target/release/blobstore-fs-provider.exe" "artifact/bin/blobstore-fs-provider.exe"
+      # - run: move "target/release/blobstore-s3-provider.exe" "artifact/bin/blobstore-s3-provider.exe"
+      # - run: move "target/release/http-client-provider.exe" "artifact/bin/http-client-provider.exe"
+      # - run: move "target/release/http-server-provider.exe" "artifact/bin/http-server-provider.exe"
+      # - run: move "target/release/keyvalue-nats-provider.exe" "artifact/bin/keyvalue-nats-provider.exe"
+      # - run: move "target/release/keyvalue-redis-provider.exe" "artifact/bin/keyvalue-redis-provider.exe"
+      # - run: move "target/release/keyvalue-vault-provider.exe" "artifact/bin/keyvalue-vault-provider.exe"
+      # - run: move "target/release/messaging-kafka-provider.exe" "artifact/bin/messaging-kafka-provider.exe"
+      # - run: move "target/release/messaging-nats-provider.exe" "artifact/bin/messaging-nats-provider.exe"
+      # - run: move "target/release/sqldb-postgres-provider.exe" "artifact/bin/sqldb-postgres-provider.exe"
 
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        with:
-          name: wasmcloud-x86_64-pc-windows-msvc
-          path: artifact
+      # - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
+      # - run: move "target/release/wasmcloud.exe" "artifact/bin/wasmcloud.exe"
+
+      # - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+      #   with:
+      #     name: wasmcloud-x86_64-pc-windows-msvc
+      #     path: artifact
 
   build-lipo:
     name: wasmcloud-universal-darwin
