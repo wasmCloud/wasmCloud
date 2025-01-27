@@ -262,7 +262,7 @@ nix = { version = "0.29", default-features = false }
 nkeys = { version = "0.4", default-features = false }
 normpath = { version = "1", default-features = false }
 notify = { version = "6", default-features = false }
-nuid = { version = "0.4", default-features = false }
+nuid = { version = "0.5", default-features = false }
 num = { version = "0.4", default-features = false }
 oci-client = { version = "0.14", default-features = false }
 oci-wasm = { version = "0.2.0", default-features = false }
