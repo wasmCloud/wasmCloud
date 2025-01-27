@@ -249,14 +249,12 @@ jobs:
               file ./result/bin/wasmcloud
             test-oci: docker load < ./result
 
-          # TODO: Build for GNU once https://github.com/rust-lang/rust/issues/92212 is resolved
-          #- target: x86_64-pc-windows-gnu
-          #  test-bin: |
-          #    nix profile install --inputs-from . 'nixpkgs#wine64'
-          #    wine64 ./result/bin/wash.exe --version
-          #    wine64 ./result/bin/wasmcloud.exe --version
-          #  test-oci: docker load < ./result
-          #  # TODO: Run win64 binary within OCI
+          - target: x86_64-pc-windows-gnu
+            test-bin: |
+              nix profile install --inputs-from . 'nixpkgs#wine64'
+              wine64 ./result/bin/wasmcloud.exe --version
+            test-oci: docker load < ./result
+            # TODO: Run win64 binary within OCI
 
           - target: x86_64-unknown-linux-musl
             test-bin: |
@@ -298,6 +296,8 @@ jobs:
           - name: blobstore-azure
             target: x86_64-apple-darwin
           - name: blobstore-azure
+            target: x86_64-pc-windows-gnu
+          - name: blobstore-azure
             target: x86_64-unknown-linux-musl
 
           - name: blobstore-fs
@@ -307,6 +307,8 @@ jobs:
           - name: blobstore-fs
             target: x86_64-apple-darwin
           - name: blobstore-fs
+            target: x86_64-pc-windows-gnu
+          - name: blobstore-fs
             target: x86_64-unknown-linux-musl
 
           - name: blobstore-s3
@@ -316,6 +318,8 @@ jobs:
           - name: blobstore-s3
             target: x86_64-apple-darwin
           - name: blobstore-s3
+            target: x86_64-pc-windows-gnu
+          - name: blobstore-s3
             target: x86_64-unknown-linux-musl
 
           - name: keyvalue-nats
@@ -324,6 +328,8 @@ jobs:
             target: aarch64-unknown-linux-musl
           - name: keyvalue-nats
             target: x86_64-apple-darwin
+          - name: keyvalue-nats
+            target: x86_64-pc-windows-gnu
           - name: keyvalue-nats
             target: x86_64-unknown-linux-musl
 
@@ -333,6 +339,8 @@ jobs:
             target: aarch64-unknown-linux-musl
           - name: keyvalue-redis
             target: x86_64-apple-darwin
+          - name: keyvalue-redis
+            target: x86_64-pc-windows-gnu
           - name: keyvalue-redis
             target: x86_64-unknown-linux-musl
 
@@ -342,6 +350,8 @@ jobs:
             target: aarch64-unknown-linux-musl
           - name: keyvalue-vault
             target: x86_64-apple-darwin
+          - name: keyvalue-vault
+            target: x86_64-pc-windows-gnu
           - name: keyvalue-vault
             target: x86_64-unknown-linux-musl
 
@@ -351,6 +361,8 @@ jobs:
             target: aarch64-unknown-linux-musl
           - name: http-client
             target: x86_64-apple-darwin
+          - name: http-client
+            target: x86_64-pc-windows-gnu
           - name: http-client
             target: x86_64-unknown-linux-musl
 
@@ -360,6 +372,8 @@ jobs:
             target: aarch64-unknown-linux-musl
           - name: http-server
             target: x86_64-apple-darwin
+          - name: http-server
+            target: x86_64-pc-windows-gnu
           - name: http-server
             target: x86_64-unknown-linux-musl
 
@@ -369,6 +383,8 @@ jobs:
             target: aarch64-unknown-linux-musl
           - name: messaging-kafka
             target: x86_64-apple-darwin
+          - name: messaging-kafka
+            target: x86_64-pc-windows-gnu
           - name: messaging-kafka
             target: x86_64-unknown-linux-musl
 
@@ -378,6 +394,8 @@ jobs:
             target: aarch64-unknown-linux-musl
           - name: messaging-nats
             target: x86_64-apple-darwin
+          - name: messaging-nats
+            target: x86_64-pc-windows-gnu
           - name: messaging-nats
             target: x86_64-unknown-linux-musl
 
@@ -387,6 +405,8 @@ jobs:
             target: aarch64-unknown-linux-musl
           - name: sqldb-postgres
             target: x86_64-apple-darwin
+          - name: sqldb-postgres
+            target: x86_64-pc-windows-gnu
           - name: sqldb-postgres
             target: x86_64-unknown-linux-musl
 
@@ -403,9 +423,9 @@ jobs:
         with:
           package: ${{ matrix.config.name }}-provider-${{ matrix.config.target }}
 
-  build-windows:
+  build-wash-windows:
     if: ${{ startswith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'}}
-    name: wasmcloud-x86_64-pc-windows-msvc
+    name: wash-x86_64-pc-windows-msvc
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -415,103 +435,14 @@ jobs:
         with:
           shared-key: windows-latest-8-cores-shared-cache
         if: ${{ !startswith(github.ref, 'refs/tags/') }}
-
-      - run: cargo build --release -p wash-cli -p wasmcloud
-
+      - run: cargo build --release -p wash-cli --bin wash
       - run: mkdir "wash/bin"
-      - run: mkdir "wasmcloud/bin"
-
-      - run: mkdir "blobstore-azure-provider/bin"
-      - run: mkdir "blobstore-fs-provider/bin"
-      - run: mkdir "blobstore-s3-provider/bin"
-      - run: mkdir "http-client-provider/bin"
-      - run: mkdir "http-server-provider/bin"
-      - run: mkdir "keyvalue-nats-provider/bin"
-      - run: mkdir "keyvalue-redis-provider/bin"
-      - run: mkdir "keyvalue-vault-provider/bin"
-      - run: mkdir "messaging-kafka-provider/bin"
-      - run: mkdir "messaging-nats-provider/bin"
-      - run: mkdir "sqldb-postgres-provider/bin"
-
-      - run: move "target/release/wash.exe" "wash/bin/wash.exe"
-      - run: move "target/release/wasmcloud.exe" "wasmcloud/bin/wasmcloud.exe"
-
-      - run: move "target/release/blobstore-azure-provider.exe" "blobstore-azure-provider/bin/blobstore-azure-provider.exe"
-      - run: move "target/release/blobstore-fs-provider.exe" "blobstore-fs-provider/bin/blobstore-fs-provider.exe"
-      - run: move "target/release/blobstore-s3-provider.exe" "blobstore-s3-provider/bin/blobstore-s3-provider.exe"
-      - run: move "target/release/http-client-provider.exe" "http-client-provider/bin/http-client-provider.exe"
-      - run: move "target/release/http-server-provider.exe" "http-server-provider/bin/http-server-provider.exe"
-      - run: move "target/release/keyvalue-nats-provider.exe" "keyvalue-nats-provider/bin/keyvalue-nats-provider.exe"
-      - run: move "target/release/keyvalue-redis-provider.exe" "keyvalue-redis-provider/bin/keyvalue-redis-provider.exe"
-      - run: move "target/release/keyvalue-vault-provider.exe" "keyvalue-vault-provider/bin/keyvalue-vault-provider.exe"
-      - run: move "target/release/messaging-kafka-provider.exe" "messaging-kafka-provider/bin/messaging-kafka-provider.exe"
-      - run: move "target/release/messaging-nats-provider.exe" "messaging-nats-provider/bin/messaging-nats-provider.exe"
-      - run: move "target/release/sqldb-postgres-provider.exe" "sqldb-postgres-provider/bin/sqldb-postgres-provider.exe"
+      - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
 
       - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
         with:
           name: wash-x86_64-pc-windows-msvc
-          path: wash
-
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        with:
-          name: wasmcloud-x86_64-pc-windows-msvc
-          path: wasmcloud
-
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        with:
-          name: blobstore-azure-provider-x86_64-pc-windows-msvc
-          path: blobstore-azure-provider
-
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        with:
-          name: blobstore-fs-provider-x86_64-pc-windows-msvc
-          path: blobstore-fs-provider
-
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        with:
-          name: blobstore-s3-provider-x86_64-pc-windows-msvc
-          path: blobstore-s3-provider
-
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        with:
-          name: http-client-provider-x86_64-pc-windows-msvc
-          path: http-client-provider
-
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        with:
-          name: http-server-provider-x86_64-pc-windows-msvc
-          path: http-server-provider
-
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        with:
-          name: keyvalue-nats-provider-x86_64-pc-windows-msvc
-          path: keyvalue-nats-provider
-
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        with:
-          name: keyvalue-redis-provider-x86_64-pc-windows-msvc
-          path: keyvalue-redis-provider
-
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        with:
-          name: keyvalue-vault-provider-x86_64-pc-windows-msvc
-          path: keyvalue-vault-provider
-
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        with:
-          name: messaging-kafka-provider-x86_64-pc-windows-msvc
-          path: messaging-kafka-provider
-
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        with:
-          name: messaging-nats-provider-x86_64-pc-windows-msvc
-          path: messaging-nats-provider
-
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
-        with:
-          name: sqldb-postgres-provider-x86_64-pc-windows-msvc
-          path: sqldb-postgres-provider
+          path: artifact
 
   build-wash-lipo:
     name: wash-universal-darwin
@@ -589,15 +520,23 @@ jobs:
       - run: chmod +x ./bin/wasmcloud
       - run: ./bin/wasmcloud --version
 
-  test-windows:
+  test-wasmcloud-windows:
     runs-on: windows-latest
-    needs: build-windows
+    needs: build-wasmcloud-bin
     steps:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
-          name: wasmcloud-x86_64-pc-windows-msvc
-      - run: .\bin\wash.exe --version
+          name: wasmcloud-x86_64-pc-windows-gnu
       - run: .\bin\wasmcloud.exe --version
+
+  test-wash-windows:
+    runs-on: windows-latest
+    needs: build-wash-windows
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: wash-x86_64-pc-windows-msvc
+      - run: .\bin\wash.exe --version
 
   cargo:
     needs: [meta]
@@ -689,7 +628,6 @@ jobs:
       - meta
       - build-wash-bin
       - build-provider-bin
-      - build-windows
       - test-wash-linux
     permissions:
       contents: read
@@ -896,7 +834,8 @@ jobs:
       - oci
       - test-wash-linux
       - test-wasmcloud-linux
-      - test-windows
+      - test-wash-windows
+      - test-wasmcloud-windows
     runs-on: ubuntu-22.04
     permissions:
       contents: write

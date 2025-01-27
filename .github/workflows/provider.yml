@@ -58,7 +58,7 @@ jobs:
       - run: chmod +x "./artifacts/${{ inputs.name }}-provider-aarch64-apple-darwin/bin/${{ inputs.name }}-provider"
       - run: chmod +x "./artifacts/${{ inputs.name }}-provider-aarch64-unknown-linux-musl/bin/${{ inputs.name }}-provider"
       - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-apple-darwin/bin/${{ inputs.name }}-provider"
-      - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-pc-windows-msvc/bin/${{ inputs.name }}-provider.exe"
+      - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-pc-windows-gnu/bin/${{ inputs.name }}-provider.exe"
       - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-unknown-linux-musl/bin/${{ inputs.name }}-provider"
 
       - run: mv "./artifacts/wash-x86_64-unknown-linux-musl/bin/wash" wash
@@ -81,7 +81,7 @@ jobs:
           ./wash par insert --arch aarch64-linux  --binary "./artifacts/${{ inputs.name }}-provider-aarch64-unknown-linux-musl/bin/${{ inputs.name }}-provider" "${{ inputs.name }}.par.gz"
           ./wash par insert --arch aarch64-macos  --binary "./artifacts/${{ inputs.name }}-provider-aarch64-apple-darwin/bin/${{ inputs.name }}-provider" "${{ inputs.name }}.par.gz"
           ./wash par insert --arch x86_64-macos   --binary "./artifacts/${{ inputs.name }}-provider-x86_64-apple-darwin/bin/${{ inputs.name }}-provider" "${{ inputs.name }}.par.gz"
-          ./wash par insert --arch x86_64-windows --binary "./artifacts/${{ inputs.name }}-provider-x86_64-pc-windows-msvc/bin/${{ inputs.name }}-provider.exe" "${{ inputs.name }}.par.gz"
+          ./wash par insert --arch x86_64-windows --binary "./artifacts/${{ inputs.name }}-provider-x86_64-pc-windows-gnu/bin/${{ inputs.name }}-provider.exe" "${{ inputs.name }}.par.gz"
           ./wash par inspect "${{ inputs.name }}.par.gz"
 
       - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
