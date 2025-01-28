@@ -12,7 +12,6 @@ use wash_lib::cli::par::{
     convert_error, create_provider_archive, detect_arch, insert_provider_binary,
 };
 use wash_lib::cli::{extract_keypair, inspect, par, CommandOutput, OutputKind};
-use wash_lib::common::create_dummy_provider_wasm;
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
@@ -288,7 +287,17 @@ pub async fn handle_create(cmd: CreateCommand, output_kind: OutputKind) -> Resul
     let wit_interface_bytes = match (cmd.wit_world.as_deref(), cmd.wit_dir.as_ref()) {
         (Some(_), None) => bail!("Both --wit-world and --wit-directory must be provided together"),
         (None, Some(_)) => bail!("Both --wit-world and --wit-directory must be provided together"),
-        (Some(world), Some(dir)) => create_dummy_provider_wasm(dir, Some(world))?,
+        (Some(world), Some(dir)) => {
+            let mut resolve = wit_parser::Resolve::default();
+            let (package_id, _paths) = resolve
+                .push_dir(dir)
+                .with_context(|| format!("failed to add WIT directory @ [{}]", dir.display()))?;
+
+            let encoded = wit_component::encode(&resolve, package_id)
+                .context("Failed to encode WIT package")?;
+
+            Some(encoded)
+        }
         (None, None) => None,
     };
 

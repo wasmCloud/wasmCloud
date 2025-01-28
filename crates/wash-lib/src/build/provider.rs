@@ -9,7 +9,6 @@ use tracing::{trace, warn};
 use crate::build::SignConfig;
 use crate::cli::par::{create_provider_archive, detect_arch, ParCreateArgs};
 use crate::cli::{extract_keypair, OutputKind};
-use crate::common::create_dummy_provider_wasm;
 use crate::parser::{CommonConfig, GoConfig, LanguageConfig, ProviderConfig, RustConfig};
 
 /// Build a capability provider for the current machine's architecture
@@ -20,8 +19,16 @@ pub(crate) async fn build_provider(
     common_config: &CommonConfig,
     signing_config: Option<&SignConfig>,
 ) -> Result<PathBuf> {
+    let mut resolve = wit_parser::Resolve::default();
+    let (package_id, _paths) = resolve.push_dir(&common_config.wit_dir).with_context(|| {
+        format!(
+            "failed to add WIT directory @ [{}]",
+            common_config.wit_dir.display()
+        )
+    })?;
+
     let wit_interface_bytes =
-        create_dummy_provider_wasm(&common_config.wit_dir, provider_config.wit_world.as_deref())?;
+        wit_component::encode(&resolve, package_id).context("Failed to encode WIT package")?;
 
     let (provider_path_buf, bin_name) = match language_config {
         LanguageConfig::Rust(rust_config) => {
@@ -54,7 +61,7 @@ pub(crate) async fn build_provider(
             arch: detect_arch(),
         },
         &provider_bytes,
-        wit_interface_bytes.as_deref(),
+        Some(wit_interface_bytes.as_ref()),
     )
     .context("failed to create initial provider archive with built provider")?;
 

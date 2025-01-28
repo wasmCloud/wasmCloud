@@ -15,12 +15,11 @@ use wasm_encoder::{Encode, Section};
 use wit_component::{ComponentEncoder, StringEncoding};
 
 use crate::{
-    build::{SignConfig, WASMCLOUD_WASM_TAG_EXPERIMENTAL},
+    build::{convert_wit_dir_to_world, SignConfig, WASMCLOUD_WASM_TAG_EXPERIMENTAL},
     cli::{
         claims::{sign_file, ComponentMetadata, GenerateCommon, SignCommand},
         OutputKind,
     },
-    common::convert_wit_dir_to_world,
     parser::{CommonConfig, ComponentConfig, LanguageConfig, RustConfig, TinyGoConfig, WasmTarget},
 };
 
@@ -531,7 +530,7 @@ fn embed_wasm_component_metadata(
         );
     };
 
-    let (resolver, world_id) = convert_wit_dir_to_world(wit_dir, Some(wit_world.as_ref()))
+    let (resolver, world_id) = convert_wit_dir_to_world(wit_dir, wit_world.as_ref())
         .context("failed to resolve WIT world")?;
 
     // Encode the metadata
