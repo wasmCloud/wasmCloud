@@ -345,7 +345,7 @@ jobs:
   build-wash-lipo:
     name: wash-universal-darwin
     needs: build-wash-bin
-    runs-on: macos-13
+    runs-on: macos-15
     steps:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
@@ -356,14 +356,8 @@ jobs:
           name: wash-x86_64-apple-darwin
           path: x86_64
 
-      - run: chmod +x ./x86_64/bin/*
-      - run: ./x86_64/bin/wash --version
-
       - run: mkdir -p ./artifact/bin
       - run: lipo -create ./aarch64/bin/wash ./x86_64/bin/wash -output ./artifact/bin/wash
-
-      - run: chmod +x ./artifact/bin/wash
-      - run: ./artifact/bin/wash --version
 
       - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
         with:
@@ -373,7 +367,7 @@ jobs:
   build-wasmcloud-lipo:
     name: wasmcloud-universal-darwin
     needs: build-wasmcloud-bin
-    runs-on: macos-13
+    runs-on: macos-15
     steps:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
@@ -384,21 +378,25 @@ jobs:
           name: wasmcloud-x86_64-apple-darwin
           path: x86_64
 
-      - run: chmod +x ./x86_64/bin/*
-      - run: ./x86_64/bin/wasmcloud --version
-
       - run: mkdir -p ./artifact/bin
       - run: lipo -create ./aarch64/bin/wasmcloud ./x86_64/bin/wasmcloud -output ./artifact/bin/wasmcloud
-
-      - run: chmod +x ./artifact/bin/wasmcloud
-      - run: ./artifact/bin/wasmcloud --version
 
       - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
         with:
           name: wasmcloud-universal-darwin
           path: artifact
 
-  test-wash-linux:
+  test-wash-linux-aarch64:
+    runs-on: ubuntu-22.04-arm
+    needs: build-wash-bin
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: wash-aarch64-unknown-linux-musl
+      - run: chmod +x ./bin/wash
+      - run: ./bin/wash --version
+
+  test-wash-linux-x86_64:
     runs-on: ubuntu-22.04
     needs: build-wash-bin
     steps:
@@ -408,7 +406,60 @@ jobs:
       - run: chmod +x ./bin/wash
       - run: ./bin/wash --version
 
-  test-wasmcloud-linux:
+  test-wash-macos-aarch64:
+    runs-on: macos-15
+    needs:
+      - build-wash-bin
+      - build-wash-lipo
+    strategy:
+      matrix:
+        artifact:
+          - wash-aarch64-apple-darwin
+          - wash-universal-darwin
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: ${{ matrix.artifact }}
+      - run: chmod +x ./bin/wash
+      - run: ./bin/wash --version
+
+  test-wash-macos-x86_64:
+    runs-on: macos-13
+    needs:
+      - build-wash-bin
+      - build-wash-lipo
+    strategy:
+      matrix:
+        artifact:
+          - wash-x86_64-apple-darwin
+          - wash-universal-darwin
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: ${{ matrix.artifact }}
+      - run: chmod +x ./bin/wash
+      - run: ./bin/wash --version
+
+  test-wash-windows-x86_64:
+    runs-on: windows-latest
+    needs: build-wash-windows
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: wash-x86_64-pc-windows-msvc
+      - run: .\bin\wash.exe --version
+
+  test-wasmcloud-linux-aarch64:
+    runs-on: ubuntu-22.04-arm
+    needs: build-wasmcloud-bin
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: wasmcloud-aarch64-unknown-linux-musl
+      - run: chmod +x ./bin/wasmcloud
+      - run: ./bin/wasmcloud --version
+
+  test-wasmcloud-linux-x86_64:
     runs-on: ubuntu-22.04
     needs: build-wasmcloud-bin
     steps:
@@ -418,7 +469,41 @@ jobs:
       - run: chmod +x ./bin/wasmcloud
       - run: ./bin/wasmcloud --version
 
-  test-wasmcloud-windows:
+  test-wasmcloud-macos-aarch64:
+    runs-on: macos-15
+    needs:
+      - build-wasmcloud-bin
+      - build-wasmcloud-lipo
+    strategy:
+      matrix:
+        artifact:
+          - wasmcloud-aarch64-apple-darwin
+          - wasmcloud-universal-darwin
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: ${{ matrix.artifact }}
+      - run: chmod +x ./bin/wasmcloud
+      - run: ./bin/wasmcloud --version
+
+  test-wasmcloud-macos-x86_64:
+    runs-on: macos-13
+    needs:
+      - build-wasmcloud-bin
+      - build-wasmcloud-lipo
+    strategy:
+      matrix:
+        artifact:
+          - wasmcloud-x86_64-apple-darwin
+          - wasmcloud-universal-darwin
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: ${{ matrix.artifact }}
+      - run: chmod +x ./bin/wasmcloud
+      - run: ./bin/wasmcloud --version
+
+  test-wasmcloud-windows-x86_64:
     runs-on: windows-latest
     needs: build-wasmcloud-bin
     steps:
@@ -426,15 +511,6 @@ jobs:
         with:
           name: wasmcloud-x86_64-pc-windows-gnu
       - run: .\bin\wasmcloud.exe --version
-
-  test-wash-windows:
-    runs-on: windows-latest
-    needs: build-wash-windows
-    steps:
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
-        with:
-          name: wash-x86_64-pc-windows-msvc
-      - run: .\bin\wash.exe --version
 
   cargo:
     needs: [meta]
@@ -526,7 +602,7 @@ jobs:
       - meta
       - build-wash-bin
       - build-provider-bin
-      - test-wash-linux
+      - test-wash-linux-x86_64
     permissions:
       contents: read
       packages: write
@@ -569,8 +645,10 @@ jobs:
     needs:
       - build-wash-bin
       - build-wasmcloud-bin
-      - test-wash-linux
-      - test-wasmcloud-linux
+      - test-wash-linux-aarch64
+      - test-wash-linux-x86_64
+      - test-wasmcloud-linux-aarch64
+      - test-wasmcloud-linux-x86_64
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: ./.github/actions/install-nix
@@ -730,10 +808,16 @@ jobs:
       - build-wasmcloud-lipo
       - cargo
       - oci
-      - test-wash-linux
-      - test-wasmcloud-linux
-      - test-wash-windows
-      - test-wasmcloud-windows
+      - test-wash-linux-aarch64
+      - test-wash-linux-x86_64
+      - test-wash-macos-aarch64
+      - test-wash-macos-x86_64
+      - test-wash-windows-x86_64
+      - test-wasmcloud-linux-aarch64
+      - test-wasmcloud-linux-x86_64
+      - test-wasmcloud-macos-aarch64
+      - test-wasmcloud-macos-x86_64
+      - test-wasmcloud-windows-x86_64
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -833,7 +917,7 @@ jobs:
     needs:
       - cargo
       - build-wash-bin
-      - test-wash-linux
+      - test-wash-linux-x86_64
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -1017,10 +1101,19 @@ jobs:
       - build-provider-bin
       - build-wash-bin
       - build-wash-lipo
+      - build-wash-windows
       - build-wasmcloud-bin
       - build-wasmcloud-lipo
-      - test-wasmcloud-linux
-      - test-wash-linux
+      - test-wash-linux-aarch64
+      - test-wash-linux-x86_64
+      - test-wash-macos-aarch64
+      - test-wash-macos-x86_64
+      - test-wash-windows-x86_64
+      - test-wasmcloud-linux-aarch64
+      - test-wasmcloud-linux-x86_64
+      - test-wasmcloud-macos-aarch64
+      - test-wasmcloud-macos-x86_64
+      - test-wasmcloud-windows-x86_64
       - cargo
       - build-doc
       - providers
@@ -1031,14 +1124,23 @@ jobs:
     steps:
       - name: Results
         run: |
-          echo 'needs.integration_tests.result: ${{ needs.integration_tests.result }}'
           echo 'needs.build-provider-bin.result: ${{ needs.build-provider-bin.result }}'
           echo 'needs.build-wash-bin.result: ${{ needs.build-wash-bin.result }}'
+          echo 'needs.build-wash-windows.result: ${{ needs.build-wash-windows.result }}'
           echo 'needs.build-wash-lipo.result: ${{ needs.build-wash-lipo.result }}'
           echo 'needs.build-wasmcloud-bin.result: ${{ needs.build-wasmcloud-bin.result }}'
           echo 'needs.build-wasmcloud-lipo.result: ${{ needs.build-wasmcloud-lipo.result }}'
-          echo 'needs.test-wash-linux.result: ${{ needs.test-wash-linux.result }}'
-          echo 'needs.test-wasmcloud-linux.result: ${{ needs.test-wasmcloud-linux.result }}'
+          echo 'needs.integration_tests.result: ${{ needs.integration_tests.result }}'
+          echo 'needs.test-wash-linux-aarch64.result: ${{ needs.test-wash-linux-aarch64.result }}'
+          echo 'needs.test-wash-linux-x86_64.result: ${{ needs.test-wash-linux-x86_64.result }}'
+          echo 'needs.test-wash-macos-aarch64.result: ${{ needs.test-wash-macos-aarch64.result }}'
+          echo 'needs.test-wash-macos-x86_64.result: ${{ needs.test-wash-macos-x86_64.result }}'
+          echo 'needs.test-wash-windows-x86_64.result: ${{ needs.test-wash-windows-x86_64.result }}'
+          echo 'needs.test-wasmcloud-linux-aarch64.result: ${{ needs.test-wasmcloud-linux-aarch64.result }}'
+          echo 'needs.test-wasmcloud-linux-x86_64.result: ${{ needs.test-wasmcloud-linux-x86_64.result }}'
+          echo 'needs.test-wasmcloud-macos-aarch64.result: ${{ needs.test-wasmcloud-macos-aarch64.result }}'
+          echo 'needs.test-wasmcloud-macos-x86_64.result: ${{ needs.test-wasmcloud-macos-x86_64.result }}'
+          echo 'needs.test-wasmcloud-windows-x86_64.result: ${{ needs.test-wasmcloud-windows-x86_64.result }}'
           echo 'needs.cargo.result: ${{ needs.cargo.result }}'
           echo 'needs.build-doc.result: ${{ needs.build-doc.result }}'
           echo 'needs.providers.result: ${{ needs.providers.result }}'
