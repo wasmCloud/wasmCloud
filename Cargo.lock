@@ -8597,6 +8597,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "unicase",
  "url",
  "uuid 1.13.2",
  "wasmcloud-control-interface",
