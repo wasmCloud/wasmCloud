@@ -159,7 +159,6 @@ jobs:
               nix profile install --inputs-from . 'nixpkgs#qemu'
               qemu-aarch64 ./result/bin/wash --version
             test-oci: docker load < ./result
-            # TODO: Run aarch64 binary within OCI
 
           - target: aarch64-apple-darwin
             test-bin: |
@@ -187,7 +186,6 @@ jobs:
           #    nix profile install --inputs-from . 'nixpkgs#wine64'
           #    wine64 ./result/bin/wash.exe --version
           #  test-oci: docker load < ./result
-          #  # TODO: Run win64 binary within OCI
 
           - target: x86_64-unknown-linux-musl
             test-bin: |
@@ -227,7 +225,6 @@ jobs:
               nix profile install --inputs-from . 'nixpkgs#qemu'
               qemu-aarch64 ./result/bin/wasmcloud --version
             test-oci: docker load < ./result
-            # TODO: Run aarch64 binary within OCI
 
           - target: aarch64-apple-darwin
             test-bin: |
@@ -254,7 +251,6 @@ jobs:
               nix profile install --inputs-from . 'nixpkgs#wine64'
               wine64 ./result/bin/wasmcloud.exe --version
             test-oci: docker load < ./result
-            # TODO: Run win64 binary within OCI
 
           - target: x86_64-unknown-linux-musl
             test-bin: |
@@ -396,6 +392,21 @@ jobs:
       - run: chmod +x ./bin/wash
       - run: ./bin/wash --version
 
+  test-wash-linux-aarch64-oci:
+    runs-on: ubuntu-22.04-arm
+    needs: build-wash-bin
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: wash-aarch64-unknown-linux-musl-oci
+      - run: docker load < ./wash-aarch64-unknown-linux-musl-oci
+      - run: docker run --rm wash:$(nix eval --raw .#wash-aarch64-unknown-linux-musl-oci.imageTag) wash --version
+
+
   test-wash-linux-x86_64:
     runs-on: ubuntu-22.04
     needs: build-wash-bin
@@ -458,6 +469,20 @@ jobs:
           name: wasmcloud-aarch64-unknown-linux-musl
       - run: chmod +x ./bin/wasmcloud
       - run: ./bin/wasmcloud --version
+
+  test-wasmcloud-linux-aarch64-oci:
+    runs-on: ubuntu-22.04-arm
+    needs: build-wasmcloud-bin
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: wasmcloud-aarch64-unknown-linux-musl-oci
+      - run: docker load < ./wasmcloud-aarch64-unknown-linux-musl-oci
+      - run: docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-aarch64-unknown-linux-musl-oci.imageTag) wasmcloud --version
 
   test-wasmcloud-linux-x86_64:
     runs-on: ubuntu-22.04
@@ -646,8 +671,10 @@ jobs:
       - build-wash-bin
       - build-wasmcloud-bin
       - test-wash-linux-aarch64
+      - test-wash-linux-aarch64-oci
       - test-wash-linux-x86_64
       - test-wasmcloud-linux-aarch64
+      - test-wasmcloud-linux-aarch64-oci
       - test-wasmcloud-linux-x86_64
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -809,11 +836,13 @@ jobs:
       - cargo
       - oci
       - test-wash-linux-aarch64
+      - test-wash-linux-aarch64-oci
       - test-wash-linux-x86_64
       - test-wash-macos-aarch64
       - test-wash-macos-x86_64
       - test-wash-windows-x86_64
       - test-wasmcloud-linux-aarch64
+      - test-wasmcloud-linux-aarch64-oci
       - test-wasmcloud-linux-x86_64
       - test-wasmcloud-macos-aarch64
       - test-wasmcloud-macos-x86_64
