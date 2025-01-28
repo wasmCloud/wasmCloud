@@ -1,6 +1,6 @@
 # HTTP KeyValue Watcher
 
-This component demonstrates a Wasm-based system for monitoring and reacting to key-value store operations through HTTP interfaces. It integrates with [wasi-http](https://github.com/WebAssembly/wasi-http) for handling HTTP requests and [wasi-keyvalue](https://github.com/WebAssembly/wasi-keyvalue) for key-value store interactions. The component establishes watch triggers based on incoming HTTP requests and executes configurable reactions when monitored events occur. At runtime, it [links](https://wasmcloud.com/docs/concepts/linking-components) to a Redis-backed implementation of the key-value store interface.
+This component demonstrates a Wasm-based system for monitoring and reacting to key-value store operations through HTTP interfaces. It integrates with [wasi-http](https://github.com/WebAssembly/wasi-http) for handling Outgoing HTTP responses and [wasi-keyvalue](https://github.com/WebAssembly/wasi-keyvalue) for key-value store interactions. The component establishes watch triggers based on link configuration and executes configurable reactions when events occur. At runtime, it [links](https://wasmcloud.com/docs/concepts/linking-components) to a Redis-backed implementation of the key-value store interface.
 
 
 ## Prerequisites
@@ -22,34 +22,40 @@ You can build and deploy your component with all dependencies and a hot reload l
 wash dev
 ```
 
+## Note
+The `watcher` interface of the Redis key-value provider requires keyspace event notifications to be enabled for proper operation of the watch functionality. Enable this by running:
+```bash
+$ redis-cli CONFIG SET notify-keyspace-events Kg$
+``` 
+Without this configuration, the watcher component won't receive notifications about key-value store operations. Note that this setting persists until explicitly changed or Redis is restarted.
+
 ## Setting Watch Triggers
-You can set triggers for key-value operations using HTTP requests with the following query parameters:
-
-- action: Type of operation to watch for (on_set or on_delete)
-- key: The key to watch for changes
-- value: The value to watch for (only required for on_set actions)
-
-### Watch for SET operations
+You can set triggers for key-value operations using link configuration by adding a `watch` field with a comma-separated string of watch patterns. Each pattern follows the format `OPERATION@key`
 ```bash
-curl "http://localhost:8000/action=on_set&key=foo&value=bar"
+# wash config put <config-name> <values...>
+wash config put custom-config foo=bar watch=SET@key,DEL@key
 ```
-
-### Watch for DELETE operations
+and load the custom-config while starting the provider
 ```bash
-curl "http://localhost:8000/action=on_delete&key=foo"
-```
+# wash start provider <component_ref> <component_id> --config <config-name>
+wash start provider ghcr.io/wasmcloud/keyvalue-redis:0.28.1 rust-keyvalue-watcher --config custom-config
 
-The component will respond with confirmation messages like:
-
-```bash
-foo: Successfully created on_set trigger
-foo: Successfully created on_delete trigger
 ```
+You can also add the watch parameters under the link config properties inside the wadm manifest
+```yaml
+# Under a link trait
+config:
+  - name: redis-custom
+    properties:
+        url: redis://0.0.0.0:6379
+        watch: SET@key,DEL@key,.....
+```
+Note that only SET and DEL operations are supported in `wasi:keyvalue@0.2.0-draft`
 
 ## Customizing Trigger Reactions
 The component currently sends HTTP requests to an alert server when watched operations occur. You can customize the reaction mechanism by modifying the on_set and on_delete functions in the `KvWatcherDemoGuest` implementation:
 
-- `on_set`: Triggered when a watched key is set
+- `on_set`: Triggered when the watched key undergoes a SET operation (**Note**: the `value` parameter contains the latest SET value of the Key.)s
 
 ```rust
 fn on_set(bucket: bindings::wasi::keyvalue::store::Bucket, key: String, value: Vec<u8>) {
@@ -59,8 +65,7 @@ fn on_set(bucket: bindings::wasi::keyvalue::store::Bucket, key: String, value: V
     // or implementing entirely different reaction mechanisms
 }
 ```
-
-- `on_delete`: Triggered when a watched key is deleted
+- `on_delete`: Triggered when the watched key undergoes a DEL operation
 
 ```rust
 fn on_delete(bucket: bindings::wasi::keyvalue::store::Bucket, key: String) {

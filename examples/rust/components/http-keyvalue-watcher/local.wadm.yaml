@@ -9,7 +9,7 @@ metadata:
     wasmcloud.dev/readme-md-url:
     wasmcloud.dev/homepage:
     wasmcloud.dev/categories: |
-      http,http-server,rust,keyvalue,http-client,example
+      http,rust,keyvalue,http-client,example
 spec:
   components:
     - name: kvwatcher
@@ -27,16 +27,6 @@ spec:
         # Establish a unidirectional link to the `kvredis` (the keyvalue capability provider),
         # so the `kvwatcher` component can make use of keyvalue functionality provided by the Redis
         # (i.e. using a keyvalue cache)            
-        - type: link
-          properties:
-            target: kvredis
-            namespace: wasi
-            package: keyvalue
-            interfaces: [watcher, store]
-            target_config:
-              - name: redis-url
-                properties:
-                  url: redis://127.0.0.1:6379
         - type: link
           properties:
             target: httpclient
@@ -79,38 +69,6 @@ spec:
         #       otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
         #       otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
         #       otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"
-
-    # Add a capability provider that enables HTTP access
-    - name: httpserver
-      type: capability
-      properties:
-        image: ghcr.io/wasmcloud/http-server:0.23.2
-        ## To configure OTEL integration for this provider specifically, uncomment the lines below
-        # config:
-        #   - name: otel
-        #     properties:
-        #       otel_exporter_otlp_endpoint: "http://all-in-one:4318"
-        #       otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
-        #       otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
-        #       otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"
-      traits:
-        # Link the httpserver to the component, and configure the HTTP server
-        # to listen on port 8000 for incoming requests
-        #
-        # Since the HTTP server calls the `counter` component, we establish
-        # a unidirectional link from this `httpserver` provider (the "source")
-        # to the `counter` component (the "target"), so the server can invoke
-        # the component to handle a request.
-        - type: link
-          properties:
-            target: kvwatcher
-            namespace: wasi
-            package: http
-            interfaces: [incoming-handler]
-            source_config:
-              - name: default-http
-                properties:
-                  address: 127.0.0.1:8000
       # The HTTP Client that is in-charge of making outgoing calls when guest functions get invoked
     - name: httpclient
       type: capability
