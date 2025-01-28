@@ -288,129 +288,27 @@ jobs:
     if: ${{ needs.meta.outputs.providers_modified == 'true' || startswith(github.ref, 'refs/tags/provider-') }}
     strategy:
       matrix:
-        config:
-          - name: blobstore-azure
-            target: aarch64-apple-darwin
-          - name: blobstore-azure
-            target: aarch64-unknown-linux-musl
-          - name: blobstore-azure
-            target: x86_64-apple-darwin
-          - name: blobstore-azure
-            target: x86_64-pc-windows-gnu
-          - name: blobstore-azure
-            target: x86_64-unknown-linux-musl
+        name:
+          - blobstore-azure
+          - blobstore-fs
+          - blobstore-s3
+          - keyvalue-nats
+          - keyvalue-redis
+          - keyvalue-vault
+          - http-client
+          - http-server
+          - messaging-kafka
+          - messaging-nats
+          - sqldb-postgres
 
-          - name: blobstore-fs
-            target: aarch64-apple-darwin
-          - name: blobstore-fs
-            target: aarch64-unknown-linux-musl
-          - name: blobstore-fs
-            target: x86_64-apple-darwin
-          - name: blobstore-fs
-            target: x86_64-pc-windows-gnu
-          - name: blobstore-fs
-            target: x86_64-unknown-linux-musl
+        target:
+          - aarch64-apple-darwin
+          - aarch64-unknown-linux-musl
+          - x86_64-apple-darwin
+          - x86_64-pc-windows-gnu
+          - x86_64-unknown-linux-musl
 
-          - name: blobstore-s3
-            target: aarch64-apple-darwin
-          - name: blobstore-s3
-            target: aarch64-unknown-linux-musl
-          - name: blobstore-s3
-            target: x86_64-apple-darwin
-          - name: blobstore-s3
-            target: x86_64-pc-windows-gnu
-          - name: blobstore-s3
-            target: x86_64-unknown-linux-musl
-
-          - name: keyvalue-nats
-            target: aarch64-apple-darwin
-          - name: keyvalue-nats
-            target: aarch64-unknown-linux-musl
-          - name: keyvalue-nats
-            target: x86_64-apple-darwin
-          - name: keyvalue-nats
-            target: x86_64-pc-windows-gnu
-          - name: keyvalue-nats
-            target: x86_64-unknown-linux-musl
-
-          - name: keyvalue-redis
-            target: aarch64-apple-darwin
-          - name: keyvalue-redis
-            target: aarch64-unknown-linux-musl
-          - name: keyvalue-redis
-            target: x86_64-apple-darwin
-          - name: keyvalue-redis
-            target: x86_64-pc-windows-gnu
-          - name: keyvalue-redis
-            target: x86_64-unknown-linux-musl
-
-          - name: keyvalue-vault
-            target: aarch64-apple-darwin
-          - name: keyvalue-vault
-            target: aarch64-unknown-linux-musl
-          - name: keyvalue-vault
-            target: x86_64-apple-darwin
-          - name: keyvalue-vault
-            target: x86_64-pc-windows-gnu
-          - name: keyvalue-vault
-            target: x86_64-unknown-linux-musl
-
-          - name: http-client
-            target: aarch64-apple-darwin
-          - name: http-client
-            target: aarch64-unknown-linux-musl
-          - name: http-client
-            target: x86_64-apple-darwin
-          - name: http-client
-            target: x86_64-pc-windows-gnu
-          - name: http-client
-            target: x86_64-unknown-linux-musl
-
-          - name: http-server
-            target: aarch64-apple-darwin
-          - name: http-server
-            target: aarch64-unknown-linux-musl
-          - name: http-server
-            target: x86_64-apple-darwin
-          - name: http-server
-            target: x86_64-pc-windows-gnu
-          - name: http-server
-            target: x86_64-unknown-linux-musl
-
-          - name: messaging-kafka
-            target: aarch64-apple-darwin
-          - name: messaging-kafka
-            target: aarch64-unknown-linux-musl
-          - name: messaging-kafka
-            target: x86_64-apple-darwin
-          - name: messaging-kafka
-            target: x86_64-pc-windows-gnu
-          - name: messaging-kafka
-            target: x86_64-unknown-linux-musl
-
-          - name: messaging-nats
-            target: aarch64-apple-darwin
-          - name: messaging-nats
-            target: aarch64-unknown-linux-musl
-          - name: messaging-nats
-            target: x86_64-apple-darwin
-          - name: messaging-nats
-            target: x86_64-pc-windows-gnu
-          - name: messaging-nats
-            target: x86_64-unknown-linux-musl
-
-          - name: sqldb-postgres
-            target: aarch64-apple-darwin
-          - name: sqldb-postgres
-            target: aarch64-unknown-linux-musl
-          - name: sqldb-postgres
-            target: x86_64-apple-darwin
-          - name: sqldb-postgres
-            target: x86_64-pc-windows-gnu
-          - name: sqldb-postgres
-            target: x86_64-unknown-linux-musl
-
-    name: ${{ matrix.config.name }}-provider-${{ matrix.config.target }}
+    name: ${{ matrix.name }}-provider-${{ matrix.target }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -421,7 +319,7 @@ jobs:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
       - uses: ./.github/actions/build-nix
         with:
-          package: ${{ matrix.config.name }}-provider-${{ matrix.config.target }}
+          package: ${{ matrix.name }}-provider-${{ matrix.target }}
 
   build-wash-windows:
     if: ${{ startswith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'}}
