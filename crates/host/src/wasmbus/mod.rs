@@ -8,7 +8,6 @@ use std::env::consts::{ARCH, FAMILY, OS};
 use std::future::Future;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
@@ -27,7 +26,7 @@ use futures::stream::{AbortHandle, Abortable, SelectAll};
 use futures::{join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use nkeys::{KeyPair, KeyPairType, XKey};
-use providers::{start_binary_provider, Provider};
+use providers::Provider;
 use secrecy::Secret;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -40,7 +39,6 @@ use tokio::time::{interval_at, Instant};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, debug_span, error, info, instrument, trace, warn, Instrument as _};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use uuid::Uuid;
 use wascap::jwt;
 use wasmcloud_control_interface::{
     ComponentAuctionAck, ComponentAuctionRequest, ComponentDescription, CtlResponse,
@@ -49,9 +47,7 @@ use wasmcloud_control_interface::{
     ScaleComponentCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
     UpdateComponentCommand,
 };
-use wasmcloud_core::{
-    ComponentId, HostData, InterfaceLinkDefinition, OtelConfig, CTL_API_VERSION_1,
-};
+use wasmcloud_core::{ComponentId, CTL_API_VERSION_1};
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_runtime::component::WrpcServeEvent;
 use wasmcloud_runtime::Runtime;
@@ -1795,101 +1791,10 @@ impl Host {
         <Self as ControlInterfaceServer>::handle_start_provider(self, cmd).await
     }
 
-    #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all)]
-    async fn start_binary_provider(
-        &self,
-        link_definitions: Vec<InterfaceLinkDefinition>,
-        provider_xkey: XKey,
-        secrets: HashMap<String, wasmcloud_core::secrets::SecretValue>,
-        host_config: HashMap<String, String>,
-        config: Arc<RwLock<ConfigBundle>>,
-        path: PathBuf,
-        provider_id: &str,
-        host_id: &str,
-    ) -> anyhow::Result<(JoinSet<()>, Arc<AtomicBool>)> {
-        let lattice_rpc_user_seed = self
-            .host_config
-            .rpc_key
-            .as_ref()
-            .map(|key| key.seed())
-            .transpose()
-            .context("private key missing for provider RPC key")?;
-        let default_rpc_timeout_ms = Some(
-            self.host_config
-                .rpc_timeout
-                .as_millis()
-                .try_into()
-                .context("failed to convert rpc_timeout to u64")?,
-        );
-        let otel_config = OtelConfig {
-            enable_observability: self.host_config.otel_config.enable_observability,
-            enable_traces: self.host_config.otel_config.enable_traces,
-            enable_metrics: self.host_config.otel_config.enable_metrics,
-            enable_logs: self.host_config.otel_config.enable_logs,
-            observability_endpoint: self.host_config.otel_config.observability_endpoint.clone(),
-            traces_endpoint: self.host_config.otel_config.traces_endpoint.clone(),
-            metrics_endpoint: self.host_config.otel_config.metrics_endpoint.clone(),
-            logs_endpoint: self.host_config.otel_config.logs_endpoint.clone(),
-            protocol: self.host_config.otel_config.protocol,
-            additional_ca_paths: self.host_config.otel_config.additional_ca_paths.clone(),
-            trace_level: self.host_config.otel_config.trace_level.clone(),
-            ..Default::default()
-        };
-
-        // The provider itself needs to know its private key
-        let provider_xkey_private_key = if let Ok(seed) = provider_xkey.seed() {
-            seed
-        } else if self.host_config.secrets_topic_prefix.is_none() {
-            "".to_string()
-        } else {
-            // This should never happen since this returns an error when an Xkey is
-            // created from a public key, but if we can't generate one for whatever
-            // reason, we should bail.
-            bail!("failed to generate seed for provider xkey")
-        };
-        let host_data = HostData {
-            host_id: self.host_key.public_key(),
-            lattice_rpc_prefix: self.host_config.lattice.to_string(),
-            link_name: "default".to_string(),
-            lattice_rpc_user_jwt: self.host_config.rpc_jwt.clone().unwrap_or_default(),
-            lattice_rpc_user_seed: lattice_rpc_user_seed.unwrap_or_default(),
-            lattice_rpc_url: self.host_config.rpc_nats_url.to_string(),
-            env_values: vec![],
-            instance_id: Uuid::new_v4().to_string(),
-            provider_key: provider_id.to_string(),
-            link_definitions,
-            config: host_config,
-            secrets,
-            provider_xkey_private_key,
-            host_xkey_public_key: self.secrets_xkey.public_key(),
-            cluster_issuers: vec![],
-            default_rpc_timeout_ms,
-            log_level: Some(self.host_config.log_level.clone()),
-            structured_logging: self.host_config.enable_structured_logging,
-            otel_config,
-        };
-        let host_data =
-            serde_json::to_vec(&host_data).context("failed to serialize provider data")?;
-
-        start_binary_provider(
-            self.rpc_nats.clone(),
-            self.ctl_nats.clone(),
-            self.event_builder.clone(),
-            self.host_config.lattice.clone(),
-            host_id,
-            provider_id,
-            path,
-            host_data,
-            config,
-        )
-        .await
-    }
-
     #[instrument(level = "debug", skip_all)]
     async fn handle_start_provider_task(
-        &self,
-        config: &[String],
+        self: Arc<Self>,
+        config_names: &[String],
         provider_id: &str,
         provider_ref: &str,
         annotations: BTreeMap<String, String>,
@@ -1950,119 +1855,70 @@ impl Host {
         self.store_component_spec(&provider_id, &component_specification)
             .await?;
 
-        let (config, secrets) = self
-            .fetch_config_and_secrets(
-                config,
-                claims_token.as_ref().map(|t| &t.jwt),
-                annotations.get("wasmcloud.dev/appspec"),
-            )
-            .await?;
-
         let mut providers = self.providers.write().await;
+        // TODO: Basically from here to execution is what we need for a restart. So we need
+        // - self.fetch_config_and_secrets
+        // - self.links
+        // - self.resolve_link_config
+        // - self.start_binary_provider
+        //
+        // Makes me think that the Provider should be able to "fully die" and then we would have a task
+        // in the host that watches for issues and restarts the provider.
         if let hash_map::Entry::Vacant(entry) = providers.entry(provider_id.into()) {
             let provider_xkey = XKey::new();
             // We only need to store the public key of the provider xkey, as the private key is only needed by the provider
             let xkey = XKey::from_public_key(&provider_xkey.public_key())
                 .context("failed to create XKey from provider public key xkey")?;
-
-            // Prepare startup links by generating the source and target configs. Note that because the provider may be the source
-            // or target of a link, we need to iterate over all links to find the ones that involve the provider.
-            let all_links = self.links.read().await;
-            let provider_links = all_links
-                .values()
-                .flatten()
-                .filter(|link| link.source_id() == provider_id || link.target() == provider_id);
-            let link_definitions = stream::iter(provider_links)
-                .filter_map(|link| async {
-                    if link.source_id() == provider_id || link.target() == provider_id {
-                        match self
-                            .resolve_link_config(
-                                link.clone(),
-                                claims_token.as_ref().map(|t| &t.jwt),
-                                annotations.get("wasmcloud.dev/appspec"),
-                                &xkey,
-                            )
-                            .await
-                        {
-                            Ok(provider_link) => Some(provider_link),
-                            Err(e) => {
-                                error!(
-                                    error = ?e,
-                                    provider_id,
-                                    source_id = link.source_id(),
-                                    target = link.target(),
-                                    "failed to resolve link config, skipping link"
-                                );
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<wasmcloud_core::InterfaceLinkDefinition>>()
-                .await;
-
-            let secrets = {
-                // NOTE(brooksmtownsend): This trait import is used here to ensure we're only exposing secret
-                // values when we need them.
-                use secrecy::ExposeSecret;
-                secrets
-                    .iter()
-                    .map(|(k, v)| match v.expose_secret() {
-                        SecretValue::String(s) => (
-                            k.clone(),
-                            wasmcloud_core::secrets::SecretValue::String(s.to_owned()),
-                        ),
-                        SecretValue::Bytes(b) => (
-                            k.clone(),
-                            wasmcloud_core::secrets::SecretValue::Bytes(b.to_owned()),
-                        ),
-                    })
-                    .collect()
-            };
-            let host_config = config.get_config().await.clone();
-            let config = Arc::new(RwLock::new(config));
-            let (tasks, restart_on_exit) = match (path, &provider_ref) {
+            let (host_data, config_bundle) = self
+                .prepare_provider_config(
+                    config_names,
+                    claims_token.as_ref(),
+                    provider_id,
+                    &provider_xkey,
+                    &annotations,
+                )
+                .await?;
+            let config_bundle = Arc::new(RwLock::new(config_bundle));
+            let restart_on_exit = Arc::new(AtomicBool::new(false));
+            let tasks = match (path, &provider_ref) {
                 (Some(path), ..) => {
-                    self.start_binary_provider(
-                        link_definitions,
-                        provider_xkey,
-                        secrets,
-                        host_config,
-                        Arc::clone(&config),
-                        path,
-                        provider_id,
-                        host_id,
-                    )
-                    .await?
+                    Arc::clone(&self)
+                        .start_binary_provider(
+                            path,
+                            host_data,
+                            Arc::clone(&config_bundle),
+                            provider_id,
+                            host_id,
+                            config_names.to_vec(),
+                            claims_token.clone(),
+                            provider_xkey,
+                            annotations.clone(),
+                            restart_on_exit.clone(),
+                        )
+                        .await?
                 }
                 (None, ResourceRef::Builtin(name)) => match *name {
-                    "http-server" if self.experimental_features.builtin_http_server => (
+                    "http-server" if self.experimental_features.builtin_http_server => {
                         self.start_http_server_provider(
-                            link_definitions,
+                            host_data,
                             provider_xkey,
-                            host_config,
                             provider_id,
                             host_id,
                         )
-                        .await?,
-                        Arc::new(AtomicBool::new(false)),
-                    ),
+                        .await?
+                    }
                     "http-server" => {
                         bail!("feature `builtin-http-server` is not enabled, denying start")
                     }
-                    "messaging-nats" if self.experimental_features.builtin_messaging_nats => (
+                    "messaging-nats" if self.experimental_features.builtin_messaging_nats => {
                         self.start_messaging_nats_provider(
-                            link_definitions,
+                            host_data,
                             provider_xkey,
-                            host_config,
                             provider_id,
                             host_id,
                         )
-                        .await?,
-                        Arc::new(AtomicBool::new(false)),
-                    ),
+                        .await?
+                    }
                     "messaging-nats" => {
                         bail!("feature `builtin-messaging-nats` is not enabled, denying start")
                     }
@@ -2094,7 +1950,7 @@ impl Host {
                 claims_token,
                 image_ref: provider_ref.as_ref().to_string(),
                 xkey,
-                config,
+                config: config_bundle,
                 restart_on_exit,
             });
         } else {
