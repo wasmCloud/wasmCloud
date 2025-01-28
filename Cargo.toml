@@ -157,7 +157,7 @@ wasmcloud-provider-sqldb-postgres = { workspace = true, optional = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"], optional = true }
 
 [dev-dependencies]
-axum ={ workspace = true, features = ["query"]}
+axum = { workspace = true, features = ["query"] }
 async-nats = { workspace = true, features = ["ring"] }
 bytes = { workspace = true }
 base64 = { workspace = true }

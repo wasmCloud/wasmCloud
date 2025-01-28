@@ -313,8 +313,6 @@ where
             .context("failed to link `wasi:keyvalue/store`")?;
         capability::keyvalue::batch::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasi:keyvalue/batch`")?;
-        capability::keyvalue::watcher::add_to_linker(&mut linker, |ctx| ctx)
-            .context("failed to link `wasi:keyvalue/watch`")?;
         capability::logging::logging::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasi:logging/logging`")?;
         capability::unversioned_logging::logging::add_to_linker(&mut linker, |ctx| ctx)
