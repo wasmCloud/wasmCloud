@@ -330,7 +330,7 @@ jobs:
           shared-key: windows-latest-8-cores-shared-cache
         if: ${{ !startswith(github.ref, 'refs/tags/') }}
       - run: cargo build --release -p wash-cli --bin wash
-      - run: mkdir "wash/bin"
+      - run: mkdir "artifact/bin"
       - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
 
       - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
