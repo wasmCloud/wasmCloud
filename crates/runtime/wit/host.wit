@@ -6,7 +6,6 @@ world interfaces {
     import wasi:keyvalue/atomics@0.2.0-draft;
     import wasi:keyvalue/batch@0.2.0-draft;
     import wasi:keyvalue/store@0.2.0-draft;
-    import wasi:keyvalue/watcher@0.2.0-draft;
     import wasi:logging/logging@0.1.0-draft;
     
     import wasmcloud:bus/lattice@1.0.0;
@@ -27,7 +26,6 @@ world wrpc-interfaces {
     import wrpc:keyvalue/atomics@0.2.0-draft;
     import wrpc:keyvalue/store@0.2.0-draft;
     import wrpc:keyvalue/batch@0.2.0-draft;
-    import wrpc:keyvalue/watcher@0.2.0-draft;
     export wrpc:keyvalue/watcher@0.2.0-draft;
 
     import wrpc:blobstore/blobstore@0.1.0;
