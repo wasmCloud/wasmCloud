@@ -433,6 +433,7 @@ jobs:
           name: ${{ matrix.artifact }}
       - run: chmod +x ./bin/wash
       - run: ./bin/wash --version
+      - run: codesign --verify ./bin/wash
 
   test-wash-macos-x86_64:
     runs-on: macos-13
@@ -450,6 +451,7 @@ jobs:
           name: ${{ matrix.artifact }}
       - run: chmod +x ./bin/wash
       - run: ./bin/wash --version
+      - run: codesign --verify ./bin/wash
 
   test-wash-windows-x86_64:
     runs-on: windows-latest
@@ -510,6 +512,7 @@ jobs:
           name: ${{ matrix.artifact }}
       - run: chmod +x ./bin/wasmcloud
       - run: ./bin/wasmcloud --version
+      - run: codesign --verify ./bin/wasmcloud
 
   test-wasmcloud-macos-x86_64:
     runs-on: macos-13
@@ -527,6 +530,7 @@ jobs:
           name: ${{ matrix.artifact }}
       - run: chmod +x ./bin/wasmcloud
       - run: ./bin/wasmcloud --version
+      - run: codesign --verify ./bin/wasmcloud
 
   test-wasmcloud-windows-x86_64:
     runs-on: windows-latest
