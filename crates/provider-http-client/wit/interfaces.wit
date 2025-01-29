@@ -1,0 +1,5 @@
+package wasmcloud:provider-http-client;
+
+world interfaces {
+    export wasi:http/outgoing-handler@0.2.2;
+}
