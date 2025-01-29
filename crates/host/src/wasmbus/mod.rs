@@ -1856,19 +1856,12 @@ impl Host {
             .await?;
 
         let mut providers = self.providers.write().await;
-        // TODO: Basically from here to execution is what we need for a restart. So we need
-        // - self.fetch_config_and_secrets
-        // - self.links
-        // - self.resolve_link_config
-        // - self.start_binary_provider
-        //
-        // Makes me think that the Provider should be able to "fully die" and then we would have a task
-        // in the host that watches for issues and restarts the provider.
         if let hash_map::Entry::Vacant(entry) = providers.entry(provider_id.into()) {
             let provider_xkey = XKey::new();
             // We only need to store the public key of the provider xkey, as the private key is only needed by the provider
             let xkey = XKey::from_public_key(&provider_xkey.public_key())
                 .context("failed to create XKey from provider public key xkey")?;
+            // Generate the HostData and ConfigBundle for the provider
             let (host_data, config_bundle) = self
                 .prepare_provider_config(
                     config_names,
@@ -1879,7 +1872,9 @@ impl Host {
                 )
                 .await?;
             let config_bundle = Arc::new(RwLock::new(config_bundle));
-            let restart_on_exit = Arc::new(AtomicBool::new(false));
+            // Used by provider child tasks (health check, config watch, process restarter) to
+            // know when to shutdown.
+            let shutdown = Arc::new(AtomicBool::new(false));
             let tasks = match (path, &provider_ref) {
                 (Some(path), ..) => {
                     Arc::clone(&self)
@@ -1887,37 +1882,27 @@ impl Host {
                             path,
                             host_data,
                             Arc::clone(&config_bundle),
+                            provider_xkey,
                             provider_id,
-                            host_id,
+                            // Arguments to allow regenerating configuration later
                             config_names.to_vec(),
                             claims_token.clone(),
-                            provider_xkey,
                             annotations.clone(),
-                            restart_on_exit.clone(),
+                            shutdown.clone(),
                         )
                         .await?
                 }
                 (None, ResourceRef::Builtin(name)) => match *name {
                     "http-server" if self.experimental_features.builtin_http_server => {
-                        self.start_http_server_provider(
-                            host_data,
-                            provider_xkey,
-                            provider_id,
-                            host_id,
-                        )
-                        .await?
+                        self.start_http_server_provider(host_data, provider_xkey, provider_id)
+                            .await?
                     }
                     "http-server" => {
                         bail!("feature `builtin-http-server` is not enabled, denying start")
                     }
                     "messaging-nats" if self.experimental_features.builtin_messaging_nats => {
-                        self.start_messaging_nats_provider(
-                            host_data,
-                            provider_xkey,
-                            provider_id,
-                            host_id,
-                        )
-                        .await?
+                        self.start_messaging_nats_provider(host_data, provider_xkey, provider_id)
+                            .await?
                     }
                     "messaging-nats" => {
                         bail!("feature `builtin-messaging-nats` is not enabled, denying start")
@@ -1950,8 +1935,7 @@ impl Host {
                 claims_token,
                 image_ref: provider_ref.as_ref().to_string(),
                 xkey,
-                config: config_bundle,
-                restart_on_exit,
+                shutdown,
             });
         } else {
             bail!("provider is already running with that ID")

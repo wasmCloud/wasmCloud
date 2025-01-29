@@ -294,9 +294,8 @@ impl crate::wasmbus::Host {
         host_data: HostData,
         provider_xkey: XKey,
         provider_id: &str,
-        host_id: &str,
     ) -> anyhow::Result<JoinSet<()>> {
-        let mut tasks = JoinSet::new();
+        let host_id = self.host_key.public_key();
         let config =
             ConnectionConfig::from_map(&host_data.config).context("failed to parse config")?;
 
@@ -307,7 +306,7 @@ impl crate::wasmbus::Host {
             &self.host_config.lattice,
             provider_id,
             provider_id,
-            host_id,
+            &host_id,
         )
         .await?;
         let conn = ProviderConnection::new(
@@ -336,6 +335,7 @@ impl crate::wasmbus::Host {
                 );
             }
         }
+        let mut tasks = JoinSet::new();
         tasks.spawn(async move {
             handle_provider_commands(provider, &conn, quit_rx, quit_tx, commands).await
         });
