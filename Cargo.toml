@@ -203,7 +203,7 @@ members = ["crates/*"]
 
 [workspace.dependencies]
 anstyle = { version = "1.0.10", default-features = false }
-anyhow = { version = "1", default-features = false }
+anyhow = { version = "1.0.95", default-features = false }
 assert-json-diff = { version = "2", default-features = false }
 async-compression = { version = "0.3", default-features = false }
 async-nats = { version = "0.36", default-features = false }
@@ -378,12 +378,12 @@ wasmtime-wit-bindgen = { version = "26", default-features = false }
 wat = { version = "1", default-features = false }
 webpki-roots = { version = "0.26", default-features = false }
 which = { version = "4", default-features = false }
-wit-bindgen = { version = "0.32", default-features = false }
-wit-bindgen-core = { version = "0.33", default-features = false }
-wit-bindgen-go = { version = "0.32", default-features = false }
+wit-bindgen = { version = "0.38.0", default-features = false }
+wit-bindgen-core = { version = "0.38.0", default-features = false }
+wit-bindgen-go = { version = "0.38.0", default-features = false }
 wit-bindgen-wrpc = { version = "0.9", default-features = false }
-wit-component = { version = "0.219", default-features = false }
-wit-parser = { version = "0.219", default-features = false }
+wit-component = { version = "0.224", default-features = false }
+wit-parser = { version = "0.224", default-features = false }
 wrpc-interface-blobstore = { version = "0.21", default-features = false }
 wrpc-interface-http = { version = "0.31", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.25", default-features = false }

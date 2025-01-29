@@ -115,12 +115,10 @@ pub async fn handle_command(
             let resolve = witty.resolve();
             let main = witty.package();
             let mut printer = wit_component::WitPrinter::default();
-            CommandOutput::from_key_and_text(
-                "wit",
-                printer
-                    .print(resolve, main, &[])
-                    .context("should be able to print WIT world from a component")?,
-            )
+            printer
+                .print(resolve, main, &[])
+                .context("should be able to print WIT world from a component")?;
+            CommandOutput::from_key_and_text("wit", printer.output.to_string())
         }
         // Catch trying to inspect a WIT from a WASI Preview 1 module
         Some(Ok(wasmparser::Payload::Version {
@@ -164,12 +162,10 @@ pub async fn handle_command(
                 let resolve = witty.resolve();
                 let main = witty.package();
                 let mut printer = wit_component::WitPrinter::default();
-                CommandOutput::from_key_and_text(
-                    "wit",
-                    printer
-                        .print(resolve, main, &[])
-                        .context("should be able to print WIT world from a provider archive")?,
-                )
+                printer
+                    .print(resolve, main, &[])
+                    .context("should be able to print WIT world from provider archive")?;
+                CommandOutput::from_key_and_text("wit", printer.output.to_string())
             } else {
                 render_provider_claims(command.clone(), &artifact).await?
             }
