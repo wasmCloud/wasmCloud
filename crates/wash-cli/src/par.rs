@@ -102,10 +102,6 @@ pub struct CreateCommand {
     #[clap(long = "disable-keygen")]
     disable_keygen: bool,
 
-    /// Optional WIT world for the provider archive, e.g. `imports`
-    #[clap(long = "wit-world")]
-    wit_world: Option<String>,
-
     /// Location of project directory containing WIT
     #[clap(long = "wit-directory")]
     wit_dir: Option<PathBuf>,
@@ -284,10 +280,8 @@ pub async fn handle_create(cmd: CreateCommand, output_kind: OutputKind) -> Resul
         ),
     };
 
-    let wit_interface_bytes = match (cmd.wit_world.as_deref(), cmd.wit_dir.as_ref()) {
-        (Some(_), None) => bail!("Both --wit-world and --wit-directory must be provided together"),
-        (None, Some(_)) => bail!("Both --wit-world and --wit-directory must be provided together"),
-        (Some(world), Some(dir)) => {
+    let wit_interface_bytes = match cmd.wit_dir.as_ref() {
+        Some(dir) => {
             let mut resolve = wit_parser::Resolve::default();
             let (package_id, _paths) = resolve
                 .push_dir(dir)
@@ -298,7 +292,7 @@ pub async fn handle_create(cmd: CreateCommand, output_kind: OutputKind) -> Resul
 
             Some(encoded)
         }
-        (None, None) => None,
+        None => None,
     };
 
     let compress = cmd.compress;
@@ -422,8 +416,6 @@ mod test {
             "--compress",
             "--wit-directory",
             "./wit",
-            "--wit-world",
-            "test-provider",
         ])
         .unwrap();
         match create_long.par {
@@ -442,7 +434,6 @@ mod test {
                 compress,
                 disable_keygen,
                 wit_dir,
-                wit_world,
             }) => {
                 assert_eq!(arch, "x86_64-testrunner");
                 assert_eq!(binary, "./testrunner.so");
@@ -458,7 +449,6 @@ mod test {
                 assert!(disable_keygen);
                 assert!(compress);
                 assert_eq!(wit_dir.unwrap(), PathBuf::from("./wit"));
-                assert_eq!(wit_world.unwrap(), "test-provider");
             }
             cmd => panic!("par insert constructed incorrect command {cmd:?}"),
         }
@@ -487,8 +477,6 @@ mod test {
             SUBJECT,
             "--wit-directory",
             "./wit",
-            "--wit-world",
-            "test-provider",
         ])
         .unwrap();
         match create_short.par {
@@ -507,7 +495,6 @@ mod test {
                 compress,
                 disable_keygen,
                 wit_dir,
-                wit_world,
             }) => {
                 assert_eq!(arch, "x86_64-testrunner");
                 assert_eq!(binary, "./testrunner.so");
@@ -523,7 +510,6 @@ mod test {
                 assert!(!disable_keygen);
                 assert!(!compress);
                 assert_eq!(wit_dir.unwrap(), PathBuf::from("./wit"));
-                assert_eq!(wit_world.unwrap(), "test-provider");
             }
             cmd => panic!("par insert constructed incorrect command {cmd:?}"),
         }
