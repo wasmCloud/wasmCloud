@@ -33,9 +33,8 @@ impl crate::wasmbus::Host {
         host_data: HostData,
         provider_xkey: XKey,
         provider_id: &str,
-        host_id: &str,
     ) -> anyhow::Result<JoinSet<()>> {
-        let mut tasks = JoinSet::new();
+        let host_id = self.host_key.public_key();
         let default_address = host_data
             .config
             .get("default_address")
@@ -50,7 +49,7 @@ impl crate::wasmbus::Host {
                 address: default_address,
                 components: Arc::clone(&self.components),
                 links: Mutex::default(),
-                host_id: Arc::from(host_id),
+                host_id: Arc::from(host_id.as_str()),
                 lattice_id: Arc::clone(&self.host_config.lattice),
             }),
             // Run provider in path mode
@@ -58,7 +57,7 @@ impl crate::wasmbus::Host {
                 path::Provider::new(
                     default_address,
                     Arc::clone(&self.components),
-                    Arc::from(host_id),
+                    Arc::from(host_id.as_str()),
                     Arc::clone(&self.host_config.lattice),
                 )
                 .await?,
@@ -73,7 +72,7 @@ impl crate::wasmbus::Host {
             &self.host_config.lattice,
             provider_id,
             provider_id,
-            host_id,
+            &host_id,
         )
         .await?;
         let conn = ProviderConnection::new(
@@ -87,6 +86,7 @@ impl crate::wasmbus::Host {
         )
         .context("failed to establish provider connection")?;
 
+        let mut tasks = JoinSet::new();
         match provider {
             HttpServerProvider::Address(provider) => {
                 for ld in host_data.link_definitions {
