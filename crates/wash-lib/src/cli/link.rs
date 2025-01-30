@@ -16,7 +16,7 @@ pub struct LinkDelCommand {
     pub source_id: Option<String>,
 
     /// Link name, defaults to "default"
-    #[clap(short = 'l', long = "link-name", required_unless_present("all"))]
+    #[clap(short = 'l', long = "link-name")]
     pub link_name: Option<String>,
 
     /// WIT namespace of the link
