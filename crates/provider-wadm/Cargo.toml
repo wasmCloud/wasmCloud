@@ -1,0 +1,32 @@
+[package]
+name = "wasmcloud-provider-wadm"
+version = "0.1.0"
+description = """
+Interact and manage lattices and apps with wadm
+"""
+
+authors = { workspace = true }
+categories = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+
+[dependencies]
+anyhow = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
+bytes = { workspace = true }
+futures = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-nats = { workspace = true }
+rustls-pemfile = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-futures = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+wascap = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wit-bindgen-wrpc = { workspace = true }
+wadm-client = { workspace = true }
+wadm-types = { workspace = true, features = ["wit"] }

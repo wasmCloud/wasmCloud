@@ -296,6 +296,7 @@ jobs:
           - messaging-kafka
           - messaging-nats
           - sqldb-postgres
+          - wadm
 
         target:
           - aarch64-apple-darwin
