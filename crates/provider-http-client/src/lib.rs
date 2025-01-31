@@ -216,3 +216,37 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
 
 /// Handle provider control commands
 impl Provider for HttpClientProvider {}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use bytes::Bytes;
+    use http::Request;
+    use wrpc_interface_http::{HttpBody, ServeOutgoingHandlerHttp};
+
+    use crate::HttpClientProvider;
+
+    #[tokio::test]
+    async fn test_client() {
+        let config = HashMap::new();
+        let client = HttpClientProvider::new(&config).await.unwrap();
+
+        let trailers = Box::pin(async { Option::Some(vec![]) });
+        // This one is fine:
+        // let trailers = Box::pin(async { Option::None});
+
+        let body = HttpBody {
+            body: Box::pin(futures::stream::once(async { Bytes::new() })),
+            trailers: trailers,
+        };
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("https://api.github.com/")
+            .body(body)
+            .unwrap();
+        let response = client.handle(None, request, None).await.unwrap().unwrap();
+        println!("Response: {}", response.status());
+    }
+}
