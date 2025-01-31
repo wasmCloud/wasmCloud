@@ -2,7 +2,6 @@ name = "HTTP Server"
 language = "rust"
 version = "0.24.0"
 type = "provider"
-wit = "../../../crates/provider-http-server/wit"
 
 [rust]
 target_dir = "../../../"

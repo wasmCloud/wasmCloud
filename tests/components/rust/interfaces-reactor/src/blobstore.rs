@@ -61,7 +61,7 @@ fn assert_create_container(name: &String, min_created_at: u64) -> blobstore::con
 
 fn assert_write_container_data(
     container: &blobstore::container::Container,
-    key: &String,
+    key: &str,
     data: &[u8],
 ) {
     let value = blobstore::types::OutgoingValue::new_outgoing_value();
@@ -124,8 +124,9 @@ right string:
             data.len().saturating_add(10).try_into().unwrap_or(u64::MAX),
         )
         .expect("failed to get container data");
-    let mut stored_value = blobstore::types::IncomingValue::incoming_value_consume_async(stored_value)
-        .expect("failed to get stored value buffer");
+    let mut stored_value =
+        blobstore::types::IncomingValue::incoming_value_consume_async(stored_value)
+            .expect("failed to get stored value buffer");
     let mut buf = vec![];
     stored_value
         .read_to_end(&mut buf)

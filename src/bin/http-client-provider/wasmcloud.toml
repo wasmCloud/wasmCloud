@@ -2,7 +2,6 @@ name = "HTTP Client"
 language = "rust"
 version = "0.12.0"
 type = "provider"
-wit = "../../../crates/provider-http-client/wit"
 
 [rust]
 target_dir = "../../../"
