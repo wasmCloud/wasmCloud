@@ -4,24 +4,18 @@ inputs:
   cachixAuthToken:
     description: auth token for https://app.cachix.org/organization/wasmcloud/cache/wasmcloud
 
-env:
-  SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1 # abort caching attempt if it's slow
-
 runs:
   using: composite
   steps:
-  # Install Nix
-  - uses: DeterminateSystems/nix-installer-action@e50d5f73bfe71c2dd0aa4218de8f4afa59f8f81d
-    with:
-      extra-conf: |
-        accept-flake-config = true
+    # Install Nix
+    - uses: DeterminateSystems/nix-installer-action@e50d5f73bfe71c2dd0aa4218de8f4afa59f8f81d
+      with:
+        extra-conf: |
+          accept-flake-config = true
 
-  # Setup magic Nix cache
-  - uses: DeterminateSystems/magic-nix-cache-action@6221693898146dc97e38ad0e013488a16477a4c4
-
-  # Setup Cachix cache
-  - uses: cachix/cachix-action@ad2ddac53f961de1989924296a1f236fcfbaa4fc
-    continue-on-error: true
-    with:
-      name: wasmcloud
-      authToken: '${{ inputs.cachixAuthToken }}'
+    # Setup Cachix cache
+    - uses: cachix/cachix-action@ad2ddac53f961de1989924296a1f236fcfbaa4fc
+      continue-on-error: true
+      with:
+        name: wasmcloud
+        authToken: "${{ inputs.cachixAuthToken }}"
