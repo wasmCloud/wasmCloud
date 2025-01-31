@@ -4250,9 +4250,9 @@ dependencies = [
 
 [[package]]
 name = "oci-wasm"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f147e207436277483c23cb8e55ccd039ee1657c6a8d19471a6de187da6973ef8"
+checksum = "0609c917e8f4c44cd9d619a6e4741535d1cc199cfd995ad75580742bf6d624e8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4261,8 +4261,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
- "wit-component 0.219.1",
- "wit-parser 0.219.1",
+ "wit-component 0.224.0",
+ "wit-parser 0.224.0",
 ]
 
 [[package]]
