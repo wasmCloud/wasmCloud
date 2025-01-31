@@ -4,7 +4,7 @@ This capability provider implements the [`wasmcloud:wadm`][wasmcloud-wadm-wit] W
 
 This provider handles concurrent component connections and status subscriptions. Components linked to it should specify configuration at link time (see [the named configuration settings section](#named-configuration-settings) for more details).
 
-[wasmcloud-wadm-wit]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/provider-wadm/wit
+[wasmcloud-wadm-wit]: https://github.com/wasmCloud/wadm/tree/main/wit/wadm
 
 ## 👟 Quickstart
 
@@ -73,15 +73,15 @@ Configuration can be specified via named configuration to the provider and refer
 
 New named configuration can be specified by using `wash config put`.
 
-| Property | Default | Description |
-|----------|---------|-------------|
-| `ctl_host` | `0.0.0.0` | NATS control interface host |
-| `ctl_port` | `4222` | NATS control interface port |
-| `ctl_jwt` | - | JWT for NATS authentication |
-| `lattice` | `default` | Lattice name |
-| `app_name` | - | Application name to receive updates for (required for subscriptions) |
-| `js_domain` | - | Optional JetStream domain |
-| `api_prefix` | - | Optional API prefix |
+| Property     | Default   | Description                                                          |
+| ------------ | --------- | -------------------------------------------------------------------- |
+| `ctl_host`   | `0.0.0.0` | NATS control interface host                                          |
+| `ctl_port`   | `4222`    | NATS control interface port                                          |
+| `ctl_jwt`    | -         | JWT for NATS authentication                                          |
+| `lattice`    | `default` | Lattice name                                                         |
+| `app_name`   | -         | Application name to receive updates for (required for subscriptions) |
+| `js_domain`  | -         | Optional JetStream domain                                            |
+| `api_prefix` | -         | Optional API prefix                                                  |
 
 ## 🔐 Secret Settings
 
@@ -89,8 +89,8 @@ Sensitive values should be specified via *secrets*.
 
 New secrets can be specified by using `wash secrets put`.
 
-| Property | Description |
-|----------|-------------|
+| Property   | Description                  |
+| ---------- | ---------------------------- |
 | `ctl_seed` | Seed for NATS authentication |
 
 ## Authentication Options
@@ -103,29 +103,18 @@ The provider supports multiple authentication methods:
 
 These can be configured through the following settings:
 
-| Property | Description |
-|----------|-------------|
-| `ctl_credsfile` | Path to credentials file |
-| `ctl_tls_ca_file` | TLS CA certificate file |
-| `ctl_tls_first` | Whether to perform TLS handshake first |
+| Property          | Description                            |
+| ----------------- | -------------------------------------- |
+| `ctl_credsfile`   | Path to credentials file               |
+| `ctl_tls_ca_file` | TLS CA certificate file                |
+| `ctl_tls_first`   | Whether to perform TLS handshake first |
 
 ## 📦 Building a PAR
 
-To build a [Provider Archive (`.par`/`.par.gz`)][par] for this provider, first build the project with `wash`:
+To build a [Provider Archive (`.par`/`.par.gz`)][par] for this provider, build the project with `wash`:
 
 ```console
 wash build
-```
-
-Then run `wash par`:
-
-```console
-wash par create \
-  --compress \
-  --binary target/debug/wadm-provider \
-  --vendor wasmcloud \
-  --version 0.1.0 \
-  --name wadm-provider
 ```
 
 [par]: https://wasmcloud.com/docs/developer/providers/build
