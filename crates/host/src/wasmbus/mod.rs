@@ -552,7 +552,12 @@ async fn connect_nats(
     require_tls: bool,
     request_timeout: Option<Duration>,
 ) -> anyhow::Result<async_nats::Client> {
-    let opts = async_nats::ConnectOptions::new().require_tls(require_tls);
+    let name = names::Generator::new(&["wasmcloud"], &["wasmbus"], names::Name::Numbered)
+        .next()
+        .context("failed to generate name")?;
+    let opts = async_nats::ConnectOptions::new()
+        .name(name)
+        .require_tls(require_tls);
     let opts = match (jwt, key) {
         (Some(jwt), Some(key)) => opts.jwt(jwt.to_string(), {
             move |nonce| {
