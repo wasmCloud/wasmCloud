@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tracing::{debug, error, instrument, trace_span, warn, Instrument as _, Span};
-use wasmcloud_core::InterfaceLinkDefinition;
+use wasmcloud_core::HostData;
 use wasmcloud_provider_messaging_nats::ConnectionConfig;
 use wasmcloud_provider_messaging_nats::{add_tls_ca, ConsumerConfig};
 use wasmcloud_provider_sdk::provider::{
@@ -291,14 +291,13 @@ impl crate::wasmbus::Host {
     #[instrument(level = "debug", skip_all)]
     pub(crate) async fn start_messaging_nats_provider(
         &self,
-        tasks: &mut JoinSet<()>,
-        link_definitions: impl IntoIterator<Item = InterfaceLinkDefinition>,
+        host_data: HostData,
         provider_xkey: XKey,
-        host_config: HashMap<String, String>,
         provider_id: &str,
-        host_id: &str,
-    ) -> anyhow::Result<()> {
-        let config = ConnectionConfig::from_map(&host_config).context("failed to parse config")?;
+    ) -> anyhow::Result<JoinSet<()>> {
+        let host_id = self.host_key.public_key();
+        let config =
+            ConnectionConfig::from_map(&host_data.config).context("failed to parse config")?;
 
         let (quit_tx, quit_rx) = broadcast::channel(1);
         let commands = ProviderCommandReceivers::new(
@@ -307,7 +306,7 @@ impl crate::wasmbus::Host {
             &self.host_config.lattice,
             provider_id,
             provider_id,
-            host_id,
+            &host_id,
         )
         .await?;
         let conn = ProviderConnection::new(
@@ -315,7 +314,7 @@ impl crate::wasmbus::Host {
             Arc::from(provider_id),
             Arc::clone(&self.host_config.lattice),
             host_id.to_string(),
-            host_config,
+            host_data.config,
             provider_xkey,
             Arc::clone(&self.secrets_xkey),
         )
@@ -328,7 +327,7 @@ impl crate::wasmbus::Host {
             host_id: Arc::from(host_id),
             lattice_id: Arc::clone(&self.host_config.lattice),
         };
-        for ld in link_definitions {
+        for ld in host_data.link_definitions {
             if let Err(e) = receive_link_for_provider(&provider, &conn, ld).await {
                 error!(
                     error = %e,
@@ -336,9 +335,11 @@ impl crate::wasmbus::Host {
                 );
             }
         }
+        let mut tasks = JoinSet::new();
         tasks.spawn(async move {
             handle_provider_commands(provider, &conn, quit_rx, quit_tx, commands).await
         });
-        Ok(())
+
+        Ok(tasks)
     }
 }

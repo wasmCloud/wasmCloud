@@ -1,7 +1,6 @@
 use core::net::SocketAddr;
 use core::str::FromStr as _;
 
-use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -11,7 +10,7 @@ use nkeys::XKey;
 use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinSet;
 use tracing::{error, instrument};
-use wasmcloud_core::InterfaceLinkDefinition;
+use wasmcloud_core::HostData;
 use wasmcloud_provider_http_server::default_listen_address;
 use wasmcloud_provider_sdk::provider::{
     handle_provider_commands, receive_link_for_provider, ProviderCommandReceivers,
@@ -31,27 +30,26 @@ impl crate::wasmbus::Host {
     #[instrument(level = "debug", skip_all)]
     pub(crate) async fn start_http_server_provider(
         &self,
-        tasks: &mut JoinSet<()>,
-        link_definitions: impl IntoIterator<Item = InterfaceLinkDefinition>,
+        host_data: HostData,
         provider_xkey: XKey,
-        host_config: HashMap<String, String>,
         provider_id: &str,
-        host_id: &str,
-    ) -> anyhow::Result<()> {
-        let default_address = host_config
+    ) -> anyhow::Result<JoinSet<()>> {
+        let host_id = self.host_key.public_key();
+        let default_address = host_data
+            .config
             .get("default_address")
             .map(|s| SocketAddr::from_str(s))
             .transpose()
             .context("failed to parse default_address")?
             .unwrap_or_else(default_listen_address);
 
-        let provider = match host_config.get("routing_mode").map(String::as_str) {
+        let provider = match host_data.config.get("routing_mode").map(String::as_str) {
             // Run provider in address mode by default
             Some("address") | None => HttpServerProvider::Address(address::Provider {
                 address: default_address,
                 components: Arc::clone(&self.components),
                 links: Mutex::default(),
-                host_id: Arc::from(host_id),
+                host_id: Arc::from(host_id.as_str()),
                 lattice_id: Arc::clone(&self.host_config.lattice),
             }),
             // Run provider in path mode
@@ -59,7 +57,7 @@ impl crate::wasmbus::Host {
                 path::Provider::new(
                     default_address,
                     Arc::clone(&self.components),
-                    Arc::from(host_id),
+                    Arc::from(host_id.as_str()),
                     Arc::clone(&self.host_config.lattice),
                 )
                 .await?,
@@ -74,7 +72,7 @@ impl crate::wasmbus::Host {
             &self.host_config.lattice,
             provider_id,
             provider_id,
-            host_id,
+            &host_id,
         )
         .await?;
         let conn = ProviderConnection::new(
@@ -82,15 +80,16 @@ impl crate::wasmbus::Host {
             Arc::from(provider_id),
             Arc::clone(&self.host_config.lattice),
             host_id.to_string(),
-            host_config,
+            host_data.config,
             provider_xkey,
             Arc::clone(&self.secrets_xkey),
         )
         .context("failed to establish provider connection")?;
 
+        let mut tasks = JoinSet::new();
         match provider {
             HttpServerProvider::Address(provider) => {
-                for ld in link_definitions {
+                for ld in host_data.link_definitions {
                     if let Err(e) = receive_link_for_provider(&provider, &conn, ld).await {
                         error!(
                             error = %e,
@@ -104,7 +103,7 @@ impl crate::wasmbus::Host {
                 });
             }
             HttpServerProvider::Path(provider) => {
-                for ld in link_definitions {
+                for ld in host_data.link_definitions {
                     if let Err(e) = receive_link_for_provider(&provider, &conn, ld).await {
                         error!(
                             error = %e,
@@ -118,7 +117,8 @@ impl crate::wasmbus::Host {
                 });
             }
         }
-        Ok(())
+
+        Ok(tasks)
     }
 }
 
