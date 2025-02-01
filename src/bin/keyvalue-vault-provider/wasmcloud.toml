@@ -2,6 +2,7 @@ name = "KV Vault"
 language = "rust"
 type = "provider"
 version = "0.10.0"
+wit = "../../../crates/provider-keyvalue-vault/wit"
 
 [rust]
 target_path = "../../../target"

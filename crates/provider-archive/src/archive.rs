@@ -22,6 +22,7 @@ use wascap::{
 };
 
 const CLAIMS_JWT_FILE: &str = "claims.jwt";
+const WIT_WORLD_FILE: &str = "world.wasm";
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
@@ -36,6 +37,7 @@ pub struct ProviderArchive {
     ver: Option<String>,
     token: Option<Token<CapabilityProvider>>,
     json_schema: Option<serde_json::Value>,
+    wit: Option<Vec<u8>>,
 }
 
 impl ProviderArchive {
@@ -50,12 +52,20 @@ impl ProviderArchive {
             ver,
             token: None,
             json_schema: None,
+            wit: None,
         }
     }
 
     /// Adds a native library file (.so, .dylib, .dll) to the archive for a given target string
     pub fn add_library(&mut self, target: &str, input: &[u8]) -> Result<()> {
         self.libraries.insert(target.to_string(), input.to_vec());
+
+        Ok(())
+    }
+
+    /// Adds a WIT file encoded as a wasm module to the archive
+    pub fn add_wit_world(&mut self, world: &[u8]) -> Result<()> {
+        self.wit = Some(world.to_vec());
 
         Ok(())
     }
@@ -100,6 +110,12 @@ impl ProviderArchive {
     #[must_use]
     pub fn schema(&self) -> Option<serde_json::Value> {
         self.json_schema.clone()
+    }
+
+    /// Returns the WIT embedded in this provider archive.
+    #[must_use]
+    pub fn wit_world(&self) -> Option<&[u8]> {
+        self.wit.as_deref()
     }
 
     /// Attempts to read a Provider Archive (PAR) file's bytes to analyze and verify its contents.
@@ -195,6 +211,7 @@ impl ProviderArchive {
         target: Option<&str>,
     ) -> Result<ProviderArchive> {
         let mut libraries = HashMap::new();
+        let mut wit_world = None;
 
         let mut magic = [0; 2];
         if let Err(e) = input.read_exact(&mut magic).await {
@@ -236,6 +253,9 @@ impl ProviderArchive {
                     jwt: jwt.to_string(),
                     claims,
                 });
+            } else if file_target == "world" {
+                tokio::io::copy(&mut entry, &mut bytes).await?;
+                wit_world = Some(bytes);
             } else if let Some(t) = target {
                 // If loading only a specific target, only copy in bytes if it is the target. We still
                 // need to iterate through the rest so we can be sure to find the claims
@@ -267,7 +287,7 @@ impl ProviderArchive {
             let ver = metadata.ver.clone();
             let json_schema = metadata.config_schema.clone();
 
-            validate_hashes(&libraries, cl)?;
+            validate_hashes(&libraries, &wit_world, cl)?;
 
             Ok(ProviderArchive {
                 libraries,
@@ -277,6 +297,7 @@ impl ProviderArchive {
                 ver,
                 token,
                 json_schema,
+                wit: wit_world,
             })
         } else {
             Err("No claims found embedded in provider archive.".into())
@@ -320,7 +341,7 @@ impl ProviderArchive {
             self.vendor.to_string(),
             self.rev,
             self.ver.clone(),
-            generate_hashes(&self.libraries),
+            generate_hashes(&self.libraries, &self.wit),
         );
         if let Some(schema) = self.json_schema.clone() {
             claims.metadata.as_mut().unwrap().config_schema = Some(schema);
@@ -338,6 +359,15 @@ impl ProviderArchive {
         header.set_cksum();
         par.append_data(&mut header, CLAIMS_JWT_FILE, Cursor::new(claims_jwt))
             .await?;
+
+        if let Some(world) = &self.wit {
+            let mut header = tokio_tar::Header::new_gnu();
+            header.set_path(WIT_WORLD_FILE)?;
+            header.set_size(world.len() as u64);
+            header.set_cksum();
+            par.append_data(&mut header, WIT_WORLD_FILE, Cursor::new(world))
+                .await?;
+        }
 
         for (tgt, lib) in &self.libraries {
             let mut header = tokio_tar::Header::new_gnu();
@@ -361,6 +391,7 @@ impl ProviderArchive {
 
 fn validate_hashes(
     libraries: &HashMap<String, Vec<u8>>,
+    wit: &Option<Vec<u8>>,
     claims: &Claims<CapabilityProvider>,
 ) -> Result<()> {
     let file_hashes = claims.metadata.as_ref().unwrap().target_hashes.clone();
@@ -372,14 +403,33 @@ fn validate_hashes(
             return Err(format!("File hash and verify hash do not match for '{tgt}'").into());
         }
     }
+
+    if let Some(interface) = wit {
+        if let Some(wit_hash) = file_hashes.get(WIT_WORLD_FILE) {
+            let check_hash = hash_bytes(interface);
+            if wit_hash != &check_hash {
+                return Err("WIT interface hash does not match".into());
+            }
+        } else if wit.is_some() {
+            return Err("WIT interface present but no hash found in claims".into());
+        }
+    }
     Ok(())
 }
 
-fn generate_hashes(libraries: &HashMap<String, Vec<u8>>) -> HashMap<String, String> {
+fn generate_hashes(
+    libraries: &HashMap<String, Vec<u8>>,
+    wit: &Option<Vec<u8>>,
+) -> HashMap<String, String> {
     let mut hm = HashMap::new();
     for (target, lib) in libraries {
         let hash = hash_bytes(lib);
         hm.insert(target.to_string(), hash);
+    }
+
+    if let Some(interface) = wit {
+        let hash = hash_bytes(interface);
+        hm.insert(WIT_WORLD_FILE.to_string(), hash);
     }
 
     hm
@@ -596,6 +646,72 @@ mod test {
     }
 
     #[tokio::test]
+    async fn wit_compression_roundtrip() -> Result<()> {
+        let mut arch =
+            ProviderArchive::new("Testing", "wasmCloud", Some(4), Some("0.0.4".to_string()));
+
+        // Add both libraries and WIT data
+        arch.add_library("aarch64-linux", b"heylookimaraspberrypi")?;
+        arch.add_library("x86_64-linux", b"system76")?;
+        arch.add_library("x86_64-macos", b"16inchmacbookpro")?;
+        arch.add_wit_world(b"interface world example { resource config {} }")?;
+
+        let issuer = KeyPair::new_account();
+        let subject = KeyPair::new_service();
+
+        let filename = "wit_test";
+        let tempdir = tempfile::tempdir()?;
+
+        let parpath = tempdir.path().join(format!("{filename}.par"));
+        let cheezypath = tempdir.path().join(format!("{filename}.par.gz"));
+
+        // Write both compressed and uncompressed
+        arch.write(&parpath, &issuer, &subject, false).await?;
+        arch.write(&cheezypath, &issuer, &subject, true).await?;
+
+        // Read both files into memory
+        let mut buf2 = Vec::new();
+        let mut f2 = File::open(&parpath).await?;
+        f2.read_to_end(&mut buf2).await?;
+
+        let mut buf3 = Vec::new();
+        let mut f3 = File::open(&cheezypath).await?;
+        f3.read_to_end(&mut buf3).await?;
+
+        // Test uncompressed archive
+        let arch2 = ProviderArchive::try_load(&buf2).await?;
+        assert_eq!(
+            arch.libraries[&"aarch64-linux".to_string()],
+            arch2.libraries[&"aarch64-linux".to_string()]
+        );
+        assert_eq!(arch.wit_world(), arch2.wit_world());
+        assert_eq!(arch.claims().unwrap().subject, subject.public_key());
+
+        // Test compressed archive
+        let arch3 = ProviderArchive::try_load(&buf3).await?;
+        assert_eq!(
+            arch.libraries[&"aarch64-linux".to_string()],
+            arch3.libraries[&"aarch64-linux".to_string()]
+        );
+        assert_eq!(arch.wit_world(), arch3.wit_world());
+        assert_eq!(arch.claims().unwrap().subject, subject.public_key());
+
+        // Test loading directly from files
+        let arch4 = ProviderArchive::try_load_file(&parpath).await?;
+        assert_eq!(arch.wit_world(), arch4.wit_world());
+
+        let arch5 = ProviderArchive::try_load_file(&cheezypath).await?;
+        assert_eq!(arch.wit_world(), arch5.wit_world());
+
+        // Verify WIT hash in claims
+        let claims = arch5.claims().unwrap();
+        let hashes = claims.metadata.unwrap().target_hashes;
+        assert!(hashes.contains_key("world.wasm"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn valid_write_compressed() -> Result<()> {
         let mut arch =
             ProviderArchive::new("Testing", "wasmCloud", Some(6), Some("0.0.6".to_string()));
@@ -634,6 +750,55 @@ mod test {
             arch.libraries[&"mips64-freebsd".to_string()],
             arch2.libraries[&"mips64-freebsd".to_string()]
         );
+        assert_eq!(arch.claims(), arch2.claims());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn valid_write_compressed_with_wit() -> Result<()> {
+        let mut arch =
+            ProviderArchive::new("Testing", "wasmCloud", Some(6), Some("0.0.6".to_string()));
+
+        // Add libraries and WIT
+        arch.add_library("x86_64-linux", b"linux")?;
+        arch.add_library("arm-macos", b"macos")?;
+        arch.add_library("mips64-freebsd", b"freebsd")?;
+        arch.add_wit_world(b"interface world capability { resource handler {} }")?;
+
+        let filename = "multi-os-wit";
+        let issuer = KeyPair::new_account();
+        let subject = KeyPair::new_service();
+
+        let tempdir = tempfile::tempdir()?;
+        arch.write(
+            tempdir.path().join(format!("{filename}.par")),
+            &issuer,
+            &subject,
+            true,
+        )
+        .await?;
+
+        let arch2 =
+            ProviderArchive::try_load_file(tempdir.path().join(format!("{filename}.par.gz")))
+                .await?;
+
+        // Verify libraries
+        assert_eq!(
+            arch.libraries[&"x86_64-linux".to_string()],
+            arch2.libraries[&"x86_64-linux".to_string()]
+        );
+        assert_eq!(
+            arch.libraries[&"arm-macos".to_string()],
+            arch2.libraries[&"arm-macos".to_string()]
+        );
+        assert_eq!(
+            arch.libraries[&"mips64-freebsd".to_string()],
+            arch2.libraries[&"mips64-freebsd".to_string()]
+        );
+
+        // Verify WIT and claims
+        assert_eq!(arch.wit_world(), arch2.wit_world());
         assert_eq!(arch.claims(), arch2.claims());
 
         Ok(())
@@ -733,6 +898,33 @@ mod test {
         assert_eq!(arch3.claims().unwrap().metadata.unwrap().rev.unwrap(), rev);
         assert_eq!(arch3.claims().unwrap().metadata.unwrap().vendor, vendor);
         assert_eq!(arch3.targets().len(), 4);
+
+        Ok(())
+    }
+
+    /// Ensures backwards compatibility with PAR that do not contain WIT
+    #[tokio::test]
+    async fn witless_archive() -> Result<()> {
+        // First create an "old style" archive without WIT
+        let mut old_arch =
+            ProviderArchive::new("OldStyle", "wasmCloud", Some(1), Some("0.0.1".to_string()));
+        old_arch.add_library("x86_64-linux", b"oldbin")?;
+
+        let issuer = KeyPair::new_account();
+        let subject = KeyPair::new_service();
+
+        let tempdir = tempfile::tempdir()?;
+        let old_path = tempdir.path().join("old_style.par");
+
+        // Write old archive
+        old_arch.write(&old_path, &issuer, &subject, false).await?;
+
+        let loaded_arch = ProviderArchive::try_load_file(&old_path).await?;
+        assert_eq!(loaded_arch.wit_world(), None); // No WIT data
+        assert_eq!(
+            loaded_arch.libraries.get("x86_64-linux"),
+            old_arch.libraries.get("x86_64-linux")
+        );
 
         Ok(())
     }
