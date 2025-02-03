@@ -7568,8 +7568,9 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "wadm-client"
-version = "0.8.0"
-source = "git+https://github.com/LUK3ARK/wadm.git?branch=fix/status-sub-topic#28e83c80614ec1c4e92d9cf7621e7018dad023f8"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b8ffccc039370445f7b7296aed8f09e676a0478881770b34a3075630b044ad6"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -7584,8 +7585,9 @@ dependencies = [
 
 [[package]]
 name = "wadm-types"
-version = "0.8.0"
-source = "git+https://github.com/LUK3ARK/wadm.git?branch=fix/status-sub-topic#28e83c80614ec1c4e92d9cf7621e7018dad023f8"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95b63cbbf5f9447d3f70f3e642dad663179f913d77562959b6ea40b8b25e1c83"
 dependencies = [
  "anyhow",
  "regex",
