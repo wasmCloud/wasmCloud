@@ -87,7 +87,6 @@ impl super::Host {
         &self,
         id: impl AsRef<str>,
         value: impl AsRef<[u8]>,
-        _publish: bool,
     ) -> anyhow::Result<()> {
         let id = id.as_ref();
         debug!(id, "process component spec put");
@@ -157,8 +156,6 @@ impl super::Host {
     pub(crate) async fn process_component_spec_delete(
         &self,
         id: impl AsRef<str>,
-        _value: impl AsRef<[u8]>,
-        _publish: bool,
     ) -> anyhow::Result<()> {
         let id = id.as_ref();
         debug!(id, "process component delete");
@@ -236,15 +233,14 @@ impl super::Host {
             operation,
             ..
         }: KvEntry,
-        publish: bool,
     ) {
         let key_id = key.split_once('_');
         let res = match (operation, key_id) {
             (Operation::Put, Some(("COMPONENT", id))) => {
-                self.process_component_spec_put(id, value, publish).await
+                self.process_component_spec_put(id, value).await
             }
             (Operation::Delete, Some(("COMPONENT", id))) => {
-                self.process_component_spec_delete(id, value, publish).await
+                self.process_component_spec_delete(id).await
             }
             (Operation::Put, Some(("LINKDEF", _id))) => {
                 debug!("ignoring deprecated LINKDEF put operation");

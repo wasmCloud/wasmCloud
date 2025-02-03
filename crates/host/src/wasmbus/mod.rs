@@ -30,7 +30,6 @@ use futures::future::Either;
 use futures::stream::{AbortHandle, Abortable, SelectAll};
 use futures::{join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use jetstream::{create_bucket, ComponentSpecification};
 use nkeys::{KeyPair, KeyPairType, XKey};
 use secrecy::Secret;
 use serde::{Deserialize, Serialize};
@@ -65,13 +64,14 @@ use wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_tracing::{global, InstrumentationScope, KeyValue};
 
 use crate::registry::RegistryCredentialExt;
+use crate::wasmbus::jetstream::create_bucket;
 use crate::{
     fetch_component, HostMetrics, OciConfig, PolicyHostInfo, PolicyManager, PolicyResponse,
     RegistryAuth, RegistryConfig, RegistryType, ResourceRef, SecretsManager,
 };
 
-mod ctl;
 mod claims;
+mod ctl;
 mod event;
 mod experimental;
 mod handler;
@@ -84,6 +84,7 @@ pub mod host_config;
 
 pub use self::experimental::Features;
 pub use self::host_config::Host as HostConfig;
+pub use jetstream::ComponentSpecification;
 
 use self::config::{BundleGenerator, ConfigBundle};
 use self::handler::Handler;
@@ -952,7 +953,7 @@ impl Host {
                                     Err(error) => {
                                         error!("failed to watch lattice data bucket: {error}");
                                     }
-                                    Ok(entry) => host.process_entry(entry, true).await,
+                                    Ok(entry) => host.process_entry(entry).await,
                                 }
                             }
                         }
@@ -1019,7 +1020,7 @@ impl Host {
             })
             .for_each(|entry| async {
                 match entry {
-                    Ok(entry) => host.process_entry(entry, false).await,
+                    Ok(entry) => host.process_entry(entry).await,
                     Err(err) => error!(%err, "failed to read entry from lattice data bucket"),
                 }
             })
