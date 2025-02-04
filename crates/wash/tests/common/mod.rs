@@ -19,17 +19,17 @@ use tokio::{
     time::Duration,
 };
 
-use wash_cli::config::{WADM_VERSION, WASMCLOUD_HOST_VERSION};
-use wash_lib::cli::output::{
+use crate::lib::cli::output::{
     AppDeleteCommandOutput, AppDeployCommandOutput, AppGetCommandOutput, AppListCommandOutput,
     AppUndeployCommandOutput, CallCommandOutput, GetHostsCommandOutput, PullCommandOutput,
     StartCommandOutput, StopCommandOutput, UpCommandOutput,
 };
-use wash_lib::common::CommandGroupUsage;
-use wash_lib::config::{host_pid_file, wadm_pid_file};
-use wash_lib::start::{
+use crate::lib::common::CommandGroupUsage;
+use crate::lib::config::{host_pid_file, wadm_pid_file};
+use crate::lib::start::{
     ensure_nats_server, start_nats_server, NatsConfig, WADM_BINARY, WASMCLOUD_HOST_BIN,
 };
+use wash_cli::config::{WADM_VERSION, WASMCLOUD_HOST_VERSION};
 use wasmcloud_control_interface::Host;
 
 #[allow(unused)]

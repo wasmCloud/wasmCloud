@@ -1,5 +1,5 @@
+use crate::lib::cli::CommandOutput;
 use clap::Subcommand;
-use wash_lib::cli::CommandOutput;
 
 mod build;
 mod deps;

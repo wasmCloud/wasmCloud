@@ -143,16 +143,15 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
                 })?;
             if suitable_hosts.is_empty() {
                 bail!("No suitable hosts found for component {}", component_ref);
-            } else {
-                let acks = suitable_hosts
-                    .into_iter()
-                    .filter_map(|h| h.into_data())
-                    .collect::<Vec<_>>();
-                let ack = acks.first().context("No suitable hosts found")?;
-                ack.host_id()
-                    .parse()
-                    .with_context(|| format!("Failed to parse host id: {}", ack.host_id()))?
             }
+            let acks = suitable_hosts
+                .into_iter()
+                .filter_map(|h| h.into_data())
+                .collect::<Vec<_>>();
+            let ack = acks.first().context("No suitable hosts found")?;
+            ack.host_id()
+                .parse()
+                .with_context(|| format!("Failed to parse host id: {}", ack.host_id()))?
         }
     };
 
@@ -267,16 +266,15 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
                 })?;
             if suitable_hosts.is_empty() {
                 bail!("No suitable hosts found for provider {}", provider_ref);
-            } else {
-                let acks = suitable_hosts
-                    .into_iter()
-                    .filter_map(|h| h.into_data())
-                    .collect::<Vec<_>>();
-                let ack = acks.first().context("No suitable hosts found")?;
-                ack.host_id()
-                    .parse()
-                    .with_context(|| format!("Failed to parse host id: {}", ack.host_id()))?
             }
+            let acks = suitable_hosts
+                .into_iter()
+                .filter_map(|h| h.into_data())
+                .collect::<Vec<_>>();
+            let ack = acks.first().context("No suitable hosts found")?;
+            ack.host_id()
+                .parse()
+                .with_context(|| format!("Failed to parse host id: {}", ack.host_id()))?
         }
     };
 

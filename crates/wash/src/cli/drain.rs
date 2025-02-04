@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
+use crate::lib::cli::CommandOutput;
+use crate::lib::config::{host_pid_file, wadm_pid_file};
+use crate::lib::drain::Drain;
 use anyhow::Result;
 use serde_json::json;
-use wash_lib::cli::CommandOutput;
-use wash_lib::config::{host_pid_file, wadm_pid_file};
-use wash_lib::drain::Drain;
 
 pub fn handle_command(cmd: Drain) -> Result<CommandOutput, anyhow::Error> {
     if matches!(cmd, Drain::All | Drain::Downloads) {

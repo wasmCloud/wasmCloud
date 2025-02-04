@@ -11,11 +11,11 @@ use semver::Version;
 use session::{SessionMetadata, WashDevSession};
 use tokio::{select, sync::mpsc};
 
+use crate::lib::cli::{CommandOutput, CommonPackageArgs};
+use crate::lib::generate::emoji;
+use crate::lib::id::ServerId;
+use crate::lib::parser::load_config;
 use tracing::trace;
-use wash_lib::cli::{CommandOutput, CommonPackageArgs};
-use wash_lib::generate::emoji;
-use wash_lib::id::ServerId;
-use wash_lib::parser::load_config;
 
 use crate::cmd::up::{
     nats_client_from_wasmcloud_opts, remove_wadm_pidfile, NatsOpts, WadmOpts, WasmcloudOpts,
@@ -47,7 +47,7 @@ const DEFAULT_PROVIDER_STOP_TIMEOUT_MS: u64 = 3000;
 
 /// The path to the dev directory for wash
 async fn dev_dir() -> Result<PathBuf> {
-    let dir = wash_lib::config::dev_dir().context("failed to resolve config dir")?;
+    let dir = crate::lib::config::dev_dir().context("failed to resolve config dir")?;
     if !tokio::fs::try_exists(&dir)
         .await
         .context("failed to check if dev dir exists")?
@@ -124,7 +124,7 @@ pub struct DevCommand {
 /// Handle `wash dev`
 pub async fn handle_command(
     cmd: DevCommand,
-    output_kind: wash_lib::cli::OutputKind,
+    output_kind: crate::lib::cli::OutputKind,
 ) -> Result<CommandOutput> {
     let current_dir =
         std::env::current_dir().context("failed to get current directory for wash dev")?;
@@ -293,17 +293,8 @@ pub async fn handle_command(
     let mut watcher = notify::recommended_watcher(move |res: _| match res {
         Ok(event) => match event {
             NotifyEvent {
-                kind: EventKind::Create(_),
-                paths,
-                ..
-            }
-            | NotifyEvent {
-                kind: EventKind::Modify(ModifyKind::Data(_)),
-                paths,
-                ..
-            }
-            | NotifyEvent {
-                kind: EventKind::Remove(_),
+                kind:
+                    EventKind::Create(_) | EventKind::Modify(ModifyKind::Data(_)) | EventKind::Remove(_),
                 paths,
                 ..
             } => {

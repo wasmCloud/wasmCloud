@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use clap::Args;
-use wash_lib::{
+use crate::lib::{
     cli::{CommandOutput, CommonPackageArgs},
     deps::WkgFetcher,
 };
+use clap::Args;
 use wasm_pkg_client::{PublishOpts, Registry};
 
 /// Arguments for invoking `wash wit publish`

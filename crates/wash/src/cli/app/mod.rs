@@ -280,7 +280,7 @@ async fn undeploy_model(cmd: UndeployCommand) -> Result<CommandOutput> {
             vec![model_name]
         }
         // If no model name was specified, use command-specified filters to determine which models to act on
-        None if cmd.all => wash_lib::app::get_models(&client, lattice.clone())
+        None if cmd.all => crate::lib::app::get_models(&client, lattice.clone())
             .await?
             .into_iter()
             .map(|m| m.name)
@@ -293,7 +293,7 @@ async fn undeploy_model(cmd: UndeployCommand) -> Result<CommandOutput> {
 
     // Undeploy models
     for model_name in models.iter() {
-        match wash_lib::app::undeploy_model(&client, lattice.clone(), model_name).await {
+        match crate::lib::app::undeploy_model(&client, lattice.clone(), model_name).await {
             Ok(_) => undeployed.push(model_name),
             Err(e) => eprintln!("failed to undeploy model [{model_name}]: {e}"),
         }
@@ -338,7 +338,7 @@ async fn deploy_model(cmd: DeployCommand) -> Result<CommandOutput> {
             app_manifest.version().map(ToString::to_string),
         ) {
             if let Err(e) =
-                wash_lib::app::delete_model_version(&client, lattice.clone(), name, version).await
+                crate::lib::app::delete_model_version(&client, lattice.clone(), name, version).await
             {
                 eprintln!("🟨 Failed to delete model during replace operation: {e}");
             }
@@ -355,7 +355,7 @@ pub(crate) async fn deploy_model_from_manifest(
     version: Option<String>,
 ) -> Result<CommandOutput> {
     let (name, version) = match manifest {
-        AppManifest::SerializedModel(manifest) => wash_lib::app::put_and_deploy_model(
+        AppManifest::SerializedModel(manifest) => crate::lib::app::put_and_deploy_model(
             client,
             lattice,
             serde_yaml::to_string(&manifest)
@@ -365,7 +365,7 @@ pub(crate) async fn deploy_model_from_manifest(
         .await
         .map(|(name, version)| (name, Some(version))),
         AppManifest::ModelName(model_name) => {
-            wash_lib::app::deploy_model(client, lattice, &model_name, version.clone()).await
+            crate::lib::app::deploy_model(client, lattice, &model_name, version.clone()).await
         }
     }?;
 
@@ -393,7 +393,7 @@ async fn put_model(cmd: PutCommand) -> Result<CommandOutput> {
     };
 
     let (name, version) = match app_manifest {
-        AppManifest::SerializedModel(manifest) => wash_lib::app::put_model(
+        AppManifest::SerializedModel(manifest) => crate::lib::app::put_model(
             &client,
             lattice,
             serde_yaml::to_string(&manifest)
@@ -424,7 +424,7 @@ async fn get_application_versions(cmd: HistoryCommand) -> Result<CommandOutput> 
 
     let client = connection_opts.into_nats_client().await?;
 
-    let versions = wash_lib::app::get_model_history(&client, lattice, &cmd.app_name).await?;
+    let versions = crate::lib::app::get_model_history(&client, lattice, &cmd.app_name).await?;
     let mut map = HashMap::new();
     map.insert("revisions".to_string(), json!(versions));
     Ok(CommandOutput::new(
@@ -440,7 +440,7 @@ async fn get_model_status(cmd: StatusCommand) -> Result<CommandOutput> {
 
     let client = connection_opts.into_nats_client().await?;
 
-    let status = wash_lib::app::get_model_status(&client, lattice, &cmd.app_name).await?;
+    let status = crate::lib::app::get_model_status(&client, lattice, &cmd.app_name).await?;
 
     let mut map = HashMap::new();
     map.insert("status".to_string(), json!(status));
@@ -502,7 +502,7 @@ async fn delete_application_version(cmd: DeleteCommand) -> Result<CommandOutput>
             vec![(model_name, version)]
         }
         // If no model name was specified, use command-specified filters to determine which models to act on
-        None if cmd.all_undeployed => wash_lib::app::get_models(&client, lattice.clone())
+        None if cmd.all_undeployed => crate::lib::app::get_models(&client, lattice.clone())
             .await?
             .into_iter()
             .filter_map(|m| match m.detailed_status.info.status_type {
@@ -578,7 +578,7 @@ async fn get_application_list(cmd: ListCommand, sp: &Spinner) -> Result<CommandO
             HashMap::new(),
         ))
     } else {
-        let models = wash_lib::app::get_models(&client, lattice).await?;
+        let models = crate::lib::app::get_models(&client, lattice).await?;
         let mut map = HashMap::new();
         map.insert("applications".to_string(), json!(models));
         Ok(CommandOutput::new(output::list_models_table(models), map))

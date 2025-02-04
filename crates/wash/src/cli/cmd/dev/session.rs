@@ -11,12 +11,12 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt as _;
 use tokio::process::Child;
-use wash_lib::common::CommandGroupUsage;
+use crate::lib::common::CommandGroupUsage;
 
-use wash_lib::config::downloads_dir;
-use wash_lib::generate::emoji;
-use wash_lib::id::ServerId;
-use wash_lib::start::{
+use crate::lib::config::downloads_dir;
+use crate::lib::generate::emoji;
+use crate::lib::id::ServerId;
+use crate::lib::start::{
     ensure_nats_server, ensure_wadm, ensure_wasmcloud, start_wadm, start_wasmcloud_host,
     NatsConfig, WadmConfig, NATS_SERVER_BINARY,
 };

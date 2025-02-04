@@ -339,8 +339,8 @@ async fn integration_up_works_with_specific_wasmcloud_host_version() -> Result<(
 #[tokio::test]
 #[serial]
 async fn integration_up_works_with_specified_wadm_version() -> Result<()> {
-    use wash_lib::config::{DOWNLOADS_DIR, WASH_DIR};
-    use wash_lib::start::WADM_BINARY;
+    use crate::lib::config::{DOWNLOADS_DIR, WASH_DIR};
+    use crate::lib::start::WADM_BINARY;
     // 0.12.0 is a sufficient version to test the latest is 0.12.2
     let previous_wadm_version = "v0.12.0";
     let home = etcetera::home_dir().context("no home directory found. Please set $HOME")?;

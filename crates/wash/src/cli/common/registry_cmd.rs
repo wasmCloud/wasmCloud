@@ -8,10 +8,10 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tracing::warn;
 
-use wash_lib::cli::registry::{RegistryPullCommand, RegistryPushCommand};
-use wash_lib::cli::{input_vec_to_hashmap, CommandOutput, OutputKind};
-use wash_lib::parser::{load_config, ProjectConfig};
-use wash_lib::registry::{
+use crate::lib::cli::registry::{RegistryPullCommand, RegistryPushCommand};
+use crate::lib::cli::{input_vec_to_hashmap, CommandOutput, OutputKind};
+use crate::lib::parser::{load_config, ProjectConfig};
+use crate::lib::registry::{
     identify_artifact, pull_oci_artifact, push_oci_artifact, ArtifactType, OciPullOptions,
     OciPushOptions,
 };
@@ -219,9 +219,9 @@ async fn resolve_registry_credentials(registry: &str) -> Result<RegistryCredenti
 
 #[cfg(test)]
 mod tests {
+    use crate::lib::cli::registry::{RegistryCommand, RegistryPullCommand};
     use anyhow::{ensure, Context as _, Result};
     use clap::Parser;
-    use wash_lib::cli::registry::{RegistryCommand, RegistryPullCommand};
 
     use crate::common::registry_cmd::RegistryPushCommand;
 

@@ -4,7 +4,7 @@ use common::{init, init_path, init_provider, init_workspace, load_fixture};
 
 use anyhow::{Context, Result};
 use tokio::{fs::File, process::Command};
-use wash_lib::build::PACKAGE_LOCK_FILE_NAME;
+use crate::lib::build::PACKAGE_LOCK_FILE_NAME;
 
 #[tokio::test]
 #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]

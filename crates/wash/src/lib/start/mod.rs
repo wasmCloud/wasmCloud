@@ -4,8 +4,8 @@
 //! # Downloading and Starting NATS and wasmCloud
 //! ```no_run
 //! use anyhow::{anyhow, Result};
-//! use wash_lib::common::CommandGroupUsage;
-//! use wash_lib::start::{
+//! use crate::lib::common::CommandGroupUsage;
+//! use crate::lib::start::{
 //!     start_wasmcloud_host,
 //!     start_nats_server,
 //!     ensure_nats_server,

@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use wash_lib::cli::{
+use crate::lib::cli::{
     label::{handle_label_host, LabelHostCommand},
     CommandOutput, OutputKind,
 };

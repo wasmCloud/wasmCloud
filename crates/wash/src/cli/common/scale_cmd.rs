@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use wash_lib::cli::{
+use crate::lib::cli::{
     scale::{handle_scale_component, ScaleCommand},
     CommandOutput, OutputKind,
 };

@@ -2,10 +2,10 @@ mod common;
 
 use common::{TestWashInstance, HELLO_OCI_REF};
 
+use crate::lib::cli::output::{GetHostInventoriesCommandOutput, StartCommandOutput};
 use anyhow::{Context, Result};
 use serial_test::serial;
 use tokio::process::Command;
-use wash_lib::cli::output::{GetHostInventoriesCommandOutput, StartCommandOutput};
 
 const OLD_HELLO_OCI_REF: &str = "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.0";
 

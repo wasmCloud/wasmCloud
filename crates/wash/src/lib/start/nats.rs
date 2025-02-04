@@ -30,7 +30,7 @@ pub const NATS_SERVER_BINARY: &str = "nats-server.exe";
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
-/// use wash_lib::start::ensure_nats_server;
+/// use crate::lib::start::ensure_nats_server;
 /// let res = ensure_nats_server("v2.10.7", "/tmp/").await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/nats-server");
@@ -58,7 +58,7 @@ where
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
-/// use wash_lib::start::ensure_nats_server_for_os_arch_pair;
+/// use crate::lib::start::ensure_nats_server_for_os_arch_pair;
 /// let os = std::env::consts::OS;
 /// let arch = std::env::consts::ARCH;
 /// let res = ensure_nats_server_for_os_arch_pair(os, arch, "v2.10.7", "/tmp/").await;
@@ -119,7 +119,7 @@ where
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
-/// use wash_lib::start::download_nats_server;
+/// use crate::lib::start::download_nats_server;
 /// let res = download_nats_server("v2.10.7", "/tmp/").await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/nats-server");
@@ -385,7 +385,7 @@ mod test {
     use anyhow::Result;
     use tokio::io::AsyncReadExt;
 
-    use crate::start::NatsConfig;
+    use crate::lib::start::NatsConfig;
 
     #[tokio::test]
     async fn can_write_properly_formed_credsfile() -> Result<()> {

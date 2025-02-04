@@ -1,7 +1,7 @@
+use crate::lib::cli::{CliConnectionOpts, CommandOutput, OutputKind};
+use crate::lib::config::WashConnectionOptions;
 use serde_json::json;
 use tracing::error;
-use wash_lib::cli::{CliConnectionOpts, CommandOutput, OutputKind};
-use wash_lib::config::WashConnectionOptions;
 use wasmcloud_secrets_types::SECRET_PREFIX;
 
 use crate::appearance::spinner::Spinner;

@@ -6,13 +6,13 @@ use anyhow::{bail, Context as _, Result};
 use semver::Version;
 use tracing::{debug, trace};
 
+use crate::lib::generate::emoji;
+use crate::lib::parser::{
+    DevConfigSpec, DevSecretSpec, InterfaceComponentOverride, ProjectConfig, WitInterfaceSpec,
+};
 use wadm_types::{
     CapabilityProperties, Component, ComponentProperties, ConfigProperty, LinkProperty, Manifest,
     Metadata, Policy, Properties, SecretProperty, Specification, TargetConfig, TraitProperty,
-};
-use wash_lib::generate::emoji;
-use wash_lib::parser::{
-    DevConfigSpec, DevSecretSpec, InterfaceComponentOverride, ProjectConfig, WitInterfaceSpec,
 };
 use wasmcloud_core::{parse_wit_package_name, LinkName, WitInterface, WitNamespace, WitPackage};
 
@@ -345,8 +345,7 @@ impl DependencySpec {
                 }))
             }
             // wasi:blobstore/blobstore -> blobstore-fs
-            (WIT_NS_WASI, Some(WIT_PKG_BLOBSTORE), Some(interface))
-            | (WIT_NS_WRPC, Some(WIT_PKG_BLOBSTORE), Some(interface))
+            (WIT_NS_WASI | WIT_NS_WRPC, Some(WIT_PKG_BLOBSTORE), Some(interface))
                 if matches!(interface, WIT_IFACE_BLOBSTORE) =>
             {
                 Some(Self::Exports(DependencySpecInner {
@@ -1025,8 +1024,7 @@ impl ProjectDeps {
                         interfaces.as_ref(),
                         version,
                     ) {
-                        (WIT_NS_WASI, "blobstore", interfaces, _)
-                        | (WIT_NS_WRPC, "blobstore", interfaces, _)
+                        (WIT_NS_WASI | WIT_NS_WRPC, "blobstore", interfaces, _)
                             if interfaces.is_some_and(|interfaces| {
                                 interfaces.iter().any(|i| i == "blobstore")
                             }) =>
@@ -1210,7 +1208,7 @@ impl ProjectDeps {
             .context("failed to generate manifests")?
             .into_iter()
         {
-            wash_lib::app::delete_model_version(
+            crate::lib::app::delete_model_version(
                 client,
                 Some(lattice.into()),
                 &manifest.metadata.name,

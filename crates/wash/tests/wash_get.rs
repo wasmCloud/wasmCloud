@@ -5,7 +5,7 @@ use common::TestWashInstance;
 use anyhow::{bail, Context, Result};
 use serial_test::serial;
 use tokio::process::Command;
-use wash_lib::cli::output::{
+use crate::lib::cli::output::{
     GetClaimsCommandOutput, GetHostInventoriesCommandOutput, GetHostsCommandOutput,
     LinkQueryCommandOutput,
 };

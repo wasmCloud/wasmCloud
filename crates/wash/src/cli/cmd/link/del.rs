@@ -2,13 +2,13 @@
 
 use std::collections::HashMap;
 
+use crate::lib::cli::link::{delete_link, get_links, LinkDelCommand};
+use crate::lib::cli::{CommandOutput, OutputKind};
+use crate::lib::config::WashConnectionOptions;
+use crate::lib::generate::interactive::prompt_for_choice;
+use crate::lib::generate::project_variables::StringEntry;
 use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use serde_json::json;
-use wash_lib::cli::link::{delete_link, get_links, LinkDelCommand};
-use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::config::WashConnectionOptions;
-use wash_lib::generate::interactive::prompt_for_choice;
-use wash_lib::generate::project_variables::StringEntry;
 
 use crate::appearance::spinner::Spinner;
 
@@ -80,8 +80,8 @@ pub async fn invoke(
             return delete_links(wco.clone())
                 .await
                 .context("failed to delete all links");
-        } else {
-            match prompt_for_choice(
+        }
+        match prompt_for_choice(
                 &StringEntry {
                     default: Some("cancel".to_string()),
                     choices: Some(vec!["Delete all links".to_string(), "Cancel".to_string()]),
@@ -93,7 +93,6 @@ pub async fn invoke(
                 Ok(1) => bail!("Link deletion cancelled"),
                 _ => unreachable!("unexpected choice received"),
             }
-        }
     }
 
     let sp: Spinner = Spinner::new(&output_kind)?;

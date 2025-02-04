@@ -1,7 +1,7 @@
 //! `wash config` related (sub)commands
 
+use crate::lib::cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput, OutputKind};
 use clap::Subcommand;
-use wash_lib::cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput, OutputKind};
 
 use crate::cmd;
 use crate::secrets::ensure_not_secret;

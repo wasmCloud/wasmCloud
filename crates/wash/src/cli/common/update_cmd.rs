@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use wash_lib::cli::{
+use crate::lib::cli::{
     update::{handle_update_component, UpdateCommand},
     CommandOutput, OutputKind,
 };

@@ -40,7 +40,7 @@ const MINIMUM_WASMCLOUD_VERSION: &str = "0.81.0";
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
-/// use wash_lib::start::ensure_wasmcloud;
+/// use crate::lib::start::ensure_wasmcloud;
 /// let res = ensure_wasmcloud("v0.63.0", "/tmp/wasmcloud/").await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/v0.63.0/wasmcloud_host".to_string());
@@ -72,7 +72,7 @@ where
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
-/// use wash_lib::start::ensure_wasmcloud_for_os_arch_pair;
+/// use crate::lib::start::ensure_wasmcloud_for_os_arch_pair;
 /// let os = std::env::consts::OS;
 /// let arch = std::env::consts::ARCH;
 /// let res = ensure_wasmcloud_for_os_arch_pair("v0.63.0", "/tmp/wasmcloud/").await;
@@ -106,7 +106,7 @@ where
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
-/// use wash_lib::start::download_wasmcloud;
+/// use crate::lib::start::download_wasmcloud;
 /// let res = download_wasmcloud("v0.57.1", "/tmp/wasmcloud/").await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/v0.63.0/wasmcloud_host".to_string());
@@ -135,7 +135,7 @@ where
 /// ```rust,ignore
 /// # #[tokio::main]
 /// # async fn main() {
-/// use wash_lib::start::download_wasmcloud_for_os_arch_pair;
+/// use crate::lib::start::download_wasmcloud_for_os_arch_pair;
 /// let os = std::env::consts::OS;
 /// let arch = std::env::consts::ARCH;
 /// let res = download_wasmcloud_for_os_arch_pair("v0.63.0", "/tmp/wasmcloud/").await;

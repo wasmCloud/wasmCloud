@@ -27,7 +27,7 @@ pub const WADM_BINARY: &str = "wadm.exe";
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
-/// use wash_lib::start::ensure_wadm;
+/// use crate::lib::start::ensure_wadm;
 /// let res = ensure_wadm("v0.4.0-alpha.1", "/tmp/").await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wadm");
@@ -54,7 +54,7 @@ where
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
-/// use wash_lib::start::ensure_wadm_for_os_arch_pair;
+/// use crate::lib::start::ensure_wadm_for_os_arch_pair;
 /// let os = std::env::consts::OS;
 /// let arch = std::env::consts::ARCH;
 /// let res = ensure_wadm_for_os_arch_pair(os, arch, "v0.4.0-alpha.1", "/tmp/").await;
@@ -109,7 +109,7 @@ where
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
-/// use wash_lib::start::download_wadm;
+/// use crate::lib::start::download_wadm;
 /// let res = download_wadm("v0.4.0-alpha.1", "/tmp/").await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wadm");

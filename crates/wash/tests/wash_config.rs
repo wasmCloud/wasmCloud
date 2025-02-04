@@ -5,7 +5,7 @@ use common::TestWashInstance;
 use std::collections::HashMap;
 
 use wash_cli::cmd::config::ConfigCliCommand;
-use wash_lib::cli::{CliConnectionOpts, OutputKind};
+use crate::lib::cli::{CliConnectionOpts, OutputKind};
 
 #[tokio::test]
 async fn test_config_put_and_get() -> anyhow::Result<()> {

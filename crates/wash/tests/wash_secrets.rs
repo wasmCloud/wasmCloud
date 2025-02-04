@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use anyhow::{bail, Context as _};
 use common::TestWashInstance;
 use wash_cli::secrets::SecretsCliCommand;
-use wash_lib::cli::{CliConnectionOpts, OutputKind};
+use crate::lib::cli::{CliConnectionOpts, OutputKind};
 use wasmcloud_secrets_types::{SECRET_POLICY_PROPERTIES_TYPE, SECRET_TYPE};
 
 #[tokio::test]

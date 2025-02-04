@@ -1,8 +1,8 @@
 use crate::appearance::spinner::Spinner;
 
+use crate::lib::cli::start::{handle_start_component, handle_start_provider, StartCommand};
+use crate::lib::cli::{CommandOutput, OutputKind};
 use anyhow::Result;
-use wash_lib::cli::start::{handle_start_component, handle_start_provider, StartCommand};
-use wash_lib::cli::{CommandOutput, OutputKind};
 
 pub async fn handle_command(
     command: StartCommand,
@@ -35,8 +35,8 @@ mod test {
 
     use crate::ctl::CtlCliCommand;
 
+    use crate::lib::cli::start::{StartComponentCommand, StartProviderCommand};
     use clap::Parser;
-    use wash_lib::cli::start::{StartComponentCommand, StartProviderCommand};
 
     #[derive(Parser)]
     struct Cmd {

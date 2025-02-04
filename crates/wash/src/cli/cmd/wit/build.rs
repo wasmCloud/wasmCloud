@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
+use crate::lib::build::load_lock_file;
+use crate::lib::cli::{CommandOutput, CommonPackageArgs};
+use crate::lib::deps::WkgFetcher;
+use crate::lib::parser::load_config;
 use clap::Args;
-use wash_lib::build::load_lock_file;
-use wash_lib::cli::{CommandOutput, CommonPackageArgs};
-use wash_lib::deps::WkgFetcher;
-use wash_lib::parser::load_config;
 
 use wasm_pkg_core::wit::{self};
 

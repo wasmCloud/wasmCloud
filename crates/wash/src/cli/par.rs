@@ -2,16 +2,16 @@ use std::fs::File;
 use std::io::Read;
 use std::{collections::HashMap, path::PathBuf};
 
+use crate::lib::cli::par::{
+    convert_error, create_provider_archive, detect_arch, insert_provider_binary,
+};
+use crate::lib::cli::{extract_keypair, inspect, par, CommandOutput, OutputKind};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use nkeys::KeyPairType;
 use provider_archive::ProviderArchive;
 use serde_json::json;
 use tracing::warn;
-use wash_lib::cli::par::{
-    convert_error, create_provider_archive, detect_arch, insert_provider_binary,
-};
-use wash_lib::cli::{extract_keypair, inspect, par, CommandOutput, OutputKind};
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 

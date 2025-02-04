@@ -1,3 +1,9 @@
+use crate::lib::cli::claims::get_claims;
+use crate::lib::cli::get::{
+    get_host_inventories, get_hosts, GetCommand, GetHostInventoriesCommand, GetLinksCommand,
+};
+use crate::lib::cli::link::{LinkCommand, LinkQueryCommand};
+use crate::lib::cli::{CommandOutput, OutputKind};
 use anyhow::Result;
 use crossterm::{
     cursor, execute,
@@ -5,12 +11,6 @@ use crossterm::{
 };
 use std::{collections::HashMap, io::Write, time::Duration};
 use tokio::time::sleep;
-use wash_lib::cli::claims::get_claims;
-use wash_lib::cli::get::{
-    get_host_inventories, get_hosts, GetCommand, GetHostInventoriesCommand, GetLinksCommand,
-};
-use wash_lib::cli::link::{LinkCommand, LinkQueryCommand};
-use wash_lib::cli::{CommandOutput, OutputKind};
 
 use crate::appearance::spinner::Spinner;
 use crate::cmd::link::invoke as invoke_link_cmd;

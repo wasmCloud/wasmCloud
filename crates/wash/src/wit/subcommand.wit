@@ -1,0 +1,39 @@
+/// The interface for a subcommand plugin. This is used to register plugins and to provide the host
+/// with an interface it can use to interact with the plugin. 
+interface subcommand {
+    /// Information about an argument
+    record argument {
+        /// The description of the argument. Used for documentation in the CLI
+        description: string,
+        /// Whether or not the argument is a path. If the argument is a path, wash will load this
+        // path (with access to only the file if it is a file path and access to the directory if
+        /// it is a directory path) and pass it as a preopened dir at the exact same path
+        is-path: bool,
+        /// Whether or not the argument is required. 
+        required: bool,
+    }
+    
+    /// The metadata for a plugin used for registration and setup
+    record metadata {
+        /// The friendly name of the plugin
+        name: string,
+        /// The ID of the plugin. This must be unique across all plugins and is used as the name of
+        /// the subcommand added to wash. This ID should contain no whitespace
+        id: string,
+        /// The version of the plugin
+        version: string,
+        /// The author of the plugin
+        author: string,
+        /// The description of the plugin. This will be used as the top level help text for the plugin
+        description: string,
+        /// The list of flags and their documentation that can be used with this plugin. The key is
+        /// the name of the flag.
+        %flags: list<tuple<string, argument>>,
+        /// The list of positional arguments that can be used with this plugin. The key is the name
+        /// of the argument.
+        arguments: list<tuple<string, argument>>,
+    }
+
+    /// The function to register a plugin. This is called by the host to register the plugin.
+    register: func() -> metadata;
+}

@@ -1,12 +1,12 @@
 use std::{collections::HashMap, path::PathBuf};
 
+use crate::lib::cli::CommandOutput;
+use crate::lib::config::cfg_dir;
+use crate::lib::keys::{fs::KeyDir, KeyManager};
 use anyhow::Result;
 use clap::Subcommand;
 use nkeys::{KeyPair, KeyPairType};
 use serde_json::json;
-use wash_lib::cli::CommandOutput;
-use wash_lib::config::cfg_dir;
-use wash_lib::keys::{fs::KeyDir, KeyManager};
 
 const NKEYS_EXTENSION: &str = ".nk";
 

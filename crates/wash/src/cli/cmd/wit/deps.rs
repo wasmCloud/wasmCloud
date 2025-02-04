@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
+use crate::lib::build::load_lock_file;
+use crate::lib::cli::{CommandOutput, CommonPackageArgs};
 use clap::Args;
-use wash_lib::build::load_lock_file;
-use wash_lib::cli::{CommandOutput, CommonPackageArgs};
 
-use wash_lib::parser::{load_config, CommonConfig, ProjectConfig, RegistryConfig};
+use crate::lib::parser::{load_config, CommonConfig, ProjectConfig, RegistryConfig};
 use wasm_pkg_core::wit::OutputType;
 
 /// Arguments to `wash wit deps`
@@ -57,7 +57,7 @@ pub async fn invoke(
     let mut lock_file = load_lock_file(&project_cfg.wasmcloud_toml_dir).await?;
 
     // Start building the wkg client config
-    let mut wkg = wash_lib::deps::WkgFetcher::from_common(&common, wkg_config).await?;
+    let mut wkg = crate::lib::deps::WkgFetcher::from_common(&common, wkg_config).await?;
     // If a project configuration was provided, apply any pull-related overrides
     // in the new "extended" configuration format
     if let Some(ProjectConfig {

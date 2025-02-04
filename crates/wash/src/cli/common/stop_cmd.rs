@@ -1,7 +1,7 @@
 use anyhow::Result;
 
-use wash_lib::cli::stop::{handle_stop_component, handle_stop_provider, stop_host, StopCommand};
-use wash_lib::cli::{CommandOutput, OutputKind};
+use crate::lib::cli::stop::{handle_stop_component, handle_stop_provider, stop_host, StopCommand};
+use crate::lib::cli::{CommandOutput, OutputKind};
 
 use crate::appearance::spinner::Spinner;
 
@@ -36,8 +36,8 @@ mod test {
     use crate::ctl::CtlCliCommand;
 
     use super::*;
+    use crate::lib::cli::stop::{StopComponentCommand, StopHostCommand, StopProviderCommand};
     use clap::Parser;
-    use wash_lib::cli::stop::{StopComponentCommand, StopHostCommand, StopProviderCommand};
 
     #[derive(Parser)]
     struct Cmd {

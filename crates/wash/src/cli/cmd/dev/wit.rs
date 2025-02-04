@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use anyhow::{bail, Context as _, Result};
 use wit_parser::{Resolve, WorldId};
 
-use wash_lib::parser::ProjectConfig;
+use crate::lib::parser::ProjectConfig;
 
 use super::deps::DependencySpec;
 

@@ -5,8 +5,8 @@ use anyhow::{Context, Result};
 use serial_test::serial;
 use tokio::process::Command;
 use wadm_types::api::StatusType;
-use wash_lib::cli::get::parse_watch_interval;
-use wash_lib::cli::output::{AppDeployCommandOutput, AppValidateOutput};
+use crate::lib::cli::get::parse_watch_interval;
+use crate::lib::cli::output::{AppDeployCommandOutput, AppValidateOutput};
 
 mod common;
 use common::TestWashInstance;

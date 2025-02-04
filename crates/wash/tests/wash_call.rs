@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serial_test::serial;
 
 use tokio::task::JoinSet;
-use wash_lib::cli::output::{CallCommandOutput, StartCommandOutput};
+use crate::lib::cli::output::{CallCommandOutput, StartCommandOutput};
 
 mod common;
 use common::{TestWashInstance, FERRIS_SAYS_OCI_REF, HTTP_JSONIFY_OCI_REF};

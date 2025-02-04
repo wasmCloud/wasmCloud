@@ -1,4 +1,18 @@
 use crate::lib::app::{load_app_manifest, AppManifest, AppManifestSource};
+use crate::lib::cli::{CommandOutput, OutputKind};
+use crate::lib::common::CommandGroupUsage;
+use crate::lib::config::{
+    create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_TIMEOUT_MS,
+};
+use crate::lib::context::fs::ContextDir;
+use crate::lib::context::ContextManager;
+use crate::lib::generate::emoji;
+use crate::lib::start::{
+    ensure_nats_server, ensure_wadm, ensure_wasmcloud, find_wasmcloud_binary, nats_pid_path,
+    new_patch_version_of_after_string, start_nats_server, start_wadm, start_wasmcloud_host,
+    NatsConfig, WadmConfig, GITHUB_WASMCLOUD_ORG, GITHUB_WASMCLOUD_WADM_REPO,
+    GITHUB_WASMCLOUD_WASMCLOUD_REPO, NATS_SERVER_BINARY, NATS_SERVER_CONF, WADM_PID,
+};
 use anyhow::{anyhow, bail, Context, Result};
 use async_nats::Client;
 use clap::Parser;
@@ -19,20 +33,6 @@ use tokio::{
     process::Child,
 };
 use tracing::{debug, warn};
-use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::common::CommandGroupUsage;
-use wash_lib::config::{
-    create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_TIMEOUT_MS,
-};
-use wash_lib::context::fs::ContextDir;
-use wash_lib::context::ContextManager;
-use wash_lib::generate::emoji;
-use wash_lib::start::{
-    ensure_nats_server, ensure_wadm, ensure_wasmcloud, find_wasmcloud_binary, nats_pid_path,
-    new_patch_version_of_after_string, start_nats_server, start_wadm, start_wasmcloud_host,
-    NatsConfig, WadmConfig, GITHUB_WASMCLOUD_ORG, GITHUB_WASMCLOUD_WADM_REPO,
-    GITHUB_WASMCLOUD_WASMCLOUD_REPO, NATS_SERVER_BINARY, NATS_SERVER_CONF, WADM_PID,
-};
 use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClientBuilder};
 
 use crate::app::deploy_model_from_manifest;
@@ -878,7 +878,7 @@ async fn deploy_wadm_application(
     lattice: &str,
 ) -> Result<()> {
     let model_name = manifest.name().context("failed to find model name")?;
-    let _ = wash_lib::app::undeploy_model(client, Some(lattice.into()), model_name).await;
+    let _ = crate::lib::app::undeploy_model(client, Some(lattice.into()), model_name).await;
     match deploy_model_from_manifest(client, Some(lattice.into()), manifest, None).await {
         // Ignore if the model is already deployed
         Err(e) if e.to_string().contains("already exists") => {}
@@ -1096,7 +1096,7 @@ async fn is_wadm_running(
     .await?;
 
     Ok(
-        wash_lib::app::get_models(&client, Some(lattice.to_string()))
+        crate::lib::app::get_models(&client, Some(lattice.to_string()))
             .await
             .is_ok(),
     )

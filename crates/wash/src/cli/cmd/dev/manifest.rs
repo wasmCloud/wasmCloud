@@ -5,7 +5,7 @@ use wadm_types::{
     SpreadScalerProperty, TraitProperty,
 };
 
-use wash_lib::{generate::emoji, parser::ProjectConfig};
+use crate::lib::{generate::emoji, parser::ProjectConfig};
 
 /// Generate the a configuration name for a dependency, given it's namespace and package
 pub(crate) fn config_name(ns: &str, pkg: &str) -> String {
@@ -117,7 +117,7 @@ pub(crate) fn generate_component_from_project_cfg(
     Ok(Component {
         name: component_id.into(),
         properties: match &cfg.project_type {
-            wash_lib::parser::TypeConfig::Component(_c) => Properties::Component {
+            crate::lib::parser::TypeConfig::Component(_c) => Properties::Component {
                 properties: ComponentProperties {
                     image: Some(image_ref.into()),
                     application: None,
@@ -126,7 +126,7 @@ pub(crate) fn generate_component_from_project_cfg(
                     secrets: Vec::with_capacity(0),
                 },
             },
-            wash_lib::parser::TypeConfig::Provider(_p) => Properties::Capability {
+            crate::lib::parser::TypeConfig::Provider(_p) => Properties::Capability {
                 properties: CapabilityProperties {
                     image: Some(image_ref.into()),
                     application: None,
@@ -137,14 +137,14 @@ pub(crate) fn generate_component_from_project_cfg(
             },
         },
         traits: match &cfg.project_type {
-            wash_lib::parser::TypeConfig::Component(_c) => Some(vec![wadm_types::Trait {
+            crate::lib::parser::TypeConfig::Component(_c) => Some(vec![wadm_types::Trait {
                 trait_type: "spreadscaler".into(),
                 properties: TraitProperty::SpreadScaler(SpreadScalerProperty {
                     instances: 100,
                     spread: Vec::new(),
                 }),
             }]),
-            wash_lib::parser::TypeConfig::Provider(_p) => Some(vec![wadm_types::Trait {
+            crate::lib::parser::TypeConfig::Provider(_p) => Some(vec![wadm_types::Trait {
                 trait_type: "spreadscaler".into(),
                 properties: TraitProperty::SpreadScaler(SpreadScalerProperty {
                     instances: 1,

@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
-use wash_lib::cli::OutputKind;
+use crate::lib::cli::OutputKind;
 
 // For more spinners check out the cli-spinners project:
 // https://github.com/sindresorhus/cli-spinners/blob/master/spinners.json

@@ -2,20 +2,20 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use crate::lib::app::AppManifest;
+use crate::lib::cli::stop::stop_provider;
+use crate::lib::component::{scale_component, ScaleComponentArgs};
 use anyhow::{bail, ensure, Context as _, Result};
 use console::style;
 use tracing::{debug, warn};
-use wash_lib::cli::stop::stop_provider;
-use wash_lib::component::{scale_component, ScaleComponentArgs};
 use wasmcloud_control_interface::Client as CtlClient;
 
-use wadm_types::{ConfigProperty, Manifest, Properties, SecretProperty, SecretSourceProperty};
-use wash_lib::build::{build_project, SignConfig};
-use wash_lib::cli::{CommonPackageArgs, OutputKind};
-use wash_lib::generate::emoji;
-use wash_lib::parser::{
+use crate::lib::build::{build_project, SignConfig};
+use crate::lib::cli::{CommonPackageArgs, OutputKind};
+use crate::lib::generate::emoji;
+use crate::lib::parser::{
     DevConfigSpec, DevManifestComponentTarget, DevSecretSpec, ProjectConfig, TypeConfig,
 };
+use wadm_types::{ConfigProperty, Manifest, Properties, SecretProperty, SecretSourceProperty};
 
 use crate::app::deploy_model_from_manifest;
 use crate::appearance::spinner::Spinner;
@@ -452,7 +452,7 @@ pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
             serde_json::to_string(&manifest).context("failed to convert manifest to JSON")?;
 
         // Put the manifest
-        match wash_lib::app::put_model(
+        match crate::lib::app::put_model(
             state.nats_client,
             Some(state.lattice.to_string()),
             &model_json,
@@ -522,7 +522,7 @@ async fn scale_down_component(
     // Scale the WADM component (which can be either a component or provider) down,
     // expecting that WADM should restore it (and trigger a reload)
     match project_cfg.project_type {
-        wash_lib::parser::TypeConfig::Component(_) => {
+        crate::lib::parser::TypeConfig::Component(_) => {
             scale_component(ScaleComponentArgs {
                 client,
                 host_id,
@@ -539,7 +539,7 @@ async fn scale_down_component(
                 format!("failed to scale down component [{component_id}] for reload")
             })?;
         }
-        wash_lib::parser::TypeConfig::Provider(_) => {
+        crate::lib::parser::TypeConfig::Provider(_) => {
             if let Err(e) = stop_provider(
                 client,
                 Some(host_id),

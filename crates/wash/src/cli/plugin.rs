@@ -11,7 +11,7 @@ use oci_client::Reference;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
-use crate::lib::{
+use super::{
     appearance::spinner::Spinner,
     ctl::plugins_table,
     util::{ensure_plugin_dir, load_plugins},
