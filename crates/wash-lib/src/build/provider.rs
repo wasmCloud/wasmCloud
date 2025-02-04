@@ -19,6 +19,26 @@ pub(crate) async fn build_provider(
     common_config: &CommonConfig,
     signing_config: Option<&SignConfig>,
 ) -> Result<PathBuf> {
+    // Attempt to get the WIT for this provider
+    let wit_interface_bytes = if common_config.wit_dir.exists() {
+        let mut resolve = wit_parser::Resolve::default();
+        match resolve.push_dir(&common_config.wit_dir) {
+            Ok((package_id, _)) => match wit_component::encode(&resolve, package_id) {
+                Ok(bytes) => Some(bytes),
+                Err(e) => {
+                    warn!("Failed to encode WIT package: {}", e);
+                    None
+                }
+            },
+            Err(e) => {
+                warn!("Failed to add WIT directory: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let (provider_path_buf, bin_name) = match language_config {
         LanguageConfig::Rust(rust_config) => {
             build_rust_provider(provider_config, rust_config, common_config)?
@@ -50,6 +70,7 @@ pub(crate) async fn build_provider(
             arch: detect_arch(),
         },
         &provider_bytes,
+        wit_interface_bytes.as_deref(),
     )
     .context("failed to create initial provider archive with built provider")?;
 
