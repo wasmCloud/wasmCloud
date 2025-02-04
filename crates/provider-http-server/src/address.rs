@@ -154,7 +154,7 @@ impl Provider for HttpServerProvider {
         let link_name = info.get_link_name();
 
         // Retrieve the thing by link name
-        let sockets_by_link_name = self.sockets_by_link_name.read().await;
+        let mut sockets_by_link_name = self.sockets_by_link_name.write().await;
         if let Some(addr) = sockets_by_link_name.get(link_name) {
             let mut handlers_by_socket = self.handlers_by_socket.write().await;
             if let Some((server, component_metas)) = handlers_by_socket.get_mut(addr) {
@@ -174,6 +174,7 @@ impl Provider for HttpServerProvider {
                     );
                     server.handle.shutdown();
                     handlers_by_socket.remove(addr);
+                    sockets_by_link_name.remove(link_name);
                 }
             }
         }
