@@ -24,6 +24,7 @@ mod bindings {
             "wasmcloud:messaging/request-reply@0.3.0": generate,
             "wasmcloud:messaging/types@0.2.0": generate,
             "wasmcloud:messaging/types@0.3.0": generate,
+            "wasmcloud:cron/scheduler@0.1.0-draft" : generate,
         }
     });
 }

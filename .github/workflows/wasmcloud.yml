@@ -50,6 +50,8 @@ on:
       - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+'
       - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-cron-scheduler-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-cron-scheduler-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-http-client-v[0-9].[0-9]+.[0-9]+'
       - 'provider-http-client-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-http-server-v[0-9].[0-9]+.[0-9]+'
@@ -652,6 +654,9 @@ jobs:
           - name: blobstore-s3
             subject: BLOBSTORE_S3_SUBJECT
             embed_wit: true
+
+          - name: cron-scheduler
+            subject: CRON_SCHEDULER_SUBJECT
 
           - name: keyvalue-nats
             subject: KEYVALUE_NATS_SUBJECT

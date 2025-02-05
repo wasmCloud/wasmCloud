@@ -15,6 +15,7 @@ world interfaces {
     import wasi:keyvalue/watcher@0.2.0-draft;
 
     import wasmcloud:messaging/consumer@0.2.0;
+    import wasmcloud:cron/scheduler@0.1.0-draft;
     import wasmcloud:messaging/producer@0.3.0;
     import wasmcloud:messaging/request-reply@0.3.0;
 }

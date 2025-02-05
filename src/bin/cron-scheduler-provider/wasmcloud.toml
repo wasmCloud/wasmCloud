@@ -1,0 +1,12 @@
+name = "Cron Scheduler"
+language = "rust"
+type = "provider"
+version = "0.4.0"
+wit = "../../../wit/cron/wit"
+
+[rust]
+target_dir = "../../"
+
+[provider]
+bin_name = "cron-scheduler-provider"
+vendor = "wasmCloud"
