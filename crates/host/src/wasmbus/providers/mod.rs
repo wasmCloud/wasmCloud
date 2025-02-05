@@ -291,8 +291,9 @@ impl Host {
                         // When the provider is shutting down, don't restart it
                         if shutdown.load(Ordering::Relaxed) {
                             trace!(
-                                "provider @ [{}] exited with `{status:?}` but will not be restarted since it's shutting down",
-                                path.display()
+                                path = ?path.display(),
+                                status = ?status,
+                                "provider exited but will not be restarted since it's shutting down",
                             );
                             // Avoid a hot loop by waiting 1s before checking the status again
                             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -300,11 +301,12 @@ impl Host {
                         }
 
                         warn!(
-                            "restarting provider @ [{}] that exited with `{status:?}`",
-                            path.display()
+                            path = ?path.display(),
+                            status = ?status,
+                            "restarting provider that exited while being supervised",
                         );
 
-                        let Ok((Ok(host_data), new_config_bundle)) = self
+                        let (host_data, new_config_bundle) = match self
                             .prepare_provider_config(
                                 &config_names,
                                 claims_token.as_ref(),
@@ -319,11 +321,20 @@ impl Host {
                                         .context("failed to serialize provider data"),
                                     Arc::new(RwLock::new(config)),
                                 )
-                            })
-                        else {
-                            error!("failed to prepare provider host data while restarting");
-                            shutdown.store(true, Ordering::Relaxed);
-                            return;
+                            }) {
+                            Ok((Ok(host_data), new_config_bundle)) => {
+                                (host_data, new_config_bundle)
+                            }
+                            Err(e) => {
+                                error!(err = ?e, "failed to prepare provider host data while restarting");
+                                shutdown.store(true, Ordering::Relaxed);
+                                return;
+                            }
+                            Ok((Err(e), _)) => {
+                                error!(err = ?e, "failed to serialize provider host data while restarting");
+                                shutdown.store(true, Ordering::Relaxed);
+                                return;
+                            }
                         };
 
                         // Stop the config watcher and start a new one with the new config bundle
@@ -339,7 +350,7 @@ impl Host {
                         // Restart the provider by attempting to re-execute the binary with the same
                         // host data
                         let Ok(child_cmd) = provider_command(&path, host_data).await else {
-                            error!("failed to restart provider @ [{}]", path.display());
+                            error!(path = ?path.display(), "failed to restart provider");
                             shutdown.store(true, Ordering::Relaxed);
                             return;
                         };
@@ -351,8 +362,9 @@ impl Host {
                     }
                     Err(e) => {
                         error!(
-                            "failed to wait for provider @ [{}] to execute: {e}",
-                            path.display()
+                            path = ?path.display(),
+                            err = ?e,
+                            "failed to wait for provider to execute",
                         );
 
                         shutdown.store(true, Ordering::Relaxed);
