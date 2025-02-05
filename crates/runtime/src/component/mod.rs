@@ -68,121 +68,19 @@ pub enum ReplacedInstanceTarget {
     HttpOutgoingHandler,
 }
 
-/// skips instance names, for which static (builtin) bindings exist
-macro_rules! skip_static_instances {
-    ($instance:expr) => {
-        match ($instance) {
-            "wasi:blobstore/blobstore@0.2.0-draft"
-            | "wasi:blobstore/container@0.2.0-draft"
-            | "wasi:blobstore/types@0.2.0-draft"
-            | "wasi:cli/environment@0.2.0"
-            | "wasi:cli/environment@0.2.1"
-            | "wasi:cli/environment@0.2.2"
-            | "wasi:cli/exit@0.2.0"
-            | "wasi:cli/exit@0.2.1"
-            | "wasi:cli/exit@0.2.2"
-            | "wasi:cli/stderr@0.2.0"
-            | "wasi:cli/stderr@0.2.1"
-            | "wasi:cli/stderr@0.2.2"
-            | "wasi:cli/stdin@0.2.0"
-            | "wasi:cli/stdin@0.2.1"
-            | "wasi:cli/stdin@0.2.2"
-            | "wasi:cli/stdout@0.2.0"
-            | "wasi:cli/stdout@0.2.1"
-            | "wasi:cli/stdout@0.2.2"
-            | "wasi:cli/terminal-input@0.2.0"
-            | "wasi:cli/terminal-input@0.2.1"
-            | "wasi:cli/terminal-input@0.2.2"
-            | "wasi:cli/terminal-output@0.2.0"
-            | "wasi:cli/terminal-output@0.2.1"
-            | "wasi:cli/terminal-output@0.2.2"
-            | "wasi:cli/terminal-stderr@0.2.0"
-            | "wasi:cli/terminal-stderr@0.2.1"
-            | "wasi:cli/terminal-stderr@0.2.2"
-            | "wasi:cli/terminal-stdin@0.2.0"
-            | "wasi:cli/terminal-stdin@0.2.1"
-            | "wasi:cli/terminal-stdin@0.2.2"
-            | "wasi:cli/terminal-stdout@0.2.0"
-            | "wasi:cli/terminal-stdout@0.2.1"
-            | "wasi:cli/terminal-stdout@0.2.2"
-            | "wasi:clocks/monotonic-clock@0.2.0"
-            | "wasi:clocks/monotonic-clock@0.2.1"
-            | "wasi:clocks/monotonic-clock@0.2.2"
-            | "wasi:clocks/timezone@0.2.1"
-            | "wasi:clocks/timezone@0.2.2"
-            | "wasi:clocks/wall-clock@0.2.0"
-            | "wasi:clocks/wall-clock@0.2.1"
-            | "wasi:clocks/wall-clock@0.2.2"
-            | "wasi:config/runtime@0.2.0-draft"
-            | "wasi:config/store@0.2.0-draft"
-            | "wasi:filesystem/preopens@0.2.0"
-            | "wasi:filesystem/preopens@0.2.1"
-            | "wasi:filesystem/preopens@0.2.2"
-            | "wasi:filesystem/types@0.2.0"
-            | "wasi:filesystem/types@0.2.1"
-            | "wasi:filesystem/types@0.2.2"
-            | "wasi:http/incoming-handler@0.2.0"
-            | "wasi:http/incoming-handler@0.2.1"
-            | "wasi:http/incoming-handler@0.2.2"
-            | "wasi:http/outgoing-handler@0.2.0"
-            | "wasi:http/outgoing-handler@0.2.1"
-            | "wasi:http/outgoing-handler@0.2.2"
-            | "wasi:http/types@0.2.0"
-            | "wasi:http/types@0.2.1"
-            | "wasi:http/types@0.2.2"
-            | "wasi:io/error@0.2.0"
-            | "wasi:io/error@0.2.1"
-            | "wasi:io/error@0.2.2"
-            | "wasi:io/poll@0.2.0"
-            | "wasi:io/poll@0.2.1"
-            | "wasi:io/poll@0.2.2"
-            | "wasi:io/streams@0.2.0"
-            | "wasi:io/streams@0.2.1"
-            | "wasi:io/streams@0.2.2"
-            | "wasi:keyvalue/atomics@0.2.0-draft"
-            | "wasi:keyvalue/batch@0.2.0-draft"
-            | "wasi:keyvalue/store@0.2.0-draft"
-            | "wasi:logging/logging"
-            | "wasi:logging/logging@0.1.0-draft"
-            | "wasi:random/insecure-seed@0.2.0"
-            | "wasi:random/insecure-seed@0.2.1"
-            | "wasi:random/insecure-seed@0.2.2"
-            | "wasi:random/insecure@0.2.0"
-            | "wasi:random/insecure@0.2.1"
-            | "wasi:random/insecure@0.2.2"
-            | "wasi:random/random@0.2.0"
-            | "wasi:random/random@0.2.1"
-            | "wasi:random/random@0.2.2"
-            | "wasi:sockets/instance-network@0.2.0"
-            | "wasi:sockets/instance-network@0.2.1"
-            | "wasi:sockets/instance-network@0.2.2"
-            | "wasi:sockets/ip-name-lookup@0.2.0"
-            | "wasi:sockets/ip-name-lookup@0.2.1"
-            | "wasi:sockets/ip-name-lookup@0.2.2"
-            | "wasi:sockets/network@0.2.0"
-            | "wasi:sockets/network@0.2.1"
-            | "wasi:sockets/network@0.2.2"
-            | "wasi:sockets/tcp-create-socket@0.2.0"
-            | "wasi:sockets/tcp-create-socket@0.2.1"
-            | "wasi:sockets/tcp-create-socket@0.2.2"
-            | "wasi:sockets/tcp@0.2.0"
-            | "wasi:sockets/tcp@0.2.1"
-            | "wasi:sockets/tcp@0.2.2"
-            | "wasi:sockets/udp-create-socket@0.2.0"
-            | "wasi:sockets/udp-create-socket@0.2.1"
-            | "wasi:sockets/udp-create-socket@0.2.2"
-            | "wasi:sockets/udp@0.2.0"
-            | "wasi:sockets/udp@0.2.1"
-            | "wasi:sockets/udp@0.2.2"
-            | "wasmcloud:bus/lattice@1.0.0"
-            | "wasmcloud:bus/lattice@2.0.0"
-            | "wasmcloud:messaging/consumer@0.2.0"
-            | "wasmcloud:messaging/types@0.2.0"
-            | "wasmcloud:secrets/reveal@0.1.0-draft"
-            | "wasmcloud:secrets/store@0.1.0-draft" => continue,
-            _ => {}
-        }
-    };
+fn is_0_2(version: &str, min_patch: u64) -> bool {
+    if let Ok(semver::Version {
+        major,
+        minor,
+        patch,
+        pre,
+        build,
+    }) = version.parse()
+    {
+        major == 0 && minor == 2 && patch >= min_patch && pre.is_empty() && build.is_empty()
+    } else {
+        false
+    }
 }
 
 /// This represents a kind of wRPC invocation error
@@ -448,12 +346,52 @@ where
         }
         for (name, ty) in ty.imports(&engine) {
             // Don't link builtin instances or feature-gated instances if the feature is disabled
-            skip_static_instances!(name);
-            if rt.skip_feature_gated_instance(name) {
-                continue;
-            }
-            link_item(&engine, &mut linker.root(), [], ty, "", name, None)
-                .context("failed to link item")?;
+            match name.split_once('/').map(|(pkg, suffix)| {
+                suffix
+                    .split_once('@')
+                    .map_or((pkg, name, None), |(iface, version)| {
+                        (pkg, iface, Some(version))
+                    })
+            }) {
+                Some(
+                    ("wasi:blobstore", "blobstore" | "container" | "types", Some("0.2.0-draft"))
+                    | ("wasi:config", "runtime" | "store", Some("0.2.0-draft"))
+                    | ("wasi:keyvalue", "atomics" | "batch" | "store", Some("0.2.0-draft"))
+                    | ("wasi:logging", "logging", None | Some("0.1.0-draft"))
+                    | ("wasmcloud:bus", "lattice", Some("1.0.0" | "2.0.0"))
+                    | ("wasmcloud:messaging", "consumer" | "types", Some("0.2.0"))
+                    | ("wasmcloud:secrets", "reveal" | "store", Some("0.1.0-draft")),
+                ) => {}
+                Some((
+                    "wasi:cli",
+                    "environment" | "exit" | "stderr" | "stdin" | "stdout" | "terminal-input"
+                    | "terminal-output" | "terminal-stderr" | "terminal-stdin" | "terminal-stdout",
+                    Some(version),
+                )) if is_0_2(version, 0) => {}
+                Some(("wasi:clocks", "monotonic-clock" | "wall-clock", Some(version)))
+                    if is_0_2(version, 0) => {}
+                Some(("wasi:clocks", "timezone", Some(version))) if is_0_2(version, 1) => {}
+                Some(("wasi:filesystem", "preopens" | "types", Some(version)))
+                    if is_0_2(version, 0) => {}
+                Some((
+                    "wasi:http",
+                    "incoming-handler" | "outgoing-handler" | "types",
+                    Some(version),
+                )) if is_0_2(version, 0) => {}
+                Some(("wasi:io", "error" | "poll" | "streams", Some(version)))
+                    if is_0_2(version, 0) => {}
+                Some(("wasi:random", "insecure-seed" | "insecure" | "random", Some(version)))
+                    if is_0_2(version, 0) => {}
+                Some((
+                    "wasi:sockets",
+                    "instance-network" | "ip-name-lookup" | "network" | "tcp-create-socket" | "tcp"
+                    | "udp-create-socket" | "udp",
+                    Some(version),
+                )) if is_0_2(version, 0) => {}
+                _ if rt.skip_feature_gated_instance(name) => {}
+                _ => link_item(&engine, &mut linker.root(), [], ty, "", name, None)
+                    .context("failed to link item")?,
+            };
         }
         let instance_pre = linker.instantiate_pre(&component)?;
         Ok(Self {

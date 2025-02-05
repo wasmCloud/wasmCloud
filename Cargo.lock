@@ -8714,6 +8714,7 @@ dependencies = [
  "once_cell",
  "opentelemetry",
  "secrecy",
+ "semver",
  "serde",
  "serde_json",
  "tokio",
