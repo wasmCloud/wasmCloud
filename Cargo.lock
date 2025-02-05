@@ -7554,9 +7554,9 @@ dependencies = [
 
 [[package]]
 name = "wadm-types"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d637c3a9ecbd4183d509edd1c8daf6f0e341f213c2ab78d7dab3d1438b9326f"
+checksum = "95b63cbbf5f9447d3f70f3e642dad663179f913d77562959b6ea40b8b25e1c83"
 dependencies = [
  "anyhow",
  "regex",
