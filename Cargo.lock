@@ -5030,6 +5030,22 @@ dependencies = [
 
 [[package]]
 name = "provider-archive"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d82f3c2120f817556159412b5d2237e7368b7e2d4439dd4d63ac015d1965bf6"
+dependencies = [
+ "async-compression",
+ "data-encoding",
+ "ring",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tokio-tar",
+ "wascap 0.15.3 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "provider-archive"
 version = "0.15.0"
 dependencies = [
  "async-compression",
@@ -5040,7 +5056,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tar",
- "wascap",
+ "wascap 0.15.3",
 ]
 
 [[package]]
@@ -5870,7 +5886,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "wascap",
+ "wascap 0.15.3",
  "wasmcloud-secrets-client",
  "wasmcloud-secrets-types",
 ]
@@ -6607,7 +6623,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "url",
- "wascap",
+ "wascap 0.15.3",
  "wasi-preview1-component-adapter-provider",
  "wit-component 0.224.0",
 ]
@@ -7733,6 +7749,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "wascap"
+version = "0.15.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2178ae194cb7a34c1628eb487bfced22792ea864691ae42e69976ad17e3c91a"
+dependencies = [
+ "data-encoding",
+ "humantime",
+ "nkeys",
+ "nuid",
+ "ring",
+ "serde",
+ "serde_json",
+ "wasm-encoder 0.221.2",
+ "wasm-gen",
+ "wasmparser 0.221.2",
+]
+
+[[package]]
 name = "wash-cli"
 version = "0.38.0"
 dependencies = [
@@ -7759,7 +7793,7 @@ dependencies = [
  "notify",
  "oci-client",
  "once_cell",
- "provider-archive",
+ "provider-archive 0.15.0",
  "rand 0.8.5",
  "regex",
  "reqwest",
@@ -7791,7 +7825,7 @@ dependencies = [
  "wasm-pkg-client",
  "wasm-pkg-core",
  "wasmcloud-control-interface",
- "wasmcloud-core",
+ "wasmcloud-core 0.16.0",
  "wasmcloud-secrets-types",
  "wat",
  "which",
@@ -7833,7 +7867,7 @@ dependencies = [
  "oci-client",
  "oci-wasm",
  "path-absolutize",
- "provider-archive",
+ "provider-archive 0.15.0",
  "regex",
  "reqwest",
  "semver",
@@ -7859,13 +7893,13 @@ dependencies = [
  "wadm-client",
  "wadm-types",
  "walkdir",
- "wascap",
+ "wascap 0.15.3",
  "wasi-preview1-component-adapter-provider",
  "wasm-encoder 0.221.2",
  "wasm-pkg-client",
  "wasm-pkg-core",
  "wasmcloud-control-interface",
- "wasmcloud-core",
+ "wasmcloud-core 0.16.0",
  "wasmcloud-test-util",
  "wasmparser 0.221.2",
  "wasmtime",
@@ -8237,7 +8271,7 @@ dependencies = [
  "hyper-util",
  "nkeys",
  "once_cell",
- "provider-archive",
+ "provider-archive 0.15.0",
  "rand 0.8.5",
  "redis",
  "regex",
@@ -8257,13 +8291,14 @@ dependencies = [
  "url",
  "uuid 1.11.0",
  "vaultrs",
- "wascap",
+ "wascap 0.15.3",
  "wasmcloud-control-interface",
- "wasmcloud-core",
+ "wasmcloud-core 0.16.0",
  "wasmcloud-host",
  "wasmcloud-provider-blobstore-azure",
  "wasmcloud-provider-blobstore-fs",
  "wasmcloud-provider-blobstore-s3",
+ "wasmcloud-provider-cron-scheduler",
  "wasmcloud-provider-http-client",
  "wasmcloud-provider-http-server",
  "wasmcloud-provider-keyvalue-nats",
@@ -8273,7 +8308,7 @@ dependencies = [
  "wasmcloud-provider-messaging-nats",
  "wasmcloud-provider-sqldb-postgres",
  "wasmcloud-test-util",
- "wasmcloud-tracing",
+ "wasmcloud-tracing 0.12.0",
  "wrpc-interface-http",
  "wrpc-transport",
  "wrpc-transport-nats",
@@ -8322,7 +8357,7 @@ dependencies = [
  "oci-client",
  "oci-wasm",
  "once_cell",
- "provider-archive",
+ "provider-archive 0.15.0",
  "reqwest",
  "rustls 0.23.19",
  "rustls-native-certs 0.8.1",
@@ -8333,7 +8368,32 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
- "wascap",
+ "wascap 0.15.3",
+ "webpki-roots",
+]
+
+[[package]]
+name = "wasmcloud-core"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "608b0aca453d297c844419c6bddf7b467bd882dd54f5b20f866cf4e62de10bd4"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "hyper-rustls 0.27.3",
+ "hyper-util",
+ "once_cell",
+ "provider-archive 0.14.0",
+ "rustls 0.23.19",
+ "rustls-native-certs 0.8.1",
+ "rustls-pemfile 2.2.0",
+ "secrecy",
+ "semver",
+ "serde",
+ "tokio",
+ "tracing",
+ "url",
+ "wascap 0.15.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "webpki-roots",
 ]
 
@@ -8367,16 +8427,16 @@ dependencies = [
  "ulid",
  "url",
  "uuid 1.11.0",
- "wascap",
+ "wascap 0.15.3",
  "wasmcloud-control-interface",
- "wasmcloud-core",
+ "wasmcloud-core 0.16.0",
  "wasmcloud-provider-http-server",
  "wasmcloud-provider-messaging-nats",
- "wasmcloud-provider-sdk",
+ "wasmcloud-provider-sdk 0.13.0",
  "wasmcloud-runtime",
  "wasmcloud-secrets-client",
  "wasmcloud-secrets-types",
- "wasmcloud-tracing",
+ "wasmcloud-tracing 0.12.0",
  "wasmtime-wasi-http",
  "wrpc-interface-http",
  "wrpc-transport",
@@ -8408,7 +8468,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
- "wasmcloud-provider-sdk",
+ "wasmcloud-provider-sdk 0.13.0",
  "wasmcloud-test-util",
  "wrpc-interface-blobstore",
  "wrpc-transport-nats",
@@ -8427,7 +8487,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
- "wasmcloud-provider-sdk",
+ "wasmcloud-provider-sdk 0.13.0",
  "wrpc-interface-blobstore",
 ]
 
@@ -8451,9 +8511,21 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
- "wasmcloud-provider-sdk",
+ "wasmcloud-provider-sdk 0.13.0",
  "wasmcloud-test-util",
  "wrpc-interface-blobstore",
+]
+
+[[package]]
+name = "wasmcloud-provider-cron-scheduler"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "tokio",
+ "tracing",
+ "wasmcloud-provider-sdk 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wit-bindgen-wrpc",
 ]
 
 [[package]]
@@ -8472,7 +8544,7 @@ dependencies = [
  "rustls-pemfile 2.2.0",
  "tokio",
  "tracing",
- "wasmcloud-provider-sdk",
+ "wasmcloud-provider-sdk 0.13.0",
  "webpki-roots",
  "wrpc-interface-http",
 ]
@@ -8499,7 +8571,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "unicase",
- "wasmcloud-provider-sdk",
+ "wasmcloud-provider-sdk 0.13.0",
  "wasmcloud-test-util",
  "wrpc-interface-http",
 ]
@@ -8517,8 +8589,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "wascap",
- "wasmcloud-provider-sdk",
+ "wascap 0.15.3",
+ "wasmcloud-provider-sdk 0.13.0",
  "wit-bindgen-wrpc",
 ]
 
@@ -8536,7 +8608,7 @@ dependencies = [
  "url",
  "uuid 1.11.0",
  "wasmcloud-control-interface",
- "wasmcloud-provider-sdk",
+ "wasmcloud-provider-sdk 0.13.0",
  "wasmcloud-test-util",
  "wit-bindgen-wrpc",
 ]
@@ -8552,7 +8624,7 @@ dependencies = [
  "tracing",
  "url",
  "vaultrs",
- "wasmcloud-provider-sdk",
+ "wasmcloud-provider-sdk 0.13.0",
  "wit-bindgen-wrpc",
 ]
 
@@ -8564,7 +8636,7 @@ dependencies = [
  "async-nats",
  "tokio",
  "tracing",
- "wascap",
+ "wascap 0.15.3",
  "wasmcloud-control-interface",
 ]
 
@@ -8579,8 +8651,8 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
- "wasmcloud-provider-sdk",
- "wasmcloud-tracing",
+ "wasmcloud-provider-sdk 0.13.0",
+ "wasmcloud-tracing 0.12.0",
  "wit-bindgen-wrpc",
 ]
 
@@ -8599,8 +8671,8 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-futures",
- "wascap",
- "wasmcloud-provider-sdk",
+ "wascap 0.15.3",
+ "wasmcloud-provider-sdk 0.13.0",
  "wit-bindgen-wrpc",
 ]
 
@@ -8625,8 +8697,37 @@ dependencies = [
  "tracing-futures",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "wasmcloud-core",
- "wasmcloud-tracing",
+ "wasmcloud-core 0.16.0",
+ "wasmcloud-tracing 0.12.0",
+ "wrpc-transport",
+ "wrpc-transport-nats",
+]
+
+[[package]]
+name = "wasmcloud-provider-sdk"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e9ca5f2b1acc5fae4355ca583b9cac3c4acdf1e528faed52d16c203a044ca3"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "base64 0.22.1",
+ "bytes",
+ "futures",
+ "nkeys",
+ "once_cell",
+ "opentelemetry",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.11",
+ "tokio",
+ "tracing",
+ "tracing-futures",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "wasmcloud-core 0.16.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wasmcloud-tracing 0.12.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "wrpc-transport",
  "wrpc-transport-nats",
 ]
@@ -8654,7 +8755,7 @@ dependencies = [
  "tracing",
  "ulid",
  "uuid 1.11.0",
- "wasmcloud-provider-sdk",
+ "wasmcloud-provider-sdk 0.13.0",
  "webpki-roots",
  "wit-bindgen-wrpc",
 ]
@@ -8678,10 +8779,10 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "wascap",
+ "wascap 0.15.3",
  "wasi-preview1-component-adapter-provider",
  "wasmcloud-component",
- "wasmcloud-core",
+ "wasmcloud-core 0.16.0",
  "wasmparser 0.221.2",
  "wasmtime",
  "wasmtime-wasi",
@@ -8716,7 +8817,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.11",
- "wascap",
+ "wascap 0.15.3",
 ]
 
 [[package]]
@@ -8735,9 +8836,9 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
- "wascap",
+ "wascap 0.15.3",
  "wasmcloud-control-interface",
- "wasmcloud-core",
+ "wasmcloud-core 0.16.0",
  "wasmcloud-host",
  "wasmcloud-secrets-types",
 ]
@@ -8761,7 +8862,31 @@ dependencies = [
  "tracing-flame",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "wasmcloud-core",
+ "wasmcloud-core 0.16.0",
+]
+
+[[package]]
+name = "wasmcloud-tracing"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b52945f59e182b01e90761baabd760b93990f37d47dd1930ff330b476d2a780f"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "heck 0.5.0",
+ "http 1.2.0",
+ "once_cell",
+ "opentelemetry",
+ "opentelemetry-appender-tracing",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "reqwest",
+ "tracing",
+ "tracing-appender",
+ "tracing-flame",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "wasmcloud-core 0.16.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]

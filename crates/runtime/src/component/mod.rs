@@ -46,6 +46,7 @@ mod keyvalue;
 mod logging;
 pub(crate) mod messaging;
 mod secrets;
+mod cron;
 
 /// Instance target, which is replaced in wRPC
 ///
@@ -177,6 +178,7 @@ macro_rules! skip_static_instances {
             | "wasmcloud:bus/lattice@1.0.0"
             | "wasmcloud:bus/lattice@2.0.0"
             | "wasmcloud:messaging/consumer@0.2.0"
+            | "wasmcloud:cron/scheduler@0.1.0-draft"
             | "wasmcloud:messaging/types@0.2.0"
             | "wasmcloud:secrets/reveal@0.1.0-draft"
             | "wasmcloud:secrets/store@0.1.0-draft" => continue,
@@ -559,6 +561,17 @@ where
                     .await
                     .context("failed to serve `wrpc:http/incoming-handler`")?;
                     invocations.push(handle);
+                }
+                (
+                    "wasmcloud:cron/scheduler@0.1.0-draft",
+                    types::ComponentItem::ComponentInstance(..),
+                ) => {
+                    let instance = instance.clone();
+                    let [(_, _, timed_invoke)] =
+                        wrpc::exports::wasmcloud::cron::scheduler::serve_interface(srv, instance)
+                            .await
+                            .context("failed to serve `wrpc:keyvalue/watcher`")?;
+                    invocations.push(timed_invoke);
                 }
                 (
                     "wasmcloud:messaging/handler@0.2.0"
