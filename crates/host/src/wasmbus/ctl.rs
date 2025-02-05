@@ -492,7 +492,7 @@ impl ControlInterfaceServer for Host {
             let provider_ref = request.provider_ref();
             let annotations = request.annotations();
 
-            if let Err(err) = self
+            if let Err(err) = Arc::clone(&self)
                 .handle_start_provider_task(
                     config,
                     provider_id,
@@ -538,8 +538,15 @@ impl ControlInterfaceServer for Host {
             return Ok(CtlResponse::error("provider with that ID is not running"));
         };
         let Provider {
-            ref annotations, ..
+            ref annotations,
+            mut tasks,
+            shutdown,
+            ..
         } = entry.remove();
+
+        // Set the shutdown flag to true to stop health checks and config updates. Also
+        // prevents restarting the provider but does not stop the provider process.
+        shutdown.store(true, Ordering::Relaxed);
 
         // Send a request to the provider, requesting a graceful shutdown
         let req = serde_json::to_vec(&json!({ "host_id": host_id }))
@@ -566,7 +573,13 @@ impl ControlInterfaceServer for Host {
                 provider_id,
                 "provider did not gracefully shut down in time, shutting down forcefully"
             );
+            // NOTE: The provider child process is spawned with [tokio::process::Command::kill_on_drop],
+            // so dropping the task will send a SIGKILL to the provider process.
         }
+
+        // Stop the provider and health check / config changes tasks
+        tasks.abort_all();
+
         info!(provider_id, "provider stopped");
         self.publish_event(
             "provider_stopped",

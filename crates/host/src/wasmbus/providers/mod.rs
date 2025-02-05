@@ -19,9 +19,9 @@ use cloudevents::EventBuilderV10;
 use futures::{stream, Future, StreamExt};
 use nkeys::XKey;
 use tokio::io::AsyncWriteExt;
+use tokio::process;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
-use tokio::{process, select};
 use tracing::{error, instrument, trace, warn};
 use uuid::Uuid;
 use wascap::jwt::{CapabilityProvider, Token};
@@ -242,7 +242,6 @@ impl Host {
             Arc::clone(&self.host_config.lattice),
             self.host_key.public_key(),
             provider_id.to_string(),
-            shutdown.clone(),
         ));
 
         Ok(tasks)
@@ -282,7 +281,6 @@ impl Host {
                 Arc::clone(&config_bundle),
                 Arc::clone(&lattice),
                 provider_id.clone(),
-                shutdown.clone(),
             ));
             loop {
                 let mut child = child.write().await;
@@ -344,7 +342,6 @@ impl Host {
                             new_config_bundle,
                             Arc::clone(&lattice),
                             provider_id.clone(),
-                            shutdown.clone(),
                         ));
 
                         // Restart the provider by attempting to re-execute the binary with the same
@@ -428,7 +425,6 @@ fn check_health(
     lattice: Arc<str>,
     host_id: String,
     provider_id: String,
-    shutdown: Arc<AtomicBool>,
 ) -> impl Future<Output = ()> {
     let health_subject =
         async_nats::Subject::from(format!("wasmbus.rpc.{lattice}.{provider_id}.health"));
@@ -440,90 +436,87 @@ fn check_health(
     health_check.reset_after(Duration::from_secs(5));
     async move {
         loop {
-            select! {
-                _ = health_check.tick() => {
-                    trace!(?provider_id, "performing provider health check");
-                    let request = async_nats::Request::new()
-                        .payload(Bytes::new())
-                        .headers(injector_to_headers(&TraceContextInjector::default_with_span()));
-                    if let Ok(async_nats::Message { payload, ..}) = rpc_nats.send_request(
-                        health_subject.clone(),
-                        request,
-                        ).await {
-                            match (serde_json::from_slice::<HealthCheckResponse>(&payload), previous_healthy) {
-                                (Ok(HealthCheckResponse { healthy: true, ..}), false) => {
-                                    trace!(?provider_id, "provider health check succeeded");
-                                    previous_healthy = true;
-                                    if let Err(e) = event::publish(
-                                        &event_builder,
-                                        &ctl_nats,
-                                        &lattice,
-                                        "health_check_passed",
-                                        event::provider_health_check(
-                                            &host_id,
-                                            &provider_id,
-                                        )
-                                    ).await {
-                                        warn!(
-                                            ?e,
-                                            ?provider_id,
-                                            "failed to publish provider health check succeeded event",
-                                        );
-                                    }
-                                },
-                                (Ok(HealthCheckResponse { healthy: false, ..}), true) => {
-                                    trace!(?provider_id, "provider health check failed");
-                                    previous_healthy = false;
-                                    if let Err(e) = event::publish(
-                                        &event_builder,
-                                        &ctl_nats,
-                                        &lattice,
-                                        "health_check_failed",
-                                        event::provider_health_check(
-                                            &host_id,
-                                            &provider_id,
-                                        )
-                                    ).await {
-                                        warn!(
-                                            ?e,
-                                            ?provider_id,
-                                            "failed to publish provider health check failed event",
-                                        );
-                                    }
-                                }
-                                // If the provider health status didn't change, we simply publish a health check status event
-                                (Ok(_), _) => {
-                                    if let Err(e) = event::publish(
-                                        &event_builder,
-                                        &ctl_nats,
-                                        &lattice,
-                                        "health_check_status",
-                                        event::provider_health_check(
-                                            &host_id,
-                                            &provider_id,
-                                        )
-                                    ).await {
-                                        warn!(
-                                            ?e,
-                                            ?provider_id,
-                                            "failed to publish provider health check status event",
-                                        );
-                                    }
-                                },
-                                _ => warn!(
-                                    ?provider_id,
-                                    "failed to deserialize provider health check response"
-                                ),
-                            }
+            let _ = health_check.tick().await;
+            trace!(?provider_id, "performing provider health check");
+            let request =
+                async_nats::Request::new()
+                    .payload(Bytes::new())
+                    .headers(injector_to_headers(
+                        &TraceContextInjector::default_with_span(),
+                    ));
+            if let Ok(async_nats::Message { payload, .. }) =
+                rpc_nats.send_request(health_subject.clone(), request).await
+            {
+                match (
+                    serde_json::from_slice::<HealthCheckResponse>(&payload),
+                    previous_healthy,
+                ) {
+                    (Ok(HealthCheckResponse { healthy: true, .. }), false) => {
+                        trace!(?provider_id, "provider health check succeeded");
+                        previous_healthy = true;
+                        if let Err(e) = event::publish(
+                            &event_builder,
+                            &ctl_nats,
+                            &lattice,
+                            "health_check_passed",
+                            event::provider_health_check(&host_id, &provider_id),
+                        )
+                        .await
+                        {
+                            warn!(
+                                ?e,
+                                ?provider_id,
+                                "failed to publish provider health check succeeded event",
+                            );
                         }
-                        else {
-                            warn!(?provider_id, "failed to request provider health, retrying in 30 seconds");
+                    }
+                    (Ok(HealthCheckResponse { healthy: false, .. }), true) => {
+                        trace!(?provider_id, "provider health check failed");
+                        previous_healthy = false;
+                        if let Err(e) = event::publish(
+                            &event_builder,
+                            &ctl_nats,
+                            &lattice,
+                            "health_check_failed",
+                            event::provider_health_check(&host_id, &provider_id),
+                        )
+                        .await
+                        {
+                            warn!(
+                                ?e,
+                                ?provider_id,
+                                "failed to publish provider health check failed event",
+                            );
                         }
+                    }
+                    // If the provider health status didn't change, we simply publish a health check status event
+                    (Ok(_), _) => {
+                        if let Err(e) = event::publish(
+                            &event_builder,
+                            &ctl_nats,
+                            &lattice,
+                            "health_check_status",
+                            event::provider_health_check(&host_id, &provider_id),
+                        )
+                        .await
+                        {
+                            warn!(
+                                ?e,
+                                ?provider_id,
+                                "failed to publish provider health check status event",
+                            );
+                        }
+                    }
+                    _ => warn!(
+                        ?provider_id,
+                        "failed to deserialize provider health check response"
+                    ),
                 }
-                true = async { shutdown.load(Ordering::Relaxed) } => {
-                    trace!(?provider_id, "received shutdown signal, stopping health check task");
-                    break;
-                }
+            } else {
+                warn!(
+                    ?provider_id,
+                    "failed to request provider health, retrying in 30 seconds"
+                );
             }
         }
     }
@@ -538,38 +531,28 @@ fn watch_config(
     config: Arc<RwLock<ConfigBundle>>,
     lattice: Arc<str>,
     provider_id: String,
-    shutdown: Arc<AtomicBool>,
 ) -> impl Future<Output = ()> {
     let subject = provider_config_update_subject(&lattice, &provider_id);
     trace!(?provider_id, "starting config update listener");
     async move {
         loop {
             let mut config = config.write().await;
-            select! {
-                maybe_update = config.changed() => {
-                    let Ok(update) = maybe_update else {
-                        // TODO: shouldn't this be continue?
-                        break;
-                    };
-                    trace!(?provider_id, "provider config bundle changed");
-                    let bytes = match serde_json::to_vec(&*update) {
-                        Ok(bytes) => bytes,
-                        Err(err) => {
-                            error!(%err, ?provider_id, ?lattice, "failed to serialize configuration update ");
-                            continue;
-                        }
-                    };
-                    trace!(?provider_id, subject, "publishing config bundle bytes");
-                    if let Err(err) = rpc_nats.publish(subject.clone(), Bytes::from(bytes)).await {
-                        error!(%err, ?provider_id, ?lattice, "failed to publish configuration update bytes to component");
+            if let Ok(update) = config.changed().await {
+                trace!(?provider_id, "provider config bundle changed");
+                let bytes = match serde_json::to_vec(&*update) {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        error!(%err, ?provider_id, ?lattice, "failed to serialize configuration update ");
+                        continue;
                     }
+                };
+                trace!(?provider_id, subject, "publishing config bundle bytes");
+                if let Err(err) = rpc_nats.publish(subject.clone(), Bytes::from(bytes)).await {
+                    error!(%err, ?provider_id, ?lattice, "failed to publish configuration update bytes to component");
                 }
-                true = async { shutdown.load(Ordering::Relaxed) } => {
-                    trace!(?provider_id, "received shutdown signal, stopping config update listener");
-                    // TODO: shouldn't this be return?
-                    break;
-                }
-            }
+            } else {
+                break;
+            };
         }
     }
 }

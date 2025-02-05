@@ -1054,39 +1054,41 @@ impl Host {
     #[instrument(level = "debug", skip_all)]
     async fn inventory(&self) -> HostInventory {
         trace!("generating host inventory");
-        let components = self.components.read().await;
-        let components: Vec<_> = stream::iter(components.iter())
-            .filter_map(|(id, component)| async move {
-                let mut description = ComponentDescription::builder()
-                    .id(id.into())
-                    .image_ref(component.image_reference.to_string())
-                    .annotations(component.annotations.clone().into_iter().collect())
-                    .max_instances(component.max_instances.get().try_into().unwrap_or(u32::MAX))
-                    .revision(
-                        component
-                            .claims()
-                            .and_then(|claims| claims.metadata.as_ref())
-                            .and_then(|jwt::Component { rev, .. }| *rev)
-                            .unwrap_or_default(),
-                    );
-                // Add name if present
-                if let Some(name) = component
-                    .claims()
-                    .and_then(|claims| claims.metadata.as_ref())
-                    .and_then(|metadata| metadata.name.as_ref())
-                    .cloned()
-                {
-                    description = description.name(name);
-                };
+        let components: Vec<_> = {
+            let components = self.components.read().await;
+            stream::iter(components.iter())
+                .filter_map(|(id, component)| async move {
+                    let mut description = ComponentDescription::builder()
+                        .id(id.into())
+                        .image_ref(component.image_reference.to_string())
+                        .annotations(component.annotations.clone().into_iter().collect())
+                        .max_instances(component.max_instances.get().try_into().unwrap_or(u32::MAX))
+                        .revision(
+                            component
+                                .claims()
+                                .and_then(|claims| claims.metadata.as_ref())
+                                .and_then(|jwt::Component { rev, .. }| *rev)
+                                .unwrap_or_default(),
+                        );
+                    // Add name if present
+                    if let Some(name) = component
+                        .claims()
+                        .and_then(|claims| claims.metadata.as_ref())
+                        .and_then(|metadata| metadata.name.as_ref())
+                        .cloned()
+                    {
+                        description = description.name(name);
+                    };
 
-                Some(
-                    description
-                        .build()
-                        .expect("failed to build component description: {e}"),
-                )
-            })
-            .collect()
-            .await;
+                    Some(
+                        description
+                            .build()
+                            .expect("failed to build component description: {e}"),
+                    )
+                })
+                .collect()
+                .await
+        };
 
         let providers: Vec<_> = self
             .providers
