@@ -7773,7 +7773,7 @@ dependencies = [
  "serde_json",
  "wasm-encoder 0.224.0",
  "wasm-gen",
- "wasmparser 0.221.3",
+ "wasmparser 0.224.0",
 ]
 
 [[package]]
@@ -7911,7 +7911,7 @@ dependencies = [
  "wasmcloud-control-interface",
  "wasmcloud-core",
  "wasmcloud-test-util",
- "wasmparser 0.221.3",
+ "wasmparser 0.224.0",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
@@ -8727,7 +8727,7 @@ dependencies = [
  "wasi-preview1-component-adapter-provider",
  "wasmcloud-component",
  "wasmcloud-core",
- "wasmparser 0.221.3",
+ "wasmparser 0.224.0",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
