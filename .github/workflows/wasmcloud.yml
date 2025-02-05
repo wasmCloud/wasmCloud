@@ -150,7 +150,7 @@ jobs:
 
   build-wash-bin:
     needs: [meta]
-    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || startsWith(github.ref, 'refs/tags/wash-cli-v') }}
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || startsWith(github.ref, 'refs/tags/wash-cli-v')  || startswith(github.ref, 'refs/tags/provider-') }}
     strategy:
       matrix:
         config:
@@ -405,7 +405,6 @@ jobs:
           name: wash-aarch64-unknown-linux-musl-oci
       - run: docker load < ./wash-aarch64-unknown-linux-musl-oci
       - run: docker run --rm wash:$(nix eval --raw .#wash-aarch64-unknown-linux-musl-oci.imageTag) wash --version
-
 
   test-wash-linux-x86_64:
     runs-on: ubuntu-22.04
