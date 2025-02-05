@@ -7,6 +7,11 @@ on:
         description: Provider name
         required: true
         type: string
+      embed_wit:
+        description: Whether to include the WIT in the provider archive
+        required: false
+        default: false
+        type: boolean
     secrets:
       subject:
         description: Capability provider issuer subject key
@@ -70,6 +75,9 @@ jobs:
           fi
           if [ "${{ secrets.subject }}" != '' ]; then
             export WASH_SUBJECT_KEY="${{ secrets.subject }}"
+          fi
+          if [[ "${{ inputs.embed_wit }}" == 'true' ]]; then
+            export WIT_DIR="crates/provider-${{ inputs.name }}/wit"
           fi
           ./wash par create \
                 --binary "./artifacts/${{ inputs.name }}-provider-x86_64-unknown-linux-musl/bin/${{ inputs.name }}-provider" \
