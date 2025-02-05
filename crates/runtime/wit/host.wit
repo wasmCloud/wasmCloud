@@ -8,6 +8,7 @@ world interfaces {
     import wasi:keyvalue/store@0.2.0-draft;
     import wasi:logging/logging@0.1.0-draft;
     
+    import wasmcloud:cron/scheduler@0.1.0-draft;
     import wasmcloud:bus/lattice@1.0.0;
     import wasmcloud:bus/lattice@2.0.1;
     import wasmcloud:bus/error@2.0.1;
