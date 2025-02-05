@@ -8,6 +8,7 @@ world interfaces {
     import wasi:keyvalue/store@0.2.0-draft;
     import wasi:logging/logging@0.1.0-draft;
     
+    import wasmcloud:cron/scheduler@0.1.0-draft;
     import wasmcloud:bus/lattice@1.0.0;
     import wasmcloud:bus/lattice@2.0.0;
     import wasmcloud:messaging/consumer@0.2.0;
@@ -22,6 +23,7 @@ world unversioned-interfaces {
 }
 
 world wrpc-interfaces {
+    import wasmcloud:cron/scheduler@0.1.0-draft;
     import wasmcloud:messaging/consumer@0.2.0;
     import wrpc:keyvalue/atomics@0.2.0-draft;
     import wrpc:keyvalue/store@0.2.0-draft;

@@ -19,3 +19,7 @@ world messaging-handler-oh-two {
 world messaging-handler {
     export wasmcloud:messaging/incoming-handler@0.3.0;
 }
+
+world scheduler {
+    export wasmcloud:cron/scheduler@0.1.0-draft;
+}
