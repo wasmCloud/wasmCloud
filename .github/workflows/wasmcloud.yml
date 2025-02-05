@@ -1023,6 +1023,12 @@ jobs:
           - crate: provider-archive
             workspace-dependencies: true
 
+          - crate: provider-http-server
+            workspace-dependencies: true
+
+          - crate: provider-messaging-nats
+            workspace-dependencies: true
+
           - crate: provider-sdk
             workspace-dependencies: true
 
