@@ -10,7 +10,7 @@ on:
       embed_wit:
         description: Whether to include the WIT in the provider archive
         required: false
-        default: false
+        default: true
         type: boolean
     secrets:
       subject:
