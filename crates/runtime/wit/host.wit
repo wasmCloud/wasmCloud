@@ -8,6 +8,7 @@ world interfaces {
     import wasi:keyvalue/store@0.2.0-draft;
     import wasi:logging/logging@0.1.0-draft;
     
+    import wasmcloud:cron/scheduler@0.1.0-draft;
     import wasmcloud:bus/lattice@1.0.0;
     import wasmcloud:bus/lattice@2.0.0;
     import wasmcloud:messaging/consumer@0.2.0;
@@ -31,4 +32,5 @@ world wrpc-interfaces {
     import wrpc:blobstore/blobstore@0.1.0;
 
     export wasmcloud:messaging/handler@0.2.0;
+    export wasmcloud:cron/scheduler@0.1.0-draft;
 }

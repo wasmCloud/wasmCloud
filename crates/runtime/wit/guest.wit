@@ -23,3 +23,7 @@ world messaging-handler {
 world watcher {
     export wasi:keyvalue/watcher@0.2.0-draft;
 }
+
+world scheduler {
+    export wasmcloud:cron/scheduler@0.1.0-draft;
+}
