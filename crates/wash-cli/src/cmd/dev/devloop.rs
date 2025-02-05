@@ -14,7 +14,8 @@ use wash_lib::build::{build_project, SignConfig};
 use wash_lib::cli::{CommonPackageArgs, OutputKind};
 use wash_lib::generate::emoji;
 use wash_lib::parser::{
-    DevConfigSpec, DevManifestComponentTarget, DevSecretSpec, ProjectConfig, TypeConfig,
+    load_config, DevConfigSpec, DevManifestComponentTarget, DevSecretSpec, ProjectConfig,
+    TypeConfig,
 };
 
 use crate::app::deploy_model_from_manifest;
@@ -31,7 +32,7 @@ pub(crate) struct RunLoopState<'a> {
     pub(crate) dev_session: &'a mut WashDevSession,
     pub(crate) nats_client: &'a async_nats::Client,
     pub(crate) ctl_client: &'a CtlClient,
-    pub(crate) project_cfg: &'a ProjectConfig,
+    pub(crate) project_cfg: &'a mut ProjectConfig,
     pub(crate) lattice: &'a str,
     pub(crate) session_id: &'a str,
     pub(crate) manifest_output_dir: Option<&'a PathBuf>,
@@ -373,6 +374,12 @@ pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
     ));
     state.component_ref = Some(format!("file://{}", built_artifact_path.display()));
     state.artifact_path = Some(built_artifact_path);
+    match load_config(Some(state.dev_session.project_path.clone()), Some(true)).await {
+        Ok(cfg) => *state.project_cfg = cfg,
+        Err(e) => {
+            warn!(err = ?e, "failed to load project configuration, using previous configuration");
+        }
+    }
 
     // Generate the manifests that we need to deploy/update
     //

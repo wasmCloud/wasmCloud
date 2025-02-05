@@ -129,7 +129,7 @@ pub async fn handle_command(
     let current_dir =
         std::env::current_dir().context("failed to get current directory for wash dev")?;
     let project_path = cmd.code_dir.unwrap_or(current_dir);
-    let project_cfg = load_config(Some(project_path.clone()), Some(true)).await?;
+    let mut project_cfg = load_config(Some(project_path.clone()), Some(true)).await?;
 
     let mut wash_dev_session = WashDevSession::from_sessions_file(&project_path)
         .await
@@ -227,7 +227,7 @@ pub async fn handle_command(
         dev_session: &mut wash_dev_session,
         nats_client: &nats_client,
         ctl_client: &ctl_client,
-        project_cfg: &project_cfg,
+        project_cfg: &mut project_cfg,
         lattice,
         session_id: &session_id,
         manifest_output_dir: cmd.manifest_output_dir.as_ref(),
