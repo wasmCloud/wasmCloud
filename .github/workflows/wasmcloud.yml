@@ -908,22 +908,14 @@ jobs:
             .#${{ matrix.bin }}-oci-wolfi
         if: steps.cache.outputs.cache-hit != 'true'
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-cli-v')
+  release-wasmcloud:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs:
       - build-doc
-      - build-wash-bin
-      - build-wash-lipo
       - build-wasmcloud-bin
       - build-wasmcloud-lipo
       - cargo
       - oci
-      - test-wash-linux-aarch64
-      - test-wash-linux-aarch64-oci
-      - test-wash-linux-x86_64
-      - test-wash-macos-aarch64
-      - test-wash-macos-x86_64
-      - test-wash-windows-x86_64
       - test-wasmcloud-linux-aarch64
       - test-wasmcloud-linux-aarch64-oci
       - test-wasmcloud-linux-x86_64
@@ -936,12 +928,10 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
-        if: startsWith(github.ref, 'refs/tags/v')
         with:
           path: artifacts
           pattern: wasmcloud-*
-      - if: startsWith(github.ref, 'refs/tags/v')
-        run: |
+      - run: |
           for dir in ./artifacts/wasmcloud-*; do
             target=${dir#./artifacts/wasmcloud-}
             for bin_path in $(find ${dir}/bin -type f); do
@@ -961,13 +951,37 @@ jobs:
             done
           done
 
+      - uses: softprops/action-gh-release@01570a1f39cb168c169c802c3bceb9e93fb10974
+        with:
+          draft: true
+          prerelease: true
+          generate_release_notes: true
+          files: ./wasmcloud/*
+
+  release-wash-cli:
+    if: startsWith(github.ref, 'refs/tags/wash-cli-v')
+    needs:
+      - build-doc
+      - build-wash-bin
+      - build-wash-lipo
+      - cargo
+      - oci
+      - test-wash-linux-aarch64
+      - test-wash-linux-aarch64-oci
+      - test-wash-linux-x86_64
+      - test-wash-macos-aarch64
+      - test-wash-macos-x86_64
+      - test-wash-windows-x86_64
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
-        if: startsWith(github.ref, 'refs/tags/wash-cli-v')
         with:
           path: artifacts
           pattern: wash-*
-      - if: startsWith(github.ref, 'refs/tags/wash-cli-v')
-        run: |
+      - run: |
           for dir in ./artifacts/wash-*; do
             target=${dir#./artifacts/wash-}
             for bin_path in $(find ${dir}/bin -type f); do
@@ -988,17 +1002,9 @@ jobs:
           done
 
       - uses: softprops/action-gh-release@01570a1f39cb168c169c802c3bceb9e93fb10974
-        if: startsWith(github.ref, 'refs/tags/v')
-        with:
-          draft: true
-          prerelease: true
-          generate_release_notes: true
-          files: ./wasmcloud/*
-
-      - uses: softprops/action-gh-release@01570a1f39cb168c169c802c3bceb9e93fb10974
         if: startsWith(github.ref, 'refs/tags/wash-cli-v')
         with:
-          draft: false
+          draft: true
           prerelease: true
           generate_release_notes: true
           files: ./wash/*
