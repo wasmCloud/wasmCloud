@@ -34,24 +34,9 @@
     "crane_2": {
       "inputs": {
         "flake-compat": "flake-compat",
-        "flake-utils": [
-          "nixify",
-          "nix-log",
-          "nixify",
-          "flake-utils"
-        ],
-        "nixpkgs": [
-          "nixify",
-          "nix-log",
-          "nixify",
-          "nixpkgs"
-        ],
-        "rust-overlay": [
-          "nixify",
-          "nix-log",
-          "nixify",
-          "rust-overlay"
-        ]
+        "flake-utils": ["nixify", "nix-log", "nixify", "flake-utils"],
+        "nixpkgs": ["nixify", "nix-log", "nixify", "nixpkgs"],
+        "rust-overlay": ["nixify", "nix-log", "nixify", "rust-overlay"]
       },
       "locked": {
         "lastModified": 1679255352,
@@ -70,10 +55,7 @@
     },
     "fenix": {
       "inputs": {
-        "nixpkgs": [
-          "nixify",
-          "nixpkgs-nixos"
-        ],
+        "nixpkgs": ["nixify", "nixpkgs-nixos"],
         "rust-analyzer-src": "rust-analyzer-src"
       },
       "locked": {
@@ -92,12 +74,7 @@
     },
     "fenix_2": {
       "inputs": {
-        "nixpkgs": [
-          "nixify",
-          "nix-log",
-          "nixify",
-          "nixpkgs"
-        ],
+        "nixpkgs": ["nixify", "nix-log", "nixify", "nixpkgs"],
         "rust-analyzer-src": "rust-analyzer-src_2"
       },
       "locked": {
@@ -259,14 +236,8 @@
     "nix-log_2": {
       "inputs": {
         "nix-flake-tests": "nix-flake-tests_2",
-        "nixify": [
-          "wit-deps",
-          "nixify"
-        ],
-        "nixlib": [
-          "wit-deps",
-          "nixlib"
-        ]
+        "nixify": ["wit-deps", "nixify"],
+        "nixlib": ["wit-deps", "nixlib"]
       },
       "locked": {
         "lastModified": 1733747205,
@@ -291,9 +262,7 @@
         "macos-sdk": "macos-sdk",
         "nix-filter": "nix-filter",
         "nix-log": "nix-log",
-        "nixlib": [
-          "nixlib"
-        ],
+        "nixlib": ["nixlib"],
         "nixpkgs-darwin": "nixpkgs-darwin",
         "nixpkgs-nixos": "nixpkgs-nixos",
         "rust-overlay": "rust-overlay_2"
@@ -472,18 +441,8 @@
     },
     "rust-overlay": {
       "inputs": {
-        "flake-utils": [
-          "nixify",
-          "nix-log",
-          "nixify",
-          "flake-utils"
-        ],
-        "nixpkgs": [
-          "nixify",
-          "nix-log",
-          "nixify",
-          "nixpkgs"
-        ]
+        "flake-utils": ["nixify", "nix-log", "nixify", "flake-utils"],
+        "nixpkgs": ["nixify", "nix-log", "nixify", "nixpkgs"]
       },
       "locked": {
         "lastModified": 1679537973,
@@ -501,10 +460,7 @@
     },
     "rust-overlay_2": {
       "inputs": {
-        "nixpkgs": [
-          "nixify",
-          "nixpkgs-nixos"
-        ]
+        "nixpkgs": ["nixify", "nixpkgs-nixos"]
       },
       "locked": {
         "lastModified": 1738463259,
@@ -538,12 +494,8 @@
     "wit-deps": {
       "inputs": {
         "nix-log": "nix-log_2",
-        "nixify": [
-          "nixify"
-        ],
-        "nixlib": [
-          "nixlib"
-        ]
+        "nixify": ["nixify"],
+        "nixlib": ["nixlib"]
       },
       "locked": {
         "lastModified": 1737050201,

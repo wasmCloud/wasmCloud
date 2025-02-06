@@ -1,0 +1,26 @@
+name = "wadm-status-receiver"
+version = "0.1.0"
+language = "rust"
+type = "component"
+
+[component]
+wit_world = "component"
+wasm_target = "wasm32-wasip2"
+
+#
+# This component implements the wasmcloud:wadm/handler interface to receive status updates
+# from the WADM provider. The provider needs to be configured with the appropriate
+# NATS connection details and application name to subscribe to.
+#
+# To make this project work with *local* usage of `wash dev`:
+#
+# 1. Ensure NATS is running and accessible
+# 2. Configure the WADM provider with appropriate connection details
+# 3. Set the application name you want to receive status updates for
+# 4. Run `wash dev`
+#
+# The configuration below instructs `wash dev` to use the local manifest
+# which contains the necessary WADM provider configuration and links
+#
+[dev]
+manifests = [{ component_name = "status-receiver", path = "wadm.yaml" }]

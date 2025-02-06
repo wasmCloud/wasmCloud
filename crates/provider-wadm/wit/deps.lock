@@ -1,0 +1,4 @@
+[wadm]
+url = "https://github.com/wasmCloud/wadm/releases/download/wit-wasmcloud-wadm-v0.2.0/wit-wasmcloud-wadm-0.2.0.tar.gz"
+sha256 = "9795ab1a83023da07da2dc28d930004bd913b9dbf07d68d9ef9207a44348a169"
+sha512 = "9a94f33fd861912c81efd441cd19cc8066dbb2df5c2236d0472b66294bddc20ec5ad569484be18334d8c104ae9647b2c81c9878210ac35694ad8ba4a5b3780be"
