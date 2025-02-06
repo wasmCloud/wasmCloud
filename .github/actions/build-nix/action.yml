@@ -8,6 +8,19 @@ inputs:
 runs:
   using: composite
   steps:
+  - uses: actions/cache@36f1e144e1c8edb0a652766b484448563d8baf46
+    id: cache
+    with:
+      path: ${{ runner.temp }}/nix-store-${{ inputs.package }}
+      key: ${{ inputs.package }}-${{ github.sha }}
+      restore-keys: |
+        ${{ inputs.package }}-
+
+  - run: nix copy --all --from "file://${{ runner.temp }}/nix-store-${{ inputs.package }}"
+    continue-on-error: true
+    shell: bash
+  - run: rm -rf "${{ runner.temp }}/nix-store-${{ inputs.package }}"
+    shell: bash
   - run: nix build --fallback -L '.#${{ inputs.package }}'
     shell: bash
   - run: nix run --fallback -L --inputs-from . 'nixpkgs#coreutils' -- --coreutils-prog=cp -RLv ./result '${{ inputs.package }}'
@@ -16,3 +29,6 @@ runs:
     with:
       name: ${{ inputs.package }}
       path: ${{ inputs.package }}
+  - run: nix copy --to "file://${{ runner.temp }}/nix-store-${{ inputs.package }}" '.#${{ inputs.package }}'
+    if: steps.cache.outputs.cache-hit != 'true'
+    shell: bash
