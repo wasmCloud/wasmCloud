@@ -318,7 +318,7 @@ jobs:
           package: ${{ matrix.name }}-provider-${{ matrix.target }}
 
   build-wash-windows:
-    if: ${{ startswith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'}}
+    if: ${{ startswith(github.ref, 'refs/tags/wash-cli-v') || github.ref == 'refs/heads/main'}}
     name: wash-x86_64-pc-windows-msvc
     runs-on: windows-latest
     steps:
