@@ -116,3 +116,60 @@ jobs:
           header: tip-conventional-commits
           hide: true
           hide_classify: 'RESOLVED'
+
+  label-pr:
+    needs: lint
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get pull request commits
+        id: get_commits
+        run: |
+          PR_COMMITS=$(gh pr view ${{ github.event.pull_request.number }} --json commits --jq '.commits[].messageHeadline')
+          echo "COMMITS<<EOF" >> $GITHUB_ENV
+          echo "$PR_COMMITS" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Parse commit messages and determine labels
+        id: parse_labels
+        run: |
+          LABELS=()
+          while IFS= read -r line; do
+            if [[ "$line" =~ ^([a-z]+)(\(([^\)]+)\))?!?: ]]; then
+              TYPE="${BASH_REMATCH[1]}"
+              SCOPE="${BASH_REMATCH[3]}"
+              if [[ "$line" =~ !: ]]; then
+                LABELS+=("impact: breaking")
+              fi
+              case "$TYPE" in
+                fix) LABELS+=("type: fix") ;;
+                feat) LABELS+=("type: feature") ;;
+                ci) LABELS+=("type: ci") ;;
+                docs) LABELS+=("type: docs") ;;
+              esac
+              case "$SCOPE" in
+                wash|wash-cli|wash-lib) LABELS+=("scope: wash") ;;
+                wasmcloud|host|runtime|core) LABELS+=("scope: wasmcloud") ;;
+                control-interface|ctl) LABELS+=("scope: control-interface") ;;
+                "") ;; # Ignore empty scope
+                *) ;; # Ignore unknown scopes. To enable adding any scope as a label, use this: # *) LABELS+=("$SCOPE") ;;
+              esac
+            fi
+          done <<< "$COMMITS"
+          UNIQUE_LABELS=($(echo "${LABELS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
+          echo "LABELS=${UNIQUE_LABELS[*]}" >> $GITHUB_ENV
+
+      - name: Apply labels to PR
+        if: ${{ env.LABELS != '' }}
+        run: |
+          for label in ${LABELS[@]}; do
+            gh pr edit ${{ github.event.pull_request.number }} --add-label "$label"
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
