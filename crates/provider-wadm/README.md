@@ -116,16 +116,3 @@ To build a [Provider Archive (`.par`/`.par.gz`)][par] for this provider, first b
 ```console
 wash build
 ```
-
-Then run `wash par`:
-
-```console
-wash par create \
-  --compress \
-  --binary target/debug/wadm-provider \
-  --vendor wasmcloud \
-  --version 0.1.0 \
-  --name wadm-provider
-```
-
-[par]: https://wasmcloud.com/docs/developer/providers/build
