@@ -203,17 +203,6 @@ jobs:
         # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - uses: actions/cache@36f1e144e1c8edb0a652766b484448563d8baf46
-        id: cache
-        with:
-          path: ${{ runner.temp }}/nix-store-deps
-          key: wash-${{ matrix.config.target }}-deps-${{ github.sha }}
-          restore-keys: |
-            wash-${{ matrix.config.target }}-deps-
-            wasmcloud-${{ matrix.config.target }}-deps-
-      - run: nix copy --all --from "file://${{ runner.temp }}/nix-store-deps"
-        continue-on-error: true
-      - run: rm -rf "${{ runner.temp }}/nix-store-deps"
       - uses: ./.github/actions/build-nix
         with:
           package: wash-${{ matrix.config.target }}
@@ -224,10 +213,6 @@ jobs:
           package: wash-${{ matrix.config.target }}-oci
       - run: ${{ matrix.config.test-oci }}
         if: ${{ !endsWith(matrix.config.target, 'fhs') }}
-      - run: |
-          target="${{ matrix.config.target }}"
-          nix copy --to "file://${{ runner.temp }}/nix-store-deps" ".#wash-${target%'-fhs'}-deps"
-        if: steps.cache.outputs.cache-hit != 'true'
 
   build-wasmcloud-bin:
     needs: [meta]
@@ -283,17 +268,6 @@ jobs:
         # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - uses: actions/cache@36f1e144e1c8edb0a652766b484448563d8baf46
-        id: cache
-        with:
-          path: ${{ runner.temp }}/nix-store-deps
-          key: wasmcloud-${{ matrix.config.target }}-deps-${{ github.sha }}
-          restore-keys: |
-            wasmcloud-${{ matrix.config.target }}-deps-
-            wash-${{ matrix.config.target }}-deps-
-      - run: nix copy --all --from "file://${{ runner.temp }}/nix-store-deps"
-        continue-on-error: true
-      - run: rm -rf "${{ runner.temp }}/nix-store-deps"
       - uses: ./.github/actions/build-nix
         with:
           package: wasmcloud-${{ matrix.config.target }}
@@ -304,10 +278,6 @@ jobs:
           package: wasmcloud-${{ matrix.config.target }}-oci
       - run: ${{ matrix.config.test-oci }}
         if: ${{ !endsWith(matrix.config.target, 'fhs') }}
-      - run: |
-          target="${{ matrix.config.target }}"
-          nix copy --to "file://${{ runner.temp }}/nix-store-deps" ".#wasmcloud-${target%'-fhs'}-deps"
-        if: steps.cache.outputs.cache-hit != 'true'
 
   build-provider-bin:
     needs: [meta]
@@ -343,21 +313,9 @@ jobs:
         # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - uses: actions/cache@36f1e144e1c8edb0a652766b484448563d8baf46
-        id: cache
-        with:
-          path: ${{ runner.temp }}/nix-store-deps
-          key: ${{ matrix.name }}-provider-${{ matrix.target }}-deps-${{ github.sha }}
-          restore-keys: |
-            ${{ matrix.name }}-provider-${{ matrix.target }}-deps-
-      - run: nix copy --all --from "file://${{ runner.temp }}/nix-store-deps"
-        continue-on-error: true
-      - run: rm -rf "${{ runner.temp }}/nix-store-deps"
       - uses: ./.github/actions/build-nix
         with:
           package: ${{ matrix.name }}-provider-${{ matrix.target }}
-      - run: nix copy --to "file://${{ runner.temp }}/nix-store-deps" '.#${{ matrix.name }}-provider-${{ matrix.target }}-deps'
-        if: steps.cache.outputs.cache-hit != 'true'
 
   build-wash-windows:
     if: ${{ startswith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'}}
