@@ -1,7 +1,8 @@
-name = "WADM"
+name = "wadm"
 language = "rust"
 type = "provider"
 version = "0.1.0"
+wit = "../../../crates/provider-wadm/wit"
 
 [rust]
 target_path = "../../../target"
