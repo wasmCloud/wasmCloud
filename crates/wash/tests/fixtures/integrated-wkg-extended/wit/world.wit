@@ -1,0 +1,19 @@
+package test-components:integrated-wkg-extended;
+
+world component {
+  export test-components:testing/pingpong@0.1.0;
+
+  // These are not used in the test, but just making sure the build process can handle local and
+  // remote deps
+  import wasmcloud:secrets/store@0.1.0-draft;
+  import wasmcloud:secrets/reveal@0.1.0-draft;
+
+  // Test OCI pulling
+  import wasmcloud:bus/lattice@1.0.0;
+
+  // Test HTTP pulling
+  import wasi:config/store@0.2.0-draft;
+
+  // Test GIT (git+http) pulling
+  import wasi:blobstore/container@0.2.0-draft;
+}

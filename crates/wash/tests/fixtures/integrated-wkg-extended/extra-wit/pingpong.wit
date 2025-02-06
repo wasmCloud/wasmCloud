@@ -1,0 +1,10 @@
+package test-components:testing@0.1.0;
+
+/// Invoke a component with a `ping` function and, ideally, receive "pong"
+interface pingpong {
+  /// Call ping, get a pong back
+  ping: func() -> string;
+
+  /// Call ping, but quietly, and get a secret pong back
+  ping-secret: func() -> string;
+}

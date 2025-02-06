@@ -1,0 +1,17 @@
+package wasmcloud:wash@0.1.0;
+
+/// The world that subcommand plugins can consume and provide. Any plugin is invoked using the
+/// `wasi:cli/run` function and is passed all relevant flags, arguments, and environment variables.
+world subcommands {
+    include wasi:cli/imports@0.2.0;
+    import wasi:http/outgoing-handler@0.2.0;
+    // TODO: Once we get the ctl interface updated, we should include that here as well
+
+    export subcommand;
+    export wasi:cli/run@0.2.0;
+}
+
+// TODO: Other types of plugins we'll want to support:
+// - Auth providers
+// - Registry providers
+// - Resource providers (for things like custom DBs or other things a platform may provide)
