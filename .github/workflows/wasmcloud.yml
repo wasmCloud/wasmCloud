@@ -591,12 +591,11 @@ jobs:
           key: wasmcloud-cargo-doc-${{ github.sha }}
           restore-keys: |
             wasmcloud-cargo-doc-
-            wasmcloud-cargo-nextest-
-            wasmcloud-cargo-clippy-
-            wasmcloud-cargo-doctest-
-            wasmcloud-cargo-audit-
-            wasmcloud-cargo-fmt-
+            wasmcloud-x86_64_unknown-linux-musl-${{ github.sha }}
+            wasmcloud-x86_64_unknown-linux-musl-
+            wash-x86_64_unknown-linux-musl-
             wasmcloud-
+            wash-
       - run: nix copy --all --from "file://${{ runner.temp }}/nix-store"
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store"
