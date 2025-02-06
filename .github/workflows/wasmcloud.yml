@@ -731,7 +731,9 @@ jobs:
       - uses: actions/cache/restore@36f1e144e1c8edb0a652766b484448563d8baf46
         with:
           path: ${{ runner.temp }}/nix-store-amd64
-          key: ${{ matrix.bin }}-x86_64-unknown-linux-musl
+          key: ${{ matrix.bin }}-x86_64-unknown-linux-musl-${{ github.sha }}
+          restore-keys: |
+            ${{ matrix.bin }}-x86_64-unknown-linux-musl-
       - run: nix copy --all --from "file://${{ runner.temp }}/nix-store-amd64"
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store-amd64"
@@ -739,7 +741,9 @@ jobs:
       - uses: actions/cache/restore@36f1e144e1c8edb0a652766b484448563d8baf46
         with:
           path: ${{ runner.temp }}/nix-store-arm64
-          key: ${{ matrix.bin }}-aarch64-unknown-linux-musl
+          key: ${{ matrix.bin }}-aarch64-unknown-linux-musl-${{ github.sha }}
+          restore-keys: |
+            ${{ matrix.bin }}-aarch64-unknown-linux-musl-
       - run: nix copy --all --from "file://${{ runner.temp }}/nix-store-arm64"
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store-arm64"
@@ -748,7 +752,9 @@ jobs:
         id: cache
         with:
           path: ${{ runner.temp }}/nix-store-oci
-          key: ${{ matrix.bin }}-oci
+          key: ${{ matrix.bin }}-oci-${{ github.sha }}
+          restore-keys: |
+            ${{ matrix.bin }}-oci-
       - run: nix copy --all --from "file://${{ runner.temp }}/nix-store-oci"
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store-oci"
