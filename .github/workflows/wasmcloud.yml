@@ -156,7 +156,7 @@ jobs:
         config:
           - target: aarch64-unknown-linux-musl
             test-bin: |
-              nix profile install --inputs-from . 'nixpkgs#qemu'
+              nix profile install --fallback --inputs-from . 'nixpkgs#qemu'
               qemu-aarch64 ./result/bin/wash --version
             test-oci: docker load < ./result
 
@@ -172,8 +172,8 @@ jobs:
 
           - target: riscv64gc-unknown-linux-gnu-fhs
             test-bin: |
-              nix build -L '.#wash-riscv64gc-unknown-linux-gnu'
-              nix shell --inputs-from . 'nixpkgs#qemu' -c qemu-riscv64 ./result/bin/wash --version
+              nix build --fallback -L '.#wash-riscv64gc-unknown-linux-gnu'
+              nix shell --fallback --inputs-from . 'nixpkgs#qemu' -c qemu-riscv64 ./result/bin/wash --version
 
           - target: x86_64-apple-darwin
             test-bin: |
@@ -183,7 +183,7 @@ jobs:
           # TODO: Build for GNU once https://github.com/rust-lang/rust/issues/92212 is resolved
           #- target: x86_64-pc-windows-gnu
           #  test-bin: |
-          #    nix profile install --inputs-from . 'nixpkgs#wine64'
+          #    nix profile install --fallback --inputs-from . 'nixpkgs#wine64'
           #    wine64 ./result/bin/wash.exe --version
           #  test-oci: docker load < ./result
 
@@ -222,7 +222,7 @@ jobs:
         config:
           - target: aarch64-unknown-linux-musl
             test-bin: |
-              nix profile install --inputs-from . 'nixpkgs#qemu'
+              nix profile install --fallback --inputs-from . 'nixpkgs#qemu'
               qemu-aarch64 ./result/bin/wasmcloud --version
             test-oci: docker load < ./result
 
@@ -238,8 +238,8 @@ jobs:
 
           - target: riscv64gc-unknown-linux-gnu-fhs
             test-bin: |
-              nix build -L '.#wasmcloud-riscv64gc-unknown-linux-gnu'
-              nix shell --inputs-from . 'nixpkgs#qemu' -c qemu-riscv64 ./result/bin/wasmcloud --version
+              nix build --fallback -L '.#wasmcloud-riscv64gc-unknown-linux-gnu'
+              nix shell --fallback --inputs-from . 'nixpkgs#qemu' -c qemu-riscv64 ./result/bin/wasmcloud --version
 
           - target: x86_64-apple-darwin
             test-bin: |
@@ -248,7 +248,7 @@ jobs:
 
           - target: x86_64-pc-windows-gnu
             test-bin: |
-              nix profile install --inputs-from . 'nixpkgs#wine64'
+              nix profile install --fallback --inputs-from . 'nixpkgs#wine64'
               wine64 ./result/bin/wasmcloud.exe --version
             test-oci: docker load < ./result
 
@@ -559,7 +559,7 @@ jobs:
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - run: nix build -L .#checks.x86_64-linux.${{ matrix.check }}
+      - run: nix build --fallback -L .#checks.x86_64-linux.${{ matrix.check }}
 
   build-doc:
     needs: [meta]
@@ -570,7 +570,7 @@ jobs:
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - run: nix build -L .#checks.x86_64-linux.doc
+      - run: nix build --fallback -L .#checks.x86_64-linux.doc
       - run: cp --no-preserve=mode -R ./result/share/doc ./doc
       - run: rm -f doc/.lock
       - name: Create `.nojekyll`
@@ -725,12 +725,12 @@ jobs:
           password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
 
       - name: Install `skopeo`
-        run: nix profile install --inputs-from . 'nixpkgs#skopeo'
+        run: nix profile install --fallback --inputs-from . 'nixpkgs#skopeo'
 
       - name: Build `${{ matrix.bin }}` image
         run: |
-          nix build -L .#${{ matrix.bin }}-oci-debian -o ./oci-debian
-          nix build -L .#${{ matrix.bin }}-oci-wolfi -o ./oci-wolfi
+          nix build --fallback -L .#${{ matrix.bin }}-oci-debian -o ./oci-debian
+          nix build --fallback -L .#${{ matrix.bin }}-oci-wolfi -o ./oci-wolfi
 
       - name: Test `${{ matrix.bin }}` image
         run: |

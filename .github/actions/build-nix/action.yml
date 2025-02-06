@@ -8,9 +8,9 @@ inputs:
 runs:
   using: composite
   steps:
-  - run: nix build -L '.#${{ inputs.package }}'
+  - run: nix build --fallback -L '.#${{ inputs.package }}'
     shell: bash
-  - run: nix run -L --inputs-from . 'nixpkgs#coreutils' -- --coreutils-prog=cp -RLv ./result '${{ inputs.package }}'
+  - run: nix run --fallback -L --inputs-from . 'nixpkgs#coreutils' -- --coreutils-prog=cp -RLv ./result '${{ inputs.package }}'
     shell: bash
   - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
     with:
