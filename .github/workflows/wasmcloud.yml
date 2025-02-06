@@ -333,7 +333,7 @@ jobs:
       - run: mkdir "artifact/bin"
       - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
 
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
           name: wash-x86_64-pc-windows-msvc
           path: artifact
@@ -355,7 +355,7 @@ jobs:
       - run: mkdir -p ./artifact/bin
       - run: lipo -create ./aarch64/bin/wash ./x86_64/bin/wash -output ./artifact/bin/wash
 
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
           name: wash-universal-darwin
           path: artifact
@@ -377,7 +377,7 @@ jobs:
       - run: mkdir -p ./artifact/bin
       - run: lipo -create ./aarch64/bin/wasmcloud ./x86_64/bin/wasmcloud -output ./artifact/bin/wasmcloud
 
-      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
           name: wasmcloud-universal-darwin
           path: artifact
