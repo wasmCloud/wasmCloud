@@ -65,7 +65,7 @@ spec:
       type: capability
       properties:
         # image: file://../../../../src/bin/keyvalue-nats-provider/build/keyvalue-nats-provider.par.gz
-        image: ghcr.io/wasmcloud/keyvalue-nats:0.3.1
+        image: ghcr.io/wasmcloud/keyvalue-nats:0.4.0
         ## NOTE: The following is an example of how to provide default/shared configuration, to all components, which do not provide their own NATS connection configuration.
         # config:
         #   - name: nats-connection
