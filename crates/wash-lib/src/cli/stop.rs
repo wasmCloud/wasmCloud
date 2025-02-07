@@ -87,11 +87,12 @@ pub struct StopHostCommand {
     #[clap(flatten)]
     pub opts: CliConnectionOpts,
 
-    /// Id of host to stop. If a non-ID is provided, the host will be selected based on matching the
-    /// prefix of the ID or the friendly name and will return an error if more than one host
-    /// matches.
+    /// Id of host to stop. If the host ID is omitted, wash will look for a running host and stop it. If
+    /// there are multiple running hosts, an error will be returned with a list of all running hosts.
+    ///
+    /// It's recommended to use `wash down --all` if you want to stop all running hosts.
     #[clap(name = "host-id")]
-    pub host_id: String,
+    pub host_id: Option<String>,
 
     /// The timeout in ms for how much time to give the host for graceful shutdown
     #[clap(
@@ -257,16 +258,24 @@ pub async fn stop_host(cmd: StopHostCommand) -> Result<CommandOutput> {
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
 
-    let (_, hosts_remain) = stop_hosts(client, Some(&cmd.host_id), false).await?;
+    let (host_ids, hosts_remain) = stop_hosts(client, cmd.host_id.as_ref(), false).await?;
     let pid_file_exists = tokio::fs::try_exists(host_pid_file()?).await?;
     if !hosts_remain && pid_file_exists {
         tokio::fs::remove_file(host_pid_file()?).await?;
     }
 
-    Ok(CommandOutput::from_key_and_text(
-        "result",
-        format!("Host {} acknowledged stop request", cmd.host_id),
-    ))
+    if host_ids.is_empty() {
+        Ok(CommandOutput::from_key_and_text(
+            "result",
+            "Attempted to find a host to stop but no hosts were running",
+        ))
+    } else {
+        Ok(CommandOutput::from_key_and_text(
+            "result",
+            // NOTE: This will just be one host ID, but we join them in case that changes
+            format!("Host {} acknowledged stop request", host_ids.join(", ")),
+        ))
+    }
 }
 
 async fn find_host_with_provider(
