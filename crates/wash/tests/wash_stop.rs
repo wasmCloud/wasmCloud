@@ -4,7 +4,7 @@ use common::{wait_for_no_hosts, TestWashInstance, HELLO_OCI_REF, PROVIDER_HTTPSE
 
 use anyhow::{Context, Result};
 use serial_test::serial;
-use crate::lib::cli::output::StartCommandOutput;
+use wash::lib::cli::output::StartCommandOutput;
 
 #[tokio::test]
 #[serial]

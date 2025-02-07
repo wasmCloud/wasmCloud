@@ -1,8 +1,8 @@
 use anyhow::Result;
 use tempfile::tempdir;
 
-use wash_lib::common::CommandGroupUsage;
-use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig, NATS_SERVER_BINARY};
+use wash::lib::common::CommandGroupUsage;
+use wash::lib::start::{ensure_nats_server, start_nats_server, NatsConfig, NATS_SERVER_BINARY};
 
 mod common;
 use common::{find_open_port, NATS_SERVER_VERSION};

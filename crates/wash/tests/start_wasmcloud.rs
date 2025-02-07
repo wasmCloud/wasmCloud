@@ -4,8 +4,8 @@ use anyhow::Context;
 use tempfile::tempdir;
 use tokio::time::Duration;
 
-use wash_lib::common::CommandGroupUsage;
-use wash_lib::start::{
+use wash::lib::common::CommandGroupUsage;
+use wash::lib::start::{
     ensure_nats_server, ensure_wasmcloud, ensure_wasmcloud_for_os_arch_pair, find_wasmcloud_binary,
     start_nats_server, start_wasmcloud_host, NatsConfig, NATS_SERVER_BINARY,
 };

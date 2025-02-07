@@ -997,7 +997,7 @@ pub async fn load_config(
 /// only needs to include the fields that are relevant to the project.
 ///
 /// ```rust
-/// use wash_lib::parser::WasmcloudDotToml;
+/// use crate::lib::parser::WasmcloudDotToml;
 ///
 /// let component_toml = r#"
 /// language = "rust"

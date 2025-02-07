@@ -163,7 +163,7 @@ pub async fn handle_install(
                 .parse()
                 .context("Invalid image reference")?;
 
-            // TODO: Add support for pulling via stream to wash_lib
+            // TODO: Add support for pulling via stream to crate::lib
             let image_data = pull_oci_artifact(
                 &image,
                 OciPullOptions {

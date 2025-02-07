@@ -5,7 +5,7 @@ use common::TestWashInstance;
 use anyhow::{Context, Result};
 use serial_test::serial;
 use tokio::process::Command;
-use crate::lib::cli::output::LabelHostCommandOutput;
+use wash::lib::cli::output::LabelHostCommandOutput;
 
 #[tokio::test]
 #[serial]

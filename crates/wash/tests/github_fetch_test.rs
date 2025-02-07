@@ -9,7 +9,7 @@ use tempfile::tempdir;
 use tokio::io::AsyncBufReadExt;
 use wasmcloud_test_util::testcontainers::{AsyncRunner as _, ImageExt, Mount, SquidProxy};
 
-use wash_lib::start::{get_download_client, new_patch_releases_after, DOWNLOAD_CLIENT_USER_AGENT};
+use wash::lib::start::{get_download_client, new_patch_releases_after, DOWNLOAD_CLIENT_USER_AGENT};
 
 // For squid config reference, see: https://www.squid-cache.org/Doc/config/
 // Sets up a squid-proxy listening on port 3128 that requires basic auth

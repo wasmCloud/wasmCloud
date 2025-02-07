@@ -1,7 +1,7 @@
 mod bindings {
     wasmtime::component::bindgen!({
         world: "subcommands",
-        async: true,
+        async: true
     });
 }
 

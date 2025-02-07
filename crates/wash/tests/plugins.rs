@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use wash_lib::plugin::subcommand::DirMapping;
+use wash::lib::plugin::subcommand::DirMapping;
 
 #[tokio::test]
 async fn test_subcommand() {
-    let mut subcommand = wash_lib::plugin::subcommand::SubcommandRunner::new().unwrap();
+    let mut subcommand = wash::lib::plugin::subcommand::SubcommandRunner::new().unwrap();
     // NOTE: All the joins are to avoid any problems with cross-platform paths
     let plugin_path =
         // This is pre-compiled to save on test time. To rebuild this plugin when changes are needed

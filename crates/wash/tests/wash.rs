@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result};
 use std::collections::HashMap;
-use wash_cli::config::{NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_HOST_VERSION};
+use wash::cli::config::{NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_HOST_VERSION};
 
 mod common;
 use common::{output_to_string, wash};

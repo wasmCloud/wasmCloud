@@ -4,8 +4,8 @@ use common::TestWashInstance;
 
 use std::collections::HashMap;
 
-use wash_cli::cmd::config::ConfigCliCommand;
-use crate::lib::cli::{CliConnectionOpts, OutputKind};
+use wash::cli::cmd::config::{self, ConfigCliCommand};
+use wash::lib::cli::{CliConnectionOpts, OutputKind};
 
 #[tokio::test]
 async fn test_config_put_and_get() -> anyhow::Result<()> {
@@ -23,22 +23,21 @@ async fn test_config_put_and_get() -> anyhow::Result<()> {
     };
 
     // Put the config
-    wash_cli::cmd::config::handle_command(command, OutputKind::Json).await?;
+    config::handle_command(command, OutputKind::Json).await?;
 
     // Assert that the retrieved config deserializes as a HashMap
-    let retrieved_config: HashMap<String, serde_json::Value> =
-        wash_cli::cmd::config::handle_command(
-            ConfigCliCommand::GetCommand {
-                opts: CliConnectionOpts {
-                    ctl_port: Some(wash_instance.nats_port.to_string()),
-                    ..Default::default()
-                },
-                name: "foobar".to_string(),
+    let retrieved_config: HashMap<String, serde_json::Value> = config::handle_command(
+        ConfigCliCommand::GetCommand {
+            opts: CliConnectionOpts {
+                ctl_port: Some(wash_instance.nats_port.to_string()),
+                ..Default::default()
             },
-            OutputKind::Json,
-        )
-        .await?
-        .map;
+            name: "foobar".to_string(),
+        },
+        OutputKind::Json,
+    )
+    .await?
+    .map;
 
     assert_eq!(retrieved_config.len(), 2);
     assert_eq!(retrieved_config.get("key").unwrap(), "value");
@@ -59,7 +58,7 @@ async fn test_config_secret_name_error() -> anyhow::Result<()> {
     };
 
     // Put the config and expect an error
-    let result = wash_cli::cmd::config::handle_command(command, OutputKind::Json).await;
+    let result = config::handle_command(command, OutputKind::Json).await;
 
     // Assert that an error occurred
     assert!(result.is_err());

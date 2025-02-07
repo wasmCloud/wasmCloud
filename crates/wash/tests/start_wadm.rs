@@ -1,5 +1,5 @@
-use wash_lib::common::CommandGroupUsage;
-use wash_lib::start::{ensure_wadm, start_wadm, WadmConfig, WADM_BINARY, WADM_PID};
+use wash::lib::common::CommandGroupUsage;
+use wash::lib::start::{ensure_wadm, start_wadm, WadmConfig, WADM_BINARY, WADM_PID};
 
 use anyhow::Result;
 use tempfile::tempdir;

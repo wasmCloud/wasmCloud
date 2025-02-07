@@ -13,7 +13,7 @@ use common::{
     find_open_port, start_nats, test_dir_with_subfolder, wait_for_nats_to_start, wait_for_no_hosts,
     wait_for_single_host, TestWashInstance, HELLO_OCI_REF,
 };
-use wash_cli::config::WASMCLOUD_HOST_VERSION;
+use wash::cli::config::WASMCLOUD_HOST_VERSION;
 
 const RGX_COMPONENT_START_MSG: &str = r"Component \[(?P<component_id>[^]]+)\] \(ref: \[(?P<component_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
 
@@ -339,8 +339,8 @@ async fn integration_up_works_with_specific_wasmcloud_host_version() -> Result<(
 #[tokio::test]
 #[serial]
 async fn integration_up_works_with_specified_wadm_version() -> Result<()> {
-    use crate::lib::config::{DOWNLOADS_DIR, WASH_DIR};
-    use crate::lib::start::WADM_BINARY;
+    use wash::lib::config::{DOWNLOADS_DIR, WASH_DIR};
+    use wash::lib::start::WADM_BINARY;
     // 0.12.0 is a sufficient version to test the latest is 0.12.2
     let previous_wadm_version = "v0.12.0";
     let home = etcetera::home_dir().context("no home directory found. Please set $HOME")?;

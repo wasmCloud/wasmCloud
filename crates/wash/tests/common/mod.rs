@@ -19,17 +19,17 @@ use tokio::{
     time::Duration,
 };
 
-use crate::lib::cli::output::{
+use wash::cli::config::{WADM_VERSION, WASMCLOUD_HOST_VERSION};
+use wash::lib::cli::output::{
     AppDeleteCommandOutput, AppDeployCommandOutput, AppGetCommandOutput, AppListCommandOutput,
     AppUndeployCommandOutput, CallCommandOutput, GetHostsCommandOutput, PullCommandOutput,
     StartCommandOutput, StopCommandOutput, UpCommandOutput,
 };
-use crate::lib::common::CommandGroupUsage;
-use crate::lib::config::{host_pid_file, wadm_pid_file};
-use crate::lib::start::{
+use wash::lib::common::CommandGroupUsage;
+use wash::lib::config::{host_pid_file, wadm_pid_file};
+use wash::lib::start::{
     ensure_nats_server, start_nats_server, NatsConfig, WADM_BINARY, WASMCLOUD_HOST_BIN,
 };
-use wash_cli::config::{WADM_VERSION, WASMCLOUD_HOST_VERSION};
 use wasmcloud_control_interface::Host;
 
 #[allow(unused)]
@@ -46,6 +46,9 @@ pub const PROVIDER_HTTPSERVER_OCI_REF: &str = "ghcr.io/wasmcloud/http-server:0.2
 
 #[allow(unused)]
 pub const FERRIS_SAYS_OCI_REF: &str = "ghcr.io/wasmcloud/components/ferris-says-rust:0.1.0";
+
+#[allow(unused)]
+pub const NATS_SERVER_VERSION: &str = "v2.10.20";
 
 pub const DEFAULT_WASH_INVOCATION_TIMEOUT_MS_ARG: &str = "40000";
 

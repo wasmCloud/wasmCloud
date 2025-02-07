@@ -1,12 +1,12 @@
 use std::time::Duration;
 
-use crate::lib::app::validate_manifest_file;
+use wash::lib::app::validate_manifest_file;
 use anyhow::{Context, Result};
 use serial_test::serial;
 use tokio::process::Command;
 use wadm_types::api::StatusType;
-use crate::lib::cli::get::parse_watch_interval;
-use crate::lib::cli::output::{AppDeployCommandOutput, AppValidateOutput};
+use wash::lib::cli::get::parse_watch_interval;
+use wash::lib::cli::output::{AppDeployCommandOutput, AppValidateOutput};
 
 mod common;
 use common::TestWashInstance;

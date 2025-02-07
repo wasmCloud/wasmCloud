@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use tempfile::tempdir;
-use wash_lib::app::{load_app_manifest, AppManifest, AppManifestSource};
+use wash::lib::app::{load_app_manifest, AppManifest, AppManifestSource};
 
 #[tokio::test]
 #[cfg_attr(

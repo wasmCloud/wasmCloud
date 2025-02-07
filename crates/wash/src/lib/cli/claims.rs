@@ -1202,9 +1202,10 @@ mod test {
     #[tokio::test]
     async fn rust_component_metadata_with_project_config_overrides() -> anyhow::Result<()> {
         let result = load_config(
-            Some(PathBuf::from(
-                "./tests/parser/files/rust_component_claims_metadata.toml",
-            )),
+            Some(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/parser/files/rust_component_claims_metadata.toml"),
+            ),
             None,
         )
         .await;
@@ -1239,14 +1240,23 @@ mod test {
                 name: "testcomponent".to_string(),
                 version: Version::parse("0.1.0").unwrap(),
                 revision: 666,
-                project_dir: PathBuf::from("./tests/parser/files/")
+                project_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests")
+                    .join("parser")
+                    .join("files")
                     .canonicalize()
                     .unwrap(),
-                build_dir: PathBuf::from("./tests/parser/files/")
+                build_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests")
+                    .join("parser")
+                    .join("files")
                     .canonicalize()
                     .unwrap()
                     .join("build"),
-                wit_dir: PathBuf::from("./tests/parser/files/")
+                wit_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests")
+                    .join("parser")
+                    .join("files")
                     .canonicalize()
                     .unwrap()
                     .join("wit"),
@@ -1341,9 +1351,13 @@ mod test {
     #[tokio::test]
     async fn rust_provider_metadata_with_project_config_overrides() -> anyhow::Result<()> {
         let result = load_config(
-            Some(PathBuf::from(
-                "./tests/parser/files/rust_provider_claims_metadata.toml",
-            )),
+            Some(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests")
+                    .join("parser")
+                    .join("files")
+                    .join("rust_provider_claims_metadata.toml"),
+            ),
             None,
         )
         .await;
@@ -1382,14 +1396,23 @@ mod test {
                 version: Version::parse("0.1.0").unwrap(),
                 revision: 666,
                 wasm_bin_name: None,
-                project_dir: PathBuf::from("./tests/parser/files/")
+                project_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests")
+                    .join("parser")
+                    .join("files")
                     .canonicalize()
                     .unwrap(),
-                build_dir: PathBuf::from("./tests/parser/files/")
+                build_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests")
+                    .join("parser")
+                    .join("files")
                     .canonicalize()
                     .unwrap()
                     .join("build"),
-                wit_dir: PathBuf::from("./tests/parser/files/")
+                wit_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests")
+                    .join("parser")
+                    .join("files")
                     .canonicalize()
                     .unwrap()
                     .join("wit"),

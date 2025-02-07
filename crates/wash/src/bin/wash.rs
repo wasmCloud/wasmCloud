@@ -3,50 +3,50 @@ use std::fmt::{Display, Formatter};
 use std::io::{stdout, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use crate::lib::cli::capture::{CaptureCommand, CaptureSubcommand};
-use crate::lib::cli::claims::ClaimsCliCommand;
-use crate::lib::cli::get::GetCommand;
-use crate::lib::cli::inspect::InspectCliCommand;
-use crate::lib::cli::label::LabelHostCommand;
-use crate::lib::cli::link::LinkCommand;
-use crate::lib::cli::registry::{RegistryPullCommand, RegistryPushCommand};
-use crate::lib::cli::scale::ScaleCommand;
-use crate::lib::cli::spy::SpyCommand;
-use crate::lib::cli::start::StartCommand;
-use crate::lib::cli::stop::StopCommand;
-use crate::lib::cli::update::UpdateCommand;
-use crate::lib::cli::{CommandOutput, OutputKind};
-use crate::lib::drain::Drain as DrainSelection;
-use crate::lib::plugin::subcommand::{DirMapping, SubcommandRunner};
 use anyhow::bail;
 use clap::{self, Arg, Command, FromArgMatches, Parser, Subcommand};
 use console::style;
 use crossterm::style::Stylize;
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
+use wash::lib::cli::capture::{CaptureCommand, CaptureSubcommand};
+use wash::lib::cli::claims::ClaimsCliCommand;
+use wash::lib::cli::get::GetCommand;
+use wash::lib::cli::inspect::InspectCliCommand;
+use wash::lib::cli::label::LabelHostCommand;
+use wash::lib::cli::link::LinkCommand;
+use wash::lib::cli::registry::{RegistryPullCommand, RegistryPushCommand};
+use wash::lib::cli::scale::ScaleCommand;
+use wash::lib::cli::spy::SpyCommand;
+use wash::lib::cli::start::StartCommand;
+use wash::lib::cli::stop::StopCommand;
+use wash::lib::cli::update::UpdateCommand;
+use wash::lib::cli::{CommandOutput, OutputKind};
+use wash::lib::drain::Drain as DrainSelection;
+use wash::lib::plugin::subcommand::{DirMapping, SubcommandRunner};
 
-use wash_cli::app::{self, AppCliCommand};
-use wash_cli::build::{self, BuildCommand};
-use wash_cli::call::{self, CallCli};
-use wash_cli::cmd::config::{self, ConfigCliCommand};
-use wash_cli::cmd::dev::{self, DevCommand};
-use wash_cli::cmd::link;
-use wash_cli::cmd::up::{self, UpCommand};
-use wash_cli::cmd::wit::{self, WitCommand};
-use wash_cli::common;
-use wash_cli::completions::{self, CompletionOpts};
-use wash_cli::config::{NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_HOST_VERSION};
-use wash_cli::ctx::{self, CtxCommand};
-use wash_cli::down::{self, DownCommand};
-use wash_cli::drain;
-use wash_cli::generate::{self, NewCliCommand};
-use wash_cli::keys::{self, KeysCliCommand};
-use wash_cli::par::{self, ParCliCommand};
-use wash_cli::plugin::{self, PluginCommand};
-use wash_cli::secrets::{self, SecretsCliCommand};
-use wash_cli::style::WASH_CLI_STYLE;
-use wash_cli::ui::{self, UiCommand};
-use wash_cli::util::ensure_plugin_dir;
+use wash::cli::app::{self, AppCliCommand};
+use wash::cli::build::{self, BuildCommand};
+use wash::cli::call::{self, CallCli};
+use wash::cli::cmd::config::{self, ConfigCliCommand};
+use wash::cli::cmd::dev::{self, DevCommand};
+use wash::cli::cmd::link;
+use wash::cli::cmd::up::{self, UpCommand};
+use wash::cli::cmd::wit::{self, WitCommand};
+use wash::cli::common;
+use wash::cli::completions::{self, CompletionOpts};
+use wash::cli::config::{NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_HOST_VERSION};
+use wash::cli::ctx::{self, CtxCommand};
+use wash::cli::down::{self, DownCommand};
+use wash::cli::drain;
+use wash::cli::generate::{self, NewCliCommand};
+use wash::cli::keys::{self, KeysCliCommand};
+use wash::cli::par::{self, ParCliCommand};
+use wash::cli::plugin::{self, PluginCommand};
+use wash::cli::secrets::{self, SecretsCliCommand};
+use wash::cli::style::WASH_CLI_STYLE;
+use wash::cli::ui::{self, UiCommand};
+use wash::cli::util::ensure_plugin_dir;
 
 #[derive(Clone)]
 struct HelpTopic {
@@ -548,13 +548,13 @@ async fn main() {
             if !cli.experimental {
                 experimental_error_message("capture")
             } else if let Some(CaptureSubcommand::Replay(cmd)) = capture_cli.replay {
-                crate::lib::cli::capture::handle_replay_command(cmd).await
+                wash::lib::cli::capture::handle_replay_command(cmd).await
             } else {
-                crate::lib::cli::capture::handle_command(capture_cli).await
+                wash::lib::cli::capture::handle_command(capture_cli).await
             }
         }
         CliCommand::Claims(claims_cli) => {
-            crate::lib::cli::claims::handle_command(claims_cli, output_kind).await
+            wash::lib::cli::claims::handle_command(claims_cli, output_kind).await
         }
         CliCommand::Completions(completions_cli) => {
             completions::handle_command(completions_cli, Cli::command())
@@ -566,7 +566,7 @@ async fn main() {
         CliCommand::Drain(drain_cli) => drain::handle_command(drain_cli),
         CliCommand::Get(get_cli) => common::get_cmd::handle_command(get_cli, output_kind).await,
         CliCommand::Inspect(inspect_cli) => {
-            crate::lib::cli::inspect::handle_command(inspect_cli, output_kind).await
+            wash::lib::cli::inspect::handle_command(inspect_cli, output_kind).await
         }
         CliCommand::Keys(keys_cli) => keys::handle_command(keys_cli),
         CliCommand::Link(link_cli) => link::invoke(link_cli, output_kind).await,
@@ -583,7 +583,7 @@ async fn main() {
             if !cli.experimental {
                 experimental_error_message("spy")
             } else {
-                crate::lib::cli::spy::handle_command(spy_cli).await
+                wash::lib::cli::spy::handle_command(spy_cli).await
             }
         }
         CliCommand::Scale(scale_cli) => {
@@ -701,7 +701,7 @@ async fn load_plugins() -> Option<(SubcommandRunner, PathBuf)> {
         }
     };
 
-    let plugins = match wash_cli::util::load_plugins(&plugin_dir).await {
+    let plugins = match wash::cli::util::load_plugins(&plugin_dir).await {
         Ok(plugins) => plugins,
         Err(e) => {
             tracing::error!(err = ?e, "Could not load wash plugins");

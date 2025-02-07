@@ -5,7 +5,7 @@ use common::{TestWashInstance, HELLO_OCI_REF};
 use anyhow::{Context, Result};
 use serial_test::serial;
 use tokio::process::Command;
-use crate::lib::cli::output::{GetHostInventoriesCommandOutput, ScaleCommandOutput};
+use wash::lib::cli::output::{GetHostInventoriesCommandOutput, ScaleCommandOutput};
 
 #[tokio::test]
 #[serial]

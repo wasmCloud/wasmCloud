@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use anyhow::{bail, Context as _};
 use common::TestWashInstance;
-use wash_cli::secrets::SecretsCliCommand;
-use crate::lib::cli::{CliConnectionOpts, OutputKind};
+use wash::cli::secrets::SecretsCliCommand;
+use wash::lib::cli::{CliConnectionOpts, OutputKind};
 use wasmcloud_secrets_types::{SECRET_POLICY_PROPERTIES_TYPE, SECRET_TYPE};
 
 #[tokio::test]
@@ -28,10 +28,10 @@ async fn test_secret_put_and_get() -> anyhow::Result<()> {
     };
 
     // Put the config
-    wash_cli::secrets::handle_command(basic_secret_command, OutputKind::Json).await?;
+    wash::cli::secrets::handle_command(basic_secret_command, OutputKind::Json).await?;
 
     // Assert that the retrieved config deserializes as a HashMap
-    let retrieved_secret: HashMap<String, serde_json::Value> = wash_cli::secrets::handle_command(
+    let retrieved_secret: HashMap<String, serde_json::Value> = wash::cli::secrets::handle_command(
         SecretsCliCommand::GetCommand {
             opts,
             name: "foobar".to_string(),
@@ -99,10 +99,10 @@ async fn test_secret_put_and_get_complex() -> anyhow::Result<()> {
     };
 
     // Put the config
-    wash_cli::secrets::handle_command(basic_secret_command, OutputKind::Json).await?;
+    wash::cli::secrets::handle_command(basic_secret_command, OutputKind::Json).await?;
 
     // Assert that the retrieved config deserializes as a HashMap
-    let retrieved_secret: HashMap<String, serde_json::Value> = wash_cli::secrets::handle_command(
+    let retrieved_secret: HashMap<String, serde_json::Value> = wash::cli::secrets::handle_command(
         SecretsCliCommand::GetCommand {
             opts,
             name: "mysecret".to_string(),

@@ -120,6 +120,7 @@ wit-parser = { workspace = true }
 wrpc-interface-http = { workspace = true, features = ["http-body"] }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
+wat = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 notify = { workspace = true, features = ["macos_fsevent"] }
