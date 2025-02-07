@@ -23,6 +23,7 @@ bytes = { workspace = true }
 futures = { workspace = true, features = ["async-await", "std"] }
 http = { workspace = true }
 secrecy = { workspace = true }
+semver = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "sync"] }
 tokio-stream = { workspace = true }
 tracing = { workspace = true }

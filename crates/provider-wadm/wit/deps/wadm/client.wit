@@ -1,0 +1,48 @@
+package wasmcloud:wadm@0.2.0;
+
+/// A Wadm client which interacts with the wadm api
+interface client {
+    use types.{
+        version-info,
+        status,
+        model-summary,
+        oam-manifest
+    };
+
+    // Deploys a model to the WADM system.
+    // If no lattice is provided, the default lattice name 'default' is used.
+    deploy-model: func(model-name: string, version: option<string>, lattice: option<string>) -> result<string, string>;
+
+    // Undeploys a model from the WADM system.
+    undeploy-model: func(model-name: string, lattice: option<string>, non-destructive: bool) -> result<_, string>;
+
+    // Stores the application manifest for later deploys.
+    // Model is the full YAML or JSON string in this case
+    // Returns the model name and version respectively.
+    put-model: func(model: string, lattice: option<string>) -> result<tuple<string, string>, string>;
+
+    /// Store an oam manifest directly for later deploys.
+    put-manifest: func(manifest: oam-manifest, lattice: option<string>) -> result<tuple<string, string>, string>;
+
+    // Retrieves the history of a given model name.
+    get-model-history: func(model-name: string, lattice: option<string>) -> result<list<version-info>, string>;
+
+    // Retrieves the status of a given model by name.
+    get-model-status: func(model-name: string, lattice: option<string>) -> result<status, string>;
+
+    // Retrieves details on a given model.
+    get-model-details: func(model-name: string, version: option<string>, lattice: option<string>) -> result<oam-manifest, string>;
+
+    // Deletes a model version from the WADM system.
+    delete-model-version: func(model-name: string, version: option<string>, lattice: option<string>) -> result<bool, string>;
+
+    // Retrieves all application manifests.
+    get-models: func(lattice: option<string>) -> result<list<model-summary>, string>;
+}
+
+interface handler {
+    use types.{status-update};
+
+    // Callback handled to invoke a function when an update is received from a app status subscription
+    handle-status-update: func(msg: status-update) -> result<_, string>;
+}

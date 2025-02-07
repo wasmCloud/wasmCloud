@@ -7,6 +7,11 @@ on:
         description: Provider name
         required: true
         type: string
+      embed_wit:
+        description: Whether to include the WIT in the provider archive
+        required: false
+        default: true
+        type: boolean
     secrets:
       subject:
         description: Capability provider issuer subject key
@@ -54,6 +59,7 @@ jobs:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           path: artifacts
+          pattern: ${{ inputs.name }}-provider-*
 
       - run: chmod +x "./artifacts/${{ inputs.name }}-provider-aarch64-apple-darwin/bin/${{ inputs.name }}-provider"
       - run: chmod +x "./artifacts/${{ inputs.name }}-provider-aarch64-unknown-linux-musl/bin/${{ inputs.name }}-provider"
@@ -61,7 +67,11 @@ jobs:
       - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-pc-windows-gnu/bin/${{ inputs.name }}-provider.exe"
       - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-unknown-linux-musl/bin/${{ inputs.name }}-provider"
 
-      - run: mv "./artifacts/wash-x86_64-unknown-linux-musl/bin/wash" wash
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: wash-x86_64-unknown-linux-musl
+
+      - run: mv ./bin/wash wash
       - run: chmod +x wash
 
       - run: |
@@ -70,6 +80,9 @@ jobs:
           fi
           if [ "${{ secrets.subject }}" != '' ]; then
             export WASH_SUBJECT_KEY="${{ secrets.subject }}"
+          fi
+          if [[ "${{ inputs.embed_wit }}" == 'true' ]]; then
+            export WIT_DIR="crates/provider-${{ inputs.name }}/wit"
           fi
           ./wash par create \
                 --binary "./artifacts/${{ inputs.name }}-provider-x86_64-unknown-linux-musl/bin/${{ inputs.name }}-provider" \

@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud"
-version = "1.5.1"
+version = "1.6.0"
 description = "wasmCloud is a Cloud Native Computing Foundation (CNCF) project that enables teams to build polyglot applications composed of reusable Wasm components and run them—resiliently and efficiently—across any cloud, Kubernetes, datacenter, or edge."
 default-run = "wasmcloud"
 readme = "README.md"
@@ -33,6 +33,7 @@ provider-keyvalue-vault = ["dep:wasmcloud-provider-keyvalue-vault"]
 provider-messaging-kafka = ["dep:wasmcloud-provider-messaging-kafka"]
 provider-messaging-nats = ["dep:wasmcloud-provider-messaging-nats"]
 provider-sqldb-postgres = ["dep:wasmcloud-provider-sqldb-postgres"]
+provider-wadm = ["dep:wasmcloud-provider-wadm"]
 
 wasmcloud = [
     "dep:clap",
@@ -58,8 +59,10 @@ default = [
     "provider-messaging-kafka",
     "provider-messaging-nats",
     "provider-sqldb-postgres",
+    "provider-wadm",
     "wasmcloud",
 ]
+
 
 [[bin]]
 name = "blobstore-azure-provider"
@@ -102,6 +105,10 @@ name = "messaging-nats-provider"
 required-features = ["provider-messaging-nats"]
 
 [[bin]]
+name = "wadm-provider"
+required-features = ["provider-wadm"]
+
+[[bin]]
 name = "sqldb-postgres-provider"
 required-features = ["provider-sqldb-postgres"]
 
@@ -115,6 +122,7 @@ opt-level = "z"
 lto = true
 
 [dependencies]
+wasmcloud-provider-wadm = { workspace = true, optional = true }
 anyhow = { workspace = true }
 clap = { workspace = true, features = [
     "color",
@@ -244,7 +252,7 @@ exponential-backoff = { version = "2.0", default-features = false }
 file-guard = { version = "0.2.0", default-features = false }
 futures = { version = "0.3", default-features = false }
 geo-types = { version = "0.7", default-features = false }
-handlebars = { version = "6.2", default-features = false }
+handlebars = { version = "6.3", default-features = false }
 heck = { version = "0.5", default-features = false }
 hex = { version = "0.4", default-features = false }
 http = { version = "1", default-features = false, features = ["std"] }
@@ -335,7 +343,7 @@ unicase = { version = "2.8.1", default-features = false }
 url = { version = "2" }
 uuid = { version = "1", default-features = false }
 vaultrs = { version = "0.7", default-features = false }
-wadm = { version = "0.19.0", default-features = false }
+wadm = { version = "0.20", default-features = false }
 wadm-client = { version = "0.8.0", default-features = false }
 wadm-types = { version = "0.8.0", default-features = false }
 walkdir = { version = "2", default-features = false }
@@ -347,7 +355,7 @@ wasi = { version = "0.13.3", default-features = false }
 wasm-pkg-client = { version = "0.9.0", default-features = false }
 wasm-pkg-core = { version = "0.9.0", default-features = false }
 wasi-preview1-component-adapter-provider = { version = "25", default-features = false }
-wasm-encoder = { version = "0.221", default-features = false }
+wasm-encoder = { version = "0.224", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-component = { version = "0", path = "crates/component", default-features = false }
 wasmcloud-control-interface = { version = "2.3.0", path = "./crates/control-interface", default-features = false }
@@ -357,7 +365,7 @@ wasmcloud-provider-blobstore-azure = { version = "*", path = "./crates/provider-
 wasmcloud-provider-blobstore-fs = { version = "*", path = "./crates/provider-blobstore-fs", default-features = false }
 wasmcloud-provider-blobstore-s3 = { version = "*", path = "./crates/provider-blobstore-s3", default-features = false }
 wasmcloud-provider-http-client = { version = "*", path = "./crates/provider-http-client", default-features = false }
-wasmcloud-provider-http-server = { version = "^0.25.0", path = "./crates/provider-http-server", default-features = false }
+wasmcloud-provider-http-server = { version = "^0.26.0", path = "./crates/provider-http-server", default-features = false }
 wasmcloud-provider-keyvalue-nats = { version = "*", path = "./crates/provider-keyvalue-nats", default-features = false }
 wasmcloud-provider-keyvalue-redis = { version = "*", path = "./crates/provider-keyvalue-redis", default-features = false }
 wasmcloud-provider-keyvalue-vault = { version = "*", path = "./crates/provider-keyvalue-vault", default-features = false }
@@ -365,12 +373,13 @@ wasmcloud-provider-messaging-kafka = { version = "*", path = "./crates/provider-
 wasmcloud-provider-messaging-nats = { version = "0.25.0", path = "./crates/provider-messaging-nats", default-features = false }
 wasmcloud-provider-sdk = { version = "^0.13.0", path = "./crates/provider-sdk", default-features = false }
 wasmcloud-provider-sqldb-postgres = { version = "*", path = "./crates/provider-sqldb-postgres", default-features = false }
+wasmcloud-provider-wadm = { version = "*", path = "./crates/provider-wadm", default-features = false }
 wasmcloud-runtime = { version = "^0.8.0", path = "./crates/runtime", default-features = false }
 wasmcloud-secrets-client = { version = "^0.6.0", path = "./crates/secrets-client", default-features = false }
 wasmcloud-secrets-types = { version = "^0.5.0", path = "./crates/secrets-types", default-features = false }
 wasmcloud-test-util = { version = "^0.16.0", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "^0.12.0", path = "./crates/tracing", default-features = false }
-wasmparser = { version = "0.221", default-features = false }
+wasmparser = { version = "0.224", default-features = false }
 wasmtime = { version = "26", default-features = false }
 wasmtime-wasi = { version = "26", default-features = false }
 wasmtime-wasi-http = { version = "26", default-features = false }
@@ -382,8 +391,8 @@ wit-bindgen = { version = "0.38.0", default-features = false }
 wit-bindgen-core = { version = "0.38.0", default-features = false }
 wit-bindgen-go = { version = "0.38.0", default-features = false }
 wit-bindgen-wrpc = { version = "0.9", default-features = false }
-wit-component = { version = "0.224", default-features = false }
-wit-parser = { version = "0.224", default-features = false }
+wit-component = { version = "0.224.1", default-features = false }
+wit-parser = { version = "0.224.1", default-features = false }
 wrpc-interface-blobstore = { version = "0.21", default-features = false }
 wrpc-interface-http = { version = "0.31", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.25", default-features = false }

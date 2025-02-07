@@ -770,7 +770,7 @@ dependencies = [
  "http 1.2.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.5.2",
+ "hyper 1.6.0",
  "hyper-util",
  "itoa",
  "matchit",
@@ -821,7 +821,7 @@ dependencies = [
  "http 1.2.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.5.2",
+ "hyper 1.6.0",
  "hyper-util",
  "pin-project-lite",
  "rustls 0.21.12",
@@ -1085,7 +1085,7 @@ dependencies = [
  "home",
  "http 1.2.0",
  "http-body-util",
- "hyper 1.5.2",
+ "hyper 1.6.0",
  "hyper-named-pipe",
  "hyper-rustls 0.27.3",
  "hyper-util",
@@ -1410,9 +1410,9 @@ dependencies = [
 
 [[package]]
 name = "clap_complete"
-version = "4.5.40"
+version = "4.5.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac2e663e3e3bed2d32d065a8404024dad306e699a04263ec59919529f803aee9"
+checksum = "375f9d8255adeeedd51053574fd8d4ba875ea5fa558e86617b07f09f1680c8b6"
 dependencies = [
  "clap",
 ]
@@ -2839,17 +2839,18 @@ dependencies = [
 
 [[package]]
 name = "handlebars"
-version = "6.2.0"
+version = "6.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd4ccde012831f9a071a637b0d4e31df31c0f6c525784b35ae76a9ac6bc1e315"
+checksum = "3d6b224b95c1e668ac0270325ad563b2eef1469fbbb8959bc7c692c844b813d9"
 dependencies = [
+ "derive_builder 0.20.2",
  "log",
  "num-order",
  "pest",
  "pest_derive",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.11",
 ]
 
 [[package]]
@@ -3110,9 +3111,9 @@ dependencies = [
 
 [[package]]
 name = "hyper"
-version = "1.5.2"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "256fb8d4bd6413123cc9d91832d78325c48ff41677595be797d90f42969beae0"
+checksum = "cc2b571658e38e0c01b1fdca3bbbe93c00d3d71693ff2770043f8c29bc7d6f80"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -3136,7 +3137,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73b7d8abf35697b81a825e386fc151e0d503e8cb5fcb93cc8669c376dfd6f278"
 dependencies = [
  "hex",
- "hyper 1.5.2",
+ "hyper 1.6.0",
  "hyper-util",
  "pin-project-lite",
  "tokio",
@@ -3184,7 +3185,7 @@ checksum = "08afdbb5c31130e3034af566421053ab03787c640246a446327f550d11bcb333"
 dependencies = [
  "futures-util",
  "http 1.2.0",
- "hyper 1.5.2",
+ "hyper 1.6.0",
  "hyper-util",
  "rustls 0.23.19",
  "rustls-native-certs 0.8.1",
@@ -3201,7 +3202,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b90d566bffbce6a75bd8b09a05aa8c2cb1fabb6cb348f8840c9e4c90a0d83b0"
 dependencies = [
- "hyper 1.5.2",
+ "hyper 1.6.0",
  "hyper-util",
  "pin-project-lite",
  "tokio",
@@ -3219,7 +3220,7 @@ dependencies = [
  "futures-util",
  "http 1.2.0",
  "http-body 1.0.1",
- "hyper 1.5.2",
+ "hyper 1.6.0",
  "pin-project-lite",
  "socket2",
  "tokio",
@@ -3235,7 +3236,7 @@ checksum = "986c5ce3b994526b3cd75578e62554abd09f0899d6206de48b3e96ab34ccc8c7"
 dependencies = [
  "hex",
  "http-body-util",
- "hyper 1.5.2",
+ "hyper 1.6.0",
  "hyper-util",
  "pin-project-lite",
  "tokio",
@@ -4261,8 +4262,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
- "wit-component 0.224.0",
- "wit-parser 0.224.0",
+ "wit-component 0.224.1",
+ "wit-parser 0.224.1",
 ]
 
 [[package]]
@@ -5391,7 +5392,7 @@ dependencies = [
  "http 1.2.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.5.2",
+ "hyper 1.6.0",
  "hyper-rustls 0.27.3",
  "hyper-util",
  "ipnet",
@@ -6609,7 +6610,7 @@ dependencies = [
  "url",
  "wascap",
  "wasi-preview1-component-adapter-provider",
- "wit-component 0.224.0",
+ "wit-component 0.224.1",
 ]
 
 [[package]]
@@ -7038,7 +7039,7 @@ dependencies = [
  "http 1.2.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.5.2",
+ "hyper 1.6.0",
  "hyper-timeout",
  "hyper-util",
  "percent-encoding",
@@ -7510,9 +7511,9 @@ dependencies = [
 
 [[package]]
 name = "wadm-types"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d637c3a9ecbd4183d509edd1c8daf6f0e341f213c2ab78d7dab3d1438b9326f"
+checksum = "95b63cbbf5f9447d3f70f3e642dad663179f913d77562959b6ea40b8b25e1c83"
 dependencies = [
  "anyhow",
  "regex",
@@ -7727,9 +7728,9 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
- "wasm-encoder 0.221.2",
+ "wasm-encoder 0.224.1",
  "wasm-gen",
- "wasmparser 0.221.2",
+ "wasmparser 0.224.1",
 ]
 
 [[package]]
@@ -7896,8 +7897,8 @@ dependencies = [
  "wat",
  "which",
  "wit-bindgen-wrpc",
- "wit-component 0.224.0",
- "wit-parser 0.224.0",
+ "wit-component 0.224.1",
+ "wit-parser 0.224.1",
  "wrpc-interface-http",
  "wrpc-transport",
  "wrpc-transport-nats",
@@ -7961,19 +7962,19 @@ dependencies = [
  "walkdir",
  "wascap",
  "wasi-preview1-component-adapter-provider",
- "wasm-encoder 0.221.2",
+ "wasm-encoder 0.224.1",
  "wasm-pkg-client",
  "wasm-pkg-core",
  "wasmcloud-control-interface",
  "wasmcloud-core",
  "wasmcloud-test-util",
- "wasmparser 0.221.2",
+ "wasmparser 0.224.1",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "wat",
- "wit-component 0.224.0",
- "wit-parser 0.224.0",
+ "wit-component 0.224.1",
+ "wit-parser 0.224.1",
 ]
 
 [[package]]
@@ -8148,12 +8149,12 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
-version = "0.224.0"
+version = "0.224.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7249cf8cb0c6b9cb42bce90c0a5feb276fbf963fa385ff3d818ab3d90818ed6"
+checksum = "1ab7a13a23790fe91ea4eb7526a1f3131001d874e3e00c2976c48861f2e82920"
 dependencies = [
  "leb128",
- "wasmparser 0.224.0",
+ "wasmparser 0.224.1",
 ]
 
 [[package]]
@@ -8200,9 +8201,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-metadata"
-version = "0.224.0"
+version = "0.224.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79d13d93febc749413cb6f327e4fdba8c84e4d03bd69fcc4a220c66f113c8de1"
+checksum = "c93c9e49fa2749be3c5ab28ad4be03167294915cd3b2ded3f04f760cef5cfb86"
 dependencies = [
  "anyhow",
  "indexmap 2.7.1",
@@ -8211,8 +8212,8 @@ dependencies = [
  "serde_json",
  "spdx",
  "url",
- "wasm-encoder 0.224.0",
- "wasmparser 0.224.0",
+ "wasm-encoder 0.224.1",
+ "wasmparser 0.224.1",
 ]
 
 [[package]]
@@ -8323,7 +8324,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud"
-version = "1.5.1"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8333,7 +8334,7 @@ dependencies = [
  "clap-markdown",
  "futures",
  "http-body-util",
- "hyper 1.5.2",
+ "hyper 1.6.0",
  "hyper-util",
  "nkeys",
  "once_cell",
@@ -8372,6 +8373,7 @@ dependencies = [
  "wasmcloud-provider-messaging-kafka",
  "wasmcloud-provider-messaging-nats",
  "wasmcloud-provider-sqldb-postgres",
+ "wasmcloud-provider-wadm",
  "wasmcloud-test-util",
  "wasmcloud-tracing",
  "wrpc-interface-http",
@@ -8451,7 +8453,7 @@ dependencies = [
  "http 1.2.0",
  "http-body-util",
  "humantime",
- "hyper 1.5.2",
+ "hyper 1.6.0",
  "hyper-util",
  "names",
  "nkeys",
@@ -8495,7 +8497,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-azure"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8516,7 +8518,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-fs"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8533,7 +8535,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-s3"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -8558,7 +8560,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-http-client"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8579,7 +8581,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-http-server"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8606,7 +8608,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-keyvalue-nats"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8624,7 +8626,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-keyvalue-redis"
-version = "0.28.2"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8643,7 +8645,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-keyvalue-vault"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -8670,7 +8672,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-messaging-kafka"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8733,7 +8735,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sqldb-postgres"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "bigdecimal 0.4.7",
@@ -8760,6 +8762,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmcloud-provider-wadm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "bytes",
+ "futures",
+ "opentelemetry",
+ "opentelemetry-nats",
+ "rustls-pemfile 2.2.0",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-futures",
+ "tracing-opentelemetry",
+ "wadm-client",
+ "wadm-types",
+ "wascap",
+ "wasmcloud-provider-sdk",
+ "wit-bindgen-wrpc",
+]
+
+[[package]]
 name = "wasmcloud-runtime"
 version = "0.8.0"
 dependencies = [
@@ -8771,6 +8797,7 @@ dependencies = [
  "once_cell",
  "opentelemetry",
  "secrecy",
+ "semver",
  "serde",
  "serde_json",
  "tokio",
@@ -8782,12 +8809,12 @@ dependencies = [
  "wasi-preview1-component-adapter-provider",
  "wasmcloud-component",
  "wasmcloud-core",
- "wasmparser 0.221.2",
+ "wasmparser 0.224.1",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "wit-bindgen-wrpc",
- "wit-component 0.224.0",
+ "wit-component 0.224.1",
  "wrpc-interface-blobstore",
  "wrpc-interface-http",
  "wrpc-runtime-wasmtime",
@@ -8928,9 +8955,9 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.224.0"
+version = "0.224.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65881a664fdd43646b647bb27bf186ab09c05bf56779d40aed4c6dce47d423f5"
+checksum = "04f17a5917c2ddd3819e84c661fae0d6ba29d7b9c1f0e96c708c65a9c4188e11"
 dependencies = [
  "bitflags 2.6.0",
  "hashbrown 0.15.2",
@@ -9198,7 +9225,7 @@ dependencies = [
  "http 1.2.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.5.2",
+ "hyper 1.6.0",
  "rustls 0.22.4",
  "tokio",
  "tokio-rustls 0.25.0",
@@ -9624,7 +9651,7 @@ checksum = "70e2f98d49960a416074c5d72889f810ed3032a32ffef5e4760094426fefbfe8"
 dependencies = [
  "anyhow",
  "heck 0.5.0",
- "wit-parser 0.224.0",
+ "wit-parser 0.224.1",
 ]
 
 [[package]]
@@ -9681,9 +9708,9 @@ dependencies = [
  "indexmap 2.7.1",
  "prettyplease",
  "syn 2.0.89",
- "wasm-metadata 0.224.0",
+ "wasm-metadata 0.224.1",
  "wit-bindgen-core 0.38.0",
- "wit-component 0.224.0",
+ "wit-component 0.224.1",
 ]
 
 [[package]]
@@ -9803,9 +9830,9 @@ dependencies = [
 
 [[package]]
 name = "wit-component"
-version = "0.224.0"
+version = "0.224.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad555ab4f4e676474df746d937823c7279c2d6dd36c3e97a61db893d4ef64ee5"
+checksum = "923637fe647372efbbb654757f8c884ba280924477e1d265eca7e35d4cdcea8b"
 dependencies = [
  "anyhow",
  "bitflags 2.6.0",
@@ -9814,10 +9841,10 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "wasm-encoder 0.224.0",
- "wasm-metadata 0.224.0",
- "wasmparser 0.224.0",
- "wit-parser 0.224.0",
+ "wasm-encoder 0.224.1",
+ "wasm-metadata 0.224.1",
+ "wasmparser 0.224.1",
+ "wit-parser 0.224.1",
 ]
 
 [[package]]
@@ -9876,9 +9903,9 @@ dependencies = [
 
 [[package]]
 name = "wit-parser"
-version = "0.224.0"
+version = "0.224.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23e2925a7365d2c6709ae17bdbb5777ffd8154fd70906b413fc01b75f0dba59e"
+checksum = "e3477d8d0acb530d76beaa8becbdb1e3face08929db275f39934963eb4f716f8"
 dependencies = [
  "anyhow",
  "id-arena",
@@ -9889,7 +9916,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "unicode-xid",
- "wasmparser 0.224.0",
+ "wasmparser 0.224.1",
 ]
 
 [[package]]
@@ -9925,7 +9952,7 @@ dependencies = [
  "http 1.2.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.5.2",
+ "hyper 1.6.0",
  "tokio",
  "tokio-stream",
  "tracing",

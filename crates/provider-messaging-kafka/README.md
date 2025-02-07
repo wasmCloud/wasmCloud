@@ -151,7 +151,7 @@ spec:
     - name: nats
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/messaging-nats:0.24.0
+        image: ghcr.io/wasmcloud/messaging-nats:0.25.0
 ```
 
 Then, we must set up the named config that we're expecting to see (`simple-subscription`):

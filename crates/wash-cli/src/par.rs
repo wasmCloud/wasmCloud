@@ -103,7 +103,7 @@ pub struct CreateCommand {
     disable_keygen: bool,
 
     /// Location of project directory containing WIT
-    #[clap(long = "wit-directory")]
+    #[clap(long = "wit-directory", env = "WIT_DIR")]
     wit_dir: Option<PathBuf>,
 }
 
