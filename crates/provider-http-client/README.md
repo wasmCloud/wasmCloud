@@ -25,7 +25,7 @@ An example of starting this provider with all of the configuration values looks 
 - name: httpclient
   type: capability
   properties:
-    image: ghcr.io/wasmcloud/http-client:0.12.1
+    image: ghcr.io/wasmcloud/http-client:0.13.0
     config:
       - name: http-client-config
         properties:
