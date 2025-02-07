@@ -114,6 +114,7 @@ jobs:
             ./.github/actions/build-nix/action.yml
             ./.github/actions/install-nix/action.yml
             ./.github/workflows/wasmcloud.yml
+            ./.github/workflows/oci.yml
             ./.config/nextest.toml
             nix/images/default.nix
             flake.lock
@@ -708,6 +709,9 @@ jobs:
       - test-wash-linux-aarch64-oci
       - test-wash-linux-x86_64
     uses: ./.github/workflows/oci.yml
+    permissions:
+      contents: read
+      packages: write
     with:
       bin: wash
       prefix: wash-cli-
@@ -716,7 +720,6 @@ jobs:
       AZURECR_PUSH_URL: ${{ secrets.AZURECR_PUSH_URL }}
       AZURECR_PUSH_USER: ${{ secrets.AZURECR_PUSH_USER }}
       AZURECR_PUSH_PASSWORD: ${{ secrets.AZURECR_PUSH_PASSWORD }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       DOCKERHUB_PUSH_USER: ${{ secrets.DOCKERHUB_PUSH_USER }}
       DOCKERHUB_PUSH_PASSWORD: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
   oci-wasmcloud:
@@ -726,6 +729,9 @@ jobs:
       - test-wasmcloud-linux-aarch64-oci
       - test-wasmcloud-linux-x86_64
     uses: ./.github/workflows/oci.yml
+    permissions:
+      contents: read
+      packages: write
     with:
       bin: wasmcloud
       prefix: ''
@@ -734,7 +740,6 @@ jobs:
       AZURECR_PUSH_URL: ${{ secrets.AZURECR_PUSH_URL }}
       AZURECR_PUSH_USER: ${{ secrets.AZURECR_PUSH_USER }}
       AZURECR_PUSH_PASSWORD: ${{ secrets.AZURECR_PUSH_PASSWORD }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       DOCKERHUB_PUSH_USER: ${{ secrets.DOCKERHUB_PUSH_USER }}
       DOCKERHUB_PUSH_PASSWORD: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
 

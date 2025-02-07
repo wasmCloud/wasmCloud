@@ -24,9 +24,6 @@ on:
       AZURECR_PUSH_PASSWORD:
         description: Password for Azure Container Registry
         required: true
-      GITHUB_TOKEN:
-        description: Token for authenticating with GitHub Container Registry
-        required: true
       DOCKERHUB_PUSH_USER:
         description: Username for DockerHub
         required: true
