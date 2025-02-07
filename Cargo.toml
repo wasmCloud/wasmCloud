@@ -322,6 +322,7 @@ time = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false }
 tokio-postgres = { version = "0.7", default-features = false }
 tokio-postgres-rustls = { version = "0.13", default-features = false }
+tokio-rustls = { version = "0.26", default-features = false }
 tokio-stream = { version = "0.1", default-features = false }
 tokio-tar = { version = "0.3", default-features = false }
 tokio-util = { version = "0.7", default-features = false }

@@ -39,6 +39,7 @@ wasmcloud-core = { workspace = true, features = [
     "hyper-rustls",
     "otel",
     "rustls-native-certs",
+    "tokio-rustls",
     "webpki-roots",
 ] }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }

@@ -15,9 +15,11 @@ default = [
     "oci",
     "reqwest",
     "rustls-native-certs",
+    "tokio-rustls",
     "webpki-roots",
 ]
 hyper-rustls = ["dep:hyper-rustls", "dep:hyper-util"]
+tokio-rustls = ["dep:tokio-rustls"]
 otel = []
 oci = ["dep:oci-client", "dep:oci-wasm"]
 
@@ -37,6 +39,7 @@ reqwest = { workspace = true, features = ["rustls-tls"], optional = true }
 rustls = { workspace = true, features = ["std"] }
 rustls-native-certs = { workspace = true, optional = true }
 rustls-pemfile = { workspace = true }
+tokio-rustls = { workspace = true, optional = true }
 semver = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

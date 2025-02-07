@@ -71,6 +71,13 @@ pub static DEFAULT_CLIENT_CONFIG: Lazy<rustls::ClientConfig> = Lazy::new(|| {
         .with_no_client_auth()
 });
 
+pub static DEFAULT_CLIENT_CONFIG_ARC: Lazy<Arc<rustls::ClientConfig>> =
+    Lazy::new(|| Arc::new(DEFAULT_CLIENT_CONFIG.clone()));
+
+#[cfg(feature = "tokio-rustls")]
+pub static DEFAULT_RUSTLS_CONNECTOR: Lazy<tokio_rustls::TlsConnector> =
+    Lazy::new(|| tokio_rustls::TlsConnector::from(Arc::clone(&DEFAULT_CLIENT_CONFIG_ARC)));
+
 #[cfg(feature = "hyper-rustls")]
 pub static DEFAULT_HYPER_CONNECTOR: Lazy<
     hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
