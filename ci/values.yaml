@@ -1,0 +1,22 @@
+tolerations:
+  - effect: NoSchedule
+    key: pool
+    operator: Equal
+    value: k6-pool
+nodeSelector:
+  pool-name: k6-pool
+test:
+  url: http://wasmcloud-headless:8080
+  parallelism: 45
+  separate: true
+  scenarios:
+    default:
+      executor: "constant-arrival-rate"
+      timeUnit: "1s"
+      duration: "2m"
+      preAllocatedVUs: 50
+      maxVUs: 1000
+      rate: 80000
+k6-operator:
+  namespace:
+    create: false

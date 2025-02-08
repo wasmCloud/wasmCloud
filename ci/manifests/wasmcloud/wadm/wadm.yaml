@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wadm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wadm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wadm
+    spec:
+      containers:
+        - name: wadm
+          image: wadm
+          imagePullPolicy: Always
+          env:
+            - name: WADM_JETSTREAM_DOMAIN
+              value: default
+            - name: WADM_NATS_SERVER
+              value: nats-headless:4222
+          securityContext:
+            capabilities:
+              drop:
+                - NET_RAW
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 0

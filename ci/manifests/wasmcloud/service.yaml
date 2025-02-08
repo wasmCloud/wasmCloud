@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/name: wasmcloud
+  name: wasmcloud-headless
+spec:
+  clusterIP: None
+  internalTrafficPolicy: Cluster
+  ports:
+    - appProtocol: tcp
+      name: local
+      port: 8080
+      protocol: TCP
+      targetPort: local
+    - appProtocol: tcp
+      name: remote
+      port: 8081
+      protocol: TCP
+      targetPort: remote
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: wasmcloud
+  sessionAffinity: None
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/name: wasmcloud
+  name: wasmcloud
+spec:
+  internalTrafficPolicy: Cluster
+  ports:
+    - appProtocol: tcp
+      name: local
+      port: 8080
+      protocol: TCP
+      targetPort: local
+    - appProtocol: tcp
+      name: remote
+      port: 8081
+      protocol: TCP
+      targetPort: remote
+  selector:
+    app.kubernetes.io/name: wasmcloud
+  sessionAffinity: None
+  type: ClusterIP
