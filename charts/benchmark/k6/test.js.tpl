@@ -41,6 +41,7 @@ var configMap = {
   kind: "ConfigMap",
   metadata: {
     name: `${__ENV.MY_POD_NAME}`,
+    namespace: "{{ .Release.Namespace }}",
     labels: {
       "k6-result": "true",
       "k6-test-name": "{{ include "benchmark.fullname" . }}-test",
