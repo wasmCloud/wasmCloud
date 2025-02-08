@@ -1,0 +1,42 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: http
+  annotations:
+    description: "HTTP hello world demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)"
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/http-hello-world/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/http-hello-world/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/http-hello-world
+    wasmcloud.dev/categories: |
+      http,http-server,rust,hello-world,example
+spec:
+  components:
+    - name: http
+      type: component
+      properties:
+        image: ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0
+      traits:
+        - type: daemonscaler
+          properties:
+            instances: 2000
+
+    - name: provider
+      type: capability
+      properties:
+        image: wasmcloud+builtin://http-server
+      traits:
+        - type: daemonscaler
+          properties:
+            instances: 1
+        - type: link
+          properties:
+            name: http
+            target: http
+            namespace: wasi
+            package: http
+            interfaces: [incoming-handler]
+            source_config:
+              - name: local
+                properties:
+                  address: 0.0.0.0:8080

@@ -1,0 +1,73 @@
+namespace: testbed
+
+resources:
+  - namespace.yaml
+  - nats
+  - wadm
+  - wasmcloud-host
+
+images:
+  - name: wasmcloud
+    newName: ghcr.io/wasmcloud/wasmcloud
+    newTag: 1.6.0
+  - name: wadm
+    newName: ghcr.io/wasmcloud/wadm
+    newTag: v0.20.1
+  - name: nats
+    newName: nats
+    newTag: 2.10.22-alpine
+  - name: nats-config-reloader
+    newName: natsio/nats-server-config-reloader
+    newTag: 0.16.0
+
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: wasmcloud
+      spec:
+        template:
+          spec:
+            nodeSelector:
+              pool-name: wasmcloud-pool
+            tolerations:
+              - effect: NoSchedule
+                key: pool
+                operator: Equal
+                value: "wasmcloud-pool"
+            topologySpreadConstraints:
+              - maxSkew: 1
+                topologyKey: kubernetes.io/hostname
+                whenUnsatisfiable: DoNotSchedule
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: wasmcloud
+            containers:
+              - name: wasmcloud
+                env:
+                  - name: WASMCLOUD_LOG_LEVEL
+                    value: ERROR
+
+  - patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: nats
+      spec:
+        template:
+          spec:
+            nodeSelector:
+              pool-name: nats-pool
+            tolerations:
+              - effect: NoSchedule
+                key: pool
+                operator: Equal
+                value: "nats-pool"
+            topologySpreadConstraints:
+              - maxSkew: 1
+                topologyKey: kubernetes.io/hostname
+                whenUnsatisfiable: DoNotSchedule
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: nats
