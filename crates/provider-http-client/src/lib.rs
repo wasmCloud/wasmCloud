@@ -1,10 +1,12 @@
 use core::convert::Infallible;
+use core::error::Error;
+use core::ops::{Deref, DerefMut};
 use core::pin::pin;
 use core::time::Duration;
 
-use std::collections::HashMap;
-use std::error::Error as _;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Context as _;
 use bytes::Bytes;
@@ -12,11 +14,15 @@ use futures::StreamExt as _;
 use http::uri::Scheme;
 use http_body::Frame;
 use http_body_util::{BodyExt as _, StreamBody};
+use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;
-use tokio::net::TcpStream;
-use tokio::task::JoinSet;
+use tokio::net::{TcpStream, ToSocketAddrs};
+use tokio::sync::Mutex;
+use tokio::task::{AbortHandle, JoinSet};
+use tokio::time::sleep;
+use tokio::{join, sync::RwLock};
 use tokio::{select, spawn};
-use tracing::{debug, error, instrument, trace, warn, Instrument};
+use tracing::{debug, error, instrument, trace, warn, Instrument as _};
 
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::{
@@ -28,10 +34,268 @@ use wrpc_interface_http::{
     split_outgoing_http_body, try_fields_to_header_map, ServeHttp, ServeOutgoingHandlerHttp,
 };
 
+// adapted from https://github.com/hyperium/hyper-util/blob/46826ea75836852fac53ff075a12cba7e290946e/src/client/legacy/client.rs#L1004
+const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+
 /// HTTP client capability provider implementation struct
 #[derive(Clone)]
 pub struct HttpClientProvider {
     tls: tokio_rustls::TlsConnector,
+    conns: ConnPool<wrpc_interface_http::HttpBody>,
+    #[allow(unused)]
+    tasks: Arc<JoinSet<()>>,
+}
+
+#[derive(Debug)]
+struct PooledConn<T> {
+    sender: http1::SendRequest<T>,
+    abort: AbortHandle,
+    last_seen: Instant,
+}
+
+impl<T> Deref for PooledConn<T> {
+    type Target = http1::SendRequest<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.sender
+    }
+}
+
+impl<T> DerefMut for PooledConn<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.sender
+    }
+}
+
+impl<T> Drop for PooledConn<T> {
+    fn drop(&mut self) {
+        self.abort.abort();
+    }
+}
+
+type ConnPoolTable<T> = RwLock<HashMap<Box<str>, std::sync::Mutex<VecDeque<PooledConn<T>>>>>;
+
+#[derive(Debug)]
+struct ConnPool<T> {
+    http: Arc<ConnPoolTable<T>>,
+    https: Arc<ConnPoolTable<T>>,
+    tasks: Arc<Mutex<JoinSet<()>>>,
+}
+
+impl<T> Default for ConnPool<T> {
+    fn default() -> Self {
+        Self {
+            http: Arc::default(),
+            https: Arc::default(),
+            tasks: Arc::default(),
+        }
+    }
+}
+
+impl<T> Clone for ConnPool<T> {
+    fn clone(&self) -> Self {
+        Self {
+            http: self.http.clone(),
+            https: self.https.clone(),
+            tasks: self.tasks.clone(),
+        }
+    }
+}
+
+fn evict_conns<T>(
+    cutoff: Instant,
+    conns: &mut HashMap<Box<str>, std::sync::Mutex<VecDeque<PooledConn<T>>>>,
+) {
+    conns.retain(|_, conns| {
+        let Ok(conns) = conns.get_mut() else {
+            return true;
+        };
+        let idx = conns.partition_point(|&PooledConn { last_seen, .. }| last_seen < cutoff);
+        if idx == conns.len() {
+            false
+        } else if idx == 0 {
+            true
+        } else {
+            *conns = conns.split_off(idx);
+            true
+        }
+    });
+}
+
+impl<T> ConnPool<T> {
+    pub async fn evict(&self, timeout: Duration) {
+        let Some(cutoff) = Instant::now().checked_sub(timeout) else {
+            return;
+        };
+        join!(
+            async {
+                let mut conns = self.http.write().await;
+                evict_conns(cutoff, &mut conns);
+            },
+            async {
+                let mut conns = self.https.write().await;
+                evict_conns(cutoff, &mut conns);
+            }
+        );
+    }
+}
+
+async fn connect(addr: impl ToSocketAddrs) -> Result<TcpStream, types::ErrorCode> {
+    match TcpStream::connect(addr).await {
+        Ok(stream) => Ok(stream),
+        Err(err) if err.kind() == std::io::ErrorKind::AddrNotAvailable => {
+            Err(dns_error("address not available".to_string(), 0))
+        }
+        Err(err) => {
+            if err
+                .to_string()
+                .starts_with("failed to lookup address information")
+            {
+                Err(dns_error("address not available".to_string(), 0))
+            } else {
+                Err(types::ErrorCode::ConnectionRefused)
+            }
+        }
+    }
+}
+
+enum Cacheable<T> {
+    Miss(T),
+    Hit(T),
+}
+
+impl<T> Deref for Cacheable<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Miss(v) | Self::Hit(v) => v,
+        }
+    }
+}
+
+impl<T> DerefMut for Cacheable<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Miss(v) | Self::Hit(v) => v,
+        }
+    }
+}
+
+impl<T> Cacheable<T> {
+    pub fn unwrap(self) -> T {
+        match self {
+            Self::Miss(v) | Self::Hit(v) => v,
+        }
+    }
+}
+
+impl<T> ConnPool<T> {
+    pub async fn connect_http(
+        &self,
+        authority: &str,
+    ) -> Result<Cacheable<PooledConn<T>>, types::ErrorCode>
+    where
+        T: http_body::Body + Send + 'static,
+        T::Data: Send,
+        T::Error: Into<Box<dyn Error + Send + Sync>>,
+    {
+        {
+            let http = self.http.read().await;
+            if let Some(conns) = http.get(authority) {
+                if let Ok(mut conns) = conns.lock() {
+                    while let Some(conn) = conns.pop_front() {
+                        if !conn.is_closed() && conn.is_ready() {
+                            return Ok(Cacheable::Hit(conn));
+                        }
+                    }
+                }
+            }
+        }
+        let stream = connect(authority).await?;
+        let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+            .await
+            .map_err(hyper_request_error)?;
+        let tasks = Arc::clone(&self.tasks);
+        let abort = tasks.lock().await.spawn(async move {
+            match conn.await {
+                Ok(()) => trace!("HTTP connection closed successfully"),
+                Err(err) => warn!(?err, "HTTP connection closed with error"),
+            }
+        });
+        Ok(Cacheable::Miss(PooledConn {
+            sender,
+            abort,
+            last_seen: Instant::now(),
+        }))
+    }
+
+    #[cfg(any(target_arch = "riscv64", target_arch = "s390x"))]
+    pub async fn connect_https(
+        &self,
+        _authority: &str,
+    ) -> Result<Cacheable<PooledConn<T>>, types::ErrorCode> {
+        Err(types::ErrorCode::InternalError(Some(
+            "unsupported architecture for SSL".to_string(),
+        )));
+    }
+
+    #[cfg(not(any(target_arch = "riscv64", target_arch = "s390x")))]
+    pub async fn connect_https(
+        &self,
+        tls: &tokio_rustls::TlsConnector,
+        authority: &str,
+    ) -> Result<Cacheable<PooledConn<T>>, types::ErrorCode>
+    where
+        T: http_body::Body + Send + 'static,
+        T::Data: Send,
+        T::Error: Into<Box<dyn Error + Send + Sync>>,
+    {
+        use rustls::pki_types::ServerName;
+
+        {
+            let https = self.https.read().await;
+            if let Some(conns) = https.get(authority) {
+                if let Ok(mut conns) = conns.lock() {
+                    while let Some(conn) = conns.pop_front() {
+                        if !conn.is_closed() && conn.is_ready() {
+                            return Ok(Cacheable::Hit(conn));
+                        }
+                    }
+                }
+            }
+        }
+        let stream = connect(authority).await?;
+
+        let mut parts = authority.split(":");
+        let host = parts.next().unwrap_or(authority);
+        let domain = ServerName::try_from(host)
+            .map_err(|err| {
+                warn!(?err, "DNS lookup failed");
+                dns_error("invalid DNS name".to_string(), 0)
+            })?
+            .to_owned();
+        let stream = tls.connect(domain, stream).await.map_err(|err| {
+            warn!(?err, "TLS protocol error");
+            types::ErrorCode::TlsProtocolError
+        })?;
+
+        let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+            .await
+            .map_err(hyper_request_error)?;
+        let tasks = Arc::clone(&self.tasks);
+        let abort = tasks.lock().await.spawn(async move {
+            match conn.await {
+                Ok(()) => trace!("HTTPS connection closed successfully"),
+                Err(err) => warn!(?err, "HTTPS connection closed with error"),
+            }
+        });
+        Ok(Cacheable::Miss(PooledConn {
+            sender,
+            abort,
+            last_seen: Instant::now(),
+        }))
+    }
 }
 
 const DEFAULT_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
@@ -46,7 +310,7 @@ pub async fn run() -> anyhow::Result<()> {
         std::env::var_os("PROVIDER_HTTP_CLIENT_FLAMEGRAPH_PATH")
     );
     let host_data = load_host_data()?;
-    let provider = HttpClientProvider::new(&host_data.config).await?;
+    let provider = HttpClientProvider::new(&host_data.config, DEFAULT_IDLE_TIMEOUT).await?;
     let shutdown = run_provider(provider.clone(), "http-client-provider")
         .await
         .context("failed to run provider")?;
@@ -87,54 +351,69 @@ pub async fn run() -> anyhow::Result<()> {
 }
 
 impl HttpClientProvider {
-    pub async fn new(config: &HashMap<String, String>) -> anyhow::Result<Self> {
+    pub async fn new(
+        config: &HashMap<String, String>,
+        idle_timeout: Duration,
+    ) -> anyhow::Result<Self> {
         // Short circuit to the default connector if no configuration is provided
-        if config.is_empty() {
-            return Ok(Self {
-                tls: tls::DEFAULT_RUSTLS_CONNECTOR.clone(),
-            });
-        }
+        let tls = if config.is_empty() {
+            tls::DEFAULT_RUSTLS_CONNECTOR.clone()
+        } else {
+            let mut ca = rustls::RootCertStore::empty();
 
-        let mut ca = rustls::RootCertStore::empty();
+            // Load native certificates
+            if config
+                .get(LOAD_NATIVE_CERTS)
+                .map(|v| v.eq_ignore_ascii_case("true"))
+                .unwrap_or(true)
+            {
+                let (added, ignored) =
+                    ca.add_parsable_certificates(tls::NATIVE_ROOTS.iter().cloned());
+                debug!(added, ignored, "loaded native root certificate store");
+            }
 
-        // Load native certificates
-        if config
-            .get(LOAD_NATIVE_CERTS)
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(true)
-        {
-            let (added, ignored) = ca.add_parsable_certificates(tls::NATIVE_ROOTS.iter().cloned());
-            tracing::debug!(added, ignored, "loaded native root certificate store");
-        }
+            // Load Mozilla trusted root certificates
+            if config
+                .get(LOAD_WEBPKI_CERTS)
+                .map(|v| v.eq_ignore_ascii_case("true"))
+                .unwrap_or(true)
+            {
+                ca.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+                debug!("loaded webpki root certificate store");
+            }
 
-        // Load Mozilla trusted root certificates
-        if config
-            .get(LOAD_WEBPKI_CERTS)
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(true)
-        {
-            ca.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            tracing::debug!("loaded webpki root certificate store");
-        }
-
-        // Load root certificates from a file
-        if let Some(file_path) = config.get(SSL_CERTS_FILE) {
-            let f = std::fs::File::open(file_path)?;
-            let mut reader = std::io::BufReader::new(f);
-            let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
-            let (added, ignored) = ca.add_parsable_certificates(certs);
-            tracing::debug!(
-                added,
-                ignored,
-                "added additional root certificates from file"
-            );
-        }
-
-        let tls_config = rustls::ClientConfig::builder()
-            .with_root_certificates(ca)
-            .with_no_client_auth();
+            // Load root certificates from a file
+            if let Some(file_path) = config.get(SSL_CERTS_FILE) {
+                let f = std::fs::File::open(file_path)?;
+                let mut reader = std::io::BufReader::new(f);
+                let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
+                let (added, ignored) = ca.add_parsable_certificates(certs);
+                debug!(
+                    added,
+                    ignored, "added additional root certificates from file"
+                );
+            }
+            tokio_rustls::TlsConnector::from(Arc::new(
+                rustls::ClientConfig::builder()
+                    .with_root_certificates(ca)
+                    .with_no_client_auth(),
+            ))
+        };
+        let conns = ConnPool::default();
+        let mut tasks = JoinSet::new();
+        tasks.spawn({
+            let conns = conns.clone();
+            async move {
+                loop {
+                    sleep(idle_timeout).await;
+                    conns.evict(idle_timeout).await;
+                }
+            }
+        });
         Ok(Self {
-            tls: tokio_rustls::TlsConnector::from(Arc::new(tls_config)),
+            tls,
+            conns,
+            tasks: Arc::new(tasks),
         })
     }
 }
@@ -216,74 +495,6 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
                 format!("{authority}:{port}")
             };
 
-            let tcp_stream = tokio::time::timeout(connect_timeout, TcpStream::connect(&authority))
-                .await
-                .map_err(|_| types::ErrorCode::ConnectionTimeout)?
-                .map_err(|e| match e.kind() {
-                    std::io::ErrorKind::AddrNotAvailable => {
-                        dns_error("address not available".to_string(), 0)
-                    }
-
-                    _ => {
-                        if e.to_string()
-                            .starts_with("failed to lookup address information")
-                        {
-                            dns_error("address not available".to_string(), 0)
-                        } else {
-                            types::ErrorCode::ConnectionRefused
-                        }
-                    }
-                })?;
-
-            let mut sender = if use_tls {
-                #[cfg(any(target_arch = "riscv64", target_arch = "s390x"))]
-                {
-                    return Err(types::ErrorCode::InternalError(Some(
-                        "unsupported architecture for SSL".to_string(),
-                    )));
-                }
-
-                #[cfg(not(any(target_arch = "riscv64", target_arch = "s390x")))]
-                {
-                    use rustls::pki_types::ServerName;
-
-                    let mut parts = authority.split(":");
-                    let host = parts.next().unwrap_or(&authority);
-                    let domain = ServerName::try_from(host)
-                        .map_err(|err| {
-                            warn!(?err, "DNS lookup failed");
-                            dns_error("invalid DNS name".to_string(), 0)
-                        })?
-                        .to_owned();
-                    let stream = self.tls.connect(domain, tcp_stream).await.map_err(|err| {
-                        warn!(?err, "TLS protocol error");
-                        types::ErrorCode::TlsProtocolError
-                    })?;
-                    let stream = TokioIo::new(stream);
-
-                    let (sender, conn) = tokio::time::timeout(
-                        connect_timeout,
-                        hyper::client::conn::http1::handshake(stream),
-                    )
-                    .await
-                    .map_err(|_| types::ErrorCode::ConnectionTimeout)?
-                    .map_err(hyper_request_error)?;
-                    spawn(conn);
-                    sender
-                }
-            } else {
-                let tcp_stream = TokioIo::new(tcp_stream);
-                let (sender, conn) = tokio::time::timeout(
-                    connect_timeout,
-                    hyper::client::conn::http1::handshake(tcp_stream),
-                )
-                .await
-                .map_err(|_| types::ErrorCode::ConnectionTimeout)?
-                .map_err(hyper_request_error)?;
-                spawn(conn);
-                sender
-            };
-
             // at this point, the request contains the scheme and the authority, but
             // the http packet should only include those if addressing a proxy, so
             // remove them here, since SendRequest::send_request does not do it for us
@@ -303,42 +514,83 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
                 .entry(http::header::USER_AGENT)
                 .or_insert(http::header::HeaderValue::from_static(DEFAULT_USER_AGENT));
 
-            debug!(uri = ?request.uri(), "sending HTTP request");
-            let res = tokio::time::timeout(first_byte_timeout, sender.send_request(request))
-                .instrument(tracing::debug_span!("http_request"))
-                .await
-                .map_err(|_| types::ErrorCode::ConnectionReadTimeout)?
-                .map_err(hyper_request_error)?
-                .map(|body| {
-                    let (data, trailers, mut errs) = split_outgoing_http_body(body);
-                    spawn(
-                        async move {
-                            while let Some(err) = errs.next().await {
-                                error!(?err, "body error encountered");
+            loop {
+                let mut sender = if use_tls {
+                    tokio::time::timeout(
+                        connect_timeout,
+                        self.conns.connect_https(&self.tls, &authority),
+                    )
+                    .await
+                } else {
+                    tokio::time::timeout(connect_timeout, self.conns.connect_http(&authority)).await
+                }
+                .map_err(|_| types::ErrorCode::ConnectionTimeout)??;
+
+                debug!(uri = ?request.uri(), "sending HTTP request");
+                match tokio::time::timeout(first_byte_timeout, sender.try_send_request(request))
+                    .instrument(tracing::debug_span!("http_request"))
+                    .await
+                    .map_err(|_| types::ErrorCode::ConnectionReadTimeout)?
+                {
+                    Err(mut err) => {
+                        let req = err.take_message();
+                        let err = err.into_error();
+                        if let Some(req) = req {
+                            if err.is_closed() && matches!(sender, Cacheable::Hit(..)) {
+                                // retry a cached connection
+                                request = req;
+                                continue;
                             }
-                            trace!("body processing finished");
                         }
-                        .in_current_span(),
-                    );
-                    StreamBody::new(data.map(Frame::data).map(Ok)).with_trailers(async {
-                        trace!("awaiting trailers");
-                        if let Some(trailers) = trailers.await {
-                            trace!("trailers received");
-                            match try_fields_to_header_map(trailers) {
-                                Ok(headers) => Some(Ok(headers)),
-                                Err(err) => {
-                                    error!(?err, "failed to parse trailers");
-                                    None
-                                }
+                        return Err(hyper_request_error(err));
+                    }
+                    Ok(res) => {
+                        trace!("HTTP response received");
+                        let authority = authority.into_boxed_str();
+                        let mut sender = sender.unwrap();
+                        sender.last_seen = Instant::now();
+                        if use_tls {
+                            let mut https = self.conns.https.write().await;
+                            if let Ok(conns) = https.entry(authority).or_default().get_mut() {
+                                conns.push_front(sender);
                             }
                         } else {
-                            trace!("no trailers received");
-                            None
+                            let mut http = self.conns.http.write().await;
+                            if let Ok(conns) = http.entry(authority).or_default().get_mut() {
+                                conns.push_front(sender);
+                            }
                         }
-                    })
-                });
-            trace!("HTTP response received");
-            Ok(res)
+                        return Ok(res.map(|body| {
+                            let (data, trailers, mut errs) = split_outgoing_http_body(body);
+                            spawn(
+                                async move {
+                                    while let Some(err) = errs.next().await {
+                                        error!(?err, "body error encountered");
+                                    }
+                                    trace!("body processing finished");
+                                }
+                                .in_current_span(),
+                            );
+                            StreamBody::new(data.map(Frame::data).map(Ok)).with_trailers(async {
+                                trace!("awaiting trailers");
+                                if let Some(trailers) = trailers.await {
+                                    trace!("trailers received");
+                                    match try_fields_to_header_map(trailers) {
+                                        Ok(headers) => Some(Ok(headers)),
+                                        Err(err) => {
+                                            error!(?err, "failed to parse trailers");
+                                            None
+                                        }
+                                    }
+                                } else {
+                                    trace!("no trailers received");
+                                    None
+                                }
+                            })
+                        }));
+                    }
+                }
+            }
         }
         .await)
     }
@@ -349,27 +601,187 @@ impl Provider for HttpClientProvider {}
 
 #[cfg(test)]
 mod tests {
+    use core::net::Ipv4Addr;
+
     use std::collections::HashMap;
 
-    use anyhow::Result;
     use http::Request;
+    use tokio::net::TcpListener;
+    use tokio::try_join;
     use wrpc_interface_http::{HttpBody, ServeOutgoingHandlerHttp};
 
-    use crate::HttpClientProvider;
+    use super::*;
 
-    #[ignore = "requires network access"]
-    #[tokio::test]
-    async fn test_client() -> Result<()> {
-        let client = HttpClientProvider::new(&HashMap::new()).await.unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("https://www.google-analytics.com/g/collect")
-            .header(http::header::HOST, "www.google-analytics.com")
-            .body(HttpBody {
-                body: Box::pin(futures::stream::empty()),
-                trailers: Box::pin(async { None }),
-            })?;
-        let _ = client.handle(None, request, None).await??;
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_single_conn() -> anyhow::Result<()> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let addr = listener.local_addr()?;
+        try_join!(
+            async {
+                let (stream, _) = listener
+                    .accept()
+                    .await
+                    .context("failed to accept connection")?;
+                hyper::server::conn::http1::Builder::new()
+                    .serve_connection(
+                        TokioIo::new(stream),
+                        hyper::service::service_fn(move |_| async {
+                            anyhow::Ok(http::Response::new(http_body_util::Empty::<Bytes>::new()))
+                        }),
+                    )
+                    .await
+                    .context("failed to serve connection")
+            },
+            async {
+                let link =
+                    HttpClientProvider::new(&HashMap::default(), DEFAULT_IDLE_TIMEOUT).await?;
+                for _ in 0..100 {
+                    let request = Request::builder()
+                        .method(http::method::Method::POST)
+                        .uri(format!("http://{addr}"))
+                        .body(HttpBody {
+                            body: Box::pin(futures::stream::empty()),
+                            trailers: Box::pin(async { None }),
+                        })?;
+                    let res = link.handle(None, request, None).await??;
+                    let body = res.collect().await.context("failed to receive body")?;
+                    assert_eq!(body.to_bytes(), Bytes::default());
+                }
+                drop(link); // drop link to close all pooled connections
+                Ok(())
+            }
+        )?;
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_concurrent_conn() -> anyhow::Result<()> {
+        const N: usize = 10;
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let addr = listener.local_addr()?;
+        let link = HttpClientProvider::new(&HashMap::default(), DEFAULT_IDLE_TIMEOUT).await?;
+        let mut clt = JoinSet::new();
+        for _ in 0..N {
+            clt.spawn({
+                let link = link.clone();
+                async move {
+                    let request = Request::builder()
+                        .method(http::method::Method::POST)
+                        .uri(format!("http://{addr}"))
+                        .body(HttpBody {
+                            body: Box::pin(futures::stream::empty()),
+                            trailers: Box::pin(async { None }),
+                        })?;
+                    let res = link.handle(None, request, None).await??;
+                    let body = res.collect().await.context("failed to receive body")?;
+                    assert_eq!(body.to_bytes(), Bytes::default());
+                    anyhow::Ok(())
+                }
+            });
+        }
+        let mut streams = Vec::with_capacity(N);
+        for i in 0..N {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .with_context(|| format!("failed to accept connection {i}"))?;
+            streams.push(stream);
+        }
+
+        let mut srv = JoinSet::new();
+        for stream in streams {
+            srv.spawn(async {
+                hyper::server::conn::http1::Builder::new()
+                    .serve_connection(
+                        TokioIo::new(stream),
+                        hyper::service::service_fn(move |_| async {
+                            anyhow::Ok(http::Response::new(http_body_util::Empty::<Bytes>::new()))
+                        }),
+                    )
+                    .await
+                    .context("failed to serve connection")
+            });
+        }
+        while let Some(res) = clt.join_next().await {
+            res??;
+        }
+        for _ in 0..N {
+            // all of these requests should be able to reuse N pooled connections
+            clt.spawn({
+                let link = link.clone();
+                async move {
+                    let request = Request::builder()
+                        .method(http::method::Method::POST)
+                        .uri(format!("http://{addr}"))
+                        .body(HttpBody {
+                            body: Box::pin(futures::stream::empty()),
+                            trailers: Box::pin(async { None }),
+                        })?;
+                    let res = link.handle(None, request, None).await??;
+                    let body = res.collect().await.context("failed to receive body")?;
+                    assert_eq!(body.to_bytes(), Bytes::default());
+                    anyhow::Ok(())
+                }
+            });
+        }
+        while let Some(res) = clt.join_next().await {
+            res??;
+        }
+        drop(link); // drop link to close all pooled connections
+        while let Some(res) = srv.join_next().await {
+            res??;
+        }
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pool_evict() -> anyhow::Result<()> {
+        const N: usize = 10;
+        const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let addr = listener.local_addr()?;
+        try_join!(
+            async {
+                for i in 0..N {
+                    let (stream, _) = listener
+                        .accept()
+                        .await
+                        .with_context(|| format!("failed to accept connection {i}"))?;
+                    hyper::server::conn::http1::Builder::new()
+                        .serve_connection(
+                            TokioIo::new(stream),
+                            hyper::service::service_fn(move |_| async {
+                                anyhow::Ok(http::Response::new(
+                                    http_body_util::Empty::<Bytes>::new(),
+                                ))
+                            }),
+                        )
+                        .await
+                        .context("failed to serve connection")?;
+                }
+                anyhow::Ok(())
+            },
+            async {
+                let link = HttpClientProvider::new(&HashMap::default(), IDLE_TIMEOUT).await?;
+                for _ in 0..N {
+                    let request = Request::builder()
+                        .method(http::method::Method::POST)
+                        .uri(format!("http://{addr}"))
+                        .body(HttpBody {
+                            body: Box::pin(futures::stream::empty()),
+                            trailers: Box::pin(async { None }),
+                        })?;
+                    let res = link.handle(None, request, None).await??;
+                    let body = res.collect().await.context("failed to receive body")?;
+                    assert_eq!(body.to_bytes(), Bytes::default());
+                    // Pooled connection should be evicted after 2*IDLE_TIMEOUT
+                    sleep(IDLE_TIMEOUT.saturating_mul(2)).await;
+                }
+                Ok(())
+            }
+        )?;
         Ok(())
     }
 }
