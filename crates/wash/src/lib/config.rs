@@ -73,7 +73,7 @@ pub struct WashConnectionOptions {
     pub ctl_seed: Option<String>,
 
     /// Credsfile for CTL authentication. Combines `ctl_seed` and `ctl_jwt`.
-    /// See <https://docs.nats.io/using-nats/developer/connecting/creds> for details.
+    /// See https://docs.nats.io/using-nats/developer/connecting/creds for details.
     pub ctl_credsfile: Option<PathBuf>,
 
     /// Path to a file containing a CA certificate to use for TLS connections

@@ -157,7 +157,7 @@ pub struct WasmcloudOpts {
     ///
     /// defaults to the [`WASMCLOUD_HOST_VERSION`] if not provided
     /// or the latest patch version after that when `wash up` issued,
-    /// see <https://github.com/wasmCloud/wasmCloud/releases> for releases
+    /// see https://github.com/wasmCloud/wasmCloud/releases for releases
     #[clap(long = "wasmcloud-version", env = "WASMCLOUD_VERSION")]
     pub wasmcloud_version: Option<String>,
 
@@ -369,7 +369,7 @@ pub struct WadmOpts {
     ///
     /// defaults to the [`WADM_VERSION`] if not provided
     /// or the latest patch version after that when `wash up` issued,
-    /// see <https://github.com/wasmCloud/wadm/releases> for releases
+    /// see https://github.com/wasmCloud/wadm/releases for releases
     #[clap(long = "wadm-version", env = "WADM_VERSION")]
     pub wadm_version: Option<String>,
 
