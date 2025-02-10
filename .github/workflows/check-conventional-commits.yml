@@ -145,18 +145,18 @@ jobs:
               TYPE="${BASH_REMATCH[1]}"
               SCOPE="${BASH_REMATCH[3]}"
               if [[ "$line" =~ !: ]]; then
-                LABELS+=("impact: breaking")
+                LABELS+=("impact:breaking")
               fi
               case "$TYPE" in
-                fix) LABELS+=("type: fix") ;;
-                feat) LABELS+=("type: feature") ;;
-                ci) LABELS+=("type: ci") ;;
-                docs) LABELS+=("type: docs") ;;
+                fix) LABELS+=("type:fix") ;;
+                feat) LABELS+=("type:feature") ;;
+                ci) LABELS+=("type:ci") ;;
+                docs) LABELS+=("type:docs") ;;
               esac
               case "$SCOPE" in
-                wash|wash-cli|wash-lib) LABELS+=("scope: wash") ;;
-                wasmcloud|host|runtime|core) LABELS+=("scope: wasmcloud") ;;
-                control-interface|ctl) LABELS+=("scope: control-interface") ;;
+                wash|wash-cli|wash-lib) LABELS+=("scope:wash") ;;
+                wasmcloud|host|runtime|core) LABELS+=("scope:wasmcloud") ;;
+                control-interface|ctl) LABELS+=("scope:control-interface") ;;
                 "") ;; # Ignore empty scope
                 *) ;; # Ignore unknown scopes. To enable adding any scope as a label, use this: # *) LABELS+=("$SCOPE") ;;
               esac
