@@ -349,7 +349,7 @@ where
             match name.split_once('/').map(|(pkg, suffix)| {
                 suffix
                     .split_once('@')
-                    .map_or((pkg, name, None), |(iface, version)| {
+                    .map_or((pkg, suffix, None), |(iface, version)| {
                         (pkg, iface, Some(version))
                     })
             }) {
