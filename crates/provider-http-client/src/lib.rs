@@ -622,16 +622,29 @@ impl Provider for HttpClientProvider {}
 
 #[cfg(test)]
 mod tests {
-    use core::net::Ipv4Addr;
+    use core::net::{Ipv4Addr, SocketAddr};
 
     use std::collections::HashMap;
 
-    use http::Request;
     use tokio::net::TcpListener;
     use tokio::try_join;
-    use wrpc_interface_http::{HttpBody, ServeOutgoingHandlerHttp};
+    use tracing::info;
+    use wrpc_interface_http::{HttpBody, ServeOutgoingHandlerHttp as _};
 
     use super::*;
+
+    const N: usize = 10;
+
+    fn new_request(addr: SocketAddr) -> http::Request<HttpBody> {
+        http::Request::builder()
+            .method(http::Method::POST)
+            .uri(format!("http://{addr}"))
+            .body(HttpBody {
+                body: Box::pin(futures::stream::empty()),
+                trailers: Box::pin(async { None }),
+            })
+            .expect("failed to construct HTTP POST request")
+    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_conn_evict() -> anyhow::Result<()> {
@@ -719,10 +732,12 @@ mod tests {
         let addr = listener.local_addr()?;
         try_join!(
             async {
+                info!("accepting stream...");
                 let (stream, _) = listener
                     .accept()
                     .await
                     .context("failed to accept connection")?;
+                info!("serving connection...");
                 hyper::server::conn::http1::Builder::new()
                     .serve_connection(
                         TokioIo::new(stream),
@@ -736,19 +751,20 @@ mod tests {
             async {
                 let link =
                     HttpClientProvider::new(&HashMap::default(), DEFAULT_IDLE_TIMEOUT).await?;
-                for _ in 0..100 {
-                    let request = Request::builder()
-                        .method(http::method::Method::POST)
-                        .uri(format!("http://{addr}"))
-                        .body(HttpBody {
-                            body: Box::pin(futures::stream::empty()),
-                            trailers: Box::pin(async { None }),
-                        })?;
-                    let res = link.handle(None, request, None).await??;
-                    let body = res.collect().await.context("failed to receive body")?;
+                for i in 0..N {
+                    info!(i, "sending request...");
+                    let res = link
+                        .handle(None, new_request(addr), None)
+                        .await
+                        .with_context(|| format!("failed to invoke `handle` for request {i}"))?
+                        .with_context(|| format!("failed to handle request {i}"))?;
+                    info!(i, "reading response body...");
+                    let body = res
+                        .collect()
+                        .await
+                        .with_context(|| format!("failed to receive body for request {i}"))?;
                     assert_eq!(body.to_bytes(), Bytes::default());
                 }
-                drop(link); // drop link to close all pooled connections
                 Ok(())
             }
         )?;
@@ -757,25 +773,25 @@ mod tests {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_concurrent_conn() -> anyhow::Result<()> {
-        const N: usize = 10;
-
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let addr = listener.local_addr()?;
         let link = HttpClientProvider::new(&HashMap::default(), DEFAULT_IDLE_TIMEOUT).await?;
         let mut clt = JoinSet::new();
-        for _ in 0..N {
+        for i in 0..N {
             clt.spawn({
                 let link = link.clone();
                 async move {
-                    let request = Request::builder()
-                        .method(http::method::Method::POST)
-                        .uri(format!("http://{addr}"))
-                        .body(HttpBody {
-                            body: Box::pin(futures::stream::empty()),
-                            trailers: Box::pin(async { None }),
-                        })?;
-                    let res = link.handle(None, request, None).await??;
-                    let body = res.collect().await.context("failed to receive body")?;
+                    info!(i, "sending request...");
+                    let res = link
+                        .handle(None, new_request(addr), None)
+                        .await
+                        .with_context(|| format!("failed to invoke `handle` for request {i}"))?
+                        .with_context(|| format!("failed to handle request {i}"))?;
+                    info!(i, "reading response body...");
+                    let body = res
+                        .collect()
+                        .await
+                        .with_context(|| format!("failed to receive body for request {i}"))?;
                     assert_eq!(body.to_bytes(), Bytes::default());
                     anyhow::Ok(())
                 }
@@ -783,6 +799,7 @@ mod tests {
         }
         let mut streams = Vec::with_capacity(N);
         for i in 0..N {
+            info!(i, "accepting stream...");
             let (stream, _) = listener
                 .accept()
                 .await
@@ -793,6 +810,7 @@ mod tests {
         let mut srv = JoinSet::new();
         for stream in streams {
             srv.spawn(async {
+                info!("serving connection...");
                 hyper::server::conn::http1::Builder::new()
                     .serve_connection(
                         TokioIo::new(stream),
@@ -807,20 +825,21 @@ mod tests {
         while let Some(res) = clt.join_next().await {
             res??;
         }
-        for _ in 0..N {
+        for i in 0..N {
             // all of these requests should be able to reuse N pooled connections
             clt.spawn({
                 let link = link.clone();
                 async move {
-                    let request = Request::builder()
-                        .method(http::method::Method::POST)
-                        .uri(format!("http://{addr}"))
-                        .body(HttpBody {
-                            body: Box::pin(futures::stream::empty()),
-                            trailers: Box::pin(async { None }),
-                        })?;
-                    let res = link.handle(None, request, None).await??;
-                    let body = res.collect().await.context("failed to receive body")?;
+                    let res = link
+                        .handle(None, new_request(addr), None)
+                        .await
+                        .with_context(|| format!("failed to invoke `handle` for request {i}"))?
+                        .with_context(|| format!("failed to handle request {i}"))?;
+                    info!(i, "reading response body...");
+                    let body = res
+                        .collect()
+                        .await
+                        .with_context(|| format!("failed to receive body for request {i}"))?;
                     assert_eq!(body.to_bytes(), Bytes::default());
                     anyhow::Ok(())
                 }
@@ -838,7 +857,6 @@ mod tests {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pool_evict() -> anyhow::Result<()> {
-        const N: usize = 10;
         const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
 
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
@@ -846,10 +864,12 @@ mod tests {
         try_join!(
             async {
                 for i in 0..N {
+                    info!(i, "accepting stream...");
                     let (stream, _) = listener
                         .accept()
                         .await
                         .with_context(|| format!("failed to accept connection {i}"))?;
+                    info!(i, "serving connection...");
                     hyper::server::conn::http1::Builder::new()
                         .serve_connection(
                             TokioIo::new(stream),
@@ -860,22 +880,24 @@ mod tests {
                             }),
                         )
                         .await
-                        .context("failed to serve connection")?;
+                        .with_context(|| format!("failed to serve connection {i}"))?;
                 }
                 anyhow::Ok(())
             },
             async {
                 let link = HttpClientProvider::new(&HashMap::default(), IDLE_TIMEOUT).await?;
-                for _ in 0..N {
-                    let request = Request::builder()
-                        .method(http::method::Method::POST)
-                        .uri(format!("http://{addr}"))
-                        .body(HttpBody {
-                            body: Box::pin(futures::stream::empty()),
-                            trailers: Box::pin(async { None }),
-                        })?;
-                    let res = link.handle(None, request, None).await??;
-                    let body = res.collect().await.context("failed to receive body")?;
+                for i in 0..N {
+                    info!(i, "sending request...");
+                    let res = link
+                        .handle(None, new_request(addr), None)
+                        .await
+                        .with_context(|| format!("failed to invoke `handle` for request {i}"))?
+                        .with_context(|| format!("failed to handle request {i}"))?;
+                    info!(i, "reading response body...");
+                    let body = res
+                        .collect()
+                        .await
+                        .with_context(|| format!("failed to receive body for request {i}"))?;
                     assert_eq!(body.to_bytes(), Bytes::default());
                     // Pooled connection should be evicted after 2*IDLE_TIMEOUT
                     sleep(IDLE_TIMEOUT.saturating_mul(2)).await;
