@@ -12,22 +12,6 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - name: Action Meta
-        id: meta
-        run: |
-          # build action meta
-          echo "fetch_depth=$(( ${{ github.event.pull_request.commits }} + 100 ))" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout PR branch & commits
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: ${{ steps.meta.outputs.fetch_depth }}
-
-      - name: Fetch Base commit
-        run: |
-          git fetch origin ${{ github.event.pull_request.base.ref }}
-
       - name: Install convco
         uses: taiki-e/install-action@77b010ce7843a10f653ccb6b0967bda4c3d81091 # v2.47.1
         with:
@@ -35,9 +19,11 @@ jobs:
 
       - name: Check commits for formatting
         id: lint
-        run: |
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: | # shell
           set +e
-          OUTPUT=$(convco check ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }})
+          OUTPUT=$(gh pr view ${{ github.event.pull_request.number }} --repo wasmcloud/wasmcloud --json commits --jq '.commits[].messageHeadline' | convco check --from-stdin)
           set -e
 
           # output results
@@ -75,6 +61,7 @@ jobs:
           JOB_OUTPUT: ${{ steps.lint.outputs.raw_output }}
           JOB_STATUS: ${{ steps.lint.outcome == 'success' && '✅' || steps.lint.outcome == 'failure' && '❌' || steps.lint.outcome == 'cancelled' && '🚫' }}
         run: |
+          JOB_OUTPUT=${JOB_OUTPUT:-"Commit messages are formatted correctly!"}
           {
             echo "## $JOB_STATUS Conventional Commits"
             echo '```'
@@ -87,36 +74,88 @@ jobs:
         id: parse
         env:
           JSON_OUTPUT: ${{ steps.lint.outputs.json_output }}
-        run: |
+        run: | # shell
           if [[ -z "$JSON_OUTPUT" ]]; then
             echo "Failed to parse errors"
             exit 1
           fi
 
-          export MD_ERRORS_ROWS=$(echo "$JSON_OUTPUT" | jq -r '.commits | map("| **\(.sha)** | \(.error) | \(.message) |") | join("\n")')
-          export MD_ERRORS_COUNT=${{ fromJson(steps.lint.outputs.json_output).count || 0 }}
-          envsubst < .github/templates/conventional-commit.md > ./conventional-commit.md
+          # Parse the JSON output from the linting step
+          echo "md-error-rows=$(echo "$JSON_OUTPUT" | jq -r '.commits | map("| **\(.sha)** | \(.error) | \(.message) |") | join("\n")')" >> "$GITHUB_OUTPUT"
+          echo "md-error-count=${{ fromJson(steps.lint.outputs.json_output).count || 0 }}" >> "$GITHUB_OUTPUT"
 
       - name: Create PR Comment
         # If the workflow failed and the error parsing was successful, create a comment on the PR with the errors
         if: failure() && steps.parse.outcome == 'success'
-        uses: marocchino/sticky-pull-request-comment@331f8f5b4215f0445d3c07b4967662a32a2d3e31 # v2.9.0
+        uses: marocchino/sticky-pull-request-comment@52423e01640425a022ef5fd42c6fb5f633a02728 # v2.9.1
         with:
           number: ${{ github.event.pull_request.number }}
           header: tip-conventional-commits
           recreate: true
           hide_and_recreate: true
-          path: ./conventional-commit.md
+          message: | # markdown
+            ### :warning: It looks like your commit is not formatted in line with Conventional Commits
+
+            This repository uses [Conventional Commits][cc] to enable automation and ensure consistent commit messages across the project.
+
+            ### Errors
+
+            | SHA | Error | Commit Message |
+            | --- | ----- | -------------- |
+            ${{ steps.parse.outputs.md_error_rows }}
+
+            ### How to fix this issue
+
+            > [!NOTE]
+            > If you don't feel comfortable doing this, don't worry—a project maintainer will help correct this for you, before merging.
+
+            <details>
+
+            <summary>Expand for instructions</summary>
+
+            Please amend your commit message to follow the [Conventional Commits][cc] format. You can do this by running the following commands:
+
+            ```
+            git rebase -i HEAD~${{ steps.parse.outputs.md_error_count }}
+            ```
+
+            This will open an editor with a list of commits. Mark the commit you want to amend with `edit`, save and close the editor. Then run:
+
+            ```console
+            git commit --amend
+            ```
+
+            This will open an editor with the commit message. Please update the commit message to follow the [Conventional Commits][cc] format. Save and close the editor.
+
+            Finally, run:
+
+            ```console
+            git rebase --continue
+            ```
+
+            This will continue the rebase process.
+
+            Finally, push your changes to your fork:
+
+            ```console
+            git push --force-with-lease
+            ```
+
+            </details>
+
+            [cc]: https://www.conventionalcommits.org/en/v1.0.0
 
       - name: Hide PR Comment
         # If the workflow is now successful, we can resolve the original comment
         if: success()
-        uses: marocchino/sticky-pull-request-comment@331f8f5b4215f0445d3c07b4967662a32a2d3e31 # v2.9.0
+        uses: marocchino/sticky-pull-request-comment@52423e01640425a022ef5fd42c6fb5f633a02728 # v2.9.1
         with:
           number: ${{ github.event.pull_request.number }}
           header: tip-conventional-commits
           hide: true
           hide_classify: 'RESOLVED'
+          append: true
+          message: 'This PR is now formatted in line with Conventional Commits'
 
   label-pr:
     if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
@@ -134,7 +173,7 @@ jobs:
           echo "$PR_COMMITS" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
 
       - name: Parse commit messages and determine labels
         id: parse_labels
@@ -172,4 +211,5 @@ jobs:
             gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label "$label"
           done
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LABELS: ${{ env.LABELS }}
+          GH_TOKEN: ${{ github.token }}
