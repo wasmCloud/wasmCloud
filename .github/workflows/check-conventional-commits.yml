@@ -7,6 +7,7 @@ permissions:
 
 jobs:
   lint:
+    if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -118,19 +119,22 @@ jobs:
           hide_classify: 'RESOLVED'
 
   label-pr:
+    if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
     needs: lint
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
+      - id: app-token
+        uses: actions/create-github-app-token@5d869da34e18e7287c1daad50e0b8ea0f506ce69 # v1.11.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
       - name: Get pull request commits
         id: get_commits
         run: |
-          PR_COMMITS=$(gh pr view ${{ github.event.pull_request.number }} --json commits --jq '.commits[].messageHeadline')
+          PR_COMMITS=$(gh pr view ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --json commits --jq '.commits[].messageHeadline')
           echo "COMMITS<<EOF" >> $GITHUB_ENV
           echo "$PR_COMMITS" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
@@ -170,7 +174,7 @@ jobs:
         if: ${{ env.LABELS != '' }}
         run: |
           for label in ${LABELS[@]}; do
-            gh pr edit ${{ github.event.pull_request.number }} --add-label "$label"
+            gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label "$label"
           done
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
