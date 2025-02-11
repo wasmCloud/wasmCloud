@@ -541,6 +541,33 @@ jobs:
           name: wasmcloud-x86_64-pc-windows-gnu
       - run: .\bin\wasmcloud.exe --version
 
+  cargo-nextest:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || needs.meta.outputs.providers_modified == 'true' || startsWith(github.ref, 'refs/tags/') }}
+
+    name: cargo nextest
+    runs-on: ubuntu-latest-8-cores
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: actions/cache/restore@36f1e144e1c8edb0a652766b484448563d8baf46
+        with:
+          path: ${{ runner.temp }}/nix-store
+          key: wasmcloud-cargo-doc-${{ github.sha }}
+          restore-keys: |
+            wasmcloud-cargo-doc-
+            wasmcloud-x86_64_unknown-linux-musl-${{ github.sha }}
+            wasmcloud-x86_64_unknown-linux-musl-
+            wash-x86_64_unknown-linux-musl-
+            wasmcloud-
+            wash-
+      - run: nix copy --all --from "file://${{ runner.temp }}/nix-store"
+        continue-on-error: true
+      - run: rm -rf "${{ runner.temp }}/nix-store"
+      - run: nix build --fallback -L .#checks.x86_64-linux.nextest
+
   cargo:
     needs: [meta]
     if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || needs.meta.outputs.providers_modified == 'true' || startsWith(github.ref, 'refs/tags/') }}
@@ -550,7 +577,6 @@ jobs:
           - audit
           - fmt
           - clippy
-          - nextest
           - doctest
 
     name: cargo ${{ matrix.check }}
@@ -750,6 +776,7 @@ jobs:
       - build-wasmcloud-bin
       - build-wasmcloud-lipo
       - cargo
+      - cargo-nextest
       - oci-wasmcloud
       - test-wasmcloud-linux-aarch64
       - test-wasmcloud-linux-aarch64-oci
@@ -800,6 +827,7 @@ jobs:
       - build-wash-bin
       - build-wash-lipo
       - cargo
+      - cargo-nextest
       - oci-wash
       - test-wash-linux-aarch64
       - test-wash-linux-aarch64-oci
@@ -875,6 +903,7 @@ jobs:
       PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_API_TOKEN }}
     needs:
       - cargo
+      - cargo-nextest
       - build-wash-bin
       - test-wash-linux-x86_64
     runs-on: ubuntu-24.04
@@ -1080,6 +1109,7 @@ jobs:
       - test-wasmcloud-macos-x86_64
       - test-wasmcloud-windows-x86_64
       - cargo
+      - cargo-nextest
       - build-doc
       - providers
       - deploy-doc
@@ -1107,6 +1137,7 @@ jobs:
           echo 'needs.test-wasmcloud-macos-x86_64.result: ${{ needs.test-wasmcloud-macos-x86_64.result }}'
           echo 'needs.test-wasmcloud-windows-x86_64.result: ${{ needs.test-wasmcloud-windows-x86_64.result }}'
           echo 'needs.cargo.result: ${{ needs.cargo.result }}'
+          echo 'needs.cargo-nextest.result: ${{ needs.cargo-nextest.result }}'
           echo 'needs.build-doc.result: ${{ needs.build-doc.result }}'
           echo 'needs.providers.result: ${{ needs.providers.result }}'
           echo 'needs.deploy-doc.result: ${{ needs.deploy-doc.result }}'
