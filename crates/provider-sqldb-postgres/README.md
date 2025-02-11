@@ -38,13 +38,13 @@ spec:
     - name: sqldb-postgres
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/sqldb-postgres:0.7.2
+        image: ghcr.io/wasmcloud/sqldb-postgres:0.8.0
 
     # A capability provider that provides HTTP serving for the component
     - name: http-server
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.25.0
+        image: ghcr.io/wasmcloud/http-server:0.26.0
 
     # A component that uses both capability providers above (HTTP server and sqldb-postgres)
     # to provide a TODO app on http://localhost:8080

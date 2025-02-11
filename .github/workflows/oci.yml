@@ -1,0 +1,221 @@
+name: oci-release
+
+on:
+  workflow_call:
+    inputs:
+      bin:
+        description: Binary name
+        required: true
+        type: string
+      prefix:
+        description: Prefix name
+        required: true
+        type: string
+    secrets:
+      CACHIX_AUTH_TOKEN:
+        description: Token for authenticating with Cachix
+        required: true
+      AZURECR_PUSH_URL:
+        description: URL for Azure Container Registry
+        required: true
+      AZURECR_PUSH_USER:
+        description: Username for Azure Container Registry
+        required: true
+      AZURECR_PUSH_PASSWORD:
+        description: Password for Azure Container Registry
+        required: true
+      DOCKERHUB_PUSH_USER:
+        description: Username for DockerHub
+        required: true
+      DOCKERHUB_PUSH_PASSWORD:
+        description: Password for DockerHub
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  oci:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          path: ${{ runner.temp }}/nix-store-amd64
+          name: nix-store-${{ inputs.bin }}-x86_64-unknown-linux-musl
+      - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store-amd64"
+        continue-on-error: true
+      - run: rm -rf "${{ runner.temp }}/nix-store-amd64"
+
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          path: ${{ runner.temp }}/nix-store-arm64
+          name: nix-store-${{ inputs.bin }}-aarch64-unknown-linux-musl
+      - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store-arm64"
+        continue-on-error: true
+      - run: rm -rf "${{ runner.temp }}/nix-store-arm64"
+
+      - uses: actions/cache@36f1e144e1c8edb0a652766b484448563d8baf46
+        id: cache
+        with:
+          path: ${{ runner.temp }}/nix-store-oci
+          key: ${{ inputs.bin }}-oci-${{ github.sha }}
+          restore-keys: |
+            ${{ inputs.bin }}-oci-
+      - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store-oci"
+        continue-on-error: true
+      - run: rm -rf "${{ runner.temp }}/nix-store-oci"
+
+      - name: Extract tag context
+        id: ctx
+        run: |
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+          version=${GITHUB_REF_NAME#${{ inputs.prefix }}v}
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "version is ${version}"
+          if [[ $version == *"-"* ]]; then
+            echo "version ${version} is a pre-release"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Login to AzureCR
+        if: startswith(github.ref, format('refs/tags/{0}v', inputs.prefix)) || github.ref == 'refs/heads/main'
+        continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
+        uses: azure/docker-login@15c4aadf093404726ab2ff205b2cdd33fa6d054c
+        with:
+          login-server: ${{ secrets.AZURECR_PUSH_URL }}
+          username: ${{ secrets.AZURECR_PUSH_USER }}
+          password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
+
+      - name: Login to GitHub Container Registry
+        if: startswith(github.ref, format('refs/tags/{0}v', inputs.prefix)) || github.ref == 'refs/heads/main'
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to DockerHub
+        if: startswith(github.ref, format('refs/tags/{0}v', inputs.prefix)) || github.ref == 'refs/heads/main'
+        continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with:
+          username: ${{ secrets.DOCKERHUB_PUSH_USER }}
+          password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
+
+      - name: Install `skopeo`
+        run: nix profile install --fallback --inputs-from . 'nixpkgs#skopeo'
+
+      - name: Build `${{ inputs.bin }}` image
+        run: |
+          nix build --fallback -L .#${{ inputs.bin }}-oci-debian -o ./oci-debian
+          nix build --fallback -L .#${{ inputs.bin }}-oci-wolfi -o ./oci-wolfi
+
+      - name: Test `${{ inputs.bin }}` image
+        run: |
+          skopeo copy oci-archive:./oci-debian docker-daemon:${{ inputs.bin }}:debian-test
+          skopeo copy oci-archive:./oci-wolfi docker-daemon:${{ inputs.bin }}:wolfi-test
+          docker run --rm ${{ inputs.bin }}:debian-test ${{ inputs.bin }} --version
+          docker run --rm ${{ inputs.bin }}:wolfi-test ${{ inputs.bin }} --version
+
+      - name: Push `${{ inputs.bin }}` commit rev tag
+        if: startswith(github.ref, format('refs/tags/{0}v', inputs.prefix)) || github.ref == 'refs/heads/main'
+        run: |
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ github.sha }}
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.sha_short }}
+          skopeo copy --all oci-archive:./oci-debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ github.sha }}-debian
+          skopeo copy --all oci-archive:./oci-debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.sha_short }}-debian
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ github.sha }}-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.sha_short }}-wolfi
+
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ github.sha }} ${{ inputs.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.sha_short }} ${{ inputs.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ github.sha }}-debian ${{ inputs.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.sha_short }}-debian ${{ inputs.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ github.sha }}-wolfi ${{ inputs.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.sha_short }}-wolfi ${{ inputs.bin }} --version
+
+      - name: Push `${{ inputs.bin }}` `canary` tag
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
+        run: |
+          skopeo copy --all oci-archive:./oci-wolfi docker://${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary
+          skopeo copy --all oci-archive:./oci-wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary
+          skopeo copy --all oci-archive:./oci-debian docker://${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary-debian
+          skopeo copy --all oci-archive:./oci-debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary-debian
+          skopeo copy --all oci-archive:./oci-debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary-debian
+          skopeo copy --all oci-archive:./oci-wolfi docker://${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary-wolfi
+
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary ${{ inputs.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary ${{ inputs.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary ${{ inputs.bin }} --version
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary-debian ${{ inputs.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary-debian ${{ inputs.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary-debian ${{ inputs.bin }} --version
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary-wolfi ${{ inputs.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary-wolfi ${{ inputs.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:canary-wolfi ${{ inputs.bin }} --version
+
+      - name: Push `${{ inputs.bin }}` version tag
+        if: startswith(github.ref, format('refs/tags/{0}v', inputs.prefix))
+        continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
+        run: |
+          skopeo copy --all oci-archive:./oci-wolfi docker://${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}
+          skopeo copy --all oci-archive:./oci-wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}
+          skopeo copy --all oci-archive:./oci-debian docker://${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}-debian
+          skopeo copy --all oci-archive:./oci-debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}-debian
+          skopeo copy --all oci-archive:./oci-debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}-debian
+          skopeo copy --all oci-archive:./oci-wolfi docker://${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}-wolfi
+
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }} ${{ inputs.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }} ${{ inputs.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }} ${{ inputs.bin }} --version
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}-debian ${{ inputs.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}-debian ${{ inputs.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}-debian ${{ inputs.bin }} --version
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}-wolfi ${{ inputs.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}-wolfi ${{ inputs.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.version }}-wolfi ${{ inputs.bin }} --version
+
+      - name: Push `${{ inputs.bin }}` `latest` tag
+        if: startswith(github.ref, format('refs/tags/{0}v', inputs.prefix)) && !steps.ctx.outputs.prerelease
+        continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
+        run: |
+          skopeo copy --all oci-archive:./oci-wolfi docker://${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest
+          skopeo copy --all oci-archive:./oci-wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest
+          skopeo copy --all oci-archive:./oci-debian docker://${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest-debian
+          skopeo copy --all oci-archive:./oci-debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest-debian
+          skopeo copy --all oci-archive:./oci-debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest-debian
+          skopeo copy --all oci-archive:./oci-wolfi docker://${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest-wolfi
+          skopeo copy --all oci-archive:./oci-wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest-wolfi
+
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest ${{ inputs.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest ${{ inputs.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest ${{ inputs.bin }} --version
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest-debian ${{ inputs.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest-debian ${{ inputs.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest-debian ${{ inputs.bin }} --version
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest-wolfi ${{ inputs.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest-wolfi ${{ inputs.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:latest-wolfi ${{ inputs.bin }} --version
+
+      - run: |
+          nix copy --to "file://${{ runner.temp }}/nix-store-oci" \
+            .#${{ inputs.bin }}-oci-debian \
+            .#${{ inputs.bin }}-oci-wolfi
+        if: steps.cache.outputs.cache-hit != 'true'

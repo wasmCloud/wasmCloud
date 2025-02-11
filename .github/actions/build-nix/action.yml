@@ -16,7 +16,7 @@ runs:
       restore-keys: |
         ${{ inputs.package }}-
 
-  - run: nix copy --all --from "file://${{ runner.temp }}/nix-store-${{ inputs.package }}"
+  - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store-${{ inputs.package }}"
     continue-on-error: true
     shell: bash
   - run: rm -rf "${{ runner.temp }}/nix-store-${{ inputs.package }}"
@@ -32,3 +32,7 @@ runs:
   - run: nix copy --to "file://${{ runner.temp }}/nix-store-${{ inputs.package }}" '.#${{ inputs.package }}'
     if: steps.cache.outputs.cache-hit != 'true'
     shell: bash
+  - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+    with:
+      name: nix-store-${{ inputs.package }}
+      path: ${{ runner.temp }}/nix-store-${{ inputs.package }}
