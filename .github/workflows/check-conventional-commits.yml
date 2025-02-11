@@ -1,6 +1,6 @@
 name: check-conventional-commits
 
-on: [pull_request]
+on: [pull_request_target]
 
 permissions:
   contents: read
@@ -126,11 +126,6 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - id: app-token
-        uses: actions/create-github-app-token@5d869da34e18e7287c1daad50e0b8ea0f506ce69 # v1.11.0
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
       - name: Get pull request commits
         id: get_commits
         run: |
