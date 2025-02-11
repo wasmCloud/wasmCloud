@@ -159,6 +159,7 @@
                 cargoLockParsed
                 ;
               cargoExtraArgs = ""; # disable `--locked` passed by default by crane
+              CARGO_PROFILE = ""; # avoid running cargo in `release` profile
             }
             // optionalAttrs (args ? cargoArtifacts) {
               nativeCheckInputs =
