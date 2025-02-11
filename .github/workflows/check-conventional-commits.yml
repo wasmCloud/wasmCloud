@@ -7,10 +7,16 @@ permissions:
 
 jobs:
   lint:
+    if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
     steps:
+      - id: app-token
+        uses: actions/create-github-app-token@5d869da34e18e7287c1daad50e0b8ea0f506ce69 # v1.11.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
       - name: Action Meta
         id: meta
         run: |
@@ -106,6 +112,7 @@ jobs:
           recreate: true
           hide_and_recreate: true
           path: ./conventional-commit.md
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Hide PR Comment
         # If the workflow is now successful, we can resolve the original comment
@@ -116,17 +123,21 @@ jobs:
           header: tip-conventional-commits
           hide: true
           hide_classify: 'RESOLVED'
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
   label-pr:
+    if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
     needs: lint
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
+      - id: app-token
+        uses: actions/create-github-app-token@5d869da34e18e7287c1daad50e0b8ea0f506ce69 # v1.11.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
       - name: Get pull request commits
         id: get_commits
         run: |
@@ -135,7 +146,7 @@ jobs:
           echo "$PR_COMMITS" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Parse commit messages and determine labels
         id: parse_labels
@@ -173,4 +184,4 @@ jobs:
             gh pr edit ${{ github.event.pull_request.number }} --add-label "$label"
           done
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
