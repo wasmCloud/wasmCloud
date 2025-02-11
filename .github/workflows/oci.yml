@@ -44,22 +44,18 @@ jobs:
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
 
-      - uses: actions/cache/restore@36f1e144e1c8edb0a652766b484448563d8baf46
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           path: ${{ runner.temp }}/nix-store-amd64
-          key: ${{ inputs.bin }}-x86_64-unknown-linux-musl-${{ github.sha }}
-          restore-keys: |
-            ${{ inputs.bin }}-x86_64-unknown-linux-musl-
+          name: nix-store-${{ inputs.bin }}-x86_64-unknown-linux-musl
       - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store-amd64"
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store-amd64"
 
-      - uses: actions/cache/restore@36f1e144e1c8edb0a652766b484448563d8baf46
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           path: ${{ runner.temp }}/nix-store-arm64
-          key: ${{ inputs.bin }}-aarch64-unknown-linux-musl-${{ github.sha }}
-          restore-keys: |
-            ${{ inputs.bin }}-aarch64-unknown-linux-musl-
+          name: nix-store-${{ inputs.bin }}-aarch64-unknown-linux-musl
       - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store-arm64"
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store-arm64"

@@ -32,3 +32,7 @@ runs:
   - run: nix copy --to "file://${{ runner.temp }}/nix-store-${{ inputs.package }}" '.#${{ inputs.package }}'
     if: steps.cache.outputs.cache-hit != 'true'
     shell: bash
+  - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+    with:
+      name: nix-store-${{ inputs.package }}
+      path: ${{ runner.temp }}/nix-store-${{ inputs.package }}
