@@ -5,7 +5,7 @@ use core::pin::pin;
 use core::time::Duration;
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
 use anyhow::Context as _;
@@ -37,6 +37,9 @@ use wrpc_interface_http::{
 // adapted from https://github.com/hyperium/hyper-util/blob/46826ea75836852fac53ff075a12cba7e290946e/src/client/legacy/client.rs#L1004
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 
+// Instant used as the "zero" `last_seen` value.
+static ZERO_INSTANT: LazyLock<Instant> = LazyLock::new(Instant::now);
+
 /// HTTP client capability provider implementation struct
 #[derive(Clone)]
 pub struct HttpClientProvider {
@@ -46,15 +49,15 @@ pub struct HttpClientProvider {
     tasks: Arc<JoinSet<()>>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct PooledConn<T> {
-    sender: http1::SendRequest<T>,
+    sender: T,
     abort: AbortHandle,
     last_seen: Instant,
 }
 
 impl<T> Deref for PooledConn<T> {
-    type Target = http1::SendRequest<T>;
+    type Target = T;
 
     fn deref(&self) -> &Self::Target {
         &self.sender
@@ -67,13 +70,37 @@ impl<T> DerefMut for PooledConn<T> {
     }
 }
 
+impl<T: PartialEq> PartialEq for PooledConn<T> {
+    fn eq(
+        &self,
+        Self {
+            sender,
+            abort,
+            last_seen,
+        }: &Self,
+    ) -> bool {
+        self.sender == *sender && self.abort.id() == abort.id() && self.last_seen == *last_seen
+    }
+}
+
 impl<T> Drop for PooledConn<T> {
     fn drop(&mut self) {
         self.abort.abort();
     }
 }
 
-type ConnPoolTable<T> = RwLock<HashMap<Box<str>, std::sync::Mutex<VecDeque<PooledConn<T>>>>>;
+impl<T> PooledConn<T> {
+    fn new(sender: T, abort: AbortHandle) -> Self {
+        Self {
+            sender,
+            abort,
+            last_seen: *ZERO_INSTANT,
+        }
+    }
+}
+
+type ConnPoolTable<T> =
+    RwLock<HashMap<Box<str>, std::sync::Mutex<VecDeque<PooledConn<http1::SendRequest<T>>>>>>;
 
 #[derive(Debug)]
 struct ConnPool<T> {
@@ -110,13 +137,14 @@ fn evict_conns<T>(
         let Ok(conns) = conns.get_mut() else {
             return true;
         };
-        let idx = conns.partition_point(|&PooledConn { last_seen, .. }| last_seen < cutoff);
+        let idx = conns.partition_point(|&PooledConn { last_seen, .. }| last_seen <= cutoff);
         if idx == conns.len() {
             false
         } else if idx == 0 {
             true
         } else {
-            *conns = conns.split_off(idx);
+            conns.rotate_left(idx);
+            conns.truncate(idx);
             true
         }
     });
@@ -194,7 +222,7 @@ impl<T> ConnPool<T> {
     pub async fn connect_http(
         &self,
         authority: &str,
-    ) -> Result<Cacheable<PooledConn<T>>, types::ErrorCode>
+    ) -> Result<Cacheable<PooledConn<http1::SendRequest<T>>>, types::ErrorCode>
     where
         T: http_body::Body + Send + 'static,
         T::Data: Send,
@@ -223,18 +251,14 @@ impl<T> ConnPool<T> {
                 Err(err) => warn!(?err, "HTTP connection closed with error"),
             }
         });
-        Ok(Cacheable::Miss(PooledConn {
-            sender,
-            abort,
-            last_seen: Instant::now(),
-        }))
+        Ok(Cacheable::Miss(PooledConn::new(sender, abort)))
     }
 
     #[cfg(any(target_arch = "riscv64", target_arch = "s390x"))]
     pub async fn connect_https(
         &self,
         _authority: &str,
-    ) -> Result<Cacheable<PooledConn<T>>, types::ErrorCode> {
+    ) -> Result<Cacheable<PooledConn<http1::SendRequest<T>>>, types::ErrorCode> {
         Err(types::ErrorCode::InternalError(Some(
             "unsupported architecture for SSL".to_string(),
         )));
@@ -245,7 +269,7 @@ impl<T> ConnPool<T> {
         &self,
         tls: &tokio_rustls::TlsConnector,
         authority: &str,
-    ) -> Result<Cacheable<PooledConn<T>>, types::ErrorCode>
+    ) -> Result<Cacheable<PooledConn<http1::SendRequest<T>>>, types::ErrorCode>
     where
         T: http_body::Body + Send + 'static,
         T::Data: Send,
@@ -290,11 +314,7 @@ impl<T> ConnPool<T> {
                 Err(err) => warn!(?err, "HTTPS connection closed with error"),
             }
         });
-        Ok(Cacheable::Miss(PooledConn {
-            sender,
-            abort,
-            last_seen: Instant::now(),
-        }))
+        Ok(Cacheable::Miss(PooledConn::new(sender, abort)))
     }
 }
 
@@ -548,14 +568,15 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
                         trace!("HTTP response received");
                         let authority = authority.into_boxed_str();
                         let mut sender = sender.unwrap();
-                        sender.last_seen = Instant::now();
                         if use_tls {
                             let mut https = self.conns.https.write().await;
+                            sender.last_seen = Instant::now();
                             if let Ok(conns) = https.entry(authority).or_default().get_mut() {
                                 conns.push_front(sender);
                             }
                         } else {
                             let mut http = self.conns.http.write().await;
+                            sender.last_seen = Instant::now();
                             if let Ok(conns) = http.entry(authority).or_default().get_mut() {
                                 conns.push_front(sender);
                             }
@@ -611,6 +632,86 @@ mod tests {
     use wrpc_interface_http::{HttpBody, ServeOutgoingHandlerHttp};
 
     use super::*;
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_conn_evict() -> anyhow::Result<()> {
+        let now = Instant::now();
+
+        let mut foo = VecDeque::from([
+            PooledConn {
+                sender: (),
+                abort: spawn(async {}).abort_handle(),
+                last_seen: now.checked_sub(Duration::from_secs(10)).unwrap(),
+            },
+            PooledConn {
+                sender: (),
+                abort: spawn(async {}).abort_handle(),
+                last_seen: now.checked_sub(Duration::from_secs(1)).unwrap(),
+            },
+            PooledConn {
+                sender: (),
+                abort: spawn(async {}).abort_handle(),
+                last_seen: now,
+            },
+            PooledConn {
+                sender: (),
+                abort: spawn(async {}).abort_handle(),
+                last_seen: now.checked_add(Duration::from_secs(1)).unwrap(),
+            },
+            PooledConn {
+                sender: (),
+                abort: spawn(async {}).abort_handle(),
+                last_seen: now.checked_add(Duration::from_secs(1)).unwrap(),
+            },
+            PooledConn {
+                sender: (),
+                abort: spawn(async {}).abort_handle(),
+                last_seen: now.checked_add(Duration::from_secs(3)).unwrap(),
+            },
+        ]);
+        let qux = VecDeque::from([
+            PooledConn {
+                sender: (),
+                abort: spawn(async {}).abort_handle(),
+                last_seen: now.checked_add(Duration::from_secs(10)).unwrap(),
+            },
+            PooledConn {
+                sender: (),
+                abort: spawn(async {}).abort_handle(),
+                last_seen: now.checked_add(Duration::from_secs(12)).unwrap(),
+            },
+        ]);
+        let mut conns = HashMap::from([
+            ("foo".into(), std::sync::Mutex::new(foo.clone())),
+            ("bar".into(), std::sync::Mutex::default()),
+            (
+                "baz".into(),
+                std::sync::Mutex::new(VecDeque::from([
+                    PooledConn {
+                        sender: (),
+                        abort: spawn(async {}).abort_handle(),
+                        last_seen: now.checked_sub(Duration::from_secs(10)).unwrap(),
+                    },
+                    PooledConn {
+                        sender: (),
+                        abort: spawn(async {}).abort_handle(),
+                        last_seen: now.checked_sub(Duration::from_secs(1)).unwrap(),
+                    },
+                ])),
+            ),
+            ("qux".into(), std::sync::Mutex::new(qux.clone())),
+        ]);
+        evict_conns(now, &mut conns);
+        assert_eq!(
+            conns.remove("foo").unwrap().into_inner().unwrap(),
+            foo.split_off(3)
+        );
+        assert_eq!(conns.remove("qux").unwrap().into_inner().unwrap(), qux);
+        assert!(conns.is_empty());
+        evict_conns(now, &mut conns);
+        assert!(conns.is_empty());
+        Ok(())
+    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_single_conn() -> anyhow::Result<()> {
