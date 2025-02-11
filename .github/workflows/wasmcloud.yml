@@ -563,7 +563,7 @@ jobs:
             wash-x86_64_unknown-linux-musl-
             wasmcloud-
             wash-
-      - run: nix copy --all --from "file://${{ runner.temp }}/nix-store"
+      - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store"
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store"
       - run: nix build --fallback -L .#checks.x86_64-linux.nextest
@@ -597,7 +597,7 @@ jobs:
             wash-x86_64_unknown-linux-musl-
             wasmcloud-
             wash-
-      - run: nix copy --all --from "file://${{ runner.temp }}/nix-store"
+      - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store"
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store"
       - run: nix build --fallback -L .#checks.x86_64-linux.${{ matrix.check }}
@@ -623,7 +623,7 @@ jobs:
             wash-x86_64_unknown-linux-musl-
             wasmcloud-
             wash-
-      - run: nix copy --all --from "file://${{ runner.temp }}/nix-store"
+      - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store"
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store"
       - run: nix build --fallback -L .#checks.x86_64-linux.doc

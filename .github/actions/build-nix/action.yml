@@ -16,7 +16,7 @@ runs:
       restore-keys: |
         ${{ inputs.package }}-
 
-  - run: nix copy --all --from "file://${{ runner.temp }}/nix-store-${{ inputs.package }}"
+  - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store-${{ inputs.package }}"
     continue-on-error: true
     shell: bash
   - run: rm -rf "${{ runner.temp }}/nix-store-${{ inputs.package }}"

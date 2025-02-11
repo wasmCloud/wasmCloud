@@ -50,7 +50,7 @@ jobs:
           key: ${{ inputs.bin }}-x86_64-unknown-linux-musl-${{ github.sha }}
           restore-keys: |
             ${{ inputs.bin }}-x86_64-unknown-linux-musl-
-      - run: nix copy --all --from "file://${{ runner.temp }}/nix-store-amd64"
+      - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store-amd64"
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store-amd64"
 
@@ -60,7 +60,7 @@ jobs:
           key: ${{ inputs.bin }}-aarch64-unknown-linux-musl-${{ github.sha }}
           restore-keys: |
             ${{ inputs.bin }}-aarch64-unknown-linux-musl-
-      - run: nix copy --all --from "file://${{ runner.temp }}/nix-store-arm64"
+      - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store-arm64"
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store-arm64"
 
@@ -71,7 +71,7 @@ jobs:
           key: ${{ inputs.bin }}-oci-${{ github.sha }}
           restore-keys: |
             ${{ inputs.bin }}-oci-
-      - run: nix copy --all --from "file://${{ runner.temp }}/nix-store-oci"
+      - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store-oci"
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store-oci"
 
