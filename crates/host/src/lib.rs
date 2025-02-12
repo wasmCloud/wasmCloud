@@ -21,6 +21,9 @@ pub mod secrets;
 /// wasmCloud host metrics
 pub(crate) mod metrics;
 
+/// experimental workload identity
+pub(crate) mod workload_identity;
+
 pub use metrics::HostMetrics;
 pub use oci::Config as OciConfig;
 pub use policy::{

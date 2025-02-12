@@ -59,6 +59,7 @@ use wasmcloud_tracing::{global, InstrumentationScope, KeyValue};
 
 use crate::registry::RegistryCredentialExt;
 use crate::wasmbus::jetstream::create_bucket;
+use crate::workload_identity::WorkloadIdentityConfig;
 use crate::{
     fetch_component, HostMetrics, OciConfig, PolicyHostInfo, PolicyManager, PolicyResponse,
     RegistryAuth, RegistryConfig, RegistryType, ResourceRef, SecretsManager,
@@ -416,25 +417,148 @@ async fn connect_nats(
     key: Option<Arc<KeyPair>>,
     require_tls: bool,
     request_timeout: Option<Duration>,
+    workload_identity_config: Option<WorkloadIdentityConfig>,
 ) -> anyhow::Result<async_nats::Client> {
-    let opts = async_nats::ConnectOptions::new().require_tls(require_tls);
-    let opts = match (jwt, key) {
-        (Some(jwt), Some(key)) => opts.jwt(jwt.to_string(), {
-            move |nonce| {
-                let key = key.clone();
-                async move { key.sign(&nonce).map_err(async_nats::AuthError::new) }
+    let opts =
+        match (jwt, key, workload_identity_config) {
+            (Some(jwt), Some(key), Some(wid_cfg)) => {
+                let jwt = jwt.to_owned();
+
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<
+                    tokio::sync::oneshot::Sender<
+                        Result<spiffe::JwtSvid, spiffe::error::GrpcClientError>,
+                    >,
+                >(100);
+
+                tokio::spawn(async move {
+                    let mut client =
+                        match spiffe::WorkloadApiClient::new_from_path(&wid_cfg.spiffe_endpoint)
+                            .await
+                        {
+                            Ok(client) => client,
+                            Err(e) => {
+                                // TODO(joonas): handle this in a better way.
+                                panic!("{e:?}");
+                            }
+                        };
+
+                    while let Some(response_tx) = rx.recv().await {
+                        // TODO(joonas): Handle this more gracefully.
+                        let res = client
+                            .fetch_jwt_svid(&[wid_cfg.auth_service_audience.as_str()], None)
+                            .await;
+                        let _ = response_tx.send(res);
+                    }
+                });
+
+                // Return an auth callback that'll get called any time the
+                // NATS connection needs to be (re-)established. This is
+                // necessary to ensure that we always provide a recently
+                // issued JWT-SVID.
+                async_nats::ConnectOptions::with_auth_callback(move |nonce| {
+                    let key = key.clone();
+                    let jwt = jwt.clone();
+                    let tx = tx.clone();
+
+                    async move {
+                        let (token_tx, token_rx) = tokio::sync::oneshot::channel::<
+                            Result<spiffe::JwtSvid, spiffe::error::GrpcClientError>,
+                        >();
+
+                        tx.send(token_tx)
+                            .await
+                            .expect("failed to send SPIFFE request");
+                        let svid = token_rx
+                            .await
+                            .expect("failed to receive SPIFFE response")
+                            .map_err(async_nats::AuthError::new)
+                            .map_err(async_nats::AuthError::new)?;
+
+                        let mut auth = async_nats::Auth::new();
+                        let signature = key
+                            .sign(&nonce)
+                            .map(String::from_utf8)
+                            .map_err(async_nats::AuthError::new)?
+                            .map_err(async_nats::AuthError::new)?;
+
+                        auth.jwt = Some(jwt);
+                        auth.signature = Some(signature);
+                        auth.token = Some(svid.token().into());
+                        Ok(auth)
+                    }
+                })
             }
-        }),
-        (Some(_), None) | (None, Some(_)) => {
-            bail!("cannot authenticate if only one of jwt or seed is specified")
-        }
-        _ => opts,
-    };
+            (Some(jwt), Some(key), None) => {
+                async_nats::ConnectOptions::with_jwt(jwt.to_string(), move |nonce| {
+                    let key = key.clone();
+                    async move { key.sign(&nonce).map_err(async_nats::AuthError::new) }
+                })
+            }
+            (Some(_), None, None) | (None, Some(_), None) => {
+                bail!("cannot authenticate if only one of jwt or seed is specified")
+            }
+            (None, None, Some(wid_cfg)) => {
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<
+                    tokio::sync::oneshot::Sender<
+                        Result<spiffe::JwtSvid, spiffe::error::GrpcClientError>,
+                    >,
+                >(100);
+
+                tokio::spawn(async move {
+                    let mut client =
+                        match spiffe::WorkloadApiClient::new_from_path(&wid_cfg.spiffe_endpoint)
+                            .await
+                        {
+                            Ok(client) => client,
+                            Err(e) => {
+                                // TODO(joonas): handle this in a better way.
+                                panic!("{e:?}");
+                            }
+                        };
+
+                    while let Some(response_tx) = rx.recv().await {
+                        let res = client
+                            .fetch_jwt_svid(&[wid_cfg.auth_service_audience.as_str()], None)
+                            .await;
+                        let _ = response_tx.send(res);
+                    }
+                });
+
+                // Return an auth callback that'll get called any time the
+                // NATS connection needs to be (re-)established. This is
+                // necessary to ensure that we always provide a recently
+                // issued JWT-SVID.
+                async_nats::ConnectOptions::with_auth_callback(move |_| {
+                    let tx = tx.clone();
+                    async move {
+                        let (token_tx, token_rx) = tokio::sync::oneshot::channel::<
+                            Result<spiffe::JwtSvid, spiffe::error::GrpcClientError>,
+                        >();
+                        tx.send(token_tx)
+                            .await
+                            .context("failed to send SPIFFE request")
+                            .map_err(async_nats::AuthError::new)?;
+
+                        let svid = token_rx
+                            .await
+                            .context("failed to receive SPIFFE response")
+                            .map_err(async_nats::AuthError::new)?
+                            .map_err(async_nats::AuthError::new)?;
+
+                        let mut auth = async_nats::Auth::new();
+                        auth.token = Some(svid.token().into());
+                        Ok(auth)
+                    }
+                })
+            }
+            _ => async_nats::ConnectOptions::new(),
+        };
     let opts = if let Some(timeout) = request_timeout {
         opts.request_timeout(Some(timeout))
     } else {
         opts
     };
+    let opts = opts.require_tls(require_tls);
     opts.connect(addr)
         .await
         .context("failed to connect to NATS")
@@ -640,6 +764,12 @@ impl Host {
             "version": config.version,
         });
 
+        let workload_identity_config = if config.experimental_features.workload_identity {
+            Some(WorkloadIdentityConfig::new()?)
+        } else {
+            None
+        };
+
         let ((ctl_nats, queue), rpc_nats) = try_join!(
             async {
                 debug!(
@@ -652,6 +782,7 @@ impl Host {
                     config.ctl_key.clone(),
                     config.ctl_tls,
                     None,
+                    workload_identity_config.clone(),
                 )
                 .await
                 .context("failed to establish NATS control server connection")?;
@@ -679,6 +810,7 @@ impl Host {
                     config.rpc_key.clone(),
                     config.rpc_tls,
                     Some(config.rpc_timeout),
+                    workload_identity_config.clone(),
                 )
                 .await
                 .context("failed to establish NATS RPC server connection")

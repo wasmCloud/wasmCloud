@@ -33,6 +33,7 @@ secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sysinfo = { workspace = true }
+spiffe = { workspace = true, features = ["spiffe-types", "workload-api"] }
 time = { workspace = true, features = ["formatting"] }
 tokio = { workspace = true, features = [
     "fs",
