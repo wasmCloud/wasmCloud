@@ -4,9 +4,10 @@ set -euo pipefail
 
 source "$(dirname "$0")/common-env"
 
-echo "Deleting cluster"
+kubectl delete machinepools --all --wait=true || echo "Machine pools already deleted"
+kubectl delete clusters --all --wait=true || echo "Clusters already deleted"
 
-KUBERNETES_VERSION=v1.31.1 \
-NAMESPACE=default \
-clusterctl generate cluster benchmark-test \
---from "$(dirname "$0")/cluster-template-managed.yaml" | kubectl delete --wait=true --filename -
+echo "Deleting volumes"
+
+# The deletion process for the cluster doesn't clean up block volumes (yay) so we do that here
+oci bv volume list --output json --compartment-id "$OCI_COMPARTMENT_ID" | jq -r '.data[].id' | xargs -I {} oci bv volume delete --force --volume-id {} || echo "Volumes already deleted"
