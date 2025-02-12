@@ -1,11 +1,11 @@
 use std::{collections::HashSet, fs, path::PathBuf};
 
+use claims::{assert_err, assert_ok};
+use semver::Version;
 use wash::lib::parser::{
     load_config, CommonConfig, ComponentConfig, LanguageConfig, RegistryConfig, RustConfig,
     TinyGoConfig, TinyGoGarbageCollector, TinyGoScheduler, TypeConfig, WasmTarget,
 };
-use claims::{assert_err, assert_ok};
-use semver::Version;
 
 #[tokio::test]
 async fn rust_component() {

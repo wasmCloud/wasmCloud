@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use wash::lib::app::validate_manifest_file;
 use anyhow::{Context, Result};
 use serial_test::serial;
 use tokio::process::Command;
 use wadm_types::api::StatusType;
+use wash::lib::app::validate_manifest_file;
 use wash::lib::cli::get::parse_watch_interval;
 use wash::lib::cli::output::{AppDeployCommandOutput, AppValidateOutput};
 
