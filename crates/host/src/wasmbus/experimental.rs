@@ -12,6 +12,9 @@ pub struct Features {
     pub(crate) builtin_messaging_nats: bool,
     /// Enable the wasmcloud:messaging@v3 interface support in the host
     pub(crate) wasmcloud_messaging_v3: bool,
+    /// Enable workload identity in the host that will be used for authenticating
+    /// into NATS
+    pub(crate) workload_identity: bool,
 }
 
 impl Features {
@@ -37,6 +40,12 @@ impl Features {
         self.wasmcloud_messaging_v3 = true;
         self
     }
+
+    /// Enable workload identity in the host
+    pub fn enable_workload_identity(mut self) -> Self {
+        self.workload_identity = true;
+        self
+    }
 }
 
 /// This enables unioning feature flags together
@@ -48,6 +57,7 @@ impl std::ops::BitOr for Features {
             builtin_http_server: self.builtin_http_server || rhs.builtin_http_server,
             builtin_messaging_nats: self.builtin_messaging_nats || rhs.builtin_messaging_nats,
             wasmcloud_messaging_v3: self.wasmcloud_messaging_v3 || rhs.wasmcloud_messaging_v3,
+            workload_identity: self.workload_identity || rhs.workload_identity,
         }
     }
 }
@@ -74,6 +84,7 @@ impl From<&str> for Features {
             "wasmcloud-messaging-v3" | "wasmcloud_messaging_v3" => {
                 Self::new().enable_wasmcloud_messaging_v3()
             }
+            "workload-identity" | "workload_identity" => Self::new().enable_workload_identity(),
             _ => {
                 warn!(%s, "unknown feature flag");
                 Self::new()
