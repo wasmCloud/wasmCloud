@@ -210,6 +210,10 @@ pub async fn create_nats_client_from_opts(
     let nats_url = format!("{host}:{port}");
     use async_nats::ConnectOptions;
 
+    let nats_name = names::Generator::new(names::ADJECTIVES, names::NOUNS, names::Name::Numbered)
+        .next()
+        .context("failed to generate name")?;
+
     let nc = if let Some(jwt_file) = jwt {
         let jwt_contents = extract_arg_value(&jwt_file)
             .await
@@ -239,12 +243,15 @@ pub async fn create_nats_client_from_opts(
             opts = opts.tls_first();
         }
 
-        opts.connect(&nats_url).await.with_context(|| {
-            format!(
-                "Failed to connect to NATS server {}:{} while creating client",
-                &host, &port
-            )
-        })?
+        opts.name(nats_name)
+            .connect(&nats_url)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to connect to NATS server {}:{} while creating client",
+                    &host, &port
+                )
+            })?
     } else if let Some(credsfile_path) = credsfile {
         let mut opts = ConnectOptions::with_credentials_file(credsfile_path.clone())
             .await
@@ -263,12 +270,15 @@ pub async fn create_nats_client_from_opts(
             opts = opts.tls_first();
         }
 
-        opts.connect(&nats_url).await.with_context(|| {
-            format!(
-                "Failed to connect to NATS {} with credentials file {:?}",
-                &nats_url, &credsfile_path
-            )
-        })?
+        opts.name(nats_name)
+            .connect(&nats_url)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to connect to NATS {} with credentials file {:?}",
+                    &nats_url, &credsfile_path
+                )
+            })?
     } else {
         let mut opts = ConnectOptions::new();
 
@@ -280,6 +290,7 @@ pub async fn create_nats_client_from_opts(
             opts = opts.tls_first();
         }
 
+        opts = opts.name(nats_name).retry_on_initial_connect();
         opts.connect(&nats_url)
             .await
             .with_context(|| format!("Failed to connect to NATS {}", &nats_url))?
