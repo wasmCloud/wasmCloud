@@ -1,0 +1,78 @@
+package wasmcloud:wash@0.1.0;
+
+/// The interface for a subcommand plugin. This is used to register plugins and to provide the host
+/// with an interface it can use to interact with the plugin.
+interface subcommand {
+  /// Information about an argument
+  record argument {
+    /// The description of the argument. Used for documentation in the CLI
+    description: string,
+    /// Whether or not the argument is a path. If the argument is a path, wash will load this
+    /// path (with access to only the file if it is a file path and access to the directory if
+    /// it is a directory path) and pass it as a preopened dir at the exact same path
+    is-path: bool,
+    /// Whether or not the argument is required.
+    required: bool,
+  }
+
+  /// The metadata for a plugin used for registration and setup
+  record metadata {
+    /// The friendly name of the plugin
+    name: string,
+    /// The ID of the plugin. This must be unique across all plugins and is used as the name of
+    /// the subcommand added to wash. This ID should contain no whitespace
+    id: string,
+    /// The version of the plugin
+    version: string,
+    /// The author of the plugin
+    author: string,
+    /// The description of the plugin. This will be used as the top level help text for the plugin
+    description: string,
+    /// The list of flags and their documentation that can be used with this plugin. The key is
+    /// the name of the flag.
+    %flags: list<tuple<string, argument>>,
+    /// The list of positional arguments that can be used with this plugin. The key is the name
+    /// of the argument.
+    arguments: list<tuple<string, argument>>,
+  }
+
+  /// The function to register a plugin. This is called by the host to register the plugin.
+  register: func() -> metadata;
+}
+
+/// The world that subcommand plugins can consume and provide. Any plugin is invoked using the
+/// `wasi:cli/run` function and is passed all relevant flags, arguments, and environment variables.
+world subcommands {
+  import wasi:io/poll@0.2.0;
+  import wasi:clocks/monotonic-clock@0.2.0;
+  import wasi:io/error@0.2.0;
+  import wasi:io/streams@0.2.0;
+  import wasi:http/types@0.2.0;
+  import wasi:http/outgoing-handler@0.2.0;
+  import wasi:cli/environment@0.2.0;
+  import wasi:cli/exit@0.2.0;
+  import wasi:cli/stdin@0.2.0;
+  import wasi:cli/stdout@0.2.0;
+  import wasi:cli/stderr@0.2.0;
+  import wasi:cli/terminal-input@0.2.0;
+  import wasi:cli/terminal-output@0.2.0;
+  import wasi:cli/terminal-stdin@0.2.0;
+  import wasi:cli/terminal-stdout@0.2.0;
+  import wasi:cli/terminal-stderr@0.2.0;
+  import wasi:clocks/wall-clock@0.2.0;
+  import wasi:filesystem/types@0.2.0;
+  import wasi:filesystem/preopens@0.2.0;
+  import wasi:sockets/network@0.2.0;
+  import wasi:sockets/instance-network@0.2.0;
+  import wasi:sockets/udp@0.2.0;
+  import wasi:sockets/udp-create-socket@0.2.0;
+  import wasi:sockets/tcp@0.2.0;
+  import wasi:sockets/tcp-create-socket@0.2.0;
+  import wasi:sockets/ip-name-lookup@0.2.0;
+  import wasi:random/random@0.2.0;
+  import wasi:random/insecure@0.2.0;
+  import wasi:random/insecure-seed@0.2.0;
+
+  export subcommand;
+  export wasi:cli/run@0.2.0;
+}

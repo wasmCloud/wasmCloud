@@ -1,0 +1,9 @@
+package test-components:ponger-config;
+
+world component {
+  export test-components:testing/pingpong@0.1.0;
+  // These are not used in the test, but just making sure the build process can handle local and
+  // remote deps
+  import wasmcloud:secrets/store@0.1.0-draft;
+  import wasmcloud:secrets/reveal@0.1.0-draft;
+}
