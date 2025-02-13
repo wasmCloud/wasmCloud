@@ -2,5 +2,21 @@
 
 changelog:
   exclude:
+    labels:
+      - type:ci
+      - type:docs
     authors:
       - dependabot
+  categories:
+    - title: Breaking Changes 🛠
+      labels:
+        - impact:breaking
+    - title: New Features 🎉
+      labels:
+        - type:feature
+    - title: Bug Fixes 🐞
+      labels:
+        - type:fix
+    - title: Other Changes
+      labels:
+        - '*'
