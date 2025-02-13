@@ -1,0 +1,6 @@
+spec:
+  nodePoolNodeConfig:
+    nodePoolPodNetworkOptionDetails:
+      cniType: OCI_VCN_IP_NATIVE
+      vcnIpNativePodNetworkOptions:
+        maxPodsPerNode: 110
