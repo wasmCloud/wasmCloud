@@ -17,7 +17,7 @@ use wasi_preview1_component_adapter_provider::WASI_SNAPSHOT_PREVIEW1_REACTOR_ADA
 /// List of (manifest path, output artifact name) for all the packages used during test
 ///
 /// Manifest paths should be relative to the directory containing this build.rs (i.e. tests/components)
-const WASI_WASM32_PACKAGES: [(&str, &str); 6] = [
+const WASI_WASM32_PACKAGES: [(&str, &str); 7] = [
     ("./rust/Cargo.toml", "interfaces-handler-reactor"),
     ("./rust/Cargo.toml", "interfaces-reactor"),
     ("./rust/Cargo.toml", "pinger-config-component"),
@@ -29,6 +29,10 @@ const WASI_WASM32_PACKAGES: [(&str, &str); 6] = [
     (
         "../../examples/rust/components/http-keyvalue-counter/Cargo.toml",
         "http-keyvalue-counter",
+    ),
+    (
+        "../../examples/rust/components/http-keyvalue-watcher/Cargo.toml",
+        "http-keyvalue-watcher",
     ),
 ];
 
