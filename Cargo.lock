@@ -7597,9 +7597,9 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "wadm-client"
-version = "0.8.0"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6a888ed0f5c7bb1b6c253ef3efb806f533e965861abd7eb7d86de5c6f896deb"
+checksum = "26f6496035592c8a7fad0b212cad71182cd404dd9995e9563204f849f5603325"
 dependencies = [
  "anyhow",
  "async-nats",
