@@ -96,6 +96,34 @@ spec:
       enable: {{ default false .traces.enable }}
       endpoint: {{ default "traces-specific-otel-collector.svc" .traces.endpoint }}
   {{- end }}
+  {{- with .certificates }}
+  certificates:
+  {{- if .authorities }}
+    authorities:
+    {{- range .authorities }}
+      {{- /*
+        ensure we have either:
+        - name: <any-valid-name>
+          configMap:
+            name: <name-of-configmap-in-namespace>
+        -or-
+        - name: <any-valid-name>
+          secret:
+            secretName: <name-of-secret-in-namespace>
+        */}}
+      {{- if (or (and .name .configMap .configMap.name) (and .name .secret .secret.secretName)) }}
+      - name: {{ .name }}
+        {{- if (and .configMap .configMap.name) }}
+        configmap:
+          name: {{ .configMap.name }}
+        {{- else if (and .secret .secret.secretName) }}
+        secret:
+          secretName: {{ .secret.secretName }}
+        {{- end }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
   # Optional: Subject prefix that will be used by the host to query for wasmCloud Secrets.
   # See https://wasmcloud.com/docs/concepts/secrets for more context
   secretsTopicPrefix: {{ default "wasmcloud.secrets" .secretsTopicPrefix }}
