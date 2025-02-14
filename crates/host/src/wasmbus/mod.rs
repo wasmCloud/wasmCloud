@@ -738,7 +738,7 @@ impl Host {
         });
 
         let workload_identity_config = if config.experimental_features.workload_identity {
-            Some(WorkloadIdentityConfig::new()?)
+            Some(WorkloadIdentityConfig::from_env()?)
         } else {
             None
         };
