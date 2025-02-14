@@ -114,7 +114,7 @@ spec:
       {{- if (or (and .name .configMap .configMap.name) (and .name .secret .secret.secretName)) }}
       - name: {{ .name }}
         {{- if (and .configMap .configMap.name) }}
-        configmap:
+        configMap:
           name: {{ .configMap.name }}
         {{- else if (and .secret .secret.secretName) }}
         secret:
