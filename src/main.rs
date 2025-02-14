@@ -323,7 +323,11 @@ struct Args {
     flame_graph: Option<String>,
 
     /// Configures the set of certificate authorities as repeatable set of file paths to load into the OCI and OpenTelemetry clients
-    #[arg(long = "tls-ca-path")]
+    #[arg(
+        long = "tls-ca-path",
+        env = "WASMCLOUD_TLS_CA_PATH",
+        value_delimiter = ','
+    )]
     pub tls_ca_paths: Option<Vec<PathBuf>>,
 
     /// If provided, overrides the default heartbeat interval of every 30 seconds. Provided value is interpreted as seconds.
