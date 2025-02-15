@@ -6,6 +6,7 @@
 .gitignore @wasmCloud/org-maintainers
 LICENSE @wasmCloud/org-maintainers
 *.md @wasmCloud/org-maintainers
+.github/workflows/check-conventional-commits.yml
 
 ## CI and nix
 
