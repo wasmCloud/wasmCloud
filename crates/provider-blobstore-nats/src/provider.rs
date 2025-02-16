@@ -56,9 +56,9 @@ impl NatsBlobstoreProvider {
     /// Build a [`NatsBlobstoreProvider`] from [`HostData`]
     pub fn from_host_data(host_data: &HostData) -> NatsBlobstoreProvider {
         let config = NatsConnectionConfig::from_link_config(&host_data.config, &host_data.secrets);
-        if let Ok(config) = config {
+        if let Ok(default_config) = config {
             NatsBlobstoreProvider {
-                default_config: config,
+                default_config,
                 ..Default::default()
             }
         } else {

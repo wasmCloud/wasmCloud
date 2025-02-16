@@ -37,11 +37,11 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
             let container_config = async_nats::jetstream::object_store::Config {
                 bucket: name,
                 description: Some("NATS Blobstore".to_string()),
-                max_age: blobstore.storage_config.max_age.unwrap(),
-                max_bytes: blobstore.storage_config.max_bytes.unwrap(),
-                storage: blobstore.storage_config.storage_type.unwrap().0,
-                num_replicas: blobstore.storage_config.num_replicas.unwrap(),
-                compression: blobstore.storage_config.compression.unwrap(),
+                max_age: blobstore.storage_config.max_age,
+                max_bytes: blobstore.storage_config.max_bytes,
+                storage: blobstore.storage_config.storage_type.0,
+                num_replicas: blobstore.storage_config.num_replicas,
+                compression: blobstore.storage_config.compression,
                 placement: None,
             };
 
@@ -509,7 +509,7 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
         .map_err(|err| format!("{err:#}")))
     }
 
-    // Move an object from one to the same (different key name, , or revision number update), or another NATS Blobstore Container
+    // Move an object from one to the same (different key name, or revision number update), or another NATS Blobstore Container
     #[instrument(level = "debug", skip(self))]
     async fn move_object(
         &self,

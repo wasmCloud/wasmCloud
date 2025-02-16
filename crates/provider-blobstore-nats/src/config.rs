@@ -69,19 +69,19 @@ pub struct NatsConnectionConfig {
 pub struct StorageConfig {
     /// Maximum age of any object in the container, expressed in nanoseconds
     #[serde(default)]
-    pub max_age: Option<core::time::Duration>,
+    pub max_age: core::time::Duration,
     /// Maximum size of the object store container, expressed in bytes
     #[serde(default)]
-    pub max_bytes: Option<i64>,
+    pub max_bytes: i64,
     /// The type of storage backend, File (default) and Memory
     #[serde(default)]
-    pub storage_type: Option<StorageType>,
+    pub storage_type: StorageType,
     /// How many replicas to keep for each object in a cluster, maximum 5
     #[serde(default)]
-    pub num_replicas: Option<usize>,
+    pub num_replicas: usize,
     /// Whether the underlying stream should be compressed
     #[serde(default)]
-    pub compression: Option<bool>,
+    pub compression: bool,
 }
 
 use std::str::FromStr;
@@ -89,6 +89,14 @@ use std::str::FromStr;
 /// StorageType represents the type of storage backend to use; it maps the configuration value to the proper 'nats_async' type
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct StorageType(pub async_nats::jetstream::stream::StorageType);
+
+/// Default implementation for [`StorageType`]
+impl Default for StorageType {
+    fn default() -> Self {
+        // Use File as default storage type
+        Self(async_nats::jetstream::stream::StorageType::File)
+    }
+}
 
 /// Implementing FromStr for StorageType to allow custom parsing from a string
 impl FromStr for StorageType {
@@ -117,13 +125,11 @@ impl FromStr for StorageType {
 impl Default for StorageConfig {
     fn default() -> StorageConfig {
         StorageConfig {
-            max_age: Some(core::time::Duration::from_secs(315_569_520)), // 10 years
-            max_bytes: Some(1_000_000_000),                              // 1 GB
-            storage_type: Some(StorageType(
-                async_nats::jetstream::stream::StorageType::File,
-            )),
-            num_replicas: Some(1),
-            compression: Some(false),
+            max_age: core::time::Duration::from_secs(0), // unlimited
+            max_bytes: -1,                               // unlimited
+            storage_type: StorageType::default(),
+            num_replicas: 1,
+            compression: false,
         }
     }
 }
@@ -228,24 +234,22 @@ impl NatsConnectionConfig {
         // NATS Object Storage Configuration
         let mut storage_config = StorageConfig::default();
         if let Some(max_age) = config.get(CONFIG_NATS_STORAGE_MAX_AGE) {
-            storage_config.max_age = Some(core::time::Duration::from_secs(
+            storage_config.max_age = core::time::Duration::from_secs(
                 max_age.parse().expect("max_age must be a number (seconds)"),
-            ));
+            );
         }
         if let Some(storage_type) = config.get(CONFIG_NATS_STORAGE_TYPE) {
-            storage_config.storage_type = Some(
-                storage_type
-                    .parse::<StorageType>()
-                    .expect("invalid storage_type"),
-            );
+            storage_config.storage_type = storage_type
+                .parse::<StorageType>()
+                .expect("invalid storage_type");
         }
         if let Some(num_replicas) = config.get(CONFIG_NATS_STORAGE_NUM_REPLICAS) {
             storage_config.num_replicas =
-                Some(num_replicas.parse().expect("num_replicas must be a number"));
+                num_replicas.parse().expect("num_replicas must be a number");
         }
         if let Some(compression) = config.get(CONFIG_NATS_STORAGE_COMPRESSION) {
             storage_config.compression =
-                Some(compression.parse().expect("compression must be a boolean"));
+                compression.parse().expect("compression must be a boolean");
         }
         map.insert(
             "storage_config".into(),
@@ -349,10 +353,8 @@ mod test {
             js_domain: Some("domain1".to_string()),
             auth_jwt: Some("jwt1".to_string()),
             storage_config: Some(StorageConfig {
-                storage_type: Some(StorageType(
-                    async_nats::jetstream::stream::StorageType::File,
-                )),
-                compression: Some(true),
+                storage_type: StorageType(async_nats::jetstream::stream::StorageType::File),
+                compression: true,
                 ..Default::default()
             }),
             max_write_wait: Some(45),
@@ -363,10 +365,8 @@ mod test {
             js_domain: Some("new_domain".to_string()),
             auth_jwt: Some("new_jwt".to_string()),
             storage_config: Some(StorageConfig {
-                storage_type: Some(StorageType(
-                    async_nats::jetstream::stream::StorageType::Memory,
-                )),
-                compression: Some(false),
+                storage_type: StorageType(async_nats::jetstream::stream::StorageType::Memory),
+                compression: false,
                 ..Default::default()
             }),
             max_write_wait: Some(60),
@@ -408,10 +408,7 @@ mod test {
 
         // Validate StorageConfig and max_age
         if let Some(storage_config) = &ncc.storage_config {
-            assert_eq!(
-                storage_config.max_age,
-                Some(std::time::Duration::from_secs(3600))
-            );
+            assert_eq!(storage_config.max_age, std::time::Duration::from_secs(3600));
         }
 
         Ok(())
