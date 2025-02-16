@@ -22,10 +22,6 @@ spec:
         # image: file://./build/http_blobstore_s.wasm
         image: ghcr.io/wasmcloud/http-blobstore-rust:0.3.0
         id: http-blobstore
-        # config:
-        #   - name: http-blobstore-example
-        #     properties:
-        #       container_names: "ying,yang"
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler

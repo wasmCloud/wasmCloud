@@ -21,10 +21,6 @@ spec:
         # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
         image: file://./build/http_blobstore_s.wasm
         id: http-blobstore
-        # config:
-        #   - name: http-blobstore-example
-        #     properties:
-        #       container_names: "ying,yang"
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
