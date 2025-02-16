@@ -1,8 +1,8 @@
 //! Functionality enabling the `wash link` group of subcommands
 
+use anyhow::Result;
 use crate::lib::cli::link::LinkCommand;
 use crate::lib::cli::{CommandOutput, OutputKind};
-use anyhow::Result;
 
 mod del;
 mod put;

@@ -219,9 +219,9 @@ async fn resolve_registry_credentials(registry: &str) -> Result<RegistryCredenti
 
 #[cfg(test)]
 mod tests {
-    use crate::lib::cli::registry::{RegistryCommand, RegistryPullCommand};
     use anyhow::{ensure, Context as _, Result};
     use clap::Parser;
+    use crate::lib::cli::registry::{RegistryCommand, RegistryPullCommand};
 
     use crate::common::registry_cmd::RegistryPushCommand;
 

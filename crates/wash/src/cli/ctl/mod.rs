@@ -1,5 +1,6 @@
 use clap::Subcommand;
 
+pub use output::*;
 use crate::lib::cli::{
     get::{GetClaimsCommand, GetHostInventoriesCommand, GetHostsCommand},
     link::LinkCommand,
@@ -8,7 +9,6 @@ use crate::lib::cli::{
     stop::StopCommand,
     update::UpdateCommand,
 };
-pub use output::*;
 
 mod output;
 
@@ -59,7 +59,6 @@ mod test {
 
     use crate::lib::cli::{
         get::GetHostsCommand,
-        link::LinkPutCommand,
         scale::ScaleComponentCommand,
         stop::{StopComponentCommand, StopProviderCommand},
         update::UpdateComponentCommand,
@@ -275,6 +274,7 @@ mod test {
             "--interface",
             "foo",
         ])?;
+        use crate::lib::cli::link::LinkPutCommand;
         match link_all.command {
             CtlCliCommand::Link(LinkCommand::Put(LinkPutCommand {
                 opts,

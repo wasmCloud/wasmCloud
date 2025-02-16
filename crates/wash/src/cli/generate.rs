@@ -1,12 +1,12 @@
 use std::{collections::HashMap, path::PathBuf};
 
+use anyhow::{Context, Result};
+use clap::{Args, Subcommand};
+use serde_json::json;
 use crate::lib::{
     cli::CommandOutput,
     generate::{generate_project, Project, ProjectKind},
 };
-use anyhow::{Context, Result};
-use clap::{Args, Subcommand};
-use serde_json::json;
 
 /// Create a new project from template
 #[derive(Debug, Clone, Subcommand)]

@@ -596,10 +596,10 @@ mod test {
         let tmp_dir = tempdir()?;
         std::fs::write(tmp_dir.path().join("foo.yaml"), "exists")?;
         let mut yaml = serde_yaml::from_str(
-            r#"
+            r"
 mapping:
   path: 'file://foo.yaml'
-"#,
+",
         )
         .context("failed to build YAML")?;
 

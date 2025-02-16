@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use crate::lib::{cli::CommandOutput, plugin::subcommand::Metadata};
 use serde_json::json;
 use term_table::{
     row::Row,
     table_cell::{Alignment, TableCell},
     Table,
 };
+use crate::lib::{cli::CommandOutput, plugin::subcommand::Metadata};
 use wasmcloud_control_interface::{Host, HostInventory, Link};
 
 use crate::util::format_optional;

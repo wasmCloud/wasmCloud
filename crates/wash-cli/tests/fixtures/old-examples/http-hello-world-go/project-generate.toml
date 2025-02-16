@@ -1,9 +1,0 @@
-[template]
-
-raw = [
-  "*.wasm"
-]
-exclude = [
-  "gen/",
-  "keys/"
-]

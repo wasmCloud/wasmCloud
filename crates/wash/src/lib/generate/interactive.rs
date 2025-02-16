@@ -92,16 +92,17 @@ pub(crate) fn prompt_for_variable(variable: &TemplateSlots) -> Result<String> {
 
         if is_valid_variable_value(&user_entry, &variable.var_info) {
             return Ok(user_entry);
+        } else {
+            eprintln!(
+                "{} {} \"{}\" {}",
+                crate::lib::generate::emoji::WARN,
+                style("Sorry,").bold().red(),
+                style(&user_entry).bold().yellow(),
+                style(format!("is not a valid value for {}", variable.var_name))
+                    .bold()
+                    .red()
+            );
         }
-        eprintln!(
-            "{} {} \"{}\" {}",
-            crate::lib::generate::emoji::WARN,
-            style("Sorry,").bold().red(),
-            style(&user_entry).bold().yellow(),
-            style(format!("is not a valid value for {}", variable.var_name))
-                .bold()
-                .red()
-        );
     }
 }
 

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
+use serde_json::json;
 use crate::lib::cli::{CliConnectionOpts, CommandOutput, OutputKind};
 use crate::lib::config::WashConnectionOptions;
-use serde_json::json;
 use wasmcloud_secrets_types::SECRET_PREFIX;
 
 use crate::appearance::spinner::Spinner;

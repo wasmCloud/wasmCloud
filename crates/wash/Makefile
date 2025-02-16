@@ -31,10 +31,10 @@ build-watch: ## Continuously build the project
 
 test: ## Run unit test suite
 	@$(CARGO) nextest run $(TARGET) --no-fail-fast --bin wash
-	@$(CARGO) nextest run $(TARGET) --no-fail-fast -p wash-lib --features=cli
+	@$(CARGO) nextest run $(TARGET) --no-fail-fast -p wash --features=cli
 
 test-wash-ci:
-	@$(CARGO) nextest run --profile ci -p wash-lib -p wash-cli --all-features -E 'binary(wash)' -E 'package(wash-lib)'
+	@$(CARGO) nextest run --profile ci -p wash --all-features -E 'binary(wash)'
 
 test-watch: ## Run unit tests continuously, can optionally specify a target test filter.
 	@$(CARGO) watch -- $(CARGO) nextest run $(TARGET)
@@ -58,7 +58,7 @@ test-unit-watch: ## Run tests continuously
 
 rust-check: ## Run rust checks
 	@$(CARGO) fmt --all --check
-	@$(CARGO) clippy --all-features --all-targets -p wash-lib -p wash-cli
+	@$(CARGO) clippy --all-features --all-targets -p wash
 
 test-all: ## Run all tests
 	$(MAKE) test

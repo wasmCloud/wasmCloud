@@ -3,16 +3,16 @@ pub use config::*;
 
 use std::{io::Cursor, path::PathBuf};
 
-use crate::lib::{
-    cli::{CommandOutput, OutputKind},
-    config::downloads_dir,
-    start::get_download_client,
-};
 use anyhow::{bail, Context, Result};
 use async_compression::tokio::bufread::GzipDecoder;
 use clap::Parser;
 use tokio_tar::Archive;
 use warp::Filter;
+use crate::lib::{
+    cli::{CommandOutput, OutputKind},
+    config::downloads_dir,
+    start::get_download_client,
+};
 
 const DEFAULT_WASHBOARD_VERSION: &str = "v0.6.0";
 

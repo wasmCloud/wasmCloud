@@ -2,6 +2,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
+use anyhow::{bail, Context as _, Result};
+use clap::Parser;
+use futures::future::join_all;
+use serde_json::json;
+use tokio::process::Command;
+use tracing::warn;
 use crate::lib::cli::{stop::stop_hosts, CommandOutput, OutputKind};
 use crate::lib::config::{
     create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_HOST,
@@ -9,12 +15,6 @@ use crate::lib::config::{
 };
 use crate::lib::id::ServerId;
 use crate::lib::start::{nats_pid_path, NATS_SERVER_BINARY, WADM_PID};
-use anyhow::{bail, Context as _, Result};
-use clap::Parser;
-use futures::future::join_all;
-use serde_json::json;
-use tokio::process::Command;
-use tracing::warn;
 
 use crate::appearance::spinner::Spinner;
 use crate::config::{
@@ -137,19 +137,20 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
                 "🛁 Exiting without stopping NATS or wadm, there are still hosts running",
             );
             return Ok(CommandOutput::new(out_text, out_json));
-        }
-        let wasmcloud_pid_file_path = host_pid_file()?;
-        // Failing to find the pid file is not an error that should prevent stopping other resources
-        if let Err(e) = tokio::fs::remove_file(&wasmcloud_pid_file_path)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to find wasmcloud pid file [{}]",
-                    wasmcloud_pid_file_path.display()
-                )
-            })
-        {
-            warn!("{}", e.to_string());
+        } else {
+            let wasmcloud_pid_file_path = host_pid_file()?;
+            // Failing to find the pid file is not an error that should prevent stopping other resources
+            if let Err(e) = tokio::fs::remove_file(&wasmcloud_pid_file_path)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to find wasmcloud pid file [{}]",
+                        wasmcloud_pid_file_path.display()
+                    )
+                })
+            {
+                warn!("{}", e.to_string());
+            }
         }
     } else {
         warn!("Couldn't connect to NATS, unable to stop running hosts")

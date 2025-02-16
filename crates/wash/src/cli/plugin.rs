@@ -1,17 +1,17 @@
 use std::path::PathBuf;
 
-use crate::lib::{
-    cli::{registry::AuthOpts, CommandOutput, OutputKind},
-    registry::{pull_oci_artifact, OciPullOptions},
-};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
 use oci_client::Reference;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
+use crate::lib::{
+    cli::{registry::AuthOpts, CommandOutput, OutputKind},
+    registry::{pull_oci_artifact, OciPullOptions},
+};
 
-use super::{
+use crate::{
     appearance::spinner::Spinner,
     ctl::plugins_table,
     util::{ensure_plugin_dir, load_plugins},
@@ -163,7 +163,7 @@ pub async fn handle_install(
                 .parse()
                 .context("Invalid image reference")?;
 
-            // TODO: Add support for pulling via stream to crate::lib
+            // TODO: Add support for pulling via stream to wash_lib
             let image_data = pull_oci_artifact(
                 &image,
                 OciPullOptions {

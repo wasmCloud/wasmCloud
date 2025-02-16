@@ -129,7 +129,7 @@ pub async fn handle_command(
     let current_dir =
         std::env::current_dir().context("failed to get current directory for wash dev")?;
     let project_path = cmd.code_dir.unwrap_or(current_dir);
-    let project_cfg = load_config(Some(project_path.clone()), Some(true)).await?;
+    let mut project_cfg = load_config(Some(project_path.clone()), Some(true)).await?;
 
     let mut wash_dev_session = WashDevSession::from_sessions_file(&project_path)
         .await
@@ -227,7 +227,7 @@ pub async fn handle_command(
         dev_session: &mut wash_dev_session,
         nats_client: &nats_client,
         ctl_client: &ctl_client,
-        project_cfg: &project_cfg,
+        project_cfg: &mut project_cfg,
         lattice,
         session_id: &session_id,
         manifest_output_dir: cmd.manifest_output_dir.as_ref(),
@@ -293,8 +293,17 @@ pub async fn handle_command(
     let mut watcher = notify::recommended_watcher(move |res: _| match res {
         Ok(event) => match event {
             NotifyEvent {
-                kind:
-                    EventKind::Create(_) | EventKind::Modify(ModifyKind::Data(_)) | EventKind::Remove(_),
+                kind: EventKind::Create(_),
+                paths,
+                ..
+            }
+            | NotifyEvent {
+                kind: EventKind::Modify(ModifyKind::Data(_)),
+                paths,
+                ..
+            }
+            | NotifyEvent {
+                kind: EventKind::Remove(_),
                 paths,
                 ..
             } => {

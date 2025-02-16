@@ -2,9 +2,11 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use wasmcloud_control_interface::{CtlResponse, Link};
 
-use crate::lib::cli::{validate_component_id, CliConnectionOpts};
-use crate::lib::common::boxed_err_to_anyhow;
-use crate::lib::config::WashConnectionOptions;
+use crate::lib::{
+    cli::CliConnectionOpts, common::boxed_err_to_anyhow, config::WashConnectionOptions,
+};
+
+use super::validate_component_id;
 
 #[derive(Parser, Debug, Clone)]
 pub struct LinkDelCommand {

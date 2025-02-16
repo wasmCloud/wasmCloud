@@ -45,8 +45,7 @@ crates/wascap @wasmCloud/wascap-maintainers
 ## projects
 
 crates/provider-* @wasmCloud/capability-provider-maintainers
-crates/wash-cli @wasmCloud/wash-maintainers
-crates/wash-lib @wasmCloud/wash-maintainers
+crates/wash @wasmCloud/wash-maintainers
 examples @wasmCloud/examples-maintainers
 
 ## Language specific folders

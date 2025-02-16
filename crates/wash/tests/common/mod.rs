@@ -47,9 +47,6 @@ pub const PROVIDER_HTTPSERVER_OCI_REF: &str = "ghcr.io/wasmcloud/http-server:0.2
 #[allow(unused)]
 pub const FERRIS_SAYS_OCI_REF: &str = "ghcr.io/wasmcloud/components/ferris-says-rust:0.1.0";
 
-#[allow(unused)]
-pub const NATS_SERVER_VERSION: &str = "v2.10.20";
-
 pub const DEFAULT_WASH_INVOCATION_TIMEOUT_MS_ARG: &str = "40000";
 
 #[allow(unused)]

@@ -36,8 +36,8 @@ mod test {
     use crate::ctl::CtlCliCommand;
 
     use super::*;
-    use crate::lib::cli::stop::{StopComponentCommand, StopHostCommand, StopProviderCommand};
     use clap::Parser;
+    use crate::lib::cli::stop::{StopComponentCommand, StopHostCommand, StopProviderCommand};
 
     #[derive(Parser)]
     struct Cmd {

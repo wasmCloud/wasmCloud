@@ -5,64 +5,6 @@
 [![Good first issues](https://img.shields.io/github/issues/wasmCloud/wasmCloud/good%20first%20issue?label=good%20first%20issues)](https://github.com/wasmCloud/wasmCloud/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22+label%3A%22wash-cli%22)
 [![wash-cli](https://img.shields.io/crates/v/wash-cli)](https://crates.io/crates/wash-cli)
 
-# wash
-
-The wasmCloud Shell (`wash`) is both a command-line tool and a library for building and managing wasmCloud applications.
-
-## Overview
-
-This crate combines the functionality of the former `wash-cli` and `wash-lib` crates into a single unified crate. It provides:
-
-- A command-line interface for interacting with wasmCloud
-- A library of reusable components for building wasmCloud tools and applications
-- Utilities for managing wasmCloud artifacts, keys, and configurations
-
-## Features
-
-The crate is organized into several feature flags to allow users to include only the functionality they need:
-
-- `cli` - Command-line interface functionality (enabled by default)
-- `start` - Functionality for starting wasmCloud hosts
-- `parser` - Parser utilities for wasmCloud artifacts
-- `nats` - NATS messaging integration
-- `plugin` - Plugin system support
-- `docs` - Documentation generation utilities
-
-## Usage
-
-### As a CLI Tool
-
-```bash
-# Install the CLI
-cargo install wash
-
-# Get help
-wash --help
-```
-
-### As a Library
-
-Add to your Cargo.toml:
-
-```toml
-[dependencies]
-wash = { version = "0.1.0", features = ["..."] }
-```
-
-## Documentation
-
-For detailed documentation on using wash, please see:
-- [Command Line Reference](https://wasmcloud.dev/reference/wash-cli/)
-- [Library Documentation](https://docs.rs/wash)
-
-## Contributing
-
-Contributions are welcome! Please see the [wasmCloud contributing guide](https://github.com/wasmCloud/wasmCloud/blob/main/CONTRIBUTING.md) for more information.
-
-## License
-
-This project is licensed under the terms specified in [LICENSE](../../LICENSE).
-
 ```console
                                      _                 _    _____ _          _ _
                                 ____| |               | |  / ____| |        | | |
@@ -75,28 +17,19 @@ This project is licensed under the terms specified in [LICENSE](../../LICENSE).
 > [!WARNING]
 > This crate is being deprecated in favor of [wash](https://crates.io/crates/wash), where the wash CLI will be published from now on.
 
-- [wash](#wash)
-  - [Overview](#overview)
-  - [Features](#features)
-  - [Usage](#usage)
-    - [As a CLI Tool](#as-a-cli-tool)
-    - [As a Library](#as-a-library)
-  - [Documentation](#documentation)
-  - [Contributing](#contributing)
-  - [License](#license)
-  - [Why wash](#why-wash)
-  - [Installing wash](#installing-wash)
-    - [Cargo](#cargo)
-    - [Linux (deb/rpm + apt)](#linux-debrpm--apt)
-    - [Linux (snap)](#linux-snap)
-    - [Linux (brew)](#linux-brew)
-    - [MacOS (brew)](#macos-brew)
-    - [Windows (choco)](#windows-choco)
-    - [Nix](#nix)
-  - [Proxy authentication](#proxy-authentication)
-  - [Using wash](#using-wash)
-  - [Shell auto-complete](#shell-auto-complete)
-  - [Contributing to wash](#contributing-to-wash)
+- [Why wash](#why-wash)
+- [Installing wash](#installing-wash)
+  - [Cargo](#cargo)
+  - [Linux (deb/rpm + apt)](#linux-debrpm--apt)
+  - [Linux (snap)](#linux-snap)
+  - [Linux (brew)](#linux-brew)
+  - [MacOS (brew)](#macos-brew)
+  - [Windows (choco)](#windows-choco)
+  - [Nix](#nix)
+- [Proxy authentication](#proxy-authentication)
+- [Using wash](#using-wash)
+- [Shell auto-complete](#shell-auto-complete)
+- [Contributing to wash](#contributing-to-wash)
 
 ## Why wash
 
@@ -107,13 +40,13 @@ This project is licensed under the terms specified in [LICENSE](../../LICENSE).
 ### Cargo
 
 ```bash
-cargo install --locked wash-cli
+cargo install --locked wash
 ```
 
 If you have [cargo-binstall](https://github.com/cargo-bins/cargo-binstall?tab=readme-ov-file#installation):
 
 ```bash
-cargo binstall wash-cli
+cargo binstall wash
 ```
 
 ### Linux (deb/rpm + apt)

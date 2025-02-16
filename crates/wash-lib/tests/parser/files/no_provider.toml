@@ -1,8 +1,0 @@
-language = "rust"
-type = "provider"
-name = "testcomponent"
-version = "0.1.0"
-
-[rust]
-cargo_path = "./cargo"
-target_path = "./target"

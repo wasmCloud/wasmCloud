@@ -1,9 +1,0 @@
-language = "rust"
-type = "component"
-name = "testcomponent"
-version = "0.1.0"
-
-[component]
-claims = ["wasmcloud:httpserver"]
-wasm_target = "wasm32-wasip2"
-wit_world = "test-world"

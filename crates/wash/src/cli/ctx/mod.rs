@@ -5,16 +5,16 @@ use std::{
     process::Command,
 };
 
+use anyhow::{bail, Result};
+use clap::{Args, Subcommand};
+use serde_json::json;
+use tracing::warn;
 use crate::lib::{
     cli::CommandOutput,
     config::{DEFAULT_LATTICE, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS},
     context::{fs::ContextDir, ContextManager, WashContext, HOST_CONFIG_NAME},
     id::ClusterSeed,
 };
-use anyhow::{bail, Result};
-use clap::{Args, Subcommand};
-use serde_json::json;
-use tracing::warn;
 
 use crate::lib::generate::{
     interactive::{prompt_for_choice, user_question},

@@ -1,18 +1,3 @@
-use crate::lib::app::{load_app_manifest, AppManifest, AppManifestSource};
-use crate::lib::cli::{CommandOutput, OutputKind};
-use crate::lib::common::CommandGroupUsage;
-use crate::lib::config::{
-    create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_TIMEOUT_MS,
-};
-use crate::lib::context::fs::ContextDir;
-use crate::lib::context::ContextManager;
-use crate::lib::generate::emoji;
-use crate::lib::start::{
-    ensure_nats_server, ensure_wadm, ensure_wasmcloud, find_wasmcloud_binary, nats_pid_path,
-    new_patch_version_of_after_string, start_nats_server, start_wadm, start_wasmcloud_host,
-    NatsConfig, WadmConfig, GITHUB_WASMCLOUD_ORG, GITHUB_WASMCLOUD_WADM_REPO,
-    GITHUB_WASMCLOUD_WASMCLOUD_REPO, NATS_SERVER_BINARY, NATS_SERVER_CONF, WADM_PID,
-};
 use anyhow::{anyhow, bail, Context, Result};
 use async_nats::Client;
 use clap::Parser;
@@ -33,6 +18,21 @@ use tokio::{
     process::Child,
 };
 use tracing::{debug, warn};
+use crate::lib::app::{load_app_manifest, AppManifest, AppManifestSource};
+use crate::lib::cli::{CommandOutput, OutputKind};
+use crate::lib::common::CommandGroupUsage;
+use crate::lib::config::{
+    create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_TIMEOUT_MS,
+};
+use crate::lib::context::fs::ContextDir;
+use crate::lib::context::ContextManager;
+use crate::lib::generate::emoji;
+use crate::lib::start::{
+    ensure_nats_server, ensure_wadm, ensure_wasmcloud, find_wasmcloud_binary, nats_pid_path,
+    new_patch_version_of_after_string, start_nats_server, start_wadm, start_wasmcloud_host,
+    NatsConfig, WadmConfig, GITHUB_WASMCLOUD_ORG, GITHUB_WASMCLOUD_WADM_REPO,
+    GITHUB_WASMCLOUD_WASMCLOUD_REPO, NATS_SERVER_BINARY, NATS_SERVER_CONF, WADM_PID,
+};
 use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClientBuilder};
 
 use crate::app::deploy_model_from_manifest;

@@ -1,2 +1,0 @@
-[overrides]
-"test-components:testing" = { path = "./extra-wit" }

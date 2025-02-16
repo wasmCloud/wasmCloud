@@ -11,7 +11,7 @@ use clap_complete::{generator::generate_to, shells::Shell};
 
 const TOKEN_FILE: &str = ".completion_suggested";
 const COMPLETION_DOC_URL: &str =
-    "https://github.com/wasmCloud/wasmCloud/blob/main/crates/wash-cli/Completions.md";
+    "https://github.com/wasmCloud/wasmCloud/blob/main/crates/wash/Completions.md";
 const SLACK_URL: &str = "https://slack.wasmcloud.com";
 
 fn instructions() -> String {

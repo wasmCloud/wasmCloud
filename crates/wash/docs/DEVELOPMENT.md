@@ -8,6 +8,7 @@ This document serves as a guide and reference for people looking to develop `was
     - [Dependency Check Script](#dependency-check-script)
     - [Optional Tools](#optional-tools)
   - [Building the project](#building-the-project)
+  - [Testing Local Changes](#testing-local-changes)
   - [Testing the project](#testing-the-project)
   - [Making Commits](#making-commits)
 
@@ -58,10 +59,10 @@ make build-watch
 ```
 ## Testing Local Changes
 
-After making changes to code in `crates/wash-cli`, you can build and run a new version of `wash` similarly to any other Rust binary project with `cargo run`:
+After making changes to code in `crates/wash`, you can build and run a new version of `wash` similarly to any other Rust binary project with `cargo run`:
 
 ```console
-cd crates/wash-cli
+cd crates/wash
 cargo run -- <args>
 ```
 For example : `cargo run -- up` is equivalent to `wash up`, with the latest code.

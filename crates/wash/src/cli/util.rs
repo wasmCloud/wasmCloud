@@ -4,12 +4,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use anyhow::{Context, Result};
+use term_table::{Table, TableStyle};
 use crate::lib::{
     config::{cfg_dir, DEFAULT_NATS_TIMEOUT_MS},
     plugin::{subcommand::SubcommandRunner, PLUGIN_DIR},
 };
-use anyhow::{Context, Result};
-use term_table::{Table, TableStyle};
 
 const MAX_TERMINAL_WIDTH: usize = 120;
 

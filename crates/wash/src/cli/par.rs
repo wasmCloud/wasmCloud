@@ -2,16 +2,16 @@ use std::fs::File;
 use std::io::Read;
 use std::{collections::HashMap, path::PathBuf};
 
-use crate::lib::cli::par::{
-    convert_error, create_provider_archive, detect_arch, insert_provider_binary,
-};
-use crate::lib::cli::{extract_keypair, inspect, par, CommandOutput, OutputKind};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use nkeys::KeyPairType;
 use provider_archive::ProviderArchive;
 use serde_json::json;
 use tracing::warn;
+use crate::lib::cli::par::{
+    convert_error, create_provider_archive, detect_arch, insert_provider_binary,
+};
+use crate::lib::cli::{extract_keypair, inspect, par, CommandOutput, OutputKind};
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
@@ -101,6 +101,10 @@ pub struct CreateCommand {
     /// Disables autogeneration of signing keys
     #[clap(long = "disable-keygen")]
     disable_keygen: bool,
+
+    /// Location of project directory containing WIT
+    #[clap(long = "wit-directory", env = "WIT_DIR")]
+    wit_dir: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -276,8 +280,23 @@ pub async fn handle_create(cmd: CreateCommand, output_kind: OutputKind) -> Resul
         ),
     };
 
+    let wit_interface_bytes = match cmd.wit_dir.as_ref() {
+        Some(dir) => {
+            let mut resolve = wit_parser::Resolve::default();
+            let (package_id, _paths) = resolve
+                .push_dir(dir)
+                .with_context(|| format!("failed to add WIT directory @ [{}]", dir.display()))?;
+
+            let encoded = wit_component::encode(&resolve, package_id)
+                .context("Failed to encode WIT package")?;
+
+            Some(encoded)
+        }
+        None => None,
+    };
+
     let compress = cmd.compress;
-    let mut par = create_provider_archive(cmd.into(), &lib)
+    let mut par = create_provider_archive(cmd.into(), &lib, wit_interface_bytes.as_deref())
         .context("failed to create provider archive with built provider")?;
     par.write(&outfile, &issuer, &subject, compress)
         .await
@@ -395,6 +414,8 @@ mod test {
             SUBJECT,
             "--disable-keygen",
             "--compress",
+            "--wit-directory",
+            "./wit",
         ])
         .unwrap();
         match create_long.par {
@@ -412,6 +433,7 @@ mod test {
                 destination,
                 compress,
                 disable_keygen,
+                wit_dir,
             }) => {
                 assert_eq!(arch, "x86_64-testrunner");
                 assert_eq!(binary, "./testrunner.so");
@@ -426,6 +448,7 @@ mod test {
                 assert_eq!(schema, None);
                 assert!(disable_keygen);
                 assert!(compress);
+                assert_eq!(wit_dir.unwrap(), PathBuf::from("./wit"));
             }
             cmd => panic!("par insert constructed incorrect command {cmd:?}"),
         }
@@ -452,6 +475,8 @@ mod test {
             ISSUER,
             "-s",
             SUBJECT,
+            "--wit-directory",
+            "./wit",
         ])
         .unwrap();
         match create_short.par {
@@ -469,6 +494,7 @@ mod test {
                 destination,
                 compress,
                 disable_keygen,
+                wit_dir,
             }) => {
                 assert_eq!(arch, "x86_64-testrunner");
                 assert_eq!(binary, "./testrunner.so");
@@ -483,6 +509,7 @@ mod test {
                 assert_eq!(schema, None);
                 assert!(!disable_keygen);
                 assert!(!compress);
+                assert_eq!(wit_dir.unwrap(), PathBuf::from("./wit"));
             }
             cmd => panic!("par insert constructed incorrect command {cmd:?}"),
         }

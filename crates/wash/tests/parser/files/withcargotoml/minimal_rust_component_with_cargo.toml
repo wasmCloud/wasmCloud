@@ -1,5 +1,0 @@
-language = "rust"
-type = "component"
-
-[component]
-claims = ["wasmcloud:httpserver"]

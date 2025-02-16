@@ -43,7 +43,7 @@ async fn integration_build_rust_component_signed() -> Result<()> {
     // We test a dep from git above, so this tests with a local path so we can test local changes
     let test_setup = init_path(
         /* component_name= */ "hello",
-        /* template_name= */ "crates/wash-cli/tests/fixtures/dog-fetcher",
+        /* template_name= */ "crates/wash/tests/fixtures/dog-fetcher",
     )
     .await?;
     let project_dir = test_setup.project_dir.clone();
@@ -136,7 +136,7 @@ async fn integration_build_rust_component_with_existing_deps_signed() -> Result<
     let test_setup = init_path(
         /* component_name= */ "hello",
         /* template_name= */
-        "crates/wash-cli/tests/fixtures/old-examples/http-hello-world-rust",
+        "crates/wash/tests/fixtures/old-examples/http-hello-world-rust",
     )
     .await?;
     let project_dir = test_setup.project_dir.clone();
@@ -265,7 +265,7 @@ async fn integration_build_rust_component_with_no_fetch() -> Result<()> {
     let test_setup = init_path(
         /* component_name= */ "hello",
         /* template_name= */
-        "crates/wash-cli/tests/fixtures/old-examples/http-hello-world-rust",
+        "crates/wash/tests/fixtures/old-examples/http-hello-world-rust",
     )
     .await?;
     let project_dir = test_setup.project_dir.clone();
@@ -635,7 +635,7 @@ async fn integration_build_tinygo_component_with_existing_deps_signed() -> Resul
     let test_setup = init_path(
         /* component_name= */ "hello-world-tinygo",
         /* template_name= */
-        "crates/wash-cli/tests/fixtures/old-examples/http-hello-world-go",
+        "crates/wash/tests/fixtures/old-examples/http-hello-world-go",
     )
     .await?;
     let project_dir = test_setup.project_dir.clone();

@@ -6,7 +6,7 @@ use clap::Subcommand;
 use tracing::trace;
 use wasmcloud_secrets_types::{SecretConfig, SECRET_PREFIX};
 
-use super::cmd;
+use crate::cmd;
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum SecretsCliCommand {

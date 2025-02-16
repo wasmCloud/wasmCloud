@@ -19,11 +19,9 @@ use wasm_pkg_client::{
 use wasm_pkg_core::{config::Override, lock::LockFile, wit::OutputType};
 use wasmcloud_core::parse_wit_package_name;
 
-use crate::lib::{
-    cli::CommonPackageArgs,
-    common::{clone_git_repo, RepoRef},
-    parser::{RegistryPullConfig, RegistryPullSource, RegistryPullSourceOverride},
-};
+use crate::lib::cli::CommonPackageArgs;
+use crate::lib::common::{clone_git_repo, RepoRef};
+use crate::lib::parser::{RegistryPullConfig, RegistryPullSource, RegistryPullSourceOverride};
 
 /// Wrapper around a `wasm_pkg_client::Client` including configuration for fetching WIT dependencies.
 /// Primarily enables reuse of functionality to override dependencies and properly setup the client.

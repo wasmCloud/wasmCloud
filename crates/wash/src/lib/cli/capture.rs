@@ -12,11 +12,9 @@ use tokio::time::Instant;
 use tracing::debug;
 
 use super::{CliConnectionOpts, CommandOutput};
+use crate::lib::capture::{ReadCapture, WriteCapture};
 use crate::lib::config::WashConnectionOptions;
-use crate::lib::{
-    capture::{ReadCapture, WriteCapture},
-    spier::{ObservedInvocation, ObservedMessage},
-};
+use crate::lib::spier::{ObservedInvocation, ObservedMessage};
 
 pub const CAPTURE_STREAM_NAME: &str = "wash-capture";
 

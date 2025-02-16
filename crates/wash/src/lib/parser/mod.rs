@@ -664,7 +664,11 @@ impl WitInterfaceSpec {
         // If interfaces don't match, this interface can't contain the other one
         match (self.interfaces.as_ref(), other.interfaces.as_ref()) {
             // If they both have no interface specified, then we do overlap
-            (None | Some(_), None) | (None, Some(_)) => {
+            (None, None) |
+            // If the other has no interface, but this one does, this *does* overlap
+            (Some(_), None) |
+            // If this spec has no interface, but the other does, then we do overlap
+            (None, Some(_)) => {
                 return false;
             }
             // If both specify different interfaces, we don't overlap
@@ -678,7 +682,13 @@ impl WitInterfaceSpec {
         // At this point, we know that the interfaces must match
         match (self.function.as_ref(), other.function.as_ref()) {
             // If neither have functions, they cannot be disjoint
-            (None | Some(_), None) | (None, Some(_)) => {
+            (None, None) |
+            // If only self has a function, then they are not disjoint
+            // (other contains self)
+            (Some(_), None) |
+            // If only the other has a function, then they are not disjoint
+            // (self contains other)
+            (None, Some(_)) => {
                 return false;
             }
             // If the functions differ, these are disjoint
@@ -690,10 +700,16 @@ impl WitInterfaceSpec {
         }
 
         // Compare the versions
-        match (self.version.as_ref(), other.version.as_ref()) {
-            // If neither have versions or only one has a version, they cannot be disjoint
-            (None | Some(_), None) | (None, Some(_)) => {
-                return false;
+        match (self.version.as_ref(), other.version.as_ref())  {
+            // If the neither have versions, they cannot be disjoint
+            (None, None) |
+            // If only self has a version, they cannot be disjoint
+            // (self contains other)
+            (Some(_), None) |
+            // If only the other has a version, they cannot be disjoint
+            // (other contains self)
+            (None, Some(_)) => {
+                false
             }
             // If the *either* version matches the other in semantic version terms, they cannot be disjoint
             //
@@ -701,18 +717,12 @@ impl WitInterfaceSpec {
             // we assume that semantic versioning semantics should ensure that 0.2.0 and 0.2.1 are backwards compatible
             // (though for <1.x versions, there is no such "real" guarantee)
             //
-            (Some(v), Some(other_v))
-                if VersionReq::parse(&format!("^{v}")).is_ok_and(|req| req.matches(other_v)) =>
-            {
-                false
-            }
-            (Some(v), Some(other_v))
-                if VersionReq::parse(&format!("^{other_v}")).is_ok_and(|req| req.matches(v)) =>
-            {
+            (Some(v), Some(other_v)) if VersionReq::parse(&format!("^{v}")).is_ok_and(|req| req.matches(other_v)) => { false }
+            (Some(v), Some(other_v)) if VersionReq::parse(&format!("^{other_v}")).is_ok_and(|req| req.matches(v)) => {
                 false
             }
             // The only option left is that the versions are the same and their versions are incompatible/different
-            _ => true,
+            _ => true
         }
     }
 }
@@ -1385,9 +1395,8 @@ fn canonicalize_or_create(path: PathBuf) -> Result<PathBuf> {
 // TODO(joonas): Remove these once doctests are run as part of CI.
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use crate::lib::parser::WitInterfaceSpec;
+    use std::str::FromStr;
 
     #[test]
     fn test_includes() {

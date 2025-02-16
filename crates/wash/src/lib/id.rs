@@ -164,7 +164,6 @@ pub fn validate_contract_id(contract_id: &str) -> Result<()> {
     {
         bail!("It looks like you used a Component or Provider ID (e.g. VABC...) instead of a contract ID (e.g. wasmcloud:httpserver)")
     }
-
     Ok(())
 }
 

@@ -3,8 +3,7 @@ use clap::Parser;
 use futures::StreamExt;
 
 use super::{validate_component_id, CliConnectionOpts, CommandOutput};
-use crate::lib::config::WashConnectionOptions;
-use crate::lib::spier::Spier;
+use crate::lib::{config::WashConnectionOptions, spier::Spier};
 
 #[derive(Debug, Parser, Clone)]
 pub struct SpyCommand {

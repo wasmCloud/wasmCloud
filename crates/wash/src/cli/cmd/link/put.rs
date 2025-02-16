@@ -2,10 +2,10 @@
 
 use std::collections::HashMap;
 
-use crate::lib::cli::link::{put_link, LinkPutCommand};
-use crate::lib::cli::{CommandOutput, OutputKind};
 use anyhow::{anyhow, bail, Result};
 use serde_json::json;
+use crate::lib::cli::link::{put_link, LinkPutCommand};
+use crate::lib::cli::{CommandOutput, OutputKind};
 use wasmcloud_control_interface::Link;
 
 use crate::appearance::spinner::Spinner;
