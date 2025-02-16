@@ -11,25 +11,25 @@ use wasmcloud_control_interface::{Host, HostInventory, Link};
 
 use crate::util::format_optional;
 
-pub fn get_hosts_output(hosts: Vec<Host>) -> CommandOutput {
+#[must_use] pub fn get_hosts_output(hosts: Vec<Host>) -> CommandOutput {
     let mut map = HashMap::new();
     map.insert("hosts".to_string(), json!(hosts));
     CommandOutput::new(hosts_table(hosts), map)
 }
 
-pub fn get_host_inventories_output(invs: Vec<HostInventory>) -> CommandOutput {
+#[must_use] pub fn get_host_inventories_output(invs: Vec<HostInventory>) -> CommandOutput {
     let mut map = HashMap::new();
     map.insert("inventories".to_string(), json!(invs));
     CommandOutput::new(host_inventories_table(invs), map)
 }
 
-pub fn get_claims_output(claims: Vec<HashMap<String, String>>) -> CommandOutput {
+#[must_use] pub fn get_claims_output(claims: Vec<HashMap<String, String>>) -> CommandOutput {
     let mut map = HashMap::new();
     map.insert("claims".to_string(), json!(claims));
     CommandOutput::new(claims_table(claims), map)
 }
 
-pub fn links_table(mut list: Vec<Link>) -> String {
+#[must_use] pub fn links_table(mut list: Vec<Link>) -> String {
     // Sort the list based on the `source_id` field in ascending order
     list.sort_by(|a, b| a.source_id().cmp(b.source_id()));
 
@@ -43,7 +43,7 @@ pub fn links_table(mut list: Vec<Link>) -> String {
         TableCell::new_with_alignment("Name", 1, Alignment::Left),
     ]));
 
-    list.iter().for_each(|l| {
+    for l in &list {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment(l.source_id().to_string(), 1, Alignment::Left),
             TableCell::new_with_alignment(l.target().to_string(), 1, Alignment::Left),
@@ -58,14 +58,14 @@ pub fn links_table(mut list: Vec<Link>) -> String {
                 Alignment::Left,
             ),
             TableCell::new_with_alignment(l.name().to_string(), 1, Alignment::Left),
-        ]))
-    });
+        ]));
+    }
 
     table.render()
 }
 
 /// Helper function to transform a Host list into a table string for printing
-pub fn hosts_table(mut hosts: Vec<Host>) -> String {
+#[must_use] pub fn hosts_table(mut hosts: Vec<Host>) -> String {
     // Sort hosts by uptime_seconds in descending order
     // hosts.sort_by(|a, b| b.uptime_seconds().cmp(&a.uptime_seconds()));
     hosts.sort_by_key(|a| std::cmp::Reverse(a.uptime_seconds()));
@@ -79,26 +79,26 @@ pub fn hosts_table(mut hosts: Vec<Host>) -> String {
         TableCell::new_with_alignment("Uptime (seconds)", 1, Alignment::Left),
     ]));
 
-    hosts.iter().for_each(|h| {
+    for h in &hosts {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment(h.id().to_string(), 2, Alignment::Left),
             TableCell::new_with_alignment(h.friendly_name().to_string(), 1, Alignment::Left),
             TableCell::new_with_alignment(format!("{}", h.uptime_seconds()), 1, Alignment::Left),
-        ]))
-    });
+        ]));
+    }
 
     table.render()
 }
 
-/// Helper function to transform a HostInventory into a table string for printing
-pub fn host_inventories_table(mut invs: Vec<HostInventory>) -> String {
+/// Helper function to transform a `HostInventory` into a table string for printing
+#[must_use] pub fn host_inventories_table(mut invs: Vec<HostInventory>) -> String {
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table, 3);
 
     // Sort the host inventories alphabetically by host_id
     invs.sort_by(|a, b| a.host_id().cmp(b.host_id()));
 
-    invs.into_iter().for_each(|inv| {
+    for inv in invs {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment("Host ID", 2, Alignment::Left),
             TableCell::new_with_alignment("Friendly name", 1, Alignment::Left),
@@ -123,12 +123,12 @@ pub fn host_inventories_table(mut invs: Vec<HostInventory>) -> String {
                 1,
                 Alignment::Left,
             )]));
-            sorted_labels.into_iter().for_each(|(k, v)| {
+            for (k, v) in sorted_labels {
                 table.add_row(Row::new(vec![
                     TableCell::new_with_alignment(k, 1, Alignment::Left),
                     TableCell::new_with_alignment(v, 1, Alignment::Left),
-                ]))
-            });
+                ]));
+            }
         } else {
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
                 "No labels present",
@@ -153,7 +153,7 @@ pub fn host_inventories_table(mut invs: Vec<HostInventory>) -> String {
                 TableCell::new_with_alignment("Name", 1, Alignment::Left),
                 TableCell::new_with_alignment("Max count", 1, Alignment::Left),
             ]));
-            components.iter().for_each(|a| {
+            for a in &components {
                 let a = a.clone();
                 table.add_row(Row::new(vec![
                     TableCell::new_with_alignment(a.id(), 1, Alignment::Left),
@@ -163,8 +163,8 @@ pub fn host_inventories_table(mut invs: Vec<HostInventory>) -> String {
                         Alignment::Left,
                     ),
                     TableCell::new_with_alignment(a.max_instances(), 1, Alignment::Left),
-                ]))
-            });
+                ]));
+            }
         } else {
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
                 "No components found",
@@ -197,7 +197,7 @@ pub fn host_inventories_table(mut invs: Vec<HostInventory>) -> String {
                         1,
                         Alignment::Left,
                     ),
-                ]))
+                ]));
             });
         } else {
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
@@ -211,13 +211,13 @@ pub fn host_inventories_table(mut invs: Vec<HostInventory>) -> String {
             4,
             Alignment::Left,
         )]));
-    });
+    }
 
     table.render()
 }
 
-/// Helper function to transform a ClaimsList into a table string for printing
-pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
+/// Helper function to transform a `ClaimsList` into a table string for printing
+#[must_use] pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table, 2);
 
@@ -227,13 +227,13 @@ pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
         Alignment::Center,
     )]));
 
-    list.iter().for_each(|c| {
+    for c in &list {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment("Issuer", 1, Alignment::Left),
             TableCell::new_with_alignment(
                 c.get("issuer")
                     .or_else(|| c.get("iss"))
-                    .unwrap_or(&"".to_string()),
+                    .unwrap_or(&String::new()),
                 1,
                 Alignment::Left,
             ),
@@ -243,7 +243,7 @@ pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
             TableCell::new_with_alignment(
                 c.get("subject")
                     .or_else(|| c.get("sub"))
-                    .unwrap_or(&"".to_string()),
+                    .unwrap_or(&String::new()),
                 1,
                 Alignment::Left,
             ),
@@ -253,7 +253,7 @@ pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
             TableCell::new_with_alignment(
                 c.get("capabilities")
                     .or_else(|| c.get("caps"))
-                    .unwrap_or(&"".to_string()),
+                    .unwrap_or(&String::new()),
                 1,
                 Alignment::Left,
             ),
@@ -261,7 +261,7 @@ pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment("Version", 1, Alignment::Left),
             TableCell::new_with_alignment(
-                c.get("version").unwrap_or(&"".to_string()),
+                c.get("version").unwrap_or(&String::new()),
                 1,
                 Alignment::Left,
             ),
@@ -271,7 +271,7 @@ pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
             TableCell::new_with_alignment(
                 c.get("revision")
                     .or_else(|| c.get("rev"))
-                    .unwrap_or(&"".to_string()),
+                    .unwrap_or(&String::new()),
                 1,
                 Alignment::Left,
             ),
@@ -281,13 +281,13 @@ pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
             2,
             Alignment::Center,
         )]));
-    });
+    }
 
     table.render()
 }
 
 /// Helper function to transform a list of plugin metadata into a table string for printing
-pub fn plugins_table(list: Vec<&Metadata>) -> String {
+#[must_use] pub fn plugins_table(list: Vec<&Metadata>) -> String {
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table, 4);
 
@@ -297,7 +297,7 @@ pub fn plugins_table(list: Vec<&Metadata>) -> String {
         TableCell::new_with_alignment("Version", 1, Alignment::Left),
         TableCell::new_with_alignment("Author", 1, Alignment::Left),
     ]));
-    list.into_iter().for_each(|metadata| {
+    for metadata in list {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment(&metadata.name, 1, Alignment::Left),
             TableCell::new_with_alignment(&metadata.id, 1, Alignment::Left),
@@ -311,7 +311,7 @@ pub fn plugins_table(list: Vec<&Metadata>) -> String {
                 Alignment::Left,
             )]));
         }
-    });
+    }
 
     table.render()
 }

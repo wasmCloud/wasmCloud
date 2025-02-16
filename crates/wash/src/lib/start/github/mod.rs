@@ -25,7 +25,7 @@ pub use api::*;
 ///
 /// # Arguments
 ///
-/// * `url` - URL of the GitHub release artifact tarball (Usually in the form of https://github.com/<owner>/<repo>/releases/download/<tag>/<artifact>.tar.gz)
+/// * `url` - URL of the GitHub release artifact tarball (Usually in the form of <https://github.com>/<owner>/<repo>/releases/download/<tag>/<artifact>.tar.gz)
 /// * `dir` - Directory on disk to install the binary into. This will be created if it doesn't exist
 /// * `bin_name` - Name of the binary inside of the tarball, e.g. `nats-server` or `wadm`
 /// # Examples
@@ -89,7 +89,7 @@ where
 
 /// Helper function to determine if the provided binary is present in a directory
 #[allow(unused)]
-pub(crate) async fn is_bin_installed<P>(dir: P, bin_name: &str) -> bool
+pub async fn is_bin_installed<P>(dir: P, bin_name: &str) -> bool
 where
     P: AsRef<Path>,
 {
@@ -104,7 +104,7 @@ pub fn get_download_client() -> Result<reqwest::Client> {
 }
 
 /// Helper function to set up a reqwest client for performing the download with a user agent
-pub(crate) fn get_download_client_with_user_agent(user_agent: &str) -> Result<reqwest::Client> {
+pub fn get_download_client_with_user_agent(user_agent: &str) -> Result<reqwest::Client> {
     let proxy_username = std::env::var("WASH_PROXY_USERNAME").unwrap_or_default();
     let proxy_password = std::env::var("WASH_PROXY_PASSWORD").unwrap_or_default();
 

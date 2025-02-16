@@ -45,8 +45,8 @@ impl fmt::Display for ProjectKind {
             f,
             "{}",
             match self {
-                ProjectKind::Component => "component",
-                ProjectKind::Provider => "provider",
+                Self::Component => "component",
+                Self::Provider => "provider",
             }
         )
     }
@@ -539,8 +539,8 @@ struct ProjectName {
 }
 
 impl ProjectName {
-    fn new(name: impl Into<String>) -> ProjectName {
-        ProjectName {
+    fn new(name: impl Into<String>) -> Self {
+        Self {
             user_input: name.into(),
         }
     }

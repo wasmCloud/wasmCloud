@@ -65,13 +65,13 @@ pub struct NewProjectArgs {
 }
 
 impl From<NewCliCommand> for Project {
-    fn from(cmd: NewCliCommand) -> Project {
+    fn from(cmd: NewCliCommand) -> Self {
         let (args, kind) = match cmd {
             NewCliCommand::Component(args) => (args, ProjectKind::Component),
             NewCliCommand::Provider(args) => (args, ProjectKind::Provider),
         };
 
-        Project {
+        Self {
             kind,
             project_name: args.project_name,
             values: args.values,

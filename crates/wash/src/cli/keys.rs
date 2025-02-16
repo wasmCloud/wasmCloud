@@ -70,7 +70,7 @@ pub fn keytype_parser(keytype: &str) -> Result<KeyPairType> {
         )),
     }
 }
-/// Generates a keypair of the specified KeyPairType
+/// Generates a keypair of the specified `KeyPairType`
 pub fn generate(kt: &KeyPairType) -> Result<CommandOutput> {
     let kp = KeyPair::new(kt.clone());
     let seed = kp.seed()?;
@@ -88,7 +88,7 @@ pub fn generate(kt: &KeyPairType) -> Result<CommandOutput> {
     ))
 }
 
-/// Retrieves a keypair by name in a specified directory, or $WASH_KEYS ($HOME/.wash/keys) if directory is not specified
+/// Retrieves a keypair by name in a specified directory, or $`WASH_KEYS` ($HOME/.wash/keys) if directory is not specified
 pub fn get(keyname: &str, directory: Option<PathBuf>) -> Result<CommandOutput> {
     let key_dir = KeyDir::new(determine_directory(directory)?)?;
     // Trim off the ".nk" for backwards compat
@@ -99,7 +99,7 @@ pub fn get(keyname: &str, directory: Option<PathBuf>) -> Result<CommandOutput> {
     Ok(CommandOutput::from_key_and_text("seed", key.seed()?))
 }
 
-/// Lists all keypairs (file extension .nk) in a specified directory or $WASH_KEYS($HOME/.wash/keys) if directory is not specified
+/// Lists all keypairs (file extension .nk) in a specified directory or $`WASH_KEYS($HOME/.wash/keys)` if directory is not specified
 pub fn list(directory: Option<PathBuf>) -> Result<CommandOutput> {
     let key_dir = KeyDir::new(determine_directory(directory)?)?;
 

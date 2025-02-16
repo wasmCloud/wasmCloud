@@ -21,11 +21,11 @@ pub struct BuildCommand {
     #[clap(flatten)]
     pub package_args: CommonPackageArgs,
 
-    /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
+    /// Location of key files for signing. Defaults to $`WASH_KEYS` ($HOME/.wash/keys)
     #[clap(long = "keys-directory", env = "WASH_KEYS", hide_env_values = true)]
     pub keys_directory: Option<PathBuf>,
 
-    /// Path to issuer seed key (account). If this flag is not provided, the seed will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    /// Path to issuer seed key (account). If this flag is not provided, the seed will be sourced from $`WASH_KEYS` ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
         short = 'i',
         long = "issuer",
@@ -34,7 +34,7 @@ pub struct BuildCommand {
     )]
     pub issuer: Option<String>,
 
-    /// Path to subject seed key (module or service). If this flag is not provided, the seed will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    /// Path to subject seed key (module or service). If this flag is not provided, the seed will be sourced from $`WASH_KEYS` ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
         short = 's',
         long = "subject",
@@ -73,7 +73,7 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
                     keys_directory: command
                         .keys_directory
                         .clone()
-                        .or(Some(component_config.key_directory.to_path_buf())),
+                        .or(Some(component_config.key_directory.clone())),
                     issuer: command.issuer,
                     subject: command.subject,
                     disable_keygen: command.disable_keygen,
@@ -132,7 +132,7 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
                     keys_directory: command
                         .keys_directory
                         .clone()
-                        .or(Some(provider_config.key_directory.to_path_buf())),
+                        .or(Some(provider_config.key_directory.clone())),
                     issuer: command.issuer,
                     subject: command.subject,
                     disable_keygen: command.disable_keygen,

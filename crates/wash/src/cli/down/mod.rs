@@ -104,14 +104,12 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
     sp.update_spinner_message(" Stopping wasmCloud ...".to_string());
 
     let mut out_json = HashMap::new();
-    let mut out_text = String::from("");
+    let mut out_text = String::new();
 
     let nats_client = create_nats_client_from_opts(
         &cmd.ctl_host
             .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string()),
-        &cmd.ctl_port
-            .map(|port| port.to_string())
-            .unwrap_or_else(|| DEFAULT_NATS_PORT.to_string()),
+        &cmd.ctl_port.map_or_else(|| DEFAULT_NATS_PORT.to_string(), |port| port.to_string()),
         cmd.ctl_jwt,
         cmd.ctl_seed,
         cmd.ctl_credsfile,
@@ -153,7 +151,7 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
             }
         }
     } else {
-        warn!("Couldn't connect to NATS, unable to stop running hosts")
+        warn!("Couldn't connect to NATS, unable to stop running hosts");
     }
 
     match stop_wadm(&install_dir).await {

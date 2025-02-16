@@ -143,22 +143,22 @@ impl SubcommandRunner {
     }
 
     /// Get the metadata for a plugin with the given ID if it exists.
-    pub fn metadata(&self, id: &str) -> Option<&Metadata> {
+    #[must_use] pub fn metadata(&self, id: &str) -> Option<&Metadata> {
         self.plugins.get(id).map(|p| &p.metadata)
     }
 
     /// Returns a list of all metadata for all plugins.
-    pub fn all_metadata(&self) -> Vec<&Metadata> {
+    #[must_use] pub fn all_metadata(&self) -> Vec<&Metadata> {
         self.plugins.values().map(|data| &data.metadata).collect()
     }
 
     /// Returns the path to the plugin with the given ID.
-    pub fn path(&self, id: &str) -> Option<&Path> {
+    #[must_use] pub fn path(&self, id: &str) -> Option<&Path> {
         self.plugins.get(id).map(|p| p.loaded_path.as_path())
     }
 
     /// Run a subcommand with the given name and args. The plugin will inherit all
-    /// stdout/stderr/stdin/env. The given plugin_dirs will be mapped into the plugin after
+    /// stdout/stderr/stdin/env. The given `plugin_dirs` will be mapped into the plugin after
     /// canonicalizing all paths and normalizing them to use `/` instead of `\`. An error will only
     /// be returned if there was a problem with the plugin (such as the plugin dirs not existing or
     /// failure to canonicalize) or the subcommand itself.
@@ -262,6 +262,6 @@ impl SubcommandRunner {
             .call_run(&mut plugin.store)
             .await
             .context("Error when running wasm component")?
-            .map_err(|_| anyhow::anyhow!("Error when running subcommand"))
+            .map_err(|()| anyhow::anyhow!("Error when running subcommand"))
     }
 }

@@ -38,7 +38,7 @@ pub async fn handle_command(command: GetCommand, output_kind: OutputKind) -> Res
         GetCommand::HostInventories(cmd) => {
             let sp: Spinner = Spinner::new(&output_kind)?;
             if let Some(id) = cmd.host_id.as_ref() {
-                sp.update_spinner_message(format!(" Retrieving inventory for host {} ...", id));
+                sp.update_spinner_message(format!(" Retrieving inventory for host {id} ..."));
             } else {
                 sp.update_spinner_message(" Retrieving hosts for inventory query ...".to_string());
             }
@@ -112,7 +112,7 @@ async fn watch_inventory(cmd: GetHostInventoriesCommand, sp: Spinner) -> Result<
         .map_err(|e| anyhow::anyhow!("Failed to clear terminal: {}", e))?;
 
         tokio::select! {
-            _ = sleep(watch_interval) => continue,
+            () = sleep(watch_interval) => continue,
             res = &mut ctrlc => {
                 res?;
                 execute!(stdout, Clear(ClearType::Purge),Clear(ClearType::FromCursorUp), cursor::MoveTo(0, 0), cursor::Show)

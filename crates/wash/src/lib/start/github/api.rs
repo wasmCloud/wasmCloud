@@ -18,7 +18,7 @@ const GITHUB_REQUEST_BATCH_SIZE: u32 = 30;
 const VERSION_FETCHER_CLIENT_USER_AGENT: &str =
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
-/// get_chronologically_sorted_releases returns with a list of chronologically ordered (latest first)
+/// `get_chronologically_sorted_releases` returns with a list of chronologically ordered (latest first)
 /// releases that are more recent than the provided `after_version`.
 async fn get_chronologically_sorted_releases(
     owner: &str,
@@ -70,7 +70,7 @@ pub async fn new_patch_version_of_after_string(
     }
 }
 
-/// GitHubRelease represents the necessary fields to determine wadm and/or wasmCloud
+/// `GitHubRelease` represents the necessary fields to determine wadm and/or wasmCloud
 /// GitHub release (<https://developer.github.com/v3/repos/releases/>) object
 /// has new patch version available. The fields are based on the response from the
 /// response schema from the docs.
@@ -91,7 +91,7 @@ impl PartialEq for GitHubRelease {
 }
 
 impl GitHubRelease {
-    pub fn get_main_artifact_release(&self) -> Option<semver::Version> {
+    #[must_use] pub fn get_main_artifact_release(&self) -> Option<semver::Version> {
         match self.tag_name.strip_prefix('v') {
             Some(v) => match semver::Version::parse(v) {
                 Ok(v) => {
@@ -112,8 +112,7 @@ impl GitHubRelease {
 /// doc: <https://developer.github.com/v3/repos/releases/#get-the-latest-release>
 fn format_latest_releases_url(owner: &str, repo: &str, page: u32) -> String {
     format!(
-        "https://api.github.com/repos/{}/{}/releases?page={}&per_page={}",
-        owner, repo, page, GITHUB_PER_PAGE
+        "https://api.github.com/repos/{owner}/{repo}/releases?page={page}&per_page={GITHUB_PER_PAGE}"
     )
 }
 
@@ -133,7 +132,7 @@ async fn fetch_latest_releases(
         );
         let batchreleases =
             get_release_batch(page, GITHUB_REQUEST_BATCH_SIZE, owner, repo, client.clone()).await?;
-        for release in batchreleases.iter() {
+        for release in &batchreleases {
             if let Some(main_release) = release.get_main_artifact_release() {
                 if main_release == *latest_interested {
                     break 'fetch_loop;
@@ -223,11 +222,11 @@ mod tests {
 
     use super::*;
 
-    /// Test if the GitHubRelease struct is parsed correctly from the raw string.
+    /// Test if the `GitHubRelease` struct is parsed correctly from the raw string.
     /// Removed some items from the raw string to keep the test readable.
     #[test]
     fn test_github_release_is_parsed_correctly() {
-        let raw_string = r#####"
+        let raw_string = r#"
         {
             "url": "https://api.github.com/repos/wasmCloud/wasmCloud/releases/165886656",
             "assets_url": "https://api.github.com/repos/wasmCloud/wasmCloud/releases/165886656/assets",
@@ -246,7 +245,7 @@ mod tests {
             "zipball_url": "https://api.github.com/repos/wasmCloud/wasmCloud/zipball/washboard-ui-v0.4.0",
             "mentions_count": 5
         }
-        "#####;
+        "#;
 
         let release = serde_json::from_str::<GitHubRelease>(raw_string);
         assert!(release.is_ok());

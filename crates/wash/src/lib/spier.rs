@@ -35,8 +35,8 @@ pub enum ObservedMessage {
 impl std::fmt::Display for ObservedMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ObservedMessage::Raw(bytes) => write!(f, "{}", String::from_utf8_lossy(bytes)),
-            ObservedMessage::Parsed(v) => {
+            Self::Raw(bytes) => write!(f, "{}", String::from_utf8_lossy(bytes)),
+            Self::Parsed(v) => {
                 write!(f, "{v}")
             }
         }
@@ -163,7 +163,7 @@ async fn get_linked_components(
         .get_links()
         .await
         .map_err(|e| anyhow::anyhow!("Unable to get links: {e:?}"))
-        .map(|response| response.into_data())?
+        .map(wasmcloud_control_interface::CtlResponse::into_data)?
         .map(|linkdefs| {
             linkdefs
                 .into_iter()

@@ -95,7 +95,7 @@ pub struct NatsOpts {
     #[clap(long = "nats-remote-url", env = "NATS_REMOTE_URL")]
     pub nats_remote_url: Option<String>,
 
-    /// If a connection can't be established, exit and don't start a NATS server. Will be ignored if a remote_url and credsfile are specified
+    /// If a connection can't be established, exit and don't start a NATS server. Will be ignored if a `remote_url` and credsfile are specified
     #[clap(
         long = "nats-connect-only",
         env = "NATS_CONNECT_ONLY",
@@ -103,7 +103,7 @@ pub struct NatsOpts {
     )]
     pub connect_only: bool,
 
-    /// NATS server version to download, e.g. `v2.10.7`. See https://github.com/nats-io/nats-server/releases/ for releases
+    /// NATS server version to download, e.g. `v2.10.7`. See <https://github.com/nats-io/nats-server/releases>/ for releases
     #[clap(long = "nats-version", default_value = NATS_SERVER_VERSION, env = "NATS_VERSION")]
     pub nats_version: String,
 
@@ -129,7 +129,7 @@ pub struct NatsOpts {
 }
 
 impl From<NatsOpts> for NatsConfig {
-    fn from(other: NatsOpts) -> NatsConfig {
+    fn from(other: NatsOpts) -> Self {
         let host = other
             .nats_host
             .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string());
@@ -138,7 +138,7 @@ impl From<NatsOpts> for NatsConfig {
                 .parse()
                 .expect("failed to parse default NATS port")
         });
-        NatsConfig {
+        Self {
             host,
             port,
             store_dir: std::env::temp_dir().join(format!("wash-jetstream-{port}")),
@@ -328,9 +328,7 @@ impl WasmcloudOpts {
             .ctl_host
             .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string());
         let ctl_port = self
-            .ctl_port
-            .map(|p| p.to_string())
-            .unwrap_or_else(|| DEFAULT_NATS_PORT.to_string())
+            .ctl_port.map_or_else(|| DEFAULT_NATS_PORT.to_string(), |p| p.to_string())
             .to_string();
         let auction_timeout_ms = auction_timeout_ms.unwrap_or(DEFAULT_NATS_TIMEOUT_MS);
 
@@ -351,7 +349,7 @@ impl WasmcloudOpts {
             .auction_timeout(tokio::time::Duration::from_millis(auction_timeout_ms));
 
         if let Some(rpc_timeout_ms) = self.rpc_timeout_ms {
-            builder = builder.timeout(tokio::time::Duration::from_millis(rpc_timeout_ms))
+            builder = builder.timeout(tokio::time::Duration::from_millis(rpc_timeout_ms));
         }
 
         if let Ok(topic_prefix) = std::env::var("WASMCLOUD_CTL_TOPIC_PREFIX") {
@@ -378,7 +376,7 @@ pub struct WadmOpts {
     #[clap(long = "disable-wadm")]
     pub disable_wadm: bool,
 
-    /// The JetStream domain to use for wadm
+    /// The `JetStream` domain to use for wadm
     #[clap(long = "wadm-js-domain", env = "WADM_JS_DOMAIN")]
     pub wadm_js_domain: Option<String>,
 
@@ -482,7 +480,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
 
     // Start building the CommandOutput providing some useful information like pids, ports, and logfiles
     let mut out_json = HashMap::new();
-    let mut out_text = String::from("");
+    let mut out_text = String::new();
     let lattice = wasmcloud_opts
         .clone()
         .lattice
@@ -528,7 +526,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
                 {
                     Ok(_) => out_text.push_str("Deployed wadm manifest"),
                     Err(e) => {
-                        let _ = write!(out_text, "Deployment failed {}", e);
+                        let _ = write!(out_text, "Deployment failed {e}");
                     }
                 };
             }
@@ -623,7 +621,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     };
     let wasmcloud_version = match wasmcloud_version {
         version if version.starts_with('v') => version,
-        version => format!("v{}", version),
+        version => format!("v{version}"),
     };
     // Download wasmCloud if not already installed
     let wasmcloud_bin_path = match wasmcloud_opts.host_path {
@@ -713,7 +711,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         {
             Ok(_) => out_text.push_str("Deployed wadm manifest"),
             Err(e) => {
-                let _ = write!(out_text, "Deployment failed {}", e);
+                let _ = write!(out_text, "Deployment failed {e}");
             }
         };
     }
@@ -784,7 +782,7 @@ async fn running_host_count(ctl_client: &CtlClient) -> Result<WasmCloudHostState
         .await
         .map_err(|e| anyhow!(e))?
         .into_iter()
-        .filter_map(|r| r.into_data())
+        .filter_map(wasmcloud_control_interface::CtlResponse::into_data)
         .count()
     {
         1 => return Ok(WasmCloudHostState::Running),
@@ -832,7 +830,7 @@ fn process_wadm_manifest(
         if detached && host_state < WasmCloudHostState::Running {
             tokio::time::timeout(tokio::time::Duration::from_secs(3), async {
                 loop {
-                    if let Ok(WasmCloudHostState::Running) = running_host_count(&ctl_client).await {
+                    if matches!(running_host_count(&ctl_client).await, Ok(WasmCloudHostState::Running)) {
                         break;
                     }
                 }
@@ -847,7 +845,7 @@ fn process_wadm_manifest(
         };
 
         // Load the manifest, now that we're done waiting
-        let manifest = load_app_manifest(AppManifestSource::File(manifest_path.to_path_buf()))
+        let manifest = load_app_manifest(AppManifestSource::File(manifest_path.clone()))
             .await
             .with_context(|| {
                 format!(
@@ -966,29 +964,26 @@ async fn install_patch_or_default_wadm_version(
     )
     .await)
         .unwrap_or_default();
-    match new_patch_version {
-        Some(new_patch) => {
-            eprintln!(
-                "{} Found a new patch version of wadm: {}",
-                emoji::INFO_SQUARE,
-                new_patch
-            );
-            // Re-add stripped 'v' prefix due to semver parsing
-            let new_version = format!("v{}", new_patch);
-            match ensure_wadm(&new_version, install_dir).await {
-                Ok(path) => Ok(path),
-                Err(e) => {
-                    debug!(
-                        "🟨 Couldn't download the patched wadm {new_version}, falling back to {version}: {e}"
-                    );
-                    ensure_wadm(&version, install_dir).await
-                }
+    if let Some(new_patch) = new_patch_version {
+        eprintln!(
+            "{} Found a new patch version of wadm: {}",
+            emoji::INFO_SQUARE,
+            new_patch
+        );
+        // Re-add stripped 'v' prefix due to semver parsing
+        let new_version = format!("v{new_patch}");
+        match ensure_wadm(&new_version, install_dir).await {
+            Ok(path) => Ok(path),
+            Err(e) => {
+                debug!(
+                    "🟨 Couldn't download the patched wadm {new_version}, falling back to {version}: {e}"
+                );
+                ensure_wadm(&version, install_dir).await
             }
         }
-        None => {
-            debug!("No new version found, using the provided: {}", version);
-            ensure_wadm(&version, install_dir).await
-        }
+    } else {
+        debug!("No new version found, using the provided: {}", version);
+        ensure_wadm(&version, install_dir).await
     }
 }
 
@@ -1013,7 +1008,7 @@ async fn run_wasmcloud_interactive(
             running.store(false, Ordering::SeqCst);
             let _ = running_sender.send(true);
         } else {
-            warn!("\nRepeated CTRL+C received, killing wasmCloud and NATS. This may result in zombie processes")
+            warn!("\nRepeated CTRL+C received, killing wasmCloud and NATS. This may result in zombie processes");
         }
         Result::<_, anyhow::Error>::Ok(())
     });
@@ -1051,7 +1046,7 @@ async fn run_wasmcloud_interactive(
 
     // Prevent extraneous messages from the host getting printed as the host shuts down
     if let Some(handle) = handle {
-        handle.abort()
+        handle.abort();
     };
     Ok(())
 }
@@ -1132,9 +1127,7 @@ pub(crate) async fn nats_client_from_wasmcloud_opts(
             .clone()
             .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string()),
         &wasmcloud_opts
-            .ctl_port
-            .map(|port| port.to_string())
-            .unwrap_or_else(|| DEFAULT_NATS_PORT.to_string()),
+            .ctl_port.map_or_else(|| DEFAULT_NATS_PORT.to_string(), |port| port.to_string()),
         wasmcloud_opts.ctl_jwt.clone(),
         wasmcloud_opts.ctl_seed.clone(),
         wasmcloud_opts.ctl_credsfile.clone(),

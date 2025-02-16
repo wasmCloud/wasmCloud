@@ -28,7 +28,7 @@ use super::wit::{discover_dependencies_from_wit, parse_component_wit, parse_proj
 use super::DEFAULT_PROVIDER_STOP_TIMEOUT_MS;
 
 /// State that is used/updated per loop of `wash dev`
-pub(crate) struct RunLoopState<'a> {
+pub struct RunLoopState<'a> {
     pub(crate) dev_session: &'a mut WashDevSession,
     pub(crate) nats_client: &'a async_nats::Client,
     pub(crate) ctl_client: &'a CtlClient,
@@ -46,7 +46,7 @@ pub(crate) struct RunLoopState<'a> {
 }
 
 /// Generate manifests that should be deployed, based on the current run loop state
-pub(crate) async fn generate_manifests(
+pub async fn generate_manifests(
     RunLoopState {
         project_cfg,
         session_id,
@@ -107,7 +107,7 @@ pub(crate) async fn generate_manifests(
     );
 
     // After we've merged, we can update the session ID to belong to this session
-    current_project_deps.session_id = Some(session_id.to_string());
+    current_project_deps.session_id = Some((**session_id).to_string());
 
     // Generate component that represents the main Webassembly component/provider being developed
     let component_id = component_id.as_ref().context("missing component id")?;
@@ -137,7 +137,7 @@ pub(crate) async fn generate_manifests(
 
     // Write out manifests to local files if a manifest output dir was specified
     if let Some(output_dir) = &manifest_output_dir {
-        for manifest in manifests.iter() {
+        for manifest in &manifests {
             ensure!(
                 tokio::fs::metadata(output_dir)
                     .await
@@ -156,7 +156,7 @@ pub(crate) async fn generate_manifests(
                     "failed to write out manifest YAML to output dir [{}]",
                     output_dir.display(),
                 )
-            })?
+            })?;
         }
     }
 
@@ -266,7 +266,7 @@ async fn update_config_properties_by_spec(
                 configs.push(ConfigProperty {
                     name: name.to_string(),
                     properties: None,
-                })
+                });
             }
         }
         DevConfigSpec::Values { values } => {
@@ -274,7 +274,7 @@ async fn update_config_properties_by_spec(
             configs.push(ConfigProperty {
                 name: "dev-overrides".into(),
                 properties: Some(HashMap::from_iter(values.clone())),
-            })
+            });
         }
     }
     Ok(())
@@ -292,7 +292,7 @@ async fn update_secret_properties_by_spec(
                 secrets.push(SecretProperty {
                     name: name.to_string(),
                     properties: source.clone(),
-                })
+                });
             }
         }
         DevSecretSpec::Values { name, values } => {
@@ -320,7 +320,7 @@ async fn update_secret_properties_by_spec(
 }
 
 /// Run one iteration of the development loop
-pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
+pub async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
     // Build the project (equivalent to `wash build`)
     let spinner = Spinner::new(&state.output_kind).context("failed to create spinner")?;
     if matches!(state.output_kind, OutputKind::Text) {
@@ -370,7 +370,7 @@ pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
             .common
             .name
             .to_lowercase()
-            .replace(" ", "-"),
+            .replace(' ', "-"),
     ));
     state.component_ref = Some(format!("file://{}", built_artifact_path.display()));
     state.artifact_path = Some(built_artifact_path);

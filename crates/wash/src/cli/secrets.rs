@@ -112,6 +112,6 @@ pub(crate) fn secret_configdata_key(name: &str) -> String {
     if is_secret(name) {
         name.to_string()
     } else {
-        format!("{SECRET_PREFIX}_{}", name)
+        format!("{SECRET_PREFIX}_{name}")
     }
 }

@@ -70,8 +70,8 @@ pub const WASMCLOUD_CONFIG_SERVICE: &str = "WASMCLOUD_CONFIG_SERVICE";
 pub const WASMCLOUD_ALLOW_FILE_LOAD: &str = "WASMCLOUD_ALLOW_FILE_LOAD";
 pub const DEFAULT_ALLOW_FILE_LOAD: &str = "true";
 
-/// Helper function to convert WasmcloudOpts to the host environment map.
-/// Takes NatsOpts as well to provide reasonable defaults
+/// Helper function to convert `WasmcloudOpts` to the host environment map.
+/// Takes `NatsOpts` as well to provide reasonable defaults
 pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap<String, String>> {
     let mut host_config = HashMap::new();
     // NATS isolation configuration variables
@@ -103,13 +103,13 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap
         wasmcloud_opts.max_execution_time.to_string(),
     );
     if let Some(policy_topic) = wasmcloud_opts.policy_topic {
-        host_config.insert(WASMCLOUD_POLICY_TOPIC.to_string(), policy_topic.to_string());
+        host_config.insert(WASMCLOUD_POLICY_TOPIC.to_string(), policy_topic);
     }
 
     if let Some(secrets_topic) = wasmcloud_opts.secrets_topic {
         host_config.insert(
             WASMCLOUD_SECRETS_TOPIC.to_string(),
-            secrets_topic.to_string(),
+            secrets_topic,
         );
     }
 
@@ -125,7 +125,7 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap
 
     // NATS RPC connection configuration
     if let Some(host) = wasmcloud_opts.rpc_host {
-        host_config.insert(WASMCLOUD_RPC_HOST.to_string(), host.clone());
+        host_config.insert(WASMCLOUD_RPC_HOST.to_string(), host);
     }
     if let Some(port) = wasmcloud_opts.rpc_port {
         host_config.insert(WASMCLOUD_RPC_PORT.to_string(), port.to_string());
@@ -138,8 +138,8 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap
     }
     if let Some(path) = wasmcloud_opts.rpc_credsfile {
         if let Ok((jwt, seed)) = parse_credsfile(path).await {
-            host_config.insert(WASMCLOUD_RPC_JWT.to_string(), jwt.clone());
-            host_config.insert(WASMCLOUD_RPC_SEED.to_string(), seed.clone());
+            host_config.insert(WASMCLOUD_RPC_JWT.to_string(), jwt);
+            host_config.insert(WASMCLOUD_RPC_SEED.to_string(), seed);
         };
     } else {
         if let Some(jwt) = wasmcloud_opts.rpc_jwt {

@@ -20,11 +20,11 @@ pub const CAPTURE_STREAM_NAME: &str = "wash-capture";
 
 #[derive(Debug, Parser, Clone)]
 pub struct CaptureCommand {
-    /// Enable wash capture. This will setup a NATS JetStream stream to capture all invocations
+    /// Enable wash capture. This will setup a NATS `JetStream` stream to capture all invocations
     #[clap(name = "enable", long = "enable", conflicts_with = "disable")]
     pub enable: bool,
 
-    /// Disable wash capture. This will removed the NATS JetStream stream that was setup to capture
+    /// Disable wash capture. This will removed the NATS `JetStream` stream that was setup to capture
     /// all invocations
     #[clap(name = "disable", long = "disable", conflicts_with = "enable")]
     pub disable: bool,
@@ -124,12 +124,12 @@ pub async fn handle_replay_command(cmd: CaptureReplayCommand) -> Result<CommandO
     let mut out = stdout();
     for (msg, published) in filtered {
         println!(
-            r#"
+            r"
 [{}]
 From: {}  To: {}
 
 Operation: {}
-Message: {}"#,
+Message: {}",
             published, msg.from, msg.to, msg.operation, msg.message
         );
         if cmd.interactive {

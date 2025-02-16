@@ -45,7 +45,7 @@ pub async fn invoke(
         .await?;
 
     Ok(CommandOutput::new(
-        format!("Published {}@{}", package, version),
+        format!("Published {package}@{version}"),
         [
             ("package".to_string(), package.to_string().into()),
             ("version".to_string(), version.to_string().into()),

@@ -188,7 +188,7 @@ pub async fn handle_stop_component(cmd: StopComponentCommand) -> Result<CommandO
         client
             .get_host_inventory(&host_id)
             .await
-            .map(|inventory| inventory.into_data())
+            .map(wasmcloud_control_interface::CtlResponse::into_data)
             .map_err(boxed_err_to_anyhow)?
             .context("Supplied host did not respond to inventory query")?
     } else {
@@ -326,7 +326,7 @@ pub async fn stop_hosts(
         .await
         .map_err(|e| anyhow!(e))?
         .into_iter()
-        .filter_map(|r| r.into_data())
+        .filter_map(wasmcloud_control_interface::CtlResponse::into_data)
         .collect::<Vec<_>>();
 
     // If a host ID was supplied, stop only that host

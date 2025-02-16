@@ -75,7 +75,7 @@ impl ReadCapture {
         })?;
         let mut archive = Archive::new(GzipDecoder::new(tokio::io::BufReader::new(file)));
 
-        let mut capture = ReadCapture {
+        let mut capture = Self {
             inventory: Vec::new(),
             messages: Vec::new(),
         };

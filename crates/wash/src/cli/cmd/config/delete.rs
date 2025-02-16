@@ -10,7 +10,7 @@ use crate::errors::suggest_run_host_error;
 use crate::secrets::is_secret;
 
 /// Invoke `wash config delete` (sub)command
-pub(crate) async fn invoke(
+pub async fn invoke(
     opts: CliConnectionOpts,
     name: &str,
     output_kind: OutputKind,

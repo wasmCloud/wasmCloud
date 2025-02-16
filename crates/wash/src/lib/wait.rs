@@ -39,6 +39,7 @@ fn get_wasmbus_event_info(event: Event) -> Result<CloudEventData> {
 }
 
 /// The potential outcomes of an event that has been found.
+///
 /// It can either succeed or fail. This enum should only be returned if we found the applicable event.
 /// If we did not find the event or another error occurred, use the `Err` variant of a `Result` wrapping around this enum.
 pub enum FindEventOutcome<T> {

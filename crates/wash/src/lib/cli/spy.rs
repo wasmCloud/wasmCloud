@@ -28,12 +28,12 @@ pub async fn handle_command(cmd: SpyCommand) -> Result<CommandOutput> {
 
     while let Some(msg) = spier.next().await {
         println!(
-            r#"
+            r"
 [{}]
 From: {:<25} To: {:<25}
 
 Operation: {}
-Message: {}"#,
+Message: {}",
             msg.timestamp, msg.from, msg.to, msg.operation, msg.message
         );
     }

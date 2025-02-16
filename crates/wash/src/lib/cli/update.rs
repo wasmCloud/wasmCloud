@@ -47,11 +47,10 @@ pub async fn handle_update_component(cmd: UpdateComponentCommand) -> Result<Comm
         client
             .get_host_inventory(&host_id)
             .await
-            .map(|inventory| inventory.into_data())
+            .map(wasmcloud_control_interface::CtlResponse::into_data)
             .map_err(boxed_err_to_anyhow)?
             .context(format!(
-                "Supplied host [{}] did not respond to inventory query",
-                host_id
+                "Supplied host [{host_id}] did not respond to inventory query"
             ))?
     } else {
         let mut inventories = get_all_inventories(&client)
@@ -130,6 +129,6 @@ pub async fn handle_update_component(cmd: UpdateComponentCommand) -> Result<Comm
 
     Ok(CommandOutput::from_key_and_text(
         "result",
-        format!("Host [{}]: {}", host_id, message),
+        format!("Host [{host_id}]: {message}"),
     ))
 }

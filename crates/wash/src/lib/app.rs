@@ -1,6 +1,6 @@
 //! Interact with and manage wadm applications over NATS, requires the `nats` feature
 //!
-//! This crate is essentially a wrapper around the wadm_client crate, and it's recommended to use
+//! This crate is essentially a wrapper around the `wadm_client` crate, and it's recommended to use
 //! that crate directly instead.
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -30,17 +30,17 @@ pub enum AppManifest {
 impl AppManifest {
     /// Resolve relative file paths in the given app manifest to some base path
     pub fn resolve_image_relative_file_paths(&mut self, base: impl AsRef<Path>) -> Result<()> {
-        if let AppManifest::SerializedModel(ref mut content) = self {
+        if let Self::SerializedModel(ref mut content) = self {
             resolve_relative_file_paths_in_yaml(content, base)?;
         }
         Ok(())
     }
 
     /// Retrieve the name of a given [`AppManifest`]
-    pub fn name(&self) -> Option<&str> {
+    #[must_use] pub fn name(&self) -> Option<&str> {
         match self {
-            AppManifest::ModelName(name) => Some(name),
-            AppManifest::SerializedModel(manifest) => manifest
+            Self::ModelName(name) => Some(name),
+            Self::SerializedModel(manifest) => manifest
                 .get("metadata")?
                 .get("name")
                 .and_then(|v| v.as_str()),
@@ -49,10 +49,10 @@ impl AppManifest {
 
     /// Retrieve the version of a given [`AppManifest`], returning None if the manifest
     /// does not contain a version (or is not the type to contain a version)
-    pub fn version(&self) -> Option<&str> {
+    #[must_use] pub fn version(&self) -> Option<&str> {
         match self {
-            AppManifest::ModelName(_) => None,
-            AppManifest::SerializedModel(manifest) => manifest
+            Self::ModelName(_) => None,
+            Self::SerializedModel(manifest) => manifest
                 .get("metadata")?
                 .get("annotations")?
                 .get("version")
@@ -472,14 +472,14 @@ pub async fn validate_oci_references(refs: Vec<String>, failures: &mut Vec<Valid
         if let Err(err) = fetcher.fetch_component(&image).await {
             let mut fetch_failure = ValidationFailure::default();
             fetch_failure.level = ValidationFailureLevel::Error;
-            fetch_failure.msg = format!("Failed to fetch OCI component '{}': {}", image, err);
+            fetch_failure.msg = format!("Failed to fetch OCI component '{image}': {err}");
             failures.push(fetch_failure);
         }
     }
 }
 
 /// Extract image references from a given manifest
-pub fn extract_image_references(manifest: &Manifest) -> Vec<String> {
+#[must_use] pub fn extract_image_references(manifest: &Manifest) -> Vec<String> {
     let mut image_refs = Vec::new();
     for component in &manifest.spec.components {
         match &component.properties {

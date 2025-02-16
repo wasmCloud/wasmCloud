@@ -120,7 +120,7 @@ pub enum TokenCommand {
 
 #[derive(Debug, Clone, Parser, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct GenerateCommon {
-    /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
+    /// Location of key files for signing. Defaults to $`WASH_KEYS` ($HOME/.wash/keys)
     #[clap(long = "directory", env = "WASH_KEYS", hide_env_values = true)]
     pub directory: Option<PathBuf>,
 
@@ -143,7 +143,7 @@ pub struct OperatorMetadata {
     #[clap(short = 'n', long = "name")]
     name: String,
 
-    /// Path to issuer seed key (self signing operator). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    /// Path to issuer seed key (self signing operator). If this flag is not provided, the will be sourced from $`WASH_KEYS` ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
         short = 'i',
         long = "issuer",
@@ -167,7 +167,7 @@ pub struct AccountMetadata {
     #[clap(short = 'n', long = "name")]
     name: String,
 
-    /// Path to issuer seed key (operator). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    /// Path to issuer seed key (operator). If this flag is not provided, the will be sourced from $`WASH_KEYS` ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
         short = 'i',
         long = "issuer",
@@ -176,7 +176,7 @@ pub struct AccountMetadata {
     )]
     issuer: Option<String>,
 
-    /// Path to subject seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    /// Path to subject seed key (account). If this flag is not provided, the will be sourced from $`WASH_KEYS` ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
         short = 's',
         long = "subject",
@@ -212,7 +212,7 @@ pub struct ProviderMetadata {
     #[clap(short = 'e', long = "version")]
     version: Option<String>,
 
-    /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $`WASH_KEYS` ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
         short = 'i',
         long = "issuer",
@@ -221,7 +221,7 @@ pub struct ProviderMetadata {
     )]
     issuer: Option<String>,
 
-    /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $`WASH_KEYS` ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
         short = 's',
         long = "subject",
@@ -242,7 +242,7 @@ impl ProviderMetadata {
             _ => ProviderConfig::default(),
         };
 
-        ProviderMetadata {
+        Self {
             name: self.name.or(Some(project_config.common.name.clone())),
             revision: self.revision.or(Some(project_config.common.revision)),
             version: self
@@ -272,7 +272,7 @@ pub struct ComponentMetadata {
     #[clap(short = 'a', long = "call-alias")]
     pub call_alias: Option<String>,
 
-    /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $`WASH_KEYS` ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
         short = 'i',
         long = "issuer",
@@ -281,7 +281,7 @@ pub struct ComponentMetadata {
     )]
     pub issuer: Option<String>,
 
-    /// Path to subject seed key (module). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    /// Path to subject seed key (module). If this flag is not provided, the will be sourced from $`WASH_KEYS` ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
         short = 's',
         long = "subject",
@@ -302,13 +302,13 @@ impl ComponentMetadata {
             _ => ComponentConfig::default(),
         };
 
-        ComponentMetadata {
+        Self {
             name: self.name.or(Some(project_config.common.name.clone())),
             rev: self.rev.or(Some(project_config.common.revision)),
             ver: self.ver.or(Some(project_config.common.version.to_string())),
             tags: match component_config.tags.clone() {
                 Some(tags) => tags
-                    .clone()
+                    
                     .into_iter()
                     .collect::<BTreeSet<String>>()
                     .union(&self.tags.clone().into_iter().collect::<BTreeSet<String>>())
@@ -331,7 +331,7 @@ impl ComponentMetadata {
 
 impl From<InspectCommand> for inspect::InspectCliCommand {
     fn from(cmd: InspectCommand) -> Self {
-        inspect::InspectCliCommand {
+        Self {
             target: cmd.component,
             jwt_only: cmd.jwt_only,
             wit: cmd.wit,

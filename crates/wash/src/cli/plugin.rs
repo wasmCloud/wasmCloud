@@ -156,7 +156,7 @@ pub async fn handle_install(
             cmd.digest
         }
         "oci" => {
-            spinner.update_spinner_message(format!(" Downloading plugin from registry {}", rest));
+            spinner.update_spinner_message(format!(" Downloading plugin from registry {rest}"));
             let image: Reference = rest
                 .trim()
                 .to_ascii_lowercase()
@@ -262,19 +262,16 @@ pub async fn handle_uninstall(
         .await
         .context("Unable to load plugins")?;
 
-    let metadata = match plugins.metadata(&cmd.plugin) {
-        Some(metadata) => metadata,
-        None => {
-            let message = format!("Plugin {} is not currently installed", cmd.plugin);
-            return Ok(CommandOutput {
-                text: message.clone(),
-                map: [
-                    ("uninstalled".to_string(), false.into()),
-                    ("message".to_string(), message.into()),
-                ]
-                .into(),
-            });
-        }
+    let metadata = if let Some(metadata) = plugins.metadata(&cmd.plugin) { metadata } else {
+        let message = format!("Plugin {} is not currently installed", cmd.plugin);
+        return Ok(CommandOutput {
+            text: message.clone(),
+            map: [
+                ("uninstalled".to_string(), false.into()),
+                ("message".to_string(), message.into()),
+            ]
+            .into(),
+        });
     };
 
     spinner.update_spinner_message(" Uninstalling plugin");

@@ -39,10 +39,10 @@ pub enum TypeConfig {
 }
 
 impl TypeConfig {
-    pub fn wit_world(&self) -> &Option<String> {
+    #[must_use] pub const fn wit_world(&self) -> &Option<String> {
         match self {
-            TypeConfig::Component(c) => &c.wit_world,
-            TypeConfig::Provider(c) => &c.wit_world,
+            Self::Component(c) => &c.wit_world,
+            Self::Provider(c) => &c.wit_world,
         }
     }
 }
@@ -82,7 +82,7 @@ where
 
 impl RustConfig {
     #[must_use]
-    pub fn build_target(&self, wasm_target: &WasmTarget) -> &'static str {
+    pub const fn build_target(&self, wasm_target: &WasmTarget) -> &'static str {
         match wasm_target {
             WasmTarget::CoreModule => "wasm32-unknown-unknown",
             WasmTarget::WasiP1 => "wasm32-wasip1",
@@ -196,7 +196,7 @@ pub enum RegistryPullSource {
     ///   - If a directory, then the namespace & path are appended
     ///   - If a direct file then the file itself is used
     ///
-    /// (ex. 'file://relative/path/to/file', 'file:///absolute/path/to/file')
+    /// (ex. '<file://relative/path/to/file>', '<file:///absolute/path/to/file>')
     LocalPath(String),
 
     /// Remote HTTP registry, configured to support `.well-known/wasm-pkg/registry.json`
@@ -207,7 +207,7 @@ pub enum RegistryPullSource {
     /// These references are resolved by appending the intended namespace and package
     /// to the provided URI
     ///
-    /// (ex. resolving `wasi:keyvalue@0.2.0` with 'oci://ghcr.io/wasmcloud/wit' becomes `oci://ghcr.io/wasmcloud/wit/wasi/keyvalue:0.2.0`)
+    /// (ex. resolving `wasi:keyvalue@0.2.0` with '<oci://ghcr.io/wasmcloud/wit>' becomes `oci://ghcr.io/wasmcloud/wit/wasi/keyvalue:0.2.0`)
     RemoteOci(String),
 
     /// URL to a HTTP/S resource
@@ -228,12 +228,12 @@ pub enum RegistryPullSource {
 impl Display for RegistryPullSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RegistryPullSource::Builtin => write!(f, "builtin")?,
-            RegistryPullSource::LocalPath(s)
-            | RegistryPullSource::RemoteHttpWellKnown(s)
-            | RegistryPullSource::RemoteOci(s)
-            | RegistryPullSource::RemoteHttp(s)
-            | RegistryPullSource::RemoteGit(s) => write!(f, "{}", s)?,
+            Self::Builtin => write!(f, "builtin")?,
+            Self::LocalPath(s)
+            | Self::RemoteHttpWellKnown(s)
+            | Self::RemoteOci(s)
+            | Self::RemoteHttp(s)
+            | Self::RemoteGit(s) => write!(f, "{s}")?,
         }
         Ok(())
     }
@@ -281,8 +281,8 @@ impl FromStr for RegistryPullSource {
 impl RegistryPullSource {
     pub async fn resolve_file_path(&self, base_dir: impl AsRef<Path>) -> Result<PathBuf> {
         match self {
-            RegistryPullSource::LocalPath(p) => match p.strip_prefix("file://") {
-                Some(s) if s.starts_with("/") => tokio::fs::canonicalize(s)
+            Self::LocalPath(p) => match p.strip_prefix("file://") {
+                Some(s) if s.starts_with('/') => tokio::fs::canonicalize(s)
                     .await
                     .with_context(|| format!("failed to canonicalize absolute path [{s}]")),
                 Some(s) => tokio::fs::canonicalize(base_dir.as_ref().join(s))
@@ -342,7 +342,7 @@ impl TryFrom<RegistryPullSource> for RegistryMapping {
                     metadata.protocol_configs = HashMap::from([("oci".into(), protocol_configs)]);
                     metadata
                 };
-                Ok(RegistryMapping::Custom(CustomConfig {
+                Ok(Self::Custom(CustomConfig {
                     registry: Registry::from_str(&format!(
                         "{}{}",
                         url.authority(),
@@ -412,15 +412,15 @@ pub enum WasmTarget {
 impl From<&str> for WasmTarget {
     fn from(value: &str) -> Self {
         match value {
-            "wasm32-wasi-preview1" => WasmTarget::WasiP1,
-            "wasm32-wasip1" => WasmTarget::WasiP1,
-            "wasm32-wasi" => WasmTarget::WasiP1,
-            "wasm32-wasi-preview2" => WasmTarget::WasiP2,
-            "wasm32-wasip2" => WasmTarget::WasiP2,
-            "wasm32-unknown-unknown" => WasmTarget::CoreModule,
+            "wasm32-wasi-preview1" => Self::WasiP1,
+            "wasm32-wasip1" => Self::WasiP1,
+            "wasm32-wasi" => Self::WasiP1,
+            "wasm32-wasi-preview2" => Self::WasiP2,
+            "wasm32-wasip2" => Self::WasiP2,
+            "wasm32-unknown-unknown" => Self::CoreModule,
             _ => {
                 warn!("Unknown wasm_target `{value}`, expected wasm32-wasip2 or wasm32-wasip1. Defaulting to wasm32-unknown-unknown");
-                WasmTarget::CoreModule
+                Self::CoreModule
             }
         }
     }
@@ -435,9 +435,9 @@ impl From<String> for WasmTarget {
 impl Display for WasmTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match &self {
-            WasmTarget::CoreModule => "wasm32-unknown-unknown",
-            WasmTarget::WasiP1 => "wasm32-wasip1",
-            WasmTarget::WasiP2 => "wasm32-wasip2",
+            Self::CoreModule => "wasm32-unknown-unknown",
+            Self::WasiP1 => "wasm32-wasip1",
+            Self::WasiP2 => "wasm32-wasip2",
         })
     }
 }
@@ -461,7 +461,7 @@ pub enum TinyGoScheduler {
 }
 
 impl TinyGoScheduler {
-    pub fn as_str(&self) -> &'static str {
+    #[must_use] pub const fn as_str(&self) -> &'static str {
         match self {
             Self::None => "none",
             Self::Tasks => "tasks",
@@ -479,7 +479,7 @@ pub enum TinyGoGarbageCollector {
 }
 
 impl TinyGoGarbageCollector {
-    pub fn as_str(&self) -> &'static str {
+    #[must_use] pub const fn as_str(&self) -> &'static str {
         match self {
             Self::None => "none",
             Self::Conservative => "conservative",
@@ -495,11 +495,11 @@ pub struct TinyGoConfig {
     /// Whether to disable the `go generate` step in the build process. Defaults to false.
     #[serde(default)]
     pub disable_go_generate: bool,
-    /// The scheduler to use for the TinyGo build.
+    /// The scheduler to use for the `TinyGo` build.
     ///
     /// Override the default scheduler (asyncify). Valid values are: none, tasks, asyncify.
     pub scheduler: Option<TinyGoScheduler>,
-    /// The garbage collector to use for the TinyGo build.
+    /// The garbage collector to use for the `TinyGo` build.
     ///
     /// Override the default garbage collector (conservative). Valid values are: none, conservative, leaking.
     pub garbage_collector: Option<TinyGoGarbageCollector>,
@@ -507,7 +507,7 @@ pub struct TinyGoConfig {
 
 impl TinyGoConfig {
     #[must_use]
-    pub fn build_target(&self, wasm_target: &WasmTarget) -> &'static str {
+    pub const fn build_target(&self, wasm_target: &WasmTarget) -> &'static str {
         match wasm_target {
             WasmTarget::CoreModule => "wasm",
             WasmTarget::WasiP1 => "wasi",
@@ -562,7 +562,7 @@ pub struct DevManifestComponentTarget {
 }
 
 impl DevManifestComponentTarget {
-    pub fn matches(&self, component: &Component) -> bool {
+    #[must_use] pub fn matches(&self, component: &Component) -> bool {
         let (component_id, component_ref) = match &component.properties {
             Properties::Component { ref properties } => (&properties.id, &properties.image),
             Properties::Capability { ref properties } => (&properties.id, &properties.image),
@@ -650,11 +650,11 @@ impl WitInterfaceSpec {
     /// assert!(WitInterfaceSpec::from_str("wasi:http").unwrap().includes(WitInterfaceSpec::from_str("wasi:http/incoming-handler").as_ref().unwrap()));
     /// assert!(WitInterfaceSpec::from_str("wasi:http/incoming-handler").unwrap().includes(WitInterfaceSpec::from_str("wasi:http/incoming-handler.handle").as_ref().unwrap()));
     /// ```
-    pub fn includes(&self, other: &Self) -> bool {
+    #[must_use] pub fn includes(&self, other: &Self) -> bool {
         !self.is_disjoint(other)
     }
 
-    pub fn is_disjoint(&self, other: &Self) -> bool {
+    #[must_use] pub fn is_disjoint(&self, other: &Self) -> bool {
         if self.namespace != other.namespace {
             return true;
         }
@@ -664,11 +664,7 @@ impl WitInterfaceSpec {
         // If interfaces don't match, this interface can't contain the other one
         match (self.interfaces.as_ref(), other.interfaces.as_ref()) {
             // If they both have no interface specified, then we do overlap
-            (None, None) |
-            // If the other has no interface, but this one does, this *does* overlap
-            (Some(_), None) |
-            // If this spec has no interface, but the other does, then we do overlap
-            (None, Some(_)) => {
+            (None | Some(_), None) | (None, Some(_)) => {
                 return false;
             }
             // If both specify different interfaces, we don't overlap
@@ -682,13 +678,7 @@ impl WitInterfaceSpec {
         // At this point, we know that the interfaces must match
         match (self.function.as_ref(), other.function.as_ref()) {
             // If neither have functions, they cannot be disjoint
-            (None, None) |
-            // If only self has a function, then they are not disjoint
-            // (other contains self)
-            (Some(_), None) |
-            // If only the other has a function, then they are not disjoint
-            // (self contains other)
-            (None, Some(_)) => {
+            (None | Some(_), None) | (None, Some(_)) => {
                 return false;
             }
             // If the functions differ, these are disjoint
@@ -702,13 +692,7 @@ impl WitInterfaceSpec {
         // Compare the versions
         match (self.version.as_ref(), other.version.as_ref())  {
             // If the neither have versions, they cannot be disjoint
-            (None, None) |
-            // If only self has a version, they cannot be disjoint
-            // (self contains other)
-            (Some(_), None) |
-            // If only the other has a version, they cannot be disjoint
-            // (other contains self)
-            (None, Some(_)) => {
+            (None | Some(_), None) | (None, Some(_)) => {
                 false
             }
             // If the *either* version matches the other in semantic version terms, they cannot be disjoint
@@ -817,8 +801,8 @@ impl<T> OneOrMore<T> {
     #[allow(unused)]
     fn into_vec(self) -> Vec<T> {
         match self {
-            OneOrMore::One(t) => vec![t],
-            OneOrMore::More(ts) => ts,
+            Self::One(t) => vec![t],
+            Self::More(ts) => ts,
         }
     }
 
@@ -843,14 +827,14 @@ impl<'a, T> Iterator for OneOrMoreIterator<'a, T> {
         match (self.idx, self.inner) {
             (0, OneOrMore::One(inner)) => {
                 if let Some(v) = self.idx.checked_add(1) {
-                    self.idx = v
+                    self.idx = v;
                 }
                 Some(inner)
             }
             (_, OneOrMore::One(_)) => None,
             (idx, OneOrMore::More(vs)) => {
                 if let Some(v) = self.idx.checked_add(1) {
-                    self.idx = v
+                    self.idx = v;
                 }
                 vs.get(idx)
             }
@@ -1024,7 +1008,7 @@ pub struct WasmcloudDotToml {
     pub language: String,
 
     /// The type of project. This is a string that is used to determine which type of config to parse.
-    /// The toml file name is just "type" but is named project_type here to avoid clashing with the type keyword in Rust.
+    /// The toml file name is just "type" but is named `project_type` here to avoid clashing with the type keyword in Rust.
     #[serde(rename = "type")]
     pub project_type: String,
 
@@ -1062,7 +1046,7 @@ pub struct WasmcloudDotToml {
     #[serde(default)]
     pub rust: RustConfig,
 
-    /// TinyGo related configuration and options
+    /// `TinyGo` related configuration and options
     #[serde(default)]
     pub tinygo: TinyGoConfig,
 
@@ -1130,16 +1114,7 @@ impl WasmcloudDotToml {
             _ => None,
         };
 
-        Ok(CommonConfig {
-            name,
-            version,
-            revision,
-            wit_dir,
-            build_dir,
-            project_dir,
-            wasm_bin_name,
-            registry,
-        })
+        Ok(CommonConfig { name, version, revision, project_dir, build_dir, wit_dir, wasm_bin_name, registry })
     }
 
     pub fn convert(self, wasmcloud_toml_dir: PathBuf) -> Result<ProjectConfig> {
@@ -1308,7 +1283,7 @@ pub struct ProjectConfig {
     /// The language of the project, e.g. rust, tinygo. Contains specific configuration for that language.
     pub language: LanguageConfig,
     /// The type of project, e.g. component, provider, interface. Contains the specific configuration for that type.
-    /// This is renamed to "type" but is named project_type here to avoid clashing with the type keyword in Rust.
+    /// This is renamed to "type" but is named `project_type` here to avoid clashing with the type keyword in Rust.
     #[serde(rename = "type")]
     pub project_type: TypeConfig,
     /// Configuration common among all project types & languages.

@@ -71,7 +71,7 @@ pub async fn get_host_inventories(cmd: GetHostInventoriesCommand) -> Result<Vec<
         if let Some(inventory) = client
             .get_host_inventory(&host_id)
             .await
-            .map(|inventory| inventory.into_data())
+            .map(wasmcloud_control_interface::CtlResponse::into_data)
             .map_err(boxed_err_to_anyhow)?
         {
             Ok(vec![inventory])
@@ -102,7 +102,7 @@ pub async fn get_hosts(cmd: GetHostsCommand) -> Result<Vec<Host>> {
         .map(|hosts| {
             hosts
                 .into_iter()
-                .filter_map(|h| h.into_data())
+                .filter_map(wasmcloud_control_interface::CtlResponse::into_data)
                 .collect::<Vec<_>>()
         })
         .context("Was able to connect to NATS, but failed to get hosts.")
@@ -117,5 +117,5 @@ pub fn parse_watch_interval(arg: &str) -> Result<std::time::Duration, String> {
         return Ok(std::time::Duration::from_millis(millis));
     }
 
-    Err(format!("Invalid duration: '{}'. Expected a duration like '5s', '1m', '100ms', or milliseconds as an integer.", arg))
+    Err(format!("Invalid duration: '{arg}'. Expected a duration like '5s', '1m', '100ms', or milliseconds as an integer."))
 }

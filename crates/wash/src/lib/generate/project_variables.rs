@@ -122,39 +122,36 @@ where
     for placeholder in &config.placeholders {
         let mut slot = try_placeholder_into_slot(placeholder, values, renderer)?;
         let key = slot.var_name.clone();
-        match values.get(&key) {
-            Some(_) => {} // we already have value for this field
-            None => {
-                // expand string default values in case they are templates
-                match slot.var_info {
-                    VarInfo::String { entry } if entry.default.is_some() => {
-                        slot.var_info = VarInfo::String {
-                            entry: expand_default_value(entry, values, renderer)?,
-                        };
-                    }
-                    _ => {}
+        if values.get(&key).is_some() {} else {
+            // expand string default values in case they are templates
+            match slot.var_info {
+                VarInfo::String { entry } if entry.default.is_some() => {
+                    slot.var_info = VarInfo::String {
+                        entry: expand_default_value(entry, values, renderer)?,
+                    };
                 }
-                match (silent, &slot.var_info) {
-                    (false, _) => {
-                        let value = value_provider(&slot)?;
-                        values.insert(key, value);
-                    }
-                    (true, VarInfo::Bool { default: Some(b) }) => {
-                        values.insert(key, Value::Bool(*b));
-                    }
-                    (
-                        true,
-                        VarInfo::String {
-                            entry:
-                                StringEntry {
-                                    default: Some(s), ..
-                                },
-                        },
-                    ) => {
-                        values.insert(key, Value::String(s.clone()));
-                    }
-                    (true, _) => undefined.push(key),
+                _ => {}
+            }
+            match (silent, &slot.var_info) {
+                (false, _) => {
+                    let value = value_provider(&slot)?;
+                    values.insert(key, value);
                 }
+                (true, VarInfo::Bool { default: Some(b) }) => {
+                    values.insert(key, Value::Bool(*b));
+                }
+                (
+                    true,
+                    VarInfo::String {
+                        entry:
+                            StringEntry {
+                                default: Some(s), ..
+                            },
+                    },
+                ) => {
+                    values.insert(key, Value::String(s.clone()));
+                }
+                (true, _) => undefined.push(key),
             }
         }
     }

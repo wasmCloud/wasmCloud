@@ -87,7 +87,7 @@ pub(crate) async fn resolve_ref(s: impl AsRef<str>) -> Result<String> {
                 "file://{}",
                 tokio::fs::canonicalize(&s)
                     .await
-                    .with_context(|| format!("failed to resolve absolute path: {}", s))?
+                    .with_context(|| format!("failed to resolve absolute path: {s}"))?
                     .display()
             )
         }
@@ -101,7 +101,7 @@ pub(crate) async fn resolve_ref(s: impl AsRef<str>) -> Result<String> {
                 "file://{}",
                 tokio::fs::canonicalize(s.split_at(7).1)
                     .await
-                    .with_context(|| format!("failed to resolve absolute path: {}", s))?
+                    .with_context(|| format!("failed to resolve absolute path: {s}"))?
                     .display()
             )
         }
@@ -124,35 +124,32 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
 
     let component_ref = resolve_ref(&cmd.component_ref).await?;
 
-    let host = match cmd.host_id {
-        Some(host) => find_host_id(&host, &client).await?.0,
-        None => {
-            let suitable_hosts = client
-                .perform_component_auction(
-                    &component_ref,
-                    &cmd.component_id,
-                    BTreeMap::from_iter(input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?),
+    let host = if let Some(host) = cmd.host_id { find_host_id(&host, &client).await?.0 } else {
+        let suitable_hosts = client
+            .perform_component_auction(
+                &component_ref,
+                &cmd.component_id,
+                BTreeMap::from_iter(input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?),
+            )
+            .await
+            .map_err(boxed_err_to_anyhow)
+            .with_context(|| {
+                format!(
+                    "Failed to auction component {} to hosts in lattice",
+                    &component_ref
                 )
-                .await
-                .map_err(boxed_err_to_anyhow)
-                .with_context(|| {
-                    format!(
-                        "Failed to auction component {} to hosts in lattice",
-                        &component_ref
-                    )
-                })?;
-            if suitable_hosts.is_empty() {
-                bail!("No suitable hosts found for component {}", component_ref);
-            } else {
-                let acks = suitable_hosts
-                    .into_iter()
-                    .filter_map(|h| h.into_data())
-                    .collect::<Vec<_>>();
-                let ack = acks.first().context("No suitable hosts found")?;
-                ack.host_id()
-                    .parse()
-                    .with_context(|| format!("Failed to parse host id: {}", ack.host_id()))?
-            }
+            })?;
+        if suitable_hosts.is_empty() {
+            bail!("No suitable hosts found for component {}", component_ref);
+        } else {
+            let acks = suitable_hosts
+                .into_iter()
+                .filter_map(wasmcloud_control_interface::CtlResponse::into_data)
+                .collect::<Vec<_>>();
+            let ack = acks.first().context("No suitable hosts found")?;
+            ack.host_id()
+                .parse()
+                .with_context(|| format!("Failed to parse host id: {}", ack.host_id()))?
         }
     };
 
@@ -248,35 +245,32 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
     // Attempt to parse the provider_ref from strings that may look like paths or be OCI references
     let provider_ref = resolve_ref(&cmd.provider_ref).await?;
 
-    let host = match cmd.host_id {
-        Some(host) => find_host_id(&host, &client).await?.0,
-        None => {
-            let suitable_hosts = client
-                .perform_provider_auction(
-                    &provider_ref,
-                    &cmd.link_name,
-                    BTreeMap::from_iter(input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?),
+    let host = if let Some(host) = cmd.host_id { find_host_id(&host, &client).await?.0 } else {
+        let suitable_hosts = client
+            .perform_provider_auction(
+                &provider_ref,
+                &cmd.link_name,
+                BTreeMap::from_iter(input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?),
+            )
+            .await
+            .map_err(boxed_err_to_anyhow)
+            .with_context(|| {
+                format!(
+                    "Failed to auction provider {} with link name {} to hosts in lattice",
+                    &provider_ref, &cmd.link_name
                 )
-                .await
-                .map_err(boxed_err_to_anyhow)
-                .with_context(|| {
-                    format!(
-                        "Failed to auction provider {} with link name {} to hosts in lattice",
-                        &provider_ref, &cmd.link_name
-                    )
-                })?;
-            if suitable_hosts.is_empty() {
-                bail!("No suitable hosts found for provider {}", provider_ref);
-            } else {
-                let acks = suitable_hosts
-                    .into_iter()
-                    .filter_map(|h| h.into_data())
-                    .collect::<Vec<_>>();
-                let ack = acks.first().context("No suitable hosts found")?;
-                ack.host_id()
-                    .parse()
-                    .with_context(|| format!("Failed to parse host id: {}", ack.host_id()))?
-            }
+            })?;
+        if suitable_hosts.is_empty() {
+            bail!("No suitable hosts found for provider {}", provider_ref);
+        } else {
+            let acks = suitable_hosts
+                .into_iter()
+                .filter_map(wasmcloud_control_interface::CtlResponse::into_data)
+                .collect::<Vec<_>>();
+            let ack = acks.first().context("No suitable hosts found")?;
+            ack.host_id()
+                .parse()
+                .with_context(|| format!("Failed to parse host id: {}", ack.host_id()))?
         }
     };
 

@@ -8,12 +8,12 @@ use wadm_types::{
 use crate::lib::{generate::emoji, parser::ProjectConfig};
 
 /// Generate the a configuration name for a dependency, given it's namespace and package
-pub(crate) fn config_name(ns: &str, pkg: &str) -> String {
-    format!("{}-{}-config", ns, pkg)
+pub fn config_name(ns: &str, pkg: &str) -> String {
+    format!("{ns}-{pkg}-config")
 }
 
 /// Find the first config value for provider  trait configuration configuration which has a certain name
-pub(crate) fn find_provider_source_trait_config_value<'a>(
+pub fn find_provider_source_trait_config_value<'a>(
     component: &'a Component,
     config_name: &'a str,
     property_key: &'a str,
@@ -47,9 +47,9 @@ pub(crate) fn find_provider_source_trait_config_value<'a>(
 }
 
 /// Generate help text for manifest with components that we recognize
-pub(crate) fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String> {
+pub fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String> {
     let mut lines = Vec::new();
-    for component in manifest.spec.components.iter() {
+    for component in &manifest.spec.components {
         match &component.properties {
             // Add help text for HTTP server
             Properties::Capability {
@@ -95,7 +95,7 @@ pub(crate) fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String
                         emoji::SPARKLE,
                         style(format!(
                             "Messaging NATS: Listening on the following subscriptions [{}]",
-                            subscriptions.split(",").collect::<Vec<&str>>().join(", "),
+                            subscriptions.split(',').collect::<Vec<&str>>().join(", "),
                         ))
                         .bold()
                     ));
@@ -109,7 +109,7 @@ pub(crate) fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String
 }
 
 /// Generate a WADM component from a project configuration
-pub(crate) fn generate_component_from_project_cfg(
+pub fn generate_component_from_project_cfg(
     cfg: &ProjectConfig,
     component_id: &str,
     image_ref: &str,

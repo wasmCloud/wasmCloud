@@ -90,13 +90,13 @@ fn create_matcher<P: AsRef<Path>>(project_dir: P, patterns: &[String]) -> Result
     Ok(builder.build()?)
 }
 
-pub(crate) fn spinner() -> Result<ProgressStyle> {
+pub fn spinner() -> Result<ProgressStyle> {
     Ok(ProgressStyle::default_spinner()
         .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
         .template("{prefix:.bold.dim} {spinner} {wide_msg}")?)
 }
 
-pub(crate) fn process_template_dir(
+pub fn process_template_dir(
     source_dir: &Path,
     project_dir: &Path,
     template_config: &TemplateConfig,

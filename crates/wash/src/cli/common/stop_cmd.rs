@@ -105,7 +105,7 @@ mod test {
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert!(skip_wait);
                 assert_eq!(host_id.unwrap(), HOST_ID);
-                assert_eq!(component_id.to_string(), COMPONENT_ID);
+                assert_eq!(component_id, COMPONENT_ID);
             }
             cmd => panic!("stop component constructed incorrect command {cmd:?}"),
         }
@@ -157,7 +157,7 @@ mod test {
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id.unwrap(), HOST_ID);
-                assert_eq!(provider_id.to_string(), PROVIDER_ID);
+                assert_eq!(provider_id, PROVIDER_ID);
                 assert!(skip_wait);
             }
             cmd => panic!("stop provider constructed incorrect command {cmd:?}"),
@@ -209,8 +209,8 @@ mod test {
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, TIMEOUT_MS);
                 assert_eq!(host_shutdown_timeout, HOST_TIMEOUT_MS);
-                assert_eq!(host_id.to_string(), HOST_ID);
-                assert_eq!(host_id.to_string(), HOST_ID,);
+                assert_eq!(host_id, HOST_ID);
+                assert_eq!(host_id, HOST_ID,);
             }
             cmd => panic!("stop host constructed incorrect command {cmd:?}"),
         }

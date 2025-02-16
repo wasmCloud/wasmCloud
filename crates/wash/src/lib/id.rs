@@ -67,7 +67,7 @@ impl<const PREFIX: char> Id<PREFIX> {
     }
 
     #[must_use]
-    pub fn prefix() -> char {
+    pub const fn prefix() -> char {
         PREFIX
     }
 }
@@ -121,7 +121,7 @@ impl<const PREFIX: char> Seed<PREFIX> {
     }
 
     #[must_use]
-    pub fn prefix() -> char {
+    pub const fn prefix() -> char {
         PREFIX
     }
 }

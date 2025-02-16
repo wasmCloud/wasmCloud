@@ -16,12 +16,12 @@ pub fn list_revisions_table(revisions: Vec<VersionInfo>) -> String {
         TableCell::new_with_alignment("Deployed", 1, Alignment::Left),
     ]));
 
-    revisions.iter().for_each(|r| {
+    for r in &revisions {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment(r.version.clone(), 1, Alignment::Left),
             TableCell::new_with_alignment(r.deployed, 1, Alignment::Left),
         ]));
-    });
+    }
 
     table.render()
 }
@@ -34,7 +34,7 @@ pub fn list_models_table(models: Vec<ModelSummary>) -> String {
         TableCell::new_with_alignment("Deployed Version", 1, Alignment::Left),
         TableCell::new_with_alignment("Status", 1, Alignment::Left),
     ]));
-    models.iter().for_each(|m| {
+    for m in &models {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment(m.name.clone(), 1, Alignment::Left),
             TableCell::new_with_alignment(
@@ -50,12 +50,12 @@ pub fn list_models_table(models: Vec<ModelSummary>) -> String {
 
         if let Some(description) = m.description.as_ref() {
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
-                format!("  └ {}", description),
+                format!("  └ {description}"),
                 3,
                 Alignment::Left,
             )]));
         }
-    });
+    }
 
     table.render()
 }
@@ -102,7 +102,7 @@ pub fn status_table(model_name: String, status: Status) -> String {
             ),
             TableCell::new_with_alignment(&s.kind, 1, Alignment::Left),
             TableCell::new_with_alignment(status, 1, Alignment::Left),
-        ]))
+        ]));
     });
 
     if status.scalers.iter().any(|s| !s.info.message.is_empty()) {

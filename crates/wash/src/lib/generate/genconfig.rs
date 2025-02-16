@@ -16,24 +16,24 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(crate) const CONFIG_FILE_NAME: &str = "project-generate.toml";
+pub const CONFIG_FILE_NAME: &str = "project-generate.toml";
 
 /// top-level data structure for a project-generate.toml file
 #[derive(Deserialize, Debug, Default, PartialEq)]
-pub(crate) struct Config {
+pub struct Config {
     pub(crate) template: Option<TemplateConfig>,
     #[serde(default)]
     pub(crate) placeholders: Vec<TomlMap>,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
-pub(crate) struct ConfigValues {
+pub struct ConfigValues {
     pub(crate) values: TomlMap,
 }
 
 /// template parameters for a project
 #[derive(Default, Deserialize, Debug, Eq, PartialEq)]
-pub(crate) struct TemplateConfig {
+pub struct TemplateConfig {
     /// list of files or file patterns to omit.
     /// syntax for paths is the same as for `.gitignore` files.
     /// All paths are relative to the project root folder
@@ -57,20 +57,20 @@ pub(crate) struct TemplateConfig {
     /// `{ from="relative-path-to-project-root", to="new-path-or-name" }`
     /// The `to` field is processed by the template engine and
     /// may contain template expressions. For example, if the project name
-    /// is "ImageProcessor", this expression `{ from="project.md", to = "{{project-name}}.md }`
+    /// is "`ImageProcessor`", this expression `{ from="project.md", to = "{{project-name}}.md }`
     /// will result in renaming the file 'project.md' to 'ImageProcessor.md'.
     #[serde(default)]
     pub(crate) rename: Vec<RenameConfig>,
 }
 
 #[derive(Clone, Deserialize, Debug, Eq, PartialEq)]
-pub(crate) struct RenameConfig {
+pub struct RenameConfig {
     pub(crate) from: PathBuf,
     pub(crate) to: String,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
-pub(crate) struct TemplateSlotsTable(pub(crate) TomlMap);
+pub struct TemplateSlotsTable(pub(crate) TomlMap);
 
 impl Config {
     pub(crate) fn from_path<P>(path: &P) -> Result<Self>
@@ -83,7 +83,7 @@ impl Config {
                 &path.as_ref().display()
             )
         })?;
-        let config = toml::from_str::<Config>(&contents).with_context(|| {
+        let config = toml::from_str::<Self>(&contents).with_context(|| {
             format!(
                 "Error parsing template configuration '{}'",
                 &path.as_ref().display()

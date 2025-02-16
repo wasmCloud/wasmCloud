@@ -51,7 +51,7 @@ pub struct CreateCommand {
     )]
     schema: Option<PathBuf>,
 
-    /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
+    /// Location of key files for signing. Defaults to $`WASH_KEYS` ($HOME/.wash/keys)
     #[clap(
         short = 'd',
         long = "directory",
@@ -60,7 +60,7 @@ pub struct CreateCommand {
     )]
     directory: Option<PathBuf>,
 
-    /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $`WASH_KEYS` ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
         short = 'i',
         long = "issuer",
@@ -69,7 +69,7 @@ pub struct CreateCommand {
     )]
     issuer: Option<String>,
 
-    /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $`WASH_KEYS` ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
         short = 's',
         long = "subject",
@@ -166,7 +166,7 @@ pub struct InsertCommand {
     #[clap(short = 'b', long = "binary")]
     binary: String,
 
-    /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
+    /// Location of key files for signing. Defaults to $`WASH_KEYS` ($HOME/.wash/keys)
     #[clap(
         short = 'd',
         long = "directory",
@@ -175,7 +175,7 @@ pub struct InsertCommand {
     )]
     directory: Option<PathBuf>,
 
-    /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $`WASH_KEYS` ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
         short = 'i',
         long = "issuer",
@@ -184,7 +184,7 @@ pub struct InsertCommand {
     )]
     issuer: Option<String>,
 
-    /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $`WASH_KEYS` ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
         short = 's',
         long = "subject",
@@ -200,7 +200,7 @@ pub struct InsertCommand {
 
 impl From<InspectCommand> for inspect::InspectCliCommand {
     fn from(cmd: InspectCommand) -> Self {
-        inspect::InspectCliCommand {
+        Self {
             target: cmd.archive,
             jwt_only: false,
             wit: false,
@@ -217,7 +217,7 @@ impl From<InspectCommand> for inspect::InspectCliCommand {
 
 impl From<CreateCommand> for par::ParCreateArgs {
     fn from(cmd: CreateCommand) -> Self {
-        par::ParCreateArgs {
+        Self {
             vendor: cmd.vendor,
             revision: cmd.revision,
             version: cmd.version,

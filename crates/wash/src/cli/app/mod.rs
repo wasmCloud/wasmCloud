@@ -180,7 +180,7 @@ pub async fn handle_command(
     command: AppCliCommand,
     output_kind: OutputKind,
 ) -> anyhow::Result<CommandOutput> {
-    use AppCliCommand::*;
+    use AppCliCommand::{Delete, Deploy, Get, History, List, Put, Status, Undeploy, Validate};
     let sp: Spinner = Spinner::new(&output_kind)?;
     let command_output: wadm_client::Result<CommandOutput> = match command {
         List(cmd) => {
@@ -292,16 +292,16 @@ async fn undeploy_model(cmd: UndeployCommand) -> Result<CommandOutput> {
     let mut output_map = HashMap::new();
 
     // Undeploy models
-    for model_name in models.iter() {
+    for model_name in &models {
         match crate::lib::app::undeploy_model(&client, lattice.clone(), model_name).await {
-            Ok(_) => undeployed.push(model_name),
+            Ok(()) => undeployed.push(model_name),
             Err(e) => eprintln!("failed to undeploy model [{model_name}]: {e}"),
         }
     }
 
     let output_msg = match &models[..] {
         [] => "No applications undeployed".into(),
-        [m] => format!("Undeployed application: {}", m),
+        [m] => format!("Undeployed application: {m}"),
         _ => format!("Undeployed [{}] applications", undeployed.len()),
     };
     output_map.insert("results".to_string(), json!(output_msg));
@@ -522,7 +522,7 @@ async fn delete_application_version(cmd: DeleteCommand) -> Result<CommandOutput>
     }
 
     // Delete all specified models
-    for (model_name, version) in models.iter() {
+    for (model_name, version) in &models {
         match crate::lib::app::delete_model_version(
             &client,
             lattice.clone(),
@@ -653,7 +653,7 @@ async fn watch_applications(
         .map_err(|e| anyhow::anyhow!("Failed to clear terminal: {}", e))?;
 
         tokio::select! {
-            _ = tokio::time::sleep(watch_interval) => continue,
+            () = tokio::time::sleep(watch_interval) => continue,
             _res = &mut ctrlc => {
                 execute!(stdout, Clear(ClearType::Purge), Clear(ClearType::FromCursorUp), cursor::MoveTo(0, 0), cursor::Show)
                     .map_err(|e| anyhow::anyhow!("Failed to execute terminal commands: {}", e))?;
@@ -682,10 +682,10 @@ fn show_validate_manifest_results(messages: impl AsRef<[ValidationFailure]>) -> 
         "manifest is valid".into()
     } else {
         format!(
-            r#"invalid manifest:
+            r"invalid manifest:
 warnings: {warnings:#?}
 errors: {errors:#?}
-"#
+"
         )
     };
     let json_output = HashMap::<String, serde_json::Value>::from([

@@ -86,8 +86,8 @@ impl SessionMetadata {
             .metadata()
             .context("failed to get sessions file metadata")?
             .len();
-        let session_metadata: SessionMetadata = if file_size == 0 {
-            SessionMetadata::default()
+        let session_metadata: Self = if file_size == 0 {
+            Self::default()
         } else {
             let sessions_file_path = sessions_file_path().await?;
             tokio::task::block_in_place(move || {
@@ -96,7 +96,7 @@ impl SessionMetadata {
                 );
                 lock.read_to_end(&mut file_contents)
                     .context("failed to read file contents")?;
-                serde_json::from_slice::<SessionMetadata>(&file_contents).with_context(|| {
+                serde_json::from_slice::<Self>(&file_contents).with_context(|| {
                     format!(
                         "failed to parse session metadata from file [{}]",
                         sessions_file_path.display(),
@@ -121,7 +121,7 @@ impl SessionMetadata {
             .context("failed to get sessions file metadata")?
             .len();
         let mut session_metadata = if file_size == 0 {
-            SessionMetadata::default()
+            Self::default()
         } else {
             tokio::task::block_in_place(|| {
                 let mut file_contents = Vec::with_capacity(
@@ -129,7 +129,7 @@ impl SessionMetadata {
                 );
                 lock.read_to_end(&mut file_contents)
                     .context("failed to read file contents")?;
-                serde_json::from_slice::<SessionMetadata>(&file_contents).with_context(|| {
+                serde_json::from_slice::<Self>(&file_contents).with_context(|| {
                     format!(
                         "failed to parse session metadata from file [{}]",
                         sessions_file_path.display(),
@@ -179,7 +179,7 @@ impl WashDevSession {
         {
             tokio::fs::create_dir_all(&base_dir)
                 .await
-                .with_context(|| format!("failed to create dir [{}]", base_dir.display()))?
+                .with_context(|| format!("failed to create dir [{}]", base_dir.display()))?;
         }
         Ok(base_dir)
     }
@@ -192,28 +192,24 @@ impl WashDevSession {
         let project_path = project_path.as_ref();
 
         // Attempt to find an session with the given path, creating one if necessary
-        let session = match session_metadata
+        let session = if let Some(existing_session) = session_metadata
             .sessions
             .iter()
-            .find(|s| s.project_path == project_path && !s.in_use)
-        {
-            Some(existing_session) => existing_session.clone(),
-            None => {
-                let session = WashDevSession {
-                    id: rand::thread_rng()
-                        .sample_iter(&Alphanumeric)
-                        .take(SESSION_ID_LEN)
-                        .map(char::from)
-                        .collect(),
-                    project_path: project_path.into(),
-                    host_data: None,
-                    in_use: true,
-                    created_at: Utc::now(),
-                    last_used_at: Utc::now(),
-                };
-                session_metadata.sessions.push(session.clone());
-                session
-            }
+            .find(|s| s.project_path == project_path && !s.in_use) { existing_session.clone() } else {
+            let session = Self {
+                id: rand::thread_rng()
+                    .sample_iter(&Alphanumeric)
+                    .take(SESSION_ID_LEN)
+                    .map(char::from)
+                    .collect(),
+                project_path: project_path.into(),
+                host_data: None,
+                in_use: true,
+                created_at: Utc::now(),
+                last_used_at: Utc::now(),
+            };
+            session_metadata.sessions.push(session.clone());
+            session
         };
 
         Ok(session)
@@ -254,7 +250,7 @@ impl WashDevSession {
         let nats_port = nats_opts
             .nats_port
             .unwrap_or(wasmcloud_opts.ctl_port.unwrap_or(4222));
-        let nats_listen_address = format!("{}:{}", nats_host, nats_port);
+        let nats_listen_address = format!("{nats_host}:{nats_port}");
 
         let nats_child = if nats_opts.connect_only {
             None

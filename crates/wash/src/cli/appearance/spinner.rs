@@ -47,7 +47,7 @@ impl Spinner {
 
     pub fn finish_and_clear(&self) {
         if let Some(progress_bar) = &self.spinner {
-            progress_bar.finish_and_clear()
+            progress_bar.finish_and_clear();
         }
     }
 }

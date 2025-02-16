@@ -64,8 +64,8 @@ impl FromStr for OutputKind {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "json" => Ok(OutputKind::Json),
-            "text" => Ok(OutputKind::Text),
+            "json" => Ok(Self::Json),
+            "text" => Ok(Self::Text),
             _ => Err(OutputParseErr),
         }
     }
@@ -96,7 +96,7 @@ impl CommandOutput {
         text: S,
         map: std::collections::HashMap<String, serde_json::Value>,
     ) -> Self {
-        CommandOutput {
+        Self {
             map,
             text: text.into(),
         }
@@ -107,7 +107,7 @@ impl CommandOutput {
         let text_string: String = text.into();
         let mut map = std::collections::HashMap::new();
         map.insert(key.into(), serde_json::Value::String(text_string.clone()));
-        CommandOutput {
+        Self {
             map,
             text: text_string,
         }
@@ -122,14 +122,14 @@ impl From<String> for CommandOutput {
             "result".to_string(),
             serde_json::Value::String(text.clone()),
         );
-        CommandOutput { map, text }
+        Self { map, text }
     }
 }
 
 impl From<&str> for CommandOutput {
     /// Create a basic `CommandOutput` from a &str. Puts the string a a "result" key in the JSON output.
     fn from(text: &str) -> Self {
-        CommandOutput::from(text.to_string())
+        Self::from(text.to_string())
     }
 }
 
@@ -143,20 +143,20 @@ pub struct CliConnectionOpts {
     #[clap(short = 'p', long = "ctl-port", env = "WASMCLOUD_CTL_PORT")]
     pub ctl_port: Option<String>,
 
-    /// JWT file for CTL authentication. Must be supplied with ctl_seed.
+    /// JWT file for CTL authentication. Must be supplied with `ctl_seed`.
     #[clap(long = "ctl-jwt", env = "WASMCLOUD_CTL_JWT", hide_env_values = true)]
     pub ctl_jwt: Option<String>,
 
-    /// Seed file or literal for CTL authentication. Must be supplied with ctl_jwt.
+    /// Seed file or literal for CTL authentication. Must be supplied with `ctl_jwt`.
     #[clap(long = "ctl-seed", env = "WASMCLOUD_CTL_SEED", hide_env_values = true)]
     pub ctl_seed: Option<String>,
 
-    /// Credsfile for CTL authentication. Combines ctl_seed and ctl_jwt.
-    /// See https://docs.nats.io/using-nats/developer/connecting/creds for details.
+    /// Credsfile for CTL authentication. Combines `ctl_seed` and `ctl_jwt`.
+    /// See <https://docs.nats.io/using-nats/developer/connecting/creds> for details.
     #[clap(long = "ctl-credsfile", env = "WASH_CTL_CREDS", hide_env_values = true)]
     pub ctl_credsfile: Option<PathBuf>,
 
-    /// TLS CA file for CTL authentication. See https://docs.nats.io/using-nats/developer/connecting/tls for details.
+    /// TLS CA file for CTL authentication. See <https://docs.nats.io/using-nats/developer/connecting/tls> for details.
     #[clap(
         long = "ctl-tls-ca-file",
         env = "WASH_CTL_TLS_CA_FILE",
@@ -201,7 +201,7 @@ pub struct CliConnectionOpts {
 
 impl Default for CliConnectionOpts {
     fn default() -> Self {
-        CliConnectionOpts {
+        Self {
             ctl_host: Some(DEFAULT_NATS_HOST.to_string()),
             ctl_port: Some(DEFAULT_NATS_PORT.to_string()),
             ctl_jwt: None,
@@ -234,7 +234,7 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
             timeout_ms,
             context,
         }: CliConnectionOpts,
-    ) -> Result<WashConnectionOptions> {
+    ) -> Result<Self> {
         // Attempt to load a context, falling back on the default if not supplied
         let ctx_dir = ContextDir::new()?;
         let ctx = if let Some(context_name) = context {
@@ -247,7 +247,7 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
                 .context("failed to load default context")?
         };
 
-        Ok(WashConnectionOptions {
+        Ok(Self {
             ctl_host,
             ctl_port,
             ctl_jwt,
@@ -378,7 +378,7 @@ impl CommonPackageArgs {
         Ok(CachingClient::new(Some(client), cache))
     }
 
-    pub fn config_path(&self) -> Option<&PathBuf> {
+    #[must_use] pub const fn config_path(&self) -> Option<&PathBuf> {
         self.config.as_ref()
     }
 }
@@ -506,7 +506,7 @@ fn determine_directory(directory: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
-fn keypair_type_to_str(keypair_type: &KeyPairType) -> &'static str {
+const fn keypair_type_to_str(keypair_type: &KeyPairType) -> &'static str {
     use KeyPairType::{Account, Cluster, Curve, Module, Operator, Server, Service, User};
     match keypair_type {
         Account => "account",
@@ -525,7 +525,7 @@ pub(crate) fn configure_table_style(table: &mut term_table::Table<'_>) {
     table.separate_rows = false;
 }
 
-fn empty_table_style() -> term_table::TableStyle {
+const fn empty_table_style() -> term_table::TableStyle {
     term_table::TableStyle {
         top_left_corner: ' ',
         top_right_corner: ' ',

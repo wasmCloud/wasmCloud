@@ -13,7 +13,7 @@ use crate::lib::{
 
 const MAX_TERMINAL_WIDTH: usize = 120;
 
-pub fn format_optional(value: Option<String>) -> String {
+#[must_use] pub fn format_optional(value: Option<String>) -> String {
     value.unwrap_or_else(|| "N/A".into())
 }
 
@@ -30,7 +30,7 @@ pub fn extract_arg_value(arg: &str) -> Result<String> {
     }
 }
 
-pub fn default_timeout_ms() -> u64 {
+#[must_use] pub const fn default_timeout_ms() -> u64 {
     DEFAULT_NATS_TIMEOUT_MS
 }
 
@@ -79,7 +79,7 @@ pub async fn load_plugins(plugin_dir: impl AsRef<Path>) -> anyhow::Result<Subcom
             .unwrap_or(false)
         {
             if let Err(e) = plugins.add_plugin(entry.path()).await {
-                eprintln!("WARN: Couldn't load plugin, skipping: {:?}", e);
+                eprintln!("WARN: Couldn't load plugin, skipping: {e:?}");
             }
         }
     }
@@ -151,12 +151,11 @@ pub fn configure_table_style(table: &mut Table<'_>, num_rows: usize) {
     // Sets the max column width to ensure the table evenly fills the terminal width
     table.max_column_width = termsize::get()
         // Just slightly reducing the terminal width to account for padding
-        .map(|size| size.cols.saturating_sub(4) as usize)
-        .unwrap_or(MAX_TERMINAL_WIDTH)
+        .map_or(MAX_TERMINAL_WIDTH, |size| size.cols.saturating_sub(4) as usize)
         / num_rows;
 }
 
-fn empty_table_style() -> TableStyle {
+const fn empty_table_style() -> TableStyle {
     TableStyle {
         top_left_corner: ' ',
         top_right_corner: ' ',

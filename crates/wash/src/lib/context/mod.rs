@@ -100,7 +100,7 @@ impl WashContext {
     /// Create a new default context with the given name
     #[must_use]
     pub fn named(name: String) -> Self {
-        WashContext {
+        Self {
             name,
             ..Self::default()
         }
@@ -109,7 +109,7 @@ impl WashContext {
 
 impl Default for WashContext {
     fn default() -> Self {
-        WashContext {
+        Self {
             name: "default".to_string(),
             cluster_seed: None,
             ctl_host: DEFAULT_NATS_HOST.to_string(),
@@ -149,12 +149,12 @@ fn default_lattice() -> String {
 }
 
 #[must_use]
-pub fn default_timeout_ms() -> u64 {
+pub const fn default_timeout_ms() -> u64 {
     DEFAULT_NATS_TIMEOUT_MS
 }
 
 /// Default timeout that should be used with operations that manipulate components (ex. scale)
 #[must_use]
-pub fn default_component_operation_timeout_ms() -> u64 {
+pub const fn default_component_operation_timeout_ms() -> u64 {
     DEFAULT_COMPONENT_OPERATION_TIMEOUT_MS
 }

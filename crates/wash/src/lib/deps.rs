@@ -32,7 +32,7 @@ pub struct WkgFetcher {
 }
 
 impl WkgFetcher {
-    pub fn new(
+    pub const fn new(
         wkg_config: wasm_pkg_core::config::Config,
         wkg_client_config: wasm_pkg_client::Config,
         cache: FileCache,
@@ -60,7 +60,7 @@ impl WkgFetcher {
         Ok(Self::new(wkg_config, wkg_client_config, cache))
     }
 
-    pub fn get_config(&self) -> &wasm_pkg_core::config::Config {
+    pub const fn get_config(&self) -> &wasm_pkg_core::config::Config {
         &self.wkg_config
     }
 
@@ -79,7 +79,7 @@ impl WkgFetcher {
     ) -> Result<()> {
         let wkg_config_overrides = self.wkg_config.overrides.get_or_insert_default();
 
-        for RegistryPullSourceOverride { target, source } in pull_cfg.sources.iter() {
+        for RegistryPullSourceOverride { target, source } in &pull_cfg.sources {
             let (ns, pkgs, _, _, maybe_version) = parse_wit_package_name(target)?;
             let version_suffix = maybe_version.map(|v| format!("@{v}")).unwrap_or_default();
 
@@ -297,8 +297,7 @@ impl WkgFetcher {
             &self.wkg_config,
             patch_dir
                 .as_ref()
-                .map(|t| t.path())
-                .unwrap_or(wit_dir.as_ref()),
+                .map_or(wit_dir.as_ref(), tempfile::TempDir::path),
             lock,
             client,
             OutputType::Wit,
@@ -321,7 +320,7 @@ impl WkgFetcher {
             // Remove the destination deps
             let dest_deps_dir = wit_dir.as_ref().join("deps");
             match tokio::fs::remove_dir_all(&dest_deps_dir).await {
-                Ok(_) => {}
+                Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e.into()),
             };

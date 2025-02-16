@@ -9,7 +9,7 @@ use crate::appearance::spinner::Spinner;
 use crate::errors::suggest_run_host_error;
 
 /// Invoke a `wash config put` command
-pub(crate) async fn invoke(
+pub async fn invoke(
     opts: CliConnectionOpts,
     name: &str,
     values: HashMap<String, String>,

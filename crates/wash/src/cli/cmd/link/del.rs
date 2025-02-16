@@ -116,8 +116,7 @@ pub async fn invoke(
                     && l.wit_namespace() == namespace
                     && l.wit_package() == package
             })
-            .collect::<Vec<_>>()
-            .len();
+            .count();
         ensure!(
             similar_link_count <= 1,
             "More than one similar link found, please specify link name explicitly"

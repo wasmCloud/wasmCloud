@@ -16,15 +16,13 @@ const SLACK_URL: &str = "https://slack.wasmcloud.com";
 
 fn instructions() -> String {
     format!(
-        "🐚 Autocomplete available! To configure autocomplete with your shell, follow the instructions at\n   {}",
-        COMPLETION_DOC_URL
+        "🐚 Autocomplete available! To configure autocomplete with your shell, follow the instructions at\n   {COMPLETION_DOC_URL}"
     )
 }
 
 fn feedback() -> String {
     format!(
-        "📝 Feedback wanted! If you want to suggest an improvement or would like assistance, join the community at\n   {}",
-        SLACK_URL
+        "📝 Feedback wanted! If you want to suggest an improvement or would like assistance, join the community at\n   {SLACK_URL}"
     )
 }
 
@@ -47,7 +45,7 @@ pub enum ShellSelection {
     Bash,
     /// generate completions for Fish
     Fish,
-    /// generate completions for PowerShell
+    /// generate completions for `PowerShell`
     PowerShell,
 }
 

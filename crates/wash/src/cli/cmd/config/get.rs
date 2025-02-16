@@ -9,7 +9,7 @@ use crate::errors::suggest_run_host_error;
 use crate::secrets::is_secret;
 
 /// Invoke `wash config get`
-pub(crate) async fn invoke(
+pub async fn invoke(
     opts: CliConnectionOpts,
     name: &str,
     output_kind: OutputKind,
@@ -38,7 +38,7 @@ pub(crate) async fn invoke(
 
     if let Some(config) = config_response.into_data() {
         Ok(CommandOutput::new(
-            format!("{:?}", config),
+            format!("{config:?}"),
             config.into_iter().map(|(k, v)| (k, json!(v))).collect(),
         ))
     } else {

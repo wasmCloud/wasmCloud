@@ -30,7 +30,7 @@ pub struct UiCommand {
 pub async fn handle_command(command: UiCommand, output_kind: OutputKind) -> Result<CommandOutput> {
     handle_ui(command, output_kind)
         .await
-        .map(|_| (CommandOutput::default()))
+        .map(|()| (CommandOutput::default()))
 }
 
 pub async fn handle_ui(cmd: UiCommand, _output_kind: OutputKind) -> Result<()> {
@@ -83,7 +83,7 @@ async fn download_washboard(version: &str, install_dir: &PathBuf) -> Result<()> 
         .await
         .context("Failed to download washboard-ui assets")?;
 
-    eprintln!("Downloaded washboard-ui@{}", version);
+    eprintln!("Downloaded washboard-ui@{version}");
 
     // Unpack and copy to install dir
     let cursor = Cursor::new(body);

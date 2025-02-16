@@ -66,13 +66,13 @@ pub struct WashConnectionOptions {
     /// CTL Port for connections, defaults to 4222 for local nats
     pub ctl_port: Option<String>,
 
-    /// JWT file for CTL authentication. Must be supplied with ctl_seed.
+    /// JWT file for CTL authentication. Must be supplied with `ctl_seed`.
     pub ctl_jwt: Option<String>,
 
-    /// Seed file or literal for CTL authentication. Must be supplied with ctl_jwt.
+    /// Seed file or literal for CTL authentication. Must be supplied with `ctl_jwt`.
     pub ctl_seed: Option<String>,
 
-    /// Credsfile for CTL authentication. Combines ctl_seed and ctl_jwt.
+    /// Credsfile for CTL authentication. Combines `ctl_seed` and `ctl_jwt`.
     /// See <https://docs.nats.io/using-nats/developer/connecting/creds> for details.
     pub ctl_credsfile: Option<PathBuf>,
 

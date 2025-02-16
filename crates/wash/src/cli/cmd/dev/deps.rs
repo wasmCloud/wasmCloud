@@ -77,7 +77,7 @@ fn is_ignored_iface_dep(ns: &str, pkg: &str, iface: &str) -> bool {
 /// let workspace_key = ProjectDependencyKey::Workspace; // alternatively ProjectDependencyKey::default()
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) enum ProjectDependencyKey {
+pub enum ProjectDependencyKey {
     #[allow(unused)]
     RootWorkspace { name: String, path: PathBuf },
     /// Identifies a nested workspace inside the root workspace
@@ -120,7 +120,7 @@ impl ProjectDependencyKey {
 /// A `DependencySpec` represents a single dependency in the project, categorized into what part it is expected
 /// to play in in fulfilling WIT interfaces.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DependencySpec {
+pub enum DependencySpec {
     /// A dependency that receives invocations (ex. `keyvalue-nats` receiving a `wasi:keyvalue/get`)
     Exports(DependencySpecInner),
     /// A dependency that performs invocations (ex. `http-server` invoking a component's `wasi:http/incoming-handler` export)
@@ -131,16 +131,16 @@ impl DependencySpec {
     /// Retrieve the name for this dependency
     pub(crate) fn name(&self) -> String {
         match self {
-            DependencySpec::Exports(inner) => inner.name(),
-            DependencySpec::Imports(inner) => inner.name(),
+            Self::Exports(inner) => inner.name(),
+            Self::Imports(inner) => inner.name(),
         }
     }
 
-    /// Retrieve the image_ref for this dependency
+    /// Retrieve the `image_ref` for this dependency
     pub(crate) fn image_ref(&self) -> Option<&str> {
         match self {
-            DependencySpec::Exports(inner) => inner.image_ref(),
-            DependencySpec::Imports(inner) => inner.image_ref(),
+            Self::Exports(inner) => inner.image_ref(),
+            Self::Imports(inner) => inner.image_ref(),
         }
     }
 
@@ -148,50 +148,50 @@ impl DependencySpec {
     ///
     /// Components must be especially noted because by default providers are expected
     /// to provide functionality, but it also possible for components to do so.
-    pub(crate) fn is_component(&self) -> bool {
+    pub(crate) const fn is_component(&self) -> bool {
         match self {
-            DependencySpec::Exports(inner) => inner.is_component(),
-            DependencySpec::Imports(inner) => inner.is_component(),
+            Self::Exports(inner) => inner.is_component(),
+            Self::Imports(inner) => inner.is_component(),
         }
     }
 
     /// Retrieve configs for this component spec
-    pub(crate) fn configs(&self) -> &Vec<ConfigProperty> {
+    pub(crate) const fn configs(&self) -> &Vec<ConfigProperty> {
         match self {
-            DependencySpec::Exports(inner) => &inner.configs,
-            DependencySpec::Imports(inner) => &inner.configs,
+            Self::Exports(inner) => &inner.configs,
+            Self::Imports(inner) => &inner.configs,
         }
     }
 
     /// Retrieve the wit for this dependency
-    pub(crate) fn wit(&self) -> &WitInterfaceSpec {
+    pub(crate) const fn wit(&self) -> &WitInterfaceSpec {
         match self {
-            DependencySpec::Exports(inner) => &inner.wit,
-            DependencySpec::Imports(inner) => &inner.wit,
+            Self::Exports(inner) => &inner.wit,
+            Self::Imports(inner) => &inner.wit,
         }
     }
 
     /// Get the inner data of the dependency spec
-    pub(crate) fn inner(&self) -> &DependencySpecInner {
+    pub(crate) const fn inner(&self) -> &DependencySpecInner {
         match self {
-            DependencySpec::Exports(inner) => inner,
-            DependencySpec::Imports(inner) => inner,
+            Self::Exports(inner) => inner,
+            Self::Imports(inner) => inner,
         }
     }
 
     /// Get the inner data of the dependency spec
     pub(crate) fn inner_mut(&mut self) -> &mut DependencySpecInner {
         match self {
-            DependencySpec::Exports(inner) => inner,
-            DependencySpec::Imports(inner) => inner,
+            Self::Exports(inner) => inner,
+            Self::Imports(inner) => inner,
         }
     }
 
     /// Add a configuration to the list of configurations on the dependency
     pub(crate) fn add_config(&mut self, cfg: impl Into<wadm_types::ConfigProperty>) {
         match self {
-            DependencySpec::Exports(inner) | DependencySpec::Imports(inner) => {
-                inner.configs.push(cfg.into())
+            Self::Exports(inner) | Self::Imports(inner) => {
+                inner.configs.push(cfg.into());
             }
         }
     }
@@ -205,7 +205,7 @@ impl DependencySpec {
         let name = name.as_ref();
         let new_props = new_props.into();
         match self {
-            DependencySpec::Exports(inner) | DependencySpec::Imports(inner) => {
+            Self::Exports(inner) | Self::Imports(inner) => {
                 match inner.configs.iter_mut().find(|c| c.name == name) {
                     Some(ConfigProperty {
                         ref mut properties, ..
@@ -225,18 +225,18 @@ impl DependencySpec {
     }
 
     /// Retrieve secrets for this component spec
-    pub(crate) fn secrets(&self) -> &Vec<SecretProperty> {
+    pub(crate) const fn secrets(&self) -> &Vec<SecretProperty> {
         match self {
-            DependencySpec::Exports(inner) => &inner.secrets,
-            DependencySpec::Imports(inner) => &inner.secrets,
+            Self::Exports(inner) => &inner.secrets,
+            Self::Imports(inner) => &inner.secrets,
         }
     }
 
     /// Add a secret to the list of secrets on the dependency
     pub(crate) fn add_secret(&mut self, cfg: impl Into<wadm_types::SecretProperty>) {
         match self {
-            DependencySpec::Exports(inner) | DependencySpec::Imports(inner) => {
-                inner.secrets.push(cfg.into())
+            Self::Exports(inner) | Self::Imports(inner) => {
+                inner.secrets.push(cfg.into());
             }
         }
     }
@@ -244,10 +244,10 @@ impl DependencySpec {
     /// Set the image reference for this dependency spec
     pub(crate) fn set_image_ref(&mut self, s: impl AsRef<str>) {
         match self {
-            DependencySpec::Exports(DependencySpecInner { image_ref, .. }) => {
+            Self::Exports(DependencySpecInner { image_ref, .. }) => {
                 image_ref.replace(s.as_ref().to_string());
             }
-            DependencySpec::Imports(DependencySpecInner { image_ref, .. }) => {
+            Self::Imports(DependencySpecInner { image_ref, .. }) => {
                 image_ref.replace(s.as_ref().to_string());
             }
         }
@@ -256,10 +256,10 @@ impl DependencySpec {
     /// Set the image reference for this dependency spec
     pub(crate) fn set_link_name(&mut self, s: impl AsRef<str>) {
         match self {
-            DependencySpec::Exports(DependencySpecInner { link_name, .. }) => {
+            Self::Exports(DependencySpecInner { link_name, .. }) => {
                 *link_name = s.as_ref().to_string();
             }
-            DependencySpec::Imports(DependencySpecInner { link_name, .. }) => {
+            Self::Imports(DependencySpecInner { link_name, .. }) => {
                 *link_name = s.as_ref().to_string();
             }
         }
@@ -267,7 +267,7 @@ impl DependencySpec {
 
     /// Override the contents of this dependency spec with another
     pub(crate) fn override_with(&mut self, other: &Self) {
-        self.inner_mut().override_with(other.inner())
+        self.inner_mut().override_with(other.inner());
     }
 
     /// Derive which local component should be used given a WIT interface to be satisfied
@@ -345,8 +345,7 @@ impl DependencySpec {
                 }))
             }
             // wasi:blobstore/blobstore -> blobstore-fs
-            (WIT_NS_WASI, Some(WIT_PKG_BLOBSTORE), Some(interface))
-            | (WIT_NS_WRPC, Some(WIT_PKG_BLOBSTORE), Some(interface))
+            (WIT_NS_WASI | WIT_NS_WRPC, Some(WIT_PKG_BLOBSTORE), Some(interface))
                 if matches!(interface, WIT_IFACE_BLOBSTORE) =>
             {
                 Some(Self::Exports(DependencySpecInner {
@@ -544,8 +543,7 @@ impl DependencySpec {
                         self.image_ref()
                             .with_context(|| {
                                 format!(
-                                "missing image ref for generated (known) component dependency [{}]",
-                                name,
+                                "missing image ref for generated (known) component dependency [{name}]",
                             )
                             })?
                             .into(),
@@ -619,7 +617,7 @@ impl DependencySpec {
 
 /// Specification of a dependency (possibly implied)
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DependencySpecInner {
+pub struct DependencySpecInner {
     /// Specification of the WIT interface that this dependency fulfills.
     ///
     /// Note that this specification may cover *more than one* interface.
@@ -651,7 +649,7 @@ pub(crate) struct DependencySpecInner {
     /// Secrets that must be created and/or consumed by this dependency
     ///
     /// [`SecretProperty`] here support a special `policy` value which is 'env'.
-    /// Paired with a key that looks like "$SOME_VALUE", the value will be extracted from ENV *prior* and
+    /// Paired with a key that looks like "$`SOME_VALUE`", the value will be extracted from ENV *prior* and
     pub(crate) secrets: Vec<wadm_types::SecretProperty>,
 }
 
@@ -675,7 +673,7 @@ impl DependencySpecInner {
                     .map(|i| {
                         let mut interfaces = i.into_iter().collect::<Vec<_>>();
                         if interfaces.is_empty() {
-                            "".to_string()
+                            String::new()
                         } else {
                             interfaces.sort();
                             format!("-{}", interfaces.join("/"))
@@ -692,7 +690,7 @@ impl DependencySpecInner {
     }
 
     /// Retrieve whether this dependency spec is a component
-    pub(crate) fn is_component(&self) -> bool {
+    pub(crate) const fn is_component(&self) -> bool {
         self.is_component
     }
 
@@ -705,7 +703,7 @@ impl DependencySpecInner {
         // Extend interfaces with the other interfaces
         match (&mut self.wit.interfaces, other.wit.interfaces.as_ref()) {
             (Some(self_ifaces), Some(other_ifaces)) => {
-                self_ifaces.extend(other_ifaces.iter().cloned())
+                self_ifaces.extend(other_ifaces.iter().cloned());
             }
             (None, Some(other_ifaces)) => self.wit.interfaces = Some(other_ifaces.clone()),
             _ => (),
@@ -721,7 +719,7 @@ impl DependencySpecInner {
 ///
 /// Projects can either be inside workspaces, or not (single component/provider).
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProjectDeps {
+pub struct ProjectDeps {
     /// ID of a session
     ///
     /// This is normally used when generating sessions to be used with `wash dev`, in order
@@ -825,7 +823,7 @@ impl ProjectDeps {
                             dep_spec.add_config(wadm_types::ConfigProperty {
                                 name: name.into(),
                                 properties: None,
-                            })
+                            });
                         }
                         DevConfigSpec::Values { values } => dep_spec
                             .add_config_properties_to_existing(
@@ -852,7 +850,7 @@ impl ProjectDeps {
                 }
             }
 
-            deps.push(dep_spec)
+            deps.push(dep_spec);
         }
 
         Self::from_known_deps(pkey, deps)
@@ -866,7 +864,7 @@ impl ProjectDeps {
         &mut self,
         deps: impl IntoIterator<Item = (ProjectDependencyKey, DependencySpec)>,
     ) -> Result<()> {
-        for (pkey, dep) in deps.into_iter() {
+        for (pkey, dep) in deps {
             self.dependencies.entry(pkey).or_default().push(dep);
         }
         Ok(())
@@ -902,7 +900,7 @@ impl ProjectDeps {
                 converted.append(&mut rest);
                 for dep in overlapping {
                     dep.override_with(&other_dep);
-                    converted.push(dep)
+                    converted.push(dep);
                 }
             }
         }
@@ -929,7 +927,7 @@ impl ProjectDeps {
             .component
             .clone()
             .context("missing/invalid component under test")?;
-        let app_name = format!("dev-{}", component.name.to_lowercase().replace(" ", "-"));
+        let app_name = format!("dev-{}", component.name.to_lowercase().replace(' ', "-"));
 
         // Generate components for all the dependencies, using a map from component name to component
         // to remove duplicates
@@ -1025,8 +1023,7 @@ impl ProjectDeps {
                         interfaces.as_ref(),
                         version,
                     ) {
-                        (WIT_NS_WASI, "blobstore", interfaces, _)
-                        | (WIT_NS_WRPC, "blobstore", interfaces, _)
+                        (WIT_NS_WASI | WIT_NS_WRPC, "blobstore", interfaces, _)
                             if interfaces.is_some_and(|interfaces| {
                                 interfaces.iter().any(|i| i == "blobstore")
                             }) =>
@@ -1185,7 +1182,7 @@ impl ProjectDeps {
                     format!(
                         "wash-dev{}",
                         std::env::var("CARGO_PKG_VERSION")
-                            .map(|s| format!("-{}", s))
+                            .map(|s| format!("-{s}"))
                             .unwrap_or_default()
                     ),
                 )]),
@@ -1208,7 +1205,6 @@ impl ProjectDeps {
         for manifest in self
             .generate_wadm_manifests()
             .context("failed to generate manifests")?
-            .into_iter()
         {
             crate::lib::app::delete_model_version(
                 client,

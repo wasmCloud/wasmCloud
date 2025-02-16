@@ -197,7 +197,7 @@ pub async fn find_host_id(
 
     let all_matches = hosts
         .into_iter()
-        .filter_map(|h| h.into_data())
+        .filter_map(wasmcloud_control_interface::CtlResponse::into_data)
         .filter_map(|h| {
             if h.id().to_lowercase().starts_with(&value)
                 || h.friendly_name().to_lowercase().contains(&value)
@@ -219,7 +219,7 @@ pub async fn find_host_id(
                 .into_iter()
                 .map(|(id, friendly_name)| Match {
                     id: id.to_string(),
-                    friendly_name: Some(friendly_name.to_string()),
+                    friendly_name: Some(friendly_name),
                 })
                 .collect(),
         ))
@@ -247,7 +247,7 @@ pub async fn get_all_inventories(
                 client
                     .get_host_inventory(&host_id)
                     .await
-                    .map(|inventory| inventory.into_data())
+                    .map(wasmcloud_control_interface::CtlResponse::into_data)
                     .map_err(boxed_err_to_anyhow)
             });
     futures::future::join_all(futs)
@@ -275,11 +275,11 @@ impl RepoRef {
     #[must_use]
     pub fn git_ref(&self) -> &str {
         match self {
-            RepoRef::Unknown(s) => s,
-            RepoRef::Branch(s) => s,
-            RepoRef::Tag(s) => s,
-            RepoRef::Sha(s) if s.starts_with("sha:") => &s[4..],
-            RepoRef::Sha(s) => s,
+            Self::Unknown(s) => s,
+            Self::Branch(s) => s,
+            Self::Tag(s) => s,
+            Self::Sha(s) if s.starts_with("sha:") => &s[4..],
+            Self::Sha(s) => s,
         }
     }
 }

@@ -62,7 +62,7 @@ fn print_test_results(results: &[TestResult]) {
     green.set_fg(Some(Color::Green));
     let mut red = ColorSpec::new();
     red.set_fg(Some(Color::Red));
-    for test in results.iter() {
+    for test in results {
         if test.passed {
             let _ = stdout.set_color(&green);
             write!(&mut stdout, "Pass").unwrap();
@@ -76,13 +76,13 @@ fn print_test_results(results: &[TestResult]) {
             let _ = stdout.set_color(&red);
             write!(&mut stdout, "Fail").unwrap();
             let _ = stdout.reset();
-            writeln!(&mut stdout, ": {}", error_msg).unwrap();
+            writeln!(&mut stdout, ": {error_msg}").unwrap();
         }
     }
     let status_color = if passed == total { green } else { red };
     write!(&mut stdout, "Test results: ").unwrap();
     let _ = stdout.set_color(&status_color);
-    writeln!(&mut stdout, "{}/{} Passed", passed, total).unwrap();
+    writeln!(&mut stdout, "{passed}/{total} Passed").unwrap();
     // Reset the color settings back to what the user configured
     let _ = stdout.set_color(&ColorSpec::new());
     writeln!(&mut stdout).unwrap();
@@ -96,7 +96,7 @@ pub struct CallCli {
 }
 
 impl CallCli {
-    pub fn command(self) -> CallCommand {
+    #[must_use] pub fn command(self) -> CallCommand {
         self.command
     }
 }
@@ -197,7 +197,7 @@ pub struct ConnectionOpts {
     )]
     rpc_port: String,
 
-    /// JWT file for RPC authentication. Must be supplied with rpc_seed.
+    /// JWT file for RPC authentication. Must be supplied with `rpc_seed`.
     #[clap(
         long = "rpc-jwt",
         env = "WASMCLOUD_RPC_JWT",
@@ -206,7 +206,7 @@ pub struct ConnectionOpts {
     )]
     rpc_jwt: Option<String>,
 
-    /// Seed file or literal for RPC authentication. Must be supplied with rpc_jwt.
+    /// Seed file or literal for RPC authentication. Must be supplied with `rpc_jwt`.
     #[clap(
         long = "rpc-seed",
         env = "WASMCLOUD_RPC_SEED",
@@ -215,13 +215,13 @@ pub struct ConnectionOpts {
     )]
     rpc_seed: Option<String>,
 
-    /// Credsfile for RPC authentication. Combines rpc_seed and rpc_jwt.
-    /// See https://docs.nats.io/using-nats/developer/connecting/creds for details.
+    /// Credsfile for RPC authentication. Combines `rpc_seed` and `rpc_jwt`.
+    /// See <https://docs.nats.io/using-nats/developer/connecting/creds> for details.
     #[clap(long = "rpc-credsfile", env = "WASH_RPC_CREDS", hide_env_values = true)]
     rpc_credsfile: Option<PathBuf>,
 
     /// CA file for RPC authentication.
-    /// See https://docs.nats.io/using-nats/developer/security/securing_nats for details.
+    /// See <https://docs.nats.io/using-nats/developer/security/securing_nats> for details.
     #[clap(
         long = "rpc-ca-file",
         env = "WASH_RPC_TLS_CA_FILE",
@@ -315,7 +315,7 @@ pub struct HttpHandlerInvocationOpts {
 
 impl HttpHandlerInvocationOpts {
     pub async fn to_request(self) -> Result<http::Request<String>> {
-        let HttpHandlerInvocationOpts {
+        let Self {
             http_scheme,
             http_host,
             http_port,
@@ -394,7 +394,7 @@ async fn wrpc_invoke_http_handler(
                 HashMap::<String, String>::from_iter(resp.headers().into_iter().map(|(k, v)| {
                     (
                         k.as_str().into(),
-                        v.to_str().map(|v| v.to_string()).unwrap_or_default(),
+                        v.to_str().map(std::string::ToString::to_string).unwrap_or_default(),
                     )
                 }));
 

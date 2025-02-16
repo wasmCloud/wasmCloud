@@ -30,7 +30,7 @@ impl Deref for KeyDir {
 
 impl KeyDir {
     /// Creates a new `KeyDir`, erroring if it is unable to access or create the given directory.
-    pub fn new(path: impl AsRef<Path>) -> Result<KeyDir> {
+    pub fn new(path: impl AsRef<Path>) -> Result<Self> {
         let p = path.as_ref();
         let exists = p.exists();
         if exists && !p.is_dir() {
@@ -41,7 +41,7 @@ impl KeyDir {
         // Always ensure the directory has the proper permissions, even if it exists
         set_permissions_keys(p)?;
         // Make sure we have the fully qualified path at this point
-        Ok(KeyDir(p.canonicalize()?))
+        Ok(Self(p.canonicalize()?))
     }
 
     /// Returns a list of paths to all keyfiles in the directory

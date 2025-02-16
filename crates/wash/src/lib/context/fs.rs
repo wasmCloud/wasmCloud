@@ -32,12 +32,12 @@ impl Deref for ContextDir {
 
 impl ContextDir {
     /// Creates and initializes a new `ContextDir` at ~/.wash/contexts
-    pub fn new() -> Result<ContextDir> {
+    pub fn new() -> Result<Self> {
         Self::from_dir(None::<&Path>)
     }
 
     /// Creates and initializes a new [`ContextDir`] at the specified path. If a path is not provided, defaults to ~/.wash/contexts
-    pub fn from_dir(path: Option<impl AsRef<Path>>) -> Result<ContextDir> {
+    pub fn from_dir(path: Option<impl AsRef<Path>>) -> Result<Self> {
         let path = if let Some(path) = path {
             path.as_ref().to_path_buf()
         } else {
@@ -65,7 +65,7 @@ impl ContextDir {
             initialize_context_dir(&context_dir, &default_path)?;
         }
 
-        Ok(ContextDir(context_dir))
+        Ok(Self(context_dir))
     }
 
     /// Returns a list of paths to all contexts in the context directory
@@ -257,7 +257,7 @@ mod test {
         let filenames: std::collections::HashSet<String> = contexts_path
             .read_dir()
             .unwrap()
-            .filter_map(|entry| entry.unwrap().file_name().clone().into_string().ok())
+            .filter_map(|entry| entry.unwrap().file_name().into_string().ok())
             .collect();
         let expected_filenames = std::collections::HashSet::from([
             "default".to_string(),

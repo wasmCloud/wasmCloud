@@ -7,8 +7,8 @@ use crate::lib::common::{clone_git_repo, RepoRef};
 pub struct CloneTemplate {
     /// temp folder where project will be cloned - deleted after 'wash new' completes
     pub clone_tmp: PathBuf,
-    /// github repository URL, e.g., "https://github.com/wasmcloud/project-templates".
-    /// For convenience, either prefix 'https://' or 'https://github.com' may be omitted.
+    /// github repository URL, e.g., "<https://github.com/wasmcloud/project-templates>".
+    /// For convenience, either prefix 'https://' or '<https://github.com>' may be omitted.
     /// ssh urls may be used if ssh-config is setup appropriately.
     /// If a private repository is used, user will be prompted for credentials.
     pub repo_url: String,

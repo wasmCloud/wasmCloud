@@ -8,7 +8,7 @@ use crate::lib::parser::ProjectConfig;
 use super::deps::DependencySpec;
 
 /// Parse Build a [`wit_parser::Resolve`] from a provided component
-pub(crate) fn parse_component_wit(component: &[u8]) -> Result<(Resolve, WorldId)> {
+pub fn parse_component_wit(component: &[u8]) -> Result<(Resolve, WorldId)> {
     match wit_parser::decoding::decode(component).context("failed to decode WIT component")? {
         wit_parser::decoding::DecodedWasm::Component(resolve, world) => Ok((resolve, world)),
         wit_parser::decoding::DecodedWasm::WitPackage(..) => {
@@ -19,7 +19,7 @@ pub(crate) fn parse_component_wit(component: &[u8]) -> Result<(Resolve, WorldId)
 
 /// Parse Build a [`wit_parser::Resolve`] from a provided directory
 /// and select a given world
-pub(crate) fn parse_project_wit(project_cfg: &ProjectConfig) -> Result<(Resolve, WorldId)> {
+pub fn parse_project_wit(project_cfg: &ProjectConfig) -> Result<(Resolve, WorldId)> {
     let project_dir = &project_cfg.common.project_dir;
     let wit_dir = project_dir.join("wit");
     let world = project_cfg.project_type.wit_world();
@@ -42,7 +42,7 @@ pub(crate) fn parse_project_wit(project_cfg: &ProjectConfig) -> Result<(Resolve,
 ///
 /// Normally, this means converting imports that the component depends on to
 /// components that can be run on the lattice.
-pub(crate) fn discover_dependencies_from_wit(
+pub fn discover_dependencies_from_wit(
     resolve: Resolve,
     world_id: WorldId,
 ) -> Result<Vec<DependencySpec>> {
@@ -52,7 +52,7 @@ pub(crate) fn discover_dependencies_from_wit(
         .get(world_id)
         .context("selected WIT world is missing")?;
     // Process imports
-    for (_key, item) in world.imports.iter() {
+    for (_key, item) in &world.imports {
         if let wit_parser::WorldItem::Interface { id, .. } = item {
             let iface = resolve
                 .interfaces
@@ -82,7 +82,7 @@ pub(crate) fn discover_dependencies_from_wit(
         }
     }
     // Process exports
-    for (_key, item) in world.exports.iter() {
+    for (_key, item) in &world.exports {
         if let wit_parser::WorldItem::Interface { id, .. } = item {
             let iface = resolve
                 .interfaces

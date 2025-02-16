@@ -50,7 +50,7 @@ use std::{fs, path::PathBuf};
 
 /// Paths to locate project templates
 #[derive(Debug, Deserialize)]
-pub(crate) struct TemplateSource {
+pub struct TemplateSource {
     pub(crate) name: String,
     pub(crate) description: String,
     pub(crate) path: Option<String>,
@@ -61,7 +61,7 @@ pub(crate) struct TemplateSource {
 
 /// Contents of favorites file
 #[derive(Debug, Deserialize)]
-pub(crate) struct Favorites {
+pub struct Favorites {
     #[serde(flatten)]
     pub(crate) templates: std::collections::HashMap<String, Vec<TemplateSource>>,
 }
@@ -73,7 +73,7 @@ const DEFAULT_FAVORITES: &str = include_str!("./favorites.toml");
 /// (1) the parameter
 /// (2) hardcoded github url (not yet implemented: post MVP)
 /// (3) fallback to compiled-in list
-pub(crate) fn load_favorites(path: Option<&PathBuf>) -> Result<Favorites> {
+pub fn load_favorites(path: Option<&PathBuf>) -> Result<Favorites> {
     // load parameter file, if provided
     let data = if let Some(path) = path {
         fs::read_to_string(path)
@@ -89,7 +89,7 @@ pub(crate) fn load_favorites(path: Option<&PathBuf>) -> Result<Favorites> {
 /// If silent mode, picks the default, or the first entry if there is no default.
 /// If interactive, and there is more than one option, displays the choices
 /// to let the user pick one
-pub(crate) fn pick_favorite(
+pub fn pick_favorite(
     fav_file: Option<&PathBuf>,
     kind: &ProjectKind,
     silent: bool,

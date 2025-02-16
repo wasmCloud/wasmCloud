@@ -138,6 +138,7 @@ where
 }
 
 /// Configuration for a NATS server that supports running either in "standalone" or "leaf" mode.
+///
 /// See the respective [`NatsConfig::new_standalone`] and [`NatsConfig::new_leaf`] implementations below for more information.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NatsConfig {
@@ -162,7 +163,7 @@ pub struct NatsConfig {
 /// * `websocket_port`: `4223`
 impl Default for NatsConfig {
     fn default() -> Self {
-        NatsConfig {
+        Self {
             host: "127.0.0.1".to_string(),
             port: 4222,
             store_dir: std::env::temp_dir().join("wash-jetstream-4222"),
@@ -197,7 +198,7 @@ impl NatsConfig {
         websocket_port: u16,
         config_path: Option<PathBuf>,
     ) -> Self {
-        NatsConfig {
+        Self {
             host: host.to_owned(),
             port,
             store_dir: std::env::temp_dir().join(format!("wash-jetstream-{port}")),
@@ -219,7 +220,7 @@ impl NatsConfig {
         if host == "0.0.0.0" {
             warn!("Listening on 0.0.0.0 is unsupported on some platforms, use 127.0.0.1 for best results");
         }
-        NatsConfig {
+        Self {
             host: host.to_owned(),
             port,
             store_dir: std::env::temp_dir().join(format!("wash-jetstream-{port}")),
@@ -241,7 +242,7 @@ impl NatsConfig {
                 .unwrap_or_default();
 
             format!(
-                r#"
+                r"
 leafnodes {{
     remotes = [
         {{
@@ -250,29 +251,29 @@ leafnodes {{
         }}
     ]
 }}
-                "#,
+                ",
             )
         } else {
             String::new()
         };
         let websocket_port = self.websocket_port;
         let websocket_section = format!(
-            r#"
+            r"
 websocket {{
     port: {websocket_port}
     no_tls: true
 }}
-                "#
+                "
         );
         let config = format!(
-            r#"
+            r"
 jetstream {{
     domain={}
     store_dir={:?}
 }}
 {leafnode_section}
 {websocket_section}
-"#,
+",
             self.js_domain.unwrap_or_else(|| "core".to_string()),
             self.store_dir.as_os_str().to_string_lossy()
         );

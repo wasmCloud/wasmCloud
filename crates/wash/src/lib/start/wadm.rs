@@ -132,7 +132,7 @@ where
 pub struct WadmConfig {
     /// Whether or not to use structured log output (as JSON)
     pub structured_logging: bool,
-    /// The NATS JetStream domain to connect to [env: WADM_JETSTREAM_DOMAIN=]
+    /// The NATS `JetStream` domain to connect to [env: `WADM_JETSTREAM_DOMAIN`=]
     pub js_domain: Option<String>,
     /// The URL of the nats server you want to connect to
     pub nats_server_url: String,

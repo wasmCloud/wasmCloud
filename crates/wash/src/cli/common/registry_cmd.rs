@@ -99,7 +99,7 @@ pub async fn registry_push(
     )?;
     let artifact_url = image.whole();
     if artifact_url.starts_with("localhost:") && !cmd.opts.insecure {
-        warn!(" Unless an SSL certificate has been installed, pushing to localhost without the --insecure option will fail")
+        warn!(" Unless an SSL certificate has been installed, pushing to localhost without the --insecure option will fail");
     }
 
     let spinner = Spinner::new(&output_kind)?;
@@ -172,7 +172,7 @@ fn resolve_artifact_ref(
 
     match project_config {
         _ if !url.is_empty() && !registry.is_empty() => {
-            let image: Reference = format!("{}/{}", registry, url)
+            let image: Reference = format!("{registry}/{url}")
                 .parse()
                 .context("failed to parse artifact url from specified registry and repository")?;
             Ok(image)
@@ -190,7 +190,7 @@ fn resolve_artifact_ref(
                 bail!("Missing or invalid registry url configuration")
             }
 
-            let image: Reference = format!("{}/{}", registry, url).parse().context(
+            let image: Reference = format!("{registry}/{url}").parse().context(
                 "failed to parse artifact url from specified repository and registry url configuration",
             )?;
             Ok(image)

@@ -62,16 +62,13 @@ pub async fn invoke(
     .await?;
 
     // Resolve the output path
-    let output_path = match output_file {
-        Some(path) => path,
-        None => {
-            let mut file_name = pkg_ref.to_string();
-            if let Some(ref version) = version {
-                file_name.push_str(&format!("@{version}"));
-            }
-            file_name.push_str(".wasm");
-            PathBuf::from(file_name)
+    let output_path = if let Some(path) = output_file { path } else {
+        let mut file_name = pkg_ref.to_string();
+        if let Some(ref version) = version {
+            file_name.push_str(&format!("@{version}"));
         }
+        file_name.push_str(".wasm");
+        PathBuf::from(file_name)
     };
 
     // Write out the WIT tot the specified path

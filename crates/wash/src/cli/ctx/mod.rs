@@ -22,7 +22,7 @@ use crate::lib::generate::{
 };
 
 pub async fn handle_command(ctx_cmd: CtxCommand) -> Result<CommandOutput> {
-    use CtxCommand::*;
+    use CtxCommand::{Default, Del, Edit, List, New};
     match ctx_cmd {
         List(cmd) => handle_list(cmd),
         Default(cmd) => handle_default(cmd),
@@ -53,14 +53,14 @@ pub enum CtxCommand {
 
 #[derive(Args, Debug, Clone)]
 pub struct ListCommand {
-    /// Location of context files for managing. Defaults to $WASH_CONTEXTS ($HOME/.wash/contexts)
+    /// Location of context files for managing. Defaults to $`WASH_CONTEXTS` ($HOME/.wash/contexts)
     #[clap(long = "directory", env = "WASH_CONTEXTS", hide_env_values = true)]
     directory: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct DelCommand {
-    /// Location of context files for managing. Defaults to $WASH_CONTEXTS ($HOME/.wash/contexts)
+    /// Location of context files for managing. Defaults to $`WASH_CONTEXTS` ($HOME/.wash/contexts)
     #[clap(long = "directory", env = "WASH_CONTEXTS", hide_env_values = true)]
     directory: Option<PathBuf>,
 
@@ -75,7 +75,7 @@ pub struct NewCommand {
     #[clap(name = "name", required_unless_present("interactive"))]
     pub name: Option<String>,
 
-    /// Location of context files for managing. Defaults to $WASH_CONTEXTS ($HOME/.wash/contexts)
+    /// Location of context files for managing. Defaults to $`WASH_CONTEXTS` ($HOME/.wash/contexts)
     #[clap(long = "directory", env = "WASH_CONTEXTS", hide_env_values = true)]
     directory: Option<PathBuf>,
 
@@ -86,7 +86,7 @@ pub struct NewCommand {
 
 #[derive(Args, Debug, Clone)]
 pub struct DefaultCommand {
-    /// Location of context files for managing. Defaults to $WASH_CONTEXTS ($HOME/.wash/contexts)
+    /// Location of context files for managing. Defaults to $`WASH_CONTEXTS` ($HOME/.wash/contexts)
     #[clap(long = "directory", env = "WASH_CONTEXTS", hide_env_values = true)]
     directory: Option<PathBuf>,
 
@@ -97,7 +97,7 @@ pub struct DefaultCommand {
 
 #[derive(Args, Debug, Clone)]
 pub struct EditCommand {
-    /// Location of context files for managing. Defaults to $WASH_CONTEXTS ($HOME/.wash/contexts)
+    /// Location of context files for managing. Defaults to $`WASH_CONTEXTS` ($HOME/.wash/contexts)
     #[clap(long = "directory", env = "WASH_CONTEXTS", hide_env_values = true)]
     directory: Option<PathBuf>,
 
@@ -172,7 +172,7 @@ fn handle_del(cmd: DelCommand) -> Result<CommandOutput> {
     Ok(CommandOutput::from("Removed file successfully"))
 }
 
-/// Handles creating a new context by writing the default WashContext object to the specified path
+/// Handles creating a new context by writing the default `WashContext` object to the specified path
 fn handle_new(cmd: NewCommand) -> Result<CommandOutput> {
     let dir = ContextDir::from_dir(cmd.directory)?;
 
@@ -249,7 +249,7 @@ fn select_context(dir: &ContextDir, prompt: &str) -> Result<Option<String>> {
     };
 
     if let Ok(choice) = prompt_for_choice(&entry, prompt) {
-        Ok(choices.get(choice).map(|c| c.to_string()))
+        Ok(choices.get(choice).map(std::string::ToString::to_string))
     } else {
         Ok(None)
     }
