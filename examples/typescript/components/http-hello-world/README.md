@@ -26,7 +26,7 @@ Building this project relies on the following software:
 | `npm`  | [Node Package Manager (NPM)][npm] which manages packages for for the NodeJS ecosystem                       |
 | `node` | [NodeJS runtime][nodejs] (see `.nvmrc` for version)                                                         |
 
-[wash]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/wash-cli
+[wash]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/wash
 [node]: https://nodejs.org
 [npm]: https://github.com/npm/cli
 

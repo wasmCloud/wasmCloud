@@ -10,7 +10,7 @@ The hashes computed with v`0.10.1` and later of wascap are not compatible with t
 
 In the [wasmCloud](https://wasmcloud.dev) host runtime, each component securely declares the set of capabilities it requires. This library is used to embed, extract, and validate JSON Web Tokens (JWT) containing these capability attestations, as well as the hash of the `wasm` file and a provable issuer for verifying module provenance.
 
-If you want to use the CLI that lets you sign and examine module claims, then you can install the [wash](https://github.com/wasmCloud/wasmCloud/tree/main/crates/wash-cli) CLI and use the `wash claims` set of commands. _Note that earlier versions of `wascap` came with a CLI. This is no longer available and has been supersede by the `wash` CLI._
+If you want to use the CLI that lets you sign and examine module claims, then you can install the [wash](https://github.com/wasmCloud/wasmCloud/tree/main/crates/wash) CLI and use the `wash claims` set of commands. _Note that earlier versions of `wascap` came with a CLI. This is no longer available and has been supersede by the `wash` CLI._
 
 While there are some standard, well-known claims already defined in the library (such as `wasmcloud:messaging` and `wasmcloud:keyvalue`), you can add custom claims in your own namespaces.
 
