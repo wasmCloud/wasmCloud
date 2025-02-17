@@ -1,0 +1,22 @@
+language = "rust"
+type = "component"
+name = "testcomponent"
+version = "0.1.0"
+revision = 666
+
+[component]
+claims = ["wasmcloud:httpserver", "wasmcloud:httpclient", "lexcorp:quantum-simulator"]
+registry = "localhost:8080"
+push_insecure = false
+key_directory = "./keys"
+destination = "./build/testcomponent.wasm"
+call_alias = "test-component"
+tags = [
+     "test",
+     "test",
+     "wasmcloud.com/experimental",
+]
+
+[rust]
+cargo_path = "./cargo"
+target_path = "./target"

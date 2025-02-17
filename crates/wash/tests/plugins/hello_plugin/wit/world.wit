@@ -1,0 +1,9 @@
+package wasmcloud:test;
+
+world plugin {
+  include wasi:cli/imports@0.2.0;
+  import wasi:http/outgoing-handler@0.2.0;
+
+  export wasmcloud:wash/subcommand@0.1.0;
+  export wasi:cli/run@0.2.0;
+}

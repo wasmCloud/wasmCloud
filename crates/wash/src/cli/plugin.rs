@@ -1,15 +1,15 @@
 use std::path::PathBuf;
 
+use crate::lib::{
+    cli::{registry::AuthOpts, CommandOutput, OutputKind},
+    registry::{pull_oci_artifact, OciPullOptions},
+};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
 use oci_client::Reference;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
-use crate::lib::{
-    cli::{registry::AuthOpts, CommandOutput, OutputKind},
-    registry::{pull_oci_artifact, OciPullOptions},
-};
 
 use crate::{
     appearance::spinner::Spinner,
@@ -163,7 +163,7 @@ pub async fn handle_install(
                 .parse()
                 .context("Invalid image reference")?;
 
-            // TODO: Add support for pulling via stream to wash_lib
+            // TODO: Add support for pulling via stream to wash::lib
             let image_data = pull_oci_artifact(
                 &image,
                 OciPullOptions {
@@ -262,7 +262,9 @@ pub async fn handle_uninstall(
         .await
         .context("Unable to load plugins")?;
 
-    let metadata = if let Some(metadata) = plugins.metadata(&cmd.plugin) { metadata } else {
+    let metadata = if let Some(metadata) = plugins.metadata(&cmd.plugin) {
+        metadata
+    } else {
         let message = format!("Plugin {} is not currently installed", cmd.plugin);
         return Ok(CommandOutput {
             text: message.clone(),

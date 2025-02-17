@@ -25,6 +25,14 @@ async fn record_reachability(host: &str) {
 
 #[tokio::main]
 async fn main() {
+    // Determine whether default docker is available
+    println!("cargo:rustc-check-cfg=cfg(docker_available)");
+    if testcontainers::core::client::docker_client_instance()
+        .await
+        .is_ok()
+    {
+        println!("cargo:rustc-cfg=docker_available");
+    }
     // On Windows, `clap` can overflow the stack in debug mode due to small default stack size
     //
     // This generally triggers during the `integration_help_subcommand_check` which checks the help
@@ -39,6 +47,7 @@ async fn main() {
 
     join!(
         record_reachability("github.com"),
+        record_reachability("raw.githubusercontent.com"),
         record_reachability("ghcr.io"),
         record_reachability("wasmcloud.azurecr.io"),
     );
