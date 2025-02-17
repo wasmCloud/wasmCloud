@@ -143,17 +143,20 @@ impl SubcommandRunner {
     }
 
     /// Get the metadata for a plugin with the given ID if it exists.
-    #[must_use] pub fn metadata(&self, id: &str) -> Option<&Metadata> {
+    #[must_use]
+    pub fn metadata(&self, id: &str) -> Option<&Metadata> {
         self.plugins.get(id).map(|p| &p.metadata)
     }
 
     /// Returns a list of all metadata for all plugins.
-    #[must_use] pub fn all_metadata(&self) -> Vec<&Metadata> {
+    #[must_use]
+    pub fn all_metadata(&self) -> Vec<&Metadata> {
         self.plugins.values().map(|data| &data.metadata).collect()
     }
 
     /// Returns the path to the plugin with the given ID.
-    #[must_use] pub fn path(&self, id: &str) -> Option<&Path> {
+    #[must_use]
+    pub fn path(&self, id: &str) -> Option<&Path> {
         self.plugins.get(id).map(|p| p.loaded_path.as_path())
     }
 

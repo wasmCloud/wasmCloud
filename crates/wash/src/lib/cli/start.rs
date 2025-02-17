@@ -124,7 +124,9 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
 
     let component_ref = resolve_ref(&cmd.component_ref).await?;
 
-    let host = if let Some(host) = cmd.host_id { find_host_id(&host, &client).await?.0 } else {
+    let host = if let Some(host) = cmd.host_id {
+        find_host_id(&host, &client).await?.0
+    } else {
         let suitable_hosts = client
             .perform_component_auction(
                 &component_ref,
@@ -245,7 +247,9 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
     // Attempt to parse the provider_ref from strings that may look like paths or be OCI references
     let provider_ref = resolve_ref(&cmd.provider_ref).await?;
 
-    let host = if let Some(host) = cmd.host_id { find_host_id(&host, &client).await?.0 } else {
+    let host = if let Some(host) = cmd.host_id {
+        find_host_id(&host, &client).await?.0
+    } else {
         let suitable_hosts = client
             .perform_provider_auction(
                 &provider_ref,

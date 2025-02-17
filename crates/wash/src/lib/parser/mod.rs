@@ -39,7 +39,8 @@ pub enum TypeConfig {
 }
 
 impl TypeConfig {
-    #[must_use] pub const fn wit_world(&self) -> &Option<String> {
+    #[must_use]
+    pub const fn wit_world(&self) -> &Option<String> {
         match self {
             Self::Component(c) => &c.wit_world,
             Self::Provider(c) => &c.wit_world,
@@ -461,7 +462,8 @@ pub enum TinyGoScheduler {
 }
 
 impl TinyGoScheduler {
-    #[must_use] pub const fn as_str(&self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::None => "none",
             Self::Tasks => "tasks",
@@ -479,7 +481,8 @@ pub enum TinyGoGarbageCollector {
 }
 
 impl TinyGoGarbageCollector {
-    #[must_use] pub const fn as_str(&self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::None => "none",
             Self::Conservative => "conservative",
@@ -562,7 +565,8 @@ pub struct DevManifestComponentTarget {
 }
 
 impl DevManifestComponentTarget {
-    #[must_use] pub fn matches(&self, component: &Component) -> bool {
+    #[must_use]
+    pub fn matches(&self, component: &Component) -> bool {
         let (component_id, component_ref) = match &component.properties {
             Properties::Component { ref properties } => (&properties.id, &properties.image),
             Properties::Capability { ref properties } => (&properties.id, &properties.image),
@@ -650,11 +654,13 @@ impl WitInterfaceSpec {
     /// assert!(WitInterfaceSpec::from_str("wasi:http").unwrap().includes(WitInterfaceSpec::from_str("wasi:http/incoming-handler").as_ref().unwrap()));
     /// assert!(WitInterfaceSpec::from_str("wasi:http/incoming-handler").unwrap().includes(WitInterfaceSpec::from_str("wasi:http/incoming-handler.handle").as_ref().unwrap()));
     /// ```
-    #[must_use] pub fn includes(&self, other: &Self) -> bool {
+    #[must_use]
+    pub fn includes(&self, other: &Self) -> bool {
         !self.is_disjoint(other)
     }
 
-    #[must_use] pub fn is_disjoint(&self, other: &Self) -> bool {
+    #[must_use]
+    pub fn is_disjoint(&self, other: &Self) -> bool {
         if self.namespace != other.namespace {
             return true;
         }
@@ -690,23 +696,27 @@ impl WitInterfaceSpec {
         }
 
         // Compare the versions
-        match (self.version.as_ref(), other.version.as_ref())  {
+        match (self.version.as_ref(), other.version.as_ref()) {
             // If the neither have versions, they cannot be disjoint
-            (None | Some(_), None) | (None, Some(_)) => {
-                false
-            }
+            (None | Some(_), None) | (None, Some(_)) => false,
             // If the *either* version matches the other in semantic version terms, they cannot be disjoint
             //
             // Realistically this means that 0.2.0 and 0.2.1 are *not* disjoint, and while they could be,
             // we assume that semantic versioning semantics should ensure that 0.2.0 and 0.2.1 are backwards compatible
             // (though for <1.x versions, there is no such "real" guarantee)
             //
-            (Some(v), Some(other_v)) if VersionReq::parse(&format!("^{v}")).is_ok_and(|req| req.matches(other_v)) => { false }
-            (Some(v), Some(other_v)) if VersionReq::parse(&format!("^{other_v}")).is_ok_and(|req| req.matches(v)) => {
+            (Some(v), Some(other_v))
+                if VersionReq::parse(&format!("^{v}")).is_ok_and(|req| req.matches(other_v)) =>
+            {
+                false
+            }
+            (Some(v), Some(other_v))
+                if VersionReq::parse(&format!("^{other_v}")).is_ok_and(|req| req.matches(v)) =>
+            {
                 false
             }
             // The only option left is that the versions are the same and their versions are incompatible/different
-            _ => true
+            _ => true,
         }
     }
 }
@@ -1114,7 +1124,16 @@ impl WasmcloudDotToml {
             _ => None,
         };
 
-        Ok(CommonConfig { name, version, revision, project_dir, build_dir, wit_dir, wasm_bin_name, registry })
+        Ok(CommonConfig {
+            name,
+            version,
+            revision,
+            project_dir,
+            build_dir,
+            wit_dir,
+            wasm_bin_name,
+            registry,
+        })
     }
 
     pub fn convert(self, wasmcloud_toml_dir: PathBuf) -> Result<ProjectConfig> {

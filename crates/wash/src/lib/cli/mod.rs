@@ -378,7 +378,8 @@ impl CommonPackageArgs {
         Ok(CachingClient::new(Some(client), cache))
     }
 
-    #[must_use] pub const fn config_path(&self) -> Option<&PathBuf> {
+    #[must_use]
+    pub const fn config_path(&self) -> Option<&PathBuf> {
         self.config.as_ref()
     }
 }

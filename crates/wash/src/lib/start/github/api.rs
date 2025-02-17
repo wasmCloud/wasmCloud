@@ -91,7 +91,8 @@ impl PartialEq for GitHubRelease {
 }
 
 impl GitHubRelease {
-    #[must_use] pub fn get_main_artifact_release(&self) -> Option<semver::Version> {
+    #[must_use]
+    pub fn get_main_artifact_release(&self) -> Option<semver::Version> {
         match self.tag_name.strip_prefix('v') {
             Some(v) => match semver::Version::parse(v) {
                 Ok(v) => {

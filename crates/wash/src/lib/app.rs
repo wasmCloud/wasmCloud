@@ -37,7 +37,8 @@ impl AppManifest {
     }
 
     /// Retrieve the name of a given [`AppManifest`]
-    #[must_use] pub fn name(&self) -> Option<&str> {
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
         match self {
             Self::ModelName(name) => Some(name),
             Self::SerializedModel(manifest) => manifest
@@ -49,7 +50,8 @@ impl AppManifest {
 
     /// Retrieve the version of a given [`AppManifest`], returning None if the manifest
     /// does not contain a version (or is not the type to contain a version)
-    #[must_use] pub fn version(&self) -> Option<&str> {
+    #[must_use]
+    pub fn version(&self) -> Option<&str> {
         match self {
             Self::ModelName(_) => None,
             Self::SerializedModel(manifest) => manifest
@@ -479,7 +481,8 @@ pub async fn validate_oci_references(refs: Vec<String>, failures: &mut Vec<Valid
 }
 
 /// Extract image references from a given manifest
-#[must_use] pub fn extract_image_references(manifest: &Manifest) -> Vec<String> {
+#[must_use]
+pub fn extract_image_references(manifest: &Manifest) -> Vec<String> {
     let mut image_refs = Vec::new();
     for component in &manifest.spec.components {
         match &component.properties {

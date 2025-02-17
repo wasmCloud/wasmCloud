@@ -308,7 +308,6 @@ impl ComponentMetadata {
             ver: self.ver.or(Some(project_config.common.version.to_string())),
             tags: match component_config.tags.clone() {
                 Some(tags) => tags
-                    
                     .into_iter()
                     .collect::<BTreeSet<String>>()
                     .union(&self.tags.clone().into_iter().collect::<BTreeSet<String>>())

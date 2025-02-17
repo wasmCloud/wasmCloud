@@ -122,7 +122,8 @@ where
     for placeholder in &config.placeholders {
         let mut slot = try_placeholder_into_slot(placeholder, values, renderer)?;
         let key = slot.var_name.clone();
-        if values.get(&key).is_some() {} else {
+        if values.get(&key).is_some() {
+        } else {
             // expand string default values in case they are templates
             match slot.var_info {
                 VarInfo::String { entry } if entry.default.is_some() => {
