@@ -241,7 +241,7 @@ impl<T> ConnPool<T> {
             }
         }
         let stream = connect(authority).await?;
-        let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        let (sender, conn) = http1::handshake(TokioIo::new(stream))
             .await
             .map_err(hyper_request_error)?;
         let tasks = Arc::clone(&self.tasks);
@@ -304,7 +304,7 @@ impl<T> ConnPool<T> {
             types::ErrorCode::TlsProtocolError
         })?;
 
-        let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        let (sender, conn) = http1::handshake(TokioIo::new(stream))
             .await
             .map_err(hyper_request_error)?;
         let tasks = Arc::clone(&self.tasks);
