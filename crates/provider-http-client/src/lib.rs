@@ -727,6 +727,7 @@ mod tests {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    #[test_log(default_log_filter = "trace")]
     async fn test_single_conn() -> anyhow::Result<()> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let addr = listener.local_addr()?;
@@ -746,7 +747,9 @@ mod tests {
                         }),
                     )
                     .await
-                    .context("failed to serve connection")
+                    .context("failed to serve connection")?;
+                info!("done serving connection");
+                anyhow::Ok(())
             },
             async {
                 let link =
