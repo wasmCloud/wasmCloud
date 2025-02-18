@@ -16,11 +16,11 @@ use http_body::Frame;
 use http_body_util::{BodyExt as _, StreamBody};
 use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;
+use tokio::join;
 use tokio::net::{TcpStream, ToSocketAddrs};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::sleep;
-use tokio::{join, sync::RwLock};
 use tokio::{select, spawn};
 use tracing::{debug, error, instrument, trace, warn, Instrument as _};
 
@@ -757,7 +757,15 @@ mod tests {
                 for i in 0..N {
                     info!(i, "sending request...");
                     let res = link
-                        .handle(None, new_request(addr), None)
+                        .handle(
+                            None,
+                            new_request(addr),
+                            Some(types::RequestOptions {
+                                connect_timeout: Some(Duration::from_secs(10).as_nanos() as _),
+                                first_byte_timeout: Some(Duration::from_secs(10).as_nanos() as _),
+                                between_bytes_timeout: Some(Duration::from_secs(10).as_nanos() as _),
+                            }),
+                        )
                         .await
                         .with_context(|| format!("failed to invoke `handle` for request {i}"))?
                         .with_context(|| format!("failed to handle request {i}"))?;
