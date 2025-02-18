@@ -1288,24 +1288,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cbindgen"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "faeaa693e5a727975a79211b8f35c0cb09b031fdb6eaa4a788bc6713d01488ca"
-dependencies = [
- "heck 0.4.1",
- "indexmap 1.9.3",
- "log",
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "syn 1.0.109",
- "tempfile",
- "toml 0.5.11",
-]
-
-[[package]]
 name = "cc"
 version = "1.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7037,15 +7019,6 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.5.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4f7f0dd8d50a853a531c426359045b1998f04219d88799810762cd4ad314234"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "toml"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd79e69d3b627db300ff956027cc6c3798cef26d22526befdfcd12feeb6d2257"
@@ -8479,16 +8452,6 @@ dependencies = [
  "wrpc-interface-http",
  "wrpc-transport",
  "wrpc-transport-nats",
-]
-
-[[package]]
-name = "wasmcloud-host-sys"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cbindgen",
- "tokio",
- "wasmcloud-host",
 ]
 
 [[package]]
