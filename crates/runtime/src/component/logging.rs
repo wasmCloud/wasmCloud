@@ -47,6 +47,9 @@ impl<H: Handler> logging::Host for Ctx<H> {
         message: String,
     ) -> anyhow::Result<()> {
         self.attach_parent_context();
+        if level == logging::Level::Error {
+            eprintln!("Error log dropped: {} - {}", context, message);
+        }
         self.handler.log(level, context, message).await
     }
 }
