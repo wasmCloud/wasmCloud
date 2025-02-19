@@ -159,6 +159,7 @@ pub async fn fetch_provider(
     provider_ref: &ResourceRef<'_>,
     host_id: impl AsRef<str>,
     allow_file_load: bool,
+    additional_ca_paths: &Vec<PathBuf>,
     registry_config: &HashMap<String, RegistryConfig>,
 ) -> anyhow::Result<(PathBuf, Option<jwt::Token<jwt::CapabilityProvider>>)> {
     match provider_ref {
@@ -181,6 +182,7 @@ pub async fn fetch_provider(
             .and_then(|authority| registry_config.get(authority))
             .map(OciFetcher::from)
             .unwrap_or_default()
+            .with_additional_ca_paths(additional_ca_paths)
             .fetch_provider(provider_ref, host_id)
             .await
             .with_context(|| {
