@@ -129,20 +129,23 @@ impl<T> Clone for ConnPool<T> {
     }
 }
 
+#[instrument(level = "trace", skip(conns))]
 fn evict_conns<T>(
     cutoff: Instant,
     conns: &mut HashMap<Box<str>, std::sync::Mutex<VecDeque<PooledConn<T>>>>,
 ) {
-    conns.retain(|_, conns| {
+    conns.retain(|authority, conns| {
         let Ok(conns) = conns.get_mut() else {
             return true;
         };
         let idx = conns.partition_point(|&PooledConn { last_seen, .. }| last_seen <= cutoff);
         if idx == conns.len() {
+            trace!(authority, "evicting all connections");
             false
         } else if idx == 0 {
             true
         } else {
+            trace!(authority, idx, "partially evicting connections");
             conns.rotate_left(idx);
             conns.truncate(idx);
             true
@@ -151,6 +154,7 @@ fn evict_conns<T>(
 }
 
 impl<T> ConnPool<T> {
+    #[instrument(level = "trace", skip(self))]
     pub async fn evict(&self, timeout: Duration) {
         let Some(cutoff) = Instant::now().checked_sub(timeout) else {
             return;
@@ -168,6 +172,7 @@ impl<T> ConnPool<T> {
     }
 }
 
+#[instrument(level = "trace", skip_all)]
 async fn connect(addr: impl ToSocketAddrs) -> Result<TcpStream, types::ErrorCode> {
     match TcpStream::connect(addr).await {
         Ok(stream) => Ok(stream),
@@ -219,6 +224,7 @@ impl<T> Cacheable<T> {
 }
 
 impl<T> ConnPool<T> {
+    #[instrument(level = "trace", skip(self))]
     pub async fn connect_http(
         &self,
         authority: &str,
@@ -233,14 +239,18 @@ impl<T> ConnPool<T> {
             if let Some(conns) = http.get(authority) {
                 if let Ok(mut conns) = conns.lock() {
                     while let Some(conn) = conns.pop_front() {
+                        trace!("found cached HTTP connection");
                         if !conn.is_closed() && conn.is_ready() {
+                            trace!("returning HTTP connection cache hit");
                             return Ok(Cacheable::Hit(conn));
                         }
                     }
                 }
             }
         }
+        trace!("establishing new TCP connection...");
         let stream = connect(authority).await?;
+        trace!("starting HTTP handshake...");
         let (sender, conn) = http1::handshake(TokioIo::new(stream))
             .await
             .map_err(hyper_request_error)?;
@@ -251,6 +261,7 @@ impl<T> ConnPool<T> {
                 Err(err) => warn!(?err, "HTTP connection closed with error"),
             }
         });
+        trace!("returning HTTP connection cache miss");
         Ok(Cacheable::Miss(PooledConn::new(sender, abort)))
     }
 
@@ -265,6 +276,7 @@ impl<T> ConnPool<T> {
     }
 
     #[cfg(not(any(target_arch = "riscv64", target_arch = "s390x")))]
+    #[instrument(level = "trace", skip(self, tls))]
     pub async fn connect_https(
         &self,
         tls: &tokio_rustls::TlsConnector,
@@ -282,13 +294,16 @@ impl<T> ConnPool<T> {
             if let Some(conns) = https.get(authority) {
                 if let Ok(mut conns) = conns.lock() {
                     while let Some(conn) = conns.pop_front() {
+                        trace!("found cached HTTPS connection");
                         if !conn.is_closed() && conn.is_ready() {
+                            trace!("returning HTTPS connection cache hit");
                             return Ok(Cacheable::Hit(conn));
                         }
                     }
                 }
             }
         }
+        trace!("establishing new TCP connection...");
         let stream = connect(authority).await?;
 
         let mut parts = authority.split(":");
@@ -299,11 +314,13 @@ impl<T> ConnPool<T> {
                 dns_error("invalid DNS name".to_string(), 0)
             })?
             .to_owned();
+        trace!("starting TLS handshake...");
         let stream = tls.connect(domain, stream).await.map_err(|err| {
             warn!(?err, "TLS protocol error");
             types::ErrorCode::TlsProtocolError
         })?;
 
+        trace!("starting HTTP handshake...");
         let (sender, conn) = http1::handshake(TokioIo::new(stream))
             .await
             .map_err(hyper_request_error)?;
@@ -314,6 +331,7 @@ impl<T> ConnPool<T> {
                 Err(err) => warn!(?err, "HTTPS connection closed with error"),
             }
         });
+        trace!("returning HTTPS connection cache miss");
         Ok(Cacheable::Miss(PooledConn::new(sender, abort)))
     }
 }
@@ -557,6 +575,7 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
                         let err = err.into_error();
                         if let Some(req) = req {
                             if err.is_closed() && matches!(sender, Cacheable::Hit(..)) {
+                                trace!("cached connection closed, retrying with a different connection...");
                                 // retry a cached connection
                                 request = req;
                                 continue;
