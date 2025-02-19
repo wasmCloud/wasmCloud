@@ -626,6 +626,7 @@ mod tests {
 
     use std::collections::HashMap;
 
+    use anyhow::bail;
     use tokio::net::TcpListener;
     use tokio::try_join;
     use tracing::info;
@@ -739,6 +740,12 @@ mod tests {
                     .await
                     .context("failed to accept connection")?;
                 info!("serving connection...");
+                let other = spawn(async move {
+                    listener
+                        .accept()
+                        .await
+                        .context("failed to accept second connection")
+                });
                 hyper::server::conn::http1::Builder::new()
                     .serve_connection(
                         TokioIo::new(stream),
@@ -749,7 +756,13 @@ mod tests {
                     .await
                     .context("failed to serve connection")?;
                 info!("done serving connection");
-                anyhow::Ok(())
+                other.abort();
+                match other.await {
+                    Ok(Err(err)) => Err(err),
+                    Ok(Ok(..)) => bail!("client did not reuse connection"),
+                    Err(err) if err.is_cancelled() => Ok(()),
+                    Err(err) => Err(err).context("accept task failed"),
+                }
             },
             async {
                 let link =
