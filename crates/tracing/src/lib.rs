@@ -59,11 +59,12 @@ pub fn configure_observability(
     if otel_config.metrics_enabled() {
         metrics::configure_metrics(&normalized_service_name, otel_config)?;
 
-        let meter = opentelemetry::global::meter("wasmcloud");
-        let error_counter = meter.u64_counter("wasmcloud_errors")
+        // Create and register the error counters
+        let meter = global::meter("wasmcloud");
+        let error_counter = meter
+            .u64_counter("wasmcloud_errors")
             .with_description("Counts the number of errors in wasmcloud")
             .init();
-    
     }
 
     traces::configure_tracing(

@@ -64,7 +64,7 @@ impl HostMetrics {
         if error {
             self.component_errors.add(1, attributes);
         } else {
-            self.component_errors.add(1,attributes);
+            self.component_errors.add(1, attributes);
         }
     }
 }
