@@ -240,7 +240,7 @@ impl<T> ConnPool<T> {
                 if let Ok(mut conns) = conns.lock() {
                     while let Some(conn) = conns.pop_front() {
                         trace!("found cached HTTP connection");
-                        if !conn.is_closed() && conn.is_ready() {
+                        if !conn.is_closed() {
                             trace!("returning HTTP connection cache hit");
                             return Ok(Cacheable::Hit(conn));
                         }
@@ -295,7 +295,7 @@ impl<T> ConnPool<T> {
                 if let Ok(mut conns) = conns.lock() {
                     while let Some(conn) = conns.pop_front() {
                         trace!("found cached HTTPS connection");
-                        if !conn.is_closed() && conn.is_ready() {
+                        if !conn.is_closed() {
                             trace!("returning HTTPS connection cache hit");
                             return Ok(Cacheable::Hit(conn));
                         }
