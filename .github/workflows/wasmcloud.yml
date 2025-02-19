@@ -39,8 +39,6 @@ on:
       - 'control-interface-v[0-9].[0-9]+.[0-9]+-*'
       - 'core-v[0-9].[0-9]+.[0-9]+'
       - 'core-v[0-9].[0-9]+.[0-9]+-*'
-      - 'host-sys-v[0-9].[0-9]+.[0-9]+'
-      - 'host-sys-v[0-9].[0-9]+.[0-9]+-*'
       - 'host-v[0-9].[0-9]+.[0-9]+'
       - 'host-v[0-9].[0-9]+.[0-9]+-*'
       - 'opentelemetry-nats-v[0-9].[0-9]+.[0-9]+'
@@ -969,9 +967,6 @@ jobs:
             workspace-dependencies: true
 
           - crate: host
-            workspace-dependencies: true
-
-          - crate: host-sys
             workspace-dependencies: true
 
           - crate: opentelemetry-nats
