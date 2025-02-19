@@ -1,0 +1,15 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\.github",
+    "\\adr",
+    "\\brand",
+    "\\charts",
+    "\\src",
+    "\\src\\bin",
+    "\\src\\bin\\blobstore-fs-provider",
+    "\\src\\bin\\blobstore-s3-provider"
+  ],
+  "SelectedNode": "\\brand",
+  "PreviewInSolutionExplorer": false
+}
