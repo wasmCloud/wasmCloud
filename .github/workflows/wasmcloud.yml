@@ -33,62 +33,64 @@ on:
     branches:
       - main
     tags:
-      - 'component-v[0-9].[0-9]+.[0-9]+'
-      - 'component-v[0-9].[0-9]+.[0-9]+-*'
-      - 'control-interface-v[0-9].[0-9]+.[0-9]+'
-      - 'control-interface-v[0-9].[0-9]+.[0-9]+-*'
-      - 'core-v[0-9].[0-9]+.[0-9]+'
-      - 'core-v[0-9].[0-9]+.[0-9]+-*'
-      - 'host-sys-v[0-9].[0-9]+.[0-9]+'
-      - 'host-sys-v[0-9].[0-9]+.[0-9]+-*'
-      - 'host-v[0-9].[0-9]+.[0-9]+'
-      - 'host-v[0-9].[0-9]+.[0-9]+-*'
-      - 'opentelemetry-nats-v[0-9].[0-9]+.[0-9]+'
-      - 'opentelemetry-nats-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-archive-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-archive-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-blobstore-azure-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-blobstore-azure-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-http-client-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-http-client-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-http-server-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-http-server-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-keyvalue-nats-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-keyvalue-nats-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-keyvalue-redis-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-keyvalue-redis-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-keyvalue-vault-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-keyvalue-vault-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-messaging-kafka-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-messaging-kafka-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-sdk-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-sdk-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+-*'
-      - 'runtime-v[0-9].[0-9]+.[0-9]+'
-      - 'runtime-v[0-9].[0-9]+.[0-9]+-*'
-      - 'secrets-client-v[0-9].[0-9]+.[0-9]+'
-      - 'secrets-client-v[0-9].[0-9]+.[0-9]+-*'
-      - 'secrets-types-v[0-9].[0-9]+.[0-9]+'
-      - 'secrets-types-v[0-9].[0-9]+.[0-9]+-*'
-      - 'test-util-v[0-9].[0-9]+.[0-9]+'
-      - 'test-util-v[0-9].[0-9]+.[0-9]+-*'
-      - 'tracing-v[0-9].[0-9]+.[0-9]+'
-      - 'tracing-v[0-9].[0-9]+.[0-9]+-*'
-      - 'v[0-9].[0-9]+.[0-9]+'
-      - 'v[0-9].[0-9]+.[0-9]+-*'
-      - 'wascap-v[0-9].[0-9]+.[0-9]+'
-      - 'wascap-v[0-9].[0-9]+.[0-9]+-*'
-      - 'wash-cli-v[0-9].[0-9]+.[0-9]+'
-      - 'wash-cli-v[0-9].[0-9]+.[0-9]+-*'
-      - 'wash-lib-v[0-9].[0-9]+.[0-9]+'
-      - 'wash-lib-v[0-9].[0-9]+.[0-9]+-*'
+      - "component-v[0-9].[0-9]+.[0-9]+"
+      - "component-v[0-9].[0-9]+.[0-9]+-*"
+      - "control-interface-v[0-9].[0-9]+.[0-9]+"
+      - "control-interface-v[0-9].[0-9]+.[0-9]+-*"
+      - "core-v[0-9].[0-9]+.[0-9]+"
+      - "core-v[0-9].[0-9]+.[0-9]+-*"
+      - "host-sys-v[0-9].[0-9]+.[0-9]+"
+      - "host-sys-v[0-9].[0-9]+.[0-9]+-*"
+      - "host-v[0-9].[0-9]+.[0-9]+"
+      - "host-v[0-9].[0-9]+.[0-9]+-*"
+      - "opentelemetry-nats-v[0-9].[0-9]+.[0-9]+"
+      - "opentelemetry-nats-v[0-9].[0-9]+.[0-9]+-*"
+      - "provider-archive-v[0-9].[0-9]+.[0-9]+"
+      - "provider-archive-v[0-9].[0-9]+.[0-9]+-*"
+      - "provider-blobstore-azure-v[0-9].[0-9]+.[0-9]+"
+      - "provider-blobstore-azure-v[0-9].[0-9]+.[0-9]+-*"
+      - "provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+"
+      - "provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+-*"
+      - "provider-blobstore-nats-v[0-9].[0-9]+.[0-9]+"
+      - "provider-blobstore-nats-v[0-9].[0-9]+.[0-9]+-*"
+      - "provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+"
+      - "provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+-*"
+      - "provider-http-client-v[0-9].[0-9]+.[0-9]+"
+      - "provider-http-client-v[0-9].[0-9]+.[0-9]+-*"
+      - "provider-http-server-v[0-9].[0-9]+.[0-9]+"
+      - "provider-http-server-v[0-9].[0-9]+.[0-9]+-*"
+      - "provider-keyvalue-nats-v[0-9].[0-9]+.[0-9]+"
+      - "provider-keyvalue-nats-v[0-9].[0-9]+.[0-9]+-*"
+      - "provider-keyvalue-redis-v[0-9].[0-9]+.[0-9]+"
+      - "provider-keyvalue-redis-v[0-9].[0-9]+.[0-9]+-*"
+      - "provider-keyvalue-vault-v[0-9].[0-9]+.[0-9]+"
+      - "provider-keyvalue-vault-v[0-9].[0-9]+.[0-9]+-*"
+      - "provider-messaging-kafka-v[0-9].[0-9]+.[0-9]+"
+      - "provider-messaging-kafka-v[0-9].[0-9]+.[0-9]+-*"
+      - "provider-messaging-nats-v[0-9].[0-9]+.[0-9]+"
+      - "provider-messaging-nats-v[0-9].[0-9]+.[0-9]+-*"
+      - "provider-sdk-v[0-9].[0-9]+.[0-9]+"
+      - "provider-sdk-v[0-9].[0-9]+.[0-9]+-*"
+      - "provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+"
+      - "provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+-*"
+      - "runtime-v[0-9].[0-9]+.[0-9]+"
+      - "runtime-v[0-9].[0-9]+.[0-9]+-*"
+      - "secrets-client-v[0-9].[0-9]+.[0-9]+"
+      - "secrets-client-v[0-9].[0-9]+.[0-9]+-*"
+      - "secrets-types-v[0-9].[0-9]+.[0-9]+"
+      - "secrets-types-v[0-9].[0-9]+.[0-9]+-*"
+      - "test-util-v[0-9].[0-9]+.[0-9]+"
+      - "test-util-v[0-9].[0-9]+.[0-9]+-*"
+      - "tracing-v[0-9].[0-9]+.[0-9]+"
+      - "tracing-v[0-9].[0-9]+.[0-9]+-*"
+      - "v[0-9].[0-9]+.[0-9]+"
+      - "v[0-9].[0-9]+.[0-9]+-*"
+      - "wascap-v[0-9].[0-9]+.[0-9]+"
+      - "wascap-v[0-9].[0-9]+.[0-9]+-*"
+      - "wash-cli-v[0-9].[0-9]+.[0-9]+"
+      - "wash-cli-v[0-9].[0-9]+.[0-9]+-*"
+      - "wash-lib-v[0-9].[0-9]+.[0-9]+"
+      - "wash-lib-v[0-9].[0-9]+.[0-9]+-*"
 
 permissions:
   contents: read
@@ -203,7 +205,7 @@ jobs:
         # need to run condition inside job steps so that job will pass if all steps are skipped
         # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
         with:
-          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          cachixAuthToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - uses: ./.github/actions/build-nix
         with:
           package: wash-${{ matrix.config.target }}
@@ -268,7 +270,7 @@ jobs:
         # need to run condition inside job steps so that job will pass if all steps are skipped
         # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
         with:
-          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          cachixAuthToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - uses: ./.github/actions/build-nix
         with:
           package: wasmcloud-${{ matrix.config.target }}
@@ -288,6 +290,7 @@ jobs:
         name:
           - blobstore-azure
           - blobstore-fs
+          - blobstore-nats
           - blobstore-s3
           - keyvalue-nats
           - keyvalue-redis
@@ -313,7 +316,7 @@ jobs:
         # need to run condition inside job steps so that job will pass if all steps are skipped
         # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
         with:
-          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          cachixAuthToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - uses: ./.github/actions/build-nix
         with:
           package: ${{ matrix.name }}-provider-${{ matrix.target }}
@@ -400,7 +403,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: ./.github/actions/install-nix
         with:
-          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          cachixAuthToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: wash-aarch64-unknown-linux-musl-oci
@@ -479,7 +482,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: ./.github/actions/install-nix
         with:
-          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          cachixAuthToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: wasmcloud-aarch64-unknown-linux-musl-oci
@@ -551,7 +554,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: ./.github/actions/install-nix
         with:
-          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          cachixAuthToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - uses: actions/cache/restore@36f1e144e1c8edb0a652766b484448563d8baf46
         with:
           path: ${{ runner.temp }}/nix-store
@@ -585,7 +588,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: ./.github/actions/install-nix
         with:
-          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          cachixAuthToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - uses: actions/cache/restore@36f1e144e1c8edb0a652766b484448563d8baf46
         with:
           path: ${{ runner.temp }}/nix-store
@@ -610,7 +613,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: ./.github/actions/install-nix
         with:
-          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          cachixAuthToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - uses: actions/cache@36f1e144e1c8edb0a652766b484448563d8baf46
         id: cache
         with:
@@ -657,6 +660,10 @@ jobs:
 
           - name: blobstore-fs
             subject: BLOBSTORE_FS_SUBJECT
+            embed_wit: true
+
+          - name: blobstore-nats
+            subject: BLOBSTORE_NATS_SUBJECT
             embed_wit: true
 
           - name: blobstore-s3
@@ -760,7 +767,7 @@ jobs:
       packages: write
     with:
       bin: wasmcloud
-      prefix: ''
+      prefix: ""
     secrets:
       CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
       AZURECR_PUSH_URL: ${{ secrets.AZURECR_PUSH_URL }}
@@ -912,7 +919,7 @@ jobs:
 
       - uses: ./.github/actions/install-nix
         with:
-          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          cachixAuthToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - name: Install NFPM
         run: nix profile install -L --inputs-from . 'nixpkgs#nfpm'
 
@@ -1056,7 +1063,7 @@ jobs:
       - run: rustup show
       - name: install smart-release
         env:
-          RUSTFLAGS: ''
+          RUSTFLAGS: ""
         # NOTE(brooksmtownsend): Installing from my fork as updating workspace dependencies is not yet supported in the mainline
         # PR to follow: https://github.com/Byron/cargo-smart-release/pull/17
         run: cargo install cargo-smart-release --git https://github.com/brooksmtownsend/cargo-smart-release --branch feat/update-workspace-dependencies
@@ -1076,7 +1083,7 @@ jobs:
           signoff: true
           committer: wasmCloud Automation <automation@wasmcloud.com>
           title: Release ${{ inputs.crate }}
-          commit-message: 'release(${{ inputs.crate }}): release and update CHANGELOG'
+          commit-message: "release(${{ inputs.crate }}): release and update CHANGELOG"
 
       - name: release
         if: ${{ inputs.do-release }}
