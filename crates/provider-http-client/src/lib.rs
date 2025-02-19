@@ -910,8 +910,8 @@ mod tests {
                         .await
                         .with_context(|| format!("failed to receive body for request {i}"))?;
                     assert_eq!(body.to_bytes(), Bytes::default());
-                    // Pooled connection should be evicted after 2*IDLE_TIMEOUT
-                    sleep(IDLE_TIMEOUT.saturating_mul(2)).await;
+                    // Pooled connection should be evicted after 5*IDLE_TIMEOUT
+                    sleep(IDLE_TIMEOUT.saturating_mul(5)).await;
                 }
                 Ok(())
             }
