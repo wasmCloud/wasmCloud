@@ -642,10 +642,11 @@ impl Provider for HttpClientProvider {}
 #[cfg(test)]
 mod tests {
     use core::net::{Ipv4Addr, SocketAddr};
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     use std::collections::HashMap;
 
-    use anyhow::bail;
+    use anyhow::ensure;
     use tokio::net::TcpListener;
     use tokio::try_join;
     use tracing::info;
@@ -653,7 +654,7 @@ mod tests {
 
     use super::*;
 
-    const N: usize = 10;
+    const N: usize = 20;
 
     fn new_request(addr: SocketAddr) -> http::Request<HttpBody> {
         http::Request::builder()
@@ -748,40 +749,38 @@ mod tests {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     #[test_log(default_log_filter = "trace")]
-    async fn test_single_conn() -> anyhow::Result<()> {
+    async fn test_reuse_conn() -> anyhow::Result<()> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let addr = listener.local_addr()?;
+        let requests = AtomicUsize::default();
         try_join!(
             async {
-                info!("accepting stream...");
-                let (stream, _) = listener
-                    .accept()
-                    .await
-                    .context("failed to accept connection")?;
-                info!("serving connection...");
-                let other = spawn(async move {
-                    listener
+                let mut conns: usize = 0;
+                while requests.load(Ordering::Relaxed) != N {
+                    info!("accepting stream...");
+                    let (stream, _) = listener
                         .accept()
                         .await
-                        .context("failed to accept second connection")
-                });
-                hyper::server::conn::http1::Builder::new()
-                    .serve_connection(
-                        TokioIo::new(stream),
-                        hyper::service::service_fn(move |_| async {
-                            anyhow::Ok(http::Response::new(http_body_util::Empty::<Bytes>::new()))
-                        }),
-                    )
-                    .await
-                    .context("failed to serve connection")?;
-                info!("done serving connection");
-                other.abort();
-                match other.await {
-                    Ok(Err(err)) => Err(err),
-                    Ok(Ok(..)) => bail!("client did not reuse connection"),
-                    Err(err) if err.is_cancelled() => Ok(()),
-                    Err(err) => Err(err).context("accept task failed"),
+                        .context("failed to accept connection")?;
+                    info!(i = conns, "serving connection...");
+                    hyper::server::conn::http1::Builder::new()
+                        .serve_connection(
+                            TokioIo::new(stream),
+                            hyper::service::service_fn(move |_| async {
+                                anyhow::Ok(http::Response::new(
+                                    http_body_util::Empty::<Bytes>::new(),
+                                ))
+                            }),
+                        )
+                        .await
+                        .context("failed to serve connection")?;
+                    info!(i = conns, "done serving connection");
+                    conns = conns.saturating_add(1);
                 }
+                let reqs = requests.load(Ordering::Relaxed);
+                info!(connections = conns, requests = reqs, "server finished");
+                ensure!(conns < reqs, "connections: {conns}, requests: {reqs}");
+                anyhow::Ok(())
             },
             async {
                 let link =
@@ -801,6 +800,7 @@ mod tests {
                         .await
                         .with_context(|| format!("failed to invoke `handle` for request {i}"))?
                         .with_context(|| format!("failed to handle request {i}"))?;
+                    requests.store(i.saturating_add(1), Ordering::Relaxed);
                     info!(i, "reading response body...");
                     let body = res
                         .collect()
