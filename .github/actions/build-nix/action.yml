@@ -25,14 +25,14 @@ runs:
     shell: bash
   - run: nix run --fallback -L --inputs-from . 'nixpkgs#coreutils' -- --coreutils-prog=cp -RLv ./result '${{ inputs.package }}'
     shell: bash
-  - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+  - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
     with:
       name: ${{ inputs.package }}
       path: ${{ inputs.package }}
   - run: nix copy --to "file://${{ runner.temp }}/nix-store-${{ inputs.package }}" '.#${{ inputs.package }}'
     if: steps.cache.outputs.cache-hit != 'true'
     shell: bash
-  - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+  - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
     with:
       name: nix-store-${{ inputs.package }}
       path: ${{ runner.temp }}/nix-store-${{ inputs.package }}
