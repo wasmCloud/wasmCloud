@@ -9,7 +9,8 @@ use std::{
 
 use anyhow::{bail, ensure, Context, Result};
 use oci_client::Reference;
-use rand::{distributions::Alphanumeric, Rng};
+use rand::distr::Alphanumeric;
+use rand::Rng;
 use sysinfo::{ProcessExt, SystemExt};
 use tempfile::TempDir;
 use tokio::{
