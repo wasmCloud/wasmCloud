@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{bail, Result};
 use reqwest::StatusCode;
+use semver::Version;
 use tokio::fs::{create_dir_all, metadata, File};
 use tokio::process::{Child, Command};
 use tokio_stream::StreamExt;
@@ -46,7 +47,7 @@ const MINIMUM_WASMCLOUD_VERSION: &str = "0.81.0";
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/v0.63.0/wasmcloud_host".to_string());
 /// # }
 /// ```
-pub async fn ensure_wasmcloud<P>(version: &str, dir: P) -> Result<PathBuf>
+pub async fn ensure_wasmcloud<P>(version: &Version, dir: P) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
@@ -80,7 +81,7 @@ where
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/v0.63.0/wasmcloud_host".to_string());
 /// # }
 /// ```
-pub async fn ensure_wasmcloud_for_os_arch_pair<P>(version: &str, dir: P) -> Result<PathBuf>
+pub async fn ensure_wasmcloud_for_os_arch_pair<P>(version: &Version, dir: P) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
@@ -107,12 +108,12 @@ where
 /// # #[tokio::main]
 /// # async fn main() {
 /// use wash_lib::start::download_wasmcloud;
-/// let res = download_wasmcloud("v0.57.1", "/tmp/wasmcloud/").await;
+/// let res = download_wasmcloud(semver::Version::parse("v0.57.1").unwrap(), "/tmp/wasmcloud/").await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/v0.63.0/wasmcloud_host".to_string());
 /// # }
 /// ```
-pub async fn download_wasmcloud<P>(version: &str, dir: P) -> Result<PathBuf>
+pub async fn download_wasmcloud<P>(version: &Version, dir: P) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
@@ -143,7 +144,7 @@ where
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/v0.63.0/wasmcloud_host".to_string());
 /// # }
 /// ```
-pub async fn download_wasmcloud_for_os_arch_pair<P>(version: &str, dir: P) -> Result<PathBuf>
+pub async fn download_wasmcloud_for_os_arch_pair<P>(version: &Version, dir: P) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
@@ -163,7 +164,7 @@ where
         .bytes_stream()
         .map(|result| result.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err)));
     let mut wasmcloud_host_burrito = StreamReader::new(burrito_bites_stream);
-    let version_dir = dir.as_ref().join(version);
+    let version_dir = dir.as_ref().join(format!("v{version}"));
     let file_path = version_dir.join(WASMCLOUD_HOST_BIN);
     if let Some(parent_folder) = file_path.parent() {
         // If the user doesn't have permission to create files in the provided directory,
@@ -232,18 +233,18 @@ where
 
 /// Helper function to indicate if the wasmCloud host tarball is successfully
 /// installed in a directory. Returns the path to the binary if it exists
-pub async fn find_wasmcloud_binary<P>(dir: P, version: &str) -> Option<PathBuf>
+pub async fn find_wasmcloud_binary<P>(dir: P, version: &Version) -> Option<PathBuf>
 where
     P: AsRef<Path>,
 {
-    let versioned_dir = dir.as_ref().join(version);
+    let versioned_dir = dir.as_ref().join(format!("v{version}"));
     let bin_file = versioned_dir.join(WASMCLOUD_HOST_BIN);
 
     metadata(&bin_file).await.is_ok().then_some(bin_file)
 }
 
 /// Helper function to determine the wasmCloud host release path given an os/arch and version
-fn wasmcloud_url(version: &str) -> String {
+fn wasmcloud_url(version: &Version) -> String {
     #[cfg(target_os = "android")]
     let os = "linux-android";
 
@@ -259,58 +260,51 @@ fn wasmcloud_url(version: &str) -> String {
     #[cfg(target_os = "windows")]
     let os = "pc-windows-msvc.exe";
     format!(
-        "{WASMCLOUD_GITHUB_RELEASE_URL}/{version}/wasmcloud-{arch}-{os}",
-        arch = std::env::consts::ARCH
+        "{WASMCLOUD_GITHUB_RELEASE_URL}/v{version}/wasmcloud-{arch}-{os}",
+        arch = std::env::consts::ARCH,
     )
 }
 
 /// Helper function to ensure the version of wasmCloud is above the minimum
 /// supported version (v0.63.0) that runs burrito releases
-fn check_version(version: &str) -> Result<()> {
+fn check_version(version: &Version) -> Result<()> {
     let version_req = semver::VersionReq::parse(&format!(">={MINIMUM_WASMCLOUD_VERSION}"))?;
-    match semver::Version::parse(version.trim_start_matches('v')) {
-        Ok(parsed_version) if !parsed_version.pre.is_empty() => {
-            warn!("Using prerelease version {} of wasmCloud", version);
-            Ok(())
-        }
-        Ok(parsed_version) if !version_req.matches(&parsed_version) => bail!(
-            "wasmCloud version {} is earlier than the minimum supported version of v{}",
-            version,
-            MINIMUM_WASMCLOUD_VERSION
-        ),
-        Ok(_ver) => Ok(()),
-        Err(_parse_err) => {
-            warn!("Failed to parse wasmCloud version as a semantic version, download may fail");
-            Ok(())
-        }
+    if !version.pre.is_empty() {
+        warn!("Using prerelease version {} of wasmCloud", version);
+        return Ok(());
     }
+
+    if !version_req.matches(version) {
+        bail!(
+            "wasmCloud version v{version} is earlier than the minimum supported version of v{MINIMUM_WASMCLOUD_VERSION}",
+        );
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod test {
     use super::{check_version, MINIMUM_WASMCLOUD_VERSION};
+    use semver::Version;
 
     #[tokio::test]
     async fn can_properly_deny_too_old_hosts() -> anyhow::Result<()> {
         // Ensure we allow versions >= 0.81.0
-        assert!(check_version("v0.81.0").is_ok());
-        assert!(check_version(MINIMUM_WASMCLOUD_VERSION).is_ok());
+        assert!(check_version(&Version::parse("0.81.0")?).is_ok());
+        assert!(check_version(&Version::parse(MINIMUM_WASMCLOUD_VERSION)?).is_ok());
 
         // Ensure we allow prerelease tags for testing
-        assert!(check_version("v0.81.0-rc1").is_ok());
+        assert!(check_version(&Version::parse("0.81.0-rc1")?).is_ok());
 
         // Ensure we deny versions < MINIMUM_WASMCLOUD_VERSION
-        assert!(check_version("v0.80.99").is_err());
+        assert!(check_version(&Version::parse("0.80.99")?).is_err());
 
-        if let Err(e) = check_version("v0.56.0") {
+        if let Err(e) = check_version(&Version::parse("0.56.0")?) {
             assert_eq!(e.to_string(), format!("wasmCloud version v0.56.0 is earlier than the minimum supported version of v{MINIMUM_WASMCLOUD_VERSION}"));
         } else {
             panic!("v0.56.0 should be before the minimum version")
         }
-
-        // The check_version will allow bad semantic versions, rather than failing immediately
-        assert!(check_version("ungabunga").is_ok());
-        assert!(check_version("v11.1").is_ok());
 
         Ok(())
     }
