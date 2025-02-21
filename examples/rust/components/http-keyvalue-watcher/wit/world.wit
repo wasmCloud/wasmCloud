@@ -1,0 +1,8 @@
+package wasmcloud:hello;
+
+world hello {
+   import wasi:logging/logging@0.1.0-draft;
+   import wasi:keyvalue/store@0.2.0-draft;
+   import wasi:http/outgoing-handler@0.2.2;
+   export wasi:keyvalue/watcher@0.2.0-draft;
+}
