@@ -1,16 +1,16 @@
-use anyhow::{anyhow, bail, Context, Result};
-use async_nats::Client;
-use clap::Parser;
-use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use anyhow::{anyhow, bail, Context, Result};
+use async_nats::Client;
+use clap::Parser;
+use semver::Version;
+use serde_json::{json, Value};
 use sysinfo::{System, SystemExt};
 use tokio::fs::create_dir_all;
 use tokio::{
@@ -18,6 +18,7 @@ use tokio::{
     process::Child,
 };
 use tracing::{debug, warn};
+
 use wash_lib::app::{load_app_manifest, AppManifest, AppManifestSource};
 use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::common::CommandGroupUsage;
@@ -607,24 +608,25 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     } else {
         None
     };
-    let wasmcloud_version = if let Some(version) = wasmcloud_opts.wasmcloud_version {
-        version
-    } else if let Some(new_version) = (new_patch_version_of_after_string(
-        GITHUB_WASMCLOUD_ORG,
-        GITHUB_WASMCLOUD_WASMCLOUD_REPO,
-        WASMCLOUD_HOST_VERSION,
+    let wasmcloud_version = Version::parse(
+        if let Some(version) = wasmcloud_opts.wasmcloud_version {
+            version
+        } else if let Some(new_version) = (new_patch_version_of_after_string(
+            GITHUB_WASMCLOUD_ORG,
+            GITHUB_WASMCLOUD_WASMCLOUD_REPO,
+            WASMCLOUD_HOST_VERSION,
+        )
+        .await)
+            .unwrap_or_default()
+        {
+            new_version.to_string()
+        } else {
+            WASMCLOUD_HOST_VERSION.to_string()
+        }
+        .trim_start_matches('v'),
     )
-    .await)
-        .unwrap_or_default()
-    {
-        new_version.to_string()
-    } else {
-        WASMCLOUD_HOST_VERSION.to_string()
-    };
-    let wasmcloud_version = match wasmcloud_version {
-        version if version.starts_with('v') => version,
-        version => format!("v{}", version),
-    };
+    .context("parsing wasmcloud version")?;
+
     // Download wasmCloud if not already installed
     let wasmcloud_bin_path = match wasmcloud_opts.host_path {
         // If an override was provided we can use it
