@@ -265,7 +265,7 @@ impl TestWashInstance {
     }
 
     async fn new(args: TestWashInstanceNewArgs) -> Result<Self> {
-        let test_id: String = rand::thread_rng()
+        let test_id: String = rand::rng()
             .sample_iter(&Alphanumeric)
             .take(6)
             .map(char::from)

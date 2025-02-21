@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use async_nats::{jetstream, Client};
 use nkeys::{KeyPair, XKey};
 use rand::distr::Alphanumeric;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use secrets_nats_kv::{Api, PutSecretRequest, PutSecretResponse};
 use std::collections::HashMap;
 use wascap::jwt::{Claims, ClaimsBuilder, Component, Host};
@@ -286,7 +286,7 @@ fn setup_api(client: Client, enc_seed: String, server_seed: String) -> (Api, Str
     let server_xkey = XKey::from_seed(&server_seed).unwrap();
     let encryption_key = XKey::from_seed(&enc_seed).unwrap();
 
-    let suffix = thread_rng()
+    let suffix = rng()
         .sample_iter(&Alphanumeric)
         .take(10)
         .map(char::from)
