@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
+use semver::Version;
 use tempfile::tempdir;
 use tokio::time::Duration;
 
@@ -13,19 +14,20 @@ use wash_lib::start::{
 mod common;
 use common::{find_open_port, NATS_SERVER_VERSION};
 
-const WASMCLOUD_VERSION: &str = "v1.4.2";
+const WASMCLOUD_VERSION: &str = "1.4.2";
 
 #[tokio::test]
 #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
 async fn can_download_wasmcloud_host() {
+    let version = Version::parse(WASMCLOUD_VERSION).unwrap();
     let download_dir = tempdir().expect("Unable to create tempdir");
-    let res = ensure_wasmcloud_for_os_arch_pair(WASMCLOUD_VERSION, &download_dir)
+    let res = ensure_wasmcloud_for_os_arch_pair(&version, &download_dir)
         .await
         .expect("Should be able to download tarball");
 
     // Make sure we can find the binary and that it matches the path we got back from ensure
     assert_eq!(
-        find_wasmcloud_binary(&download_dir, WASMCLOUD_VERSION)
+        find_wasmcloud_binary(&download_dir, &version)
             .await
             .expect("Should have found installed wasmcloud"),
         res
@@ -33,18 +35,12 @@ async fn can_download_wasmcloud_host() {
 
     // Just to triple check, make sure the paths actually exist
     assert!(
-        download_dir.path().join(WASMCLOUD_VERSION).exists(),
+        download_dir
+            .path()
+            .join(format!("v{WASMCLOUD_VERSION}"))
+            .exists(),
         "Directory should exist"
     );
-}
-
-#[tokio::test]
-#[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
-async fn can_handle_missing_wasmcloud_version() {
-    let download_dir = tempdir().expect("Unable to create tempdir");
-    let res = ensure_wasmcloud("v10233.123.3.4", &download_dir).await;
-
-    assert!(res.is_err());
 }
 
 #[tokio::test]
@@ -70,9 +66,10 @@ async fn can_download_and_start_wasmcloud() -> anyhow::Result<()> {
     .await
     .expect("Unable to start nats process");
 
-    let wasmcloud_binary = ensure_wasmcloud(WASMCLOUD_VERSION, &install_dir)
-        .await
-        .expect("Unable to ensure wasmcloud");
+    let wasmcloud_binary =
+        ensure_wasmcloud(&Version::parse(WASMCLOUD_VERSION).unwrap(), &install_dir)
+            .await
+            .expect("Unable to ensure wasmcloud");
 
     let stderr_log_path = wasmcloud_binary
         .parent()
