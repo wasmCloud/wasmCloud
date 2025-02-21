@@ -2,7 +2,8 @@ use std::collections::HashSet;
 
 use async_nats::{jetstream, Client};
 use nkeys::{KeyPair, XKey};
-use rand::{distributions::Alphanumeric, thread_rng, Rng};
+use rand::distr::Alphanumeric;
+use rand::{thread_rng, Rng};
 use secrets_nats_kv::{Api, PutSecretRequest, PutSecretResponse};
 use std::collections::HashMap;
 use wascap::jwt::{Claims, ClaimsBuilder, Component, Host};
