@@ -100,6 +100,7 @@ New named configuration can be specified by using `wash config put`.
 | `POSTGRES_HOST`         | `localhost` | Postgres cluster hostname                                 |
 | `POSTGRES_PORT`         | `5432`      | Postgres cluster port                                     |
 | `POSTGRES_USERNAME`     | `postgres`  | Postgres cluster username                                 |
+| `POSTGRES_DATABASE`     | `postgres`  | Postgres cluster database                                 |
 | `POSTGRES_TLS_REQUIRED` | `false`     | Whether TLS should be required for al managed connections |
 
 Once named configuration with the keys above is created, it can be referenced as `target_config` for a link to this provider.
