@@ -321,10 +321,14 @@ impl WashDevSession {
         };
 
         // Start the host in detached mode, w/ custom log file
-        let wasmcloud_version = wasmcloud_opts
-            .clone()
-            .wasmcloud_version
-            .unwrap_or_else(|| WASMCLOUD_HOST_VERSION.into());
+        let wasmcloud_version = Version::parse(
+            wasmcloud_opts
+                .clone()
+                .wasmcloud_version
+                .unwrap_or_else(|| WASMCLOUD_HOST_VERSION.into())
+                .trim_start_matches('v'),
+        )
+        .context("parsing semantic wasmcloud version")?;
         let wasmcloud_log_path = session_dir.join("wasmcloud.log");
         let wasmcloud_binary = ensure_wasmcloud(&wasmcloud_version, &install_dir).await?;
         let log_output: Stdio = tokio::fs::File::create(&wasmcloud_log_path)
