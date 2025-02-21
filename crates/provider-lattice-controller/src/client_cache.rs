@@ -154,6 +154,7 @@ async fn connect(cfg: &ConnectionConfig) -> Result<async_nats::Client> {
 
     let url = cfg.cluster_uris.first().unwrap();
 
+    let name = names::Generator::new(names::ADJECTIVES, names::NOUNS, names::Name::Numbered).next().context("failed to generate name");
     let conn = opts
         .event_callback(|event| async move {
             // lattice prefix/ID will already be on the span from earlier calls
@@ -166,6 +167,7 @@ async fn connect(cfg: &ConnectionConfig) -> Result<async_nats::Client> {
                 other => debug!("NATS client other event occurred: {other}"),
             }
         })
+        .name(name)
         .connect(url)
         .await
         .with_context(|| format!("Nats connection to {url}"))?;
