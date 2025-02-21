@@ -9,7 +9,8 @@ use std::{
 
 use anyhow::{bail, ensure, Context, Result};
 use oci_client::Reference;
-use rand::{distributions::Alphanumeric, Rng};
+use rand::distr::Alphanumeric;
+use rand::Rng;
 use sysinfo::{ProcessExt, SystemExt};
 use tempfile::TempDir;
 use tokio::{
@@ -264,7 +265,7 @@ impl TestWashInstance {
     }
 
     async fn new(args: TestWashInstanceNewArgs) -> Result<Self> {
-        let test_id: String = rand::thread_rng()
+        let test_id: String = rand::rng()
             .sample_iter(&Alphanumeric)
             .take(6)
             .map(char::from)

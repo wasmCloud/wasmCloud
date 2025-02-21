@@ -6,7 +6,8 @@ use std::process::Stdio;
 use anyhow::{bail, Context as _, Result};
 use chrono::{DateTime, Utc};
 use console::style;
-use rand::{distributions::Alphanumeric, Rng};
+use rand::distr::Alphanumeric;
+use rand::Rng;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt as _;
@@ -200,7 +201,7 @@ impl WashDevSession {
             Some(existing_session) => existing_session.clone(),
             None => {
                 let session = WashDevSession {
-                    id: rand::thread_rng()
+                    id: rand::rng()
                         .sample_iter(&Alphanumeric)
                         .take(SESSION_ID_LEN)
                         .map(char::from)
