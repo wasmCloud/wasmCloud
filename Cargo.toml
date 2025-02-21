@@ -287,7 +287,7 @@ pin-project-lite = { version = "0.2", default-features = false }
 postgres-types = { version = "0.2", default-features = false }
 provider-archive = { version = "^0.15.0", path = "./crates/provider-archive", default-features = false }
 quote = { version = "1", default-features = false }
-rand = { version = "0.8", default-features = false }
+rand = { version = "0.9", default-features = false }
 redis = { version = "0.25", default-features = false }
 regex = { version = "1", default-features = false }
 reqwest = { version = "0.12", default-features = false }
