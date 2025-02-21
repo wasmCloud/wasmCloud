@@ -22,11 +22,11 @@ async-nats = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = [
-    "cargo",
-    "derive",
-    "env",
-    "std",
-    "string",
+  "cargo",
+  "derive",
+  "env",
+  "std",
+  "string",
 ] }
 clap_complete = { workspace = true }
 clap-markdown = { workspace = true }
@@ -44,7 +44,7 @@ notify = { workspace = true }
 oci-client = { workspace = true, features = ["rustls-tls"] }
 once_cell = { workspace = true }
 provider-archive = { workspace = true }
-rand = { workspace = true }
+rand = { workspace = true, feautres = ["thread_rng"] }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 rmp-serde = { workspace = true }
@@ -66,22 +66,22 @@ tokio-tar = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = [
-    "ansi",
-    "env-filter",
-    "fmt",
-    "json",
-    "std",
+  "ansi",
+  "env-filter",
+  "fmt",
+  "json",
+  "std",
 ] }
 wadm-client = { workspace = true }
 wadm-types = { workspace = true }
 walkdir = { workspace = true }
 warp = { workspace = true }
 wash-lib = { workspace = true, features = [
-    "cli",
-    "parser",
-    "nats",
-    "start",
-    "plugin",
+  "cli",
+  "parser",
+  "nats",
+  "start",
+  "plugin",
 ] }
 wasm-pkg-client = { workspace = true }
 wasm-pkg-core = { workspace = true }

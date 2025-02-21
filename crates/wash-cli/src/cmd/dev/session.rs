@@ -201,7 +201,7 @@ impl WashDevSession {
             Some(existing_session) => existing_session.clone(),
             None => {
                 let session = WashDevSession {
-                    id: rand::thread_rng()
+                    id: rand::rng()
                         .sample_iter(&Alphanumeric)
                         .take(SESSION_ID_LEN)
                         .map(char::from)
