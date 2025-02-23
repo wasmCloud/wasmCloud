@@ -627,16 +627,13 @@ where
                     .context("failed to serve `wrpc:http/incoming-handler`")?;
                     invocations.push(handle);
                 }
-                (
-                    "wasmcloud:cron/scheduler@0.1.0-draft",
-                    types::ComponentItem::ComponentInstance(..),
-                ) => {
+                ("wasmcloud:cron/scheduler@0.1.0", types::ComponentItem::ComponentInstance(..)) => {
                     let instance = instance.clone();
-                    let [(_, _, timed_invoke)] =
+                    let [(_, _, invoke)] =
                         wrpc::exports::wasmcloud::cron::scheduler::serve_interface(srv, instance)
                             .await
                             .context("failed to serve `wrpc:keyvalue/watcher`")?;
-                    invocations.push(timed_invoke);
+                    invocations.push(invoke);
                 }
                 (
                     "wasmcloud:messaging/handler@0.2.0"

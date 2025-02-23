@@ -1,8 +1,8 @@
-# Custom Capability Provider
+# Cron Job Capability Provider
 
-This capability provider is a template for creating providers with custom capabilities. It uses the [wasmcloud-provider-sdk](https://crates.io/crates/wasmcloud-provider-sdk) and implements the [Provider](https://docs.rs/wasmcloud-provider-sdk/0.5.0/wasmcloud_provider_sdk/trait.Provider.html) trait with an example handler that will persist the links that target the provider (target links) and links where the provider is the source and targets a component (source links).
+This capability provider enables scheduled execution of tasks using cron expressions within the wasmCloud ecosystem. It uses the [wasmcloud-provider-sdk](https://crates.io/crates/wasmcloud-provider-sdk) and implements the [Provider](https://docs.rs/wasmcloud-provider-sdk/0.5.0/wasmcloud_provider_sdk/trait.Provider.html) trait to manage scheduled tasks based on cron expressions.
 
-The purpose of this example is to provide comprehensive comments on the usage of our wasmCloud provider SDK, from serving RPC exports to invoking component imports. The code is informative to read through and provides a base for extending wasmCloud with custom capabilities.
+The provider maintains a registry of cron jobs for components, executes the jobs according to their schedules, and delivers payloads to the target components. It supports dynamic configuration through link definitions, allowing components to register and update their scheduled jobs at runtime.
 
 ## Building
 
@@ -21,23 +21,17 @@ Prerequisites:
 1. [nats-server](https://github.com/nats-io/nats-server)
 1. [nats-cli](https://github.com/nats-io/natscli)
 
-You can run this capability provider as a binary by passing a simple base64 encoded [HostData](https://docs.rs/wasmcloud-core/0.6.0/wasmcloud_core/host/struct.HostData.html) struct, in order to do basic testing. For example:
+You can run this cron capability provider as a binary by passing a simple base64 encoded [HostData](https://docs.rs/wasmcloud-core/0.6.0/wasmcloud_core/host/struct.HostData.html) struct, in order to do basic testing. For example:
 
 ```bash
 nats-server -js &
-echo '{"lattice_rpc_url": "0.0.0.0:4222", "lattice_rpc_prefix": "default", "provider_key": "custom-template", "config": {"foo": "bar"}, "env_values": {}, "link_definitions": [], "otel_config": {"enable_observability": false}}' | base64 | cargo run
+echo '{"lattice_rpc_url": "0.0.0.0:4222", "lattice_rpc_prefix": "default", "provider_key": "wasmcloud:cron", "config": {"interval_seconds": "5"}, "env_values": {}, "link_definitions": [], "otel_config": {"enable_observability": false}}' | base64 | cargo run
 ```
 
 And in another terminal, you can request the health of the provider using the NATS CLI
 
 ```bash
-nats req "wasmbus.rpc.default.custom-template.health" '{}'
-```
-
-Additionally, you can invoke the provider directly which will send test data to each linked component
-
-```bash
-wash call custom-template wasmcloud:example/system-info.call
+nats req "wasmbus.rpc.default.wasmcloud:scheduler.health" '{}'
 ```
 
 ## Running as an application
@@ -51,12 +45,35 @@ wash up -d
 wash app deploy ./wadm.yaml
 ```
 
+## Usage
+
+Components can register cron jobs by linking to this provider with appropriate configuration. The link configuration should include cron expressions in the following format:
+
+```
+job_name=cron_expression:payload
+```
+
+For example:
+```
+daily_report=0 0 * * *:{"type":"generate_report"}
+hourly_update=0 * * * *:{"action":"refresh_data"}
+```
+
+Multiple jobs can be specified by separating them with semicolons:
+```
+daily_report=0 0 * * *:{"type":"generate_report"};hourly_update=0 * * * *:{"action":"refresh_data"}
+```
+
+When a job is triggered, the provider will invoke the target component with the specified payload.
+
 ## Customizing
 
-Customizing this provider to meet your needs of a custom capability takes just a few steps.
+You can customize this cron job provider by:
 
-1. Update the [wit/world.wit](./wit/world.wit) to include the data types and functions that model your custom capability. You can use the example as a base and the [component model WIT reference](https://component-model.bytecodealliance.org/design/wit.html) as a guide for types and keywords.
-1. Implement any provider `export`s in [src/provider.rs](./src/provider.rs) inside of the `impl Handler {}` block.
-1. Use the methods inside of the `impl Provider {}` block to handle invoking components. For inspiration, take a look at our other capability providers that implement various capabilities like HTTP, Messaging, Key-Value in the [crates/provider-\*](../../../../crates/) folder.
+1. Adjusting the minimum interval time between checks in the configuration.
+2. Extending the job parsing logic to support additional formats or parameters.
+3. Adding support for more complex scheduling patterns beyond standard cron expressions.
+4. Implementing job history and status reporting capabilities.
+5. Adding retry logic or error handling for failed job executions.
 
 Have any questions? Please feel free to [file an issue](https://github.com/wasmCloud/wasmCloud/issues/new/choose) and/or join us on the [wasmCloud slack](https://slack.wasmcloud.com)!
