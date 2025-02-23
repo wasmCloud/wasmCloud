@@ -25,5 +25,5 @@ world watcher {
 }
 
 world scheduler {
-    export wasmcloud:cron/scheduler@0.1.0-draft;
+    export wasmcloud:cron/scheduler@0.1.0;
 }

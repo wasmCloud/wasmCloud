@@ -15,6 +15,10 @@ repository.workspace = true
 status = "actively-developed"
 
 [dependencies]
+async-nats = { workspace = true }
+bytes = "1.5"
+chrono = "0.4"
+cron = "0.12"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
