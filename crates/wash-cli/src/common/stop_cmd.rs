@@ -22,8 +22,11 @@ pub async fn handle_command(
             handle_stop_provider(cmd).await?
         }
         StopCommand::Host(cmd) => {
-            let host_id = &cmd.host_id.to_string();
-            sp.update_spinner_message(format!(" Stopping host {host_id} ... "));
+            if let Some(host_id) = cmd.host_id.as_ref() {
+                sp.update_spinner_message(format!(" Stopping host {host_id} ... "));
+            } else {
+                sp.update_spinner_message(format!(" Finding and stopping host ... "));
+            }
             stop_host(cmd).await?
         }
     };
@@ -209,8 +212,7 @@ mod test {
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, TIMEOUT_MS);
                 assert_eq!(host_shutdown_timeout, HOST_TIMEOUT_MS);
-                assert_eq!(host_id.to_string(), HOST_ID);
-                assert_eq!(host_id.to_string(), HOST_ID,);
+                assert_eq!(host_id.expect("host to be specified"), HOST_ID);
             }
             cmd => panic!("stop host constructed incorrect command {cmd:?}"),
         }
