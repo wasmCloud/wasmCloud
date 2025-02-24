@@ -1,5 +1,11 @@
 # Golang Examples
 
+> [!WARNING]
+> **Deprecation Warning**
+> The wasmCloud Golang examples have been moved to the [wasmCloud/go repo](https://github.com/wasmCloud/go/tree/main/examples).
+>
+> This folder and the examples in it will not be updated and will be removed after a new release of the `wash` CLI that depends on it.
+
 This folder contains examples that can be run with [wasmcloud][wasmcloud] which are written in [Golang][golang].
 
 Most examples compile with [TinyGo][tinygo] rather than the Golang compiler proper given that WebAssembly support landed in TinyGo first and is still slightly better supported there.
