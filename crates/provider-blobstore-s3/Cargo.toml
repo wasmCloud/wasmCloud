@@ -22,7 +22,7 @@ aws-smithy-runtime = { workspace = true, features = ["client", "tls-rustls"] }
 base64 = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
-hyper-rustls = { version = "0.25", features = [
+hyper-rustls = { version = "0.27", features = [
     "http2",
     "ring",
     "webpki-tokio",
