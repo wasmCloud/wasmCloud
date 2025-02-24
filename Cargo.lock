@@ -8296,6 +8296,7 @@ version = "1.6.2"
 dependencies = [
  "anyhow",
  "async-nats",
+ "axum",
  "base64 0.22.1",
  "bytes",
  "clap",
@@ -8596,6 +8597,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "unicase",
  "url",
  "uuid 1.13.2",
  "wasmcloud-control-interface",

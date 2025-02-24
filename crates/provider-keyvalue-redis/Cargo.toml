@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+async-nats = { workspace = true }
 anyhow = { workspace = true }
 bytes = { workspace = true }
 redis = { workspace = true, features = [
@@ -19,6 +20,7 @@ redis = { workspace = true, features = [
 ] }
 tokio = { workspace = true }
 tracing = { workspace = true }
+unicase = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wit-bindgen-wrpc = { workspace = true }
 
