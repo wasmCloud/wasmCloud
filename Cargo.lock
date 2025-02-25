@@ -8427,6 +8427,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "sysinfo",
  "time",
  "tokio",
  "tokio-stream",

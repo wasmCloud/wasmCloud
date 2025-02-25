@@ -1,5 +1,8 @@
-use wasmcloud_tracing::{Counter, Histogram, KeyValue, Meter};
-
+use std::sync::{Arc, Mutex};
+use sysinfo::CpuExt;
+use sysinfo::System;
+use sysinfo::SystemExt;
+use wasmcloud_tracing::{Counter, Histogram, KeyValue, Meter, ObservableGauge};
 /// `HostMetrics` encapsulates the set of metrics emitted by the wasmcloud host
 #[derive(Clone, Debug)]
 #[allow(clippy::module_name_repetitions)]
@@ -10,6 +13,13 @@ pub struct HostMetrics {
     pub component_invocations: Counter<u64>,
     /// The count of the number of times an component invocation resulted in an error.
     pub component_errors: Counter<u64>,
+
+    /// The total amount of available system memory in bytes.
+    pub system_total_memory_bytes: ObservableGauge<f64>,
+    /// The total amount of used system memory in bytes.
+    pub system_used_memory_bytes: ObservableGauge<f64>,
+    /// The total cpu usage.
+    pub system_cpu_usage: ObservableGauge<f64>,
 
     /// The host's ID.
     // TODO this is actually configured as an InstrumentationScope attribute on the global meter,
@@ -25,7 +35,11 @@ pub struct HostMetrics {
 impl HostMetrics {
     /// Construct a new [`HostMetrics`] instance for accessing the various wasmcloud host metrics linked to the provided meter.
     #[must_use]
-    pub fn new(meter: &Meter, host_id: String, lattice_id: String) -> Self {
+    pub fn new(
+        meter: &Meter,
+        host_id: String,
+        lattice_id: String,
+    ) -> anyhow::Result<Self, anyhow::Error> {
         let wasmcloud_host_handle_rpc_message_duration_ns = meter
             .u64_histogram("wasmcloud_host.handle_rpc_message.duration")
             .with_description("Duration in nanoseconds each handle_rpc_message operation took")
@@ -42,13 +56,65 @@ impl HostMetrics {
             .with_description("Number of component errors")
             .build();
 
-        Self {
+        let shared_sys = Arc::new(Mutex::new(System::new()));
+
+        // System Memory
+        let system_memory_total_bytes = meter
+            .f64_observable_gauge("wasmcloud_host.process.memory.total.bytes")
+            .with_description("The total amount of memory in bytes")
+            .with_unit("bytes")
+            .with_callback({
+                let local_sys = Arc::clone(&shared_sys);
+                move |observer| {
+                    let mut sys = local_sys.lock().unwrap();
+                    sys.refresh_memory();
+                    let total_memory = sys.total_memory();
+                    observer.observe(total_memory as f64, &[]);
+                }
+            })
+            .build();
+
+        let system_memory_used_bytes = meter
+            .f64_observable_gauge("wasmcloud_host.process.memory.used.bytes")
+            .with_description("The used amount of memory in bytes")
+            .with_unit("bytes")
+            .with_callback({
+                let local_sys = Arc::clone(&shared_sys);
+                move |observer| {
+                    let mut sys = local_sys.lock().unwrap();
+                    sys.refresh_memory();
+                    let used_memory = sys.used_memory();
+                    observer.observe(used_memory as f64, &[]);
+                }
+            })
+            .build();
+
+        // System CPU
+        let system_cpu_usage = meter
+            .f64_observable_gauge("wasmcloud_host.process.cpu.usage")
+            .with_description("The CPU usage of the process")
+            .with_unit("percentage")
+            .with_callback({
+                let local_sys = Arc::clone(&shared_sys);
+                move |observer| {
+                    let mut sys = local_sys.lock().unwrap();
+                    sys.refresh_cpu();
+                    let cpu_usage = sys.global_cpu_info().cpu_usage();
+                    observer.observe(cpu_usage as f64, &[]);
+                }
+            })
+            .build();
+
+        Ok(Self {
             handle_rpc_message_duration_ns: wasmcloud_host_handle_rpc_message_duration_ns,
             component_invocations: component_invocation_count,
             component_errors: component_error_count,
+            system_total_memory_bytes: system_memory_total_bytes,
+            system_used_memory_bytes: system_memory_used_bytes,
+            system_cpu_usage: system_cpu_usage,
             host_id,
             lattice_id,
-        }
+        })
     }
 
     /// Record the result of invoking a component, including the elapsed time, any attributes, and whether the invocation resulted in an error.
