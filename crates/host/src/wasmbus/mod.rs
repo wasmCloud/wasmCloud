@@ -1814,6 +1814,7 @@ impl Host {
                     &provider_ref,
                     host_id,
                     self.host_config.allow_file_load,
+                    &self.host_config.oci_opts.additional_ca_paths,
                     &registry_config,
                 )
                 .await

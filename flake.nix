@@ -41,9 +41,20 @@
       targets.wasm32-unknown-unknown = false;
       targets.wasm32-wasip1 = false;
       targets.wasm32-wasip2 = false;
+
+      overrideVendorCargoPackage = {name, ...}: drv:
+        if name == "spiffe"
+        then
+          drv.overrideAttrs (_: {
+            patches = [
+              ./nix/patches/rust-spiffe.patch
+            ];
+          })
+        else drv;
     in
       rust.mkFlake {
         inherit
+          overrideVendorCargoPackage
           targets
           ;
         src = ./.;
@@ -116,48 +127,25 @@
         test.workspace = true;
 
         buildOverrides = {
+          craneLib,
           pkgs,
           pkgsCross ? pkgs,
           ...
         }: {nativeCheckInputs ? [], ...} @ args:
-          with pkgs.lib; let
-            cargoLock.root = readTOML ./Cargo.lock;
-            cargoLock.tests = readTOML ./tests/components/rust/Cargo.lock;
-
-            cargoLock.examples.http-hello-world = readTOML ./examples/rust/components/http-hello-world/Cargo.lock;
-            cargoLock.examples.http-keyvalue-counter = readTOML ./examples/rust/components/http-keyvalue-counter/Cargo.lock;
-
-            lockPackages =
-              cargoLock.examples.http-hello-world.package
-              ++ cargoLock.examples.http-keyvalue-counter.package
-              ++ cargoLock.tests.package
-              ++ cargoLock.root.package;
-
-            # deduplicate lockPackages by $name:$version:$checksum
-            lockPackages' = listToAttrs (
-              map (
-                {
-                  name,
-                  version,
-                  checksum ? "no-hash",
-                  ...
-                } @ pkg:
-                  nameValuePair "${name}:${version}:${checksum}" pkg
-              )
-              lockPackages
-            );
-
-            cargoLockParsed =
-              cargoLock.root
-              // {
-                package = attrValues lockPackages';
-              };
-          in
+          with pkgs.lib;
             {
-              inherit
-                cargoLockParsed
-                ;
-              cargoExtraArgs = ""; # disable `--locked` passed by default by crane
+              cargoVendorDir = craneLib.vendorMultipleCargoDeps {
+                inherit
+                  overrideVendorCargoPackage
+                  ;
+
+                cargoLockList = [
+                  ./Cargo.lock
+                  ./examples/rust/components/http-hello-world/Cargo.lock
+                  ./examples/rust/components/http-keyvalue-counter/Cargo.lock
+                  ./tests/components/rust/Cargo.lock
+                ];
+              };
             }
             // optionalAttrs (args ? cargoArtifacts) {
               nativeCheckInputs =
@@ -183,6 +171,7 @@
                 "${name}" =
                   rust.mkAttrs {
                     inherit
+                      overrideVendorCargoPackage
                       src
                       targets
                       ;
@@ -208,6 +197,7 @@
               wash =
                 rust.mkAttrs {
                   inherit
+                    overrideVendorCargoPackage
                     src
                     targets
                     ;
@@ -224,6 +214,7 @@
               wasmcloud =
                 rust.mkAttrs {
                   inherit
+                    overrideVendorCargoPackage
                     src
                     targets
                     ;

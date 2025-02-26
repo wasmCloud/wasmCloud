@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud"
-version = "1.6.1"
+version = "1.6.2"
 description = "wasmCloud is a Cloud Native Computing Foundation (CNCF) project that enables teams to build polyglot applications composed of reusable Wasm components and run them—resiliently and efficiently—across any cloud, Kubernetes, datacenter, or edge."
 default-run = "wasmcloud"
 readme = "README.md"
@@ -217,7 +217,7 @@ async-compression = { version = "0.3", default-features = false }
 async-nats = { version = "0.36", default-features = false }
 async-trait = { version = "0.1", default-features = false }
 aws-config = { version = "1.5", default-features = false }
-aws-sdk-s3 = { version = "1.67", default-features = false }
+aws-sdk-s3 = { version = "=1.68", default-features = false } # more recent versions depend on `cbindgen`, using MPL-2.0, not permitted by CNCF
 aws-smithy-runtime = { version = "1.7", default-features = false }
 axum = { version = "0.7", default-features = false }
 axum-server = { version = "0.6", default-features = false }
@@ -345,8 +345,8 @@ unicase = { version = "2.8.1", default-features = false }
 url = { version = "2" }
 uuid = { version = "1", default-features = false }
 vaultrs = { version = "0.7", default-features = false }
-wadm = { version = "0.20", default-features = false }
-wadm-client = { version = "0.8.0", default-features = false }
+wadm = { version = "0.20.2", default-features = false }
+wadm-client = { version = "0.8.2", default-features = false }
 wadm-types = { version = "0.8.2", default-features = false }
 walkdir = { version = "2", default-features = false }
 warp = { version = "0.3", default-features = false }
@@ -379,7 +379,7 @@ wasmcloud-secrets-client = { version = "^0.6.0", path = "./crates/secrets-client
 wasmcloud-secrets-types = { version = "^0.5.0", path = "./crates/secrets-types", default-features = false }
 wasmcloud-test-util = { version = "^0.16.0", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "^0.12.0", path = "./crates/tracing", default-features = false }
-wasmparser = { version = "0.224", default-features = false }
+wasmparser = { version = "0.225", default-features = false }
 wasmtime = { version = "26", default-features = false }
 wasmtime-wasi = { version = "26", default-features = false }
 wasmtime-wasi-http = { version = "26", default-features = false }

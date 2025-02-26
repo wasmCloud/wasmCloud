@@ -16,11 +16,11 @@ use http_body::Frame;
 use http_body_util::{BodyExt as _, StreamBody};
 use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;
+use tokio::join;
 use tokio::net::{TcpStream, ToSocketAddrs};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::sleep;
-use tokio::{join, sync::RwLock};
 use tokio::{select, spawn};
 use tracing::{debug, error, instrument, trace, warn, Instrument as _};
 
@@ -129,20 +129,23 @@ impl<T> Clone for ConnPool<T> {
     }
 }
 
+#[instrument(level = "trace", skip(conns))]
 fn evict_conns<T>(
     cutoff: Instant,
     conns: &mut HashMap<Box<str>, std::sync::Mutex<VecDeque<PooledConn<T>>>>,
 ) {
-    conns.retain(|_, conns| {
+    conns.retain(|authority, conns| {
         let Ok(conns) = conns.get_mut() else {
             return true;
         };
         let idx = conns.partition_point(|&PooledConn { last_seen, .. }| last_seen <= cutoff);
         if idx == conns.len() {
+            trace!(authority, "evicting all connections");
             false
         } else if idx == 0 {
             true
         } else {
+            trace!(authority, idx, "partially evicting connections");
             conns.rotate_left(idx);
             conns.truncate(idx);
             true
@@ -151,6 +154,7 @@ fn evict_conns<T>(
 }
 
 impl<T> ConnPool<T> {
+    #[instrument(level = "trace", skip(self))]
     pub async fn evict(&self, timeout: Duration) {
         let Some(cutoff) = Instant::now().checked_sub(timeout) else {
             return;
@@ -168,6 +172,7 @@ impl<T> ConnPool<T> {
     }
 }
 
+#[instrument(level = "trace", skip_all)]
 async fn connect(addr: impl ToSocketAddrs) -> Result<TcpStream, types::ErrorCode> {
     match TcpStream::connect(addr).await {
         Ok(stream) => Ok(stream),
@@ -219,6 +224,7 @@ impl<T> Cacheable<T> {
 }
 
 impl<T> ConnPool<T> {
+    #[instrument(level = "trace", skip(self))]
     pub async fn connect_http(
         &self,
         authority: &str,
@@ -233,15 +239,19 @@ impl<T> ConnPool<T> {
             if let Some(conns) = http.get(authority) {
                 if let Ok(mut conns) = conns.lock() {
                     while let Some(conn) = conns.pop_front() {
+                        trace!("found cached HTTP connection");
                         if !conn.is_closed() && conn.is_ready() {
+                            trace!("returning HTTP connection cache hit");
                             return Ok(Cacheable::Hit(conn));
                         }
                     }
                 }
             }
         }
+        trace!("establishing new TCP connection...");
         let stream = connect(authority).await?;
-        let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        trace!("starting HTTP handshake...");
+        let (sender, conn) = http1::handshake(TokioIo::new(stream))
             .await
             .map_err(hyper_request_error)?;
         let tasks = Arc::clone(&self.tasks);
@@ -251,6 +261,7 @@ impl<T> ConnPool<T> {
                 Err(err) => warn!(?err, "HTTP connection closed with error"),
             }
         });
+        trace!("returning HTTP connection cache miss");
         Ok(Cacheable::Miss(PooledConn::new(sender, abort)))
     }
 
@@ -265,6 +276,7 @@ impl<T> ConnPool<T> {
     }
 
     #[cfg(not(any(target_arch = "riscv64", target_arch = "s390x")))]
+    #[instrument(level = "trace", skip(self, tls))]
     pub async fn connect_https(
         &self,
         tls: &tokio_rustls::TlsConnector,
@@ -282,13 +294,16 @@ impl<T> ConnPool<T> {
             if let Some(conns) = https.get(authority) {
                 if let Ok(mut conns) = conns.lock() {
                     while let Some(conn) = conns.pop_front() {
+                        trace!("found cached HTTPS connection");
                         if !conn.is_closed() && conn.is_ready() {
+                            trace!("returning HTTPS connection cache hit");
                             return Ok(Cacheable::Hit(conn));
                         }
                     }
                 }
             }
         }
+        trace!("establishing new TCP connection...");
         let stream = connect(authority).await?;
 
         let mut parts = authority.split(":");
@@ -299,12 +314,14 @@ impl<T> ConnPool<T> {
                 dns_error("invalid DNS name".to_string(), 0)
             })?
             .to_owned();
+        trace!("starting TLS handshake...");
         let stream = tls.connect(domain, stream).await.map_err(|err| {
             warn!(?err, "TLS protocol error");
             types::ErrorCode::TlsProtocolError
         })?;
 
-        let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        trace!("starting HTTP handshake...");
+        let (sender, conn) = http1::handshake(TokioIo::new(stream))
             .await
             .map_err(hyper_request_error)?;
         let tasks = Arc::clone(&self.tasks);
@@ -314,6 +331,7 @@ impl<T> ConnPool<T> {
                 Err(err) => warn!(?err, "HTTPS connection closed with error"),
             }
         });
+        trace!("returning HTTPS connection cache miss");
         Ok(Cacheable::Miss(PooledConn::new(sender, abort)))
     }
 }
@@ -557,6 +575,7 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
                         let err = err.into_error();
                         if let Some(req) = req {
                             if err.is_closed() && matches!(sender, Cacheable::Hit(..)) {
+                                trace!("cached connection closed, retrying with a different connection...");
                                 // retry a cached connection
                                 request = req;
                                 continue;
@@ -623,9 +642,11 @@ impl Provider for HttpClientProvider {}
 #[cfg(test)]
 mod tests {
     use core::net::{Ipv4Addr, SocketAddr};
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     use std::collections::HashMap;
 
+    use anyhow::ensure;
     use tokio::net::TcpListener;
     use tokio::try_join;
     use tracing::info;
@@ -633,7 +654,7 @@ mod tests {
 
     use super::*;
 
-    const N: usize = 10;
+    const N: usize = 20;
 
     fn new_request(addr: SocketAddr) -> http::Request<HttpBody> {
         http::Request::builder()
@@ -727,26 +748,39 @@ mod tests {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_single_conn() -> anyhow::Result<()> {
+    #[test_log(default_log_filter = "trace")]
+    async fn test_reuse_conn() -> anyhow::Result<()> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let addr = listener.local_addr()?;
+        let requests = AtomicUsize::default();
         try_join!(
             async {
-                info!("accepting stream...");
-                let (stream, _) = listener
-                    .accept()
-                    .await
-                    .context("failed to accept connection")?;
-                info!("serving connection...");
-                hyper::server::conn::http1::Builder::new()
-                    .serve_connection(
-                        TokioIo::new(stream),
-                        hyper::service::service_fn(move |_| async {
-                            anyhow::Ok(http::Response::new(http_body_util::Empty::<Bytes>::new()))
-                        }),
-                    )
-                    .await
-                    .context("failed to serve connection")
+                let mut conns: usize = 0;
+                while requests.load(Ordering::Relaxed) != N {
+                    info!("accepting stream...");
+                    let (stream, _) = listener
+                        .accept()
+                        .await
+                        .context("failed to accept connection")?;
+                    info!(i = conns, "serving connection...");
+                    hyper::server::conn::http1::Builder::new()
+                        .serve_connection(
+                            TokioIo::new(stream),
+                            hyper::service::service_fn(move |_| async {
+                                anyhow::Ok(http::Response::new(
+                                    http_body_util::Empty::<Bytes>::new(),
+                                ))
+                            }),
+                        )
+                        .await
+                        .context("failed to serve connection")?;
+                    info!(i = conns, "done serving connection");
+                    conns = conns.saturating_add(1);
+                }
+                let reqs = requests.load(Ordering::Relaxed);
+                info!(connections = conns, requests = reqs, "server finished");
+                ensure!(conns < reqs, "connections: {conns}, requests: {reqs}");
+                anyhow::Ok(())
             },
             async {
                 let link =
@@ -754,10 +788,19 @@ mod tests {
                 for i in 0..N {
                     info!(i, "sending request...");
                     let res = link
-                        .handle(None, new_request(addr), None)
+                        .handle(
+                            None,
+                            new_request(addr),
+                            Some(types::RequestOptions {
+                                connect_timeout: Some(Duration::from_secs(10).as_nanos() as _),
+                                first_byte_timeout: Some(Duration::from_secs(10).as_nanos() as _),
+                                between_bytes_timeout: Some(Duration::from_secs(10).as_nanos() as _),
+                            }),
+                        )
                         .await
                         .with_context(|| format!("failed to invoke `handle` for request {i}"))?
                         .with_context(|| format!("failed to handle request {i}"))?;
+                    requests.store(i.saturating_add(1), Ordering::Relaxed);
                     info!(i, "reading response body...");
                     let body = res
                         .collect()
@@ -899,8 +942,8 @@ mod tests {
                         .await
                         .with_context(|| format!("failed to receive body for request {i}"))?;
                     assert_eq!(body.to_bytes(), Bytes::default());
-                    // Pooled connection should be evicted after 2*IDLE_TIMEOUT
-                    sleep(IDLE_TIMEOUT.saturating_mul(2)).await;
+                    // Pooled connection should be evicted after 5*IDLE_TIMEOUT
+                    sleep(IDLE_TIMEOUT.saturating_mul(5)).await;
                 }
                 Ok(())
             }
