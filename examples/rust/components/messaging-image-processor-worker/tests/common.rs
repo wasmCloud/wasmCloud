@@ -61,7 +61,7 @@ pub struct TestEnv {
 ///
 /// - wasmCloud instance (launched with the component running)
 ///
-/// NOTE: this setup is *NOT* robust (unlike test utilities in wash-cli) -- it expects only one wasmcloud instance
+/// NOTE: this setup is *NOT* robust (unlike test utilities in wash) -- it expects only one wasmcloud instance
 /// to be running at a time.
 pub async fn setup_test_env() -> Result<TestEnv> {
     let pg_tag = std::env::var("TEST_POSTGRES_IMAGE_TAG")
