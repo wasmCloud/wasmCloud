@@ -5,7 +5,7 @@ use heck::ToKebabCase;
 #[cfg(feature = "otel")]
 pub use opentelemetry::{
     global,
-    metrics::{Counter, Histogram, Meter},
+    metrics::{Counter, Histogram, Meter, ObservableGauge},
     InstrumentationScope, KeyValue,
 };
 use wasmcloud_core::logging::Level;
