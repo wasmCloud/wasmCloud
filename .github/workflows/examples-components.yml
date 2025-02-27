@@ -30,8 +30,6 @@ on:
       - component-keyvalue-messaging-v[0-9]+.[0-9]+.[0-9]+-*
       - component-sqldb-postgres-query-v[0-9]+.[0-9]+.[0-9]+*
       - component-sqldb-postgres-query-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-sqldb-postgres-query-tinygo-v[0-9]+.[0-9]+.[0-9]+*
-      - component-sqldb-postgres-query-tinygo-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-task-manager-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-password-checker-rust-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-password-checker-rust-v[0-9]+.[0-9]+.[0-9]+-*
@@ -104,13 +102,6 @@ jobs:
             lang-version: '1.23'
             test-deploy: wadm.yaml
             wasm-bin: 'http_hello_world_s.wasm'
-
-          - folder: 'sqldb-postgres-query'
-            tag-prefix: 'component-sqldb-postgres-query-tinygo-v'
-            lang: 'tinygo'
-            lang-version: '1.23'
-            test-deploy: local.wadm.yaml
-            wasm-bin: 'sqldb_postgres_query_s.wasm'
 
           # Rust example components
           - folder: 'blobby'

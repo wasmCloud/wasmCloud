@@ -1,9 +1,0 @@
-name = "sqldb-postgres-query"
-version = "0.1.0"
-language = "tinygo"
-type = "component"
-
-[component]
-wit_world = "component"
-wasm_target = "wasm32-wasip2"
-destination = "build/sqldb_postgres_query_s.wasm"
