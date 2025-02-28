@@ -23,6 +23,7 @@ pub struct RuntimeBuilder {
     max_components: u32,
     max_component_size: u64,
     max_linear_memory: u64,
+    rpc_timeout: Duration,
     max_execution_time: Duration,
     component_config: ComponentConfig,
     force_pooling_allocator: bool,
@@ -45,6 +46,7 @@ impl RuntimeBuilder {
             // chonky. So this is pretty big for now.
             max_component_size: MAX_COMPONENT_SIZE,
             max_linear_memory: MAX_LINEAR_MEMORY,
+            rpc_timeout: Duration::from_secs(2),
             max_execution_time: Duration::from_secs(10 * 60),
             component_config: ComponentConfig::default(),
             force_pooling_allocator: false,
@@ -95,6 +97,17 @@ impl RuntimeBuilder {
     pub fn max_execution_time(self, max_execution_time: Duration) -> Self {
         Self {
             max_execution_time: max_execution_time.max(Duration::from_secs(1)),
+            ..self
+        }
+    }
+
+    /// Sets the timeout for a component invoking an RPC call. Defaults to 2 seconds.
+    /// This operates on second precision and value of 1 second is the minimum.
+    /// Any value below 1 second will be interpreted as 1 second limit.
+    #[must_use]
+    pub fn rpc_timeout(self, rpc_timeout: Duration) -> Self {
+        Self {
+            rpc_timeout: rpc_timeout.max(Duration::from_secs(1)),
             ..self
         }
     }
@@ -190,6 +203,7 @@ impl RuntimeBuilder {
             Runtime {
                 engine,
                 component_config: self.component_config,
+                rpc_timeout: self.rpc_timeout,
                 max_execution_time: self.max_execution_time,
                 experimental_features: self.experimental_features,
             },
@@ -211,6 +225,7 @@ impl TryFrom<RuntimeBuilder> for (Runtime, thread::JoinHandle<Result<(), ()>>) {
 pub struct Runtime {
     pub(crate) engine: wasmtime::Engine,
     pub(crate) component_config: ComponentConfig,
+    pub(crate) rpc_timeout: Duration,
     pub(crate) max_execution_time: Duration,
     pub(crate) experimental_features: Features,
 }
