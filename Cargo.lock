@@ -772,6 +772,7 @@ dependencies = [
  "pin-project-lite",
  "rustversion",
  "serde",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tower 0.5.2",
@@ -8296,6 +8297,7 @@ version = "1.6.2"
 dependencies = [
  "anyhow",
  "async-nats",
+ "axum",
  "base64 0.22.1",
  "bytes",
  "clap",
@@ -8596,6 +8598,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "unicase",
  "url",
  "uuid 1.14.0",
  "wasmcloud-control-interface",

@@ -9,7 +9,7 @@
 
 use core::num::NonZeroU64;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{bail, Context as _};
@@ -17,7 +17,10 @@ use bytes::Bytes;
 use redis::aio::ConnectionManager;
 use redis::{Cmd, FromRedisValue};
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
+use unicase::UniCase;
+use wasmcloud_provider_sdk::provider::WrpcClient;
 use wasmcloud_provider_sdk::{
     get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
     LinkDeleteInfo, Provider,
@@ -30,10 +33,12 @@ mod bindings {
             "wrpc:keyvalue/atomics@0.2.0-draft": generate,
             "wrpc:keyvalue/batch@0.2.0-draft": generate,
             "wrpc:keyvalue/store@0.2.0-draft": generate,
+            "wrpc:keyvalue/watcher@0.2.0-draft": generate,
         }
     });
 }
 use bindings::exports::wrpc::keyvalue;
+use wit_bindgen_wrpc::futures::StreamExt;
 
 /// Default URL to use to connect to Redis
 const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
@@ -49,6 +54,27 @@ pub enum DefaultConnection {
     Conn(ConnectionManager),
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct WatchedKeyInfo {
+    event_type: WatchEventType,
+    target: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum WatchEventType {
+    Set,
+    Delete,
+}
+/// Represents a unique identifier for a link (target_id, link_name)
+#[derive(Eq, Hash, PartialEq)]
+struct LinkId {
+    pub target_id: String,
+    pub link_name: String,
+}
+
+/// Type for storing watch tasks associated with links
+type WatchTaskMap = HashMap<LinkId, JoinHandle<()>>;
+
 /// Redis `wrpc:keyvalue` provider implementation.
 #[derive(Clone)]
 pub struct KvRedisProvider {
@@ -56,6 +82,13 @@ pub struct KvRedisProvider {
     sources: Arc<RwLock<HashMap<(String, String), ConnectionManager>>>,
     // default connection, which may be uninitialized
     default_connection: Arc<RwLock<DefaultConnection>>,
+    // Stores information about watched keys for keyspace notifications
+    // The outer HashMap uses the key as its key, and the HashSet contains
+    // WatchedKeyInfo structs for each watcher of that key, allowing multiple
+    // components to watch the same key for different event types.
+    watched_keys: Arc<RwLock<HashMap<String, HashSet<WatchedKeyInfo>>>>,
+    // Stores background tasks that handle keyspace notifications for each link
+    watch_tasks: Arc<RwLock<WatchTaskMap>>,
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -95,6 +128,8 @@ impl KvRedisProvider {
             default_connection: Arc::new(RwLock::new(DefaultConnection::ClientConfig(
                 initial_config,
             ))),
+            watched_keys: Arc::new(RwLock::new(HashMap::new())),
+            watch_tasks: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -161,6 +196,46 @@ impl KvRedisProvider {
             }
         }
     }
+}
+#[instrument(level = "info", skip(wrpc))]
+async fn invoke_on_set(wrpc: &WrpcClient, bucket: &str, key: &str, value: &Bytes) {
+    let mut cx: async_nats::HeaderMap = async_nats::HeaderMap::new();
+    for (k, v) in
+        wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector::default_with_span(
+        )
+        .iter()
+    {
+        cx.insert(k.as_str(), v.as_str())
+    }
+    match bindings::wrpc::keyvalue::watcher::on_set(wrpc, Some(cx), bucket, key, value).await {
+        Ok(_) => {
+            debug!("successfully invoked on_set");
+        }
+        Err(err) => {
+            error!(?err, "failed to invoke on_set");
+        }
+    }
+    debug!("key set");
+}
+#[instrument(level = "info", skip(wrpc))]
+async fn invoke_on_delete(wrpc: &WrpcClient, bucket: &str, key: &str) {
+    let mut cx: async_nats::HeaderMap = async_nats::HeaderMap::new();
+    for (k, v) in
+        wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector::default_with_span(
+        )
+        .iter()
+    {
+        cx.insert(k.as_str(), v.as_str())
+    }
+    match bindings::wrpc::keyvalue::watcher::on_delete(wrpc, Some(cx), bucket, key).await {
+        Ok(_) => {
+            debug!("successfully invoked on_delete");
+        }
+        Err(err) => {
+            error!(?err, "failed to invoke on_delete");
+        }
+    }
+    debug!("key deleted");
 }
 
 impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
@@ -381,6 +456,185 @@ impl Provider for KvRedisProvider {
         Ok(())
     }
 
+    async fn receive_link_config_as_source(
+        &self,
+        LinkConfig {
+            target_id,
+            config,
+            secrets,
+            link_name,
+            wit_metadata: (_, _, interfaces),
+            ..
+        }: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
+        let url = secrets
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+            .and_then(|url_key| config.get(url_key))
+            .or_else(|| {
+                warn!("Redis connection URLs can be sensitive. Consider using secrets to pass this value.");
+                config.keys()
+                    .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+                    .and_then(|url_key| config.get(url_key))
+            })
+            .map_or(DEFAULT_CONNECT_URL, |v| v);
+
+        let client = match redis::Client::open(url.to_string()) {
+            Ok(client) => {
+                info!(url, "Established link at receive_link_config_as_source");
+                client
+            }
+            Err(err) => {
+                warn!(target_id = %target_id, err = ?err, "Failed to create Redis client");
+                bail!("Failed to create Redis client");
+            }
+        };
+        let mut conn = client.get_connection_manager().await.map_err(|e| {
+            error!(err = ?e, "Failed to get async connection");
+            anyhow::anyhow!("Failed to get async connection: {}", e)
+        })?;
+
+        let component_id: Arc<str> = target_id.into();
+        let wrpc = get_connection()
+            .get_wrpc_client(&component_id)
+            .await
+            .context("failed to construct wRPC client")?;
+        if interfaces.contains(&"watcher".to_string()) {
+            let config_response: Vec<String> = redis::cmd("CONFIG")
+                .arg("GET")
+                .arg("notify-keyspace-events")
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| {
+                    error!(err = %e, "Failed to get keyspace notifications config");
+                    anyhow::anyhow!("Failed to get keyspace notifications config: {}", e)
+                })?;
+
+            let current_config = config_response.get(1).ok_or_else(|| {
+                error!("Unexpected response format from Redis CONFIG GET");
+                anyhow::anyhow!("Unexpected response format from Redis CONFIG GET")
+            })?;
+
+            if !current_config.contains('K')
+                || !current_config.contains('$')
+                || !current_config.contains('g')
+            {
+                error!(
+                    current_config = %current_config,
+                    "Redis keyspace-notifications not properly configured"
+                );
+                return Err(anyhow::anyhow!(
+                    "Redis keyspace-notifications not properly configured! \
+                        Expected 'K$g' in settings, but got '{}'. \
+                        Please run: CONFIG SET notify-keyspace-events K$g",
+                    current_config
+                ));
+            }
+
+            let wrpc = Arc::new(wrpc);
+            let wrpc_for_task = wrpc.clone();
+
+            let config_watch_entries = parse_watch_config(config, target_id);
+
+            // Update watched keys
+            let mut watched_keys = self.watched_keys.write().await;
+            for (key, key_info_set) in config_watch_entries {
+                watched_keys
+                    .entry(key)
+                    .or_insert_with(HashSet::new)
+                    .extend(key_info_set);
+            }
+
+            let client_clone = client.clone();
+            let self_clone = self.clone();
+            let mut conn_clone = conn.clone();
+            let task = tokio::spawn(async move {
+                let mut pubsub = match client_clone.get_async_pubsub().await {
+                    Ok(pubsub) => pubsub,
+                    Err(e) => {
+                        error!(err = %e, "Failed to get pubsub connection");
+                        return;
+                    }
+                };
+                let watched_keys = self_clone.watched_keys.read().await;
+                for key in watched_keys.keys() {
+                    let channel = format!("__keyspace@0__:{}", key);
+                    let _ = pubsub
+                        .psubscribe(&channel)
+                        .await
+                        .context("Failed to subscribe to SET/DEL events for key");
+                }
+                let stream = pubsub.on_message();
+                tokio::pin!(stream);
+                while let Some(msg) = stream.next().await {
+                    let channel: String = msg.get_channel_name().to_string();
+                    let event: String = match msg.get_payload() {
+                        Ok(event) => event,
+                        Err(e) => {
+                            error!(err = %e, "Failed to get payload");
+                            continue;
+                        }
+                    };
+                    // The Channel is in the format __keyspace@0__:key
+                    // While the payload is the event (ie set | del)
+                    let mkey = match channel.split(':').last() {
+                        Some(key) => key,
+                        None => {
+                            error!(channel = %channel, "Malformed Redis channel name: expected '__keyspace@0__:key' format");
+                            continue;
+                        }
+                    };
+                    // Check if the key is being watched by any component
+                    let watched_keys = self_clone.watched_keys.read().await;
+                    if let Some(key_info_set) = watched_keys.get(mkey) {
+                        if event == "set" || event == "SET" {
+                            // Perform a GET operation to retrieve the current value of the key since redis doesn't have a
+                            // native way to get the value of the key from the notification
+                            let value: wit_bindgen_wrpc::bytes::Bytes = match redis::cmd("GET")
+                                .arg(mkey)
+                                .query_async::<_, Option<Vec<u8>>>(&mut conn_clone)
+                                .await
+                            {
+                                Ok(Some(v)) => v.into(),
+                                Ok(None) => {
+                                    debug!(key = %mkey, "Key not found or was deleted");
+                                    continue;
+                                }
+                                Err(e) => {
+                                    error!(key = %mkey, err = %e, "Failed to get value for key");
+                                    continue;
+                                }
+                            };
+                            for key_info in key_info_set {
+                                if key_info.event_type == WatchEventType::Set {
+                                    invoke_on_set(&wrpc_for_task, "0", mkey, &value).await;
+                                }
+                            }
+                        } else if event == "del" || event == "DEL" {
+                            for key_info in key_info_set {
+                                if key_info.event_type == WatchEventType::Delete {
+                                    invoke_on_delete(&wrpc_for_task, "0", mkey).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            let mut tasks = self.watch_tasks.write().await;
+            tasks.insert(
+                LinkId {
+                    target_id: target_id.to_string(),
+                    link_name: link_name.to_string(),
+                },
+                task,
+            );
+        }
+        let mut sources = self.sources.write().await;
+        sources.insert((target_id.to_string(), link_name.to_string()), conn);
+
+        Ok(())
+    }
+
     /// Handle notification that a link is dropped - close the connection
     #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
     async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
@@ -391,6 +645,41 @@ impl Provider for KvRedisProvider {
         // we're dealing with one link or the other.
         aw.retain(|(src_id, _link_name), _| src_id != component_id);
         debug!(component_id, "closing all redis connections for component");
+        Ok(())
+    }
+
+    #[instrument(level = "info", skip_all, fields(target_id = info.get_target_id()))]
+    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_target_id();
+        let link_name = info.get_link_name();
+
+        let mut sources = self.sources.write().await;
+        sources.remove(&(component_id.to_string(), link_name.to_string()));
+
+        let mut watch_tasks = self.watch_tasks.write().await;
+
+        // If there's a watch task for this link, abort it and remove from map
+        if let Some(task) = watch_tasks.remove(&LinkId {
+            target_id: component_id.to_string(),
+            link_name: link_name.to_string(),
+        }) {
+            task.abort();
+            let _ = task.await;
+        }
+
+        // Clean up watched keys for this target
+        let mut watched_keys = self.watched_keys.write().await;
+        for key_watchers in watched_keys.values_mut() {
+            key_watchers.retain(|key_info| key_info.target != component_id);
+        }
+
+        // Remove any empty watch sets
+        watched_keys.retain(|_, watchers| !watchers.is_empty());
+
+        debug!(
+            component_id,
+            link_name, "cleaned up redis connection and watch tasks for link"
+        );
         Ok(())
     }
 
@@ -423,6 +712,80 @@ pub fn retrieve_default_url(config: &HashMap<String, String>) -> String {
         DEFAULT_CONNECT_URL.to_string()
     }
 }
+/// Parse watch configuration from the link configuration and return watch entries
+///
+/// Watch configuration is expected in the format "SET@key,DEL@key" where:
+/// - SET: Watch for set operations on the specified key
+/// - DEL: Watch for delete operations on the specified key
+///
+/// Returns a map of keys to sets of WatchedKeyInfo indicating which operations to watch for each key
+#[instrument(level = "debug", skip(config))]
+fn parse_watch_config(
+    config: &HashMap<String, String>,
+    target_id: &str,
+) -> HashMap<String, HashSet<WatchedKeyInfo>> {
+    let mut watched_keys = HashMap::new();
+
+    // Convert config keys to case-insensitive map
+    let config_map: HashMap<UniCase<&str>, &String> = config
+        .iter()
+        .map(|(k, v)| (UniCase::new(k.as_str()), v))
+        .collect();
+
+    // Look for watch configuration in the format "watch: SET@key,DEL@key"
+    if let Some(watch_config) = config_map.get(&UniCase::new("watch")) {
+        for watch_entry in watch_config.split(',') {
+            let watch_entry = watch_entry.trim();
+            if watch_entry.is_empty() {
+                continue;
+            }
+
+            let parts: Vec<&str> = watch_entry.split('@').collect();
+            if parts.len() != 2 {
+                error!(watch_entry = %watch_entry, "Invalid watch entry format. Expected FORMAT@KEY");
+                continue;
+            }
+
+            let operation = parts[0].trim().to_uppercase();
+            let key_value = parts[1].trim();
+
+            if key_value.contains(':') {
+                error!(key = %key_value, "Invalid SET watch format. SET expects only KEY");
+                continue;
+            }
+            if key_value.is_empty() {
+                error!(watch_entry = %watch_entry, "Invalid watch entry: Missing key.");
+                continue;
+            }
+
+            match operation.as_str() {
+                "SET" => {
+                    watched_keys
+                        .entry(key_value.to_string())
+                        .or_insert_with(HashSet::new)
+                        .insert(WatchedKeyInfo {
+                            event_type: WatchEventType::Set,
+                            target: target_id.to_string(),
+                        });
+                }
+                "DEL" => {
+                    watched_keys
+                        .entry(key_value.to_string())
+                        .or_insert_with(HashSet::new)
+                        .insert(WatchedKeyInfo {
+                            event_type: WatchEventType::Delete,
+                            target: target_id.to_string(),
+                        });
+                }
+                _ => {
+                    error!(operation = %operation, "Unsupported watch operation. Expected SET or DEL");
+                }
+            }
+        }
+    }
+
+    watched_keys
+}
 
 /// Check for unsupported bucket names,
 /// primarily warning on non-empty bucket names, since this provider does not yet properly support named buckets
@@ -434,6 +797,7 @@ fn check_bucket_name(bucket: &str) {
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use std::collections::HashMap;
 
     use crate::retrieve_default_url;
@@ -449,5 +813,102 @@ mod test {
         assert_eq!(PROPER_URL, retrieve_default_url(&lowercase_config));
         assert_eq!(PROPER_URL, retrieve_default_url(&uppercase_config));
         assert_eq!(PROPER_URL, retrieve_default_url(&initial_caps_config));
+    }
+
+    #[test]
+    fn test_parse_watch_config_valid_entries() {
+        let mut config = HashMap::new();
+        config.insert(
+            "watch".to_string(),
+            "SET@key1,DEL@key2,SET@key2".to_string(),
+        );
+        let target_id = "target_1";
+
+        let result = parse_watch_config(&config, target_id);
+
+        assert_eq!(result.len(), 2);
+        assert!(result.contains_key("key1"));
+        assert!(result.contains_key("key2"));
+
+        assert!(result["key1"].contains(&WatchedKeyInfo {
+            event_type: WatchEventType::Set,
+            target: target_id.to_string()
+        }));
+        assert!(result["key2"].contains(&WatchedKeyInfo {
+            event_type: WatchEventType::Delete,
+            target: target_id.to_string()
+        }));
+        assert!(result["key2"].contains(&WatchedKeyInfo {
+            event_type: WatchEventType::Set,
+            target: target_id.to_string()
+        }));
+    }
+
+    #[test]
+    fn test_parse_watch_config_invalid_entries() {
+        let mut config = HashMap::new();
+        config.insert(
+            "watch".to_string(),
+            "INVALID@key1,SET@key2,DEL@key3,SET@key4:extra".to_string(),
+        );
+        let target_id = "target_2";
+
+        let result = parse_watch_config(&config, target_id);
+
+        assert_eq!(result.len(), 2);
+        assert!(result.contains_key("key2"));
+        assert!(result.contains_key("key3"));
+
+        assert!(result["key2"].contains(&WatchedKeyInfo {
+            event_type: WatchEventType::Set,
+            target: target_id.to_string()
+        }));
+        assert!(result["key3"].contains(&WatchedKeyInfo {
+            event_type: WatchEventType::Delete,
+            target: target_id.to_string()
+        }));
+    }
+
+    #[test]
+    fn test_parse_watch_config_empty_or_malformed() {
+        let mut config = HashMap::new();
+        config.insert("watch".to_string(), "SET@,DEL@ , @key5".to_string());
+        let target_id = "target_3";
+
+        let result = parse_watch_config(&config, target_id);
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_watch_config_case_insensitivity() {
+        let mut config = HashMap::new();
+        config.insert("WATCH".to_string(), "set@key1,del@key2".to_string());
+        let target_id = "target_4";
+
+        let result = parse_watch_config(&config, target_id);
+
+        assert_eq!(result.len(), 2);
+        assert!(result.contains_key("key1"));
+        assert!(result.contains_key("key2"));
+
+        assert!(result["key1"].contains(&WatchedKeyInfo {
+            event_type: WatchEventType::Set,
+            target: target_id.to_string()
+        }));
+        assert!(result["key2"].contains(&WatchedKeyInfo {
+            event_type: WatchEventType::Delete,
+            target: target_id.to_string()
+        }));
+    }
+
+    #[test]
+    fn test_parse_watch_config_no_watch_key() {
+        let config = HashMap::new();
+        let target_id = "target_5";
+
+        let result = parse_watch_config(&config, target_id);
+
+        assert!(result.is_empty());
     }
 }

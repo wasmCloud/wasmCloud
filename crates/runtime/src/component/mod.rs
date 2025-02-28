@@ -62,6 +62,8 @@ pub enum ReplacedInstanceTarget {
     KeyvalueStore,
     /// `wasi:keyvalue/batch` instance replacement
     KeyvalueBatch,
+    /// `wasi:keyvalue/watch` instance replacment
+    KeyvalueWatch,
     /// `wasi:http/incoming-handler` instance replacement
     HttpIncomingHandler,
     /// `wasi:http/outgoing-handler` instance replacement
@@ -511,6 +513,18 @@ where
                         .await
                         .context("failed to serve `wasmcloud:messaging/handler`")?;
                     invocations.push(handle_message);
+                }
+                (
+                    "wasi:keyvalue/watcher@0.2.0-draft",
+                    types::ComponentItem::ComponentInstance(..),
+                ) => {
+                    let instance = instance.clone();
+                    let [(_, _, on_set), (_, _, on_delete)] =
+                        wrpc::exports::wrpc::keyvalue::watcher::serve_interface(srv, instance)
+                            .await
+                            .context("failed to serve `wrpc:keyvalue/watcher`")?;
+                    invocations.push(on_set);
+                    invocations.push(on_delete);
                 }
                 (name, types::ComponentItem::ComponentFunc(ty)) => {
                     let engine = self.engine.clone();
