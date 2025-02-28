@@ -19,7 +19,7 @@ use wasmtime::component::{types, Linker, ResourceTable, ResourceTableError};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 use wasmtime_wasi_http::WasiHttpCtx;
 use wrpc_runtime_wasmtime::{
-    collect_component_resources, link_item, ServeExt as _, SharedResourceTable, WrpcView,
+    collect_component_resources, ServeExt as _, SharedResourceTable, WrpcView,
 };
 
 use crate::capability::{self, wrpc};
@@ -391,7 +391,7 @@ where
                     Some(version),
                 )) if is_0_2(version, 0) => {}
                 _ if rt.skip_feature_gated_instance(name) => {}
-                _ => link_item(&engine, &mut linker.root(), [], ty, "", name, None)
+                _ => crate::runtime::link_item(&engine, &mut linker.root(), [], ty, "", name, None)
                     .context("failed to link item")?,
             };
         }
@@ -527,11 +527,11 @@ where
                             move || {
                                 let span = info_span!("call_instance_function");
                                 let mut store = new_store(
-&engine,
-handler.clone(),
+                                    &engine,
+                                    handler.clone(),
                                     rpc_timeout,
-max_execution_time,
-);
+                                    max_execution_time,
+                                );
                                 store.data_mut().parent_context = Some(span.context());
                                 store
                             },
