@@ -1,2 +1,3 @@
 [overrides]
 "test-components:testing" = { path = "../../wit/testing" }
+"wasmcloud:bus" = { path = "../../../../wit/bus/wit" }
