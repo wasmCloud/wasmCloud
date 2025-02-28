@@ -69,3 +69,7 @@ jobs:
     - name: Teardown cluster
       if: ${{ always() }}
       run: ./ci/delete-cluster.sh
+      env:
+        OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CREDENTIALS_KEY }}
+        OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CREDENTIALS_FINGERPRINT }}
+        OCI_CLI_USER: ${{ secrets.OCI_USER_ID }}
