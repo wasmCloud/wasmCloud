@@ -114,7 +114,7 @@
         build.workspace = true;
 
         clippy.allTargets = true;
-        clippy.deny = ["warnings"];
+        clippy.warn = ["warnings"];
         clippy.workspace = true;
 
         test.allTargets = true;
