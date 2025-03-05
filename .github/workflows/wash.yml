@@ -13,8 +13,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  GO_VERSION: "1.23"
-  TINYGO_VERSION: "0.34.0"
+  GO_VERSION: '1.23'
+  TINYGO_VERSION: '0.34.0'
 
 permissions:
   contents: read
@@ -59,12 +59,12 @@ jobs:
     steps:
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
         with:
-          node-version: "18.x"
+          node-version: '18.x'
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - run: rustup show
       - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
         with:
-          shared-key: "${{ matrix.os }}-shared-cache"
+          shared-key: '${{ matrix.os }}-shared-cache'
       - name: Install nextest
         uses: taiki-e/install-action@2c3c8dfabf5933531aca0613c6b0c173fa51745e
         with:
@@ -75,7 +75,7 @@ jobs:
       - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
         with:
           tinygo-version: ${{ env.TINYGO_VERSION }}
-          install-binaryen: "false"
+          install-binaryen: 'false'
 
       # Run builds and tests only on Linux and macOS for PRs, Windows on `main`
       - name: Build wash
@@ -95,21 +95,24 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # Free disk space
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
       - run: rustup show
       - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
         with:
-          shared-key: "ubuntu-22.04-shared-cache"
+          shared-key: 'ubuntu-22.04-shared-cache'
       - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a
         with:
           go-version: ${{ env.GO_VERSION }}
       - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
         with:
           tinygo-version: ${{ env.TINYGO_VERSION }}
-          install-binaryen: "false"
+          install-binaryen: 'false'
       - name: Launch integration test services
         uses: sudo-bot/action-docker-compose@ef4c4da08a9673f93d4eb8a5da1e942bf24a37ea
         with:
-          cli-args: "-f ./crates/wash/tools/docker-compose.yml up --detach"
+          cli-args: '-f ./crates/wash/tools/docker-compose.yml up --detach'
       - name: Install nextest
         uses: taiki-e/install-action@2c3c8dfabf5933531aca0613c6b0c173fa51745e
         with:
@@ -134,13 +137,13 @@ jobs:
             lang: rust
           - name: hello-world-tinygo
             lang: tinygo
-            lang-version: "1.23"
+            lang-version: '1.23'
           - name: hello-world-typescript
             lang: typescript
-            lang-version: "22.x"
+            lang-version: '22.x'
           - name: hello-world-python
             lang: python
-            lang-version: "3.10"
+            lang-version: '3.10'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
@@ -156,7 +159,7 @@ jobs:
       - run: rustup show
       - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
         with:
-          shared-key: "ubuntu-22.04-shared-cache"
+          shared-key: 'ubuntu-22.04-shared-cache'
 
       - name: Ensure `wash new` works
         run: wash new component ${{ matrix.template.name }} --template-name ${{ matrix.template.name }}
