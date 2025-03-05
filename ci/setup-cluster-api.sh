@@ -19,3 +19,6 @@ export OCI_CREDENTIALS_KEY_B64="$(echo -n "$OCI_CREDENTIALS_KEY" | base64 | tr -
 export EXP_MACHINE_POOL=true
 
 clusterctl init --infrastructure oci:v0.16.0
+
+echo "Waiting for Cluster API to be ready"
+kubectl -n cluster-api-provider-oci-system wait --timeout=10m --for='jsonpath={.status.conditions[?(@.type=="Ready")].status}=True' --all pods

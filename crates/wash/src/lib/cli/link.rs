@@ -108,8 +108,8 @@ pub enum LinkCommand {
 /// # Examples
 ///
 /// ```no_run
-/// # use crate::lib::cli::link::get_links;
-/// use crate::lib::config::WashConnectionOptions;
+/// # use wash::lib::cli::link::get_links;
+/// use wash::lib::config::WashConnectionOptions;
 /// # async fn doc() -> anyhow::Result<()> {
 /// let links = get_links(WashConnectionOptions::default()).await?;
 /// println!("{links:?}");
@@ -138,8 +138,8 @@ pub async fn get_links(wco: WashConnectionOptions) -> Result<Vec<Link>> {
 /// # Examples
 ///
 /// ```no_run
-/// # use crate::lib::cli::link::delete_link;
-/// use crate::lib::config::WashConnectionOptions;
+/// # use wash::lib::cli::link::delete_link;
+/// use wash::lib::config::WashConnectionOptions;
 /// # async fn doc() -> anyhow::Result<()> {
 /// let ack = delete_link(
 ///   WashConnectionOptions::default(),
@@ -181,8 +181,8 @@ pub async fn delete_link(
 /// # Examples
 ///
 /// ```no_run
-/// # use crate::lib::cli::link::put_link;
-/// use crate::lib::config::WashConnectionOptions;
+/// # use wash::lib::cli::link::put_link;
+/// use wash::lib::config::WashConnectionOptions;
 /// use wasmcloud_control_interface::Link;
 /// # async fn doc() -> anyhow::Result<()> {
 /// let ack = put_link(

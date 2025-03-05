@@ -1,0 +1,119 @@
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+  name: "${CLUSTER_NAME}"
+  namespace: "${NAMESPACE}"
+spec:
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+    kind: OCIManagedCluster
+    name: "${CLUSTER_NAME}"
+    namespace: "${NAMESPACE}"
+  controlPlaneRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+    kind: OCIManagedControlPlane
+    name: "${CLUSTER_NAME}"
+    namespace: "${NAMESPACE}"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: OCIManagedCluster
+metadata:
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+  name: "${CLUSTER_NAME}"
+spec:
+  compartmentId: "${OCI_COMPARTMENT_ID}"
+---
+kind: OCIManagedControlPlane
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+metadata:
+  name: "${CLUSTER_NAME}"
+  namespace: "${NAMESPACE}"
+spec:
+  version: "${KUBERNETES_VERSION}"
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachinePool
+metadata:
+  name: default-pool
+  namespace: "${NAMESPACE}"
+  annotations:
+    "cluster.x-k8s.io/replicas-managed-by": ""
+spec:
+  clusterName: ${CLUSTER_NAME}
+  replicas: 3
+  template:
+    spec:
+      clusterName: ${CLUSTER_NAME}
+      bootstrap:
+        dataSecretName: ""
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+        kind: OCIManagedMachinePool
+        name: default-node-pool
+      version: ${KUBERNETES_VERSION}
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachinePool
+metadata:
+  name: wasmcloud-pool
+  namespace: "${NAMESPACE}"
+  annotations:
+    "cluster.x-k8s.io/replicas-managed-by": ""
+spec:
+  clusterName: ${CLUSTER_NAME}
+  replicas: 45
+  template:
+    spec:
+      clusterName: ${CLUSTER_NAME}
+      bootstrap:
+        dataSecretName: ""
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+        kind: OCIManagedMachinePool
+        name: wasmcloud-pool
+      version: ${KUBERNETES_VERSION}
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachinePool
+metadata:
+  name: k6-pool
+  namespace: "${NAMESPACE}"
+  annotations:
+    "cluster.x-k8s.io/replicas-managed-by": ""
+spec:
+  clusterName: ${CLUSTER_NAME}
+  replicas: 45
+  template:
+    spec:
+      clusterName: ${CLUSTER_NAME}
+      bootstrap:
+        dataSecretName: ""
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+        kind: OCIManagedMachinePool
+        name: k6-pool
+      version: ${KUBERNETES_VERSION}
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachinePool
+metadata:
+  name: nats-pool
+  namespace: "${NAMESPACE}"
+  annotations:
+    "cluster.x-k8s.io/replicas-managed-by": ""
+spec:
+  clusterName: ${CLUSTER_NAME}
+  replicas: 3
+  template:
+    spec:
+      clusterName: ${CLUSTER_NAME}
+      bootstrap:
+        dataSecretName: ""
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+        kind: OCIManagedMachinePool
+        name: nats-pool
+      version: ${KUBERNETES_VERSION}
