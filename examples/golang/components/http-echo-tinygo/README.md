@@ -107,7 +107,7 @@ go test -tags e2e
 > Note that the tests use `go`, _not_ `tinygo`, and require `wash` to be installed
 
 [wasmcloud]: https://github.com/wasmCloud/wasmCloud
-[wash]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/wash-cli
+[wash]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/wash
 [go]: https://go.dev
 [tinygo]: https://tinygo.org
 [tinygo-toolchain]: https://tinygo.org/getting-started/install/

@@ -10,8 +10,7 @@ on:
         description: crate to smart-release
         options:
           - wascap
-          - wash-cli
-          - wash-lib
+          - wash
           - wasmcloud
           - wasmcloud-component
           - wasmcloud-control-interface
@@ -917,19 +916,19 @@ jobs:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: wash-aarch64-unknown-linux-musl
-          path: ./crates/wash-cli/aarch64
+          path: ./crates/wash/aarch64
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: wash-x86_64-unknown-linux-musl
-          path: ./crates/wash-cli/x86_64
+          path: ./crates/wash/x86_64
       - name: Make wash executable
-        working-directory: ./crates/wash-cli
+        working-directory: ./crates/wash
         run: |
           chmod +x ./aarch64/bin/wash
           chmod +x ./x86_64/bin/wash
 
       - name: Build `deb` and `rpm`
-        working-directory: ./crates/wash-cli
+        working-directory: ./crates/wash
         run: |
           export VERSION=$(echo $REF| cut -d- -f3 | tr -d "v")
           nfpm pkg --packager deb -f build/nfpm.amd64.yaml
@@ -937,7 +936,7 @@ jobs:
           nfpm pkg --packager rpm -f build/nfpm.amd64.yaml
           nfpm pkg --packager rpm -f build/nfpm.arm64.yaml
       - name: Push `deb`
-        working-directory: ./crates/wash-cli
+        working-directory: ./crates/wash
         run: |
           debs=(35 203 206 207 210 215 219 220 221 233 235 237 261 266 278 284)
           for distro_version in "${debs[@]}"; do
@@ -945,7 +944,7 @@ jobs:
             curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash_*_arm64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
           done
       - name: Push `rpm`
-        working-directory: ./crates/wash-cli
+        working-directory: ./crates/wash
         run: |
           rpms=(194 204 209 216 226 231 236 239 240 244 260 273 279 283 302)
           for distro_version in "${rpms[@]}"; do
@@ -1000,10 +999,7 @@ jobs:
 
           - crate: wascap
 
-          - crate: wash-cli
-            workspace-dependencies: true
-
-          - crate: wash-lib
+          - crate: wash
             workspace-dependencies: true
 
     name: publish ${{ matrix.crate }} to crates.io

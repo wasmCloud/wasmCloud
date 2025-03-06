@@ -3,9 +3,9 @@
 This guide should serve as a runbook for maintainers who are preparing to release new patches or
 features to existing crates in this repo.
 
-This monorepo has two primary output binaries: `wasmcloud` and `wash-cli`. Both of these binaries
+This monorepo has two primary output binaries: `wasmcloud` and `wash`. Both of these binaries
 share common dependencies in libraries, located under `crates/`. When releasing new versions of
-`wasmcloud` and `wash-cli`, it can be difficult to look back at the changes in the repository to
+`wasmcloud` and `wash`, it can be difficult to look back at the changes in the repository to
 know exactly when to patch or minor bump a crate (major bumps will likely be rejected at PR unless
 we're prepared to update a crate with a major bump) and in what order to release new versions of
 crates. We use the tool [cargo smart-release](https://github.com/Byron/cargo-smart-release) to
@@ -49,9 +49,9 @@ full changelog.
    release
 7. Watch for your crates to release and tags to create
 
-## Releasing `wash-cli`
+## Releasing `wash`
 
-1. Follow the steps above to release the `wash-cli` crate
+1. Follow the steps above to release the `wash` crate
 2. Approve the PR in the [homebrew](https://github.com/wasmCloud/homebrew-wasmcloud) repository.
    This might require signing off the commit in order to kick off the release actions. Then, attach
    the `pr-pull` label to trigger the homebrew release (this will end with the PR being merged to
