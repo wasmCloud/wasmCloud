@@ -7,10 +7,6 @@
 )]
 #![allow(clippy::module_name_repetitions)]
 
-// // Re-export commonly used types
-// pub use errors::Error;
-// pub type Result<T> = std::result::Result<T, Error>;
-
 // Library modules (from wash-lib)
 pub mod lib {
     pub mod app;
@@ -36,9 +32,6 @@ pub mod lib {
 
 // CLI modules
 pub mod cli;
-
-// Root level modules
-// pub mod errors;
 
 // Re-exports for backward compatibility
 pub use cli::*;

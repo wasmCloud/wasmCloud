@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::HashMap;
 
 use anyhow::{bail, Context, Result};
 use docker_credential::{get_credential, DockerCredential};
@@ -125,7 +125,7 @@ pub async fn registry_push(
         artifact_url.clone(),
         cmd.artifact,
         OciPushOptions {
-            config: cmd.config.map(PathBuf::from),
+            config: cmd.config,
             allow_latest: cmd.allow_latest,
             user: credentials.username().map(String::from),
             password: credentials.password().map(String::from),
@@ -219,9 +219,9 @@ async fn resolve_registry_credentials(registry: &str) -> Result<RegistryCredenti
 
 #[cfg(test)]
 mod tests {
+    use crate::lib::cli::registry::{RegistryCommand, RegistryPullCommand};
     use anyhow::{ensure, Context as _, Result};
     use clap::Parser;
-    use crate::lib::cli::registry::{RegistryCommand, RegistryPullCommand};
 
     use crate::common::registry_cmd::RegistryPushCommand;
 

@@ -81,125 +81,125 @@ jobs:
           - current
         project:
           # Golang example components
-          - folder: "http-client-tinygo"
-            tag-prefix: "component-http-client-tinygo-v"
-            lang: "tinygo"
-            lang-version: "1.23"
+          - folder: 'http-client-tinygo'
+            tag-prefix: 'component-http-client-tinygo-v'
+            lang: 'tinygo'
+            lang-version: '1.23'
             test-deploy: wadm.yaml
-            wasm-bin: "http_client_tinygo_s.wasm"
+            wasm-bin: 'http_client_tinygo_s.wasm'
 
-          - folder: "http-echo-tinygo"
-            tag-prefix: "component-http-echo-tinygo-v"
-            lang: "tinygo"
-            lang-version: "1.23"
+          - folder: 'http-echo-tinygo'
+            tag-prefix: 'component-http-echo-tinygo-v'
+            lang: 'tinygo'
+            lang-version: '1.23'
             test-deploy: wadm.yaml
-            wasm-bin: "http-echo-tinygo-component_s.wasm"
+            wasm-bin: 'http-echo-tinygo-component_s.wasm'
 
-          - folder: "http-hello-world"
-            tag-prefix: "component-http-hello-world-tinygo-v"
-            lang: "tinygo"
-            lang-version: "1.23"
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-tinygo-v'
+            lang: 'tinygo'
+            lang-version: '1.23'
             test-deploy: wadm.yaml
-            wasm-bin: "http_hello_world_s.wasm"
+            wasm-bin: 'http_hello_world_s.wasm'
 
           # Rust example components
-          - folder: "blobby"
-            tag-prefix: "component-blobby-v"
-            lang: "rust"
-            wasm-bin: "blobby_s.wasm"
+          - folder: 'blobby'
+            tag-prefix: 'component-blobby-v'
+            lang: 'rust'
+            wasm-bin: 'blobby_s.wasm'
 
-          - folder: "dog-fetcher"
-            tag-prefix: "component-dog-fetcher-v"
-            lang: "rust"
-            wasm-bin: "dog_fetcher_s.wasm"
+          - folder: 'dog-fetcher'
+            tag-prefix: 'component-dog-fetcher-v'
+            lang: 'rust'
+            wasm-bin: 'dog_fetcher_s.wasm'
             test-deploy: local.wadm.yaml
 
-          - folder: "echo-messaging"
-            tag-prefix: "component-echo-messaging-v"
-            lang: "rust"
-            wasm-bin: "echo_messaging_s.wasm"
+          - folder: 'echo-messaging'
+            tag-prefix: 'component-echo-messaging-v'
+            lang: 'rust'
+            wasm-bin: 'echo_messaging_s.wasm'
             test-deploy: local.wadm.yaml
 
-          - folder: "ferris-says"
-            tag-prefix: "component-ferris-says-v"
-            lang: "rust"
-            wasm-bin: "ferris_says_s.wasm"
+          - folder: 'ferris-says'
+            tag-prefix: 'component-ferris-says-v'
+            lang: 'rust'
+            wasm-bin: 'ferris_says_s.wasm'
             test-deploy: local.wadm.yaml
 
-          - folder: "http-blobstore"
-            tag-prefix: "component-http-blobstore-v"
-            lang: "rust"
-            wasm-bin: "http_blobstore_s.wasm"
+          - folder: 'http-blobstore'
+            tag-prefix: 'component-http-blobstore-v'
+            lang: 'rust'
+            wasm-bin: 'http_blobstore_s.wasm'
             test-deploy: local.wadm.yaml
 
-          - folder: "http-hello-world"
-            tag-prefix: "component-http-hello-world-v"
-            lang: "rust"
-            wasm-bin: "http_hello_world_s.wasm"
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-v'
+            lang: 'rust'
+            wasm-bin: 'http_hello_world_s.wasm'
             test-deploy: local.wadm.yaml
 
-          - folder: "http-jsonify"
-            tag-prefix: "component-http-jsonify-v"
-            lang: "rust"
-            wasm-bin: "http_jsonify_s.wasm"
+          - folder: 'http-jsonify'
+            tag-prefix: 'component-http-jsonify-v'
+            lang: 'rust'
+            wasm-bin: 'http_jsonify_s.wasm'
             test-deploy: local.wadm.yaml
 
-          - folder: "http-keyvalue-counter"
-            tag-prefix: "component-http-keyvalue-counter-v"
-            lang: "rust"
-            wasm-bin: "http_keyvalue_counter_s.wasm"
+          - folder: 'http-keyvalue-counter'
+            tag-prefix: 'component-http-keyvalue-counter-v'
+            lang: 'rust'
+            wasm-bin: 'http_keyvalue_counter_s.wasm'
             test-deploy: local.wadm.yaml
 
-          - folder: "keyvalue-messaging"
-            tag-prefix: "component-keyvalue-messaging-v"
-            lang: "rust"
-            wasm-bin: "keyvalue_messaging_s.wasm"
+          - folder: 'keyvalue-messaging'
+            tag-prefix: 'component-keyvalue-messaging-v'
+            lang: 'rust'
+            wasm-bin: 'keyvalue_messaging_s.wasm'
             test-deploy: local.wadm.yaml
 
-          - folder: "sqldb-postgres-query"
-            tag-prefix: "component-sqldb-postgres-query-v"
-            lang: "rust"
-            wasm-bin: "sqldb_postgres_query_s.wasm"
+          - folder: 'sqldb-postgres-query'
+            tag-prefix: 'component-sqldb-postgres-query-v'
+            lang: 'rust'
+            wasm-bin: 'sqldb_postgres_query_s.wasm'
             test-deploy: local.wadm.yaml
 
-          - folder: "http-task-manager"
-            tag-prefix: "component-http-task-manager-v"
-            lang: "rust"
-            wasm-bin: "http_task_manager_s.wasm"
+          - folder: 'http-task-manager'
+            tag-prefix: 'component-http-task-manager-v'
+            lang: 'rust'
+            wasm-bin: 'http_task_manager_s.wasm'
             test-deploy: local.wadm.yaml
 
-          - folder: "http-password-checker"
-            tag-prefix: "component-http-password-checker-rust-v"
-            lang: "rust"
-            wasm-bin: "http_password_checker_s.wasm"
+          - folder: 'http-password-checker'
+            tag-prefix: 'component-http-password-checker-rust-v'
+            lang: 'rust'
+            wasm-bin: 'http_password_checker_s.wasm'
             test-deploy: local.wadm.yaml
 
-          - folder: "messaging-image-processor-worker"
-            tag-prefix: "component-messaging-image-processor-worker-rust-v"
-            lang: "rust"
-            wasm-bin: "messaging_image_processor_worker_s.wasm"
+          - folder: 'messaging-image-processor-worker'
+            tag-prefix: 'component-messaging-image-processor-worker-rust-v'
+            lang: 'rust'
+            wasm-bin: 'messaging_image_processor_worker_s.wasm'
             test-deploy: local.wadm.yaml
 
           # Python example components
-          - folder: "http-hello-world"
-            tag-prefix: "component-http-hello-world-python-v"
-            lang: "python"
-            wasm-bin: "http_hello_world_s.wasm"
-            lang-version: "3.10"
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-python-v'
+            lang: 'python'
+            wasm-bin: 'http_hello_world_s.wasm'
+            lang-version: '3.10'
 
           # Typescript example components
-          - folder: "http-hello-world"
-            tag-prefix: "component-http-hello-world-typescript-v"
-            lang: "typescript"
-            lang-version: "20.x"
-            wasm-bin: "http_hello_world_s.wasm"
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-typescript-v'
+            lang: 'typescript'
+            lang-version: '20.x'
+            wasm-bin: 'http_hello_world_s.wasm'
             test_deploy: local.wadm.yaml
 
-          - folder: "http-password-checker"
-            tag-prefix: "component-http-password-checker-typescript-v"
-            lang: "typescript"
-            lang-version: "22.x"
-            wasm-bin: "http_password_checker_s.wasm"
+          - folder: 'http-password-checker'
+            tag-prefix: 'component-http-password-checker-typescript-v'
+            lang: 'typescript'
+            lang-version: '22.x'
+            wasm-bin: 'http_password_checker_s.wasm'
             test_deploy: local.wadm.yaml
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -277,87 +277,87 @@ jobs:
           - current
         project:
           # Go example components (to publish)
-          - folder: "http-echo-tinygo"
-            tag-prefix: "component-http-echo-tinygo-v"
-            lang: "tinygo"
-            wasm-bin: "http-echo-tinygo-component_s.wasm"
+          - folder: 'http-echo-tinygo'
+            tag-prefix: 'component-http-echo-tinygo-v'
+            lang: 'tinygo'
+            wasm-bin: 'http-echo-tinygo-component_s.wasm'
 
-          - folder: "http-hello-world"
-            tag-prefix: "component-http-hello-world-tinygo-v"
-            lang: "tinygo"
-            wasm-bin: "http_hello_world_s.wasm"
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-tinygo-v'
+            lang: 'tinygo'
+            wasm-bin: 'http_hello_world_s.wasm'
 
           # Rust example components (to publish)
-          - folder: "blobby"
-            tag-prefix: "component-blobby-v"
-            lang: "rust"
-            wasm-bin: "blobby_s.wasm"
+          - folder: 'blobby'
+            tag-prefix: 'component-blobby-v'
+            lang: 'rust'
+            wasm-bin: 'blobby_s.wasm'
 
-          - folder: "dog-fetcher"
-            tag-prefix: "component-dog-fetcher-v"
-            lang: "rust"
-            wasm-bin: "dog_fetcher_s.wasm"
+          - folder: 'dog-fetcher'
+            tag-prefix: 'component-dog-fetcher-v'
+            lang: 'rust'
+            wasm-bin: 'dog_fetcher_s.wasm'
 
-          - folder: "echo-messaging"
-            tag-prefix: "component-echo-messaging-v"
-            lang: "rust"
-            wasm-bin: "echo_messaging_s.wasm"
+          - folder: 'echo-messaging'
+            tag-prefix: 'component-echo-messaging-v'
+            lang: 'rust'
+            wasm-bin: 'echo_messaging_s.wasm'
 
-          - folder: "ferris-says"
-            tag-prefix: "component-ferris-says-v"
-            lang: "rust"
-            wasm-bin: "ferris_says_s.wasm"
+          - folder: 'ferris-says'
+            tag-prefix: 'component-ferris-says-v'
+            lang: 'rust'
+            wasm-bin: 'ferris_says_s.wasm'
 
-          - folder: "http-blobstore"
-            tag-prefix: "component-http-blobstore-v"
-            lang: "rust"
-            wasm-bin: "http_blobstore_s.wasm"
+          - folder: 'http-blobstore'
+            tag-prefix: 'component-http-blobstore-v'
+            lang: 'rust'
+            wasm-bin: 'http_blobstore_s.wasm'
 
-          - folder: "http-hello-world"
-            tag-prefix: "component-http-hello-world-v"
-            lang: "rust"
-            wasm-bin: "http_hello_world_s.wasm"
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-v'
+            lang: 'rust'
+            wasm-bin: 'http_hello_world_s.wasm'
 
-          - folder: "http-jsonify"
-            tag-prefix: "component-http-jsonify-v"
-            lang: "rust"
-            wasm-bin: "http_jsonify_s.wasm"
+          - folder: 'http-jsonify'
+            tag-prefix: 'component-http-jsonify-v'
+            lang: 'rust'
+            wasm-bin: 'http_jsonify_s.wasm'
 
-          - folder: "http-keyvalue-counter"
-            tag-prefix: "component-keyvalue-counter-v"
-            lang: "rust"
-            wasm-bin: "http_keyvalue_counter_s.wasm"
+          - folder: 'http-keyvalue-counter'
+            tag-prefix: 'component-keyvalue-counter-v'
+            lang: 'rust'
+            wasm-bin: 'http_keyvalue_counter_s.wasm'
 
-          - folder: "keyvalue-messaging"
-            tag-prefix: "component-keyvalue-messaging-v"
-            lang: "rust"
-            wasm-bin: "keyvalue_messaging_s.wasm"
+          - folder: 'keyvalue-messaging'
+            tag-prefix: 'component-keyvalue-messaging-v'
+            lang: 'rust'
+            wasm-bin: 'keyvalue_messaging_s.wasm'
 
-          - folder: "sqldb-postgres-query"
-            tag-prefix: "component-sqldb-postgres-query-v"
-            lang: "rust"
-            wasm-bin: "sqldb_postgres_query_s.wasm"
+          - folder: 'sqldb-postgres-query'
+            tag-prefix: 'component-sqldb-postgres-query-v'
+            lang: 'rust'
+            wasm-bin: 'sqldb_postgres_query_s.wasm'
 
-          - folder: "http-task-manager"
-            tag-prefix: "component-http-task-manager-v"
-            lang: "rust"
-            wasm-bin: "http_task_manager_s.wasm"
+          - folder: 'http-task-manager'
+            tag-prefix: 'component-http-task-manager-v'
+            lang: 'rust'
+            wasm-bin: 'http_task_manager_s.wasm'
 
-          - folder: "http-password-checker"
-            tag-prefix: "component-http-password-checker-rust-v"
-            lang: "rust"
-            wasm-bin: "http_password_checker_s.wasm"
+          - folder: 'http-password-checker'
+            tag-prefix: 'component-http-password-checker-rust-v'
+            lang: 'rust'
+            wasm-bin: 'http_password_checker_s.wasm'
 
-          - folder: "messaging-image-processor-worker"
-            tag-prefix: "component-messaging-image-processor-worker-rust-v"
-            lang: "rust"
-            wasm-bin: "messaging_image_processor_worker_s.wasm"
+          - folder: 'messaging-image-processor-worker'
+            tag-prefix: 'component-messaging-image-processor-worker-rust-v'
+            lang: 'rust'
+            wasm-bin: 'messaging_image_processor_worker_s.wasm'
 
           # Python
-          - folder: "http-hello-world"
-            tag-prefix: "component-http-hello-world-python-v"
-            lang: "python"
-            wasm-bin: "http_hello_world_s.wasm"
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-python-v'
+            lang: 'python'
+            wasm-bin: 'http_hello_world_s.wasm'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       # Determine tag version (if this is a release tag), without the 'v'
