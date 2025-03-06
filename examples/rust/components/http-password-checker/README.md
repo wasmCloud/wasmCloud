@@ -23,7 +23,7 @@ This relies on the following installed software:
 | `cargo` | [Rust package installer][cargo] (part of the Rust toolchain)                                                |
 | `wash`  | [Wasmcloud Shell][wash] controls your [wasmcloud][wasmcloud] host instances and enables building components |
 
-[wash]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/wash-cli
+[wash]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/wash
 [cargo]: https://doc.rust-lang.org/cargo
 
 # Quickstart

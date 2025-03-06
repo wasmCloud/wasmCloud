@@ -30,13 +30,13 @@ rustup toolchain install nightly
 Follow the instructions for your OS on the [Installation page](https://wasmcloud.com/docs/installation). Since several of the following tools use [Cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html), you may wish to use `wash` through Cargo as well.
 
 ```shell
-cargo install --locked wash-cli
+cargo install --locked wash
 ```
 
 If you have [`cargo-binstall`][cargo-binstall] installed, you can install even faster:
 
 ```bash
-cargo binstall wash-cli
+cargo binstall wash
 ```
 
 [cargo-binstall]: https://crates.io/crates/cargo-binstall

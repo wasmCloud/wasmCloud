@@ -4,7 +4,7 @@
 //! over a NATS connection.
 //!
 //! This library can be used by multiple types of tools, and is also used
-//! by the control interface capability provider and the [`wash` CLI][wash-cli].
+//! by the control interface capability provider and the [`wash` CLI][wash].
 //!
 //! ## Usage
 //!
@@ -15,7 +15,7 @@
 //! The inner result is the actual response from the host(s) and should be handled for application-level errors.
 //!
 //! [docs-control-interface]: <https://wasmcloud.com/docs/hosts/lattice-protocols/control-interface>
-//! [wash-cli]: <https://wasmcloud.com/docs/ecosystem/wash>
+//! [wash]: <https://wasmcloud.com/docs/ecosystem/wash>
 
 use serde::{Deserialize, Serialize};
 

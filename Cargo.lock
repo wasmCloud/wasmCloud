@@ -489,7 +489,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "tracing",
- "uuid 1.14.0",
+ "uuid 1.13.2",
 ]
 
 [[package]]
@@ -872,7 +872,7 @@ dependencies = [
  "time",
  "tracing",
  "url",
- "uuid 1.14.0",
+ "uuid 1.13.2",
 ]
 
 [[package]]
@@ -891,7 +891,7 @@ dependencies = [
  "time",
  "tracing",
  "url",
- "uuid 1.14.0",
+ "uuid 1.13.2",
 ]
 
 [[package]]
@@ -912,7 +912,7 @@ dependencies = [
  "time",
  "tracing",
  "url",
- "uuid 1.14.0",
+ "uuid 1.13.2",
 ]
 
 [[package]]
@@ -1198,7 +1198,7 @@ dependencies = [
  "cap-primitives",
  "cap-std",
  "io-lifetimes",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1226,7 +1226,7 @@ dependencies = [
  "ipnet",
  "maybe-owned",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
  "winx",
 ]
 
@@ -1374,9 +1374,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.30"
+version = "4.5.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92b7b18d71fad5313a1e320fa9897994228ce274b60faa4d694fe0ea89cd9e6d"
+checksum = "8acebd8ad879283633b343856142139f2da2317c96b05b4dd6181c61e2480184"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1393,9 +1393,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.30"
+version = "4.5.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a35db2071778a7344791a4fb4f95308b5673d219dee3ae348b86642574ecc90c"
+checksum = "f6ba32cbda51c7e1dfd49acc1457ba1a7dec5b64fe360e828acb13ca8dc9c2f9"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1405,9 +1405,9 @@ dependencies = [
 
 [[package]]
 name = "clap_complete"
-version = "4.5.46"
+version = "4.5.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5c5508ea23c5366f77e53f5a0070e5a84e51687ec3ef9e0464c86dc8d13ce98"
+checksum = "1e3040c8291884ddf39445dc033c70abc2bc44a42f0a3a00571a0f483a83f0cd"
 dependencies = [
  "clap",
 ]
@@ -1445,7 +1445,7 @@ dependencies = [
  "serde_json",
  "snafu",
  "url",
- "uuid 1.14.0",
+ "uuid 1.13.2",
  "web-sys",
 ]
 
@@ -2410,7 +2410,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33d852cb9b869c2a9b3df2f71a3074817f01e1844f839a144f5fcef059a4eb5d"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2587,7 +2587,7 @@ checksum = "5e2e6123af26f0f2c51cc66869137080199406754903cc926a7690401ce09cb4"
 dependencies = [
  "io-lifetimes",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3560,7 +3560,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2285ddfe3054097ef4b2fe909ef8c3bcd1ea52a8f0d274416caebeef39f04a65"
 dependencies = [
  "io-lifetimes",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4878,7 +4878,7 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid 0.8.2",
- "uuid 1.14.0",
+ "uuid 1.13.2",
 ]
 
 [[package]]
@@ -4982,7 +4982,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22505a5c94da8e3b7c2996394d1c933236c4d743e81a410bcca4e6989fc066a4"
 dependencies = [
  "bytes",
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools 0.12.1",
  "log",
  "multimap",
@@ -5180,7 +5180,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5511,9 +5511,9 @@ dependencies = [
 
 [[package]]
 name = "ring"
-version = "0.17.10"
+version = "0.17.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d34b5020fcdea098ef7d95e9f89ec15952123a4a039badd09fabebe9e963e839"
+checksum = "e75ec5e92c4d8aede845126adc388046234541629e76029599ed35a003c7ed24"
 dependencies = [
  "cc",
  "cfg-if",
@@ -5644,7 +5644,7 @@ dependencies = [
  "libc",
  "linux-raw-sys",
  "once_cell",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6568,7 +6568,7 @@ dependencies = [
  "fd-lock",
  "io-lifetimes",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
  "winx",
 ]
 
@@ -6589,7 +6589,7 @@ dependencies = [
  "getrandom 0.3.1",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7337,7 +7337,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.7.3",
+ "rand 0.8.5",
  "static_assertions",
 ]
 
@@ -7530,9 +7530,9 @@ checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
 
 [[package]]
 name = "uuid"
-version = "1.14.0"
+version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93d59ca99a559661b96bf898d8fce28ed87935fd2bea9f05983c1464dd6c71b1"
+checksum = "8c1f41ffb7cf259f1ecc2876861a17e7142e63ead296f671f81f6ae85903e0d6"
 dependencies = [
  "getrandom 0.3.1",
  "rand 0.9.0",
@@ -7819,8 +7819,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "wash-cli"
-version = "0.39.0"
+name = "wash"
+version = "0.40.0"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -7828,23 +7828,37 @@ dependencies = [
  "async-compression",
  "async-nats",
  "bytes",
+ "cargo_metadata",
+ "cargo_toml",
  "chrono",
+ "claims",
  "clap",
  "clap-markdown",
  "clap_complete",
+ "cloudevents-sdk",
+ "command-group",
+ "config",
  "console",
  "crossterm",
+ "dialoguer",
  "docker_credential",
  "etcetera",
  "file-guard",
  "futures",
+ "handlebars",
+ "heck 0.5.0",
  "http 1.2.0",
+ "humantime",
+ "ignore",
  "indicatif",
  "nix 0.29.0",
  "nkeys",
+ "normpath",
  "notify",
  "oci-client",
+ "oci-wasm",
  "once_cell",
+ "path-absolutize",
  "provider-archive",
  "rand 0.8.5",
  "regex",
@@ -7856,6 +7870,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
+ "serde_with",
  "serde_yaml",
  "serial_test",
  "sha2",
@@ -7864,73 +7879,6 @@ dependencies = [
  "term-table",
  "termcolor",
  "termsize",
- "tokio",
- "tokio-tar",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "wadm-client",
- "wadm-types",
- "walkdir",
- "warp",
- "wash-lib",
- "wasm-pkg-client",
- "wasm-pkg-core",
- "wasmcloud-control-interface",
- "wasmcloud-core",
- "wasmcloud-secrets-types",
- "wat",
- "which",
- "wit-bindgen-wrpc",
- "wit-component 0.224.1",
- "wit-parser 0.224.1",
- "wrpc-interface-http",
- "wrpc-transport",
- "wrpc-transport-nats",
-]
-
-[[package]]
-name = "wash-lib"
-version = "0.33.0"
-dependencies = [
- "anyhow",
- "async-compression",
- "async-nats",
- "bytes",
- "cargo_metadata",
- "cargo_toml",
- "chrono",
- "claims",
- "clap",
- "cloudevents-sdk",
- "command-group",
- "config",
- "console",
- "dialoguer",
- "etcetera",
- "futures",
- "handlebars",
- "heck 0.5.0",
- "humantime",
- "ignore",
- "indicatif",
- "nkeys",
- "normpath",
- "oci-client",
- "oci-wasm",
- "path-absolutize",
- "provider-archive",
- "regex",
- "reqwest",
- "semver",
- "serde",
- "serde_json",
- "serde_with",
- "serde_yaml",
- "serial_test",
- "sha2",
- "tempfile",
- "term-table",
  "test-case",
  "testcontainers",
  "thiserror 2.0.11",
@@ -7941,10 +7889,12 @@ dependencies = [
  "tokio-util",
  "toml 0.8.20",
  "tracing",
+ "tracing-subscriber",
  "url",
  "wadm-client",
  "wadm-types",
  "walkdir",
+ "warp",
  "wascap",
  "wasi-preview1-component-adapter-provider",
  "wasm-encoder 0.224.1",
@@ -7952,14 +7902,20 @@ dependencies = [
  "wasm-pkg-core",
  "wasmcloud-control-interface",
  "wasmcloud-core",
+ "wasmcloud-secrets-types",
  "wasmcloud-test-util",
  "wasmparser 0.225.0",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "wat",
+ "which",
+ "wit-bindgen-wrpc",
  "wit-component 0.224.1",
  "wit-parser 0.224.1",
+ "wrpc-interface-http",
+ "wrpc-transport",
+ "wrpc-transport-nats",
 ]
 
 [[package]]
@@ -8346,7 +8302,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
- "uuid 1.14.0",
+ "uuid 1.13.2",
  "vaultrs",
  "wascap",
  "wasmcloud-control-interface",
@@ -8380,7 +8336,7 @@ dependencies = [
  "http 1.2.0",
  "rand 0.8.5",
  "tokio",
- "uuid 1.14.0",
+ "uuid 1.13.2",
  "wasi 0.13.3+wasi-0.2.2",
  "wit-bindgen 0.38.0",
 ]
@@ -8459,7 +8415,7 @@ dependencies = [
  "tracing-opentelemetry",
  "ulid",
  "url",
- "uuid 1.14.0",
+ "uuid 1.13.2",
  "wascap",
  "wasmcloud-control-interface",
  "wasmcloud-core",
@@ -8620,7 +8576,7 @@ dependencies = [
  "tracing",
  "unicase",
  "url",
- "uuid 1.14.0",
+ "uuid 1.13.2",
  "wasmcloud-control-interface",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
@@ -8739,7 +8695,7 @@ dependencies = [
  "tokio-postgres-rustls",
  "tracing",
  "ulid",
- "uuid 1.14.0",
+ "uuid 1.13.2",
  "wasmcloud-provider-sdk",
  "webpki-roots",
  "wit-bindgen-wrpc",
@@ -9354,7 +9310,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9592,7 +9548,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f3fd376f71958b862e7afb20cfe5a22830e1963462f3a17f49d82a6c1d1f42d"
 dependencies = [
  "bitflags 2.8.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9976,7 +9932,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "uuid 1.14.0",
+ "uuid 1.13.2",
  "wasm-tokio",
  "wasmtime",
  "wasmtime-wasi",
