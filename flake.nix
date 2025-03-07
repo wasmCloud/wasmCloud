@@ -232,6 +232,20 @@
                   ];
                 }
                 pkgs;
+              secrets-nats-kv =
+                rust.mkAttrs {
+                  inherit
+                    overrideVendorCargoPackage
+                    src
+                    targets
+                    ;
+                  pname = "secrets-nats-kv";
+                  doCheck = false;
+                  build.packages = [
+                    "secrets-nats-kv"
+                  ];
+                }
+                pkgs;
             };
 
           interpreters.aarch64-unknown-linux-gnu = "/lib/ld-linux-aarch64.so.1";
@@ -344,6 +358,8 @@
               then (readTOML ./Cargo.toml).package.version
               else if name == "wash"
               then (readTOML ./crates/wash/Cargo.toml).package.version
+              else if name == "secrets-nats-kv"
+              then (readTOML ./crates/secrets-nats-kv/Cargo.toml).package.version
               else throw "unsupported binary `${name}`";
 
             config =
@@ -375,6 +391,8 @@
           imageArgs.bin.wash.name = "wash";
           imageArgs.bin.wasmcloud.description = "wasmCloud host";
           imageArgs.bin.wasmcloud.name = "wasmcloud";
+          imageArgs.bin.secrets-nats-kv.description = "wasmCloud Secrets implementation using NATS";
+          imageArgs.bin.secrets-nats-kv.name = "secrets-nats-kv";
           imageArgs.config.wolfi.user = "65532:65532"; # nonroot:x:65532:65532
           imageArgs.image.debian-amd64.architecture = "amd64";
           imageArgs.image.debian-amd64.fromImage = images.debian-amd64;
@@ -443,6 +461,37 @@
               pkg = attrs.wasmcloud.packages.wasmcloud-x86_64-unknown-linux-musl;
             }
             // imageArgs.bin.wasmcloud
+            // imageArgs.config.wolfi
+            // imageArgs.image.wolfi-amd64
+          );
+
+          secrets-nats-kv-aarch64-unknown-linux-musl-oci-debian = buildImage (
+            {
+              pkg = attrs.secrets-nats-kv.packages.secrets-nats-kv-aarch64-unknown-linux-musl;
+            }
+            // imageArgs.bin.secrets-nats-kv
+            // imageArgs.image.debian-arm64
+          );
+          secrets-nats-kv-x86_64-unknown-linux-musl-oci-debian = buildImage (
+            {
+              pkg = attrs.secrets-nats-kv.packages.secrets-nats-kv-x86_64-unknown-linux-musl;
+            }
+            // imageArgs.bin.secrets-nats-kv
+            // imageArgs.image.debian-amd64
+          );
+          secrets-nats-kv-aarch64-unknown-linux-musl-oci-wolfi = buildImage (
+            {
+              pkg = attrs.secrets-nats-kv.packages.secrets-nats-kv-aarch64-unknown-linux-musl;
+            }
+            // imageArgs.bin.secrets-nats-kv
+            // imageArgs.config.wolfi
+            // imageArgs.image.wolfi-arm64
+          );
+          secrets-nats-kv-x86_64-unknown-linux-musl-oci-wolfi = buildImage (
+            {
+              pkg = attrs.secrets-nats-kv.packages.secrets-nats-kv-x86_64-unknown-linux-musl;
+            }
+            // imageArgs.bin.secrets-nats-kv
             // imageArgs.config.wolfi
             // imageArgs.image.wolfi-amd64
           );
@@ -546,6 +595,21 @@
             amd64 = wasmcloud-x86_64-unknown-linux-musl-oci-wolfi;
             arm64 = wasmcloud-aarch64-unknown-linux-musl-oci-wolfi;
           };
+
+          secrets-nats-kv-oci-debian = buildMultiArchImage {
+            name = "secrets-nats-kv";
+            base = "debian";
+            amd64 = secrets-nats-kv-x86_64-unknown-linux-musl-oci-debian;
+            arm64 = secrets-nats-kv-aarch64-unknown-linux-musl-oci-debian;
+          };
+
+          secrets-nats-kv-oci-wolfi = buildMultiArchImage {
+            name = "secrets-nats-kv";
+            base = "wolfi";
+            amd64 = secrets-nats-kv-x86_64-unknown-linux-musl-oci-wolfi;
+            arm64 = secrets-nats-kv-aarch64-unknown-linux-musl-oci-wolfi;
+          };
+
         in
           (concatMapAttrs (_: {packages, ...}: packages) attrs)
           // {
@@ -568,6 +632,8 @@
               wasmcloud-x86_64-unknown-linux-gnu-fhs
               wasmcloud-x86_64-unknown-linux-musl-oci-debian
               wasmcloud-x86_64-unknown-linux-musl-oci-wolfi
+              secrets-nats-kv-oci-debian
+              secrets-nats-kv-oci-wolfi
               ;
 
             default = attrs.wasmcloud.packages.wasmcloud;
