@@ -14,13 +14,13 @@
   wolfi-amd64.arch = "amd64";
   wolfi-amd64.finalImageName = "cgr.dev/chainguard/wolfi-base";
   wolfi-amd64.finalImageTag = "latest";
-  wolfi-amd64.imageDigest = "sha256:c93d380c88ee4ccfc4a1827b6ea54debd9ff6e69e64deb53bb75471297ae713a";
+  wolfi-amd64.imageDigest = "sha256:78adc0075d239ee722b5d6ba0ca23e1cd40a30f23aac2e38d48f61a014151277";
   wolfi-amd64.imageName = "cgr.dev/chainguard/wolfi-base";
-  wolfi-amd64.sha256 = "sha256-VB3b9p62hOwkI1FB6vH815KdD2nLAXS2fyDcuhTfiZU=";
+  wolfi-amd64.sha256 = "sha256-A70P/HMkP+gHVtnP0/lMuIqL/NpyLJgS0gpf6xQ/VWs=";
   wolfi-arm64.arch = "arm64";
   wolfi-arm64.finalImageName = "cgr.dev/chainguard/wolfi-base";
   wolfi-arm64.finalImageTag = "latest";
-  wolfi-arm64.imageDigest = "sha256:c93d380c88ee4ccfc4a1827b6ea54debd9ff6e69e64deb53bb75471297ae713a";
+  wolfi-arm64.imageDigest = "sha256:78adc0075d239ee722b5d6ba0ca23e1cd40a30f23aac2e38d48f61a014151277";
   wolfi-arm64.imageName = "cgr.dev/chainguard/wolfi-base";
-  wolfi-arm64.sha256 = "sha256-C2VeNFClnXS7aPpXOe0/omv01AdEBPLZqBiDVtandhY=";
+  wolfi-arm64.sha256 = "sha256-QncR2WaFUzg1S6o0N9nsr+6z/Az2llrg3DQVnVrhAiM=";
 }
