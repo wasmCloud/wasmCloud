@@ -1,0 +1,4 @@
+tests/output
+*.wasm
+# keep the hello_plugin_s.wasm file for testing
+!hello_plugin_s.wasm

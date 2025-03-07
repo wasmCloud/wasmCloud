@@ -203,5 +203,5 @@ docker exec -it \
 Messages you send via the producer will be echoed first in the original consumer (`wasmcloud.echo`) and _also_ echoed in `wasmcloud.echo.reply`, which is the work of the `echo-messaging` component and the default functionality of this provider (supplying a generated `reply_to` topic).
 
 [docker]: https://docs.docker.com
-[wash]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/wash-cli
+[wash]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/wash
 [wadm]: https://github.com/wasmCloud/wadm

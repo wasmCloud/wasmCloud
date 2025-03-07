@@ -58,7 +58,7 @@ struct ApiError {
 /// Ensure that a roundtrip of the component works
 ///
 /// NOTE: this test is *not* robust to running with multiple other tests,
-/// unlike the setup in wash-cli and related tests.
+/// unlike the setup in wash and related tests.
 ///
 /// This test (and the setup required) expects to be run as the only test, and the only one performing `wash` commands.
 /// Early termination, unexpected errors, etc will likely leave leftover wasmcloud/wadm instances and require running `wash down`.

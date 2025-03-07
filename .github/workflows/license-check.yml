@@ -9,7 +9,7 @@ jobs:
   cargo-deny:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-    - uses: EmbarkStudios/cargo-deny-action@55a198ad5e9a07759beeae4e572e50e5af91813f
-      with:
-        command: check bans licenses
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: EmbarkStudios/cargo-deny-action@55a198ad5e9a07759beeae4e572e50e5af91813f
+        with:
+          command: check bans licenses

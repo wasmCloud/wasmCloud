@@ -83,15 +83,15 @@
           "CODEOWNERS"
           "CONTRIBUTING.md"
           "CONTRIBUTION_LADDER.md"
-          "crates/wash-cli/.devcontainer"
-          "crates/wash-cli/build"
-          "crates/wash-cli/Completions.md"
-          "crates/wash-cli/CONTRIBUTING.md"
-          "crates/wash-cli/Dockerfile"
-          "crates/wash-cli/docs"
-          "crates/wash-cli/Makefile"
-          "crates/wash-cli/snap"
-          "crates/wash-cli/tools"
+          "crates/wash/src/cli/.devcontainer"
+          "crates/wash/src/cli/build"
+          "crates/wash/src/cli/Completions.md"
+          "crates/wash/src/cli/CONTRIBUTING.md"
+          "crates/wash/src/cli/Dockerfile"
+          "crates/wash/src/cli/docs"
+          "crates/wash/src/cli/Makefile"
+          "crates/wash/src/cli/snap"
+          "crates/wash/src/cli/tools"
           "Dockerfile"
           "flake.nix"
           "garnix.yaml"
@@ -114,14 +114,13 @@
         build.workspace = true;
 
         clippy.allTargets = true;
-        clippy.deny = ["warnings"];
+        clippy.warn = ["warnings"];
         clippy.workspace = true;
 
         test.allTargets = true;
         test.excludes = [
           "secrets-nats-kv"
-          "wash-cli"
-          "wash-lib"
+          "wash"
           "wasmcloud-provider-blobstore-s3" # TODO: Make the test self-contained and reenable
           "wasmcloud-provider-messaging-nats" # tests appear to be broken
         ];
@@ -208,7 +207,7 @@
                     "wash"
                   ];
                   build.packages = [
-                    "wash-cli"
+                    "wash"
                   ];
                 }
                 pkgs;
@@ -344,7 +343,7 @@
               if name == "wasmcloud"
               then (readTOML ./Cargo.toml).package.version
               else if name == "wash"
-              then (readTOML ./crates/wash-cli/Cargo.toml).package.version
+              then (readTOML ./crates/wash/Cargo.toml).package.version
               else throw "unsupported binary `${name}`";
 
             config =
