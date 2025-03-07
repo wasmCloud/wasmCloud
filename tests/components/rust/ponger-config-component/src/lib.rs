@@ -2,15 +2,17 @@ wit_bindgen::generate!({ generate_all });
 
 use wasmcloud_component::wasi;
 
+// TODO(brooksmtownsend): Source this from wasmcloud_component
+use crate::wasmcloud::bus::lattice::RpcError;
 use exports::test_components::testing::*;
 
 struct Actor;
 
 impl pingpong::Guest for Actor {
-    fn ping() -> String {
-        wasi::config::store::get("pong")
+    fn ping() -> Result<String, RpcError> {
+        Ok(wasi::config::store::get("pong")
             .expect("Unable to fetch value")
-            .unwrap_or_else(|| "config value not set".to_string())
+            .unwrap_or_else(|| "config value not set".to_string()))
     }
 
     fn ping_secret() -> String {
