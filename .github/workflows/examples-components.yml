@@ -77,8 +77,8 @@ jobs:
           # due to all the new WIT package retrieval goodness
           #
           # Once a new version of wash is out we can use prebuilt versions again (>= 35.0)
-          - 0.36.1
-          - current
+          - 0.39.0
+          # - current
         project:
           # Golang example components
           - folder: 'http-client-tinygo'
@@ -270,11 +270,9 @@ jobs:
       fail-fast: false
       matrix:
         wash-version:
-          # NOTE(2024/10/23): we need to use the current version of wash *only*
-          # due to all the new WIT package retrieval goodness
-          #
-          # Once a new version of wash is out we can use prebuilt versions again (>= 35.0)
-          - current
+          # TODO(brooksmtownsend): re-enabling `current` once we finish the rename of wash-cli to wash
+          # - current
+          - 0.39.0
         project:
           # Go example components (to publish)
           - folder: 'http-echo-tinygo'
@@ -380,7 +378,7 @@ jobs:
       - name: install wash (current)
         uses: taiki-e/cache-cargo-install-action@caa6f48d18d42462f9c30df89e2b4f71a42b7c2c # v2.0.1
         with:
-          tool: wash-cli
+          tool: wash
           git: https://github.com/${{ github.repository }}
           rev: ${{ github.sha }}
       # Push the project to GitHub Container Registry under various tags, if this is a release tag

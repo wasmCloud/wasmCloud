@@ -40,21 +40,21 @@ jobs:
       fail-fast: false
       matrix:
         wash-version:
-          - 0.37.0
-          - current
+          - 0.39.0
+          # - current
         project:
           # Golang example providers
-          - name: "custom-template"
-            lang: "golang"
-            lang_version: "1.23"
-            tinygo_version: "0.33.0"
+          - name: 'custom-template'
+            lang: 'golang'
+            lang_version: '1.23'
+            tinygo_version: '0.33.0'
             test_deploy: wadm.yaml
           # Rust example providers
-          - name: "custom-template"
-            lang: "rust"
+          - name: 'custom-template'
+            lang: 'rust'
             test_deploy: wadm.yaml
-          - name: "messaging-nats"
-            lang: "rust"
+          - name: 'messaging-nats'
+            lang: 'rust'
             test_deploy: local.wadm.yaml
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -79,7 +79,7 @@ jobs:
         if: ${{ matrix.project.lang == 'golang' }}
         with:
           tinygo-version: ${{ matrix.project.tinygo_version }}
-          install-binaryen: "false"
+          install-binaryen: 'false'
       - name: install wit-bindgen-wrpc
         shell: bash
         run: |

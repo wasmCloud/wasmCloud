@@ -131,7 +131,7 @@ jobs:
     strategy:
       matrix:
         wash-version:
-          - current
+          - 0.39.0
         template:
           - name: hello-world-rust
             lang: rust

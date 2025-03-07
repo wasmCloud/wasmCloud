@@ -40,8 +40,9 @@ runs:
         echo "Using $REVISION as the target revision"
 
     - name: Build wash
+      if: steps.base-ref.outputs.target_revision != github.event.pull_request.base.sha
       uses: taiki-e/cache-cargo-install-action@caa6f48d18d42462f9c30df89e2b4f71a42b7c2c # v2.0.1
       with:
-        tool: wash-cli
+        tool: wash
         git: https://github.com/${{ github.repository }}
-        rev: ${{ steps.base-ref.outputs.target_revision }}
+        rev: ${{ github.sha }}
