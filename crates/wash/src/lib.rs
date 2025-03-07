@@ -1,12 +1,3 @@
-#![warn(
-    clippy::all,
-    clippy::pedantic,
-    clippy::cargo,
-    clippy::nursery,
-    clippy::unwrap_used
-)]
-#![allow(clippy::module_name_repetitions)]
-
 // Library modules (from wash-lib)
 pub mod lib {
     pub mod app;
