@@ -30,6 +30,8 @@ use providers::Provider;
 use secrecy::Secret;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sysinfo::System;
+use sysinfo::SystemExt;
 use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
 use tokio::spawn;
@@ -759,15 +761,29 @@ impl Host {
             &ctl_nats,
         ));
 
+        let mut sys = System::new();
+        sys.refresh_system();
+
         let scope = InstrumentationScope::builder("wasmcloud-host")
             .with_version(config.version.clone())
             .with_attributes(vec![
                 KeyValue::new("host.id", host_key.public_key()),
                 KeyValue::new("host.version", config.version.clone()),
+                KeyValue::new("host.arch", ARCH),
+                KeyValue::new("host.os", OS),
+                KeyValue::new("host.osfamily", FAMILY),
+                KeyValue::new("host.friendly_name", friendly_name.clone()),
+                KeyValue::new("host.hostname", sys.host_name().unwrap_or_default()),
+                KeyValue::new(
+                    "host.kernel_version",
+                    sys.kernel_version().unwrap_or_default(),
+                ),
+                KeyValue::new("host.os_version", sys.os_version().unwrap_or_default()),
             ])
             .build();
         let meter = global::meter_with_scope(scope);
-        let metrics = HostMetrics::new(&meter, host_key.public_key(), config.lattice.to_string());
+        let metrics = HostMetrics::new(&meter, host_key.public_key(), config.lattice.to_string())
+            .context("failed to create HostMetrics instance")?;
 
         let config_generator = BundleGenerator::new(config_data.clone());
 
