@@ -6568,9 +6568,9 @@ dependencies = [
 
 [[package]]
 name = "spiffe"
-version = "0.6.4"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20f7d839118f735f26bf2ec8efd34c854ec2e5a83aa07b5eb063877ebe6bd8d7"
+checksum = "49ad109af7453136f86ad4cf5f4425236600a9c800ae8c9bbb7442ebaec6ebe7"
 dependencies = [
  "anyhow",
  "hyper-util",
