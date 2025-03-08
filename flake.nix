@@ -43,20 +43,9 @@
       targets.wasm32-unknown-unknown = false;
       targets.wasm32-wasip1 = false;
       targets.wasm32-wasip2 = false;
-
-      overrideVendorCargoPackage = {name, ...}: drv:
-        if name == "spiffe"
-        then
-          drv.overrideAttrs (_: {
-            patches = [
-              ./nix/patches/rust-spiffe.patch
-            ];
-          })
-        else drv;
     in
       rust.mkFlake {
         inherit
-          overrideVendorCargoPackage
           targets
           ;
         src = ./.;
@@ -152,10 +141,6 @@
           with pkgs.lib;
             {
               cargoVendorDir = craneLib.vendorMultipleCargoDeps {
-                inherit
-                  overrideVendorCargoPackage
-                  ;
-
                 cargoLockList = [
                   ./Cargo.lock
                   ./examples/rust/components/http-hello-world/Cargo.lock
@@ -189,7 +174,6 @@
                 "${name}" =
                   rust.mkAttrs {
                     inherit
-                      overrideVendorCargoPackage
                       src
                       targets
                       ;
@@ -215,7 +199,6 @@
               wash =
                 rust.mkAttrs {
                   inherit
-                    overrideVendorCargoPackage
                     src
                     targets
                     ;
@@ -232,7 +215,6 @@
               wasmcloud =
                 rust.mkAttrs {
                   inherit
-                    overrideVendorCargoPackage
                     src
                     targets
                     ;
