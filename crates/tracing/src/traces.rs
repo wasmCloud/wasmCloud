@@ -114,6 +114,29 @@ pub fn configure_tracing(
     ))
 }
 
+pub struct ErrorCounter {
+    dropped_lines : usize,
+}
+
+impl ErrorCounter {
+    fn new() -> Self {
+        ErrorCounter { dropped_lines: 0}
+    }
+
+    fn increment(&mut self) {
+        Self.dropped_lines +=1;
+        if self.dropped_lines == 1 {
+            tracing::error!("Buffer if full");
+        }
+    }
+
+    fn get_count(&self) -> usize {
+        self.dropped_lines
+    }
+}
+
+
+
 /// Configures a global tracing subscriber, which includes:
 /// - A level filter, which forms the base and applies to all other layers
 /// - OTEL tracing and logging layers, if OTEL configuration is provided
@@ -166,9 +189,21 @@ pub fn configure_tracing(
     let stderr = std::io::stderr();
     let ansi = stderr.is_terminal();
     let (stderr, stderr_guard) = tracing_appender::non_blocking(stderr);
+
+    let mut error_counter = ErrorCounter::new();
+
     let fmt = tracing_subscriber::fmt::layer()
         .with_writer(stderr)
-        .with_ansi(ansi);
+        .with_ansi(ansi)
+        .with_filter(move |meta| {
+            if error_counter.get_count() > 0 {
+                tracing::error!(
+                    "Dropped {} logs due to a full buffer.",
+                    error_counter.get_count()
+                );
+            }
+            true
+        });
 
     let dispatch = if use_structured_logging {
         registry
