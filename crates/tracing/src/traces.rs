@@ -193,21 +193,24 @@ pub fn configure_tracing(
     let ansi = stderr.is_terminal();
     let (stderr, stderr_guard) = tracing_appender::non_blocking(stderr);
 
-    let mut error_counter = ErrorCounter::new();
+    let mut error_counter = ErrorCounter::default();
 
     let fmt = tracing_subscriber::fmt::layer()
-        .with_writer(stderr)
-        .with_ansi(ansi)
-        .with_filter(move |meta| {
-            if error_counter.get_count() > 0 {
-                tracing::error!(
-                    "Dropped {} logs due to a full buffer.",
-                    error_counter.get_count()
-                );
-                error_counter.reset();
-            }
-            true
-        });
+    .with_writer(stderr)
+    .with_ansi(ansi)
+    .with_filter(move |_meta| {
+        if error_counter.get_count() > 0 {
+            tracing::error!(
+                "Dropped {} logs due to a full buffer.",
+                error_counter.get_count()
+            );
+            error_counter.reset();
+            LevelFilter::ERROR
+        } else {
+            LevelFilter::INFO
+        }
+    });
+
 
     let dispatch = if use_structured_logging {
         registry
