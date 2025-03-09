@@ -119,14 +119,18 @@ pub struct ErrorCounter {
 }
 
 impl ErrorCounter {
-    fn new() -> Self {
-        ErrorCounter { dropped_lines: 0}
+    fn reset(&mut self) {
+        self.dropped_lines = 0;
     }
-
+// Increment the dropped lines and log an error if the buffer is full
     fn increment(&mut self) {
-        Self.dropped_lines +=1;
+        self.dropped_lines +=1;
         if self.dropped_lines == 1 {
-            tracing::error!("Buffer if full");
+            tracing::error!("Buffer iS full");
+        }
+
+        if self.dropped_lines > 100 {
+            self.reset();
         }
     }
 
@@ -134,7 +138,6 @@ impl ErrorCounter {
         self.dropped_lines
     }
 }
-
 
 
 /// Configures a global tracing subscriber, which includes:
@@ -201,6 +204,7 @@ pub fn configure_tracing(
                     "Dropped {} logs due to a full buffer.",
                     error_counter.get_count()
                 );
+                error_counter.reset();
             }
             true
         });
