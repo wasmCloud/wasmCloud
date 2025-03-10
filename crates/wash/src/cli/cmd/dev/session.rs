@@ -3,6 +3,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use crate::lib::common::CommandGroupUsage;
 use anyhow::{bail, Context as _, Result};
 use chrono::{DateTime, Utc};
 use console::style;
@@ -11,7 +12,6 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt as _;
 use tokio::process::Child;
-use crate::lib::common::CommandGroupUsage;
 
 use crate::lib::config::downloads_dir;
 use crate::lib::generate::emoji;
@@ -45,6 +45,8 @@ pub struct WashDevSession {
     pub(crate) created_at: DateTime<Utc>,
     /// When the wash dev session was last used
     pub(crate) last_used_at: DateTime<Utc>,
+    /// Optional mirror to use for downloading wadm, wasmCloud, and NATS binaries
+    pub(crate) github_mirror: Option<String>,
 }
 
 /// The structure of an a file containing sessions of `wash dev`
@@ -195,7 +197,10 @@ impl WashDevSession {
         let session = if let Some(existing_session) = session_metadata
             .sessions
             .iter()
-            .find(|s| s.project_path == project_path && !s.in_use) { existing_session.clone() } else {
+            .find(|s| s.project_path == project_path && !s.in_use)
+        {
+            existing_session.clone()
+        } else {
             let session = Self {
                 id: rand::thread_rng()
                     .sample_iter(&Alphanumeric)
@@ -207,6 +212,7 @@ impl WashDevSession {
                 in_use: true,
                 created_at: Utc::now(),
                 last_used_at: Utc::now(),
+                github_mirror: None,
             };
             session_metadata.sessions.push(session.clone());
             session
@@ -257,7 +263,12 @@ impl WashDevSession {
         } else {
             // Start NATS
             let nats_log_path = session_dir.join("nats.log");
-            let nats_binary = ensure_nats_server(&nats_opts.nats_version, &install_dir).await?;
+            let nats_binary = ensure_nats_server(
+                &nats_opts.nats_version,
+                &install_dir,
+                self.github_mirror.as_ref(),
+            )
+            .await?;
             let nats_config = NatsConfig {
                 host: nats_host,
                 port: nats_port,
@@ -302,7 +313,8 @@ impl WashDevSession {
         let wadm_version = wadm_opts
             .wadm_version
             .unwrap_or_else(|| WADM_VERSION.into());
-        let wadm_binary = ensure_wadm(&wadm_version, &install_dir).await?;
+        let wadm_binary =
+            ensure_wadm(&wadm_version, &install_dir, self.github_mirror.as_ref()).await?;
         let wadm_child = match start_wadm(
             &install_dir,
             &wadm_binary,
@@ -326,7 +338,12 @@ impl WashDevSession {
         )
         .context("parsing semantic wasmcloud version")?;
         let wasmcloud_log_path = session_dir.join("wasmcloud.log");
-        let wasmcloud_binary = ensure_wasmcloud(&wasmcloud_version, &install_dir).await?;
+        let wasmcloud_binary = ensure_wasmcloud(
+            &wasmcloud_version,
+            &install_dir,
+            self.github_mirror.as_ref(),
+        )
+        .await?;
         let log_output: Stdio = tokio::fs::File::create(&wasmcloud_log_path)
             .await
             .with_context(|| {

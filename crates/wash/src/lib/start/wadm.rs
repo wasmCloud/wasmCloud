@@ -8,8 +8,9 @@ use tracing::warn;
 
 use super::download_binary_from_github;
 use crate::lib::common::CommandGroupUsage;
+use crate::lib::start::GITHUB_DOT_COM;
 
-const WADM_GITHUB_RELEASE_URL: &str = "https://github.com/wasmcloud/wadm/releases/download";
+const WADM_GITHUB_RELEASE_PATH: &str = "wasmcloud/wadm/releases/download";
 pub const WADM_PID: &str = "wadm.pid";
 #[cfg(target_family = "unix")]
 pub const WADM_BINARY: &str = "wadm";
@@ -22,22 +23,30 @@ pub const WADM_BINARY: &str = "wadm.exe";
 ///
 /// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`
 /// * `dir` - Where to download the `wadm` binary to
+/// * `mirror` - Optional mirror to download the binary from instead of GitHub
 /// # Examples
 ///
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
 /// use crate::lib::start::ensure_wadm;
-/// let res = ensure_wadm("v0.4.0-alpha.1", "/tmp/").await;
+/// let res = ensure_wadm("v0.4.0-alpha.1", "/tmp/", None).await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wadm");
 /// # }
 /// ```
-pub async fn ensure_wadm<P>(version: &str, dir: P) -> Result<PathBuf>
+pub async fn ensure_wadm<P>(version: &str, dir: P, mirror: Option<&String>) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
-    ensure_wadm_for_os_arch_pair(std::env::consts::OS, std::env::consts::ARCH, version, dir).await
+    ensure_wadm_for_os_arch_pair(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        version,
+        dir,
+        mirror,
+    )
+    .await
 }
 
 /// Ensures the `wadm` binary is installed, returning the path to the executable early if it exists or
@@ -49,6 +58,7 @@ where
 /// * `arch` - Specifies the architecture of the binary to download, e.g. `amd64`
 /// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`
 /// * `dir` - Where to download the `wadm` binary to
+/// * `mirror` - Optional mirror to download the binary from instead of GitHub
 /// # Examples
 ///
 /// ```no_run
@@ -57,7 +67,7 @@ where
 /// use crate::lib::start::ensure_wadm_for_os_arch_pair;
 /// let os = std::env::consts::OS;
 /// let arch = std::env::consts::ARCH;
-/// let res = ensure_wadm_for_os_arch_pair(os, arch, "v0.4.0-alpha.1", "/tmp/").await;
+/// let res = ensure_wadm_for_os_arch_pair(os, arch, "v0.4.0-alpha.1", "/tmp/", None).await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wadm");
 /// # }
@@ -67,6 +77,7 @@ pub async fn ensure_wadm_for_os_arch_pair<P>(
     arch: &str,
     version: &str,
     dir: P,
+    mirror: Option<&String>,
 ) -> Result<PathBuf>
 where
     P: AsRef<Path>,
@@ -85,12 +96,10 @@ where
         }
     }
     // Download wadm tarball
-    eprintln!(
-        "🎣 Downloading new wadm from {}",
-        &wadm_url(os, arch, version)
-    );
+    let wadm_url = wadm_url(os, arch, version, mirror);
+    eprintln!("🎣 Downloading new wadm from {wadm_url}");
 
-    let res = download_binary_from_github(&wadm_url(os, arch, version), dir, WADM_BINARY).await;
+    let res = download_binary_from_github(&wadm_url, dir, WADM_BINARY).await;
     if let Ok(ref path) = res {
         eprintln!("🎯 Saved wadm to {}", path.display());
     }
@@ -104,23 +113,29 @@ where
 ///
 /// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`
 /// * `dir` - Where to download the `wadm` binary to
+/// * `mirror` - Optional mirror to download the binary from instead of GitHub
 /// # Examples
 ///
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
 /// use crate::lib::start::download_wadm;
-/// let res = download_wadm("v0.4.0-alpha.1", "/tmp/").await;
+/// let res = download_wadm("v0.4.0-alpha.1", "/tmp/", None).await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wadm");
 /// # }
 /// ```
-pub async fn download_wadm<P>(version: &str, dir: P) -> Result<PathBuf>
+pub async fn download_wadm<P>(version: &str, dir: P, mirror: Option<&String>) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
     download_binary_from_github(
-        &wadm_url(std::env::consts::OS, std::env::consts::ARCH, version),
+        &wadm_url(
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            version,
+            mirror,
+        ),
         dir,
         WADM_BINARY,
     )
@@ -197,11 +212,19 @@ where
 }
 
 /// Helper function to determine the wadm release path given an os/arch and version
-fn wadm_url(os: &str, arch: &str, version: &str) -> String {
+fn wadm_url(os: &str, arch: &str, version: &str, mirror: Option<&String>) -> String {
     // Replace architecture to match wadm release naming scheme
     let arch = match arch {
         "x86_64" => "amd64",
         _ => arch,
     };
-    format!("{WADM_GITHUB_RELEASE_URL}/{version}/wadm-{version}-{os}-{arch}.tar.gz")
+    if let Some(mirror) = mirror {
+        format!(
+            "{}/{WADM_GITHUB_RELEASE_PATH}/{version}/wadm-{version}-{os}-{arch}.tar.gz",
+            // Remove possible trailing slash from mirror
+            mirror.trim_end_matches('/').trim()
+        )
+    } else {
+        format!("{GITHUB_DOT_COM}/{WADM_GITHUB_RELEASE_PATH}/{version}/wadm-{version}-{os}-{arch}.tar.gz")
+    }
 }

@@ -23,7 +23,7 @@ const WASMCLOUD_VERSION: &str = "1.4.2";
 async fn can_download_wasmcloud_host() {
     let version = Version::parse(WASMCLOUD_VERSION).unwrap();
     let download_dir = tempdir().expect("Unable to create tempdir");
-    let res = ensure_wasmcloud_for_os_arch_pair(&version, &download_dir)
+    let res = ensure_wasmcloud_for_os_arch_pair(&version, &download_dir, None)
         .await
         .expect("Should be able to download tarball");
 
@@ -53,7 +53,7 @@ async fn can_download_and_start_wasmcloud() -> anyhow::Result<()> {
     // Install and start NATS server for this test
     let nats_port = find_open_port().await?;
     let nats_ws_port = find_open_port().await?;
-    ensure_nats_server(NATS_SERVER_VERSION, &install_dir)
+    ensure_nats_server(NATS_SERVER_VERSION, &install_dir, None)
         .await
         .expect("Should be able to install NATS server");
 
@@ -68,10 +68,13 @@ async fn can_download_and_start_wasmcloud() -> anyhow::Result<()> {
     .await
     .expect("Unable to start nats process");
 
-    let wasmcloud_binary =
-        ensure_wasmcloud(&Version::parse(WASMCLOUD_VERSION).unwrap(), &install_dir)
-            .await
-            .expect("Unable to ensure wasmcloud");
+    let wasmcloud_binary = ensure_wasmcloud(
+        &Version::parse(WASMCLOUD_VERSION).unwrap(),
+        &install_dir,
+        None,
+    )
+    .await
+    .expect("Unable to ensure wasmcloud");
 
     let stderr_log_path = wasmcloud_binary
         .parent()

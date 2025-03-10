@@ -9,9 +9,9 @@ use tracing::warn;
 use crate::lib::common::CommandGroupUsage;
 use crate::lib::start::wait_for_server;
 
-use super::download_binary_from_github;
+use super::{download_binary_from_github, GITHUB_DOT_COM};
 
-const NATS_GITHUB_RELEASE_URL: &str = "https://github.com/nats-io/nats-server/releases/download";
+const NATS_GITHUB_RELEASE_PATH: &str = "nats-io/nats-server/releases/download";
 pub const NATS_SERVER_CONF: &str = "nats.conf";
 pub const NATS_SERVER_PID: &str = "nats.pid";
 #[cfg(target_family = "unix")]
@@ -25,23 +25,34 @@ pub const NATS_SERVER_BINARY: &str = "nats-server.exe";
 ///
 /// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`
 /// * `dir` - Where to download the `nats-server` binary to
+/// * `mirror` - Optional mirror to download the binary from instead of GitHub
 /// # Examples
 ///
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
 /// use crate::lib::start::ensure_nats_server;
-/// let res = ensure_nats_server("v2.10.7", "/tmp/").await;
+/// let res = ensure_nats_server("v2.10.7", "/tmp/", None).await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/nats-server");
 /// # }
 /// ```
-pub async fn ensure_nats_server<P>(version: &str, dir: P) -> Result<PathBuf>
+pub async fn ensure_nats_server<P>(
+    version: &str,
+    dir: P,
+    mirror: Option<&String>,
+) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
-    ensure_nats_server_for_os_arch_pair(std::env::consts::OS, std::env::consts::ARCH, version, dir)
-        .await
+    ensure_nats_server_for_os_arch_pair(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        version,
+        dir,
+        mirror,
+    )
+    .await
 }
 
 /// Ensures the `nats-server` binary is installed, returning the path to the executable early if it exists or
@@ -53,6 +64,7 @@ where
 /// * `arch` - Specifies the architecture of the binary to download, e.g. `amd64`
 /// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`
 /// * `dir` - Where to download the `nats-server` binary to
+/// * `mirror` - Optional mirror to download the binary from instead of GitHub
 /// # Examples
 ///
 /// ```no_run
@@ -61,7 +73,7 @@ where
 /// use crate::lib::start::ensure_nats_server_for_os_arch_pair;
 /// let os = std::env::consts::OS;
 /// let arch = std::env::consts::ARCH;
-/// let res = ensure_nats_server_for_os_arch_pair(os, arch, "v2.10.7", "/tmp/").await;
+/// let res = ensure_nats_server_for_os_arch_pair(os, arch, "v2.10.7", "/tmp/", None).await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/nats-server");
 /// # }
@@ -71,6 +83,7 @@ pub async fn ensure_nats_server_for_os_arch_pair<P>(
     arch: &str,
     version: &str,
     dir: P,
+    mirror: Option<&String>,
 ) -> Result<PathBuf>
 where
     P: AsRef<Path>,
@@ -93,14 +106,11 @@ where
         }
     }
 
-    eprintln!(
-        "🎣 Downloading new nats-server from {}",
-        &nats_url(os, arch, version)
-    );
+    let nats_url = nats_url(os, arch, version, mirror);
+    eprintln!("🎣 Downloading new nats-server from {nats_url}",);
 
     // Download NATS binary
-    let res =
-        download_binary_from_github(&nats_url(os, arch, version), dir, NATS_SERVER_BINARY).await;
+    let res = download_binary_from_github(&nats_url, dir, NATS_SERVER_BINARY).await;
     if let Ok(ref path) = res {
         eprintln!("🎯 Saved nats-server to {}", path.display());
     }
@@ -114,23 +124,33 @@ where
 ///
 /// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`
 /// * `dir` - Where to download the `nats-server` binary to
+/// * `mirror` - Optional mirror to download the binary from instead of GitHub
 /// # Examples
 ///
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
 /// use crate::lib::start::download_nats_server;
-/// let res = download_nats_server("v2.10.7", "/tmp/").await;
+/// let res = download_nats_server("v2.10.7", "/tmp/", None).await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/nats-server");
 /// # }
 /// ```
-pub async fn download_nats_server<P>(version: &str, dir: P) -> Result<PathBuf>
+pub async fn download_nats_server<P>(
+    version: &str,
+    dir: P,
+    mirror: Option<&String>,
+) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
     download_binary_from_github(
-        &nats_url(std::env::consts::OS, std::env::consts::ARCH, version),
+        &nats_url(
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            version,
+            mirror,
+        ),
         dir,
         NATS_SERVER_BINARY,
     )
@@ -369,7 +389,7 @@ where
 }
 
 /// Helper function to determine the NATS server release path given an os/arch and version
-fn nats_url(os: &str, arch: &str, version: &str) -> String {
+fn nats_url(os: &str, arch: &str, version: &str, mirror: Option<&String>) -> String {
     // Replace "macos" with "darwin" to match NATS release scheme
     let os = if os == "macos" { "darwin" } else { os };
     // Replace architecture to match NATS release naming scheme
@@ -378,7 +398,14 @@ fn nats_url(os: &str, arch: &str, version: &str) -> String {
         "x86_64" => "amd64",
         _ => arch,
     };
-    format!("{NATS_GITHUB_RELEASE_URL}/{version}/nats-server-{version}-{os}-{arch}.tar.gz")
+    if let Some(mirror) = mirror {
+        format!(
+            "{}/{NATS_GITHUB_RELEASE_PATH}/{version}/nats-server-{version}-{os}-{arch}.tar.gz",
+            mirror.trim_end_matches('/').trim()
+        )
+    } else {
+        format!("{GITHUB_DOT_COM}/{NATS_GITHUB_RELEASE_PATH}/{version}/nats-server-{version}-{os}-{arch}.tar.gz")
+    }
 }
 
 #[cfg(test)]

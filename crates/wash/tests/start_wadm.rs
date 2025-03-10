@@ -15,7 +15,7 @@ async fn can_handle_missing_wadm_version() -> Result<()> {
     let minor: u8 = 52;
     let patch: u8 = 222;
 
-    let res = ensure_wadm(&format!("v{major}.{minor}.{patch}"), &install_dir).await;
+    let res = ensure_wadm(&format!("v{major}.{minor}.{patch}"), &install_dir, None).await;
     assert!(res.is_err());
 
     Ok(())
@@ -26,7 +26,7 @@ async fn can_handle_missing_wadm_version() -> Result<()> {
 async fn can_download_and_start_wadm() -> Result<()> {
     let install_dir = tempdir().expect("Unable to create tempdir");
 
-    let res = ensure_wadm(WADM_VERSION, &install_dir).await;
+    let res = ensure_wadm(WADM_VERSION, &install_dir, None).await;
     assert!(res.is_ok());
 
     let log_path = install_dir.path().join("wadm.log");

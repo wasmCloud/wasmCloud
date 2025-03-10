@@ -17,10 +17,9 @@ use std::process::Stdio;
 #[cfg(target_family = "unix")]
 use command_group::AsyncCommandGroup;
 
-use super::get_download_client;
+use super::{get_download_client, GITHUB_DOT_COM};
 
-const WASMCLOUD_GITHUB_RELEASE_URL: &str =
-    "https://github.com/wasmCloud/wasmCloud/releases/download";
+const WASMCLOUD_GITHUB_RELEASE_PATH: &str = "wasmCloud/wasmCloud/releases/download";
 #[cfg(target_family = "unix")]
 pub const WASMCLOUD_HOST_BIN: &str = "wasmcloud_host";
 #[cfg(target_family = "windows")]
@@ -36,22 +35,27 @@ const MINIMUM_WASMCLOUD_VERSION: &str = "0.81.0";
 ///
 /// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`. Must be at least v0.63.0.
 /// * `dir` - Where to unpack the wasmCloud host contents into
+/// * `mirror` - Optional mirror to download the binary from instead of GitHub
 /// # Examples
 ///
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
 /// use crate::lib::start::ensure_wasmcloud;
-/// let res = ensure_wasmcloud(&semver::Version::parse("0.63.0").unwrap(), "/tmp/wasmcloud/").await;
+/// let res = ensure_wasmcloud(&semver::Version::parse("0.63.0").unwrap(), "/tmp/wasmcloud/", None).await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/v0.63.0/wasmcloud_host".to_string());
 /// # }
 /// ```
-pub async fn ensure_wasmcloud<P>(version: &Version, dir: P) -> Result<PathBuf>
+pub async fn ensure_wasmcloud<P>(
+    version: &Version,
+    dir: P,
+    mirror: Option<&String>,
+) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
-    ensure_wasmcloud_for_os_arch_pair(version, dir).await
+    ensure_wasmcloud_for_os_arch_pair(version, dir, mirror).await
 }
 
 /// Ensures the `wasmcloud_host` application is installed, returning the path to the executable
@@ -67,6 +71,7 @@ where
 ///   at least v0.63.0.
 /// * `dir` - Where to unpack the wasmCloud host contents into. This should be the root level
 ///   directory where to store hosts. Each host will be stored in a directory matching its version
+/// * `mirror` - Optional mirror to download the binary from instead of GitHub
 /// # Examples
 ///
 /// ```no_run
@@ -75,12 +80,16 @@ where
 /// use crate::lib::start::ensure_wasmcloud_for_os_arch_pair;
 /// let os = std::env::consts::OS;
 /// let arch = std::env::consts::ARCH;
-/// let res = ensure_wasmcloud_for_os_arch_pair(&semver::Version::parse("0.63.0").unwrap(), "/tmp/wasmcloud/").await;
+/// let res = ensure_wasmcloud_for_os_arch_pair(&semver::Version::parse("0.63.0").unwrap(), "/tmp/wasmcloud/", None).await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/v0.63.0/wasmcloud_host".to_string());
 /// # }
 /// ```
-pub async fn ensure_wasmcloud_for_os_arch_pair<P>(version: &Version, dir: P) -> Result<PathBuf>
+pub async fn ensure_wasmcloud_for_os_arch_pair<P>(
+    version: &Version,
+    dir: P,
+    mirror: Option<&String>,
+) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
@@ -90,7 +99,7 @@ where
         return Ok(dir);
     }
     // Download wasmCloud host tarball
-    download_wasmcloud_for_os_arch_pair(version, dir).await
+    download_wasmcloud_for_os_arch_pair(version, dir, mirror).await
 }
 
 /// A wrapper around the [`download_wasmcloud_for_os_arch_pair`] function that uses the
@@ -101,22 +110,27 @@ where
 /// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`
 /// * `dir` - Where to unpack the wasmCloud host contents into. This should be the root level
 ///   directory where to store hosts. Each host will be stored in a directory matching its version
+/// * `mirror` - Optional mirror to download the binary from instead of GitHub
 /// # Examples
 ///
 /// ```no_run
 /// # #[tokio::main]
 /// # async fn main() {
 /// use crate::lib::start::download_wasmcloud;
-/// let res = download_wasmcloud(&semver::Version::parse("0.57.1").unwrap(), "/tmp/wasmcloud/").await;
+/// let res = download_wasmcloud(&semver::Version::parse("0.57.1").unwrap(), "/tmp/wasmcloud/", None).await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/v0.63.0/wasmcloud_host".to_string());
 /// # }
 /// ```
-pub async fn download_wasmcloud<P>(version: &Version, dir: P) -> Result<PathBuf>
+pub async fn download_wasmcloud<P>(
+    version: &Version,
+    dir: P,
+    mirror: Option<&String>,
+) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
-    download_wasmcloud_for_os_arch_pair(version, dir).await
+    download_wasmcloud_for_os_arch_pair(version, dir, mirror).await
 }
 
 /// Downloads the specified GitHub release version of the wasmCloud host from
@@ -130,6 +144,7 @@ where
 /// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`
 /// * `dir` - Where to unpack the wasmCloud host contents into. This should be the root level
 ///   directory where to store hosts. Each host will be stored in a directory matching its version
+/// * `mirror` - Optional mirror to download the binary from instead of GitHub
 /// # Examples
 ///
 /// ```rust,ignore
@@ -138,16 +153,20 @@ where
 /// use crate::lib::start::download_wasmcloud_for_os_arch_pair;
 /// let os = std::env::consts::OS;
 /// let arch = std::env::consts::ARCH;
-/// let res = download_wasmcloud_for_os_arch_pair(&semver::Version::parse("0.63.0").unwrap(), "/tmp/wasmcloud/").await;
+/// let res = download_wasmcloud_for_os_arch_pair(&semver::Version::parse("0.63.0").unwrap(), "/tmp/wasmcloud/", None).await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/v0.63.0/wasmcloud_host".to_string());
 /// # }
 /// ```
-pub async fn download_wasmcloud_for_os_arch_pair<P>(version: &Version, dir: P) -> Result<PathBuf>
+pub async fn download_wasmcloud_for_os_arch_pair<P>(
+    version: &Version,
+    dir: P,
+    mirror: Option<&String>,
+) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
-    let url = wasmcloud_url(version);
+    let url = wasmcloud_url(version, mirror);
     // NOTE(brooksmtownsend): This seems like a lot of work when I really just want to use AsyncRead
     // to pipe the response body into a file. I'm not sure if there's a better way to do this.
     let download_response = get_download_client()?.get(&url).send().await?;
@@ -159,10 +178,10 @@ where
         );
     }
 
-    let burrito_bites_stream = download_response
+    let host_bytes_stream = download_response
         .bytes_stream()
         .map(|result| result.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err)));
-    let mut wasmcloud_host_burrito = StreamReader::new(burrito_bites_stream);
+    let mut wasmcloud_host_tarball = StreamReader::new(host_bytes_stream);
     let version_dir = dir.as_ref().join(format!("v{version}"));
     let file_path = version_dir.join(WASMCLOUD_HOST_BIN);
     if let Some(parent_folder) = file_path.parent() {
@@ -181,7 +200,7 @@ where
                 wasmcloud_file.set_permissions(perms).await?;
             }
         }
-        tokio::io::copy(&mut wasmcloud_host_burrito, &mut wasmcloud_file).await?;
+        tokio::io::copy(&mut wasmcloud_host_tarball, &mut wasmcloud_file).await?;
     }
 
     // Return success if wasmCloud components exist, error otherwise
@@ -243,7 +262,7 @@ where
 }
 
 /// Helper function to determine the wasmCloud host release path given an os/arch and version
-fn wasmcloud_url(version: &Version) -> String {
+fn wasmcloud_url(version: &Version, mirror: Option<&String>) -> String {
     #[cfg(target_os = "android")]
     let os = "linux-android";
 
@@ -258,10 +277,19 @@ fn wasmcloud_url(version: &Version) -> String {
 
     #[cfg(target_os = "windows")]
     let os = "pc-windows-msvc.exe";
-    format!(
-        "{WASMCLOUD_GITHUB_RELEASE_URL}/v{version}/wasmcloud-{arch}-{os}",
-        arch = std::env::consts::ARCH,
-    )
+
+    if let Some(mirror) = mirror {
+        format!(
+            "{}/{WASMCLOUD_GITHUB_RELEASE_PATH}/v{version}/wasmcloud-{}-{os}",
+            mirror.trim_end_matches('/').trim(),
+            std::env::consts::ARCH,
+        )
+    } else {
+        format!(
+            "{GITHUB_DOT_COM}/{WASMCLOUD_GITHUB_RELEASE_PATH}/v{version}/wasmcloud-{}-{os}",
+            std::env::consts::ARCH,
+        )
+    }
 }
 
 /// Helper function to ensure the version of wasmCloud is above the minimum
