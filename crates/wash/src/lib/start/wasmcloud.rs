@@ -25,8 +25,7 @@ pub const WASMCLOUD_HOST_BIN: &str = "wasmcloud_host";
 #[cfg(target_family = "windows")]
 pub const WASMCLOUD_HOST_BIN: &str = "wasmcloud_host.exe";
 
-// Any version of wasmCloud under 0.81 does not support wasmtime 16 wit worlds and is incompatible.
-const MINIMUM_WASMCLOUD_VERSION: &str = "0.81.0";
+const MINIMUM_WASMCLOUD_VERSION: &str = "1.0.0";
 
 /// A wrapper around the [`ensure_wasmcloud_for_os_arch_pair`] function that uses the
 /// architecture and operating system of the current host machine.
