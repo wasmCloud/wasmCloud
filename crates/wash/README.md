@@ -1,9 +1,8 @@
-[![Latest Release](https://img.shields.io/github/v/release/wasmCloud/wasmCloud?filter=wash*)](https://github.com/wasmCloud/wasmCloud/releases)
+[![Latest Release](https://img.shields.io/github/v/release/wasmCloud/wasmCloud?filter=wash-v*)](https://github.com/wasmCloud/wasmCloud/releases)
 [![Rust Build](https://img.shields.io/github/actions/workflow/status/wasmCloud/wasmCloud/wash.yml?branch=main)](https://github.com/wasmCloud/wasmCloud/actions/workflows/wash.yml)
-[![Rust Version](https://img.shields.io/badge/rustc-1.66.0-orange.svg)](https://blog.rust-lang.org/2022/12/15/Rust-1.66.0.html)
 [![Contributors](https://img.shields.io/github/contributors/wasmCloud/wasmCloud)](https://github.com/wasmCloud/wasmCloud/graphs/contributors)
 [![Good first issues](https://img.shields.io/github/issues/wasmCloud/wasmCloud/good%20first%20issue?label=good%20first%20issues)](https://github.com/wasmCloud/wasmCloud/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22+label%3A%22wash-cli%22)
-[![wash-cli](https://img.shields.io/crates/v/wash-cli)](https://crates.io/crates/wash-cli)
+[![wash](https://img.shields.io/crates/v/wash)](https://crates.io/crates/wash)
 
 ```console
                                      _                 _    _____ _          _ _
@@ -13,9 +12,6 @@
   \ V  V / (_| \__ \ | | | | | |____| | (_) | |_| | (_| |  ____) | | | |  __/ | |
    \_/\_/ \__,_|___/_| |_| |_|\_____|_|\___/ \__,_|\__,_| |_____/|_| |_|\___|_|_|
 ```
-
-> [!WARNING]
-> This crate is being deprecated in favor of [wash](https://crates.io/crates/wash), where the wash CLI will be published from now on.
 
 - [Why wash](#why-wash)
 - [Installing wash](#installing-wash)
@@ -91,6 +87,7 @@ nix run github:wasmCloud/wash
 ```
 
 ## Proxy authentication
+
 In a scenario where you are behind a proxy, you can set the `HTTP_PROXY` and `HTTPS_PROXY` environment variables to the proxy URL.
 And if your proxy requires authentication, you can set the `WASH_PROXY_USERNAME` and `WASH_PROXY_PASSWORD` environment variables to the username and password, respectively. Since most passwords contain special characters, it's recommended to specify the value for 'WASH_PROXY_PASSWORD' in single quotes.
 
