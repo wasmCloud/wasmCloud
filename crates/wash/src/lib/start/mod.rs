@@ -58,6 +58,8 @@
 use anyhow::Result;
 use tracing::debug;
 
+pub(crate) const GITHUB_DOT_COM: &str = "https://github.com";
+
 pub async fn wait_for_server(url: &str, service: &str) -> Result<()> {
     let mut wait_count = 1;
     loop {
