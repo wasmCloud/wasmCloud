@@ -84,7 +84,7 @@ runs:
       if: ${{ inputs.wash-version && inputs.wash-version != 'current' }}
       uses: taiki-e/install-action@acd25891978b4cdaebd139d3efef606d26513b14 # v2.47.0
       with:
-        tool: wash-cli@${{ inputs.wash-version }}
+        tool: wash@${{ inputs.wash-version }}
 
     - name: install wash (current)
       if: ${{ inputs.wash-version && inputs.wash-version == 'current' }}

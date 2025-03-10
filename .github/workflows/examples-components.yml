@@ -73,12 +73,7 @@ jobs:
       fail-fast: false
       matrix:
         wash-version:
-          # NOTE(2024/10/23): we need to use the current version of wash *only*
-          # due to all the new WIT package retrieval goodness
-          #
-          # Once a new version of wash is out we can use prebuilt versions again (>= 35.0)
-          - 0.39.0
-          # - current
+          - current
         project:
           # Golang example components
           - folder: 'http-client-tinygo'
@@ -270,9 +265,7 @@ jobs:
       fail-fast: false
       matrix:
         wash-version:
-          # TODO(brooksmtownsend): re-enabling `current` once we finish the rename of wash-cli to wash
-          # - current
-          - 0.39.0
+          - current
         project:
           # Go example components (to publish)
           - folder: 'http-echo-tinygo'

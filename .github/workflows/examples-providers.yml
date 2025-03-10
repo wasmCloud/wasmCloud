@@ -40,8 +40,7 @@ jobs:
       fail-fast: false
       matrix:
         wash-version:
-          - 0.39.0
-          # - current
+          - current
         project:
           # Golang example providers
           - name: 'custom-template'
