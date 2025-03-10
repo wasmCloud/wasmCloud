@@ -8,8 +8,9 @@ interface invoke {
 
 /// Invoke a component with a `ping` function and, ideally, receive "pong"
 interface pingpong {
-    /// Call ping, get a pong back
-    ping: func() -> string;
+    use wasmcloud:bus/lattice@2.0.0.{rpc-error};
+    /// Call ping, get a pong back (with error handling)
+    ping: func() -> result<string, rpc-error>;
 
     /// Call ping, but quietly, and get a secret pong back
     ping-secret: func() -> string;

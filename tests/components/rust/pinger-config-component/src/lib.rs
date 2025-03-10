@@ -32,12 +32,18 @@ impl http::Server for Actor {
 
         // No args, return string
         let pong = pingpong::ping();
+        // Used in the error handling test
+        if let Err(e) = pong {
+            let res = json!({"error": e.to_string()});
+            let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");
+            return Ok(http::Response::new(body));
+        }
         let pong_secret = pingpong::ping_secret();
 
         let res = json!({
             "single_val": config::store::get(&config_key).expect("failed to get config value"),
             "multi_val": config::store::get_all().expect("failed to get config value").into_iter().collect::<HashMap<String, String>>(),
-            "pong": pong,
+            "pong": pong.expect("failed to get pong"),
             "pong_secret": pong_secret,
         });
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");
