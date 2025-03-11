@@ -9,8 +9,7 @@ use std::{
 
 use anyhow::{bail, ensure, Context, Result};
 use oci_client::Reference;
-use rand::{distributions::Alphanumeric, Rng};
-use sysinfo::{ProcessExt, SystemExt};
+use rand::{distr::Alphanumeric, Rng};
 use tempfile::TempDir;
 use tokio::{
     fs::File,
@@ -264,7 +263,7 @@ impl TestWashInstance {
     }
 
     async fn new(args: TestWashInstanceNewArgs) -> Result<Self> {
-        let test_id: String = rand::thread_rng()
+        let test_id: String = rand::rng()
             .sample_iter(&Alphanumeric)
             .take(6)
             .map(char::from)
@@ -913,16 +912,17 @@ pub async fn wait_until_process_has_count(
 ) -> Result<()> {
     // Check to see if process was removed
     let mut info = sysinfo::System::new_with_specifics(
-        sysinfo::RefreshKind::new().with_processes(sysinfo::ProcessRefreshKind::new()),
+        sysinfo::RefreshKind::everything()
+            .with_processes(sysinfo::ProcessRefreshKind::everything()),
     );
 
     tokio::time::timeout(timeout, async move {
         loop {
-            info.refresh_processes();
+            info.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
             let count = info
                 .processes()
                 .values()
-                .map(|p| p.exe().to_string_lossy())
+                .filter_map(|p| p.exe().map(|s| s.to_string_lossy()))
                 .filter(|name| name.contains(filter))
                 .count();
             if predicate(count) {

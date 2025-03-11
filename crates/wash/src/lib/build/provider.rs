@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process;
 
 use anyhow::{anyhow, bail, Context, Result};
+use cargo_metadata::TargetKind;
 use nkeys::KeyPairType;
 use tracing::{trace, warn};
 
@@ -163,7 +164,7 @@ fn build_rust_provider(
             .iter()
             .find_map(|p| {
                 p.targets.iter().find_map(|t| {
-                    if t.kind.iter().any(|k| k == "bin") {
+                    if t.kind.iter().any(|k| *k == TargetKind::Bin) {
                         Some(t.name.clone())
                     } else {
                         None

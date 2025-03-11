@@ -1,9 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use sysinfo::CpuExt;
 use sysinfo::System;
-use sysinfo::SystemExt;
 use tokio::task::JoinHandle;
 use wasmcloud_tracing::{Counter, Histogram, KeyValue, Meter, ObservableGauge};
 
@@ -93,11 +91,11 @@ impl HostMetrics {
         let mut system = System::new();
         // Get the initial metrics
         system.refresh_memory();
-        system.refresh_cpu();
+        system.refresh_cpu_usage();
         let initial_metrics = SystemMetrics {
             system_total_memory_bytes: system.total_memory(),
             system_used_memory_bytes: system.used_memory(),
-            system_cpu_usage: system.global_cpu_info().cpu_usage() as f64,
+            system_cpu_usage: system.global_cpu_usage() as f64,
         };
         let (tx, rx) = tokio::sync::watch::channel(initial_metrics);
 
@@ -106,12 +104,12 @@ impl HostMetrics {
         let refresh_task_handle = tokio::spawn(async move {
             loop {
                 system.refresh_memory();
-                system.refresh_cpu();
+                system.refresh_cpu_usage();
 
                 tx.send_modify(|current| {
                     current.system_total_memory_bytes = system.total_memory();
                     current.system_used_memory_bytes = system.used_memory();
-                    current.system_cpu_usage = system.global_cpu_info().cpu_usage() as f64;
+                    current.system_cpu_usage = system.global_cpu_usage() as f64;
                 });
                 tokio::time::sleep(refresh_time).await;
             }

@@ -41,7 +41,13 @@ bytes = { workspace = true, features = ["serde"] }
 cargo_metadata = { workspace = true }
 cargo_toml = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
-clap = { workspace = true, features = ["cargo", "derive", "env", "std", "string"], optional = true }
+clap = { workspace = true, features = [
+    "cargo",
+    "derive",
+    "env",
+    "std",
+    "string",
+], optional = true }
 clap_complete = { workspace = true }
 clap-markdown = { workspace = true }
 cloudevents-sdk = { workspace = true }
@@ -67,9 +73,11 @@ notify = { workspace = true }
 oci-client = { workspace = true, features = ["rustls-tls"] }
 oci-wasm = { workspace = true, features = ["rustls-tls"] }
 once_cell = { workspace = true }
-path-absolutize = { workspace = true, features = ["once_cell_cache"], optional = true }
+path-absolutize = { workspace = true, features = [
+    "once_cell_cache",
+], optional = true }
 provider-archive = { workspace = true }
-rand = { workspace = true }
+rand = { workspace = true, features = ["thread_rng"] }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 rmp-serde = { workspace = true }
@@ -82,7 +90,7 @@ serde_json = { workspace = true, features = ["raw_value"] }
 serde_with = { workspace = true, features = ["macros"] }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
-sysinfo = { workspace = true }
+sysinfo = { workspace = true, features = ["system"] }
 tempfile = { workspace = true }
 term-table = { workspace = true, optional = true }
 termcolor = { workspace = true }
@@ -95,7 +103,13 @@ tokio-tar = { workspace = true }
 tokio-util = { workspace = true }
 toml = { workspace = true, features = ["parse"] }
 tracing = { workspace = true, features = ["log"] }
-tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"] }
+tracing-subscriber = { workspace = true, features = [
+    "ansi",
+    "env-filter",
+    "fmt",
+    "json",
+    "std",
+] }
 url = { workspace = true }
 wadm-client = { workspace = true }
 wadm-types = { workspace = true, optional = true }
@@ -107,10 +121,19 @@ wasm-encoder = { workspace = true }
 wasm-pkg-client = { workspace = true }
 wasm-pkg-core = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
-wasmcloud-core = { workspace = true, features = ["oci", "reqwest", "rustls-native-certs"] }
+wasmcloud-core = { workspace = true, features = [
+    "oci",
+    "reqwest",
+    "rustls-native-certs",
+] }
 wasmcloud-secrets-types = { workspace = true }
 wasmparser = { workspace = true }
-wasmtime = { workspace = true, optional = true, features = ["cranelift", "cache", "component-model", "gc"] }
+wasmtime = { workspace = true, optional = true, features = [
+    "cranelift",
+    "cache",
+    "component-model",
+    "gc",
+] }
 wasmtime-wasi = { workspace = true, optional = true }
 wasmtime-wasi-http = { workspace = true, optional = true }
 which = { workspace = true }
@@ -141,7 +164,13 @@ wit-component = { workspace = true }
 wasm-pkg-client = { workspace = true }
 
 [build-dependencies]
-tokio = { workspace = true, features = ["macros", "net", "fs", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = [
+    "macros",
+    "net",
+    "fs",
+    "rt-multi-thread",
+    "time",
+] }
 testcontainers = { workspace = true }
 
 [package.metadata.binstall]

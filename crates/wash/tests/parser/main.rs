@@ -416,7 +416,7 @@ async fn cargo_toml_component() {
                 .unwrap()
                 .join("wit"),
             revision: 0,
-            wasm_bin_name: None,
+            wasm_bin_name: Some("withcargotoml".to_string()),
             registry: RegistryConfig::default(),
         }
     );
