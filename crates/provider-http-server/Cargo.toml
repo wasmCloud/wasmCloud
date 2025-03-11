@@ -16,7 +16,8 @@ status = "actively-developed"
 anyhow = { workspace = true }
 async-nats = { workspace = true, features = ["ring"] }
 axum = { workspace = true, features = ["http1", "http2", "tokio", "tracing"] }
-axum-server = { workspace = true, features = ["tls-rustls"] }
+axum-extra = { workspace = true }
+axum-server = { workspace = true, features = ["tls-rustls-no-provider"] }
 base64 = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
@@ -35,4 +36,8 @@ wrpc-interface-http = { workspace = true, features = ["http-body"] }
 
 [dev-dependencies]
 reqwest = { workspace = true }
-wasmcloud-test-util = { workspace = true, features = ["http", "os", "testcontainers"] }
+wasmcloud-test-util = { workspace = true, features = [
+    "http",
+    "os",
+    "testcontainers",
+] }

@@ -29,7 +29,7 @@ mod wasmtime_bindings {
 
         pub type Secret = std::sync::Arc<String>;
 
-        impl secrecy::Zeroize for SecretValue {
+        impl secrecy::zeroize::Zeroize for SecretValue {
             fn zeroize(&mut self) {
                 match self {
                     SecretValue::String(s) => s.zeroize(),
@@ -40,8 +40,6 @@ mod wasmtime_bindings {
 
         /// Permits cloning
         impl secrecy::CloneableSecret for SecretValue {}
-        /// Provides a `Debug` impl (by default `[[REDACTED]]`)
-        impl secrecy::DebugSecret for SecretValue {}
     }
 
     wasmtime::component::bindgen!({

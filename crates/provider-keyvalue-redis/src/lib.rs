@@ -277,7 +277,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
             .await
         {
             Ok(redis::Value::Nil) => Ok(Ok(None)),
-            Ok(redis::Value::Data(buf)) => Ok(Ok(Some(buf.into()))),
+            Ok(redis::Value::BulkString(buf)) => Ok(Ok(Some(buf.into()))),
             Ok(_) => Ok(Err(keyvalue::store::Error::Other(
                 "invalid data type returned by Redis".into(),
             ))),
@@ -592,7 +592,7 @@ impl Provider for KvRedisProvider {
                             // native way to get the value of the key from the notification
                             let value: wit_bindgen_wrpc::bytes::Bytes = match redis::cmd("GET")
                                 .arg(mkey)
-                                .query_async::<_, Option<Vec<u8>>>(&mut conn_clone)
+                                .query_async::<Option<Vec<u8>>>(&mut conn_clone)
                                 .await
                             {
                                 Ok(Some(v)) => v.into(),

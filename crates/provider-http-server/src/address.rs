@@ -212,7 +212,7 @@ async fn handle_request(
         scheme,
         handlers_by_socket,
     }): extract::State<RequestContext>,
-    extract::Host(authority): extract::Host,
+    axum_extra::extract::Host(authority): axum_extra::extract::Host,
     request: extract::Request,
 ) -> impl axum::response::IntoResponse {
     let (component_id, wrpc) = {

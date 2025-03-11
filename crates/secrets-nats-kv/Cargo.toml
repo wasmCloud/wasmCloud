@@ -43,5 +43,5 @@ wascap = { workspace = true }
 wasmcloud-secrets-types = { workspace = true }
 
 [dev-dependencies]
-rand = { workspace = true }
+rand = { workspace = true, features = ["thread_rng"] }
 wasmcloud-secrets-client = { workspace = true }
