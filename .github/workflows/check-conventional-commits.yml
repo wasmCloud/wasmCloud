@@ -13,7 +13,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Install convco
-        uses: taiki-e/install-action@77b010ce7843a10f653ccb6b0967bda4c3d81091 # v2.47.1
+        uses: taiki-e/install-action@4a7eafa27f0bd6857fe4f46dad5c66568c426ac0 # v2.49.22
         with:
           tool: convco@0.6.1
 
