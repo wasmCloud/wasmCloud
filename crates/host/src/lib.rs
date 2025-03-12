@@ -22,7 +22,7 @@ pub mod secrets;
 pub(crate) mod metrics;
 
 /// experimental workload identity
-pub(crate) mod workload_identity;
+pub mod workload_identity;
 
 pub use metrics::HostMetrics;
 pub use oci::Config as OciConfig;

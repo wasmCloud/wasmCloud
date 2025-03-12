@@ -158,13 +158,14 @@ wasmcloud-tracing = { workspace = true, features = ["otel"], optional = true }
 
 [dev-dependencies]
 axum = { workspace = true, features = ["query"] }
-async-nats = { workspace = true, features = ["ring"] }
+async-nats = { workspace = true, features = ["ring", "service"] }
 bytes = { workspace = true }
 base64 = { workspace = true }
 futures = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true, features = ["server-auto", "tokio"] }
+nats-jwt-rs = { workspace = true }
 nkeys = { workspace = true }
 once_cell = { workspace = true }
 provider-archive = { workspace = true }
@@ -182,6 +183,7 @@ secrets-nats-kv = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
+spiffe = { workspace = true }
 tempfile = { workspace = true }
 test-components = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
@@ -202,7 +204,7 @@ wasmcloud-core = { workspace = true, features = [
     "reqwest",
     "rustls-native-certs",
 ] }
-wasmcloud-test-util = { workspace = true }
+wasmcloud-test-util = { workspace = true, features = ["testcontainers"] }
 wrpc-interface-http = { workspace = true, features = ["hyper"] }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
