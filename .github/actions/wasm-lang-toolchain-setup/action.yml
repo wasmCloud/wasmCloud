@@ -30,7 +30,7 @@ runs:
       if: ${{ inputs.language == 'golang' || inputs.language == 'tinygo' }}
       with:
         go-version: ${{ inputs.language-version }}
-    - uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
+    - uses: taiki-e/install-action@4a7eafa27f0bd6857fe4f46dad5c66568c426ac0 # v2.49.22
       if: ${{ inputs.language == 'golang' || inputs.language == 'tinygo' }}
       with:
         tool: wit-bindgen-cli,wasm-tools
@@ -82,7 +82,7 @@ runs:
     # Install wash
     - name: install wash (previous version)
       if: ${{ inputs.wash-version && inputs.wash-version != 'current' }}
-      uses: taiki-e/install-action@acd25891978b4cdaebd139d3efef606d26513b14 # v2.47.0
+      uses: taiki-e/install-action@4a7eafa27f0bd6857fe4f46dad5c66568c426ac0 # v2.49.22
       with:
         tool: wash@${{ inputs.wash-version }}
 
