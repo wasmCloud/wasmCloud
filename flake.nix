@@ -155,6 +155,7 @@
                 ++ [
                   pkgs.minio
                   pkgs.redis
+                  pkgs.spire-agent
                   pkgs.vault
 
                   pkgs.pkgsUnstable.nats-server
@@ -650,6 +651,7 @@
               pkgs.minio
               pkgs.redis
               pkgs.skopeo
+              pkgs.spire-agent
               pkgs.tinygo
               pkgs.vault
               pkgs.wit-deps
