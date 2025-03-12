@@ -1,4 +1,6 @@
-pub use testcontainers::{core::Mount, runners::AsyncRunner, ContainerAsync, ImageExt};
+pub use testcontainers::{
+    core::ExecCommand, core::Mount, runners::AsyncRunner, ContainerAsync, ImageExt,
+};
 
 pub mod azurite;
 pub use azurite::*;
@@ -11,3 +13,9 @@ pub use nats_server::*;
 
 pub mod squid_proxy;
 pub use squid_proxy::*;
+
+pub mod spire_agent;
+pub use spire_agent::*;
+
+pub mod spire_server;
+pub use spire_server::*;

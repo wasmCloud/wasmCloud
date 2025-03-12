@@ -405,13 +405,15 @@ pub struct Host {
 /// Given the NATS address, authentication jwt, seed, tls requirement and optional request timeout,
 /// attempt to establish connection.
 ///
+/// This function should be used to create a NATS client for Host communication, for non-host NATS
+/// clients we recommend using async-nats directly.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - Only one of JWT or seed is specified, as we cannot authenticate with only one of them
 /// - Connection fails
-async fn connect_nats(
+pub async fn connect_nats(
     addr: impl async_nats::ToServerAddrs,
     jwt: Option<&String>,
     key: Option<Arc<KeyPair>>,
@@ -435,17 +437,9 @@ async fn connect_nats(
                 let wid_cfg = wid_cfg.clone();
 
                 let fetch_svid_handle = tokio::spawn(async move {
-                    let mut client = match spiffe::WorkloadApiClient::new_from_path(
-                        wid_cfg.spiffe_endpoint.as_str(),
-                    )
-                    .await
-                    {
-                        Ok(client) => client,
-                        Err(e) => {
-                            // TODO(joonas): handle this in a better way.
-                            panic!("{e:?}");
-                        }
-                    };
+                    let mut client = spiffe::WorkloadApiClient::default()
+                        .await
+                        .map_err(async_nats::AuthError::new)?;
                     client
                         .fetch_jwt_svid(&[wid_cfg.auth_service_audience.as_str()], None)
                         .await
@@ -461,8 +455,9 @@ async fn connect_nats(
                     let mut auth = async_nats::Auth::new();
                     let signature = key
                         .sign(&nonce)
-                        .map(String::from_utf8)
-                        .map_err(async_nats::AuthError::new)?
+                        // TODO(joonas): Remove these once we have async-nats 0.38.0
+                        // .map(String::from_utf8)
+                        // .map_err(async_nats::AuthError::new)?
                         .map_err(async_nats::AuthError::new)?;
 
                     auth.jwt = Some(jwt.to_string());
@@ -495,17 +490,9 @@ async fn connect_nats(
                 let wid_cfg = wid_cfg.clone();
 
                 let fetch_svid_handle = tokio::spawn(async move {
-                    let mut client =
-                        match spiffe::WorkloadApiClient::new_from_path(&wid_cfg.spiffe_endpoint)
-                            .await
-                        {
-                            Ok(client) => client,
-                            Err(e) => {
-                                // TODO(joonas): handle this in a better way.
-                                panic!("{e:?}");
-                            }
-                        };
-
+                    let mut client = spiffe::WorkloadApiClient::default()
+                        .await
+                        .map_err(async_nats::AuthError::new)?;
                     client
                         .fetch_jwt_svid(&[wid_cfg.auth_service_audience.as_str()], None)
                         .await
