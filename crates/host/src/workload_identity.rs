@@ -13,6 +13,7 @@ pub struct WorkloadIdentityConfig {
 
 impl WorkloadIdentityConfig {
     /// Fetch workload identity configuration from environment variables
+    #[cfg(unix)]
     pub fn from_env() -> Result<Self> {
         // TODO(joonas): figure out better naming here. maybe this should be interpolated from a trust domain?
         // This needs to follow format like: "spiffe://{spiffe_trust_domain}/{nats_auth_callout_service}"
@@ -22,5 +23,13 @@ impl WorkloadIdentityConfig {
         Ok(Self {
             auth_service_audience,
         })
+    }
+
+    #[cfg(target_family = "windows")]
+    pub fn from_env() -> Result<Self> {
+        // The use is inline so as to appease clippy.
+        use anyhow::bail;
+
+        bail!("workload identity is not supported on Windows")
     }
 }

@@ -33,7 +33,6 @@ secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sysinfo = { workspace = true }
-spiffe = { workspace = true, features = ["spiffe-types", "workload-api"] }
 time = { workspace = true, features = ["formatting"] }
 tokio = { workspace = true, features = [
     "fs",
@@ -67,6 +66,9 @@ wasmtime-wasi-http = { workspace = true }
 wrpc-transport = { workspace = true }
 wrpc-interface-http = { workspace = true }
 wrpc-transport-nats = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+spiffe = { workspace = true, features = ["default"] }
 
 [package.metadata.cargo-machete]
 ignored = ["cloudevents-sdk"]
