@@ -907,7 +907,8 @@ func main() {}
 
         // Run bindgen generation process
         assert!(std::env::set_current_dir(&project_dir).is_ok());
-        assert!(generate_tinygo_bindgen(&project_dir).await.is_err());
+        // NOTE: multi-world is now supported when generating
+        assert!(generate_tinygo_bindgen(&project_dir).await.is_ok());
 
         let dir_contents = fs::read_dir(output_dir)
             .context("failed to read dir")?
