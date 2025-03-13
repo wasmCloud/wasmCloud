@@ -4099,8 +4099,9 @@ dependencies = [
 
 [[package]]
 name = "nats-jwt-rs"
-version = "0.1.0"
-source = "git+https://github.com/wasmCloud/nats-jwt-rs.git?rev=4b2c76bd2a1d90ccad93c00dd38278ff58ee1838#4b2c76bd2a1d90ccad93c00dd38278ff58ee1838"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e44bf436bfef5aacfa19599b1df8c5e0200e5c994e15aaa6aebc870423fc9081"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
