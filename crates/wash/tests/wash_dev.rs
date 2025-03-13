@@ -919,14 +919,14 @@ async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
     .await?;
     let project_dir = test_setup.project_dir.clone();
 
-    let dir = test_dir_with_subfolder("dev_hello_component");
+    let dir = tempfile::tempdir()?;
 
     wait_for_no_hosts()
         .await
         .context("one or more unexpected wasmcloud instances running")?;
 
     let nats_port = find_open_port().await?;
-    let mut nats = start_nats(nats_port, &dir).await?;
+    let mut nats = start_nats(nats_port, &dir.path().to_path_buf()).await?;
 
     // Start a wasmCloud host
     let host_id = KeyPair::new_server();
