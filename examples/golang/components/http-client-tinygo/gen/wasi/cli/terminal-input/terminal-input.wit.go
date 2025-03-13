@@ -4,7 +4,7 @@
 package terminalinput
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
+	"go.bytecodealliance.org/cm"
 )
 
 // TerminalInput represents the imported resource "wasi:cli/terminal-input@0.2.0#terminal-input".

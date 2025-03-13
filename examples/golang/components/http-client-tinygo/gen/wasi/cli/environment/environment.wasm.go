@@ -3,7 +3,7 @@
 package environment
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
+	"go.bytecodealliance.org/cm"
 )
 
 // This file contains wasmimport and wasmexport declarations for "wasi:cli@0.2.0".

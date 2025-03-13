@@ -4,8 +4,8 @@
 package terminalstdout
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
 	terminaloutput "github.com/wasmcloud/wasmcloud/examples/golang/components/http-client-tinygo/gen/wasi/cli/terminal-output"
+	"go.bytecodealliance.org/cm"
 )
 
 // TerminalOutput represents the imported type alias "wasi:cli/terminal-stdout@0.2.0#terminal-output".

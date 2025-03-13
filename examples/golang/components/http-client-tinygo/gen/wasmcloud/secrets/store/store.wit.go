@@ -4,7 +4,7 @@
 package store
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
+	"go.bytecodealliance.org/cm"
 )
 
 // SecretsError represents the variant "wasmcloud:secrets/store@0.1.0-draft#secrets-error".

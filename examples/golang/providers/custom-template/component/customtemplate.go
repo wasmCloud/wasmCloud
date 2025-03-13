@@ -1,3 +1,5 @@
+//go:generate go tool wit-bindgen-go generate --world component --out gen ./wit
+
 package main
 
 import (
@@ -20,5 +22,4 @@ func (c CustomTemplateComponent) Process(data gen.ExportsWasmcloudExample0_1_0_P
 	return fmt.Sprintf("Provider is running on %s-%s", os, arch)
 }
 
-//go:generate wit-bindgen tiny-go wit --out-dir=gen
 func main() {}

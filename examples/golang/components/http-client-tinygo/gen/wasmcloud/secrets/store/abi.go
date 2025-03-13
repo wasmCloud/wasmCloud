@@ -3,7 +3,7 @@
 package store
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
+	"go.bytecodealliance.org/cm"
 	"unsafe"
 )
 
