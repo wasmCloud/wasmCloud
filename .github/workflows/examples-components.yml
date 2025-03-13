@@ -79,21 +79,21 @@ jobs:
           - folder: 'http-client-tinygo'
             tag-prefix: 'component-http-client-tinygo-v'
             lang: 'tinygo'
-            lang-version: '1.23'
+            lang-version: '1.24.1'
             test-deploy: wadm.yaml
             wasm-bin: 'http_client_tinygo_s.wasm'
 
           - folder: 'http-echo-tinygo'
             tag-prefix: 'component-http-echo-tinygo-v'
             lang: 'tinygo'
-            lang-version: '1.23'
+            lang-version: '1.24.1'
             test-deploy: wadm.yaml
             wasm-bin: 'http-echo-tinygo-component_s.wasm'
 
           - folder: 'http-hello-world'
             tag-prefix: 'component-http-hello-world-tinygo-v'
             lang: 'tinygo'
-            lang-version: '1.23'
+            lang-version: '1.24.1'
             test-deploy: wadm.yaml
             wasm-bin: 'http_hello_world_s.wasm'
 
