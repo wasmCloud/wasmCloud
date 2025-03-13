@@ -14,12 +14,17 @@ wash build -p src/bin/http-server-provider
 
 The wasmCloud HTTP server has optional configuration that you can provide to it at startup. All configuration keys are case insensitive, as in two configuration values "ROUTING_MODE" and "routing_mode" will conflict, so ensure they are unique. See the [provider config](https://wasmcloud.com/docs/developer/providers/configure) documentation for information about defining and using this configuration. All link configuration should be passed as `source` configuration, with the HTTP server as the source.
 
-The configuration passed to this provider at startup primarily defines the "mode" the HTTP server should be running in. The `address` mode sets up a listener on a provided address for **each** linked component, and the `path` mode sets up a listener on a provided address, using the `path` link configuration to route to the linked component.
+The configuration passed to this provider at startup primarily defines the "mode" the HTTP server should be running in:
+
+- `address` mode sets up a listener on a provided address for **each** linked component.
+- `path` mode sets up a listener on a provided address, using the `path` link configuration to route to the linked component. 
+- `host` mode sets up a listener on a provided address, using the `host` link configuration to route to the linked component.
 
 | Key               | Value                  | Default        | Description                                                                                                           |
 | ----------------- | ---------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `routing_mode`    | "address"              | `address`      | Dictates the routing mode of the capability provider. `address` mode will listen on a new address for each component. |
-| `default_address` | A valid listen address | "0.0.0.0:8000" | The default listen address to listen on and route to components.                                                      |
+| `routing_mode`    | `address,path,host`    | `address`      | Dictates the routing mode of the capability provider. `address` mode will listen on a new address for each component. |
+| `default_address` | A valid listen address | `0.0.0.0:8000` | The default listen address to listen on and route to components.                                                      |
+| `header`          | Inbound Host Header    | `host`         | Which Inbound Header carries the Hostname when in `host` routing_mode.                                                |
 
 Configuration differs slightly depending on the `routing_mode` chosen for the HTTP server.
 
@@ -70,6 +75,7 @@ components:
     traits:
       - type: link
         properties:
+          name: link-one
           target: http-component-one
           namespace: wasi
           package: http
@@ -81,6 +87,7 @@ components:
                   path: '/foo'
       - type: link
         properties:
+          name: link-two
           target: http-component-two
           namespace: wasi
           package: http
@@ -90,6 +97,73 @@ components:
               - name: path-two
                 properties:
                   path: '/bar'
+```
+
+### Host routing mode
+
+In host routing mode, the configuration of `routing_mode` and `default_address` is supplied as provider configuration as well as all values in [HTTP address configuration](#http-address-configuration). The HTTP server, when in host routing mode, sets up a listener at startup to serve **all** components.
+
+All components must be configured with a `host` on the link config for routing in this mode.
+
+| Key    | Default | Description                                                                                                    |
+| ------ | ------- | -------------------------------------------------------------------------------------------------------------- |
+| `host` | `N/A`   | **Required.** The host, e.g. `componentA.wasmcloud`, to register to send all requests at that path to the linked component. |
+
+This is an example of a manifest that routes to two different components in host mode, listening on `0.0.0.0:8081` and serving hosts `component-one.wasmcloud.dev` and `component-two.wasmcloud.dev`.
+
+```yaml
+components:
+  - name: http-component-one
+    type: component
+    properties:
+      image: file://./build/http_hello_world_s.wasm
+    traits:
+      - type: spreadscaler
+        properties:
+          instances: 1
+  - name: http-component-two
+    type: component
+    properties:
+      image: file://./build/http_hello_world_s.wasm
+    traits:
+      - type: spreadscaler
+        properties:
+          instances: 1
+
+  - name: httpserver
+    type: capability
+    properties:
+      image: ghcr.io/wasmcloud/http-server:0.26.0
+      config:
+        - name: http-config
+          properties:
+            routing_mode: 'host'
+            default_address: '0.0.0.0:8081'
+    traits:
+      - type: link
+        properties:
+          name: link-one
+          target: http-component-one
+          namespace: wasi
+          package: http
+          interfaces: [incoming-handler]
+          source:
+            config:
+              - name: host-one
+                properties:
+                  host: 'component-one.wasmcloud.dev'
+      - type: link
+        properties:
+          name: link-two
+          target: http-component-two
+          namespace: wasi
+          package: http
+          interfaces: [incoming-handler]
+          source:
+            config:
+              - name: host-two
+                properties:
+                  host: 'component-two.wasmcloud.dev'
 ```
 
 ## HTTP Address Configuration
