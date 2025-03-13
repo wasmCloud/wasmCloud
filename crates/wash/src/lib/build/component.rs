@@ -650,10 +650,87 @@ world downstream {
 
     const COMPONENT_GO_MOD: &str = r"
 module example
+
+go 1.24.1
+
+tool go.bytecodealliance.org/cmd/wit-bindgen-go
+
+require go.bytecodealliance.org/cm v0.1.0
+
+require (
+	github.com/coreos/go-semver v0.3.1 // indirect
+	github.com/docker/libtrust v0.0.0-20160708172513-aabc10ec26b7 // indirect
+	github.com/klauspost/compress v1.17.11 // indirect
+	github.com/opencontainers/go-digest v1.0.0 // indirect
+	github.com/regclient/regclient v0.7.2 // indirect
+	github.com/sirupsen/logrus v1.9.3 // indirect
+	github.com/ulikunitz/xz v0.5.12 // indirect
+	github.com/urfave/cli/v3 v3.0.0-beta1 // indirect
+	go.bytecodealliance.org v0.5.0 // indirect
+	golang.org/x/mod v0.22.0 // indirect
+	golang.org/x/sys v0.28.0 // indirect
+)
     ";
 
+    const COMPONENT_GO_SUM: &str = r"
+github.com/coreos/go-semver v0.3.1 h1:yi21YpKnrx1gt5R+la8n5WgS0kCrsPp33dmEyHReZr4=
+github.com/coreos/go-semver v0.3.1/go.mod h1:irMmmIw/7yzSRPWryHsK7EYSg09caPQL03VsM8rvUec=
+github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
+github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/docker/libtrust v0.0.0-20160708172513-aabc10ec26b7 h1:UhxFibDNY/bfvqU5CAUmr9zpesgbU6SWc8/B4mflAE4=
+github.com/docker/libtrust v0.0.0-20160708172513-aabc10ec26b7/go.mod h1:cyGadeNEkKy96OOhEzfZl+yxihPEzKnqJwvfuSUqbZE=
+github.com/klauspost/compress v1.17.11 h1:In6xLpyWOi1+C7tXUUWv2ot1QvBjxevKAaI6IXrJmUc=
+github.com/klauspost/compress v1.17.11/go.mod h1:pMDklpSncoRMuLFrf1W9Ss9KT+0rH90U12bZKk7uwG0=
+github.com/olareg/olareg v0.1.1 h1:Ui7q93zjcoF+U9U71sgqgZWByDoZOpqHitUXEu2xV+g=
+github.com/olareg/olareg v0.1.1/go.mod h1:w8NP4SWrHHtxsFaUiv1lnCnYPm4sN1seCd2h7FK/dc0=
+github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8Oi/yOhh5U=
+github.com/opencontainers/go-digest v1.0.0/go.mod h1:0JzlMkj0TRzQZfJkVvzbP0HBR3IKzErnv2BNG4W4MAM=
+github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
+github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/regclient/regclient v0.7.2 h1:vcldDAwBMLtighYVMeb6qNt5+0hKg3AN2IkCc0JIJNM=
+github.com/regclient/regclient v0.7.2/go.mod h1:QlA7W9/pvmbblOXM4d49JgfuOTwVXcUMKt3bFuOSVIQ=
+github.com/sergi/go-diff v1.3.1 h1:xkr+Oxo4BOQKmkn/B9eMK0g5Kg/983T9DqqPHwYqD+8=
+github.com/sergi/go-diff v1.3.1/go.mod h1:aMJSSKb2lpPvRNec0+w3fl7LP9IOFzdc9Pa4NFbPK1I=
+github.com/sirupsen/logrus v1.9.3 h1:dueUQJ1C2q9oE3F7wvmSGAaVtTmUizReu6fjN8uqzbQ=
+github.com/sirupsen/logrus v1.9.3/go.mod h1:naHLuLoDiP4jHNo9R0sCBMtWGeIprob74mVsIT4qYEQ=
+github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
+github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
+github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsTg=
+github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
+github.com/ulikunitz/xz v0.5.12 h1:37Nm15o69RwBkXM0J6A5OlE67RZTfzUxTj8fB3dfcsc=
+github.com/ulikunitz/xz v0.5.12/go.mod h1:nbz6k7qbPmH4IRqmfOplQw/tblSgqTqBwxkY0oWt/14=
+github.com/urfave/cli/v3 v3.0.0-beta1 h1:6DTaaUarcM0wX7qj5Hcvs+5Dm3dyUTBbEwIWAjcw9Zg=
+github.com/urfave/cli/v3 v3.0.0-beta1/go.mod h1:FnIeEMYu+ko8zP1F9Ypr3xkZMIDqW3DR92yUtY39q1Y=
+go.bytecodealliance.org v0.5.0 h1:ywhCpF0JdqGkqct5JqSY1Me8lz001UIJXUaCSS32cew=
+go.bytecodealliance.org v0.5.0/go.mod h1:8kYTSxmQr8DU3dKOKCOHH1Ap1gWX/61qlFSbIuIno2Q=
+go.bytecodealliance.org/cm v0.1.0 h1:78Rk4d5rgir5Hm+LMFpDWhjmFBWrKDFPSKUwDBj+nwo=
+go.bytecodealliance.org/cm v0.1.0/go.mod h1:NZ2UT0DyGhBfpIPOxPMCuG6g1YTR4YF3xweD7mHX5VQ=
+golang.org/x/mod v0.22.0 h1:D4nJWe9zXqHOmWqj4VMOJhvzj7bEZg4wEYa759z1pH4=
+golang.org/x/mod v0.22.0/go.mod h1:6SkKJ3Xj0I0BrPOZoBy3bdMptDDU9oJrpohJ3eWZ1fY=
+golang.org/x/sync v0.10.0 h1:3NQrjDixjgGwUOCaF8w2+VYHv0Ve/vGYSbdkTa98gmQ=
+golang.org/x/sync v0.10.0/go.mod h1:Czt+wKu1gCyEFDUtn0jG5QVvpJ6rzVqr5aXyt9drQfk=
+golang.org/x/sys v0.0.0-20220715151400-c0bba94af5f8/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+golang.org/x/sys v0.28.0 h1:Fksou7UEQUWlKvIdsqzJmUmCX3cZuD2+P3XyyzwMhlA=
+golang.org/x/sys v0.28.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
+golang.org/x/tools v0.28.0 h1:WuB6qZ4RPCQo5aP3WdKZS7i595EdWqWR8vqJTlwTVK8=
+golang.org/x/tools v0.28.0/go.mod h1:dcIOrVd3mfQKTgrDVQHqCPMWy6lnhfhtX3hLXYVLfRw=
+gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+";
+
     const COMPONENT_GO_GENERATE: &str = r"
-//go:generate wit-bindgen tiny-go wit --out-dir=generated
+//go:generate go tool wit-bindgen-go generate --out gen ./wit
+
+package main
+
+func main() {}
+    ";
+
+    const COMPONENT_GO_GENERATE_MULTI_WORLD: &str = r"
+//go:generate go tool wit-bindgen-go generate --world upstream --out gen ./wit
 
 package main
 
@@ -783,13 +860,15 @@ func main() {}
 
         // Set up directories
         let wit_dir = project_dir.path().join("wit");
-        let output_dir = project_dir.path().join("generated");
+        let output_dir = project_dir.path().join("gen");
         std::fs::create_dir(&wit_dir).context("failed to create WIT dir")?;
         std::fs::create_dir(&output_dir).context("failed to create output dir")?;
 
         // Write WIT for Golang code
         std::fs::write(project_dir.path().join("go.mod"), COMPONENT_GO_MOD)
             .context("failed to write go mod")?;
+        std::fs::write(project_dir.path().join("go.sum"), COMPONENT_GO_SUM)
+            .context("failed to write go sum")?;
         std::fs::write(project_dir.path().join("main.go"), COMPONENT_GO_GENERATE)
             .context("failed to write go file")?;
         std::fs::write(wit_dir.join("test.wit"), COMPONENT_BASIC_WIT)
@@ -818,15 +897,20 @@ func main() {}
 
         // Set up directories
         let wit_dir = project_dir.path().join("wit");
-        let output_dir = project_dir.path().join("generated");
+        let output_dir = project_dir.path().join("gen");
         std::fs::create_dir(&wit_dir).context("failed to create WIT dir")?;
         std::fs::create_dir(&output_dir).context("failed to create output dir")?;
 
         // Write WIT for Golang code
         std::fs::write(project_dir.path().join("go.mod"), COMPONENT_GO_MOD)
             .context("failed to write go mod")?;
-        std::fs::write(project_dir.path().join("main.go"), COMPONENT_GO_GENERATE)
-            .context("failed to write go file")?;
+        std::fs::write(project_dir.path().join("go.sum"), COMPONENT_GO_SUM)
+            .context("failed to write go sum")?;
+        std::fs::write(
+            project_dir.path().join("main.go"),
+            COMPONENT_GO_GENERATE_MULTI_WORLD,
+        )
+        .context("failed to write go file")?;
         std::fs::write(wit_dir.join("upstream.wit"), COMPONENT_UPSTREAM_WIT)
             .context("failed to write test WIT file")?;
         std::fs::write(wit_dir.join("downstream.wit"), COMPONENT_DOWNSTREAM_WIT)

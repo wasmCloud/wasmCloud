@@ -37,7 +37,7 @@ runs:
     - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
       if: ${{ inputs.language == 'tinygo' }}
       with:
-        tinygo-version: '0.33.0'
+        tinygo-version: '0.36.0'
         install-binaryen: 'false'
 
     # Python
