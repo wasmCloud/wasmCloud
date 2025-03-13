@@ -45,7 +45,7 @@ jobs:
           # Golang example providers
           - name: 'custom-template'
             lang: 'golang'
-            lang_version: '1.23'
+            lang_version: '1.24.1'
             tinygo_version: '0.36.0'
             test_deploy: wadm.yaml
           # Rust example providers
