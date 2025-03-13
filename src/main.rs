@@ -419,7 +419,7 @@ async fn main() -> anyhow::Result<()> {
             Some(guard)
         }
         Err(e) => {
-            eprintln!("Failed to configure observability: {e}");
+            eprintln!("Failed to configure observability: {e:?}");
             None
         }
     };
