@@ -20,5 +20,5 @@ func (c CustomTemplateComponent) Process(data gen.ExportsWasmcloudExample0_1_0_P
 	return fmt.Sprintf("Provider is running on %s-%s", os, arch)
 }
 
-//go:generate wit-bindgen tiny-go wit --out-dir=gen --gofmt
+//go:generate wit-bindgen tiny-go wit --out-dir=gen
 func main() {}

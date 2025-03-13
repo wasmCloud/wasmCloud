@@ -653,7 +653,7 @@ module example
     ";
 
     const COMPONENT_GO_GENERATE: &str = r"
-//go:generate wit-bindgen tiny-go wit --out-dir=generated --gofmt
+//go:generate wit-bindgen tiny-go wit --out-dir=generated
 
 package main
 
