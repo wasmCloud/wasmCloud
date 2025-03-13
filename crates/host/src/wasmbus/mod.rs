@@ -423,49 +423,7 @@ pub async fn connect_nats(
 ) -> anyhow::Result<async_nats::Client> {
     let opts = match (jwt, key, workload_identity_config) {
         (Some(jwt), Some(key), Some(wid_cfg)) => {
-            let wid_cfg = Arc::new(wid_cfg);
-            let jwt = Arc::new(jwt.to_string());
-            let key = Arc::clone(&key);
-
-            // Return an auth callback that'll get called any time the
-            // NATS connection needs to be (re-)established. This is
-            // necessary to ensure that we always provide a recently
-            // issued JWT-SVID.
-            async_nats::ConnectOptions::with_auth_callback(move |nonce| {
-                let key = key.clone();
-                let jwt = jwt.clone();
-                let wid_cfg = wid_cfg.clone();
-
-                let fetch_svid_handle = tokio::spawn(async move {
-                    let mut client = spiffe::WorkloadApiClient::default()
-                        .await
-                        .map_err(async_nats::AuthError::new)?;
-                    client
-                        .fetch_jwt_svid(&[wid_cfg.auth_service_audience.as_str()], None)
-                        .await
-                        .map_err(async_nats::AuthError::new)
-                });
-
-                async move {
-                    let svid = fetch_svid_handle
-                        .await
-                        .map_err(async_nats::AuthError::new)?
-                        .map_err(async_nats::AuthError::new)?;
-
-                    let mut auth = async_nats::Auth::new();
-                    let signature = key
-                        .sign(&nonce)
-                        // TODO(joonas): Remove these once we have async-nats 0.38.0
-                        // .map(String::from_utf8)
-                        // .map_err(async_nats::AuthError::new)?
-                        .map_err(async_nats::AuthError::new)?;
-
-                    auth.jwt = Some(jwt.to_string());
-                    auth.signature = Some(signature);
-                    auth.token = Some(svid.token().into());
-                    Ok(auth)
-                }
-            })
+            setup_workload_identity_nats_connect_options(Some(jwt), Some(key), wid_cfg).await?
         }
         (Some(jwt), Some(key), None) => {
             async_nats::ConnectOptions::with_jwt(jwt.to_string(), move |nonce| {
@@ -477,39 +435,7 @@ pub async fn connect_nats(
             bail!("cannot authenticate if only one of jwt or seed is specified")
         }
         (None, None, Some(wid_cfg)) => {
-            let wid_cfg = Arc::new(wid_cfg);
-
-            // Return an auth callback that'll get called any time the
-            // NATS connection needs to be (re-)established. This is
-            // necessary to ensure that we always provide a recently
-            // issued JWT-SVID.
-            //
-            // NOTE: We ignore the nonce since we don't have a keypair to
-            // sign it with.
-            async_nats::ConnectOptions::with_auth_callback(move |_| {
-                let wid_cfg = wid_cfg.clone();
-
-                let fetch_svid_handle = tokio::spawn(async move {
-                    let mut client = spiffe::WorkloadApiClient::default()
-                        .await
-                        .map_err(async_nats::AuthError::new)?;
-                    client
-                        .fetch_jwt_svid(&[wid_cfg.auth_service_audience.as_str()], None)
-                        .await
-                        .map_err(async_nats::AuthError::new)
-                });
-                async move {
-                    let svid = fetch_svid_handle
-                        .await
-                        .context("failed to receive SPIFFE response")
-                        .map_err(async_nats::AuthError::new)?
-                        .map_err(async_nats::AuthError::new)?;
-
-                    let mut auth = async_nats::Auth::new();
-                    auth.token = Some(svid.token().into());
-                    Ok(auth)
-                }
-            })
+            setup_workload_identity_nats_connect_options(None, None, wid_cfg).await?
         }
         _ => async_nats::ConnectOptions::new(),
     };
@@ -522,6 +448,71 @@ pub async fn connect_nats(
     opts.connect(addr)
         .await
         .context("failed to connect to NATS")
+}
+
+#[cfg(unix)]
+async fn setup_workload_identity_nats_connect_options(
+    jwt: Option<&String>,
+    key: Option<Arc<KeyPair>>,
+    wid_cfg: WorkloadIdentityConfig,
+) -> anyhow::Result<async_nats::ConnectOptions> {
+    let wid_cfg = Arc::new(wid_cfg);
+    let jwt = jwt.map(String::to_string).map(Arc::new);
+    let key = key.clone();
+
+    // Return an auth callback that'll get called any time the
+    // NATS connection needs to be (re-)established. This is
+    // necessary to ensure that we always provide a recently
+    // issued JWT-SVID.
+    Ok(async_nats::ConnectOptions::with_auth_callback(
+        move |nonce| {
+            let key = key.clone();
+            let jwt = jwt.clone();
+            let wid_cfg = wid_cfg.clone();
+
+            let fetch_svid_handle = tokio::spawn(async move {
+                let mut client = spiffe::WorkloadApiClient::default()
+                    .await
+                    .map_err(async_nats::AuthError::new)?;
+                client
+                    .fetch_jwt_svid(&[wid_cfg.auth_service_audience.as_str()], None)
+                    .await
+                    .map_err(async_nats::AuthError::new)
+            });
+
+            async move {
+                let svid = fetch_svid_handle
+                    .await
+                    .map_err(async_nats::AuthError::new)?
+                    .map_err(async_nats::AuthError::new)?;
+
+                let mut auth = async_nats::Auth::new();
+                if let Some(key) = key {
+                    let signature = key
+                        .sign(&nonce)
+                        // TODO(joonas): Remove these once we have async-nats 0.38.0
+                        // .map(String::from_utf8)
+                        // .map_err(async_nats::AuthError::new)?
+                        .map_err(async_nats::AuthError::new)?;
+                    auth.signature = Some(signature);
+                }
+                if let Some(jwt) = jwt {
+                    auth.jwt = Some(jwt.to_string());
+                }
+                auth.token = Some(svid.token().into());
+                Ok(auth)
+            }
+        },
+    ))
+}
+
+#[cfg(target_family = "windows")]
+async fn setup_workload_identity_nats_connect_options(
+    jwt: Option<&String>,
+    key: Option<Arc<KeyPair>>,
+    wid_cfg: WorkloadIdentityConfig,
+) -> anyhow::Result<async_nats::ConnectOptions> {
+    bail!("workload identity is not supported on Windows")
 }
 
 #[derive(Debug, Default)]

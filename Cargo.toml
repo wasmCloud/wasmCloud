@@ -183,7 +183,6 @@ secrets-nats-kv = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
-spiffe = { workspace = true }
 tempfile = { workspace = true }
 test-components = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
@@ -208,6 +207,10 @@ wasmcloud-test-util = { workspace = true, features = ["testcontainers"] }
 wrpc-interface-http = { workspace = true, features = ["hyper"] }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+# Used in the integration testing for the experimental workload identity feature
+spiffe = { workspace = true, features = ["default"] }
 
 [workspace]
 members = ["crates/*"]
