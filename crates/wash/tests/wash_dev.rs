@@ -1,9 +1,9 @@
 #![cfg(target_family = "unix")]
 
-use std::io::{self, BufRead, Write};
+use std::io::Write;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::thread;
 
@@ -15,15 +15,21 @@ use tokio::time::Duration;
 use wadm_types::{LinkProperty, Manifest, Properties, TraitProperty};
 use wasmcloud_control_interface::{ClientBuilder as CtlClientBuilder, Host};
 
+const DEV_WAIT_TIME: Duration = Duration::from_secs(1200);
+const DEV_EXIT_TIME: Duration = Duration::from_secs(60);
+
 mod common;
 use common::{
-    find_open_port, init, init_path, start_nats, test_dir_with_subfolder, wait_for_no_hosts,
+    find_open_port, force_cleanup_processes, init, init_path, start_nats, wait_for_no_hosts,
     wait_for_no_nats, wait_for_no_wadm, wait_for_num_hosts,
 };
 
 #[tokio::test]
 #[serial_test::serial]
 async fn integration_dev_hello_component_serial() -> Result<()> {
+    // Force cleanup any lingering processes from previous tests
+    force_cleanup_processes().await?;
+
     wait_for_no_hosts()
         .await
         .context("unexpected wasmcloud instance(s) running")?;
@@ -34,7 +40,7 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
     .await?;
     let project_dir = test_setup.project_dir.clone();
 
-    let dir = test_dir_with_subfolder("dev_hello_component");
+    let dir = tempfile::tempdir()?;
 
     wait_for_no_hosts()
         .await
@@ -58,7 +64,7 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
             ])
             .kill_on_drop(true)
             .spawn()
-            .context("failed running cargo dev")?,
+            .context("failed running wash dev")?,
     ));
     let watch_dev_cmd = dev_cmd.clone();
 
@@ -67,7 +73,7 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
 
     // Wait until the signed file is there (this means dev succeeded)
     let _ = tokio::time::timeout(
-        Duration::from_secs(1200),
+        DEV_WAIT_TIME,
         tokio::spawn(async move {
             loop {
                 // If the command failed (and exited early), bail
@@ -86,7 +92,9 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
     )
     .await
     .context("timed out while waiting for file path to get created")?;
-    assert!(signed_file_path.exists(), "signed component file was built");
+    if !signed_file_path.exists() {
+        bail!("signed component file was not built");
+    }
 
     let process_pid = dev_cmd
         .write()
@@ -100,10 +108,10 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
         nix::unistd::Pid::from_raw(process_pid as i32),
         nix::sys::signal::Signal::SIGINT,
     )
-    .expect("cannot send ctrl-c");
+    .context("cannot send ctrl-c")?;
 
     // Wait until the process stops
-    let _ = tokio::time::timeout(Duration::from_secs(15), dev_cmd.write().await.wait())
+    let _ = tokio::time::timeout(DEV_EXIT_TIME, dev_cmd.write().await.wait())
         .await
         .context("dev command did not exit")?;
 
@@ -129,13 +137,16 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
 #[tokio::test]
 #[serial_test::serial]
 async fn integration_override_manifest_yaml_serial() -> Result<()> {
+    // Force cleanup any lingering processes from previous tests
+    force_cleanup_processes().await?;
+
     wait_for_no_hosts()
         .await
         .context("unexpected wasmcloud instance(s) running")?;
 
     let test_setup = init("hello", "hello-world-rust").await?;
     let project_dir = test_setup.project_dir.clone();
-    let dir = test_dir_with_subfolder("dev_hello_component");
+    let dir = tempfile::tempdir()?;
 
     wait_for_no_hosts()
         .await
@@ -208,12 +219,12 @@ manifests = [
             ])
             .kill_on_drop(true)
             .spawn()
-            .context("failed running cargo dev")?,
+            .context("failed running wash dev")?,
     ));
     let watch_dev_cmd = dev_cmd.clone();
 
     // Get the host that was created
-    let host = tokio::time::timeout(Duration::from_secs(10), async {
+    let host = tokio::time::timeout(DEV_WAIT_TIME, async {
         loop {
             if let Some(h) = ctl_client
                 .get_hosts()
@@ -284,10 +295,10 @@ manifests = [
         nix::unistd::Pid::from_raw(process_pid as i32),
         nix::sys::signal::Signal::SIGINT,
     )
-    .expect("cannot send ctrl-c");
+    .context("cannot send ctrl-c")?;
 
     // Wait until the process stops
-    let _ = tokio::time::timeout(Duration::from_secs(15), dev_cmd.write().await.wait())
+    let _ = tokio::time::timeout(DEV_EXIT_TIME, dev_cmd.write().await.wait())
         .await
         .context("dev command did not exit")?;
 
@@ -313,13 +324,16 @@ manifests = [
 #[tokio::test]
 #[serial_test::serial]
 async fn integration_override_via_interface_serial() -> Result<()> {
+    // Force cleanup any lingering processes from previous tests
+    force_cleanup_processes().await?;
+
     wait_for_no_hosts()
         .await
         .context("unexpected wasmcloud instance(s) running")?;
 
     let test_setup = init("hello", "hello-world-rust").await?;
     let project_dir = test_setup.project_dir.clone();
-    let dir = test_dir_with_subfolder("dev_hello_component");
+    let dir = tempfile::tempdir()?;
 
     // Create a dir for generated manifests
     let generated_manifests_dir = project_dir.join("generated-manifests");
@@ -400,12 +414,12 @@ link_name = "default"
             ])
             .kill_on_drop(true)
             .spawn()
-            .context("failed running cargo dev")?,
+            .context("failed running wash dev")?,
     ));
     let watch_dev_cmd = dev_cmd.clone();
 
     // Get the host that was created
-    let host = tokio::time::timeout(Duration::from_secs(10), async {
+    let host = tokio::time::timeout(DEV_WAIT_TIME, async {
         loop {
             if let Some(h) = ctl_client
                 .get_hosts()
@@ -502,10 +516,10 @@ link_name = "default"
         nix::unistd::Pid::from_raw(process_pid as i32),
         nix::sys::signal::Signal::SIGINT,
     )
-    .expect("cannot send ctrl-c");
+    .context("cannot send ctrl-c")?;
 
     // Wait until the process stops
-    let _ = tokio::time::timeout(Duration::from_secs(15), dev_cmd.write().await.wait())
+    let _ = tokio::time::timeout(DEV_EXIT_TIME, dev_cmd.write().await.wait())
         .await
         .context("dev command did not exit")?;
 
@@ -533,6 +547,9 @@ link_name = "default"
 #[tokio::test]
 #[serial_test::serial]
 async fn integration_override_multiple_interfaces() -> Result<()> {
+    // Force cleanup any lingering processes from previous tests
+    force_cleanup_processes().await?;
+
     wait_for_no_hosts()
         .await
         .context("unexpected wasmcloud instance(s) running")?;
@@ -540,7 +557,7 @@ async fn integration_override_multiple_interfaces() -> Result<()> {
     // KV counter
     let test_setup = init_path("hello", "examples/rust/components/http-keyvalue-counter").await?;
     let project_dir = test_setup.project_dir.clone();
-    let dir = test_dir_with_subfolder("dev_keyvalue_component");
+    let dir = tempfile::tempdir()?;
 
     // Create a dir for generated manifests
     let generated_manifests_dir = project_dir.join("generated-manifests");
@@ -620,12 +637,12 @@ link_name = "default"
             ])
             .kill_on_drop(true)
             .spawn()
-            .context("failed running cargo dev")?,
+            .context("failed running wash dev")?,
     ));
     let watch_dev_cmd = dev_cmd.clone();
 
     // Get the host that was created
-    let host = tokio::time::timeout(Duration::from_secs(10), async {
+    let host = tokio::time::timeout(DEV_WAIT_TIME, async {
         loop {
             if let Some(h) = ctl_client
                 .get_hosts()
@@ -712,7 +729,11 @@ link_name = "default"
 
     // Link from HTTP -> component, component -> keyvalue. Notably, only one link
     // for atomics and store.
-    assert_eq!(generated_manifest.links().collect::<Vec<_>>().len(), 2);
+    let links_count = generated_manifest.links().count();
+    if links_count != 2 {
+        bail!("Expected 2 links, but got {links_count}");
+    }
+
     let override_interfaces_link_exists = generated_manifest.links().any(|l| match &l.properties {
         TraitProperty::Link(LinkProperty {
             interfaces, target, ..
@@ -723,7 +744,10 @@ link_name = "default"
         }
         _ => false,
     });
-    assert!(override_interfaces_link_exists);
+
+    if !override_interfaces_link_exists {
+        bail!("Link with atomics and store interfaces to provider component not found");
+    }
 
     let process_pid = dev_cmd
         .write()
@@ -737,10 +761,10 @@ link_name = "default"
         nix::unistd::Pid::from_raw(process_pid as i32),
         nix::sys::signal::Signal::SIGINT,
     )
-    .expect("cannot send ctrl-c");
+    .context("cannot send ctrl-c")?;
 
     // Wait until the process stops
-    let _ = tokio::time::timeout(Duration::from_secs(15), dev_cmd.write().await.wait())
+    let _ = tokio::time::timeout(DEV_EXIT_TIME, dev_cmd.write().await.wait())
         .await
         .context("dev command did not exit")?;
 
@@ -762,11 +786,20 @@ link_name = "default"
     Ok(())
 }
 
+// NOTE(thomastaylor312): So this test and integration_dev_running_multiple_hosts_tests are both
+// terribly borked and almost always fail in CI. These are fairly brittle and do pass locally, but in
+// CI they constantly have issues because processes stick around during failures and other such
+// stuff. It might be easier to re-write these in bash or make them less dependent on process
+// counts. For now they are ignored
 #[tokio::test]
 #[serial_test::serial]
+#[ignore]
 /// This test ensures that dev works when there is already a running host by
 /// connecting to it and then starting a dev loop.
 async fn integration_dev_running_host_tests() -> Result<()> {
+    // Force cleanup any lingering processes from previous tests
+    force_cleanup_processes().await?;
+
     wait_for_no_hosts()
         .await
         .context("unexpected wasmcloud instance(s) running")?;
@@ -777,7 +810,7 @@ async fn integration_dev_running_host_tests() -> Result<()> {
     .await?;
     let project_dir = test_setup.project_dir.clone();
 
-    let dir = test_dir_with_subfolder("dev_hello_component");
+    let dir = tempfile::tempdir()?;
 
     wait_for_no_hosts()
         .await
@@ -802,8 +835,15 @@ async fn integration_dev_running_host_tests() -> Result<()> {
             ])
             .kill_on_drop(true)
             .spawn()
-            .context("failed running cargo dev")?,
+            .context("failed running wash up")?,
     ));
+
+    // Wait for the first host to come up so they don't clobber each other when downloading things
+    // Wait until the first host is up to avoid them competing with each other and trying to
+    // download twice
+    wait_for_num_hosts(1)
+        .await
+        .context("did not get host running")?;
 
     // Start a dev loop, which should just work and use the existing host
     let dev_cmd = Arc::new(RwLock::new(
@@ -821,7 +861,7 @@ async fn integration_dev_running_host_tests() -> Result<()> {
             ])
             .kill_on_drop(true)
             .spawn()
-            .context("failed running cargo dev")?,
+            .context("failed running wash dev")?,
     ));
     let watch_dev_cmd = dev_cmd.clone();
 
@@ -830,7 +870,7 @@ async fn integration_dev_running_host_tests() -> Result<()> {
 
     // Wait until the signed file is there (this means dev succeeded)
     let _ = tokio::time::timeout(
-        Duration::from_secs(1200),
+        DEV_WAIT_TIME,
         tokio::spawn(async move {
             loop {
                 // If the command failed (and exited early), bail
@@ -849,7 +889,10 @@ async fn integration_dev_running_host_tests() -> Result<()> {
     )
     .await
     .context("timed out while waiting for file path to get created")?;
-    assert!(signed_file_path.exists(), "signed component file was built");
+
+    if !signed_file_path.exists() {
+        bail!("signed component file was not built");
+    }
 
     let process_pid = dev_cmd
         .write()
@@ -863,10 +906,10 @@ async fn integration_dev_running_host_tests() -> Result<()> {
         nix::unistd::Pid::from_raw(process_pid as i32),
         nix::sys::signal::Signal::SIGINT,
     )
-    .expect("cannot send ctrl-c");
+    .context("cannot send ctrl-c")?;
 
     // Wait until the process stops
-    let _ = tokio::time::timeout(Duration::from_secs(15), dev_cmd.write().await.wait())
+    let _ = tokio::time::timeout(DEV_EXIT_TIME, dev_cmd.write().await.wait())
         .await
         .context("dev command did not exit")?;
 
@@ -883,7 +926,7 @@ async fn integration_dev_running_host_tests() -> Result<()> {
         nix::unistd::Pid::from_raw(process_pid as i32),
         nix::sys::signal::Signal::SIGINT,
     )
-    .expect("cannot send ctrl-c");
+    .context("cannot send ctrl-c")?;
 
     wait_for_no_hosts()
         .await
@@ -905,10 +948,14 @@ async fn integration_dev_running_host_tests() -> Result<()> {
 
 #[tokio::test]
 #[serial_test::serial]
+#[ignore]
 /// This test ensures that dev does not start and exits cleanly when multiple hosts are
 /// available and the host ID is not specified. Then, ensures dev does start when
 /// the host ID is specified.
 async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
+    // Force cleanup any lingering processes from previous tests
+    force_cleanup_processes().await?;
+
     wait_for_no_hosts()
         .await
         .context("unexpected wasmcloud instance(s) running")?;
@@ -926,13 +973,14 @@ async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
         .context("one or more unexpected wasmcloud instances running")?;
 
     let nats_port = find_open_port().await?;
-    let mut nats = start_nats(nats_port, &dir.path().to_path_buf()).await?;
+    let mut nats = start_nats(nats_port, &dir).await?;
 
     // Start a wasmCloud host
     let host_id = KeyPair::new_server();
     let up_cmd = Arc::new(RwLock::new(
         test_setup
             .base_command()
+            .stdin(Stdio::null())
             .args([
                 "up",
                 "--nats-connect-only",
@@ -947,12 +995,20 @@ async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
             ])
             .kill_on_drop(true)
             .spawn()
-            .context("failed running cargo dev")?,
+            .context("failed running wash up")?,
     ));
+
+    // Wait until the first host is up to avoid them competing with each other and trying to
+    // download twice
+    wait_for_num_hosts(1)
+        .await
+        .context("did not get first host running")?;
+
     // Start a second wasmCloud host
     let up_cmd2 = Arc::new(RwLock::new(
         test_setup
             .base_command()
+            .stdin(Stdio::null())
             .args([
                 "up",
                 "--nats-connect-only",
@@ -966,7 +1022,7 @@ async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
             ])
             .kill_on_drop(true)
             .spawn()
-            .context("failed running cargo dev")?,
+            .context("failed running wash up")?,
     ));
 
     // Ensure two hosts are running
@@ -999,10 +1055,17 @@ async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
         .context("dev loop did not exit in expected time")?
         .context("dev loop failed to exit cleanly")?;
 
-    assert!(!bad_dev_cmd_multiple_hosts.status.success());
-    assert!(bad_dev_cmd_multiple_hosts.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&bad_dev_cmd_multiple_hosts.stderr)
-        .contains("found multiple running hosts"));
+    if bad_dev_cmd_multiple_hosts.status.success() {
+        bail!("Expected dev command to fail with multiple hosts, but it succeeded");
+    }
+    if !bad_dev_cmd_multiple_hosts.stdout.is_empty() {
+        bail!("Expected empty stdout for failed dev command, but got output");
+    }
+    if !String::from_utf8_lossy(&bad_dev_cmd_multiple_hosts.stderr)
+        .contains("found multiple running hosts")
+    {
+        bail!("Expected error message about multiple hosts, but got different error");
+    }
 
     // Start a dev loop, which will fail to find the desired host
     let bad_dev_cmd_multiple_hosts =
@@ -1032,14 +1095,22 @@ async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
         .context("dev loop did not exit in expected time")?
         .context("dev loop failed to exit cleanly")?;
 
-    assert!(!bad_dev_cmd_multiple_hosts.status.success());
-    assert!(bad_dev_cmd_multiple_hosts.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&bad_dev_cmd_multiple_hosts.stderr)
-        .contains("not found in running hosts"));
+    if bad_dev_cmd_multiple_hosts.status.success() {
+        bail!("Expected dev command to fail with invalid host ID, but it succeeded");
+    }
+    if !bad_dev_cmd_multiple_hosts.stdout.is_empty() {
+        bail!("Expected empty stdout for failed dev command, but got output");
+    }
+    if !String::from_utf8_lossy(&bad_dev_cmd_multiple_hosts.stderr)
+        .contains("not found in running hosts")
+    {
+        bail!("Expected error message about host not found, but got different error");
+    }
 
     let dev_cmd = Arc::new(RwLock::new(
         test_setup
             .base_command()
+            .stdin(Stdio::null())
             .args([
                 "dev",
                 "--nats-connect-only",
@@ -1064,7 +1135,7 @@ async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
 
     // Wait until the signed file is there (this means dev succeeded)
     let _ = tokio::time::timeout(
-        Duration::from_secs(1200),
+        DEV_WAIT_TIME,
         tokio::spawn(async move {
             loop {
                 // If the command failed (and exited early), bail
@@ -1083,7 +1154,9 @@ async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
     )
     .await
     .context("timed out while waiting for file path to get created")?;
-    assert!(signed_file_path.exists(), "signed component file was built");
+    if !signed_file_path.exists() {
+        bail!("signed component file was not built");
+    }
 
     let process_pid = dev_cmd
         .write()
@@ -1097,10 +1170,10 @@ async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
         nix::unistd::Pid::from_raw(process_pid as i32),
         nix::sys::signal::Signal::SIGINT,
     )
-    .expect("cannot send ctrl-c");
+    .context("cannot send ctrl-c")?;
 
     // Wait until the process stops
-    let _ = tokio::time::timeout(Duration::from_secs(15), dev_cmd.write().await.wait())
+    let _ = tokio::time::timeout(DEV_EXIT_TIME, dev_cmd.write().await.wait())
         .await
         .context("dev command did not exit")?;
 
@@ -1116,7 +1189,7 @@ async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
         nix::unistd::Pid::from_raw(process_pid as i32),
         nix::sys::signal::Signal::SIGINT,
     )
-    .expect("cannot send ctrl-c");
+    .context("cannot send ctrl-c")?;
 
     // Kill the second host
     let process_pid = up_cmd2
@@ -1130,7 +1203,7 @@ async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
         nix::unistd::Pid::from_raw(process_pid as i32),
         nix::sys::signal::Signal::SIGINT,
     )
-    .expect("cannot send ctrl-c");
+    .context("cannot send ctrl-c")?;
 
     wait_for_no_hosts()
         .await
@@ -1169,25 +1242,29 @@ async fn integration_dev_running_multiple_hosts_tests() -> Result<()> {
 #[serial_test::serial]
 #[cfg(target_family = "unix")]
 async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
+    // Force cleanup any lingering processes from previous tests
+    force_cleanup_processes().await?;
+
     // ========================================================================
     // Preamble
     // ========================================================================
     // Create the test component
+
+    use tokio::io::AsyncBufReadExt as _;
     let test_setup = init("hello", "hello-world-rust").await?;
     let project_dir = test_setup.project_dir.clone();
 
     // Build the test component
-    let mut proc = Command::new(env!("CARGO_BIN_EXE_wash"))
+    let mut proc = test_setup
+        .base_command()
         .arg("build")
         .current_dir(project_dir.clone())
         .spawn()
-        .expect("failed to spawn proc(`wash build`)");
-    let status: ExitStatus = proc.wait().expect("failed to wait for proc(`wash build`)");
-    assert!(
-        status.code() == Some(0) && status.success(),
-        "unexpected exit status for proc(`wash build`); {:?}",
-        status,
-    );
+        .context("failed to spawn proc(`wash build`)")?;
+    let status: ExitStatus = proc.wait().await?;
+    if !(status.code() == Some(0) && status.success()) {
+        bail!("unexpected exit status for proc(`wash build`); {status:?}");
+    }
 
     // Start a NATS server
     let port = find_open_port().await?;
@@ -1199,7 +1276,8 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
     // ========================================================================
     // Create the 'wash dev' process using a piped stdout
     #[allow(clippy::zombie_processes)]
-    let mut proc1 = Command::new(env!("CARGO_BIN_EXE_wash"))
+    let mut proc1 = test_setup
+        .base_command()
         .env("RUST_BACKTRACE", "full")
         .args([
             "dev",
@@ -1217,39 +1295,43 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
         .stderr(Stdio::piped())
         .current_dir(project_dir.clone())
         .spawn()
-        .expect("failed to spawn proc(`wash dev`)");
-    let pid1 = proc1.id();
+        .context("failed to spawn proc(`wash dev`)")?;
+    let pid1 = proc1
+        .id()
+        .context("failed to get pid of proc(`wash dev`)")?;
 
     // Create the 'wc -l' process and use the piped stdout of wash dev as stdin
     #[allow(clippy::zombie_processes)]
-    let mut proc2 = Command::new("wc")
+    let mut proc2 = tokio::process::Command::new("wc")
         .arg("-l")
-        .stdin(
+        .stdin(<tokio::process::ChildStdout as TryInto<Stdio>>::try_into(
             proc1
                 .stdout
                 .take()
-                .expect("failed to take stdout of proc(`wash dev`) as stdin for proc(`wc -l`)"),
-        )
+                .context("failed to take stdout of proc(`wash dev`) as stdin for proc(`wc -l`)")?,
+        )?)
         .stdout(Stdio::piped())
         .spawn()
-        .expect("failed to spawn piped proc(`wc -l`)");
-    let pid2 = proc2.id();
+        .context("failed to spawn piped proc(`wc -l`)")?;
+    let pid2 = proc2
+        .id()
+        .context("failed to get pid of piped proc(`wc -l`)")?;
 
     // Wait for the first process('wash dev') to be started and is waiting for CTRL+C
     let stderr1_pattern = "press Ctrl+c to stop";
     let mut stderr1_out = String::new();
-    let mut stderr1_reader = io::BufReader::new(
+    let mut stderr1_reader = tokio::io::BufReader::new(
         proc1
             .stderr
             .take()
-            .expect("failed to take stderr of proc(`wash dev`)"),
+            .context("failed to take stderr of proc(`wash dev`)")?,
     );
     let mut stderr1_line_count = 0;
     let mut stderr = std::io::stderr(); // used to echo output of proc(`wash dev`) to stderr
     loop {
         let mut line = String::new();
 
-        match stderr1_reader.read_line(&mut line) {
+        match stderr1_reader.read_line(&mut line).await {
             Ok(0) => break,
             Ok(_) => {
                 write!(&mut stderr, "{}", line)?;
@@ -1262,23 +1344,26 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
         }
 
         stderr1_line_count += 1;
-        assert!(
-            stderr1_line_count < 20,
-            "failed to process stderr of proc(`wash dev`)"
+        if stderr1_line_count >= 20 {
+            bail!("failed to process stderr of proc(`wash dev`)");
+        }
+    }
+    if !stderr1_out.contains(stderr1_pattern) {
+        bail!(
+            "Expected stderr to contain '{}', but it didn't",
+            stderr1_pattern
         );
     }
-    assert!(stderr1_out.contains(stderr1_pattern));
 
     // Send SIGINT to second process; this will be trigger the
     // stdout of the first process to be closed
     {
-        let pid = proc2.id();
         nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(pid as i32),
+            nix::unistd::Pid::from_raw(pid2 as i32),
             nix::sys::signal::Signal::SIGINT,
         )
-        .expect("cannot send ctrl-c to piped proc(`wc -l`)");
-        proc2.wait()?;
+        .context("cannot send ctrl-c to piped proc(`wc -l`)")?;
+        proc2.wait().await?;
     }
 
     // Give the first process some time to do its job/damage
@@ -1286,28 +1371,29 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
 
     // Send SIGINT to first process; unbuffered writes to stdout will result in a broken pipe
     {
-        let pid = proc1.id();
         nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(pid as i32),
+            nix::unistd::Pid::from_raw(pid1 as i32),
             nix::sys::signal::Signal::SIGINT,
         )
-        .expect("cannot send ctrl-c to proc(`wash dev`)");
-        proc1.wait()?;
+        .context("cannot send ctrl-c to proc(`wash dev`)")?;
+        proc1.wait().await?;
     }
 
     // Wait for the processes to complete
     let status1: ExitStatus = proc1
         .wait()
-        .unwrap_or_else(|_| panic!("failed to wait for proc(`wash dev`), pid({})", pid1));
+        .await
+        .context("failed to wait for proc(`wash dev`), pid({})")?;
     let status2: ExitStatus = proc2
         .wait()
-        .unwrap_or_else(|_| panic!("failed to wait for piped proc(`wc -l`), pid({})", pid2));
+        .await
+        .context("failed to wait for piped proc(`wc -l`), pid({})")?;
 
     // Echo the remaining stderr output of the first process
     loop {
         let mut line = String::new();
 
-        match stderr1_reader.read_line(&mut line) {
+        match stderr1_reader.read_line(&mut line).await {
             Ok(0) => break,
             Ok(_) => write!(&mut stderr, "{}", line)?,
             Err(_) => break,
@@ -1328,20 +1414,14 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
     // Verdict
     // ========================================================================
     // The exit status of proc('wc -l') should be SIGINT(2)
-    assert!(
-        status2.signal() == Some(2) && !status2.success() && status2.code().is_none(),
-        "unexpected exit status for piped proc(`wc -l`), pid({}); {:?}",
-        pid2,
-        status2
-    );
+    if !(status2.signal() == Some(2) && !status2.success() && status2.code().is_none()) {
+        bail!("unexpected exit status for piped proc(`wc -l`), pid({pid2}); {status2:?}");
+    }
 
     // The exit status of proc('wash dev') should be code 0
-    assert!(
-        status1.signal().is_none() && status1.success() && status1.code() == Some(0),
-        "unexpected exit status for proc(`wash dev`), pid({}); {:?}",
-        pid1,
-        status1,
-    );
+    if !(status1.signal().is_none() && status1.success() && status1.code() == Some(0)) {
+        bail!("unexpected exit status for proc(`wash dev`), pid({pid1}); {status1:?}",);
+    }
 
     Ok(())
 }

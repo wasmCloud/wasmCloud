@@ -40,7 +40,7 @@ pub(crate) async fn build_provider(
         None
     };
 
-    let (provider_path_buf, bin_name) = match language_config {
+    let (mut provider_path_buf, bin_name) = match language_config {
         LanguageConfig::Rust(rust_config) => {
             build_rust_provider(provider_config, rust_config, common_config)?
         }
@@ -50,10 +50,14 @@ pub(crate) async fn build_provider(
         _ => bail!("Unsupported language for provider: {:?}", language_config),
     };
 
-    trace!("Retrieving provider binary from {:?}", provider_path_buf);
-    let provider_path_buf = provider_path_buf
+    if provider_path_buf.is_relative() {
+        provider_path_buf = common_config.project_dir.join(provider_path_buf);
+    }
+    provider_path_buf = provider_path_buf
         .canonicalize()
-        .context("failed to resolve file path")?;
+        .context("failed to canonicalize provider path")?;
+
+    trace!("Retrieving provider binary from {:?}", provider_path_buf);
     let provider_bytes = tokio::fs::read(&provider_path_buf).await.with_context(|| {
         format!(
             "missing provider binary at [{}]",
@@ -127,8 +131,6 @@ fn build_rust_provider(
         None => process::Command::new("cargo"),
     };
 
-    // Change directory into the project directory
-    std::env::set_current_dir(&common_config.project_dir)?;
     trace!("Building provider in {:?}", common_config.project_dir);
 
     // Build for a specified target if provided, or the default rust target
@@ -142,19 +144,27 @@ fn build_rust_provider(
         build_args.extend_from_slice(&["--target", override_target]);
     };
 
-    let result = command.args(build_args).status().map_err(|e| {
-        if e.kind() == ErrorKind::NotFound {
-            anyhow!("{:?} command is not found", command.get_program())
-        } else {
-            anyhow!(e)
-        }
-    })?;
+    let result = command
+        .current_dir(&common_config.project_dir)
+        .args(build_args)
+        .status()
+        .map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                anyhow!("{:?} command is not found", command.get_program())
+            } else {
+                anyhow!(e)
+            }
+        })?;
 
     if !result.success() {
         bail!("Compiling provider failed: {result}")
     }
 
-    let metadata = cargo_metadata::MetadataCommand::new().no_deps().exec()?;
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .current_dir(&common_config.project_dir)
+        .no_deps()
+        .exec()
+        .context("failed to get cargo metadata")?;
     let bin_name = if let Some(bin_name) = &provider_config.bin_name {
         bin_name.to_string()
     } else {
@@ -203,13 +213,12 @@ fn build_go_provider(
         None => process::Command::new("go"),
     };
 
-    // Change directory into the project directory
-    std::env::set_current_dir(&common_config.project_dir)?;
     trace!("Building provider in {:?}", common_config.project_dir);
 
     // Generate interfaces, if not disabled
     if !go_config.disable_go_generate {
         let result = generate_command
+            .current_dir(&common_config.project_dir)
             .args(["generate", "./..."])
             // NOTE: this can be removed once upstream merges verbose flag
             // https://github.com/bytecodealliance/wasm-tools-go/pull/214
@@ -247,6 +256,7 @@ fn build_go_provider(
     };
     // Build for a specified target
     let result = build_command
+        .current_dir(&common_config.project_dir)
         .args(["build", "-o", &bin_name])
         .status()
         .map_err(|e| {

@@ -32,12 +32,11 @@ impl NatsKvSecretsBackend {
     }
 
     pub async fn ensure_build(&self) -> Result<Output> {
-        std::env::set_current_dir("crates/secrets-nats-kv")?;
         let res = tokio::process::Command::new("cargo")
+            .current_dir("crates/secrets-nats-kv")
             .arg("build")
             .output()
             .await;
-        std::env::set_current_dir("../../")?;
         res.map_err(|e| anyhow::anyhow!(e))
     }
 
