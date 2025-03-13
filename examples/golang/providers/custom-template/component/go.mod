@@ -6,8 +6,6 @@ tool go.bytecodealliance.org/cmd/wit-bindgen-go
 
 require go.bytecodealliance.org/cm v0.1.0
 
-//replace github.com/wasmcloud/wasmcloud/examples/golang/providers/custom-template/component/gen => ./gen
-
 require (
 	github.com/coreos/go-semver v0.3.1 // indirect
 	github.com/docker/libtrust v0.0.0-20160708172513-aabc10ec26b7 // indirect

@@ -5,5 +5,5 @@ version = "0.1.0"
 
 [component]
 wit_world = "component"
-wasm_target = "wasm32-wasip1"
+wasm_target = "wasm32-wasip2"
 destination = "build/custom_template_component_s.wasm"
