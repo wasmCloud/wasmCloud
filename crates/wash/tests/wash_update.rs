@@ -4,7 +4,6 @@ use common::{TestWashInstance, HELLO_OCI_REF};
 
 use anyhow::{Context, Result};
 use serial_test::serial;
-use tokio::process::Command;
 use wash::lib::cli::output::{GetHostInventoriesCommandOutput, StartCommandOutput};
 
 const OLD_HELLO_OCI_REF: &str = "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.0";
@@ -15,7 +14,8 @@ const OLD_HELLO_OCI_REF: &str = "ghcr.io/brooksmtownsend/http-hello-world-rust:0
 async fn integration_update_component_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
-    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+    let output = wash_instance
+        .wash_cmd()
         .args([
             "start",
             "component",
@@ -42,7 +42,8 @@ async fn integration_update_component_serial() -> Result<()> {
     // Give the host a couple of seconds to download the component bytes and start the component
     for retries in 0..5 {
         // get host inventory
-        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+        let output = wash_instance
+            .wash_cmd()
             .args([
                 "get",
                 "inventory",
@@ -80,7 +81,8 @@ async fn integration_update_component_serial() -> Result<()> {
         }
     }
 
-    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+    let output = wash_instance
+        .wash_cmd()
         .args([
             "update",
             "component",
@@ -109,7 +111,8 @@ async fn integration_update_component_serial() -> Result<()> {
     // Give the host a couple of seconds to download the component bytes and start the component
     for retries in 0..5 {
         // get host inventory
-        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+        let output = wash_instance
+            .wash_cmd()
             .args([
                 "get",
                 "inventory",
@@ -151,7 +154,8 @@ async fn integration_update_component_serial() -> Result<()> {
     }
 
     // Check update with the same image ref
-    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+    let output = wash_instance
+        .wash_cmd()
         .args([
             "update",
             "component",

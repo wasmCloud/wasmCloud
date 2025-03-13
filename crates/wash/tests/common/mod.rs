@@ -157,10 +157,13 @@ pub async fn set_test_file_content(path: &PathBuf, content: &str) -> Result<()> 
 }
 
 #[allow(unused)]
-pub async fn start_nats(port: u16, nats_install_dir: &PathBuf) -> Result<Child> {
+pub async fn start_nats(port: u16, nats_install_dir: impl AsRef<Path>) -> Result<Child> {
     let nats_binary =
-        ensure_nats_server(wash::lib::common::NATS_SERVER_VERSION, nats_install_dir).await?;
-    let config = NatsConfig::new_standalone("127.0.0.1", port, None);
+        ensure_nats_server(wash::lib::common::NATS_SERVER_VERSION, &nats_install_dir).await?;
+    let store_dir = nats_install_dir.as_ref().join("store");
+    tokio::fs::create_dir_all(&store_dir).await?;
+    let mut config = NatsConfig::new_standalone("127.0.0.1", port, None);
+    config.store_dir = store_dir;
     start_nats_server(
         nats_binary,
         std::process::Stdio::null(),
@@ -209,6 +212,7 @@ impl Drop for TestWashInstance {
         let kill_cmd = (*kill_cmd).to_string();
         let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
         wash()
+            .env("HOME", test_dir.path())
             .args(vec![
                 down,
                 "--host-id",
@@ -223,8 +227,6 @@ impl Drop for TestWashInstance {
         self.nats
             .start_kill()
             .expect("failed to start_kill() on nats instance");
-
-        remove_dir_all(test_dir).expect("failed to remove temporary directory during cleanup");
     }
 }
 
@@ -883,15 +885,30 @@ pub async fn wait_until_process_has_count(
             .with_processes(sysinfo::ProcessRefreshKind::everything()),
     );
 
+    let last_found = std::sync::Arc::new(tokio::sync::Mutex::new(0usize));
+    let last_found_clone = last_found.clone();
+
     tokio::time::timeout(timeout, async move {
         loop {
             info.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
             let count = info
                 .processes()
                 .values()
-                .filter_map(|p| p.exe().map(|s| s.to_string_lossy()))
+                .filter(|p| p.status() != sysinfo::ProcessStatus::Dead)
+                .filter_map(|p| {
+                    // Because of the way the tests current kill/clean things up, things can exit
+                    // before they get killed and the tempdir where things are located gets deleted
+                    // out from under the process. This filters out any dead processes so retries
+                    // can continue to run. We should find a way to make this better
+                    if p.status() == sysinfo::ProcessStatus::Dead {
+                        None
+                    } else {
+                        p.exe().map(|s| s.to_string_lossy())
+                    }
+                })
                 .filter(|name| name.contains(filter))
                 .count();
+            *last_found_clone.lock().await = count;
             if predicate(count) {
                 break;
             };
@@ -900,7 +917,8 @@ pub async fn wait_until_process_has_count(
     })
     .await
     .context(format!(
-        "failed to find satisfactory amount of processes named [{filter}]"
+        "failed to find satisfactory amount of processes named [{filter}], last number of processes found: {}",
+        *last_found.lock().await
     ))?;
 
     Ok(())
@@ -1015,8 +1033,9 @@ pub async fn wait_for_num_hosts(num_hosts: usize) -> Result<()> {
     wait_until_process_has_count(
         WASMCLOUD_HOST_BIN,
         |v| v == num_hosts,
-        Duration::from_secs(15),
-        Duration::from_millis(250),
+        // This is longer because it takes a bit to download the host when starting `dev` or `up`.
+        Duration::from_secs(180),
+        Duration::from_secs(2),
     )
     .await
     .context(format!("number of hosts running is not [{num_hosts}]"))
@@ -1161,4 +1180,124 @@ async fn copy_dir(source: impl AsRef<Path>, destination: impl AsRef<Path>) -> an
         }
     }
     Ok(())
+}
+
+#[allow(unused)]
+fn filter_process(process_name: &str) -> impl FnMut(&&sysinfo::Process) -> bool + use<'_> {
+    move |p: &&sysinfo::Process| {
+        p.status() != sysinfo::ProcessStatus::Dead
+            && p.exe()
+                .map(|s| s.to_string_lossy().contains(process_name))
+                .unwrap_or(false)
+    }
+}
+
+#[allow(unused)]
+/// Forcefully kill all wasmCloud and NATS processes that might be lingering from previous tests
+pub async fn force_cleanup_processes() -> Result<()> {
+    // First, try to kill all wasmcloud_host processes
+    kill_processes_by_name(WASMCLOUD_HOST_BIN).await?;
+
+    // Then, try to kill all nats-server processes
+    kill_processes_by_name("nats-server").await?;
+
+    // Also kill any wadm processes that might be lingering
+    kill_processes_by_name(WADM_BINARY).await?;
+
+    // Wait a moment to ensure processes are gone
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    Ok(())
+}
+
+#[allow(unused)]
+/// Kill all processes matching a given name
+async fn kill_processes_by_name(process_name: &str) -> Result<()> {
+    let mut system = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::everything()
+            .with_processes(sysinfo::ProcessRefreshKind::everything()),
+    );
+
+    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+    // Find all matching processes
+    let matching_pids: Vec<i32> = system
+        .processes()
+        .values()
+        .filter(filter_process(process_name))
+        .map(|p| p.pid().as_u32() as i32)
+        .collect();
+
+    // Kill each process with SIGKILL
+    for pid in matching_pids {
+        if let Err(e) = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid),
+            nix::sys::signal::Signal::SIGKILL,
+        ) {
+            // Ignore errors here - process might have already terminated
+            eprintln!("Note: Failed to send SIGKILL to process {}: {}", pid, e);
+        }
+    }
+
+    // Verify processes are gone
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+            let count = system
+                .processes()
+                .values()
+                .filter(filter_process(process_name))
+                .count();
+
+            if count == 0 {
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .context(format!(
+        "Timed out waiting for {} processes to terminate",
+        process_name
+    ))?;
+
+    Ok(())
+}
+
+#[allow(unused)]
+/// Get diagnostic information about running processes matching a name
+pub async fn get_process_info(process_name: &str) -> String {
+    let mut system = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::everything()
+            .with_processes(sysinfo::ProcessRefreshKind::everything()),
+    );
+
+    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+    let processes: Vec<String> = system
+        .processes()
+        .values()
+        .filter(filter_process(process_name))
+        .map(|p| {
+            format!(
+                "PID: {}, Status: {:?}, CMD: {:?}, Started: {}s ago",
+                p.pid(),
+                p.status(),
+                p.cmd(),
+                p.run_time() / 60
+            )
+        })
+        .collect();
+
+    if processes.is_empty() {
+        format!("No processes matching '{}' found", process_name)
+    } else {
+        format!(
+            "Found {} processes matching '{}':\n{}",
+            processes.len(),
+            process_name,
+            processes.join("\n")
+        )
+    }
 }
