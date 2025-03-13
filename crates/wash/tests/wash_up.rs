@@ -1,7 +1,7 @@
-use std::fs::{read_to_string, remove_dir_all};
-use std::path::PathBuf;
+use std::fs::read_to_string;
+use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use regex::Regex;
 use semver::Version;
 use serial_test::serial;
@@ -10,19 +10,26 @@ use tokio::{process::Command, time::Duration};
 
 mod common;
 use common::{
-    find_open_port, start_nats, test_dir_with_subfolder, wait_for_nats_to_start, wait_for_no_hosts,
+    find_open_port, force_cleanup_processes, start_nats, wait_for_nats_to_start, wait_for_no_hosts,
     wait_for_single_host, TestWashInstance, HELLO_OCI_REF,
 };
 use wash::cli::config::WASMCLOUD_HOST_VERSION;
 
 const RGX_COMPONENT_START_MSG: &str = r"Component \[(?P<component_id>[^]]+)\] \(ref: \[(?P<component_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
 
+fn wash_cmd(home: impl AsRef<Path>) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_wash"));
+    cmd.env("HOME", home.as_ref());
+    cmd
+}
+
 #[tokio::test]
 #[serial]
 #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 async fn integration_up_can_start_wasmcloud_and_component_serial() -> Result<()> {
-    let dir = test_dir_with_subfolder("can_start_wasmcloud");
-    let path = dir.join("washup.log");
+    force_cleanup_processes().await?;
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
 
     wait_for_no_hosts()
@@ -32,7 +39,7 @@ async fn integration_up_can_start_wasmcloud_and_component_serial() -> Result<()>
     let host_seed = nkeys::KeyPair::new_server();
 
     let nats_port = find_open_port().await?;
-    let mut up_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
+    let mut up_cmd = wash_cmd(dir.path())
         .args([
             "up",
             "--nats-port",
@@ -53,7 +60,9 @@ async fn integration_up_can_start_wasmcloud_and_component_serial() -> Result<()>
         .await
         .context("up command failed to complete")?;
 
-    assert!(status.success(), "failed to complete up command");
+    if !status.success() {
+        bail!("wash up command failed with status: {}", status);
+    }
     let out = read_to_string(&path).expect("could not read output of wash up");
 
     // Extract kill command for later
@@ -63,10 +72,11 @@ async fn integration_up_can_start_wasmcloud_and_component_serial() -> Result<()>
     };
 
     // Wait for a single host to exist
-    let host =
-        wait_for_single_host(nats_port, Duration::from_secs(10), Duration::from_secs(1)).await?;
+    let host = wait_for_single_host(nats_port, Duration::from_secs(300), Duration::from_secs(1))
+        .await
+        .context("Timed out waiting for host to start")?;
 
-    let start_echo = Command::new(env!("CARGO_BIN_EXE_wash"))
+    let start_echo = wash_cmd(dir.path())
         .args([
             "start",
             "component",
@@ -85,17 +95,21 @@ async fn integration_up_can_start_wasmcloud_and_component_serial() -> Result<()>
         ))?;
 
     let stdout = String::from_utf8_lossy(&start_echo.stdout);
-    let component_start_output_rgx =
-        Regex::new(RGX_COMPONENT_START_MSG).expect("failed to create regular expression");
-    assert!(
-        component_start_output_rgx.is_match(&stdout),
-        "Did not find the correct output when starting component.\n stdout: {stdout}\nstderr: {}",
-        String::from_utf8_lossy(&start_echo.stderr)
-    );
+    let component_start_output_rgx = Regex::new(RGX_COMPONENT_START_MSG)
+        .context("failed to create regular expression for component start output")?;
+    if !component_start_output_rgx.is_match(&stdout) {
+        bail!(
+            "Did not find the correct output when starting component.\n stdout: {stdout}\nstderr: {}",
+            String::from_utf8_lossy(&start_echo.stderr)
+        );
+    }
 
     let kill_cmd = kill_cmd.to_string();
-    let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
-    Command::new(env!("CARGO_BIN_EXE_wash"))
+    let (_wash, down) = kill_cmd
+        .trim_matches('"')
+        .split_once(' ')
+        .ok_or_else(|| anyhow!("Could not parse kill command from wash up output: {kill_cmd}"))?;
+    wash_cmd(dir.path())
         .args(vec![
             down,
             "--ctl-port",
@@ -113,15 +127,16 @@ async fn integration_up_can_start_wasmcloud_and_component_serial() -> Result<()>
         .await
         .context("wasmcloud instance failed to exit cleanly (processes still left over)")?;
 
-    remove_dir_all(dir).unwrap();
     Ok(())
 }
 
 #[tokio::test]
 #[serial]
 async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
-    let dir = test_dir_with_subfolder("can_stop_wasmcloud");
-    let path = dir.join("washup.log");
+    force_cleanup_processes().await?;
+
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
     let nats_port: u16 = find_open_port().await?;
 
@@ -131,7 +146,7 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
 
     let host_seed = nkeys::KeyPair::new_server();
 
-    let mut up_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
+    let mut up_cmd = wash_cmd(dir.path())
         .args([
             "up",
             "--nats-port",
@@ -152,8 +167,10 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
         .await
         .context("up command failed to complete")?;
 
-    assert!(status.success());
-    let out = read_to_string(&path).expect("could not read output of wash up");
+    if !status.success() {
+        bail!("wash up command failed with status: {status}");
+    }
+    let out = tokio::fs::read_to_string(&path).await?;
 
     let (kill_cmd, _wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
         Ok(v) => (v["kill_cmd"].clone(), v["wasmcloud_log"].clone()),
@@ -165,8 +182,11 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
 
     // Stop the wash instance
     let kill_cmd = kill_cmd.to_string();
-    let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
-    Command::new(env!("CARGO_BIN_EXE_wash"))
+    let (_wash, down) = kill_cmd
+        .trim_matches('"')
+        .split_once(' ')
+        .ok_or_else(|| anyhow!("Could not parse kill command from wash up output: {kill_cmd}"))?;
+    wash_cmd(dir.path())
         .args(vec![
             down,
             "--ctl-port",
@@ -183,15 +203,16 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
         .await
         .context("wasmcloud instance failed to exit cleanly (processes still left over)")?;
 
-    remove_dir_all(dir).unwrap();
     Ok(())
 }
 
 #[tokio::test]
 #[serial]
 async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
-    let dir = test_dir_with_subfolder("doesnt_kill_unowned_nats");
-    let path = dir.join("washup.log");
+    force_cleanup_processes().await?;
+
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
     let nats_port: u16 = find_open_port().await?;
 
@@ -202,7 +223,7 @@ async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
 
     let mut nats = start_nats(nats_port, &dir).await?;
 
-    let mut up_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
+    let mut up_cmd = wash_cmd(dir.path())
         .args([
             "up",
             "--nats-port",
@@ -222,33 +243,39 @@ async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
         .await
         .context("up command failed to complete")?;
 
-    assert!(status.success());
-    let out = read_to_string(&path).expect("could not read output of wash up");
+    if !status.success() {
+        bail!("wash up command failed");
+    }
+    let out = tokio::fs::read_to_string(&path).await?;
 
     let (kill_cmd, _wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
         Ok(v) => (v["kill_cmd"].clone(), v["wasmcloud_log"].clone()),
-        Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
+        Err(e) => bail!("Unable to parse kill cmd from wash up output: {e}"),
     };
 
     // Wait for a single host to exist
-    wait_for_single_host(nats_port, Duration::from_secs(10), Duration::from_secs(1)).await?;
+    wait_for_single_host(nats_port, Duration::from_secs(300), Duration::from_secs(1)).await?;
 
     let kill_cmd = kill_cmd.to_string();
-    let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
-    Command::new(env!("CARGO_BIN_EXE_wash"))
+    let (_wash, down) = kill_cmd
+        .trim_matches('"')
+        .split_once(' ')
+        .ok_or_else(|| anyhow!("Could not parse kill command from wash up output: {kill_cmd}"))?;
+    wash_cmd(dir.path())
         .kill_on_drop(true)
         .args(vec![down, "--ctl-port", nats_port.to_string().as_ref()])
         .output()
         .await
         .context("Could not spawn wash down process")?;
 
+    let pid = nats.id().context("Could not find NATS PID")?;
+
     // Check that there is exactly one nats-server running
-    wait_for_nats_to_start()
+    wait_for_nats_to_start(pid)
         .await
         .context("nats process not running")?;
 
     nats.kill().await.map_err(|e| anyhow!(e))?;
-    remove_dir_all(dir).unwrap();
     Ok(())
 }
 
@@ -264,14 +291,16 @@ async fn integration_up_works_with_labels() -> Result<()> {
         .get_hosts()
         .await
         .context("failed to call component")?;
-    assert!(cmd_output.success, "call command succeeded");
-    assert!(
-        cmd_output
-            .hosts
-            .iter()
-            .any(|h| h.labels().get("is-label-test").is_some_and(|v| v == "yes")),
-        "a host is present which has the created label",
-    );
+    if !cmd_output.success {
+        bail!("call command failed");
+    }
+    if !cmd_output
+        .hosts
+        .iter()
+        .any(|h| h.labels().get("is-label-test").is_some_and(|v| v == "yes"))
+    {
+        bail!("no host found with the created label");
+    }
 
     Ok(())
 }
@@ -343,16 +372,17 @@ async fn integration_up_works_with_specified_wadm_version() -> Result<()> {
     use wash::lib::start::WADM_BINARY;
     // 0.12.0 is a sufficient version to test the latest is 0.12.2
     let previous_wadm_version = "v0.12.0";
-    let home = etcetera::home_dir().context("no home directory found. Please set $HOME")?;
 
-    let wadm_path = home
+    let instance =
+        TestWashInstance::create_with_extra_args(["--wadm-version", previous_wadm_version]).await?;
+    let wadm_path = instance
+        .test_dir
+        .path()
         .join(WASH_DIR)
         .join(DOWNLOADS_DIR)
         .join(WADM_BINARY)
         .canonicalize()
         .context("failed to canonicalize wadm binary path")?;
-    let instance =
-        TestWashInstance::create_with_extra_args(["--wadm-version", previous_wadm_version]).await?;
     let cmd_output = instance.get_hosts().await.context("failed to call hosts")?;
     assert!(cmd_output.success, "call command succeeded");
     let host = cmd_output.hosts.first();
@@ -384,7 +414,6 @@ async fn integration_up_works_with_specified_wadm_version() -> Result<()> {
         patch, previous_version.patch,
         "patch version should not change"
     );
-    tokio::fs::remove_file(wadm_path.as_path()).await?;
     Ok(())
 }
 

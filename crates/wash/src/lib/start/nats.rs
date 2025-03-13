@@ -7,9 +7,7 @@ use tokio::process::{Child, Command};
 use tracing::warn;
 
 use crate::lib::common::CommandGroupUsage;
-use crate::lib::start::wait_for_server;
-
-use super::download_binary_from_github;
+use crate::lib::start::{download_binary_from_github, wait_for_server_with_timeout};
 
 const NATS_GITHUB_RELEASE_URL: &str = "https://github.com/nats-io/nats-server/releases/download";
 pub const NATS_SERVER_CONF: &str = "nats.conf";
@@ -297,6 +295,28 @@ where
     P: AsRef<Path>,
     T: Into<Stdio>,
 {
+    start_nats_server_with_timeout(
+        bin_path,
+        stderr,
+        config,
+        command_group,
+        std::time::Duration::from_secs(15),
+    )
+    .await
+}
+
+/// Same as [`start_nats_server`] but with a timeout
+pub async fn start_nats_server_with_timeout<P, T>(
+    bin_path: P,
+    stderr: T,
+    config: NatsConfig,
+    command_group: CommandGroupUsage,
+    timeout: std::time::Duration,
+) -> Result<Child>
+where
+    P: AsRef<Path>,
+    T: Into<Stdio>,
+{
     let host_addr = format!("{}:{}", config.host, config.port);
 
     // If we can connect to the local port, NATS won't be able to listen on that port
@@ -356,7 +376,7 @@ where
         cmd.spawn().map_err(anyhow::Error::from)?
     };
 
-    wait_for_server(&host_addr, "NATS server")
+    wait_for_server_with_timeout(&host_addr, "NATS server", timeout)
         .await
         .map(|()| child)
 }

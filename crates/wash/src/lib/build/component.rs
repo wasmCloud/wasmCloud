@@ -103,6 +103,14 @@ pub async fn build_component(
         }
     };
 
+    let component_wasm_path = if component_wasm_path.is_relative() {
+        tokio::fs::canonicalize(component_wasm_path.join(&common_config.project_dir))
+            .await
+            .context("failed to canonicalize component path")?
+    } else {
+        component_wasm_path
+    };
+
     // Sign the wasm file (if configured)
     if let Some(cfg) = signing_config {
         sign_component_wasm(common_config, component_config, cfg, component_wasm_path)
@@ -153,10 +161,14 @@ pub fn sign_component_wasm(
         .ok_or_else(|| anyhow!("Could not convert file path to string"))?
         .to_string();
 
-    // Output the signed file in the same directory with a _s suffix
     let destination = if let Some(destination) = component_config.destination.clone() {
-        destination
+        if destination.is_relative() {
+            common_config.project_dir.join(destination)
+        } else {
+            destination
+        }
     } else {
+        // Output the signed file in the same directory with a _s suffix by default
         PathBuf::from(source.replace(".wasm", "_s.wasm"))
     };
 
@@ -180,11 +192,7 @@ pub fn sign_component_wasm(
     };
     sign_file(sign_options, OutputKind::Json)?;
 
-    Ok(if destination.is_absolute() {
-        destination
-    } else {
-        common_config.project_dir.join(destination)
-    })
+    Ok(destination)
 }
 
 /// Builds a rust component and returns the path to the file.
@@ -198,9 +206,6 @@ async fn build_rust_component(
         None => tokio::process::Command::new("cargo"),
     };
 
-    // Change directory into the project directory
-    std::env::set_current_dir(&common_config.project_dir)?;
-
     // Build for a specified target if provided, or the default rust target
     let mut build_args = vec!["build"];
 
@@ -210,13 +215,18 @@ async fn build_rust_component(
 
     let build_target: &str = rust_config.build_target(&component_config.wasm_target);
     build_args.extend_from_slice(&["--target", build_target]);
-    let result = command.args(build_args).status().await.map_err(|e| {
-        if e.kind() == ErrorKind::NotFound {
-            anyhow!("{:?} command is not found", command.as_std().get_program())
-        } else {
-            anyhow!(e)
-        }
-    })?;
+    let result = command
+        .current_dir(&common_config.project_dir)
+        .args(build_args)
+        .status()
+        .await
+        .map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                anyhow!("{:?} command is not found", command.as_std().get_program())
+            } else {
+                anyhow!(e)
+            }
+        })?;
 
     if !result.success() {
         bail!("Compiling component failed: {}", result.to_string())
@@ -232,7 +242,9 @@ async fn build_rust_component(
     // We're using a third-party library normpath to ensure that the paths are normalized.
     // Once out of nightly, we should be able to use std::path::absolute
     // https://github.com/rust-lang/rust/pull/91673
-    let metadata = cargo_metadata::MetadataCommand::new().exec()?;
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .current_dir(&common_config.project_dir)
+        .exec()?;
     let mut wasm_path_buf = rust_config
         .target_path
         .clone()
@@ -278,9 +290,6 @@ async fn build_tinygo_component(
     let wasm_file_path = common_config
         .build_dir
         .join(format!("{}.wasm", common_config.name));
-
-    // Change directory into the project directory
-    std::env::set_current_dir(&common_config.project_dir)?;
 
     let mut command = match &tinygo_config.tinygo_path {
         Some(path) => tokio::process::Command::new(path),
@@ -343,13 +352,18 @@ async fn build_tinygo_component(
         }
     };
 
-    let result = command.args(build_args).status().await.map_err(|e| {
-        if e.kind() == ErrorKind::NotFound {
-            anyhow!("{:?} command is not found", command.as_std().get_program())
-        } else {
-            anyhow!(e)
-        }
-    })?;
+    let result = command
+        .current_dir(&common_config.project_dir)
+        .args(build_args)
+        .status()
+        .await
+        .map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                anyhow!("{:?} command is not found", command.as_std().get_program())
+            } else {
+                anyhow!(e)
+            }
+        })?;
 
     if !result.success() {
         bail!("Compiling component failed: {}", result.to_string())
@@ -371,12 +385,11 @@ async fn build_custom_component(
     component_config: &ComponentConfig,
     raw_command: &str,
 ) -> Result<PathBuf> {
-    // Change directory into the project directory
-    std::env::set_current_dir(&common_config.project_dir)?;
     let (command, args) = parse_custom_command(raw_command)?;
     let mut command = tokio::process::Command::new(command);
     // All remaining elements of the split command are interpreted as arguments
     command
+        .current_dir(&common_config.project_dir)
         .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -433,11 +446,11 @@ async fn generate_tinygo_bindgen(project_dir: impl AsRef<Path>) -> Result<()> {
     if !tokio::fs::try_exists(project_dir).await.unwrap_or_default() {
         bail!("directory @ [{}] does not exist", project_dir.display(),);
     }
-    std::env::set_current_dir(project_dir)?;
 
     let mut command = tokio::process::Command::new("go");
     let result = command
         .args(vec!["generate", "./..."])
+        .current_dir(project_dir)
         // NOTE: this can be removed once upstream merges verbose flag
         // https://github.com/bytecodealliance/wasm-tools-go/pull/214
         .stderr(std::process::Stdio::piped())
@@ -867,7 +880,6 @@ func main() {}
             .context("failed to write test WIT file")?;
 
         // Multiple worlds without specifying them in the wit-bindgen call. This should fail.
-        assert!(std::env::set_current_dir(&project_dir).is_ok());
         generate_tinygo_bindgen(&project_dir)
             .await
             .context("failed to run tinygo bindgen")?;
@@ -905,8 +917,6 @@ func main() {}
         std::fs::write(wit_dir.join("downstream.wit"), COMPONENT_DOWNSTREAM_WIT)
             .context("failed to write test WIT file")?;
 
-        // Run bindgen generation process
-        assert!(std::env::set_current_dir(&project_dir).is_ok());
         // NOTE: multi-world is now supported when generating
         assert!(generate_tinygo_bindgen(&project_dir).await.is_ok());
 
