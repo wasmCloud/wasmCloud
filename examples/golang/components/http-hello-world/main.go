@@ -1,4 +1,5 @@
-//go:generate go run github.com/bytecodealliance/wasm-tools-go/cmd/wit-bindgen-go generate --world hello --out gen ./wit
+//go:generate go tool wit-bindgen-go generate --world hello --out gen ./wit
+
 package main
 
 import (

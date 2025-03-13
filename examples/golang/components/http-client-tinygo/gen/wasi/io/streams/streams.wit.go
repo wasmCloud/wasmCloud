@@ -4,9 +4,9 @@
 package streams
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
 	ioerror "github.com/wasmcloud/wasmcloud/examples/golang/components/http-client-tinygo/gen/wasi/io/error"
 	"github.com/wasmcloud/wasmcloud/examples/golang/components/http-client-tinygo/gen/wasi/io/poll"
+	"go.bytecodealliance.org/cm"
 )
 
 // Error represents the imported type alias "wasi:io/streams@0.2.0#error".
