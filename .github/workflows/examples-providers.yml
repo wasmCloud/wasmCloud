@@ -46,7 +46,7 @@ jobs:
           - name: 'custom-template'
             lang: 'golang'
             lang_version: '1.23'
-            tinygo_version: '0.33.0'
+            tinygo_version: '0.36.0'
             test_deploy: wadm.yaml
           # Rust example providers
           - name: 'custom-template'
@@ -105,6 +105,12 @@ jobs:
       - uses: taiki-e/install-action@4a7eafa27f0bd6857fe4f46dad5c66568c426ac0 # v2.49.22
         with:
           tool: wit-bindgen-cli
+
+      # Install wasm-tools for golang projects
+      - uses: taiki-e/install-action@4a7eafa27f0bd6857fe4f46dad5c66568c426ac0 # v2.49.22
+        if: ${{ matrix.project.lang == 'golang' }}
+        with:
+          tool: wasm-tools@1.225.0
 
       # Build required project if necessary
       - name: Build dependent component if present

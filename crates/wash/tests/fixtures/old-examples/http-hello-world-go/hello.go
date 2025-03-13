@@ -1,3 +1,5 @@
+//go:generate go tool wit-bindgen-go generate --world hello --out gen ./wit
+
 package main
 
 import (
@@ -34,5 +36,4 @@ func (h HttpServer) Handle(request HttpRequest, responseWriter HttpResponseWrite
 	http.StaticOutgoingBodyFinish(body, http.None[http.WasiHttp0_2_0_TypesTrailers]())
 }
 
-//go:generate wit-bindgen tiny-go wit --out-dir=gen
 func main() {}
