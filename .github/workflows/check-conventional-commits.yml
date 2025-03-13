@@ -93,6 +93,7 @@ jobs:
           header: tip-conventional-commits
           recreate: true
           hide_and_recreate: true
+          skip_unchanged: true
           message: | # markdown
             ### :warning: It looks like your commit is not formatted in line with Conventional Commits
 
@@ -155,6 +156,7 @@ jobs:
           hide: true
           hide_classify: 'RESOLVED'
           append: true
+          skip_unchanged: true
           message: 'This PR is now formatted in line with Conventional Commits'
 
   label-pr:
