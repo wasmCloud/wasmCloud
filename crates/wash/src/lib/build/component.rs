@@ -729,14 +729,6 @@ package main
 func main() {}
     ";
 
-    const COMPONENT_GO_GENERATE_MULTI_WORLD: &str = r"
-//go:generate go tool wit-bindgen-go generate --world upstream --out gen ./wit
-
-package main
-
-func main() {}
-    ";
-
     /// Set up a component that should be built
     ///
     /// This function returns the path to a mock project directory
@@ -906,11 +898,8 @@ func main() {}
             .context("failed to write go mod")?;
         std::fs::write(project_dir.path().join("go.sum"), COMPONENT_GO_SUM)
             .context("failed to write go sum")?;
-        std::fs::write(
-            project_dir.path().join("main.go"),
-            COMPONENT_GO_GENERATE_MULTI_WORLD,
-        )
-        .context("failed to write go file")?;
+        std::fs::write(project_dir.path().join("main.go"), COMPONENT_GO_GENERATE)
+            .context("failed to write go file")?;
         std::fs::write(wit_dir.join("upstream.wit"), COMPONENT_UPSTREAM_WIT)
             .context("failed to write test WIT file")?;
         std::fs::write(wit_dir.join("downstream.wit"), COMPONENT_DOWNSTREAM_WIT)
