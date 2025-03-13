@@ -18,6 +18,8 @@ pub(crate) struct ConnectionCreateOptions {
     pub database: String,
     /// Whether TLS is required for the connection
     pub tls_required: bool,
+    /// Optional connection pool size
+    pub pool_size: Option<usize>,
 }
 
 impl From<ConnectionCreateOptions> for deadpool_postgres::Config {
@@ -28,6 +30,12 @@ impl From<ConnectionCreateOptions> for deadpool_postgres::Config {
         cfg.password = Some(opts.password);
         cfg.dbname = Some(opts.database);
         cfg.port = Some(opts.port);
+        if let Some(pool_size) = opts.pool_size {
+            cfg.pool = Some(deadpool_postgres::PoolConfig {
+                max_size: pool_size,
+                ..deadpool_postgres::PoolConfig::default()
+            });
+        }
         cfg
     }
 }
@@ -51,13 +59,14 @@ pub(crate) fn extract_prefixed_conn_config(
         format!("{prefix}PASSWORD"),
         format!("{prefix}DATABASE"),
         format!("{prefix}TLS_REQUIRED"),
+        format!("{prefix}POOL_SIZE"),
     ];
     match keys
         .iter()
         .map(|k| config.get(k))
         .collect::<Vec<Option<&String>>>()[..]
     {
-        [Some(host), Some(port), Some(username), config_password, Some(database), Some(tls_required)] =>
+        [Some(host), Some(port), Some(username), config_password, Some(database), tls_required, pool_size] =>
         {
             let secret_password = secrets
                 .get(&format!("{prefix}PASSWORD"))
@@ -75,6 +84,13 @@ pub(crate) fn extract_prefixed_conn_config(
                 }
             };
 
+            let pool_size = pool_size.and_then(|pool_size| {
+                pool_size.as_str().parse::<usize>().ok().or_else(|| {
+                    warn!("invalid pool size value [{pool_size}], using default");
+                    None
+                })
+            });
+
             Some(ConnectionCreateOptions {
                 host: host.to_string(),
                 port: port.parse::<u16>().unwrap_or_else(|_e| {
@@ -83,8 +99,11 @@ pub(crate) fn extract_prefixed_conn_config(
                 }),
                 username: username.to_string(),
                 password: password.to_string(),
-                tls_required: matches!(tls_required.to_lowercase().as_str(), "true" | "yes"),
+                tls_required: tls_required.is_some_and(|tls_required| {
+                    matches!(tls_required.to_lowercase().as_str(), "true" | "yes")
+                }),
                 database: database.to_string(),
+                pool_size,
             })
         }
         _ => {
