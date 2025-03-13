@@ -12,6 +12,24 @@ use wasmcloud_control_interface::HostInventory;
 
 use crate::lib::id::{ModuleId, ServerId, ServiceId};
 
+/// Version of the NATS server used by default for wash
+pub const NATS_SERVER_VERSION: &str = "v2.10.20";
+
+/// Default host for the NATS server used by wash
+pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
+
+/// Default port for the NATS server used by default for wash
+pub const DEFAULT_NATS_PORT: &str = "4222";
+
+/// Default port for the NATS websocket server used by wash
+pub const DEFAULT_NATS_WEBSOCKET_PORT: &str = "4223";
+
+/// Version of wadm used by default for wash
+pub const WADM_VERSION: &str = "v0.20.2";
+
+/// Version of wasmCloud host used by default for wash
+pub const WASMCLOUD_HOST_VERSION: &str = "v1.6.1";
+
 /// Default path to the `git` command (assumes it exists on PATH)
 const DEFAULT_GIT_PATH: &str = "git";
 
