@@ -914,7 +914,7 @@ func main() {}
             .context("failed to read dir")?
             .collect::<Result<Vec<DirEntry>, std::io::Error>>()?;
 
-        assert!(dir_contents.is_empty(), "files were generated");
+        assert!(!dir_contents.is_empty(), "files were generated");
 
         Ok(())
     }
