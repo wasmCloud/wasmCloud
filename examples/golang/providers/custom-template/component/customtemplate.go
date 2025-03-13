@@ -1,8 +1,6 @@
 //go:generate go tool wit-bindgen-go generate --world component --out gen ./wit
 package main
 
-package main
-
 import (
 	"fmt"
 
