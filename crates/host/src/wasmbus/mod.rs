@@ -782,8 +782,13 @@ impl Host {
             ])
             .build();
         let meter = global::meter_with_scope(scope);
-        let metrics = HostMetrics::new(&meter, host_key.public_key(), config.lattice.to_string())
-            .context("failed to create HostMetrics instance")?;
+        let metrics = HostMetrics::new(
+            &meter,
+            host_key.public_key(),
+            config.lattice.to_string(),
+            None,
+        )
+        .context("failed to create HostMetrics instance")?;
 
         let config_generator = BundleGenerator::new(config_data.clone());
 
