@@ -1,6 +1,9 @@
 package wasmcloud:custom;
 
 world component {
+  // Import for wasi p2
+  include wasi:cli/imports@0.2.0;
+
   // Import logging for processing data
   import wasi:logging/logging@0.1.0-draft;
 

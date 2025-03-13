@@ -3,6 +3,15 @@
 version = 1
 
 [[packages]]
+name = "wasi:cli"
+registry = "wasi.dev"
+
+[[packages.versions]]
+requirement = "=0.2.0"
+version = "0.2.0"
+digest = "sha256:e7e85458e11caf76554b724ebf4f113259decf0f3b1ee2e2930de096f72114a7"
+
+[[packages]]
 name = "wasi:logging"
 registry = "wasi.dev"
 

@@ -1,24 +1,24 @@
 //go:generate go tool wit-bindgen-go generate --world component --out gen ./wit
+package main
 
 package main
 
 import (
 	"fmt"
 
-	gen "github.com/wasmcloud/wasmcloud/examples/golang/providers/custom-template/component/gen"
+	"github.com/wasmcloud/wasmcloud/examples/golang/providers/custom-template/component/gen/wasi/logging/logging"
+	process "github.com/wasmcloud/wasmcloud/examples/golang/providers/custom-template/component/gen/wasmcloud/example/process-data"
+	system "github.com/wasmcloud/wasmcloud/examples/golang/providers/custom-template/component/gen/wasmcloud/example/system-info"
 )
 
-type CustomTemplateComponent struct{}
-
 func init() {
-	customTemplate := CustomTemplateComponent{}
-	gen.SetExportsWasmcloudExample0_1_0_ProcessData(customTemplate)
+	process.Exports.Process = Process
 }
 
-func (c CustomTemplateComponent) Process(data gen.ExportsWasmcloudExample0_1_0_ProcessDataData) string {
-	gen.WasiLogging0_1_0_draft_LoggingLog(gen.WasiLogging0_1_0_draft_LoggingLevelInfo(), "", fmt.Sprintf("Processing data: %v", data))
-	os := gen.WasmcloudExample0_1_0_SystemInfoRequestInfo(gen.WasmcloudExample0_1_0_SystemInfoKindOs())
-	arch := gen.WasmcloudExample0_1_0_SystemInfoRequestInfo(gen.WasmcloudExample0_1_0_SystemInfoKindArch())
+func Process(data process.Data) string {
+	logging.Log(logging.LevelInfo, "", fmt.Sprintf("Processing data: %v", data))
+	os := system.RequestInfo(system.KindOS)
+	arch := system.RequestInfo(system.KindOS)
 	return fmt.Sprintf("Provider is running on %s-%s", os, arch)
 }
 
