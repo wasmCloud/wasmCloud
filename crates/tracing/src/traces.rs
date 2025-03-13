@@ -126,7 +126,7 @@ impl ErrorCounter {
     fn increment(&mut self) {
         self.dropped_lines +=1;
         if self.dropped_lines == 1 {
-            tracing::error!("Buffer iS full");
+            tracing::error!("Buffer is full");
         }
 
         if self.dropped_lines > 100 {
@@ -201,15 +201,13 @@ pub fn configure_tracing(
     .with_filter(move |_meta| {
         if error_counter.get_count() > 0 {
             tracing::error!(
-                "Dropped {} logs due to a full buffer.",
-                error_counter.get_count()
-            );
-            error_counter.reset();
-            LevelFilter::ERROR
-        } else {
-            LevelFilter::INFO
-        }
-    });
+               "Dropped {} logs due to a full buffer.",
+                    error_counter.get_count()
+                );
+                error_counter.reset();
+            }
+            true
+        });
 
 
     let dispatch = if use_structured_logging {
