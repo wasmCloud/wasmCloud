@@ -70,7 +70,12 @@ async fn interfaces() -> anyhow::Result<()> {
                 .await
                 .context("failed to start MinIO")
         },
-        async { start_nats().await.context("failed to start NATS") },
+        async {
+            start_nats(None, true)
+                .await
+                .map(|res| (res.0, res.1, res.2.unwrap()))
+                .context("failed to start NATS")
+        },
         async { start_redis().await.context("failed to start Redis") },
         async { start_vault("test").await.context("failed to start Vault") },
     )?;
