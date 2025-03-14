@@ -18,14 +18,12 @@ use common::spire::{
 };
 use common::tempdir;
 
-use nats_jwt_rs::{
-    account::{Account, ExternalAuthorization},
-    authorization::{AuthRequest, AuthResponse},
-    operator::Operator,
-    types::{Permission, Permissions},
-    user::User,
-    Claims,
-};
+use nats_jwt_rs::account::{Account, ExternalAuthorization};
+use nats_jwt_rs::authorization::{AuthRequest, AuthResponse};
+use nats_jwt_rs::operator::Operator;
+use nats_jwt_rs::types::{Permission, Permissions};
+use nats_jwt_rs::user::User;
+use nats_jwt_rs::Claims;
 use nkeys::KeyPair;
 use wasmcloud_host::wasmbus::connect_nats;
 use wasmcloud_host::workload_identity::WorkloadIdentityConfig;

@@ -1,6 +1,5 @@
 use std::ffi::{OsStr, OsString};
 
-#[allow(unused)]
 pub struct EnvVarGuard {
     var_name: OsString,
     var_value: Option<OsString>,
@@ -16,7 +15,6 @@ impl Drop for EnvVarGuard {
     }
 }
 
-#[allow(unused)]
 impl EnvVarGuard {
     /// Sets the environment variable `key` to `val` and returns a guard that will reset the
     /// environment variable to its original value when dropped.

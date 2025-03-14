@@ -1,7 +1,5 @@
-use testcontainers::{
-    core::{ContainerPort, WaitFor},
-    CopyDataSource, CopyToContainer, Image,
-};
+use testcontainers::core::{ContainerPort, WaitFor};
+use testcontainers::{CopyDataSource, CopyToContainer, Image};
 
 const SPIRE_SERVER_CONFIG_PATH: &str = "/opt/spire/conf/server/server.conf";
 
@@ -108,7 +106,6 @@ impl Image for SpireServer {
     fn ready_conditions(&self) -> Vec<WaitFor> {
         vec![
             WaitFor::message_on_stdout("Starting Server APIs"),
-            // WaitFor::message_on_stdout("Health check recovered"),
             WaitFor::seconds(3),
         ]
     }

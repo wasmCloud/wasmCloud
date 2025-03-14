@@ -1,9 +1,7 @@
 use std::{net::IpAddr, path::PathBuf};
 
-use testcontainers::{
-    core::{ContainerPort, Mount, WaitFor},
-    CopyDataSource, CopyToContainer, Image,
-};
+use testcontainers::core::{ContainerPort, Mount, WaitFor};
+use testcontainers::{CopyDataSource, CopyToContainer, Image};
 
 const AGENT_SOCKET_DIR: &str = "/tmp/spire-agent/public";
 

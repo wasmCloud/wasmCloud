@@ -1,10 +1,8 @@
 use std::collections::BTreeMap;
 
 use serde::Serialize;
-use testcontainers::{
-    core::{ExecCommand, WaitFor},
-    Image,
-};
+use testcontainers::core::{ExecCommand, WaitFor};
+use testcontainers::Image;
 
 const NATS_CONFIG_PATH: &str = "/etc/nats/config.json";
 
