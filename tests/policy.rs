@@ -24,8 +24,10 @@ const LATTICE: &str = "default";
 #[tokio::test]
 async fn policy_always_deny() -> anyhow::Result<()> {
     // Start NATS for communication
-    let (nats_server, nats_url, nats_client) =
-        start_nats().await.context("failed to start NATS")?;
+    let (nats_server, nats_url, nats_client) = start_nats(None, true)
+        .await
+        .map(|res| (res.0, res.1, res.2.unwrap()))
+        .context("failed to start NATS")?;
 
     // Build client for interacting with the lattice
     let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client)

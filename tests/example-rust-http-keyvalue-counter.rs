@@ -55,7 +55,12 @@ async fn example_rust_http_keyvalue_counter() -> anyhow::Result<()> {
         .init();
 
     let ((nats_server, nats_url, nats_client), (redis_server, redis_url)) = try_join!(
-        async { start_nats().await.context("failed to start NATS") },
+        async {
+            start_nats(None, true)
+                .await
+                .map(|res| (res.0, res.1, res.2.unwrap()))
+                .context("failed to start NATS")
+        },
         async { start_redis().await.context("failed to start Redis") },
     )?;
 

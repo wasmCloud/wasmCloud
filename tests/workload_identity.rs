@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::Context as _;
 use async_nats::service::ServiceExt;
 use bytes::Bytes;
+use common::nats::{ensure_nats_connection_until_timeout, start_nats};
 use futures::StreamExt;
 
 mod common;
@@ -26,24 +27,20 @@ use wasmcloud_host::wasmbus::connect_nats;
 use wasmcloud_host::workload_identity::WorkloadIdentityConfig;
 use wasmcloud_test_util::env::EnvVarGuard;
 use wasmcloud_test_util::testcontainers::{
-    AsyncRunner as _, ContainerAsync, ExecCommand, ImageExt, NatsConfig, NatsResolver, NatsServer,
-    SpireServer,
+    AsyncRunner as _, ContainerAsync, ExecCommand, ImageExt, NatsConfig, NatsResolver, SpireServer,
 };
 
 #[tokio::test]
 async fn connect_to_nats_with_workload_identity() -> anyhow::Result<()> {
     // Generate the NATS Server configuration that's needed for configuring decentralized Auth Callout
     let (nats_config, auth_account_nkey, auth_user_nkey) = generate_nats_config()?;
-    let nats = NatsServer::default()
-        .with_config(nats_config)
-        .with_startup_timeout(Duration::from_secs(5))
-        .start()
-        .await?;
-    let nats_address = &format!(
-        "{}:{}",
-        nats.get_host().await?,
-        nats.get_host_port_ipv4(4222).await?
-    );
+    let config_json =
+        serde_json::to_string(&nats_config).context("failed to serialize NATS config")?;
+
+    // Start NATS for communication
+    let (nats_server, nats_url, _) = start_nats(Some(config_json), false)
+        .await
+        .context("failed to start NATS")?;
 
     // Set up Sentinel credentials for code under test to use to establish the initial NATS connection
     // that'll be used to send the JWT-SVID to the Auth Callout service.
@@ -100,10 +97,10 @@ async fn connect_to_nats_with_workload_identity() -> anyhow::Result<()> {
     );
 
     // Start the Auth Callout Service that validates the JWT-SVIDs sent by the code under test
-    let nats_server_address = nats_address.clone();
+    let nats_server_address = nats_url.clone();
     tokio::spawn(async move {
         let _ = start_workload_identity_auth_callout(
-            &nats_server_address,
+            nats_server_address.as_ref(),
             auth_account_nkey,
             auth_user_nkey,
         )
@@ -134,7 +131,7 @@ async fn connect_to_nats_with_workload_identity() -> anyhow::Result<()> {
 
     // Actually run the code under test
     let client = connect_nats(
-        nats_address,
+        nats_url.to_string(),
         Some(&sentinel_jwt),
         Some(Arc::new(sentinel_kp)),
         false,
@@ -143,13 +140,14 @@ async fn connect_to_nats_with_workload_identity() -> anyhow::Result<()> {
     )
     .await?;
 
-    // Shut down the SPIRE Agent running locally
-    agent.stop().await?;
-
     assert_eq!(
         client.connection_state(),
         async_nats::connection::State::Connected
     );
+
+    // Clean up dependencies
+    let _ = agent.stop().await;
+    let _ = nats_server.stop().await;
 
     Ok(())
 }
@@ -269,8 +267,12 @@ async fn start_workload_identity_auth_callout(
             async move { kp.sign(&nonce).map_err(async_nats::AuthError::new) }
         })
         .name("auth-callout")
+        .retry_on_initial_connect()
         .connect(nats_address)
         .await?;
+
+    let nats_client =
+        ensure_nats_connection_until_timeout(nats_client, Duration::from_secs(5)).await?;
 
     // Establish the SPIFFE client against the local SPIRE Agent so we can validate the incoming JWT-SVIDs
     let mut spiffe_client = spiffe::WorkloadApiClient::default()

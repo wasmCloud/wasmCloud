@@ -37,8 +37,9 @@ const PONGER_COMPONENT_ID: &str = "ponger_component";
 #[instrument(skip_all, ret)]
 #[tokio::test(flavor = "multi_thread")]
 async fn config_updates() -> Result<()> {
-    let (nats_server, _, nats_client) = start_nats()
+    let (nats_server, _, nats_client) = start_nats(None, true)
         .await
+        .map(|res| (res.0, res.1, res.2.unwrap()))
         .context("failed to start backing services")?;
 
     let store = jetstream::new(nats_client)
@@ -141,8 +142,10 @@ async fn config_e2e() -> anyhow::Result<()> {
         .init();
 
     // Start NATS server
-    let (nats_server, nats_url, nats_client) =
-        start_nats().await.expect("should be able to start NATS");
+    let (nats_server, nats_url, nats_client) = start_nats(None, true)
+        .await
+        .map(|res| (res.0, res.1, res.2.unwrap()))
+        .expect("should be able to start NATS");
 
     // Build client for interacting with the lattice
     let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client.clone())
