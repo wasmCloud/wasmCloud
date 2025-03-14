@@ -1,18 +1,23 @@
 #![cfg(all(unix, feature = "wasmcloud"))]
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::MetadataExt;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
 use async_nats::service::ServiceExt;
 use bytes::Bytes;
-use common::nats::{ensure_nats_connection_until_timeout, start_nats};
 use futures::StreamExt;
 
 mod common;
-use common::{spire::start_spire_agent, tempdir};
+use common::nats::{ensure_nats_connection_until_timeout, start_nats};
+use common::{
+    spire::{
+        generate_join_token, register_spiffe_workload, start_spire_agent, start_spire_server,
+        validate_workload_registration_within_timeout,
+    },
+    tempdir,
+};
 
 use nats_jwt_rs::{
     account::{Account, ExternalAuthorization},
@@ -26,9 +31,7 @@ use nkeys::KeyPair;
 use wasmcloud_host::wasmbus::connect_nats;
 use wasmcloud_host::workload_identity::WorkloadIdentityConfig;
 use wasmcloud_test_util::env::EnvVarGuard;
-use wasmcloud_test_util::testcontainers::{
-    AsyncRunner as _, ContainerAsync, ExecCommand, ImageExt, NatsConfig, NatsResolver, SpireServer,
-};
+use wasmcloud_test_util::testcontainers::{NatsConfig, NatsResolver};
 
 #[tokio::test]
 async fn connect_to_nats_with_workload_identity() -> anyhow::Result<()> {
@@ -60,30 +63,23 @@ async fn connect_to_nats_with_workload_identity() -> anyhow::Result<()> {
     };
     let sentinel_jwt = sentinel_claims.encode(&auth_account_nkey)?;
 
-    let spire_server = SpireServer::default()
-        .with_startup_timeout(Duration::from_secs(5))
-        .start()
-        .await?;
-    let spire_server_url = &format!(
-        "http://{}:{}",
-        spire_server.get_host().await?,
-        spire_server.get_host_port_ipv4(8081).await?
-    );
+    // Temporary directory for storing all of the SPIRE Agent and Server configuration and sockets
+    let tmp_dir = tempdir().context("should have create a temporary directory for SPIRE Agent")?;
 
-    let agent_spiffe_id = "spiffe://example.org/test-agent";
-    let workload_spiffe_id = "spiffe://example.org/test-workload";
-    let auth_callout_service_audience = "spiffe://example.org/auth-callout";
+    let (spire_server, spire_server_url, spire_server_socket_path) =
+        start_spire_server(tmp_dir.path()).await?;
+
+    let agent_spiffe_id = "spiffe://wasmcloud.dev/test-agent";
+    let workload_spiffe_id = "spiffe://wasmcloud.dev/test-workload";
+    let auth_callout_service_audience = "spiffe://wasmcloud.dev/auth-callout";
 
     // Generate the join_token used by the SPIRE Agent to establish it's identity with the SPIRE Server
-    let agent_join_token = generate_join_token(agent_spiffe_id, &spire_server)
+    let agent_join_token = generate_join_token(agent_spiffe_id, &spire_server_socket_path)
         .await
         .context("should have generated join token for SPIRE Agent")?;
 
-    // Temporary directory for storing all of the SPIRE Agent configuration and sockets
-    let tmp_dir = tempdir().context("should have create a temporary directory for SPIRE Agent")?;
-
     // Start the SPIRE Agent on the local machine so that we can use the Workload API socket for connecting to NATS
-    let (agent, api_socket, _) =
+    let (spire_agent, api_socket, _) =
         start_spire_agent(&agent_join_token, spire_server_url, tmp_dir.path()).await?;
 
     // Set environment variables to be used in Auth Callout Service and WorkloadIdentityConfig
@@ -115,10 +111,10 @@ async fn connect_to_nats_with_workload_identity() -> anyhow::Result<()> {
 
     // Register the test workload on the SPIRE Server
     register_spiffe_workload(
-        &spire_server,
         agent_spiffe_id,
         workload_spiffe_id,
         &workload_selector,
+        &spire_server_socket_path,
     )
     .await
     .context("should have registered workload on the SPIRE Server")?;
@@ -146,107 +142,10 @@ async fn connect_to_nats_with_workload_identity() -> anyhow::Result<()> {
     );
 
     // Clean up dependencies
-    let _ = agent.stop().await;
+    let _ = spire_agent.stop().await;
+    let _ = spire_server.stop().await;
     let _ = nats_server.stop().await;
 
-    Ok(())
-}
-
-// Generates a join token used by the SPIRE Agent to establish it's identity
-// with the SPIRE Server.
-async fn generate_join_token(
-    agent_spiffe_id: &str,
-    spire_server: &ContainerAsync<SpireServer>,
-) -> anyhow::Result<String> {
-    let mut join_token_cmd = spire_server
-        .exec(ExecCommand::new(vec![
-            "/opt/spire/bin/spire-server",
-            "token",
-            "generate",
-            "-spiffeID",
-            agent_spiffe_id,
-            "-output",
-            "json",
-            "-ttl",
-            "3600",
-        ]))
-        .await
-        .context("should generate join token")?;
-
-    let join_token_response = join_token_cmd
-        .stdout_to_vec()
-        .await
-        .context("should parse join token generate response")?;
-
-    let join_token: serde_json::Value = serde_json::from_slice(&join_token_response)
-        .context("should parse SPIRE Server join token response")?;
-
-    Ok(join_token
-        .get("value")
-        .context("should find a 'value' field in the join token response")?
-        .as_str()
-        .context("should return join token 'value' field")?
-        .to_string())
-}
-
-// Uses the SPIRE Server container to register the test workload under the
-// local SPIRE Agent
-async fn register_spiffe_workload(
-    spire_server: &ContainerAsync<SpireServer>,
-    agent_spiffe_id: &str,
-    workload_spiffe_id: &str,
-    workload_selector: &str,
-) -> anyhow::Result<()> {
-    _ = spire_server
-        .exec(ExecCommand::new(vec![
-            "/opt/spire/bin/spire-server",
-            "entry",
-            "create",
-            "-parentID",
-            agent_spiffe_id,
-            "-spiffeID",
-            workload_spiffe_id,
-            "-selector",
-            workload_selector,
-        ]))
-        .await
-        .context("failed to register create SPIFFE entry for workload")?;
-    Ok(())
-}
-
-// Ensure that workloads can be fetched (within provided timeout), so that
-// subsequent calls to the SPIRE Agent from the test workload and Auth Callout
-// service succeed
-async fn validate_workload_registration_within_timeout(
-    agent_socket: &Path,
-    timeout: Duration,
-) -> anyhow::Result<()> {
-    tokio::time::timeout(timeout, async move {
-        loop {
-            if let Ok(status) = tokio::process::Command::new(
-                std::env::var("TEST_SPIRE_AGENT_BIN")
-                    .as_deref()
-                    .unwrap_or("spire-agent"),
-            )
-            .args([
-                "api",
-                "fetch",
-                "x509",
-                "-silent",
-                "-socketPath",
-                &agent_socket.display().to_string(),
-            ])
-            .status()
-            .await
-            {
-                if status.success() {
-                    break;
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-    })
-    .await?;
     Ok(())
 }
 
