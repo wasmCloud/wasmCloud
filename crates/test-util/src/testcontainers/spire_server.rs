@@ -10,7 +10,7 @@ const SPIRE_SERVER_CONFIG: &str = r#"server {
     bind_address = "0.0.0.0"
     bind_port = "8081"
     socket_path = "/tmp/spire-server/private/api.sock"
-    trust_domain = "example.org"
+    trust_domain = "wasmcloud.dev"
     data_dir = "/var/lib/spire/server/.data"
     log_level = "DEBUG"
 }

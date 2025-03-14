@@ -18,7 +18,7 @@ const SPIRE_AGENT_CONFIG: &str = r#"agent {
     #socket_path = "/tmp/spire-agent/public/api.sock"
     socket_path ="tcp:///0.0.0.0:8082"
     trust_bundle_path = "/etc/spire/agent/dummy_root_ca.crt"
-    trust_domain = "example.org"
+    trust_domain = "wasmcloud.dev"
 }
 
 plugins {
