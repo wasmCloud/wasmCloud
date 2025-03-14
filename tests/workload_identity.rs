@@ -1,4 +1,5 @@
 #![cfg(all(unix, feature = "wasmcloud"))]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::MetadataExt;
 use std::sync::Arc;
@@ -9,15 +10,13 @@ use async_nats::service::ServiceExt;
 use bytes::Bytes;
 use futures::StreamExt;
 
-mod common;
+pub mod common;
 use common::nats::{ensure_nats_connection_until_timeout, start_nats};
-use common::{
-    spire::{
-        generate_join_token, register_spiffe_workload, start_spire_agent, start_spire_server,
-        validate_workload_registration_within_timeout,
-    },
-    tempdir,
+use common::spire::{
+    generate_join_token, register_spiffe_workload, start_spire_agent, start_spire_server,
+    validate_workload_registration_within_timeout,
 };
+use common::tempdir;
 
 use nats_jwt_rs::{
     account::{Account, ExternalAuthorization},
