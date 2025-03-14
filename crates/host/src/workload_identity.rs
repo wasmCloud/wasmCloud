@@ -27,9 +27,6 @@ impl WorkloadIdentityConfig {
 
     #[cfg(target_family = "windows")]
     pub fn from_env() -> Result<Self> {
-        // The use is inline so as to appease clippy.
-        use anyhow::bail;
-
-        bail!("workload identity is not supported on Windows")
+        anyhow::bail!("workload identity is not supported on Windows")
     }
 }

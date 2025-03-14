@@ -422,8 +422,8 @@ pub async fn connect_nats(
     workload_identity_config: Option<WorkloadIdentityConfig>,
 ) -> anyhow::Result<async_nats::Client> {
     let opts = match (jwt, key, workload_identity_config) {
-        (Some(jwt), Some(key), Some(wid_cfg)) => {
-            setup_workload_identity_nats_connect_options(Some(jwt), Some(key), wid_cfg).await?
+        (jwt, key, Some(wid_cfg)) => {
+            setup_workload_identity_nats_connect_options(jwt, key, wid_cfg).await?
         }
         (Some(jwt), Some(key), None) => {
             async_nats::ConnectOptions::with_jwt(jwt.to_string(), move |nonce| {
@@ -433,9 +433,6 @@ pub async fn connect_nats(
         }
         (Some(_), None, None) | (None, Some(_), None) => {
             bail!("cannot authenticate if only one of jwt or seed is specified")
-        }
-        (None, None, Some(wid_cfg)) => {
-            setup_workload_identity_nats_connect_options(None, None, wid_cfg).await?
         }
         _ => async_nats::ConnectOptions::new(),
     };
@@ -488,12 +485,7 @@ async fn setup_workload_identity_nats_connect_options(
 
                 let mut auth = async_nats::Auth::new();
                 if let Some(key) = key {
-                    let signature = key
-                        .sign(&nonce)
-                        // TODO(joonas): Remove these once we have async-nats 0.38.0
-                        // .map(String::from_utf8)
-                        // .map_err(async_nats::AuthError::new)?
-                        .map_err(async_nats::AuthError::new)?;
+                    let signature = key.sign(&nonce).map_err(async_nats::AuthError::new)?;
                     auth.signature = Some(signature);
                 }
                 if let Some(jwt) = jwt {
