@@ -19,6 +19,7 @@
   inputs.nixify.inputs.nixlib.follows = "nixlib";
   inputs.nixify.url = "github:rvolosatovs/nixify";
   inputs.nixlib.url = "github:nix-community/nixpkgs.lib";
+  inputs.nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   inputs.wit-deps.inputs.nixify.follows = "nixify";
   inputs.wit-deps.inputs.nixlib.follows = "nixlib";
   inputs.wit-deps.url = "github:bytecodealliance/wit-deps/v0.5.0";
@@ -26,6 +27,7 @@
   outputs = {
     nixify,
     nixlib,
+    nixpkgs-unstable,
     wit-deps,
     ...
   }:
@@ -64,6 +66,21 @@
 
         overlays = [
           wit-deps.overlays.default
+          (
+            final: prev: {
+              pkgsUnstable = import nixpkgs-unstable {
+                inherit
+                  (final.stdenv.hostPlatform)
+                  system
+                  ;
+
+                inherit
+                  (final)
+                  config
+                  ;
+              };
+            }
+          )
         ];
 
         excludePaths = [
@@ -151,10 +168,11 @@
               nativeCheckInputs =
                 nativeCheckInputs
                 ++ [
-                  pkgs.nats-server
-                  pkgs.redis
                   pkgs.minio
+                  pkgs.redis
                   pkgs.vault
+
+                  pkgs.pkgsUnstable.nats-server
                 ];
             };
 
@@ -609,7 +627,6 @@
             amd64 = secrets-nats-kv-x86_64-unknown-linux-musl-oci-wolfi;
             arm64 = secrets-nats-kv-aarch64-unknown-linux-musl-oci-wolfi;
           };
-
         in
           (concatMapAttrs (_: {packages, ...}: packages) attrs)
           // {
@@ -648,16 +665,17 @@
           extendDerivations {
             buildInputs = [
               pkgs.cargo-audit
-              pkgs.go
-              pkgs.kubectl
-              pkgs.kubernetes-helm
               pkgs.minio
-              pkgs.nats-server
               pkgs.redis
               pkgs.skopeo
               pkgs.tinygo
               pkgs.vault
               pkgs.wit-deps
+
+              pkgs.pkgsUnstable.go
+              pkgs.pkgsUnstable.kubectl
+              pkgs.pkgsUnstable.kubernetes-helm
+              pkgs.pkgsUnstable.nats-server
             ];
           }
           devShells;
