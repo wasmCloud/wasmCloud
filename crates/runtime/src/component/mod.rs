@@ -19,7 +19,7 @@ use wasmtime::component::{types, Linker, ResourceTable, ResourceTableError};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 use wasmtime_wasi_http::WasiHttpCtx;
 use wrpc_runtime_wasmtime::{
-    collect_component_resources, link_item, ServeExt as _, SharedResourceTable, WrpcView,
+    collect_component_resources, ServeExt as _, SharedResourceTable, WrpcView,
 };
 
 use crate::capability::{self, wrpc};
@@ -179,6 +179,7 @@ where
     engine: wasmtime::Engine,
     claims: Option<jwt::Claims<jwt::Component>>,
     instance_pre: wasmtime::component::InstancePre<Ctx<H>>,
+    rpc_timeout: Duration,
     max_execution_time: Duration,
     experimental_features: Features,
 }
@@ -199,6 +200,7 @@ where
 fn new_store<H: Handler>(
     engine: &wasmtime::Engine,
     handler: H,
+    rpc_timeout: Duration,
     max_execution_time: Duration,
 ) -> wasmtime::Store<Ctx<H>> {
     let table = ResourceTable::new();
@@ -215,7 +217,7 @@ fn new_store<H: Handler>(
             http: WasiHttpCtx::new(),
             table,
             shared_resources: SharedResourceTable::default(),
-            timeout: max_execution_time,
+            timeout: rpc_timeout,
             parent_context: None,
         },
     );
@@ -391,7 +393,7 @@ where
                     Some(version),
                 )) if is_0_2(version, 0) => {}
                 _ if rt.skip_feature_gated_instance(name) => {}
-                _ => link_item(&engine, &mut linker.root(), [], ty, "", name, None)
+                _ => crate::runtime::link_item(&engine, &mut linker.root(), [], ty, "", name, None)
                     .context("failed to link item")?,
             };
         }
@@ -400,6 +402,7 @@ where
             engine,
             claims,
             instance_pre,
+            rpc_timeout: rt.rpc_timeout,
             max_execution_time: rt.max_execution_time,
             experimental_features: rt.experimental_features,
         })
@@ -455,6 +458,7 @@ where
             engine: self.engine.clone(),
             pre: self.instance_pre.clone(),
             handler,
+            rpc_timeout: self.rpc_timeout,
             max_execution_time: self.max_execution_time,
             events,
             experimental_features: self.experimental_features,
@@ -478,6 +482,7 @@ where
         S: wrpc_transport::Serve,
         S::Context: Deref<Target = tracing::Span>,
     {
+        let rpc_timeout = self.rpc_timeout;
         let max_execution_time = self.max_execution_time;
         let mut invocations = vec![];
         let instance = self.instantiate(handler.clone(), events.clone());
@@ -535,8 +540,12 @@ where
                         .serve_function(
                             move || {
                                 let span = info_span!("call_instance_function");
-                                let mut store =
-                                    new_store(&engine, handler.clone(), max_execution_time);
+                                let mut store = new_store(
+                                    &engine,
+                                    handler.clone(),
+                                    rpc_timeout,
+                                    max_execution_time,
+                                );
                                 store.data_mut().parent_context = Some(span.context());
                                 store
                             },
@@ -598,6 +607,7 @@ where
                                             let mut store = new_store(
                                                 &engine,
                                                 handler.clone(),
+                                                rpc_timeout,
                                                 max_execution_time,
                                             );
                                             store.data_mut().parent_context = Some(span.context());
@@ -690,6 +700,7 @@ where
     engine: wasmtime::Engine,
     pre: wasmtime::component::InstancePre<Ctx<H>>,
     handler: H,
+    rpc_timeout: Duration,
     max_execution_time: Duration,
     events: mpsc::Sender<WrpcServeEvent<C>>,
     experimental_features: Features,
@@ -703,6 +714,7 @@ where
         Self {
             engine: self.engine.clone(),
             pre: self.pre.clone(),
+            rpc_timeout: self.rpc_timeout,
             handler: self.handler.clone(),
             max_execution_time: self.max_execution_time,
             events: self.events.clone(),

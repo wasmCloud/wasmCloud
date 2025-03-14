@@ -6,6 +6,16 @@ interface lattice {
         constructor(namespace: string, %package: string, %interface: string);
     }
 
+    record rpc-error {
+        wasmcloud-error: error,
+    }
+
+    variant error {
+        transport(string),
+        wasmcloud(string),
+        wrpc(string),
+    }
+
     /// Set a link name to use for all interfaces specified. This is advanced functionality only
     /// available within wasmcloud and, as such, is exposed here as part of the wasmcloud:bus package.
     /// This is used when you are linking multiple of the same interfaces
