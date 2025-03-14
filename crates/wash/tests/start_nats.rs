@@ -13,7 +13,7 @@ use common::find_open_port;
 async fn can_handle_missing_nats_version() -> Result<()> {
     let install_dir = tempdir().expect("Couldn't create tempdir");
 
-    let res = ensure_nats_server("v300.22.1111223", &install_dir).await;
+    let res = ensure_nats_server("v300.22.1111223", &install_dir, None).await;
     assert!(res.is_err());
 
     Ok(())
@@ -24,7 +24,7 @@ async fn can_handle_missing_nats_version() -> Result<()> {
 async fn can_download_and_start_nats() -> Result<()> {
     let install_dir = tempdir().expect("Couldn't create tempdir");
 
-    let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir).await;
+    let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir, None).await;
     assert!(res.is_ok());
 
     let log_path = install_dir.path().join("nats.log");
@@ -69,7 +69,7 @@ async fn can_download_and_start_nats() -> Result<()> {
 async fn can_gracefully_fail_running_nats() -> Result<()> {
     let install_dir = tempdir().expect("Couldn't create tempdir");
 
-    let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir).await;
+    let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir, None).await;
     assert!(res.is_ok());
 
     let nats_port = find_open_port().await?;
