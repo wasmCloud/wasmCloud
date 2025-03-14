@@ -1,5 +1,4 @@
 use std::net::Ipv6Addr;
-use std::path::Path;
 use std::process::ExitStatus;
 use std::sync::Arc;
 
@@ -7,13 +6,12 @@ use anyhow::{anyhow, ensure, Context, Result};
 use futures::StreamExt;
 use hyper::header::HOST;
 use hyper::Uri;
-use tempfile::{NamedTempFile, TempDir};
+use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::process::Command;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tracing::info;
-use url::Url;
 
 pub mod minio;
 pub mod nats;
@@ -82,25 +80,6 @@ impl BackgroundServer {
         ensure!(status.code().is_none());
         Ok(())
     }
-}
-
-/// Copy a pre-built PAR file to a temporary location so that it can be used safely.
-///
-/// During CI, it is possible for a PAR to be written to during the process of a parallel test
-/// triggering an file busy (EXTBSY) OS error. To avoid this, we copy the provider par
-/// to a temporary directory and use that instead.
-pub async fn copy_par(path: impl AsRef<Path>) -> Result<(Url, NamedTempFile)> {
-    let provider_tmp = tempfile::Builder::new()
-        .prefix("provider-tmp")
-        .suffix(".par")
-        .tempfile()
-        .context("failed to make temp file for http provider")?;
-    tokio::fs::copy(path.as_ref(), &provider_tmp)
-        .await
-        .context("failed to copy test par to new file")?;
-    let provider_url =
-        Url::from_file_path(provider_tmp.path()).expect("failed to construct provider ref");
-    Ok((provider_url, provider_tmp))
 }
 
 /// Helper for serving HTTP requests via wrpc for testing. Will likely be subsumed once we have a
