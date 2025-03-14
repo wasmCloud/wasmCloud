@@ -156,6 +156,7 @@
                   pkgs.minio
                   pkgs.redis
                   pkgs.spire-agent
+                  pkgs.spire-server
                   pkgs.vault
 
                   pkgs.pkgsUnstable.nats-server
