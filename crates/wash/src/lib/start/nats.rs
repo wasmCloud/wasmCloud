@@ -348,6 +348,7 @@ where
     let mut cmd = Command::new(bin_path_ref);
     cmd.stderr(stderr.into())
         .stdin(Stdio::null())
+        .stdout(Stdio::null())
         .args(&cmd_args);
     let child = if command_group == CommandGroupUsage::CreateNew {
         cmd.group_spawn().map_err(anyhow::Error::from)?.into_inner()

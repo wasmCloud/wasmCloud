@@ -28,7 +28,7 @@ impl HostRng {
     #[cfg(feature = "rand")]
     #[must_use]
     pub fn random_in_range(min: u32, max: u32) -> u32 {
-        HostRng.gen_range(min..=max)
+        HostRng.random_range(min..=max)
     }
 }
 
@@ -54,11 +54,5 @@ impl crate::RngCore for HostRng {
             // TODO: Optimize
             self.fill_bytes(tail);
         }
-    }
-
-    #[inline]
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
-        self.fill_bytes(dest);
-        Ok(())
     }
 }

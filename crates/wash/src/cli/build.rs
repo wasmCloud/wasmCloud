@@ -81,7 +81,6 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
             };
 
             let component_path = if command.sign_only {
-                std::env::set_current_dir(&config.common.project_dir)?;
                 let component_wasm_path =
                     if let Some(path) = component_config.build_artifact.as_ref() {
                         path.clone()

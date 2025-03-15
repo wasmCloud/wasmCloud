@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::str::FromStr;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use tokio::process::Command;
 
 use anyhow::Context;
@@ -11,6 +11,24 @@ use tracing::error;
 use wasmcloud_control_interface::HostInventory;
 
 use crate::lib::id::{ModuleId, ServerId, ServiceId};
+
+/// Version of the NATS server used by default for wash
+pub const NATS_SERVER_VERSION: &str = "v2.10.20";
+
+/// Default host for the NATS server used by wash
+pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
+
+/// Default port for the NATS server used by default for wash
+pub const DEFAULT_NATS_PORT: &str = "4222";
+
+/// Default port for the NATS websocket server used by wash
+pub const DEFAULT_NATS_WEBSOCKET_PORT: &str = "4223";
+
+/// Version of wadm used by default for wash
+pub const WADM_VERSION: &str = "v0.20.2";
+
+/// Version of wasmCloud host used by default for wash
+pub const WASMCLOUD_HOST_VERSION: &str = "v1.6.1";
 
 /// Default path to the `git` command (assumes it exists on PATH)
 const DEFAULT_GIT_PATH: &str = "git";
@@ -305,10 +323,6 @@ pub async fn clone_git_repo(
 ) -> Result<()> {
     let git_cmd = git_cmd.unwrap_or_else(|| DEFAULT_GIT_PATH.into());
     let tmp_dir = tmp_dir.as_ref();
-    let cwd =
-        std::env::current_dir().map_err(|e| anyhow!("could not get current directory: {}", e))?;
-    std::env::set_current_dir(tmp_dir)
-        .map_err(|e| anyhow!("could not cd to tmp dir {}: {}", tmp_dir.display(), e))?;
 
     // For convenience, allow omission of prefix 'https://' or 'https://github.com'
     let repo_url = {
@@ -357,6 +371,7 @@ pub async fn clone_git_repo(
     }
 
     let clone_cmd_out = Command::new(&git_cmd)
+        .current_dir(tmp_dir)
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -375,6 +390,7 @@ pub async fn clone_git_repo(
     // checkout of the ref (branches use the --branch switch during checkout)
     if let Some(repo_ref) = repo_ref {
         let checkout_cmd_out = Command::new(&git_cmd)
+            .current_dir(tmp_dir)
             .args(["checkout", repo_ref.git_ref()])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -393,6 +409,7 @@ pub async fn clone_git_repo(
     // After we've pulled the right ref, we can descend into a subfolder if specified
     if let Some(sub_folder) = sub_folder {
         let checkout_cmd_out = Command::new(&git_cmd)
+            .current_dir(tmp_dir)
             .args(["sparse-checkout", "set", &sub_folder])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -408,6 +425,5 @@ pub async fn clone_git_repo(
         }
     }
 
-    std::env::set_current_dir(cwd)?;
     Ok(())
 }

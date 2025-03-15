@@ -4,16 +4,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
-use term_table::{Table, TableStyle};
 use crate::lib::{
     config::{cfg_dir, DEFAULT_NATS_TIMEOUT_MS},
     plugin::{subcommand::SubcommandRunner, PLUGIN_DIR},
 };
+use anyhow::{Context, Result};
+use term_table::{Table, TableStyle};
 
 const MAX_TERMINAL_WIDTH: usize = 120;
 
-#[must_use] pub fn format_optional(value: Option<String>) -> String {
+#[must_use]
+pub fn format_optional(value: Option<String>) -> String {
     value.unwrap_or_else(|| "N/A".into())
 }
 
@@ -30,7 +31,8 @@ pub fn extract_arg_value(arg: &str) -> Result<String> {
     }
 }
 
-#[must_use] pub const fn default_timeout_ms() -> u64 {
+#[must_use]
+pub const fn default_timeout_ms() -> u64 {
     DEFAULT_NATS_TIMEOUT_MS
 }
 
@@ -49,7 +51,11 @@ pub async fn ensure_plugin_dir(dir: Option<impl AsRef<Path>>) -> Result<PathBuf>
     };
 
     if !tokio::fs::try_exists(&plugin_dir).await.unwrap_or(false) {
-        tokio::fs::create_dir(&plugin_dir).await?;
+        if let Err(e) = tokio::fs::create_dir(&plugin_dir).await {
+            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(e.into());
+            }
+        }
     }
     Ok(plugin_dir)
 }
@@ -151,7 +157,9 @@ pub fn configure_table_style(table: &mut Table<'_>, num_rows: usize) {
     // Sets the max column width to ensure the table evenly fills the terminal width
     table.max_column_width = termsize::get()
         // Just slightly reducing the terminal width to account for padding
-        .map_or(MAX_TERMINAL_WIDTH, |size| size.cols.saturating_sub(4) as usize)
+        .map_or(MAX_TERMINAL_WIDTH, |size| {
+            size.cols.saturating_sub(4) as usize
+        })
         / num_rows;
 }
 

@@ -26,7 +26,7 @@ use wasmcloud_core::OtelConfig;
 use wasmcloud_core::OtelProtocol;
 
 #[cfg(feature = "otel")]
-static LOG_PROVIDER: once_cell::sync::OnceCell<opentelemetry_sdk::logs::LoggerProvider> =
+static LOG_PROVIDER: once_cell::sync::OnceCell<opentelemetry_sdk::logs::SdkLoggerProvider> =
     once_cell::sync::OnceCell::new();
 
 /// A struct that allows us to dynamically choose JSON formatting without using dynamic dispatch.
@@ -283,18 +283,24 @@ where
     }
     let batch_config = batch_builder.build();
 
-    let processor = opentelemetry_sdk::trace::BatchSpanProcessor::builder(
-        exporter,
-        opentelemetry_sdk::runtime::Tokio,
-    )
-    .with_batch_config(batch_config)
-    .build();
+    let processor =
+        opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor::builder(
+            exporter,
+            opentelemetry_sdk::runtime::Tokio,
+        )
+        .with_batch_config(batch_config)
+        .build();
 
-    let tracer = opentelemetry_sdk::trace::TracerProvider::builder()
+    let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_sampler(sampler)
-        .with_resource(opentelemetry_sdk::Resource::new(vec![
-            opentelemetry::KeyValue::new("service.name", service_name),
-        ]))
+        .with_resource(
+            opentelemetry_sdk::Resource::builder_empty()
+                .with_attribute(opentelemetry::KeyValue::new(
+                    "service.name",
+                    service_name.to_string(),
+                ))
+                .build(),
+        )
         .with_span_processor(processor)
         .build()
         .tracer("wasmcloud-tracing");
@@ -336,16 +342,22 @@ where
         }
     };
 
-    let processor = opentelemetry_sdk::logs::BatchLogProcessor::builder(
-        exporter,
-        opentelemetry_sdk::runtime::Tokio,
-    )
-    .build();
+    let processor =
+        opentelemetry_sdk::logs::log_processor_with_async_runtime::BatchLogProcessor::builder(
+            exporter,
+            opentelemetry_sdk::runtime::Tokio,
+        )
+        .build();
 
-    let log_provider = opentelemetry_sdk::logs::LoggerProvider::builder()
-        .with_resource(opentelemetry_sdk::Resource::new(vec![
-            opentelemetry::KeyValue::new("service.name", service_name),
-        ]))
+    let log_provider = opentelemetry_sdk::logs::SdkLoggerProvider::builder()
+        .with_resource(
+            opentelemetry_sdk::Resource::builder_empty()
+                .with_attribute(opentelemetry::KeyValue::new(
+                    "service.name",
+                    service_name.to_string(),
+                ))
+                .build(),
+        )
         .with_log_processor(processor)
         .build();
 

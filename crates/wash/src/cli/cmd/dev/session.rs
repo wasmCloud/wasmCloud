@@ -3,15 +3,15 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use crate::lib::common::CommandGroupUsage;
 use anyhow::{bail, Context as _, Result};
 use chrono::{DateTime, Utc};
 use console::style;
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{distr::Alphanumeric, Rng};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt as _;
 use tokio::process::Child;
-use crate::lib::common::CommandGroupUsage;
 
 use crate::lib::config::downloads_dir;
 use crate::lib::generate::emoji;
@@ -195,9 +195,12 @@ impl WashDevSession {
         let session = if let Some(existing_session) = session_metadata
             .sessions
             .iter()
-            .find(|s| s.project_path == project_path && !s.in_use) { existing_session.clone() } else {
+            .find(|s| s.project_path == project_path && !s.in_use)
+        {
+            existing_session.clone()
+        } else {
             let session = Self {
-                id: rand::thread_rng()
+                id: rand::rng()
                     .sample_iter(&Alphanumeric)
                     .take(SESSION_ID_LEN)
                     .map(char::from)

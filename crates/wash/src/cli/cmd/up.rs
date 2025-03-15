@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use sysinfo::{System, SystemExt};
+use sysinfo::System;
 use tokio::fs::create_dir_all;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -849,7 +849,11 @@ fn is_process_running(pid: &str) -> bool {
 
         // Refresh processes
         let mut sys = sys;
-        if panic::catch_unwind(AssertUnwindSafe(|| sys.refresh_processes())).is_err() {
+        if panic::catch_unwind(AssertUnwindSafe(|| {
+            sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true)
+        }))
+        .is_err()
+        {
             return false;
         }
 

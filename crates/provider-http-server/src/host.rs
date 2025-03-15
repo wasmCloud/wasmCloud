@@ -11,7 +11,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{bail, Context as _};
-use axum::extract::{self};
+use axum::extract;
 use axum::handler::Handler;
 use axum_server::tls_rustls::RustlsConfig;
 use axum_server::Handle;
@@ -240,7 +240,7 @@ async fn handle_request(
         scheme,
         settings,
     }): extract::State<RequestContext>,
-    extract::Host(authority): extract::Host,
+    axum_extra::extract::Host(authority): axum_extra::extract::Host,
     request: extract::Request,
 ) -> impl axum::response::IntoResponse {
     let timeout = settings.timeout_ms.map(Duration::from_millis);

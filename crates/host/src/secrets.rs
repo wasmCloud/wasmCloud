@@ -6,7 +6,7 @@ use anyhow::{bail, ensure, Context as _};
 use async_nats::{jetstream::kv::Store, Client};
 use futures::stream;
 use futures::stream::{StreamExt, TryStreamExt};
-use secrecy::Secret;
+use secrecy::SecretBox;
 use tokio::sync::RwLock;
 use tracing::instrument;
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
@@ -101,7 +101,7 @@ impl Manager {
         entity_jwt: Option<&String>,
         host_jwt: &str,
         application: Option<&String>,
-    ) -> anyhow::Result<HashMap<String, Secret<SecretValue>>> {
+    ) -> anyhow::Result<HashMap<String, SecretBox<SecretValue>>> {
         // If we're not fetching any secrets, return empty map successfully
         if secret_names.is_empty() {
             return Ok(HashMap::with_capacity(0));
@@ -151,13 +151,16 @@ impl Manager {
                         ..
                     } => secrets.insert(
                         secret_name,
-                        Secret::new(SecretValue::String(string_secret)),
+                        SecretBox::new(SecretValue::String(string_secret).into()),
                     ),
                     WasmcloudSecret {
                         binary_secret: Some(binary_secret),
                         ..
                     } => {
-                        secrets.insert(secret_name, Secret::new(SecretValue::Bytes(binary_secret)))
+                        secrets.insert(
+                            secret_name,
+                            SecretBox::new(SecretValue::Bytes(binary_secret).into()),
+                        )
                     }
                     WasmcloudSecret {
                         string_secret: None,

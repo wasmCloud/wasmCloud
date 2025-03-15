@@ -32,6 +32,10 @@ opentelemetry_sdk = { workspace = true, optional = true, features = [
     "metrics",
     "trace",
     "rt-tokio",
+    "experimental_async_runtime",
+    "experimental_trace_batch_span_processor_with_async_runtime",
+    "experimental_metrics_periodicreader_with_async_runtime",
+    "experimental_logs_batch_log_processor_with_async_runtime",
 ] }
 opentelemetry-appender-tracing = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, features = [

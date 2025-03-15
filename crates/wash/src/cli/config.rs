@@ -5,17 +5,11 @@ use anyhow::{anyhow, Result};
 use crate::cmd::up::WasmcloudOpts;
 use crate::creds::parse_credsfile;
 
-// NATS configuration values
-pub const NATS_SERVER_VERSION: &str = "v2.10.20";
-pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
-pub const DEFAULT_NATS_PORT: &str = "4222";
-pub const DEFAULT_NATS_WEBSOCKET_PORT: &str = "4223";
-
-// wadm configuration values
-pub const WADM_VERSION: &str = "v0.20.2";
-
-// wasmCloud configuration values, https://wasmcloud.com/docs/reference/host-config
-pub const WASMCLOUD_HOST_VERSION: &str = "v1.6.1";
+// Re-exports here for backcompat.
+pub use crate::lib::common::{
+    DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_WEBSOCKET_PORT, NATS_SERVER_VERSION,
+    WADM_VERSION, WASMCLOUD_HOST_VERSION,
+};
 
 // NATS isolation configuration variables
 pub const WASMCLOUD_LATTICE: &str = "WASMCLOUD_LATTICE";
@@ -107,10 +101,7 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap
     }
 
     if let Some(secrets_topic) = wasmcloud_opts.secrets_topic {
-        host_config.insert(
-            WASMCLOUD_SECRETS_TOPIC.to_string(),
-            secrets_topic,
-        );
+        host_config.insert(WASMCLOUD_SECRETS_TOPIC.to_string(), secrets_topic);
     }
 
     if wasmcloud_opts.allow_latest {

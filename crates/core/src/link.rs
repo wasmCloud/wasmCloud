@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use secrecy::{zeroize::ZeroizeOnDrop, Zeroize};
+use secrecy::zeroize::{Zeroize, ZeroizeOnDrop};
 use serde::{Deserialize, Serialize};
 
 use crate::{ComponentId, LatticeTarget, WitInterface, WitNamespace, WitPackage};

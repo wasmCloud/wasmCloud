@@ -27,11 +27,10 @@ use futures::{join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStream
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use nkeys::{KeyPair, KeyPairType, XKey};
 use providers::Provider;
-use secrecy::Secret;
+use secrecy::SecretBox;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sysinfo::System;
-use sysinfo::SystemExt;
 use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
 use tokio::spawn;
@@ -836,9 +835,6 @@ impl Host {
             &ctl_nats,
         ));
 
-        let mut sys = System::new();
-        sys.refresh_system();
-
         let scope = InstrumentationScope::builder("wasmcloud-host")
             .with_version(config.version.clone())
             .with_attributes(vec![
@@ -848,12 +844,12 @@ impl Host {
                 KeyValue::new("host.os", OS),
                 KeyValue::new("host.osfamily", FAMILY),
                 KeyValue::new("host.friendly_name", friendly_name.clone()),
-                KeyValue::new("host.hostname", sys.host_name().unwrap_or_default()),
+                KeyValue::new("host.hostname", System::host_name().unwrap_or_default()),
                 KeyValue::new(
                     "host.kernel_version",
-                    sys.kernel_version().unwrap_or_default(),
+                    System::kernel_version().unwrap_or_default(),
                 ),
-                KeyValue::new("host.os_version", sys.os_version().unwrap_or_default()),
+                KeyValue::new("host.os_version", System::os_version().unwrap_or_default()),
             ])
             .build();
         let meter = global::meter_with_scope(scope);
@@ -1414,7 +1410,7 @@ impl Host {
         max_instances: NonZeroUsize,
         annotations: &Annotations,
         config: ConfigBundle,
-        secrets: HashMap<String, Secret<SecretValue>>,
+        secrets: HashMap<String, SecretBox<SecretValue>>,
     ) -> anyhow::Result<&'a mut Arc<Component>> {
         debug!(?component_ref, ?max_instances, "starting new component");
 
@@ -2468,7 +2464,7 @@ impl Host {
         config_names: &[String],
         entity_jwt: Option<&String>,
         application: Option<&String>,
-    ) -> anyhow::Result<(ConfigBundle, HashMap<String, Secret<SecretValue>>)> {
+    ) -> anyhow::Result<(ConfigBundle, HashMap<String, SecretBox<SecretValue>>)> {
         let (secret_names, config_names) = config_names
             .iter()
             .map(|s| s.to_string())

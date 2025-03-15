@@ -9,7 +9,7 @@ use anyhow::{anyhow, bail, Context as _};
 use async_nats::header::{IntoHeaderName as _, IntoHeaderValue as _};
 use async_trait::async_trait;
 use bytes::Bytes;
-use secrecy::Secret;
+use secrecy::SecretBox;
 use tokio::sync::RwLock;
 use tracing::{error, instrument, warn};
 use wasmcloud_runtime::capability::logging::logging;
@@ -38,7 +38,7 @@ pub struct Handler {
     /// Secrets are cached per-[`Handler`] so they can be used at runtime without consulting the secrets
     /// backend for each request. The [`SecretValue`] is wrapped in the [`Secret`] type from the `secrecy`
     /// crate to ensure that it is not accidentally logged or exposed in error messages.
-    pub secrets: Arc<RwLock<HashMap<String, Secret<SecretValue>>>>,
+    pub secrets: Arc<RwLock<HashMap<String, SecretBox<SecretValue>>>>,
     /// The lattice this handler will use for RPC
     pub lattice: Arc<str>,
     /// The identifier of the component that this handler is associated with
