@@ -96,54 +96,49 @@ jobs:
   meta:
     runs-on: ubuntu-latest
     outputs:
-      wasmcloud_modified: ${{ steps.wasmcloud_changes.outputs.any_changed }}
-      providers_modified: ${{ steps.provider_changes.outputs.any_changed }}
+      wasmcloud_modified: ${{ steps.changes.outputs.wasmcloud }}
+      providers_modified: ${{ steps.changes.outputs.providers }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: tj-actions/changed-files@7ac5902a02bbf88c426878d792c0728b55bb97ae
-        id: wasmcloud_changes
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: changes
         with:
           # Consider wasmCloud changed if any Rust file other than
           # capability providers change
-          files: |
-            ./.github/actions/build-nix/action.yml
-            ./.github/actions/install-nix/action.yml
-            ./.github/workflows/wasmcloud.yml
-            ./.github/workflows/oci.yml
-            ./.config/nextest.toml
-            nix/images/default.nix
-            flake.lock
-            flake.nix
-            Cargo.lock
-            Cargo.toml
-            rust-toolchain.toml
-            crates/**/*.{rs,toml,wit}
-            src/**/*.{rs,toml,wit}
-            tests/**/*.{rs,toml,wit}
-            wit/**/*.wit
+          #
           # Somewhat naive assumption that providers will be under `crates/provider-<interface>-<vendor>`
           # as that is our naming convention for providers.
-          files_ignore: |
-            !crates/provider-*-*
-            !crates/wash-*
-      - uses: tj-actions/changed-files@7ac5902a02bbf88c426878d792c0728b55bb97ae
-        id: provider_changes
-        with:
-          # Consider providers changed if any file in the providers change
-          files: |
-            ./.github/actions/build-nix/action.yml
-            ./.github/actions/install-nix/action.yml
-            ./.github/workflows/provider.yml
-            ./.github/workflows/wasmcloud.yml
-            Cargo.lock
-            Cargo.toml
-            crates/provider-*/*.{rs,toml,wit}
-            flake.lock
-            flake.nix
-            rust-toolchain.toml
-          files_ignore: |
-            !crates/**/*.md
-
+          filters: |
+            wasmcloud:
+              - './.github/actions/build-nix/action.yml'
+              - './.github/actions/install-nix/action.yml'
+              - './.github/workflows/wasmcloud.yml'
+              - './.github/workflows/oci.yml'
+              - './.config/nextest.toml'
+              - 'nix/images/default.nix'
+              - 'flake.lock'
+              - 'flake.nix'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'rust-toolchain.toml'
+              - 'crates/**/*.{rs,toml,wit}'
+              - 'src/**/*.{rs,toml,wit}'
+              - 'tests/**/*.{rs,toml,wit}'
+              - 'wit/**/*.wit'
+              - '!crates/provider-*/**'
+              - '!crates/wash/**'
+            providers:
+              - './.github/actions/build-nix/action.yml'
+              - './.github/actions/install-nix/action.yml'
+              - './.github/workflows/provider.yml'
+              - './.github/workflows/wasmcloud.yml'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'crates/provider-*/*.{rs,toml,wit}'
+              - 'flake.lock'
+              - 'flake.nix'
+              - 'rust-toolchain.toml'
+              - '!crates/**/*.md'
   build-wash-bin:
     needs: [meta]
     if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || startsWith(github.ref, 'refs/tags/wash-v')  || startswith(github.ref, 'refs/tags/provider-') }}
