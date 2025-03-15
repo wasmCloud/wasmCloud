@@ -9,14 +9,16 @@ runs:
     - name: Check for changes that might affect the build for wash
       if: ${{ github.event_name == 'pull_request' }}
       # It'd be a little nicer if we calculated if wash was affected by the changes, but this will do for now
-      id: changed-files
-      uses: tj-actions/changed-files@bab30c2299617f6615ec02a68b9a40d10bd21366 # v45.0.5
+      id: changes
+      uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
       with:
-        files_ignore: |
-          adr/**
-          brand/**
-          examples/**
-          **/*.md
+        filters: |
+          changed:
+            - '**'
+            - '!adr/**'
+            - '!brand/**'
+            - '!examples/**'
+            - '!**/*.md'
 
     - name: Set wash revision to build/cache
       id: base-ref
@@ -29,7 +31,7 @@ runs:
         elif [ ${{ github.event.pull_request.base.sha }} == null ]; then
           echo "No base ref, building from the current commit"
           REVISION=${{ github.sha }}
-        elif [ ${{ steps.changed-files.outcome == 'success' && steps.changed-files.outputs.all_changed_and_modified_files_count || 0 }} -eq 0 ]; then
+        elif [ ${{ steps.changes.outcome == 'success' && steps.changes.outputs.changed_count || 0 }} -gt 0 ]; then
           echo "Something changed that might affect the build, building from the current commit"
           REVISION=${{ github.sha }}
         else

@@ -23,29 +23,30 @@ jobs:
   meta:
     runs-on: ubuntu-latest
     outputs:
-      modified: ${{ steps.changes.outputs.any_changed }}
+      modified: ${{ steps.changes.outputs.changed }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: tj-actions/changed-files@7ac5902a02bbf88c426878d792c0728b55bb97ae
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         id: changes
         with:
-          files: |
-            ./.github/workflows/wash.yml
-            ./.github/actions/install-cached-wash-cli/action.yml
-            Cargo.lock
-            Cargo.toml
-            crates/control-interface/**
-            crates/core/**
-            crates/secrets-types/**
-            crates/tracing/**
-            crates/wash/**
-          files_ignore: |
-            !crates/**/*.md
-            !crates/wash/.devcontainer
+          list-files: shell
+          filters: |
+            changed:
+              - './.github/workflows/wash.yml'
+              - './.github/actions/install-cached-wash-cli/action.yml'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'crates/control-interface/**'
+              - 'crates/core/**'
+              - 'crates/secrets-types/**'
+              - 'crates/tracing/**'
+              - 'crates/wash/**'
+              - '!crates/**/*.md'
+              - '!crates/wash/.devcontainer'
       - name: Changed files
         run: |
-          echo "Changed file(s) (${{ steps.changes.outputs.all_changed_files_count}})"
-          echo "${{ steps.changes.outputs.all_changed_files }}"
+          echo "Changed file(s) (${{ steps.changes.outputs.changed_count }})"
+          echo "${{ steps.changes.outputs.changed_files }}"
 
   unit_tests:
     needs: [meta]
