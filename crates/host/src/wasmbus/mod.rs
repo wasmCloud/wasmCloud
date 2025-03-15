@@ -421,17 +421,17 @@ pub async fn connect_nats(
     workload_identity_config: Option<WorkloadIdentityConfig>,
 ) -> anyhow::Result<async_nats::Client> {
     let opts = match (jwt, key, workload_identity_config) {
-        (jwt, key, Some(wid_cfg)) => {
-            setup_workload_identity_nats_connect_options(jwt, key, wid_cfg).await?
-        }
         (Some(jwt), Some(key), None) => {
             async_nats::ConnectOptions::with_jwt(jwt.to_string(), move |nonce| {
                 let key = key.clone();
                 async move { key.sign(&nonce).map_err(async_nats::AuthError::new) }
             })
         }
-        (Some(_), None, None) | (None, Some(_), None) => {
+        (Some(_), None, _) | (None, Some(_), _) => {
             bail!("cannot authenticate if only one of jwt or seed is specified")
+        }
+        (jwt, key, Some(wid_cfg)) => {
+            setup_workload_identity_nats_connect_options(jwt, key, wid_cfg).await?
         }
         _ => async_nats::ConnectOptions::new(),
     };
