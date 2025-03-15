@@ -13,7 +13,7 @@ use wasmcloud_control_interface::HostInventory;
 use crate::lib::id::{ModuleId, ServerId, ServiceId};
 
 /// Version of the NATS server used by default for wash
-pub const NATS_SERVER_VERSION: &str = "v2.10.20";
+pub const NATS_SERVER_VERSION: &str = "v2.10.26";
 
 /// Default host for the NATS server used by wash
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
