@@ -6,11 +6,22 @@ interface lattice {
         constructor(namespace: string, %package: string, %interface: string);
     }
 
+    /// A String representation of a WIT package version.
+    /// e.g "0.1.0"
+    type version = string;
+
     /// Set a link name to use for all interfaces specified. This is advanced functionality only
     /// available within wasmcloud and, as such, is exposed here as part of the wasmcloud:bus package.
     /// This is used when you are linking multiple of the same interfaces
     /// (i.e. a keyvalue implementation for caching and another one for secrets) to a component.
-    /// 
+    ///
     /// Will return an error if a link does not exist at call time with the specified name and interfaces.
     set-link-name: func(name: string, interfaces: list<call-target-interface>) -> result<_, string>;
+
+    /// Set a specific target for an interface call. This is advanced functionality that allows
+    /// direct routing to components or services outside of standard link definitions. Used when
+    /// targeting standalone wRPC servers or specific component instances directly.
+    ///
+    /// Will return an error if the target cannot be set or the interface is invalid.
+    set-target-component: func(target: string, %interface: call-target-interface, expected-version: version) -> result<_, string>;
 }

@@ -20,6 +20,17 @@ pub trait Bus {
         link_name: String,
         interfaces: Vec<Arc<CallTargetInterface>>,
     ) -> anyhow::Result<Result<(), String>>;
+
+    /// Set a specific target component for an interface call, returning an error if the
+    /// target cannot be set.
+    /// This allows direct routing to components or services outside of standard link definitions,
+    /// particularly useful for targeting standalone wRPC servers or specific component instances.
+    async fn set_target_component(
+        &self,
+        target: String,
+        interface: Arc<CallTargetInterface>,
+        expected_version: String,
+    ) -> anyhow::Result<Result<(), String>>;
 }
 
 #[async_trait]
@@ -40,6 +51,27 @@ impl<H: Handler> lattice::Host for Ctx<H> {
             .set_link_name(link_name, interfaces)
             .await
             .context("failed to set link name")
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn set_target_component(
+        &mut self,
+        target: String,
+        interface: Resource<Arc<CallTargetInterface>>,
+        expected_version: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        self.attach_parent_context();
+        let interface = self
+            .table
+            .get(&interface)
+            .cloned()
+            .context("failed to get call target interface")?;
+
+        // Set target if version matches
+        self.handler
+            .set_target_component(target, interface, expected_version)
+            .await
+            .context("failed to set target component")
     }
 }
 
