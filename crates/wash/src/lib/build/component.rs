@@ -8,6 +8,7 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use normpath::PathExt;
 use tracing::{debug, info, warn};
+use wac_graph::{types::Package, CompositionGraph, EncodeOptions};
 use wasi_preview1_component_adapter_provider::{
     WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME, WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
 };
@@ -20,7 +21,10 @@ use crate::lib::{
         claims::{sign_file, ComponentMetadata, GenerateCommon, SignCommand},
         OutputKind,
     },
-    parser::{CommonConfig, ComponentConfig, LanguageConfig, RustConfig, TinyGoConfig, WasmTarget},
+    parser::{
+        CommonConfig, ComponentConfig, CompositionConfig, LanguageConfig, RustConfig, TinyGoConfig,
+        WasmTarget,
+    },
 };
 
 /// Builds a wasmCloud component using the installed language toolchain, then signs the component
@@ -41,6 +45,7 @@ pub async fn build_component(
     language_config: &LanguageConfig,
     common_config: &CommonConfig,
     signing_config: Option<&SignConfig>,
+    composition_config: &CompositionConfig,
 ) -> Result<PathBuf> {
     // Build component
     let component_wasm_path = if let Some(raw_command) = component_config.build_command.as_ref() {
@@ -101,6 +106,76 @@ pub async fn build_component(
                 bail!("build command is required for unsupported language {other}");
             }
         }
+    };
+
+    // COMPOSE
+    let mut graph = CompositionGraph::new();
+    // TODO: refactor to a match for better handlin
+    let (socket, plugs) = if let Some(socket) = &composition_config.socket {
+        // User component is a plug
+        // Register plug component (component with export)
+        let plug_package = Package::from_file(
+            &common_config.name,
+            None,
+            component_wasm_path.as_path(),
+            graph.types_mut(),
+        )
+        .context("failed to load component package")?;
+        let plug_component = graph
+            .register_package(plug_package)
+            .context("failed to register component as package")?;
+
+        // Register socket component (component with imports)
+        let socket_package = Package::from_file("imports", None, socket, graph.types_mut())
+            .context("failed to load socket package")?;
+        let socket_component = graph
+            .register_package(socket_package)
+            .context("failed to register socket as package")?;
+
+        (socket_component, vec![plug_component])
+    } else {
+        // User component is a socket
+
+        // Register socket component (component with imports)
+        // TODO: moar plugs
+        let plug = composition_config
+            .plugs
+            .first()
+            .context("failed to get first plug from composition config")?;
+        let plug_package = Package::from_file("plug", None, plug, graph.types_mut())
+            .context("failed to load plug package")?;
+        let plug_component = graph
+            .register_package(plug_package)
+            .context("failed to register plug as package")?;
+
+        // Register plug component (component with export)
+        let socket_package = Package::from_file(
+            &common_config.name,
+            None,
+            component_wasm_path.as_path(),
+            graph.types_mut(),
+        )
+        .context("failed to load socket package")?;
+        let socket_component = graph
+            .register_package(socket_package)
+            .context("failed to register socket as package")?;
+
+        (socket_component, vec![plug_component])
+    };
+
+    // Encode the graph into a WASM binary
+    let component_wasm_path = if composition_config.socket.is_some() {
+        wac_graph::plug(&mut graph, plugs, socket).context("failed to compose components")?;
+        let encoding = graph
+            .encode(EncodeOptions::default())
+            .context("failed to encode graph")?;
+        let composed_wasm_path = common_config.build_dir.join("composition.wasm");
+        std::fs::write(composed_wasm_path.as_path(), encoding)
+            .context("failed to write composed wasm")?;
+        composed_wasm_path
+    } else {
+        // No socket, just return the original component
+        component_wasm_path
     };
 
     // Sign the wasm file (if configured)

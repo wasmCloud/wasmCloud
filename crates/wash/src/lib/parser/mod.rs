@@ -357,6 +357,17 @@ impl TryFrom<RegistryPullSource> for RegistryMapping {
     }
 }
 
+/// Configuration for WebAssembly compositions
+#[derive(Default, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct CompositionConfig {
+    /// The component with imports
+    pub socket: Option<PathBuf>,
+    /// The component with exports
+    #[serde(default)]
+    pub plugs: Vec<PathBuf>,
+    // TODO: also support a wac file
+}
+
 /// Configuration common among all project types & languages.
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct CommonConfig {
@@ -1077,6 +1088,10 @@ pub struct WasmcloudDotToml {
     /// Configuration for image registry usage
     #[serde(default)]
     pub registry: RegistryConfig,
+
+    /// Configuration for WebAssembly compositions
+    #[serde(default)]
+    pub composition: CompositionConfig,
 }
 
 impl WasmcloudDotToml {
@@ -1287,6 +1302,7 @@ impl WasmcloudDotToml {
 
         Ok(ProjectConfig {
             dev: self.dev,
+            composition_config: self.composition,
             project_type: project_type_config,
             language: language_config,
             common: common_config,
@@ -1311,6 +1327,8 @@ pub struct ProjectConfig {
     pub dev: DevConfig,
     /// Configuration for package tooling
     pub package_config: PackageConfig,
+    /// Configuration for composing WebAssembly components
+    pub composition_config: CompositionConfig,
     /// The directory where the project wasmcloud.toml file is located
     #[serde(skip)]
     pub wasmcloud_toml_dir: PathBuf,
