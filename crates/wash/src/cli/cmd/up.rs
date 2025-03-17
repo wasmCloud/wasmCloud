@@ -61,6 +61,10 @@ pub struct UpCommand {
     #[clap(short = 'd', long = "detached", alias = "detach")]
     pub detached: bool,
 
+    /// Optional mirror to use for downloading wadm, wasmCloud, and NATS binaries
+    #[clap(long = "github-mirror", env = "WASH_GITHUB_MIRROR")]
+    pub github_mirror: Option<String>,
+
     #[clap(flatten)]
     pub nats_opts: NatsOpts,
 
@@ -445,7 +449,12 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     let nats_bin = if should_run_nats || supplied_remote_credentials {
         // Download NATS if not already installed
         spinner.update_spinner_message(" Downloading NATS ...".to_string());
-        let nats_binary = ensure_nats_server(&cmd.nats_opts.nats_version, &install_dir).await?;
+        let nats_binary = ensure_nats_server(
+            &cmd.nats_opts.nats_version,
+            &install_dir,
+            cmd.github_mirror.as_ref(),
+        )
+        .await?;
 
         spinner.update_spinner_message(" Starting NATS ...".to_string());
 
@@ -571,8 +580,12 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             .into_std()
             .await;
 
-        let wadm_path =
-            install_patch_or_default_wadm_version(&cmd.wadm_opts.wadm_version, &install_dir).await;
+        let wadm_path = install_patch_or_default_wadm_version(
+            &cmd.wadm_opts.wadm_version,
+            &install_dir,
+            cmd.github_mirror.as_ref(),
+        )
+        .await;
         match wadm_path {
             Ok(wadm_bin_path) => {
                 let wadm_child = start_wadm(
@@ -638,7 +651,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         None if !wasmcloud_opts.start_only => {
             spinner.update_spinner_message(" Downloading wasmCloud ...".to_string());
 
-            ensure_wasmcloud(&wasmcloud_version, &install_dir).await?
+            ensure_wasmcloud(&wasmcloud_version, &install_dir, cmd.github_mirror.as_ref()).await?
         }
         // If no override was provided, we must attempt to find the binary
         None => {
@@ -1001,9 +1014,10 @@ pub(crate) async fn start_nats(
 async fn install_patch_or_default_wadm_version(
     version: &Option<String>,
     install_dir: &Path,
+    github_mirror: Option<&String>,
 ) -> Result<PathBuf> {
     if let Some(version) = version {
-        return ensure_wadm(version, install_dir).await;
+        return ensure_wadm(version, install_dir, github_mirror).await;
     }
 
     let version = version.clone().unwrap_or_else(|| WADM_VERSION.to_owned());
@@ -1022,18 +1036,18 @@ async fn install_patch_or_default_wadm_version(
         );
         // Re-add stripped 'v' prefix due to semver parsing
         let new_version = format!("v{new_patch}");
-        match ensure_wadm(&new_version, install_dir).await {
+        match ensure_wadm(&new_version, install_dir, github_mirror).await {
             Ok(path) => Ok(path),
             Err(e) => {
                 debug!(
                     "🟨 Couldn't download the patched wadm {new_version}, falling back to {version}: {e}"
                 );
-                ensure_wadm(&version, install_dir).await
+                ensure_wadm(&version, install_dir, github_mirror).await
             }
         }
     } else {
-        debug!("No new version found, using the provided: {}", version);
-        ensure_wadm(&version, install_dir).await
+        debug!("No new version found, using the provided: {version}");
+        ensure_wadm(&version, install_dir, github_mirror).await
     }
 }
 
