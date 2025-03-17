@@ -1,0 +1,11 @@
+package test-components:pinger-external;
+
+world component {
+  import test-components:testing/pingpong@0.1.0;
+  import wasmcloud:bus/lattice@2.0.0;
+  export wasi:http/incoming-handler@0.2.2;
+}
+
+world virtual-ponger {
+  export test-components:testing/pingpong@0.1.0;
+}

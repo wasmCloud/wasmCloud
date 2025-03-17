@@ -185,6 +185,7 @@ serde_bytes = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 test-components = { workspace = true }
+test-virtual-components = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tokio-stream = { workspace = true }
 tracing-subscriber = { workspace = true, features = [
@@ -204,6 +205,7 @@ wasmcloud-core = { workspace = true, features = [
     "rustls-native-certs",
 ] }
 wasmcloud-test-util = { workspace = true, features = ["testcontainers"] }
+wit-bindgen-wrpc = { workspace = true }
 wrpc-interface-http = { workspace = true, features = ["hyper"] }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
@@ -223,7 +225,7 @@ async-compression = { version = "0.3", default-features = false }
 async-nats = { version = "0.39", default-features = false }
 async-trait = { version = "0.1", default-features = false }
 aws-config = { version = "1.5", default-features = false }
-aws-sdk-s3 = { version = "=1.68", default-features = false } # more recent versions depend on `cbindgen`, using MPL-2.0, not permitted by CNCF
+aws-sdk-s3 = { version = "=1.68", default-features = false }                                               # more recent versions depend on `cbindgen`, using MPL-2.0, not permitted by CNCF
 aws-smithy-runtime = { version = "1.7", default-features = false }
 axum = { version = "0.7", default-features = false }
 axum-server = { version = "0.6", default-features = false }
@@ -324,6 +326,7 @@ termcolor = { version = "1", default-features = false }
 termsize = { version = "0.1", default-features = false }
 test-case = { version = "3", default-features = false }
 test-components = { version = "0", path = "./tests/components", default-features = false }
+test-virtual-components = { version = "0", path = "./tests/virtual", default-features = false }
 test-log = { version = "0.2", default-features = false }
 testcontainers = { version = "0.23" }
 thiserror = { version = "2", default-features = false }

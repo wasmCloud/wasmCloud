@@ -21,7 +21,5 @@ interface lattice {
     /// Set a specific target for an interface call. This is advanced functionality that allows
     /// direct routing to components or services outside of standard link definitions. Used when
     /// targeting standalone wRPC servers or specific component instances directly.
-    ///
-    /// Will return an error if the target cannot be set or the interface is invalid.
     set-target-component: func(target: string, %interface: call-target-interface, expected-version: version) -> result<_, string>;
 }

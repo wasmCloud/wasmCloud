@@ -194,12 +194,6 @@ impl Bus for Handler {
             interface_key.clone(),
             TargetType::Custom(target.clone().into(), expected_version.clone().into()),
         );
-        tracing::debug!(
-            target = %target,
-            interface = %interface_key,
-            version = %expected_version,
-            "Set custom target component"
-        );
         Ok(Ok(()))
     }
 }
@@ -238,12 +232,10 @@ impl wrpc_transport::Invoke for Handler {
             None => instance.split_once('@').map_or(instance, |(l, _)| l),
         };
 
-        let subject = match targets.get(target_instance) {
+        let prefix = match targets.get(target_instance) {
             Some(TargetType::Custom(target, _version)) => {
-                format!(
-                    "{}.{}.wrpc.0.0.1.{}.{}",
-                    self.lattice, target, instance, func
-                )
+                let prefix = format!("{}.{}", self.lattice, target);
+                prefix
             }
             _ => {
                 let link_name = targets
@@ -262,7 +254,7 @@ impl wrpc_transport::Invoke for Handler {
                     format!("link `{link_name}` not found for instance `{target_instance}`")
                 })?;
 
-                let id = instances.get(target_instance).with_context(||{
+                let id = instances.get(target_instance).with_context(|| {
                     warn!(
                         instance,
                         ?target_instance,
@@ -272,7 +264,8 @@ impl wrpc_transport::Invoke for Handler {
                     format!("failed to call `{func}` in instance `{instance}` (failed to find a configured link with name `{link_name}` from component `{id}`, please check your configuration)", id = self.component_id)
                 })?;
 
-                format!("{}.{id}", &self.lattice)
+                let prefix = format!("{}.{}", self.lattice, id);
+                prefix
             }
         };
 
@@ -285,8 +278,7 @@ impl wrpc_transport::Invoke for Handler {
                 .map(AsRef::as_ref)
                 .unwrap_or("default"),
         );
-        let nats =
-            wrpc_transport_nats::Client::new(Arc::clone(&self.nats), subject.clone(), None).await?;
+        let nats = wrpc_transport_nats::Client::new(Arc::clone(&self.nats), prefix, None).await?;
         nats.timeout(self.invocation_timeout)
             .invoke(Some(headers), instance, func, params, paths)
             .await

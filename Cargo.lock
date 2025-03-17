@@ -6944,6 +6944,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-virtual-components"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tokio",
+]
+
+[[package]]
 name = "testcontainers"
 version = "0.23.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8579,6 +8587,7 @@ dependencies = [
  "spiffe",
  "tempfile",
  "test-components",
+ "test-virtual-components",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -8604,6 +8613,7 @@ dependencies = [
  "wasmcloud-provider-wadm",
  "wasmcloud-test-util",
  "wasmcloud-tracing",
+ "wit-bindgen-wrpc",
  "wrpc-interface-http",
  "wrpc-transport",
  "wrpc-transport-nats",
