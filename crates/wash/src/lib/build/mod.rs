@@ -158,7 +158,14 @@ pub async fn build_project(
 
     match &config.project_type {
         TypeConfig::Component(component_config) => {
-            build_component(component_config, &config.language, &config.common, signing).await
+            build_component(
+                component_config,
+                &config.language,
+                &config.common,
+                signing,
+                &config.composition_config,
+            )
+            .await
         }
         TypeConfig::Provider(provider_config) => {
             build_provider(provider_config, &config.language, &config.common, signing).await

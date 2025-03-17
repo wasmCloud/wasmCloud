@@ -97,6 +97,7 @@ toml = { workspace = true, features = ["parse"] }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"] }
 url = { workspace = true }
+wac-graph = { workspace = true}
 wadm-client = { workspace = true }
 wadm-types = { workspace = true, optional = true }
 walkdir = { workspace = true }
@@ -113,6 +114,7 @@ wasmparser = { workspace = true }
 wasmtime = { workspace = true, optional = true, features = ["cranelift", "cache", "component-model", "gc"] }
 wasmtime-wasi = { workspace = true, optional = true }
 wasmtime-wasi-http = { workspace = true, optional = true }
+wat = { workspace = true }
 which = { workspace = true }
 wit-bindgen-wrpc = { workspace = true }
 wit-component = { workspace = true }
@@ -120,7 +122,6 @@ wit-parser = { workspace = true }
 wrpc-interface-http = { workspace = true, features = ["http-body"] }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
-wat = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 notify = { workspace = true, features = ["macos_fsevent"] }
