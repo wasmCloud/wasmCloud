@@ -2288,7 +2288,7 @@ impl Host {
         if let Some(reply) = message.reply {
             let headers = injector_to_headers(&TraceContextInjector::default_with_span());
 
-            let payload = match ctl_response {
+            let payload: Option<Bytes> = match ctl_response {
                 Ok(Some(Ok(payload))) => Some(payload.into()),
                 // No response from the host (e.g. auctioning provider)
                 Ok(None) => None,
@@ -2311,6 +2311,14 @@ impl Host {
             };
 
             if let Some(payload) = payload {
+                let max_payload = self.ctl_nats.server_info().max_payload;
+                if payload.len() > max_payload {
+                    warn!(
+                        size = payload.len(),
+                        max_size = max_payload,
+                        "ctl response payload is too large to publish and may fail",
+                    );
+                }
                 if let Err(err) = self
                     .ctl_nats
                     .publish_with_headers(reply.clone(), headers, payload)
