@@ -157,6 +157,7 @@ jobs:
           hide_classify: 'RESOLVED'
           append: true
           skip_unchanged: true
+          only_update: true
           message: 'This PR is now formatted in line with Conventional Commits'
 
   label-pr:
