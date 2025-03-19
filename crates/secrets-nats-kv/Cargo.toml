@@ -1,6 +1,6 @@
 [package]
 name = "secrets-nats-kv"
-version = "0.1.1"
+version = "0.2.0"
 readme = "README.md"
 description = "A secrets backend for wasmCloud that uses NATS as a key-value store."
 categories = ["cryptography"]
