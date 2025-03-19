@@ -1149,7 +1149,8 @@ impl Identity for Handler {
             }
         };
 
-        let mut selectors = parse_selectors_from_host_labels(self.host_labels.read().await).await;
+        let mut selectors =
+            parse_selectors_from_host_labels(self.host_labels.read().await.deref()).await;
         // "wasmcloud", "component:{component_id}" is inserted at the end to make sure it can't be overridden.
         selectors.push(Selector::Generic((
             WASMCLOUD_SELECTOR_TYPE.to_string(),
@@ -1207,9 +1208,7 @@ impl InvocationErrorIntrospect for Handler {
 // becomes:
 // SPIRE Selector -> wasmcloud:ns:my-namespace-goes-here
 #[cfg(unix)]
-async fn parse_selectors_from_host_labels(
-    host_labels: tokio::sync::RwLockReadGuard<'_, BTreeMap<String, String>>,
-) -> Vec<Selector> {
+async fn parse_selectors_from_host_labels(host_labels: &BTreeMap<String, String>) -> Vec<Selector> {
     let mut selectors = vec![];
 
     for (key, value) in host_labels.iter() {
