@@ -706,7 +706,7 @@ impl Host {
             "version": config.version,
         });
 
-        let workload_identity_config = if config.experimental_features.workload_identity {
+        let workload_identity_config = if config.experimental_features.workload_identity_auth {
             Some(WorkloadIdentityConfig::from_env()?)
         } else {
             None
