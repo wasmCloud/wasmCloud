@@ -124,7 +124,7 @@ impl std::fmt::Display for wasmtime_bindings::wasi::logging0_1_0_draft::logging:
 pub use unversioned_logging_bindings::wasi::logging as unversioned_logging;
 pub use wasmtime_bindings::wasi::{blobstore, keyvalue, logging0_1_0_draft as logging};
 pub use wasmtime_bindings::wasmcloud::{
-    bus1_0_0, bus2_0_0 as bus, bus2_0_0, messaging0_2_0, messaging0_3_0 as messaging,
+    bus1_0_0, bus2_0_0 as bus, bus2_0_0, identity, messaging0_2_0, messaging0_3_0 as messaging,
     messaging0_3_0, secrets,
 };
 pub use wasmtime_bindings::Interfaces;

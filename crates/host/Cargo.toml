@@ -69,6 +69,7 @@ wrpc-transport-nats = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 spiffe = { workspace = true, features = ["default"] }
+spire-api = { workspace = true }
 
 [package.metadata.cargo-machete]
 ignored = ["cloudevents-sdk"]
