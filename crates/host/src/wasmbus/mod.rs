@@ -364,7 +364,7 @@ pub struct Host {
     host_token: Arc<jwt::Token<jwt::Host>>,
     /// The Xkey used to encrypt secrets when sending them over NATS
     secrets_xkey: Arc<XKey>,
-    labels: RwLock<BTreeMap<String, String>>,
+    labels: Arc<RwLock<BTreeMap<String, String>>>,
     ctl_topic_prefix: String,
     /// NATS client to use for control interface subscriptions and jetstream queries
     ctl_nats: async_nats::Client,
@@ -950,7 +950,7 @@ impl Host {
             host_key,
             host_token,
             secrets_xkey: Arc::new(XKey::new()),
-            labels: RwLock::new(labels),
+            labels: Arc::new(RwLock::new(labels)),
             ctl_nats,
             rpc_nats: Arc::new(rpc_nats),
             experimental_features: config.experimental_features,
@@ -1442,6 +1442,7 @@ impl Host {
             },
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
             experimental_features: self.experimental_features,
+            host_labels: Arc::clone(&self.labels),
         };
         let component = wasmcloud_runtime::Component::new(&self.runtime, wasm)?;
         let component = self

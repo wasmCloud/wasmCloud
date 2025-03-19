@@ -1,6 +1,6 @@
 use core::any::Any;
 use core::iter::{repeat, zip};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,23 +10,35 @@ use async_nats::header::{IntoHeaderName as _, IntoHeaderValue as _};
 use async_trait::async_trait;
 use bytes::Bytes;
 use secrecy::SecretBox;
+#[cfg(unix)]
+use spire_api::{
+    selectors::Selector, DelegateAttestationRequest::Selectors, DelegatedIdentityClient,
+};
 use tokio::sync::RwLock;
 use tracing::{error, instrument, warn};
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_runtime::capability::{
-    self, messaging0_2_0, messaging0_3_0, secrets, CallTargetInterface,
+    self, identity, messaging0_2_0, messaging0_3_0, secrets, CallTargetInterface,
 };
 use wasmcloud_runtime::component::{
-    Bus, Bus1_0_0, Config, InvocationErrorIntrospect, InvocationErrorKind, Logging, Messaging0_2,
-    Messaging0_3, MessagingClient0_3, MessagingGuestMessage0_3, MessagingHostMessage0_3,
-    ReplacedInstanceTarget, Secrets,
+    Bus, Bus1_0_0, Config, Identity, InvocationErrorIntrospect, InvocationErrorKind, Logging,
+    Messaging0_2, Messaging0_3, MessagingClient0_3, MessagingGuestMessage0_3,
+    MessagingHostMessage0_3, ReplacedInstanceTarget, Secrets,
 };
 use wasmcloud_tracing::context::TraceContextInjector;
 use wrpc_transport::InvokeExt as _;
 
 use super::config::ConfigBundle;
 use super::{injector_to_headers, Features};
+
+// The key used to represent a wasmCloud-specific selector:
+// https://github.com/spiffe/spire-api-sdk/blob/3c6b1447f3d82210b91462d003f6c2774ffbe472/proto/spire/api/types/selector.proto#L6-L8
+//
+// Similar to existing types defined in the spire-api crate: https://github.com/maxlambrecht/rust-spiffe/blob/929a090f99d458dd67fa499b74afbeb2fc44b114/spire-api/src/selectors.rs#L4-L5
+const WASMCLOUD_SELECTOR_TYPE: &str = "wasmcloud";
+// Similar to the existing Kubernetes types: https://github.com/maxlambrecht/rust-spiffe/blob/929a090f99d458dd67fa499b74afbeb2fc44b114/spire-api/src/selectors.rs#L38-L39
+const WASMCLOUD_SELECTOR_COMPONENT: &str = "component";
 
 #[derive(Clone, Debug)]
 pub struct Handler {
@@ -64,6 +76,8 @@ pub struct Handler {
     pub invocation_timeout: Duration,
     /// Experimental features enabled in the host for gating handler functionality
     pub experimental_features: Features,
+    /// Labels associated with the wasmCloud Host the component is running on
+    pub host_labels: Arc<RwLock<BTreeMap<String, String>>>,
 }
 
 impl Handler {
@@ -81,6 +95,7 @@ impl Handler {
             messaging_links: self.messaging_links.clone(),
             invocation_timeout: self.invocation_timeout,
             experimental_features: self.experimental_features,
+            host_labels: self.host_labels.clone(),
         }
     }
 }
@@ -1117,6 +1132,63 @@ impl Messaging0_3 for Handler {
     }
 }
 
+#[async_trait]
+impl Identity for Handler {
+    #[cfg(unix)]
+    #[instrument(level = "debug", skip_all)]
+    async fn get(
+        &self,
+        audience: &str,
+    ) -> anyhow::Result<Result<Option<String>, identity::store::Error>> {
+        let mut client = match DelegatedIdentityClient::default().await {
+            Ok(client) => client,
+            Err(err) => {
+                return Ok(Err(identity::store::Error::Io(format!(
+                    "Unable to connect to workload identity service: {err}"
+                ))));
+            }
+        };
+
+        let mut selectors = parse_selectors_from_host_labels(self.host_labels.read().await).await;
+        // "wasmcloud", "component:{component_id}" is inserted at the end to make sure it can't be overridden.
+        selectors.push(Selector::Generic((
+            WASMCLOUD_SELECTOR_TYPE.to_string(),
+            format!("{}:{}", WASMCLOUD_SELECTOR_COMPONENT, self.component_id),
+        )));
+
+        let svids = match client
+            .fetch_jwt_svids(&[audience], Selectors(selectors))
+            .await
+        {
+            Ok(svids) => svids,
+            Err(err) => {
+                return Ok(Err(identity::store::Error::Io(format!(
+                    "Unable to query workload identity service: {err}"
+                ))));
+            }
+        };
+
+        if !svids.is_empty() {
+            // TODO: Is there a better way to determine which SVID to return here?
+            let svid = svids.first().map(|svid| svid.token()).unwrap_or_default();
+            Ok(Ok(Some(svid.to_string())))
+        } else {
+            Ok(Err(identity::store::Error::NotFound))
+        }
+    }
+
+    #[cfg(target_family = "windows")]
+    #[instrument(level = "debug", skip_all)]
+    async fn get(
+        &self,
+        _audience: &str,
+    ) -> anyhow::Result<Result<Option<String>, identity::store::Error>> {
+        Ok(Err(identity::store::Error::Other(
+            "workload identity is not supported on Windows".to_string(),
+        )))
+    }
+}
+
 impl InvocationErrorIntrospect for Handler {
     fn invocation_error_kind(&self, err: &anyhow::Error) -> InvocationErrorKind {
         if let Some(err) = err.root_cause().downcast_ref::<std::io::Error>() {
@@ -1126,4 +1198,38 @@ impl InvocationErrorIntrospect for Handler {
         }
         InvocationErrorKind::Trap
     }
+}
+
+// TODO(joonas): Make this more generalized so we can support non-wasmcloud-specific
+// selectors as well.
+//
+// environment variable -> WASMCLOUD_LABEL_wasmcloud__ns=my-namespace-goes-here
+// becomes:
+// SPIRE Selector -> wasmcloud:ns:my-namespace-goes-here
+async fn parse_selectors_from_host_labels(
+    host_labels: tokio::sync::RwLockReadGuard<'_, BTreeMap<String, String>>,
+) -> Vec<Selector> {
+    let mut selectors = vec![];
+
+    for (key, value) in host_labels.iter() {
+        // Ensure the label starts with `wasmcloud__` and doesn't end in `__`, i.e. just `wasmcloud__`
+        if key.starts_with("wasmcloud__") && !key.ends_with("__") {
+            let selector = key
+                // Replace all __ with :
+                .replace("__", ":")
+                // Remove the leading "wasmcloud"
+                .split_once(":")
+                // Map the remaining part of the label key together with the value `` to make it a selector
+                .map(|(_, selector)| format!("{}:{}", selector, value))
+                // This should never get triggered, but just in case.
+                .unwrap_or("unknown".to_string());
+
+            selectors.push(Selector::Generic((
+                WASMCLOUD_SELECTOR_TYPE.to_string(),
+                selector,
+            )));
+        }
+    }
+
+    selectors
 }

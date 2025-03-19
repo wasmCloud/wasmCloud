@@ -29,6 +29,7 @@ use crate::Runtime;
 pub use bus::Bus;
 pub use bus1_0_0::Bus as Bus1_0_0;
 pub use config::Config;
+pub use identity::Identity;
 pub use logging::Logging;
 pub use messaging::v0_2::Messaging as Messaging0_2;
 pub use messaging::v0_3::{
@@ -42,6 +43,7 @@ mod bus;
 mod bus1_0_0;
 mod config;
 mod http;
+mod identity;
 mod keyvalue;
 mod logging;
 pub(crate) mod messaging;
@@ -110,6 +112,7 @@ pub trait Handler:
     + Secrets
     + Messaging0_2
     + Messaging0_3
+    + Identity
     + InvocationErrorIntrospect
     + Send
     + Sync
@@ -126,6 +129,7 @@ impl<
             + Secrets
             + Messaging0_2
             + Messaging0_3
+            + Identity
             + InvocationErrorIntrospect
             + Send
             + Sync
@@ -338,6 +342,11 @@ where
                 .context("failed to link `wasmcloud:messaging/producer@0.3.0`")?;
             capability::messaging0_3_0::request_reply::add_to_linker(&mut linker, |ctx| ctx)
                 .context("failed to link `wasmcloud:messaging/request-reply@0.3.0`")?;
+        }
+        // Only link wasmcloud:identity if the workload identity feature is enabled
+        if rt.experimental_features.workload_identity_interface {
+            capability::identity::store::add_to_linker(&mut linker, |ctx| ctx)
+                .context("failed to link `wasmcloud:identity/store`")?;
         }
 
         let ty = component.component_type();

@@ -6748,6 +6748,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "spire-api"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8461447dde99250eb3af4767a5f8f2c44908602a7e84cfac83d1e299db52856a"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "hyper-util",
+ "prost 0.13.5",
+ "prost-build 0.13.4",
+ "prost-types 0.13.4",
+ "protox 0.7.2",
+ "spiffe",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
+ "tower 0.5.2",
+]
+
+[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8757,6 +8778,7 @@ dependencies = [
  "serde",
  "serde_json",
  "spiffe",
+ "spire-api",
  "sysinfo",
  "time",
  "tokio",

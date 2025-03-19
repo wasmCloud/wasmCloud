@@ -250,11 +250,20 @@ impl Runtime {
 
     /// Returns a boolean indicating whether the runtime should skip linking a feature-gated instance
     pub(crate) fn skip_feature_gated_instance(&self, instance: &str) -> bool {
-        matches!(
-            instance,
+        match instance {
             "wasmcloud:messaging/producer@0.3.0"
-                | "wasmcloud:messaging/request-reply@0.3.0"
-                | "wasmcloud:messaging/types@0.3.0"
-                if self.experimental_features.wasmcloud_messaging_v3)
+            | "wasmcloud:messaging/request-reply@0.3.0"
+            | "wasmcloud:messaging/types@0.3.0"
+                if self.experimental_features.wasmcloud_messaging_v3 =>
+            {
+                true
+            }
+            "wasmcloud:identity/store@0.1.0-draft"
+                if self.experimental_features.workload_identity_interface =>
+            {
+                true
+            }
+            _ => false,
+        }
     }
 }
