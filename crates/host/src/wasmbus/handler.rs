@@ -1206,6 +1206,7 @@ impl InvocationErrorIntrospect for Handler {
 // environment variable -> WASMCLOUD_LABEL_wasmcloud__ns=my-namespace-goes-here
 // becomes:
 // SPIRE Selector -> wasmcloud:ns:my-namespace-goes-here
+#[cfg(unix)]
 async fn parse_selectors_from_host_labels(
     host_labels: tokio::sync::RwLockReadGuard<'_, BTreeMap<String, String>>,
 ) -> Vec<Selector> {
