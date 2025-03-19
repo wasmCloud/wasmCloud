@@ -1210,6 +1210,7 @@ fn filter_process(process_name: &str) -> impl FnMut(&&sysinfo::Process) -> bool 
 }
 
 #[allow(unused)]
+#[cfg(target_family = "unix")]
 /// Forcefully kill all wasmCloud and NATS processes that might be lingering from previous tests
 pub async fn force_cleanup_processes() -> Result<()> {
     // First, try to kill all wasmcloud_host processes
@@ -1228,6 +1229,7 @@ pub async fn force_cleanup_processes() -> Result<()> {
 }
 
 #[allow(unused)]
+#[cfg(target_family = "unix")]
 /// Kill all processes matching a given name
 async fn kill_processes_by_name(process_name: &str) -> Result<()> {
     let mut system = sysinfo::System::new_with_specifics(
