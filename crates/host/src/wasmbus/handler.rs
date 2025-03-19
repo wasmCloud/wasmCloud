@@ -1233,3 +1233,38 @@ async fn parse_selectors_from_host_labels(host_labels: &BTreeMap<String, String>
 
     selectors
 }
+
+#[cfg(unix)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env::consts::{ARCH, FAMILY, OS};
+
+    #[tokio::test]
+    async fn test_parse_selectors_from_host_labels() {
+        let labels = BTreeMap::from([
+            ("hostcore.arch".into(), ARCH.into()),
+            ("hostcore.os".into(), OS.into()),
+            ("hostcore.osfamily".into(), FAMILY.into()),
+            ("wasmcloud__lattice".into(), "default".into()),
+        ]);
+
+        let selectors = parse_selectors_from_host_labels(&labels).await;
+
+        assert_eq!(selectors.len(), 1);
+
+        let (selector_type, selector_value) = match selectors.first() {
+            Some(Selector::Generic(pair)) => pair,
+            _ => &("wrong-value".into(), "wrong-value".into()),
+        };
+        assert_eq!(selector_type, WASMCLOUD_SELECTOR_TYPE);
+        assert_eq!(selector_value, "lattice:default");
+    }
+
+    #[tokio::test]
+    async fn test_parse_selectors_from_host_labels_defaults_to_no_selectors() {
+        let no_labels = BTreeMap::new();
+        let selectors = parse_selectors_from_host_labels(&no_labels).await;
+        assert_eq!(selectors.len(), 0);
+    }
+}
