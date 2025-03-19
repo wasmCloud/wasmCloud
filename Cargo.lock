@@ -4596,7 +4596,7 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry-nats"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-nats",
  "opentelemetry",
@@ -5370,7 +5370,7 @@ dependencies = [
 
 [[package]]
 name = "provider-archive"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "async-compression",
  "data-encoding",
@@ -6253,7 +6253,7 @@ dependencies = [
 
 [[package]]
 name = "secrets-nats-kv"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8176,7 +8176,7 @@ dependencies = [
 
 [[package]]
 name = "wascap"
-version = "0.15.3"
+version = "0.16.0"
 dependencies = [
  "data-encoding",
  "humantime",
@@ -8192,7 +8192,7 @@ dependencies = [
 
 [[package]]
 name = "wash"
-version = "0.40.0"
+version = "0.41.0"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -8709,7 +8709,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-core"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8736,7 +8736,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-host"
-version = "0.24.1"
+version = "0.25.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8870,7 +8870,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-http-server"
-version = "0.26.0"
+version = "0.27.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8979,7 +8979,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-messaging-nats"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8999,7 +8999,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sdk"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9078,7 +9078,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-runtime"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9114,7 +9114,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-secrets-client"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-nats",
  "nkeys",
@@ -9125,7 +9125,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-secrets-types"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9139,7 +9139,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-test-util"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9162,7 +9162,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-tracing"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "bytes",

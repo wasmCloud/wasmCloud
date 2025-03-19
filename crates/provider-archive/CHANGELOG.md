@@ -5,7 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.16.0 (2025-03-19)
+
+## 0.15.0 (2025-02-06)
+
+### Chore
+
+ - <csr-id-583957aed6918ad08b6d1c9b937e0811b05ee0a7/> Update provider-archive version
+ - <csr-id-98bf9ae36fc321fc7803a7485f32b833907f036e/> address clippy warnings
+ - <csr-id-a9b02e5e203c1332ee785cbee8b998be9584c5b0/> address clippy warnings
+
+### New Features
+
+ - <csr-id-dccf7fb6b635d82096e55d8400ea5e9f48ff546b/> add WIT interface embedding in provider archives
+
+### Other
+
+ - <csr-id-ef45f597710929d41be989110fc3c51621c9ee62/> bump wascap v0.15.2, provider-archive v0.14.0, wasmcloud-core v0.15.0, wash-lib v0.31.0, wasmcloud-tracing v0.11.0, wasmcloud-provider-sdk v0.12.0, wasmcloud-secrets-types v0.5.0, wash-cli v0.37.0, safety bump 9 crates
+   SAFETY BUMP: wasmcloud-core v0.15.0, wash-lib v0.31.0, wasmcloud-tracing v0.11.0, wasmcloud-provider-sdk v0.12.0, wash-cli v0.37.0, wasmcloud-host v0.23.0, wasmcloud-runtime v0.7.0, wasmcloud-test-util v0.15.0, wasmcloud-secrets-client v0.6.0
+ - <csr-id-81766005150677e6d21c28eee27f2240b3da39fc/> update to 0.13
+ - <csr-id-c50884ac5e7ca8c58bb8a14ef499b0e4ee7d0530/> update deps for wash-cli-v0.36
+ - <csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/> bump for test-util release
+   Bump wasmcloud-core v0.8.0, opentelemetry-nats v0.1.1, provider-archive v0.12.0, wasmcloud-runtime v0.3.0, wasmcloud-secrets-types v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, safety bump 8 crates
+   
+   SAFETY BUMP: wasmcloud-runtime v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, wasmcloud-provider-sdk v0.7.0, wash-cli v0.30.0, wash-lib v0.23.0
+
+### Refactor
+
+ - <csr-id-63cb8c96b2a047a7e884aecef82bdffd5319f545/> use wit_component::encode instead of dummy module
+
+### New Features (BREAKING)
+
+ - <csr-id-6df433f01db7923d11554e2b76b9cdd34452e6f5/> store claims and jwt with par
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 10 commits contributed to the release over the course of 208 calendar days.
+ - 237 days passed between releases.
+ - 10 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Update provider-archive version ([`583957a`](https://github.com/wasmCloud/wasmCloud/commit/583957aed6918ad08b6d1c9b937e0811b05ee0a7))
+    - Use wit_component::encode instead of dummy module ([`63cb8c9`](https://github.com/wasmCloud/wasmCloud/commit/63cb8c96b2a047a7e884aecef82bdffd5319f545))
+    - Add WIT interface embedding in provider archives ([`dccf7fb`](https://github.com/wasmCloud/wasmCloud/commit/dccf7fb6b635d82096e55d8400ea5e9f48ff546b))
+    - Address clippy warnings ([`98bf9ae`](https://github.com/wasmCloud/wasmCloud/commit/98bf9ae36fc321fc7803a7485f32b833907f036e))
+    - Bump wascap v0.15.2, provider-archive v0.14.0, wasmcloud-core v0.15.0, wash-lib v0.31.0, wasmcloud-tracing v0.11.0, wasmcloud-provider-sdk v0.12.0, wasmcloud-secrets-types v0.5.0, wash-cli v0.37.0, safety bump 9 crates ([`ef45f59`](https://github.com/wasmCloud/wasmCloud/commit/ef45f597710929d41be989110fc3c51621c9ee62))
+    - Update to 0.13 ([`8176600`](https://github.com/wasmCloud/wasmCloud/commit/81766005150677e6d21c28eee27f2240b3da39fc))
+    - Update deps for wash-cli-v0.36 ([`c50884a`](https://github.com/wasmCloud/wasmCloud/commit/c50884ac5e7ca8c58bb8a14ef499b0e4ee7d0530))
+    - Bump for test-util release ([`7cd2e71`](https://github.com/wasmCloud/wasmCloud/commit/7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4))
+    - Store claims and jwt with par ([`6df433f`](https://github.com/wasmCloud/wasmCloud/commit/6df433f01db7923d11554e2b76b9cdd34452e6f5))
+    - Address clippy warnings ([`a9b02e5`](https://github.com/wasmCloud/wasmCloud/commit/a9b02e5e203c1332ee785cbee8b998be9584c5b0))
+</details>
+
 ## 0.14.0 (2024-11-08)
+
+<csr-id-a9b02e5e203c1332ee785cbee8b998be9584c5b0/>
+<csr-id-4213d3c378c49c930723313060195653157d63ef/>
+<csr-id-c50884ac5e7ca8c58bb8a14ef499b0e4ee7d0530/>
+<csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/>
 
 ### Chore
 
@@ -23,29 +89,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### New Features (BREAKING)
 
  - <csr-id-6df433f01db7923d11554e2b76b9cdd34452e6f5/> store claims and jwt with par
-
-### Commit Statistics
-
-<csr-read-only-do-not-edit/>
-
- - 5 commits contributed to the release over the course of 119 calendar days.
- - 148 days passed between releases.
- - 5 commits were understood as [conventional](https://www.conventionalcommits.org).
- - 0 issues like '(#ID)' were seen in commit messages
-
-### Commit Details
-
-<csr-read-only-do-not-edit/>
-
-<details><summary>view details</summary>
-
- * **Uncategorized**
-    - Update to 0.13 ([`4213d3c`](https://github.com/wasmCloud/wasmCloud/commit/4213d3c378c49c930723313060195653157d63ef))
-    - Update deps for wash-cli-v0.36 ([`c50884a`](https://github.com/wasmCloud/wasmCloud/commit/c50884ac5e7ca8c58bb8a14ef499b0e4ee7d0530))
-    - Bump for test-util release ([`7cd2e71`](https://github.com/wasmCloud/wasmCloud/commit/7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4))
-    - Store claims and jwt with par ([`6df433f`](https://github.com/wasmCloud/wasmCloud/commit/6df433f01db7923d11554e2b76b9cdd34452e6f5))
-    - Address clippy warnings ([`a9b02e5`](https://github.com/wasmCloud/wasmCloud/commit/a9b02e5e203c1332ee785cbee8b998be9584c5b0))
-</details>
 
 ## 0.12.0 (2024-07-31)
 
