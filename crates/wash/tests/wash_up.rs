@@ -10,8 +10,8 @@ use tokio::{process::Command, time::Duration};
 
 mod common;
 use common::{
-    find_open_port, force_cleanup_processes, start_nats, wait_for_nats_to_start, wait_for_no_hosts,
-    wait_for_single_host, TestWashInstance, HELLO_OCI_REF,
+    find_open_port, start_nats, wait_for_nats_to_start, wait_for_no_hosts, wait_for_single_host,
+    TestWashInstance, HELLO_OCI_REF,
 };
 use wash::cli::config::WASMCLOUD_HOST_VERSION;
 
@@ -27,7 +27,10 @@ fn wash_cmd(home: impl AsRef<Path>) -> Command {
 #[serial]
 #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 async fn integration_up_can_start_wasmcloud_and_component_serial() -> Result<()> {
-    force_cleanup_processes().await?;
+    // This is only really needed for CI, which runs purely in linux. And even then it is just a
+    // backup to make sure tests can pass quicker in case of a slow cleanup/failure
+    #[cfg(target_family = "unix")]
+    common::force_cleanup_processes().await?;
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
@@ -133,7 +136,10 @@ async fn integration_up_can_start_wasmcloud_and_component_serial() -> Result<()>
 #[tokio::test]
 #[serial]
 async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
-    force_cleanup_processes().await?;
+    // This is only really needed for CI, which runs purely in linux. And even then it is just a
+    // backup to make sure tests can pass quicker in case of a slow cleanup/failure
+    #[cfg(target_family = "unix")]
+    common::force_cleanup_processes().await?;
 
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("washup.log");
@@ -209,7 +215,10 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
-    force_cleanup_processes().await?;
+    // This is only really needed for CI, which runs purely in linux. And even then it is just a
+    // backup to make sure tests can pass quicker in case of a slow cleanup/failure
+    #[cfg(target_family = "unix")]
+    common::force_cleanup_processes().await?;
 
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("washup.log");
