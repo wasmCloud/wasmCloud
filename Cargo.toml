@@ -223,7 +223,7 @@ async-compression = { version = "0.4", default-features = false }
 async-nats = { version = "0.39", default-features = false }
 async-trait = { version = "0.1", default-features = false }
 aws-config = { version = "1.5", default-features = false }
-aws-sdk-s3 = { version = "=1.68", default-features = false }                                               # more recent versions depend on `cbindgen`, using MPL-2.0, not permitted by CNCF
+aws-sdk-s3 = { version = "=1.68", default-features = false } # more recent versions depend on `cbindgen`, using MPL-2.0, not permitted by CNCF
 aws-smithy-runtime = { version = "1.7", default-features = false }
 axum = { version = "0.8", default-features = false }
 axum-extra = { version = "0.10", default-features = false }
@@ -353,9 +353,9 @@ unicase = { version = "2.8.1", default-features = false }
 url = { version = "2" }
 uuid = { version = "1", default-features = false }
 vaultrs = { version = "0.7", default-features = false }
-wadm = { git = "https://github.com/wasmcloud/wadm", branch = "main", version = "0.20", default-features = false }
-wadm-client = { git = "https://github.com/wasmcloud/wadm", branch = "main", version = "0.9.0", default-features = false }
-wadm-types = { git = "https://github.com/wasmcloud/wadm", branch = "main", version = "0.8.2", default-features = false }
+wadm = { version = "0.21", default-features = false }
+wadm-client = { version = "0.10", default-features = false }
+wadm-types = { version = "0.8.3", default-features = false }
 walkdir = { version = "2", default-features = false }
 warp = { version = "0.3", default-features = false }
 wascap = { version = "^0.16.0", path = "./crates/wascap", default-features = false }
