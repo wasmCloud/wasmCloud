@@ -166,6 +166,7 @@ async fn config_e2e() -> anyhow::Result<()> {
         None,
         None,
         Some("wasmcloud.secrets".to_string()),
+        None,
     )
     .await
     .context("failed to start test host")?;
