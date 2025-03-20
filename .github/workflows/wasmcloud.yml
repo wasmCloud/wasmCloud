@@ -324,7 +324,7 @@ jobs:
       - run: mkdir "artifact/bin"
       - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
 
-      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: wash-x86_64-pc-windows-msvc
           path: artifact
@@ -334,11 +334,11 @@ jobs:
     needs: build-wash-bin
     runs-on: macos-15
     steps:
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: wash-aarch64-apple-darwin
           path: aarch64
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: wash-x86_64-apple-darwin
           path: x86_64
@@ -346,7 +346,7 @@ jobs:
       - run: mkdir -p ./artifact/bin
       - run: lipo -create ./aarch64/bin/wash ./x86_64/bin/wash -output ./artifact/bin/wash
 
-      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: wash-universal-darwin
           path: artifact
@@ -356,11 +356,11 @@ jobs:
     needs: build-wasmcloud-bin
     runs-on: macos-15
     steps:
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: wasmcloud-aarch64-apple-darwin
           path: aarch64
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: wasmcloud-x86_64-apple-darwin
           path: x86_64
@@ -368,7 +368,7 @@ jobs:
       - run: mkdir -p ./artifact/bin
       - run: lipo -create ./aarch64/bin/wasmcloud ./x86_64/bin/wasmcloud -output ./artifact/bin/wasmcloud
 
-      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: wasmcloud-universal-darwin
           path: artifact
@@ -377,7 +377,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     needs: build-wash-bin
     steps:
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: wash-aarch64-unknown-linux-musl
       - run: chmod +x ./bin/wash
@@ -391,7 +391,7 @@ jobs:
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: wash-aarch64-unknown-linux-musl-oci
       - run: docker load < ./wash-aarch64-unknown-linux-musl-oci
@@ -401,7 +401,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build-wash-bin
     steps:
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: wash-x86_64-unknown-linux-musl
       - run: chmod +x ./bin/wash
@@ -418,7 +418,7 @@ jobs:
           - wash-aarch64-apple-darwin
           - wash-universal-darwin
     steps:
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: ${{ matrix.artifact }}
       - run: chmod +x ./bin/wash
@@ -436,7 +436,7 @@ jobs:
           - wash-x86_64-apple-darwin
           - wash-universal-darwin
     steps:
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: ${{ matrix.artifact }}
       - run: chmod +x ./bin/wash
@@ -447,7 +447,7 @@ jobs:
     runs-on: windows-latest
     needs: build-wash-windows
     steps:
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: wash-x86_64-pc-windows-msvc
       - run: .\bin\wash.exe --version
@@ -456,7 +456,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     needs: build-wasmcloud-bin
     steps:
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: wasmcloud-aarch64-unknown-linux-musl
       - run: chmod +x ./bin/wasmcloud
@@ -470,7 +470,7 @@ jobs:
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: wasmcloud-aarch64-unknown-linux-musl-oci
       - run: docker load < ./wasmcloud-aarch64-unknown-linux-musl-oci
@@ -480,7 +480,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build-wasmcloud-bin
     steps:
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: wasmcloud-x86_64-unknown-linux-musl
       - run: chmod +x ./bin/wasmcloud
@@ -497,7 +497,7 @@ jobs:
           - wasmcloud-aarch64-apple-darwin
           - wasmcloud-universal-darwin
     steps:
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: ${{ matrix.artifact }}
       - run: chmod +x ./bin/wasmcloud
@@ -515,7 +515,7 @@ jobs:
           - wasmcloud-x86_64-apple-darwin
           - wasmcloud-universal-darwin
     steps:
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: ${{ matrix.artifact }}
       - run: chmod +x ./bin/wasmcloud
@@ -526,7 +526,7 @@ jobs:
     runs-on: windows-latest
     needs: build-wasmcloud-bin
     steps:
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: wasmcloud-x86_64-pc-windows-gnu
       - run: .\bin\wasmcloud.exe --version
@@ -779,7 +779,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           path: artifacts
           pattern: wasmcloud-*
@@ -830,7 +830,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           path: artifacts
           pattern: wash-*
@@ -906,11 +906,11 @@ jobs:
       - name: Install NFPM
         run: nix profile install -L --inputs-from . 'nixpkgs#nfpm'
 
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: wash-aarch64-unknown-linux-musl
           path: ./crates/wash/aarch64
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           name: wash-x86_64-unknown-linux-musl
           path: ./crates/wash/x86_64

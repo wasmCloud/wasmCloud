@@ -44,7 +44,7 @@ jobs:
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
 
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           path: ${{ runner.temp }}/nix-store-amd64
           name: nix-store-${{ inputs.bin }}-x86_64-unknown-linux-musl
@@ -52,7 +52,7 @@ jobs:
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store-amd64"
 
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           path: ${{ runner.temp }}/nix-store-arm64
           name: nix-store-${{ inputs.bin }}-aarch64-unknown-linux-musl
