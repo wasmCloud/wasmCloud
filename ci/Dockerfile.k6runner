@@ -1,6 +1,6 @@
-FROM grafana/xk6:0.13.4 AS builder
+FROM grafana/xk6:0.13.4@sha256:7b535663dd9f908e89c51d3dae586c36e86137fc5106273cf6c1fe4c04c18c7a AS builder
 
 RUN xk6 build v0.56.0 --with github.com/grafana/xk6-kubernetes@v0.10.0
 
-FROM grafana/k6:0.56.0
+FROM grafana/k6:0.56.0@sha256:89684628f98358ba6cc1a2e604bf2b05d49aad43611ece73a44aafcec06fcf28
 COPY --from=builder /xk6/k6 /usr/bin/k6
