@@ -1,0 +1,15 @@
+[package]
+name = "workload-identity-component"
+edition = "2021"
+description = """
+Component used to test wasmcloud:identity interface
+"""
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde_json = { workspace = true, features = ["std"] }
+wasmcloud-component = { workspace = true, features = ["http"] }
+wit-bindgen = { workspace = true, features = ["default"] }
