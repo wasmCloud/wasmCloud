@@ -57,3 +57,14 @@ pub const RUST_PONGER_CONFIG_COMPONENT_PREVIEW2_SIGNED: &str = concat!(
     env!("OUT_DIR"),
     "/rust-ponger-config-component-preview2.signed.wasm"
 );
+
+pub const RUST_WORKLOAD_IDENTITY_COMPONENT: &str =
+    concat!(env!("OUT_DIR"), "/rust-workload-identity-component.wasm");
+pub const RUST_WORKLOAD_IDENTITY_COMPONENT_PREVIEW2: &str = concat!(
+    env!("OUT_DIR"),
+    "/rust-workload-identity-component-preview2.wasm"
+);
+pub const RUST_WORKLOAD_IDENTITY_COMPONENT_PREVIEW2_SIGNED: &str = concat!(
+    env!("OUT_DIR"),
+    "/rust-workload-identity-component-preview2.signed.wasm"
+);

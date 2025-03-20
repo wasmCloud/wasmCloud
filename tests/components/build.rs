@@ -17,11 +17,12 @@ use wasi_preview1_component_adapter_provider::WASI_SNAPSHOT_PREVIEW1_REACTOR_ADA
 /// List of (manifest path, output artifact name) for all the packages used during test
 ///
 /// Manifest paths should be relative to the directory containing this build.rs (i.e. tests/components)
-const WASI_WASM32_PACKAGES: [(&str, &str); 7] = [
+const WASI_WASM32_PACKAGES: [(&str, &str); 8] = [
     ("./rust/Cargo.toml", "interfaces-handler-reactor"),
     ("./rust/Cargo.toml", "interfaces-reactor"),
     ("./rust/Cargo.toml", "pinger-config-component"),
     ("./rust/Cargo.toml", "ponger-config-component"),
+    ("./rust/Cargo.toml", "workload-identity-component"),
     (
         "../../examples/rust/components/http-hello-world/Cargo.toml",
         "http-hello-world",
@@ -37,7 +38,7 @@ const WASI_WASM32_PACKAGES: [(&str, &str); 7] = [
 ];
 
 /// List of packages which should have output artifacts signed
-const WASI_WASM32_PACKAGES_SIGNED: [&str; 10] = [
+const WASI_WASM32_PACKAGES_SIGNED: [&str; 12] = [
     "http-keyvalue-counter",
     "http-keyvalue-counter-preview2",
     "interfaces-handler-reactor",
@@ -48,6 +49,8 @@ const WASI_WASM32_PACKAGES_SIGNED: [&str; 10] = [
     "pinger-config-component-preview2",
     "ponger-config-component",
     "ponger-config-component-preview2",
+    "workload-identity-component",
+    "workload-identity-component-preview2",
 ];
 
 /// Convert a hard-coded artifact name (see [`WASI_WASM32_PACKAGES`])
