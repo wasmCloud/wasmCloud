@@ -174,8 +174,8 @@ pub async fn generate_join_token(
 // Uses the SPIRE Server container to register the test workload under the
 // local SPIRE Agent
 pub async fn register_spiffe_workload(
-    agent_spiffe_id: &str,
-    workload_spiffe_id: &str,
+    parent_id: &str,
+    spiffe_id: &str,
     workload_selector: &str,
     spire_server_socket: &Path,
 ) -> anyhow::Result<()> {
@@ -188,9 +188,9 @@ pub async fn register_spiffe_workload(
         "entry",
         "create",
         "-parentID",
-        agent_spiffe_id,
+        parent_id,
         "-spiffeID",
-        workload_spiffe_id,
+        spiffe_id,
         "-selector",
         workload_selector,
         "-socketPath",
