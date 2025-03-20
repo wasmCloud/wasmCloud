@@ -1,4 +1,4 @@
-package wasmcloud:identity@0.1.0-draft;
+package wasmcloud:identity@0.0.1;
 
 /// This WIT interface powers workload identity support for components
 ///

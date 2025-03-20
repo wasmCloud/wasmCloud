@@ -258,7 +258,7 @@ impl Runtime {
             {
                 true
             }
-            "wasmcloud:identity/store@0.1.0-draft"
+            "wasmcloud:identity/store@0.0.1"
                 if self.experimental_features.workload_identity_interface =>
             {
                 true
