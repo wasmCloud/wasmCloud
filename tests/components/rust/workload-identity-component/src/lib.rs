@@ -2,7 +2,7 @@ wit_bindgen::generate!({
     with: {
         "wasi:http/types@0.2.2": wasmcloud_component::wasi::http::types,
         "wasi:io/streams@0.2.2": wasmcloud_component::wasi::io::streams,
-        "wasmcloud:identity/store@0.1.0-draft": generate,
+        "wasmcloud:identity/store@0.0.1": generate,
     },
     generate_all,
 });
