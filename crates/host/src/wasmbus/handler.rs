@@ -43,9 +43,10 @@ pub struct Handler {
     pub lattice: Arc<str>,
     /// The identifier of the component that this handler is associated with
     pub component_id: Arc<str>,
-    /// The current link targets. `instance` -> `link-name`
+    /// The current link targets. `instance` -> `target-type`
     /// Instance specification does not include a version
-    pub targets: Arc<RwLock<HashMap<Box<str>, Arc<str>>>>,
+    /// Target type may be either a link name for internal routing or a custom target/version pair
+    pub targets: Arc<RwLock<HashMap<Box<str>, TargetType>>>,
 
     /// Map of link names -> instance -> Target
     ///
@@ -64,6 +65,27 @@ pub struct Handler {
     pub invocation_timeout: Duration,
     /// Experimental features enabled in the host for gating handler functionality
     pub experimental_features: Features,
+}
+
+/// Distinguishes the type of target details recorded.
+#[derive(Debug, Clone)]
+pub enum TargetType {
+    /// Link target distinguishes the link name (e.g., "default")
+    /// that an instance maps to internal to lattices.
+    Link(Arc<str>),
+    /// Custom target distinguishes the virtual component target (some service external to the runtime)
+    /// and the version of the WIT package interface that this virtual component obeys.
+    /// (target, version) (e.g., "external-comp", "0.1.0")
+    Custom(Arc<str>, Arc<str>),
+}
+
+impl AsRef<str> for TargetType {
+    fn as_ref(&self) -> &str {
+        match self {
+            TargetType::Link(ln) => ln.as_ref(),
+            TargetType::Custom(_, _) => "default", // fallback for native interfaces which should never encounter custom targets
+        }
+    }
 }
 
 impl Handler {
@@ -114,7 +136,7 @@ impl Bus1_0_0 for Handler {
             {
                 targets.insert(
                     format!("{namespace}:{package}/{interface}").into_boxed_str(),
-                    Arc::clone(&link_name),
+                    TargetType::Link(Arc::clone(&link_name)),
                 );
             }
         }
@@ -158,6 +180,22 @@ impl Bus for Handler {
         Bus1_0_0::set_link_name(self, link_name, interfaces).await;
         Ok(Ok(()))
     }
+
+    #[instrument(level = "debug", skip(self))]
+    async fn set_target_component(
+        &self,
+        target: String,
+        interface: Arc<CallTargetInterface>,
+        expected_version: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        let mut targets = self.targets.write().await;
+        let interface_key = interface.as_instance().into_boxed_str();
+        targets.insert(
+            interface_key.clone(),
+            TargetType::Custom(target.clone().into(), expected_version.clone().into()),
+        );
+        Ok(Ok(()))
+    }
 }
 
 impl wrpc_transport::Invoke for Handler {
@@ -194,41 +232,53 @@ impl wrpc_transport::Invoke for Handler {
             None => instance.split_once('@').map_or(instance, |(l, _)| l),
         };
 
-        let link_name = targets
-            .get(target_instance)
-            .map_or("default", AsRef::as_ref);
+        let prefix = match targets.get(target_instance) {
+            Some(TargetType::Custom(target, _version)) => {
+                let prefix = format!("{}.{}", self.lattice, target);
+                prefix
+            }
+            _ => {
+                let link_name = targets
+                    .get(target_instance)
+                    .map(AsRef::as_ref)
+                    .unwrap_or("default");
 
-        let instances = links.get(link_name).with_context(|| {
-            warn!(
-                instance,
-                link_name,
-                ?target_instance,
-                ?self.component_id,
-                "no links with link name found for instance"
-            );
-            format!("link `{link_name}` not found for instance `{target_instance}`")
-        })?;
+                let instances = links.get(link_name).with_context(|| {
+                    warn!(
+                        instance,
+                        link_name,
+                        ?target_instance,
+                        ?self.component_id,
+                        "no links with link name found for instance"
+                    );
+                    format!("link `{link_name}` not found for instance `{target_instance}`")
+                })?;
 
-        // Determine the lattice target ID we should be sending to
-        let id = instances.get(target_instance).with_context(||{
-            warn!(
-                instance,
-                ?target_instance,
-                ?self.component_id,
-                "component is not linked to a lattice target for the given instance"
-            );
-            format!("failed to call `{func}` in instance `{instance}` (failed to find a configured link with name `{link_name}` from component `{id}`, please check your configuration)", id = self.component_id)
-        })?;
+                let id = instances.get(target_instance).with_context(|| {
+                    warn!(
+                        instance,
+                        ?target_instance,
+                        ?self.component_id,
+                        "component is not linked to a lattice target for the given instance"
+                    );
+                    format!("failed to call `{func}` in instance `{instance}` (failed to find a configured link with name `{link_name}` from component `{id}`, please check your configuration)", id = self.component_id)
+                })?;
+
+                let prefix = format!("{}.{}", self.lattice, id);
+                prefix
+            }
+        };
 
         let mut headers = injector_to_headers(&TraceContextInjector::default_with_span());
         headers.insert("source-id", &*self.component_id);
-        headers.insert("link-name", link_name);
-        let nats = wrpc_transport_nats::Client::new(
-            Arc::clone(&self.nats),
-            format!("{}.{id}", &self.lattice),
-            None,
-        )
-        .await?;
+        headers.insert(
+            "link-name",
+            targets
+                .get(target_instance)
+                .map(AsRef::as_ref)
+                .unwrap_or("default"),
+        );
+        let nats = wrpc_transport_nats::Client::new(Arc::clone(&self.nats), prefix, None).await?;
         nats.timeout(self.invocation_timeout)
             .invoke(Some(headers), instance, func, params, paths)
             .await

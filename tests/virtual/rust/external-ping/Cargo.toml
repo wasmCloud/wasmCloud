@@ -1,0 +1,24 @@
+[package]
+name = "external-ping"
+edition = "2021"
+version = "0.1.0"
+
+[workspace]
+
+[dependencies]
+anyhow = "1.0.97"
+wit-bindgen-wrpc = "0.9.0"
+async-nats = { version = "0.39" }
+wrpc-transport-nats = { version = "0.28", default-features = false, features = [
+    "async-nats-0_39",
+] }
+tokio = { version = "1.44.0", features = [
+    "fs",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+futures = "0.3.31"
+tracing = "0.1.41"
+url = "2.5.4"

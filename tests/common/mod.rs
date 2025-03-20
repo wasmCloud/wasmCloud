@@ -20,6 +20,7 @@ pub mod redis;
 pub mod secrets;
 pub mod spire;
 pub mod vault;
+pub mod wrpc;
 
 /// Create a temporary directory
 pub fn tempdir() -> Result<TempDir> {

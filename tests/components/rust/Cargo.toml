@@ -3,6 +3,7 @@ members = [
     "interfaces-handler-reactor",
     "interfaces-reactor",
     "pinger-config-component",
+    "pinger-external-component",
     "ponger-config-component",
 ]
 resolver = "2"

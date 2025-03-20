@@ -1,0 +1,5 @@
+package test-virtual-components:ponger-config;
+
+world virtual-component {
+  export test-components:testing/pingpong@0.1.0;
+}
