@@ -1,6 +1,7 @@
 #![cfg(all(unix, feature = "wasmcloud"))]
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::Ipv4Addr;
 use std::os::unix::fs::MetadataExt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,15 +10,6 @@ use anyhow::Context as _;
 use async_nats::service::ServiceExt;
 use bytes::Bytes;
 use futures::StreamExt;
-
-pub mod common;
-use common::nats::{ensure_nats_connection_until_timeout, start_nats};
-use common::spire::{
-    generate_join_token, register_spiffe_workload, start_spire_agent, start_spire_server,
-    validate_workload_registration_within_timeout,
-};
-use common::tempdir;
-
 use nats_jwt_rs::account::{Account, ExternalAuthorization};
 use nats_jwt_rs::authorization::{AuthRequest, AuthResponse};
 use nats_jwt_rs::operator::Operator;
@@ -25,10 +17,33 @@ use nats_jwt_rs::types::{Permission, Permissions};
 use nats_jwt_rs::user::User;
 use nats_jwt_rs::Claims;
 use nkeys::KeyPair;
+use tokio::time::sleep;
+use tokio::try_join;
+use tracing_subscriber::prelude::*;
+use wasmcloud_core::tls::NativeRootsExt as _;
 use wasmcloud_host::wasmbus::connect_nats;
 use wasmcloud_host::workload_identity::WorkloadIdentityConfig;
+use wasmcloud_test_util::component::assert_scale_component;
 use wasmcloud_test_util::env::EnvVarGuard;
+use wasmcloud_test_util::host::WasmCloudTestHost;
+use wasmcloud_test_util::lattice::config::assert_config_put;
+use wasmcloud_test_util::lattice::link::assert_advertise_link;
+use wasmcloud_test_util::provider::{assert_start_provider, StartProviderArgs};
 use wasmcloud_test_util::testcontainers::{NatsConfig, NatsResolver};
+
+use test_components::RUST_WORKLOAD_IDENTITY_COMPONENT;
+
+pub mod common;
+use common::nats::{ensure_nats_connection_until_timeout, start_nats};
+use common::spire::{
+    generate_join_token, register_spiffe_workload, start_spire_agent, start_spire_server,
+    validate_workload_registration_within_timeout,
+};
+use common::{free_port, tempdir};
+
+const LATTICE: &str = "links";
+const COMPONENT_ID: &str = "workload_identity_test";
+const BUILTIN_HTTP: &str = "wasmcloud+builtin://http-server";
 
 #[tokio::test]
 async fn connect_to_nats_with_workload_identity() -> anyhow::Result<()> {
@@ -143,6 +158,208 @@ async fn connect_to_nats_with_workload_identity() -> anyhow::Result<()> {
     let _ = spire_server.stop().await;
     let _ = nats_server.stop().await;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn workload_identity_component_interface() -> anyhow::Result<()> {
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().compact().without_time())
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("info,cranelift_codegen=warn,wasmcloud=trace")
+            }),
+        )
+        .init();
+
+    let (nats_server, nats_url, nats_client) = start_nats(None, true)
+        .await
+        .map(|res| (res.0, res.1, res.2.unwrap()))
+        .context("failed to start NATS")?;
+
+    // Build client for interacting with the lattice
+    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client)
+        .lattice(LATTICE.to_string())
+        .build();
+
+    // --- Set up SPIRE Server & Agent
+    // Temporary directory for storing all of the SPIRE Agent and Server configuration and sockets
+    let tmp_dir = tempdir().context("should have create a temporary directory for SPIRE")?;
+
+    let (spire_server, spire_server_url, spire_server_socket_path) =
+        start_spire_server(tmp_dir.path()).await?;
+
+    let agent_spiffe_id = "spiffe://wasmcloud.dev/test-agent";
+    let host_spiffe_id = "spiffe://wasmcloud.dev/wasmcloud-host";
+    let component_spiffe_id = "spiffe://wasmcloud.dev/workload-identity-component";
+
+    // Generate the join_token used by the SPIRE Agent to establish it's identity with the SPIRE Server
+    let agent_join_token = generate_join_token(agent_spiffe_id, &spire_server_socket_path)
+        .await
+        .context("should have generated join token for SPIRE Agent")?;
+
+    // Start the SPIRE Agent on the local machine so that we can use the Workload API socket for connecting to NATS
+    let (spire_agent, api_socket, admin_socket) =
+        start_spire_agent(&agent_join_token, spire_server_url, tmp_dir.path()).await?;
+
+    // Read SPIRE Agent API socket metadata to get the current user id so it
+    // can be used as part of the workload selector on the SPIRE Server
+    let metadata = std::fs::metadata(admin_socket.clone())
+        .context("should have read file metadata for the SPIRE Agent Workload API socket")?;
+
+    // Register the wasmcloud host on the SPIRE Server
+    register_spiffe_workload(
+        agent_spiffe_id,
+        host_spiffe_id,
+        format!("unix:uid:{}", metadata.uid()).as_str(),
+        &spire_server_socket_path,
+    )
+    .await
+    .context("should have registered workload on the SPIRE Server")?;
+
+    // Register the component workload on the SPIRE Server
+    register_spiffe_workload(
+        host_spiffe_id,
+        component_spiffe_id,
+        format!("wasmcloud:component:{}", COMPONENT_ID).as_str(),
+        &spire_server_socket_path,
+    )
+    .await
+    .context("should have registered workload on the SPIRE Server")?;
+
+    // Wait for the SPIFFE entries to propagate to the agent before attempting to connect
+    validate_workload_registration_within_timeout(&api_socket, Duration::from_secs(15)).await?;
+
+    let _spire_admin_socket = EnvVarGuard::set(
+        "SPIRE_ADMIN_ENDPOINT_SOCKET",
+        format!("unix:{}", admin_socket.display()),
+    );
+
+    // Build the host
+    let host = WasmCloudTestHost::start_custom(
+        &nats_url,
+        LATTICE,
+        None,
+        None,
+        None,
+        None,
+        Some(
+            wasmcloud_host::wasmbus::Features::new()
+                .enable_builtin_http_server()
+                .enable_workload_identity_interface(),
+        ),
+    )
+    .await
+    .context("failed to start test host")?;
+
+    let http_port = free_port().await?;
+
+    let http_server_config_name = "http-server".to_string();
+    let http_server_id = "http-server";
+
+    let host_key = host.host_key();
+    let host_id = host_key.public_key();
+
+    try_join!(
+        async {
+            assert_config_put(
+                &ctl_client,
+                &http_server_config_name,
+                [(
+                    "ADDRESS".to_string(),
+                    format!("{}:{http_port}", Ipv4Addr::LOCALHOST),
+                )],
+            )
+            .await
+            .context("failed to put configuration")
+        },
+        async {
+            assert_start_provider(StartProviderArgs {
+                client: &ctl_client,
+                host_id: &host_id,
+                provider_id: http_server_id,
+                provider_ref: BUILTIN_HTTP,
+                config: vec![],
+            })
+            .await
+            .context("failed to start providers")
+        },
+        async {
+            assert_scale_component(
+                &ctl_client,
+                &host_id,
+                format!("file://{RUST_WORKLOAD_IDENTITY_COMPONENT}"),
+                COMPONENT_ID,
+                None,
+                5,
+                Vec::new(),
+                Duration::from_secs(10),
+            )
+            .await
+            .context("failed to scale `rust-workload-identity-component` component")
+        }
+    )?;
+
+    assert_advertise_link(
+        &ctl_client,
+        http_server_id,
+        COMPONENT_ID,
+        "default",
+        "wasi",
+        "http",
+        vec!["incoming-handler".to_string()],
+        vec![http_server_config_name],
+        vec![],
+    )
+    .await
+    .context("failed to advertise link")?;
+
+    let http_client = reqwest::Client::builder()
+        .with_native_certificates()
+        .timeout(Duration::from_secs(20))
+        .connect_timeout(Duration::from_secs(20))
+        .build()
+        .context("failed to build HTTP client")?;
+
+    // Wait for data to be propagated across lattice
+    sleep(Duration::from_secs(1)).await;
+
+    let url = format!("http://localhost:{http_port}/");
+    let res = http_client
+        .get(&url)
+        .send()
+        .await
+        .context("failed to connect to server")?
+        .error_for_status()
+        .context("failed to get response")?
+        .text()
+        .await
+        .context("failed to get response text")?;
+
+    #[derive(Debug, serde::Deserialize)]
+    struct WorkloadIdentityComponentResponse {
+        token: Option<String>,
+        error: Option<String>,
+    }
+
+    let response_json = serde_json::from_str::<WorkloadIdentityComponentResponse>(&res)
+        .context("failed to deserialize response")?;
+
+    println!("response: {response_json:#?}");
+
+    assert!(
+        response_json.error.unwrap_or_default().is_empty(),
+        "received error in response"
+    );
+    assert!(
+        !response_json.token.unwrap_or_default().is_empty(),
+        "did not receive token in response"
+    );
+
+    // Clean up dependencies
+    let _ = spire_agent.stop().await;
+    let _ = spire_server.stop().await;
+    let _ = nats_server.stop().await;
     Ok(())
 }
 
