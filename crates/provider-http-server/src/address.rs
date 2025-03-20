@@ -15,15 +15,12 @@ use axum::handler::Handler;
 use axum_server::tls_rustls::RustlsConfig;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument};
+use wasmcloud_core::http::{default_listen_address, load_settings, ServiceSettings};
 use wasmcloud_provider_sdk::core::LinkName;
 use wasmcloud_provider_sdk::provider::WrpcClient;
 use wasmcloud_provider_sdk::{get_connection, HostData, LinkConfig, LinkDeleteInfo, Provider};
 
-use crate::settings::default_listen_address;
-use crate::{
-    build_request, get_cors_layer, get_tcp_listener, invoke_component, load_settings,
-    ServiceSettings,
-};
+use crate::{build_request, get_cors_layer, get_tcp_listener, invoke_component};
 
 /// Lookup for handlers by socket
 ///

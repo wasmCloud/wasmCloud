@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-core"
-version = "0.17.0"
+version = "0.18.0"
 description = "wasmCloud core functionality shared throughout the ecosystem"
 
 authors.workspace = true
@@ -22,10 +22,20 @@ hyper-rustls = ["dep:hyper-rustls", "dep:hyper-util"]
 tokio-rustls = ["dep:tokio-rustls"]
 otel = []
 oci = ["dep:oci-client", "dep:oci-wasm"]
+http = [
+    "dep:base64",
+    "dep:http",
+    "dep:unicase",
+    "dep:serde_json",
+    "dep:thiserror",
+]
+messaging = ["dep:serde_json"]
 
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
 async-nats = { workspace = true, features = ["ring"] }
+base64 = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
 hyper-rustls = { workspace = true, features = [
     "http2",
     "ring",
@@ -43,8 +53,11 @@ tokio-rustls = { workspace = true, optional = true }
 semver = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+unicase = { workspace = true, optional = true }
 url = { workspace = true }
 wascap = { workspace = true }
 webpki-roots = { workspace = true, optional = true }

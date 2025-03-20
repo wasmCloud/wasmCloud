@@ -39,6 +39,7 @@ use tokio::task::JoinHandle;
 use tokio::{spawn, time};
 use tower_http::cors::{self, CorsLayer};
 use tracing::{debug, info, trace};
+use wasmcloud_core::http::{load_settings, ServiceSettings};
 use wasmcloud_provider_sdk::provider::WrpcClient;
 use wasmcloud_provider_sdk::{initialize_observability, load_host_data, run_provider};
 use wrpc_interface_http::InvokeIncomingHandler as _;
@@ -46,8 +47,6 @@ use wrpc_interface_http::InvokeIncomingHandler as _;
 mod address;
 mod host;
 mod path;
-mod settings;
-pub use settings::{default_listen_address, load_settings, ServiceSettings};
 
 pub async fn run() -> anyhow::Result<()> {
     initialize_observability!(

@@ -10,8 +10,7 @@ use nkeys::XKey;
 use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinSet;
 use tracing::{error, instrument};
-use wasmcloud_core::HostData;
-use wasmcloud_provider_http_server::default_listen_address;
+use wasmcloud_core::{http::default_listen_address, HostData};
 use wasmcloud_provider_sdk::provider::{
     handle_provider_commands, receive_link_for_provider, ProviderCommandReceivers,
 };

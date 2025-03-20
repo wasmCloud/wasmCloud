@@ -1,18 +1,16 @@
-//! Configuration settings for [`HttpServerProvider`](crate::HttpServerProvider).
-//! The "values" map in the component link definition may contain
-//! one or more of the following keys,
+//! Common Configuration settings for the http server provider and built in http server. This
+//! requires that the `http` feature be enabled.
+//!
+//! The "values" map in the component link definition may contain one or more of the following keys,
 //! which determine how the configuration is parsed.
 //!
-//! For the key...
-///   `config_file`:       load configuration from file name.
-///                      Interprets file as json or toml, based on file extension.
-///   `config_b64`:        Configuration is a base64-encoded json string
-///   `config_json`:       Configuration is a raw json string
+//! For the key... `config_file`:       load configuration from file name. Interprets file as json
+///   or toml, based on file extension. `config_b64`:        Configuration is a base64-encoded json
+///                      string `config_json`:       Configuration is a raw json string
 ///
 /// If no configuration is provided, the default settings below will be used:
 /// - TLS is disabled
-/// - CORS allows all hosts(origins), most methods, and common headers
-///   (see constants below).
+/// - CORS allows all hosts(origins), most methods, and common headers (see constants below).
 /// - Default listener is bound to 127.0.0.1 port 8000.
 ///
 use core::fmt;
@@ -387,8 +385,7 @@ impl FromStr for CorsOrigin {
                 return Err(std::io::Error::new(
                     ErrorKind::InvalidInput,
                     format!(
-                        "Cors origin invalid schema {}, only [http] and [https] are supported: ",
-                        uri.scheme_str().unwrap()
+                        "Cors origin invalid schema {s}, only [http] and [https] are supported: ",
                     ),
                 ));
             }
@@ -532,7 +529,7 @@ where
 mod test {
     use std::str::FromStr;
 
-    use crate::settings::{CorsOrigin, ServiceSettings};
+    use super::{CorsOrigin, ServiceSettings};
 
     const GOOD_ORIGINS: &[&str] = &[
         // origins that should be parsed correctly
@@ -561,9 +558,11 @@ mod test {
     fn settings_init() {
         let s = ServiceSettings::default();
         assert!(s.address.is_ipv4());
+        let allowed_origins = s
+            .cors_allowed_origins
+            .expect("allowed_origins should be set");
         assert!(s.cors_allowed_methods.is_some());
-        assert!(s.cors_allowed_origins.is_some());
-        assert!(s.cors_allowed_origins.unwrap().0.is_empty());
+        assert!(allowed_origins.0.is_empty());
     }
 
     #[test]
@@ -575,10 +574,21 @@ mod test {
          }"#;
 
         let s = ServiceSettings::from_json(json).expect("parse_json");
-        assert_eq!(s.cors_allowed_headers.as_ref().unwrap().0.len(), 1);
         assert_eq!(
-            s.cors_allowed_headers.as_ref().unwrap().0.first().unwrap(),
-            "X-Cookies"
+            s.cors_allowed_headers
+                .as_ref()
+                .expect("allowed headers should be set")
+                .0
+                .len(),
+            1
+        );
+        assert_eq!(
+            s.cors_allowed_headers
+                .as_ref()
+                .expect("allowed headers should be set")
+                .0
+                .first(),
+            Some(&"X-Cookies".into())
         );
     }
 
@@ -588,11 +598,11 @@ mod test {
         for valid in GOOD_ORIGINS {
             let o = serde_json::from_value::<CorsOrigin>(serde_json::Value::String(
                 (*valid).to_string(),
-            ));
-            assert!(o.is_ok(), "from_value '{valid}'");
+            ))
+            .expect("deserialize should succeed");
 
             // test as_ref()
-            assert_eq!(&o.unwrap().0, valid);
+            assert_eq!(&o.0, valid);
         }
     }
 
@@ -600,12 +610,10 @@ mod test {
     fn origins_from_str() {
         // test CorsOrigin
         for &valid in GOOD_ORIGINS {
-            let o = CorsOrigin::from_str(valid);
-            println!("{valid}: {o:?}");
-            assert!(o.is_ok(), "from_str '{valid}'");
+            let o = CorsOrigin::from_str(valid).expect("deserialize should succeed");
 
             // test as_ref()
-            assert_eq!(&o.unwrap().0, valid);
+            assert_eq!(&o.0, valid);
         }
     }
 
@@ -614,11 +622,9 @@ mod test {
         for bad in BAD_ORIGINS {
             let o =
                 serde_json::from_value::<CorsOrigin>(serde_json::Value::String((*bad).to_string()));
-            println!("{bad}: {o:?}");
             assert!(o.is_err(), "from_value '{bad}' (expect err)");
 
             let o = serde_json::from_str::<CorsOrigin>(bad);
-            println!("{bad}: {o:?}");
             assert!(o.is_err(), "from_str '{bad}' (expect err)");
         }
     }
