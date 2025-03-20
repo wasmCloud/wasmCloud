@@ -237,7 +237,6 @@
               secrets-nats-kv =
                 rust.mkAttrs {
                   inherit
-                    overrideVendorCargoPackage
                     src
                     targets
                     ;
