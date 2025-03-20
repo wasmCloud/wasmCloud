@@ -54,9 +54,9 @@ wasmcloud-core = { workspace = true, features = [
     "oci",
     "otel",
     "rustls-native-certs",
+    "http",
+    "messaging",
 ] }
-wasmcloud-provider-http-server = { workspace = true }
-wasmcloud-provider-messaging-nats = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true }
 wasmcloud-runtime = { workspace = true }
 wasmcloud-secrets-client = { workspace = true }

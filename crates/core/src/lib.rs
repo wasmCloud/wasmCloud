@@ -32,6 +32,12 @@ pub mod secrets;
 pub mod wit;
 pub use wit::*;
 
+#[cfg(feature = "http")]
+pub mod http;
+
+#[cfg(feature = "messaging")]
+pub mod messaging;
+
 /// The 1.0 version of the wasmCloud control API, used in topic strings for the control API
 pub const CTL_API_VERSION_1: &str = "v1";
 

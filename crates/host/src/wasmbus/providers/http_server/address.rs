@@ -12,7 +12,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tracing::{info_span, instrument, trace_span, Instrument as _, Span};
-use wasmcloud_provider_http_server::{load_settings, ServiceSettings};
+use wasmcloud_core::http::{load_settings, ServiceSettings};
 use wasmcloud_provider_sdk::{LinkConfig, LinkDeleteInfo};
 use wasmcloud_tracing::KeyValue;
 use wrpc_interface_http::ServeIncomingHandlerWasmtime as _;

@@ -8732,10 +8732,12 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-core"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "async-nats",
+ "base64 0.22.1",
+ "http 1.3.1",
  "hyper-rustls 0.27.5",
  "hyper-util",
  "oci-client",
@@ -8749,9 +8751,12 @@ dependencies = [
  "secrecy 0.10.3",
  "semver",
  "serde",
+ "serde_json",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-rustls 0.26.2",
  "tracing",
+ "unicase",
  "url",
  "wascap",
  "webpki-roots",
@@ -8793,8 +8798,6 @@ dependencies = [
  "wascap",
  "wasmcloud-control-interface",
  "wasmcloud-core",
- "wasmcloud-provider-http-server",
- "wasmcloud-provider-messaging-nats",
  "wasmcloud-provider-sdk",
  "wasmcloud-runtime",
  "wasmcloud-secrets-client",
@@ -8915,6 +8918,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "unicase",
+ "wasmcloud-core",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
  "wrpc-interface-http",
@@ -9003,7 +9007,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-messaging-nats"
-version = "0.26.0"
+version = "0.27.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9017,13 +9021,14 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "wascap",
+ "wasmcloud-core",
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc",
 ]
 
 [[package]]
 name = "wasmcloud-provider-sdk"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9102,7 +9107,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-runtime"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9186,7 +9191,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-tracing"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "bytes",
