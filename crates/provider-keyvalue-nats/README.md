@@ -12,6 +12,75 @@ This capability provider is an implementation of the following interfaces of `wa
 
 This provider is multi-threaded and can handle concurrent requests from multiple consumer components. Furthermore, consumer components can share a host supplied default configuration, or provide their bespoke provider configuration, using wasmCloud's link definitions. Each link definition declared for this provider will result in a single NATS cluster connection managed on behalf of the linked component. Connections are maintained within the provider process, so multiple instances of this provider running in the same lattice will not share connections.
 
+## wasmCloud Application Deployment Manager (`wadm`)
+
+If you follow the [wasmCloud Quickstart](https://wasmcloud.com/docs/tour/hello-world) to the end of the [Extend and Deploy](https://wasmcloud.com/docs/tour/extend-and-deploy) step, you can swap out the contents of the application manifest (`wadm.yaml`) with the manifest below to use `keyvalue-nats` as your provider.
+
+```yaml
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: hello-world
+  annotations:
+    description: 'HTTP hello world demo'
+spec:
+  components:
+  - name: keyvalue-nats
+    type: capability
+    properties:
+      image: ghcr.io/wasmcloud/keyvalue-nats:0.3.1
+    traits: []
+  - name: http-component
+    type: component
+    properties:
+      image: file://./build/http_hello_world_s.wasm
+      id: http-component
+    traits:
+    - type: spreadscaler
+      properties:
+        instances: 100
+    - type: link
+      properties:
+        namespace: wasi
+        package: keyvalue
+        interfaces:
+        - store
+        - atomics
+        target:
+          name: keyvalue-nats
+          config:
+          - name: wasi-keyvalue-config
+            properties:
+              bucket: wasmcloud
+              enable_bucket_auto_create: 'true'
+  - name: http-server
+    type: capability
+    properties:
+      image: ghcr.io/wasmcloud/http-server:0.24.0
+    traits:
+    - type: link
+      properties:
+        namespace: wasi
+        package: http
+        interfaces:
+        - incoming-handler
+        source:
+          config:
+          - name: wasi-http-config
+            properties:
+              address: 127.0.0.1:8000
+        target:
+          name: http-component
+```
+
+When you run `wash app deploy wadm.yaml`, wasmCloud sets up:
+
+* An HTTP server that listens on port 8000.
+* A NATS-backed keyvalue provider that connects to an existing NATS environment. (Note: You will already have a NATS environment available if you are running wasmCloud with `wash up`).
+* A WebAssembly component that serves HTTP requests and communicates with the keyvalue provider. (You will need to have built the component according to the Quickstart.)
+
+After a few seconds of initialization, you can interact with the running application.
+
 ## Link Definition Configuration Settings
 
 To configure this provider, use the following settings in link definitions:
