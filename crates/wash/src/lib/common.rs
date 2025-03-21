@@ -25,10 +25,10 @@ pub const DEFAULT_NATS_PORT: &str = "4222";
 pub const DEFAULT_NATS_WEBSOCKET_PORT: &str = "4223";
 
 /// Version of wadm used by default for wash
-pub const WADM_VERSION: &str = "v0.20.2";
+pub const WADM_VERSION: &str = "v0.21.0";
 
 /// Version of wasmCloud host used by default for wash
-pub const WASMCLOUD_HOST_VERSION: &str = "v1.6.1";
+pub const WASMCLOUD_HOST_VERSION: &str = "v1.7.0";
 
 /// Default path to the `git` command (assumes it exists on PATH)
 const DEFAULT_GIT_PATH: &str = "git";
