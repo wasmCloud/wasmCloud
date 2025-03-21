@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud"
-version = "1.6.2"
+version = "1.7.0"
 description = "wasmCloud is a Cloud Native Computing Foundation (CNCF) project that enables teams to build polyglot applications composed of reusable Wasm components and run them—resiliently and efficiently—across any cloud, Kubernetes, datacenter, or edge."
 default-run = "wasmcloud"
 readme = "README.md"
@@ -223,7 +223,7 @@ async-compression = { version = "0.4", default-features = false }
 async-nats = { version = "0.39", default-features = false }
 async-trait = { version = "0.1", default-features = false }
 aws-config = { version = "1.5", default-features = false }
-aws-sdk-s3 = { version = "=1.68", default-features = false } # more recent versions depend on `cbindgen`, using MPL-2.0, not permitted by CNCF
+aws-sdk-s3 = { version = "=1.68", default-features = false }                                                # more recent versions depend on `cbindgen`, using MPL-2.0, not permitted by CNCF
 aws-smithy-runtime = { version = "1.7", default-features = false }
 axum = { version = "0.8", default-features = false }
 axum-extra = { version = "0.10", default-features = false }
