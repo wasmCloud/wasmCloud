@@ -227,8 +227,7 @@ jobs:
         working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.folder }}
         run: |
           set -xe
-          wash up &
-          WASH_PID=$!
+          wash up -d
           sleep 4;
           wash app deploy ${{ matrix.project.test-deploy }};
           TRIES=0
@@ -242,7 +241,7 @@ jobs:
           done;
           echo "✅ successfully started at least one component";
           wash app delete ${{ matrix.project.test-deploy }};
-          kill $WASH_PID;
+          wash down;
           exit 0;
 
       # Save example as an artifact for later step(s)
