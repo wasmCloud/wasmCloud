@@ -4,7 +4,7 @@ use anyhow::Context;
 use cloudevents::{EventBuilder, EventBuilderV10};
 use serde_json::json;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
-use tracing::instrument;
+use tracing::{instrument, warn};
 use ulid::Ulid;
 use uuid::Uuid;
 use wascap::jwt;
@@ -287,6 +287,16 @@ pub(crate) async fn publish(
         .build()
         .context("failed to build cloud event")?;
     let ev = serde_json::to_vec(&ev).context("failed to serialize event")?;
+    let max_payload = ctl_nats.server_info().max_payload;
+    if ev.len() > max_payload {
+        warn!(
+            size = ev.len(),
+            max_size = max_payload,
+            event = name,
+            lattice = lattice,
+            "event payload is too large to publish and may fail",
+        );
+    }
     ctl_nats
         .publish(format!("wasmbus.evt.{lattice}.{name}"), ev.into())
         .await
