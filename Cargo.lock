@@ -8210,7 +8210,7 @@ dependencies = [
  "serde_json",
  "wasm-encoder 0.227.1",
  "wasm-gen",
- "wasmparser 0.225.0",
+ "wasmparser 0.227.1",
 ]
 
 [[package]]
@@ -8299,7 +8299,7 @@ dependencies = [
  "wasmcloud-core",
  "wasmcloud-secrets-types",
  "wasmcloud-test-util",
- "wasmparser 0.225.0",
+ "wasmparser 0.227.1",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
@@ -9129,7 +9129,7 @@ dependencies = [
  "wasi-preview1-component-adapter-provider",
  "wasmcloud-component",
  "wasmcloud-core",
- "wasmparser 0.225.0",
+ "wasmparser 0.227.1",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
@@ -9271,16 +9271,6 @@ dependencies = [
  "bitflags 2.9.0",
  "hashbrown 0.15.2",
  "indexmap 2.8.0",
- "semver",
-]
-
-[[package]]
-name = "wasmparser"
-version = "0.225.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36e5456165f81e64cb9908a0fe9b9d852c2c74582aa3fe2be3c2da57f937d3ae"
-dependencies = [
- "bitflags 2.9.0",
  "semver",
 ]
 
