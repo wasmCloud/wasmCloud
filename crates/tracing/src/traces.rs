@@ -18,6 +18,8 @@ use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::EnvFilter;
+use opentelemetry::metrics::MeterProvider as _;
+use opentelemetry::global;
 #[cfg(feature = "otel")]
 use tracing_subscriber::Layer;
 use wasmcloud_core::logging::Level;
@@ -114,6 +116,15 @@ pub fn configure_tracing(
     ))
 }
 
+#[cfg(feature = "otel")]
+fn increment_otel_metric() { 
+    let meter = global::meter("wasmcloud");
+    let counter = meter.u64_counter("dropped_logs").init();
+
+    counter.add(1, &[]);
+}
+
+#[derive(Default)]
 pub struct ErrorCounter {
     dropped_lines : usize,
 }
@@ -125,6 +136,7 @@ impl ErrorCounter {
 // Increment the dropped lines and log an error if the buffer is full
     fn increment(&mut self) {
         self.dropped_lines +=1;
+        increment_otel_metric();
         if self.dropped_lines == 1 {
             tracing::error!("Buffer is full");
         }
@@ -199,6 +211,9 @@ pub fn configure_tracing(
     .with_writer(stderr)
     .with_ansi(ansi)
     .with_filter(move |_meta| {
+        if meta.level() <= &tracing::Level::ERROR {
+            error_counter.increment();
+        }
         if error_counter.get_count() > 0 {
             tracing::error!(
                "Dropped {} logs due to a full buffer.",
