@@ -19,11 +19,7 @@ This demo is designed to demonstrate multiple ecosystem tools, including:
 * **WebAssembly Compositions (WAC)**: A CLI tool for declaratively composing components.
 * **WASI Virt**: A CLI tool for virtualizing components within a composition.
 
-Below are instructions for installing the required tooling for this example. Note that multiple tools require Cargo, and WASI Virt requires the [nightly release channel for Rust](https://github.com/bytecodealliance/WASI-Virt/blob/main/rust-toolchain.toml), so you may wish to install that up front:
-
-```bash
-rustup toolchain install nightly
-```
+Below are instructions for installing the required tooling for this example. Note that multiple tools require Cargo, so you may wish to install that up front. 
 
 ## wasmCloud Shell (`wash`)
 
@@ -59,16 +55,10 @@ cargo install wac-cli
 
 ## WASI Virt
 
-WASI Virt requires the nightly release channel for [Rust](https://www.rust-lang.org/tools/install):
-
-```bash
-rustup toolchain install nightly
-```
-
 Install the `wasi-virt` command line tool with Rust's `cargo` package manager:
 
 ```bash
-cargo +nightly install --git https://github.com/bytecodealliance/wasi-virt
+cargo install --git https://github.com/bytecodealliance/wasi-virt
 ```
 
 ## This example
@@ -150,7 +140,7 @@ wash inspect --wit ./build/pong_s.wasm
 package root:component;
 
 world root {
-  import wasi:cli/environment@0.2.0;
+  import wasi:cli/environment@0.2.1;
   import wasi:cli/exit@0.2.0;
   import wasi:io/error@0.2.0;
   import wasi:io/streams@0.2.0;
@@ -180,12 +170,21 @@ wash inspect --wit virt.wasm
 package root:component;
 
 world root {
+  import wasi:cli/exit@0.2.0;
+  import wasi:io/error@0.2.0;
+  import wasi:io/streams@0.2.0;
+  import wasi:cli/stdin@0.2.0;
+  import wasi:cli/stdout@0.2.0;
+  import wasi:cli/stderr@0.2.0;
+  import wasi:clocks/wall-clock@0.2.0;
+  import wasi:filesystem/types@0.2.0;
+  import wasi:filesystem/preopens@0.2.0;
   import wasi:random/random@0.2.0;
 
   export example:pong/pingpong;
 }
 ```
-The virtualized component still exports `pingpong` but no longer requires `wasi:cli/environment`&mdash;that import (and all of the others except the new `wasi:random/random`, which we added via a WASI Virt argument) is satisfied by the encapsulating component. If we run this component on wasmCloud or with Wasmtime, the host will be able to satisfy the `random` import. But we still need another component to invoke this one via the exposed `pingpong` interface.
+The virtualized component still exports `pingpong` but no longer requires `wasi:cli/environment`&mdash;that import is satisfied by the encapsulating component. If we run this component on wasmCloud or with Wasmtime, the host will be able to satisfy the `random` import. But we still need another component to invoke this one via the exposed `pingpong` interface.
 
 # Step 2: Linking at runtime
 
@@ -211,8 +210,7 @@ Hello World! I got pong demo
 For many use-cases, runtime linking is the most appropriate approach and we can stop here. To clean up our wasmCloud host environment:
 
 ```shell
-wash app undeploy http-hello-world
-wash app delete http-hello-world --delete-all
+wash app delete wadm.yaml
 ```
 
 For the purposes of demonstration, let's see how we can compose these components into a single component at build-time.
@@ -248,7 +246,6 @@ wash inspect --wit output.wasm
 package root:component;
 
 world root {
-  import wasi:random/random@0.2.0;
   import wasi:io/error@0.2.0;
   import wasi:io/streams@0.2.0;
   import wasi:http/types@0.2.0;
@@ -260,6 +257,7 @@ world root {
   import wasi:clocks/wall-clock@0.2.0;
   import wasi:filesystem/types@0.2.0;
   import wasi:filesystem/preopens@0.2.0;
+  import wasi:random/random@0.2.0;
 
   export wasi:http/incoming-handler@0.2.0;
 }
