@@ -1,4 +1,4 @@
-#![cfg(target_os = "linux")]
+// #![cfg(target_os = "linux")]
 // NOTE: These are only run on linux for CI purposes, because they rely on the docker client being
 // available, and for various reasons this has proven to be problematic on both the Windows and
 // MacOS runners we use.
@@ -8,7 +8,10 @@ use tokio::io::AsyncBufReadExt;
 use wasmcloud_test_util::env::EnvVarGuard;
 use wasmcloud_test_util::testcontainers::{AsyncRunner as _, ImageExt, Mount, SquidProxy};
 
-use wash::lib::start::{get_download_client, new_patch_releases_after, DOWNLOAD_CLIENT_USER_AGENT};
+use wash::lib::start::{
+    get_download_client, new_minor_version_compatible_with_version_string,
+    new_patch_releases_after, DOWNLOAD_CLIENT_USER_AGENT,
+};
 
 // For squid config reference, see: https://www.squid-cache.org/Doc/config/
 // Sets up a squid-proxy listening on port 3128 that requires basic auth
@@ -203,18 +206,71 @@ async fn test_fetching_wasm_cloud_patch_versions_after_v_1_0_3() {
     let patch_releases = new_patch_releases_after(owner, repo, &latest_version)
         .await
         .expect("Should have been able to fetch releases");
-    for new_path_release in patch_releases {
+
+    // Checks that the tag name starts with a v
+    let re = regex::Regex::new(r"^v\d+\.\d+\.\d+").unwrap();
+
+    for new_patch_release in patch_releases {
         let semver::Version {
             major,
             minor,
             patch,
             ..
-        } = new_path_release
+        } = new_patch_release
             .get_main_artifact_release()
             .expect("new patch version is semver conventional versions");
 
+        assert!(
+            re.is_match(&new_patch_release.tag_name),
+            "release tag name starts with a v"
+        );
         assert_eq!(latest_version.major, major, "major version is not changed");
         assert_eq!(latest_version.minor, minor, "minor version is not changed");
         assert!(latest_version.patch < patch, "patch version is bigger");
     }
+}
+
+#[tokio::test]
+#[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
+async fn test_fetching_new_wadm_version_from_tag_name_after_v_0_20_0() {
+    let owner = &"wasmCloud";
+    let repo = &"wadm";
+
+    // Note that because this is a pre-1.0.0 version, the semver behavior is a little different. When the version is
+    // 1.0.0 and up the positions are `<major>.<minor>.<patch>` but pre-1.0.0, it's `0.<major>.<minor>`.
+    // <https://semver.org/#spec-item-4>
+
+    // Use 0.20.0 as the latest version, since there is a newer version
+    let release_tag_name = &"v0.20.0";
+    // Note: This starts with 'v' ──┘
+
+    let semver::Version {
+        major,
+        minor,
+        patch,
+        ..
+    } = new_minor_version_compatible_with_version_string(owner, repo, None, release_tag_name)
+        .await
+        .expect("Should have been able to fetch releases");
+
+    assert_eq!(major, 0, "major version is not changed");
+    assert_eq!(minor, 20, "minor version is not changed");
+    assert!(patch > 1, "patch version is bigger");
+}
+
+#[tokio::test]
+#[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
+async fn test_fetching_external_tool_version() {
+    let owner = &"nats-io";
+    let repo = &"nats-server";
+    // As of 2025-04-04, the 2.10.0 is released and 2.10.26 is the latest patch version
+    let release_tag_name = &"v2.10.0";
+
+    let semver::Version { major, minor, .. } =
+        new_minor_version_compatible_with_version_string(owner, repo, None, release_tag_name)
+            .await
+            .expect("Should have been able to fetch releases");
+
+    assert_eq!(major, 2, "major version is not changed");
+    assert!(minor > 10, "minor version is bigger");
 }
