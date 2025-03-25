@@ -9,8 +9,8 @@ use crate::lib::context::ContextManager;
 use crate::lib::generate::emoji;
 use crate::lib::start::{
     ensure_nats_server, ensure_wadm, ensure_wasmcloud, find_wasmcloud_binary, nats_pid_path,
-    new_patch_version_of_after_string, start_nats_server, start_wadm, start_wasmcloud_host,
-    NatsConfig, WadmConfig, GITHUB_WASMCLOUD_ORG, GITHUB_WASMCLOUD_WADM_REPO,
+    new_minor_version_compatible_with_version_string, start_nats_server, start_wadm,
+    start_wasmcloud_host, NatsConfig, WadmConfig, GITHUB_WASMCLOUD_ORG, GITHUB_WASMCLOUD_WADM_REPO,
     GITHUB_WASMCLOUD_WASMCLOUD_REPO, NATS_SERVER_BINARY, NATS_SERVER_CONF, WADM_PID,
 };
 use anyhow::{anyhow, bail, Context, Result};
@@ -608,13 +608,13 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     let wasmcloud_version = Version::parse(
         if let Some(version) = wasmcloud_opts.wasmcloud_version {
             version
-        } else if let Some(new_version) = (new_patch_version_of_after_string(
+        } else if let Ok(new_version) = new_minor_version_compatible_with_version_string(
             GITHUB_WASMCLOUD_ORG,
             GITHUB_WASMCLOUD_WASMCLOUD_REPO,
+            None,
             WASMCLOUD_HOST_VERSION,
         )
-        .await)
-            .unwrap_or_default()
+        .await
         {
             new_version.to_string()
         } else {
@@ -1011,21 +1011,21 @@ async fn install_patch_or_default_wadm_version(
     }
 
     let version = version.clone().unwrap_or_else(|| WADM_VERSION.to_owned());
-    let new_patch_version = (new_patch_version_of_after_string(
+    if let Ok(new_patch_version) = new_minor_version_compatible_with_version_string(
         GITHUB_WASMCLOUD_ORG,
         GITHUB_WASMCLOUD_WADM_REPO,
+        None,
         &version,
     )
-    .await)
-        .unwrap_or_default();
-    if let Some(new_patch) = new_patch_version {
+    .await
+    {
         eprintln!(
             "{} Found a new patch version of wadm: {}",
             emoji::INFO_SQUARE,
-            new_patch
+            new_patch_version
         );
         // Re-add stripped 'v' prefix due to semver parsing
-        let new_version = format!("v{new_patch}");
+        let new_version = format!("v{new_patch_version}");
         match ensure_wadm(&new_version, install_dir).await {
             Ok(path) => Ok(path),
             Err(e) => {
