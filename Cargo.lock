@@ -8638,7 +8638,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8764,7 +8764,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-host"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9191,7 +9191,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-tracing"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "anyhow",
  "bytes",
