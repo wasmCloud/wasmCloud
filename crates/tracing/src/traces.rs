@@ -18,6 +18,8 @@ use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::EnvFilter;
+use opentelemetry::metrics::MeterProvider as _;
+use opentelemetry::global;
 #[cfg(feature = "otel")]
 use tracing_subscriber::Layer;
 use wasmcloud_core::logging::Level;
@@ -114,6 +116,42 @@ pub fn configure_tracing(
     ))
 }
 
+#[cfg(feature = "otel")]
+fn increment_otel_metric() { 
+    let meter = global::meter("wasmcloud");
+    let counter = meter.u64_counter("dropped_logs").init();
+
+    counter.add(1, &[]);
+}
+
+#[derive(Default)]
+pub struct ErrorCounter {
+    dropped_lines : usize,
+}
+
+impl ErrorCounter {
+    fn reset(&mut self) {
+        self.dropped_lines = 0;
+    }
+// Increment the dropped lines and log an error if the buffer is full
+    fn increment(&mut self) {
+        self.dropped_lines +=1;
+        increment_otel_metric();
+        if self.dropped_lines == 1 {
+            tracing::error!("Buffer is full");
+        }
+
+        if self.dropped_lines > 100 {
+            self.reset();
+        }
+    }
+
+    fn get_count(&self) -> usize {
+        self.dropped_lines
+    }
+}
+
+
 /// Configures a global tracing subscriber, which includes:
 /// - A level filter, which forms the base and applies to all other layers
 /// - OTEL tracing and logging layers, if OTEL configuration is provided
@@ -166,9 +204,26 @@ pub fn configure_tracing(
     let stderr = std::io::stderr();
     let ansi = stderr.is_terminal();
     let (stderr, stderr_guard) = tracing_appender::non_blocking(stderr);
+
+    let mut error_counter = ErrorCounter::default();
+
     let fmt = tracing_subscriber::fmt::layer()
-        .with_writer(stderr)
-        .with_ansi(ansi);
+    .with_writer(stderr)
+    .with_ansi(ansi)
+    .with_filter(move |_meta| {
+        if meta.level() <= &tracing::Level::ERROR {
+            error_counter.increment();
+        }
+        if error_counter.get_count() > 0 {
+            tracing::error!(
+               "Dropped {} logs due to a full buffer.",
+                    error_counter.get_count()
+                );
+                error_counter.reset();
+            }
+            true
+        });
+
 
     let dispatch = if use_structured_logging {
         registry
