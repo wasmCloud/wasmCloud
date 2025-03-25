@@ -41,6 +41,9 @@ pub fn configure_metrics(
     let meter_provider = SdkMeterProvider::builder()
         .with_resource(
             opentelemetry_sdk::Resource::builder_empty()
+                .with_detector(Box::new(
+                    opentelemetry_sdk::resource::EnvResourceDetector::new(),
+                ))
                 .with_attribute(opentelemetry::KeyValue::new(
                     "service.name",
                     service_name.to_string(),
