@@ -1,9 +1,10 @@
-use anyhow::Error;
+use anyhow::{Context, Error};
 use chrono::{DateTime, Utc};
 use futures::future::join_all;
-use semver::Version;
+use regex::Regex;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
-use tracing::trace;
+use tracing::debug;
 
 use super::get_download_client_with_user_agent;
 
@@ -12,68 +13,127 @@ type DateTimeUtc = DateTime<Utc>;
 /// GitHub page max <https://docs.github.com/en/rest/releases/releases?apiVersion=2022-11-28#list-releases>
 const GITHUB_PER_PAGE: u32 = 100;
 
-// Batch size to fetch releases from GitHub
-const GITHUB_REQUEST_BATCH_SIZE: u32 = 30;
+/// Batch size to fetch releases from GitHub. Max for unauthenticated requests is *60 per hour*. If we start to hit this
+/// rate limit, we might need to find an alternative solution for interacting with the GitHub API.
+const GITHUB_REQUEST_BATCH_SIZE: u32 = 3;
 
 const VERSION_FETCHER_CLIENT_USER_AGENT: &str =
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
-/// `get_chronologically_sorted_releases` returns with a list of chronologically ordered (latest first)
-/// releases that are more recent than the provided `after_version`.
-async fn get_chronologically_sorted_releases(
+/// Gets a list of releases that are more newer, but semver compatible with the provided `after_version`. They are
+/// sorted by the version number, and the published date. Optionally, a tag pattern can be provided to filter the
+/// releases. If this is not provided, only the main releases are considered.
+async fn get_sorted_releases(
     owner: &str,
     repo: &str,
-    after_version: &semver::Version,
+    after_version: &Version,
+    tag_pattern: Option<&str>,
 ) -> Result<Vec<GitHubRelease>, anyhow::Error> {
-    let releases_of_repo = fetch_latest_releases(owner, repo, after_version).await?;
+    let releases_of_repo = fetch_latest_releases(owner, repo, after_version, tag_pattern).await?;
     let mut releases_of_repo = releases_of_repo.into_iter().collect::<Vec<GitHubRelease>>();
     releases_of_repo.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+    releases_of_repo.sort_by(|a, b| {
+        let a_version = a.get_x_y_z_version().ok();
+        let b_version = b.get_x_y_z_version().ok();
+        b_version.cmp(&a_version)
+    });
     Ok(releases_of_repo)
 }
 
-/// Get a full list of github patch releases that exist after the provided version.
 pub async fn new_patch_releases_after(
     owner: &str,
     repo: &str,
     after_version: &Version,
 ) -> Result<Vec<GitHubRelease>, Error> {
-    let releases = get_chronologically_sorted_releases(owner, repo, after_version).await?;
+    new_releases_after(owner, repo, None, after_version, VersionMatch::Patch).await
+}
+
+pub async fn new_minor_releases_after(
+    owner: &str,
+    repo: &str,
+    after_version: &Version,
+) -> Result<Vec<GitHubRelease>, Error> {
+    new_releases_after(owner, repo, None, after_version, VersionMatch::Minor).await
+}
+
+pub async fn new_patch_tag_pattern_releases_after(
+    owner: &str,
+    repo: &str,
+    after_version: &Version,
+    tag_pattern: Option<&str>,
+) -> Result<Vec<GitHubRelease>, Error> {
+    new_releases_after(owner, repo, tag_pattern, after_version, VersionMatch::Patch).await
+}
+
+pub async fn new_minor_tag_pattern_releases_after(
+    owner: &str,
+    repo: &str,
+    after_version: &Version,
+    tag_pattern: Option<&str>,
+) -> Result<Vec<GitHubRelease>, Error> {
+    new_releases_after(owner, repo, tag_pattern, after_version, VersionMatch::Minor).await
+}
+
+enum VersionMatch {
+    Minor,
+    Patch,
+}
+impl VersionMatch {
+    fn as_str(&self) -> &str {
+        match self {
+            VersionMatch::Minor => "^",
+            VersionMatch::Patch => "~",
+        }
+    }
+}
+
+/// Get a full list of releases from the GitHub repository that are newer than the provided version.
+/// Optionally, a tag pattern can be provided to filter the releases. If this is not provided, only the main releases
+/// are considered.
+async fn new_releases_after(
+    owner: &str,
+    repo: &str,
+    tag_pattern: Option<&str>,
+    after_version: &Version,
+    comparator: VersionMatch,
+) -> Result<Vec<GitHubRelease>, Error> {
+    let releases = get_sorted_releases(owner, repo, after_version, tag_pattern).await?;
+    let op = comparator.as_str();
     let main_releases = releases
         .into_iter()
-        .filter(|release| match &release.get_main_artifact_release() {
-            Some(version) => {
-                after_version.major == version.major && after_version.minor == version.minor
-            }
-            None => false,
+        .filter(|release| match &release.get_x_y_z_version() {
+            Ok(_) => release.satisfies_constraint(&format!("{op}{v}, >{v}", v = after_version)),
+            _ => false,
         })
         .collect::<Vec<GitHubRelease>>();
     Ok(main_releases)
 }
 
-/// Returns the latest patch version of the provided version.
-pub async fn new_patch_version_of_after_string(
+/// Returns the version of a release if it is semver compatible (^) with the provided version. Optionally, a tag pattern
+/// can be provided to filter the releases. If this is not provided, only the main releases are considered.
+pub async fn new_minor_version_compatible_with_version_string(
     owner: &str,
     repo: &str,
-    after_version: &str,
-) -> Result<Option<Version>, Error> {
-    let after_version = after_version.strip_prefix('v').unwrap_or(after_version);
-    let after_version = match Version::parse(after_version) {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
-    match new_patch_releases_after(owner, repo, &after_version).await {
-        Ok(patches) => match patches.first() {
-            Some(patch) => Ok(patch.get_main_artifact_release()),
-            None => Ok(None),
-        },
-        _ => Ok(None),
-    }
+    tag_pattern: Option<&str>,
+    version_string: &str,
+) -> Result<Version, Error> {
+    let version_string = version_string.strip_prefix('v').unwrap_or(version_string);
+    let version = Version::parse(version_string).expect("failed to parse version");
+    let releases = new_minor_tag_pattern_releases_after(owner, repo, &version, tag_pattern)
+        .await
+        .expect("failed to fetch releases");
+    releases
+        .first()
+        .expect("no releases found")
+        .get_x_y_z_version()
 }
 
-/// `GitHubRelease` represents the necessary fields to determine wadm and/or wasmCloud
-/// GitHub release (<https://developer.github.com/v3/repos/releases/>) object
-/// has new patch version available. The fields are based on the response from the
-/// response schema from the docs.
+/// A GitHub release object from the GitHub API with some helper methods
+///
+/// [`GitHubRelease`] represents the a subset of fields from a [GitHub Release API Response](https://developer.github.com/v3/repos/releases/)
+/// that are necessary to determine if a release of a tool (wadm, wasmCloud, NATS, etc.) has new version available.
+///
+/// It also provides some helper methods to check assist with these checks.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct GitHubRelease {
     pub tag_name: String,
@@ -91,21 +151,58 @@ impl PartialEq for GitHubRelease {
 }
 
 impl GitHubRelease {
+    /// Returns the version of the release if is a "main artifact" release. That is, if the tag name is a only a version
+    /// and not the name of a package/crate/etc. For example, `v1.0.0` will match, but `washboard-ui@1.4.0`) will not.
+    /// This is also subject to the checks in `get_published_version` to check if the release is a draft or prerelease.
     #[must_use]
-    pub fn get_main_artifact_release(&self) -> Option<semver::Version> {
-        match self.tag_name.strip_prefix('v') {
-            Some(v) => match semver::Version::parse(v) {
-                Ok(v) => {
-                    if self.draft || self.prerelease {
-                        None
-                    } else {
-                        Some(v)
-                    }
-                }
-                Err(_) => None,
-            },
-            None => None,
+    pub fn get_main_artifact_release(&self) -> Option<Version> {
+        // Main artifact should only have a version string as the tag name. e.g. v1.4.0
+        // This pattern is simple, but we're only using it as an initial check. The actual version is extracted by
+        // by `Version`.
+        self.get_published_version(Some(r"^v\d\.\d+\.\d+"))
+    }
+
+    /// Returns the version of the release if it is not a draft or prerelease. If the tag_pattern is provided, it will
+    /// filter the releases based on the tag pattern. If the tag pattern is not provided, it will return only releases
+    /// that have a tag name that is a valid semver version (i.e. `v1.2.3`)
+    pub fn get_published_version(&self, tag_pattern: Option<&str>) -> Option<Version> {
+        if self.draft || self.prerelease {
+            None
+        } else if let Some(tag_pattern) = tag_pattern {
+            if self.matches_tag_pattern(tag_pattern) {
+                self.get_x_y_z_version().ok()
+            } else {
+                None
+            }
+        } else {
+            self.get_x_y_z_version().ok()
         }
+    }
+
+    /// Returns the version of the release by parsing the tag name. If the tag name does not contain a valid semver
+    /// version, it will return `None`.
+    pub fn get_x_y_z_version(&self) -> Result<Version, Error> {
+        let re = Regex::new(r"\d+\.\d+\.\d+").unwrap();
+        let version = re
+            .find(self.tag_name.as_str())
+            .unwrap_or_else(|| panic!("failed to find x.y.z version in tag: {}", self.tag_name))
+            .as_str();
+        Version::parse(version).context("failed to parse version")
+    }
+
+    /// Returns `true` if the version passes a check using the constraint string when tested through [`VersionReq::parse`],
+    pub fn satisfies_constraint(&self, constraint_string: &str) -> bool {
+        let req = VersionReq::parse(constraint_string).unwrap_or_default();
+        let version = self.get_x_y_z_version().unwrap();
+
+        req.matches(&version)
+    }
+
+    /// Returns `true` if the tag name matches a [`Regex`] created from the provided `tag_pattern`.
+    pub fn matches_tag_pattern(&self, tag_pattern: &str) -> bool {
+        let re = Regex::new(tag_pattern)
+            .unwrap_or_else(|_| panic!("failed to create regex from tag pattern: {tag_pattern}"));
+        re.is_match(self.tag_name.as_str())
     }
 }
 
@@ -120,29 +217,29 @@ fn format_latest_releases_url(owner: &str, repo: &str, page: u32) -> String {
 async fn fetch_latest_releases(
     owner: &str,
     repo: &str,
-    latest_interested: &semver::Version,
+    latest_interested: &Version,
+    tag_pattern: Option<&str>,
 ) -> Result<Vec<GitHubRelease>, anyhow::Error> {
     let client = get_download_client_with_user_agent(VERSION_FETCHER_CLIENT_USER_AGENT)?;
-    let mut page = 0u32;
+    let mut page = 1u32; // GitHub page starts from 1
     let mut releases: Vec<GitHubRelease> = Vec::new();
     'fetch_loop: loop {
-        trace!(
+        debug!(
             "Fetching releases from GitHub starting at page: {} with batch {}",
-            page,
-            GITHUB_REQUEST_BATCH_SIZE
+            page, GITHUB_REQUEST_BATCH_SIZE
         );
         let batchreleases =
             get_release_batch(page, GITHUB_REQUEST_BATCH_SIZE, owner, repo, client.clone()).await?;
+        if batchreleases.is_empty() {
+            break 'fetch_loop;
+        }
         for release in &batchreleases {
-            if let Some(main_release) = release.get_main_artifact_release() {
-                if main_release == *latest_interested {
+            if let Some(version) = release.get_published_version(tag_pattern) {
+                if version == *latest_interested {
                     break 'fetch_loop;
                 }
             }
             releases.push(release.clone());
-        }
-        if batchreleases.is_empty() {
-            break 'fetch_loop;
         }
         page += GITHUB_REQUEST_BATCH_SIZE;
     }
@@ -287,7 +384,7 @@ mod tests {
         };
         let version = release.get_main_artifact_release();
         assert!(version.is_some());
-        assert_eq!(version.unwrap(), semver::Version::parse("0.4.0").unwrap());
+        assert_eq!(version.unwrap(), Version::parse("0.4.0").unwrap());
 
         let release_with_prefix = GitHubRelease {
             tag_name: "washboard-ui-v0.4.0".to_string(),
@@ -298,5 +395,99 @@ mod tests {
         };
         let version = release_with_prefix.get_main_artifact_release();
         assert!(version.is_none());
+    }
+
+    #[test]
+    fn test_semver_with_prefix() {
+        let release = GitHubRelease {
+            tag_name: "washboard-ui@v0.4.0".to_string(),
+            name: "washboard-ui@v0.4.0".to_string(),
+            published_at: Utc::now(),
+            draft: false,
+            prerelease: false,
+        };
+        let version = release.get_published_version(Some("washboard-ui"));
+        assert!(version.is_some());
+        assert_eq!(version.unwrap(), Version::parse("0.4.0").unwrap());
+    }
+
+    #[test]
+    fn test_github_release_is_not_draft_or_pre_release_with_tag_pattern() {
+        let release = GitHubRelease {
+            tag_name: "washboard-ui@v0.4.0".to_string(),
+            name: "washboard-ui@v0.4.0".to_string(),
+            published_at: Utc::now(),
+            draft: false,
+            prerelease: false,
+        };
+        assert!(release
+            .get_published_version(Some("washboard-ui"))
+            .is_some());
+
+        let release = GitHubRelease {
+            tag_name: "washboard-ui@v0.4.0".to_string(),
+            name: "washboard-ui@v0.4.0".to_string(),
+            published_at: Utc::now(),
+            draft: false,
+            prerelease: true,
+        };
+        assert!(release
+            .get_published_version(Some("washboard-ui"))
+            .is_none());
+
+        let release = GitHubRelease {
+            tag_name: "washboard-ui@v0.4.0".to_string(),
+            name: "washboard-ui@v0.4.0".to_string(),
+            published_at: Utc::now(),
+            draft: true,
+            prerelease: false,
+        };
+        assert!(release
+            .get_published_version(Some("washboard-ui"))
+            .is_none());
+    }
+
+    #[test]
+    fn test_github_release_is_newer() {
+        let release = GitHubRelease {
+            tag_name: "v0.4.0".to_string(),
+            name: "v0.4.0".to_string(),
+            published_at: Utc::now(),
+            draft: false,
+            prerelease: false,
+        };
+        assert!(release.satisfies_constraint("^0.4.0"));
+        assert!(release.satisfies_constraint(">0.3.0"));
+        assert!(!release.satisfies_constraint("^0.5.0"));
+    }
+
+    #[test]
+    fn test_github_release_is_newer_with_tag_pattern() {
+        let release = GitHubRelease {
+            tag_name: "washboard-ui@v0.4.0".to_string(),
+            name: "washboard-ui@v0.4.0".to_string(),
+            published_at: Utc::now(),
+            draft: false,
+            prerelease: false,
+        };
+        assert!(release.satisfies_constraint("^0.4.0"));
+        assert!(release.satisfies_constraint(">0.3.0"));
+        assert!(!release.satisfies_constraint("^0.5.0"));
+    }
+
+    #[test]
+    fn test_github_release_is_newer_with_tag_pattern_major() {
+        let release = GitHubRelease {
+            tag_name: "v1.7.10".to_string(),
+            name: "v1.7.10".to_string(),
+            published_at: Utc::now(),
+            draft: false,
+            prerelease: false,
+        };
+
+        assert!(release.satisfies_constraint("^1.7.5"));
+        assert!(release.satisfies_constraint("^1.7.0"));
+        assert!(!release.satisfies_constraint("^0.99.0"));
+        assert!(!release.satisfies_constraint("^2.5.0"));
     }
 }
