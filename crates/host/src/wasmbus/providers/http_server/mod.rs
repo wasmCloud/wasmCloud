@@ -17,12 +17,14 @@ use wasmcloud_provider_sdk::provider::{
 use wasmcloud_provider_sdk::ProviderConnection;
 
 pub(crate) mod address;
+pub(crate) mod host;
 pub(crate) mod path;
 
 /// Helper enum to allow for code reuse between different routing modes
 enum HttpServerProvider {
     Address(address::Provider),
     Path(path::Provider),
+    Host(host::Provider),
 }
 
 impl crate::wasmbus::Host {
@@ -58,6 +60,16 @@ impl crate::wasmbus::Host {
                     Arc::clone(&self.components),
                     Arc::from(host_id.as_str()),
                     Arc::clone(&self.host_config.lattice),
+                )
+                .await?,
+            ),
+            Some("host") => HttpServerProvider::Host(
+                host::Provider::new(
+                    default_address,
+                    Arc::clone(&self.components),
+                    Arc::from(host_id.as_str()),
+                    Arc::clone(&self.host_config.lattice),
+                    host_data.config.get("header").cloned(),
                 )
                 .await?,
             ),
@@ -102,6 +114,20 @@ impl crate::wasmbus::Host {
                 });
             }
             HttpServerProvider::Path(provider) => {
+                for ld in host_data.link_definitions {
+                    if let Err(e) = receive_link_for_provider(&provider, &conn, ld).await {
+                        error!(
+                            error = %e,
+                            "failed to initialize link during provider startup",
+                        );
+                    }
+                }
+
+                tasks.spawn(async move {
+                    handle_provider_commands(provider, &conn, quit_rx, quit_tx, commands).await
+                });
+            }
+            HttpServerProvider::Host(provider) => {
                 for ld in host_data.link_definitions {
                     if let Err(e) = receive_link_for_provider(&provider, &conn, ld).await {
                         error!(
