@@ -17,6 +17,8 @@ pub const DOWNLOAD_CLIENT_USER_AGENT: &str =
 pub const GITHUB_WASMCLOUD_ORG: &str = "wasmCloud";
 pub const GITHUB_WASMCLOUD_WASMCLOUD_REPO: &str = "wasmCloud";
 pub const GITHUB_WASMCLOUD_WADM_REPO: &str = "wadm";
+pub const GITHUB_WASMCLOUD_TS_REPO: &str = "typescript";
+pub const GITHUB_WASHBOARD_TAG_PREFIX: &str = "washboard-ui@";
 
 mod api;
 pub use api::*;
