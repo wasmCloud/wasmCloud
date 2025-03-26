@@ -150,7 +150,7 @@ impl From<NatsOpts> for NatsConfig {
     }
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Clone, Default)]
 pub struct WasmcloudOpts {
     /// wasmcloud host version to download, e.g. `v1.4.2`.
     ///

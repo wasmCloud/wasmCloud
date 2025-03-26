@@ -193,6 +193,9 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap
         .iter()
         .map(
             |labelpair| match labelpair.split('=').collect::<Vec<&str>>()[..] {
+                [k, _] if k.to_lowercase().starts_with("hostcore.") => {
+                    Err(anyhow!("hostcore.* labels cannot be set manually"))
+                }
                 [k, v] => Ok((k.to_string(), v.to_string())),
                 _ => Err(anyhow!(
                     "invalid label format `{labelpair}`. Expected `key=value`"
@@ -212,4 +215,24 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap
         host_config.insert(WASMCLOUD_ENABLE_IPV6.to_string(), "true".to_string());
     }
     Ok(host_config)
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+
+    use crate::cmd::up::WasmcloudOpts;
+    use crate::config::configure_host_env;
+
+    /// Ensure configuring the host env does not allow for hostcore labels
+    #[tokio::test]
+    async fn labels_no_hostcore() -> Result<()> {
+        assert!(configure_host_env(WasmcloudOpts {
+            label: Some(Vec::from(["hostcore.example=test".into()])),
+            ..Default::default()
+        })
+        .await
+        .is_err());
+        Ok(())
+    }
 }

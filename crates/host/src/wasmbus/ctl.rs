@@ -667,6 +667,10 @@ impl ControlInterfaceServer for Host {
         host_id: &str,
     ) -> anyhow::Result<CtlResponse<()>> {
         let key = request.key();
+        if key.to_lowercase().starts_with("hostcore.") {
+            bail!("hostcore.* labels cannot be set dynamically");
+        }
+
         let value = request.value();
         let mut labels = self.labels.write().await;
         match labels.entry(key.into()) {
