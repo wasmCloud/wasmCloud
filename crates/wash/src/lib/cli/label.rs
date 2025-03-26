@@ -57,6 +57,12 @@ pub async fn handle_label_host(cmd: LabelHostCommand) -> Result<CommandOutput> {
     let mut succeeded = true;
     let mut processed: Vec<(&str, &str)> = Vec::new();
     for (key, value) in &labels {
+        if key.to_lowercase().starts_with("hostcore.") {
+            error!("hostcore.* labels ('{key}') cannot be set manually");
+            succeeded = false;
+            break;
+        }
+
         let op = if cmd.delete {
             client
                 .delete_label(&host_id, key)
