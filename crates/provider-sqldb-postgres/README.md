@@ -4,12 +4,14 @@ This capability provider implements the [`wasmcloud:sqldb-postgres`][wasmcloud-s
 
 This provider handles concurrent component connections, and components which are linked to it should specify configuration at link time (see [the named configuration settings section](#named-configuration-settings) for more details.
 
-Want to read all the functionality included the interface? [Start from `provider.wit`](./wit/provider.wit) to read what this provider can do, and work your way to [`types.wit`](./wit/types.wit).
+Want to read all the functionality included the interface? [Start from `provider.wit`][provider-wit] to read what this provider can do, and work your way to [`types.wit`][types-wit].
 
 Note that connections are local to a single provider, so multiple providers running on the same lattice will _not_ share connections automatically.
 
 [postgres]: https://postgresql.org
 [wasmcloud-sqldb-postgres-wit]: https://github.com/vados-cosmonic/wit-wasmcloud-postgres
+[provider-wit]: https://github.com/wasmCloud/wasmCloud/blob/main/crates/provider-sqldb-postgres/wit/provider.wit
+[types-wit]: https://github.com/wasmCloud/wasmCloud/blob/main/crates/provider-sqldb-postgres/wit/types.wit
 
 ## 👟 Quickstart
 
