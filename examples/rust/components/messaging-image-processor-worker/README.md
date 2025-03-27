@@ -24,7 +24,7 @@ This WebAssembly component requires a few other pieces to function:
 - A `wasmcloud:blobstore` provider (ex. [`blobstore-fs`][provider-blobstore-fs], [`blobstore-s3`][provider-blobstore-s3], [`blobstore-azure`][blobstore-azure], or a custom one)
 - A `wasmcloud:messaging` provider (ex. [`messaging-nats`][provider-messaging-nats], [`messaging-kafka`][provider-messaging-kafka], or a custom one)
 
-If deploying with the [wasmCloud Application Deployment Manager (`wadm`)][wadm], you can use `wadm.yaml` to deploy these pieces automatically via the [included WADM manifest](./wadm.yaml) (i.e. by running `wash app deploy wadm.yaml`).
+If deploying with the [wasmCloud Application Deployment Manager (`wadm`)][wadm], you can use `wadm.yaml` to deploy these pieces automatically via the [included WADM manifest][wadm-yaml] (i.e. by running `wash app deploy wadm.yaml`).
 
 By default, the `blobstore-fs` and `messaging-nats` providers are used as they require no extra dependencies (ex. docker containers) to run infrastructure.
 
@@ -36,6 +36,7 @@ This component (the image processor) and the HTTP task manager component communi
 [provider-blobstore-s3]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/provider-blobstore-s3
 [provider-blobstore-azure]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/provider-blobstore-azure
 [wadm]: https://github.com/wasmCloud/wadm
+[wadm-yaml]: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/messaging-image-processor-worker/wadm.yaml
 
 ## Prerequisites
 
@@ -128,9 +129,11 @@ EOF
 ```
 
 > [!NOTE]
-> The task above uses the *default* image for the component, which is [`wasmcloud-logo.jpg`](./wasmcloud-logo.jpg) 
+> The task above uses the *default* image for the component, which is [`wasmcloud-logo.jpg`][wasmcloud-logo-jpg]
 
 You will receive the Job (task) ID as output to the task submission.
+
+[wasmcloud-logo-jpg]: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/messaging-image-processor-worker/wasmcloud-logo.jpg
 
 ### Send a message notifying the worker of the new job
 
@@ -143,7 +146,7 @@ An example of the JSON payload:
 ```
 
 > ![NOTE]
-> See the `ImageProcessingRequest` struct in [`src/processing.rs`](./src/processing.rs) for the complete schema.
+> See the `ImageProcessingRequest` struct in [`src/processing.rs`][processing-rs] for the complete schema.
 
 You can send the JSON payload via the [`nats` client binary][nats-client-binary] to trigger the component, on the configured NATS subject (or Kafka Topic):
 
@@ -154,6 +157,7 @@ nats publish images.processing '{ "job_id": "......"}'
 > [!NOTE]
 > You may encounter errors, and it is best to monitor the wasmCloud host output for errors reported from the provider or host.
 
+[processing-rs]: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/messaging-image-processor-worker/src/processing.rs
 
 ## Tests
 

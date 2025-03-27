@@ -5,8 +5,8 @@ This folder contains a WebAssembly component that makes use of:
 - The [`wasmcloud:postgres` WIT contract][contract]
 - The [`sqldb-postgres-provider`][provider] Capability Provider
 
-[contract]: ./wit/deps/postgres/provider.wit
-[provider]: ../../../../crates/provider-sqldb-postgres
+[contract]: https://github.com/wasmCloud/wasmCloud/blob/main/crates/provider-sqldb-postgres/wit/provider.wit
+[provider]: https://github.com/wasmCloud/wasmCloud/blob/main/crates/provider-sqldb-postgres
 
 ## 📦 Dependencies
 
@@ -63,7 +63,7 @@ Since configuration for Database clusters is usually sensitive information, we m
 
 ### Named configuration setup
 
-Set up a named configuration for components that link to the sqldb-postgres provider which is used from [`wadm.yaml`](./wadm.yaml):
+Set up a named configuration for components that link to the sqldb-postgres provider which is used from [`wadm.yaml`][wadm-yaml]:
 
 ```console
 wash config put default-postgres \
@@ -74,6 +74,8 @@ wash config put default-postgres \
     POSTGRES_DATABASE=postgres \
     POSTGRES_TLS_REQUIRED=false
 ```
+
+[wadm-yaml]: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/sqldb-postgres-query/wadm.yaml
 
 ### Deploy the example application with WADM
 

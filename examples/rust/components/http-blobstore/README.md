@@ -15,7 +15,7 @@ First, build and sign this component using `wash`:
 wash build
 ```
 
-Next you'll need a compatible blobstore capability provider. You can use the [blobstore-fs](../../../../crates/providers/blobstore-fs/) capability provider, simply navigate to that folder and run the following commands to build and package the provider:
+Next you'll need a compatible blobstore capability provider. You can use the [blobstore-fs capability provider][provider-blobstore-fs], simply navigate to that folder and run the following commands to build and package the provider:
 
 ```bash
 cargo build --release
@@ -26,6 +26,8 @@ wash par create \
     --binary ../target/release/blobstore_fs \
     --compress
 ```
+
+[provider-blobstore-fs]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/provider-blobstore-fs
 
 ## Running with wasmCloud
 
