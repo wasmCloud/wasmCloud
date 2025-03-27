@@ -4,7 +4,7 @@ use std::io::{stdout, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::bail;
-use clap::{self, Arg, Command, FromArgMatches, Parser, Subcommand};
+use clap::{self, Arg, ArgMatches, Command, FromArgMatches, Parser, Subcommand};
 use console::style;
 use crossterm::style::Stylize;
 use serde_json::json;
@@ -387,8 +387,10 @@ async fn main() {
         .init();
 
     let mut command = Cli::command();
+
     // Load plugins if they are not disabled
-    let plugins = if std::env::var("WASH_DISABLE_PLUGINS").is_err() {
+    let mut resolved_plugins = None;
+    if std::env::var("WASH_DISABLE_PLUGINS").is_err() {
         if let Some((plugins, dir)) = load_plugins().await {
             let mut plugin_paths = HashMap::new();
             for plugin in plugins.all_metadata().into_iter().cloned() {
@@ -444,74 +446,35 @@ async fn main() {
                         .collect::<Vec<_>>(),
                 );
             }
-            Some((plugins, dir, plugin_paths))
-        } else {
-            None
+            resolved_plugins = Some((plugins, dir, plugin_paths));
         }
-    } else {
-        None
-    };
+    }
 
     command.build();
+    let mut matches = command.get_matches_mut();
 
-    let matches = command.get_matches_mut();
-
-    let cli = match (Cli::from_arg_matches(&matches), plugins) {
-        (Ok(cli), _) => cli,
-        (Err(mut e), Some((mut plugins, plugin_dir, plugin_paths))) => {
-            let (id, sub_matches) = match matches.subcommand() {
-                Some(data) => data,
-                None => {
-                    e.exit();
-                }
-            };
-
-            let dir = match ensure_plugin_scratch_dir_exists(plugin_dir, id).await {
-                Ok(dir) => dir,
-                Err(e) => {
-                    eprintln!("Error creating plugin scratch directory: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            let mut plugin_dirs = Vec::new();
-
-            // Try fetching all path matches from args marked as paths
-            plugin_dirs.extend(
-                plugin_paths
-                    .get(id)
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|id| {
-                        sub_matches.get_one::<String>(&id).map(|path| DirMapping {
-                            host_path: path.into(),
-                            component_path: None,
-                        })
-                    }),
-            );
-
-            if plugins.metadata(id).is_none() {
-                e.insert(
-                    clap::error::ContextKind::InvalidSubcommand,
-                    clap::error::ContextValue::String("No plugin found for subcommand".to_string()),
-                );
-                e.exit();
-            }
-
-            // NOTE(thomastaylor312): This is a hack to get the raw args to pass to the plugin. I
-            // don't really love this, but we can't add nice help text and structured arguments to
-            // the CLI if we just get the raw args with `allow_external_subcommands(true)`. We can
-            // revisit this later with something if we need to. I did do some basic testing that
-            // even if you wrap wash in a shell script, it still works.
-            let args: Vec<String> = std::env::args().skip(1).collect();
-            if let Err(e) = plugins.run(id, dir, plugin_dirs, args).await {
-                eprintln!("Error running plugin: {}", e);
-                std::process::exit(1);
-            } else {
-                std::process::exit(0);
-            }
+    let cli = match (Cli::from_arg_matches(&matches), resolved_plugins) {
+        // Received a valid CLI command with no parsed known subcommand, but with a matched subcommand
+        // (this is usually a plugin call)
+        (Ok(Cli { command: None, .. }), Some((mut plugins, plugin_dir, plugin_paths)))
+            if matches.subcommand().is_some() =>
+        {
+            run_plugin(&mut matches, None, &mut plugins, &plugin_dir, plugin_paths).await
         }
+        // Received a valid CLI command
+        (Ok(cli), _) => cli,
+        // Failed to parse the CLI command, which *may* be a plugin execution
+        (Err(mut e), Some((mut plugins, plugin_dir, plugin_paths))) => {
+            run_plugin(
+                &mut matches,
+                Some(&mut e),
+                &mut plugins,
+                &plugin_dir,
+                plugin_paths,
+            )
+            .await
+        }
+        // Failed to parse the CLI command, with no possible plugins to call
         (Err(e), None) => {
             e.exit();
         }
@@ -682,6 +645,84 @@ async fn main() {
 
     let _ = stdout_buf.flush();
     std::process::exit(exit_code);
+}
+
+/// Run a plugin
+async fn run_plugin(
+    matches: &mut ArgMatches,
+    maybe_error: Option<&mut clap::Error>,
+    plugins: &mut SubcommandRunner,
+    plugin_dir: &PathBuf,
+    plugin_paths: HashMap<String, Vec<String>>,
+) -> ! {
+    let (id, sub_matches) = match matches.subcommand() {
+        Some(data) => data,
+        None => {
+            if let Some(e) = maybe_error {
+                e.exit();
+            } else {
+                clap::Error::raw(
+                    clap::error::ErrorKind::InvalidSubcommand,
+                    "failed to find named plugin",
+                )
+                .exit();
+            }
+        }
+    };
+
+    let dir = match ensure_plugin_scratch_dir_exists(plugin_dir, id).await {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("Error creating plugin scratch directory: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let mut plugin_dirs = Vec::new();
+
+    // Try fetching all path matches from args marked as paths
+    plugin_dirs.extend(
+        plugin_paths
+            .get(id)
+            .map(ToOwned::to_owned)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|id| {
+                sub_matches.get_one::<String>(&id).map(|path| DirMapping {
+                    host_path: path.into(),
+                    component_path: None,
+                })
+            }),
+    );
+
+    if plugins.metadata(id).is_none() {
+        if let Some(e) = maybe_error {
+            e.insert(
+                clap::error::ContextKind::InvalidSubcommand,
+                clap::error::ContextValue::String("No plugin found for subcommand".to_string()),
+            );
+            e.exit();
+        } else {
+            clap::Error::raw(
+                clap::error::ErrorKind::InvalidSubcommand,
+                "No plugin found for subcommand",
+            )
+            .exit();
+        }
+    }
+
+    // NOTE(thomastaylor312): This is a hack to get the raw args to pass to the plugin. I
+    // don't really love this, but we can't add nice help text and structured arguments to
+    // the CLI if we just get the raw args with `allow_external_subcommands(true)`. We can
+    // revisit this later with something if we need to. I did do some basic testing that
+    // even if you wrap wash in a shell script, it still works.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Err(e) = plugins.run(id, dir, plugin_dirs, args).await {
+        eprintln!("Error running plugin: {e}");
+        std::process::exit(1);
+    } else {
+        std::process::exit(0);
+    }
 }
 
 fn experimental_error_message(command: &str) -> anyhow::Result<CommandOutput> {
