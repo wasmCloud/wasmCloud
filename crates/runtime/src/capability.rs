@@ -55,10 +55,12 @@ mod wasmtime_bindings {
            "wasi:io": wasmtime_wasi::bindings::io,
            "wasi:keyvalue/store/bucket": keyvalue::Bucket,
            "wasmcloud:bus/lattice/call-target-interface": lattice::CallTargetInterface,
+           "wasmcloud:bus/error/error": crate::component::Error,
            "wasmcloud:messaging/types@0.3.0/client": messaging0_3_0::Client,
            "wasmcloud:messaging/types@0.3.0/message": messaging0_3_0::Message,
            "wasmcloud:messaging/request-reply@0.3.0/request-options": messaging0_3_0::RequestOptions,
            "wasmcloud:secrets/store/secret": secrets::Secret,
+           "wrpc:rpc": wrpc_runtime_wasmtime::bindings::rpc,
         },
     });
 }
@@ -125,7 +127,7 @@ impl std::fmt::Display for wasmtime_bindings::wasi::logging0_1_0_draft::logging:
 pub use unversioned_logging_bindings::wasi::logging as unversioned_logging;
 pub use wasmtime_bindings::wasi::{blobstore, keyvalue, logging0_1_0_draft as logging};
 pub use wasmtime_bindings::wasmcloud::{
-    bus1_0_0, bus2_0_0 as bus, bus2_0_0, identity, messaging0_2_0, messaging0_3_0 as messaging,
+    bus1_0_0, bus2_0_1 as bus, bus2_0_1, identity, messaging0_2_0, messaging0_3_0 as messaging,
     messaging0_3_0, secrets,
 };
 pub use wasmtime_bindings::Interfaces;

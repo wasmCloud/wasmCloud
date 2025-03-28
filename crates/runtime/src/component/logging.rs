@@ -58,10 +58,11 @@ impl<H: Handler> crate::capability::unversioned_logging::logging::Host for Ctx<H
         context: String,
         message: String,
     ) -> anyhow::Result<()> {
+        use crate::capability::unversioned_logging::logging::Level;
+
         self.attach_parent_context();
         // NOTE(thomastaylor312): I couldn't figure out the proper incantation for using `with` to
         // avoid this. If there is a better way, we can fix it
-        use crate::capability::unversioned_logging::logging::Level;
         let level = match level {
             Level::Trace => logging::Level::Trace,
             Level::Debug => logging::Level::Debug,
