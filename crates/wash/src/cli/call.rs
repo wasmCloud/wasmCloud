@@ -17,7 +17,10 @@ use crate::lib::config::DEFAULT_LATTICE;
 use wasmcloud_core::parse_wit_meta_from_operation;
 use wit_bindgen_wrpc::wrpc_transport::InvokeExt as _;
 
-use crate::util::{default_timeout_ms, extract_arg_value, msgpack_to_json_val};
+use crate::util::{
+    default_timeout, default_timeout_ms, extract_arg_value, msgpack_to_json_val,
+    parse_duration_fallback_ms,
+};
 
 const DEFAULT_HTTP_SCHEME: &str = "http";
 const DEFAULT_HTTP_HOST: &str = "localhost";
@@ -157,6 +160,7 @@ pub async fn handle_command(
                 &lattice,
                 &component_id,
                 opts.timeout_ms,
+                opts.timeout,
                 request,
                 http_response_extract_json,
             )
@@ -171,6 +175,7 @@ pub async fn handle_command(
                 &instance,
                 &name,
                 opts.timeout_ms,
+                opts.timeout,
             )
             .await
         }
@@ -235,12 +240,23 @@ pub struct ConnectionOpts {
 
     /// Timeout length for RPC, defaults to 2000 milliseconds
     #[clap(
-        short = 't',
         long = "rpc-timeout-ms",
         default_value_t = default_timeout_ms(),
-        env = "WASMCLOUD_RPC_TIMEOUT_MS"
+        env = "WASMCLOUD_RPC_TIMEOUT_MS",
+        hide = true,
+        conflicts_with = "rpc_timeout",
     )]
     timeout_ms: u64,
+
+    /// Timeout length for RPC, defaults to 2000 milliseconds
+    #[clap(
+        short = 't',
+        long = "rpc-timeout",
+        default_value = "2000ms",
+        value_parser = parse_duration_fallback_ms,
+        env = "WASMCLOUD_RPC_TIMEOUT",
+    )]
+    timeout: Duration,
 
     /// Name of the context to use for RPC connection, authentication, and cluster seed invocation signing
     #[clap(long = "context")]
@@ -368,6 +384,7 @@ async fn wrpc_invoke_http_handler(
     lattice: &str,
     component_id: &str,
     timeout_ms: u64,
+    _timeout: Duration,
     request: http::request::Request<String>,
     extract_json: bool,
 ) -> Result<CommandOutput> {
@@ -448,6 +465,7 @@ async fn wrpc_invoke_simple(
     instance: &str,
     function_name: &str,
     timeout_ms: u64,
+    _timeout: Duration,
 ) -> Result<CommandOutput> {
     let result = client
            .timeout(Duration::from_millis(timeout_ms))
@@ -535,7 +553,6 @@ async fn create_client_from_opts_wrpc(opts: &ConnectionOpts) -> Result<async_nat
         rpc_ca_file: tls_ca_file,
         ..
     } = opts;
-
     let nats_url = format!("{host}:{port}");
     use async_nats::ConnectOptions;
 
