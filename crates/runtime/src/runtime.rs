@@ -253,16 +253,16 @@ impl Runtime {
         match instance {
             "wasmcloud:messaging/producer@0.3.0"
             | "wasmcloud:messaging/request-reply@0.3.0"
-            | "wasmcloud:messaging/types@0.3.0"
-                if self.experimental_features.wasmcloud_messaging_v3 =>
-            {
-                true
+            | "wasmcloud:messaging/types@0.3.0" => {
+                self.experimental_features.wasmcloud_messaging_v3
             }
-            "wasmcloud:identity/store@0.0.1"
-                if self.experimental_features.workload_identity_interface =>
-            {
-                true
+            "wasmcloud:identity/store@0.0.1" => {
+                self.experimental_features.workload_identity_interface
             }
+            "wrpc:rpc/context@0.1.0"
+            | "wrpc:rpc/error@0.1.0"
+            | "wrpc:rpc/invoker@0.1.0"
+            | "wrpc:rpc/transport@0.1.0" => self.experimental_features.rpc_interface,
             _ => false,
         }
     }

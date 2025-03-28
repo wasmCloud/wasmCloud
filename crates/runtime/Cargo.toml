@@ -41,8 +41,11 @@ wasmtime = { workspace = true, features = [
     "coredump",
     "cranelift",
     "gc",
+    "gc-drc",
+    "gc-null",
     "parallel-compilation",
     "pooling-allocator",
+    "threads",
 ] }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }

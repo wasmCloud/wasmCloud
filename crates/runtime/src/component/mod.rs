@@ -1,16 +1,11 @@
+use core::fmt::{self, Debug};
 use core::future::Future;
-use core::ops::Deref;
+use core::ops::{Bound, Deref};
 use core::pin::Pin;
 use core::time::Duration;
-use core::{
-    fmt::{self, Debug},
-    ops::Bound,
-};
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use anyhow::{ensure, Context as _};
 use futures::{Stream, TryStreamExt as _};
@@ -35,7 +30,7 @@ use crate::capability::{self, wrpc};
 use crate::experimental::Features;
 use crate::Runtime;
 
-pub use bus::Bus;
+pub use bus::{Bus, Error};
 pub use bus1_0_0::Bus as Bus1_0_0;
 pub use config::Config;
 pub use identity::Identity;
@@ -192,6 +187,7 @@ where
     engine: wasmtime::Engine,
     claims: Option<jwt::Claims<jwt::Component>>,
     instance_pre: wasmtime::component::InstancePre<Ctx<H>>,
+    host_resources: Arc<HashMap<Box<str>, HashMap<Box<str>, (ResourceType, ResourceType)>>>,
     max_execution_time: Duration,
     experimental_features: Features,
 }
@@ -333,8 +329,10 @@ where
 
         capability::bus1_0_0::lattice::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasmcloud:bus/lattice@1.0.0`")?;
-        capability::bus2_0_0::lattice::add_to_linker(&mut linker, |ctx| ctx)
-            .context("failed to link `wasmcloud:bus/lattice@2.0.0`")?;
+        capability::bus2_0_1::lattice::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasmcloud:bus/lattice@2.0.1`")?;
+        capability::bus2_0_1::error::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasmcloud:bus/error@2.0.1`")?;
         capability::messaging0_2_0::types::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasmcloud:messaging/types@0.2.0`")?;
         capability::messaging0_2_0::consumer::add_to_linker(&mut linker, |ctx| ctx)
@@ -356,6 +354,11 @@ where
         if rt.experimental_features.workload_identity_interface {
             capability::identity::store::add_to_linker(&mut linker, |ctx| ctx)
                 .context("failed to link `wasmcloud:identity/store`")?;
+        }
+
+        // Only link wrpc:rpc if the RPC feature is enabled
+        if rt.experimental_features.rpc_interface {
+            rpc::add_to_linker(&mut linker).context("failed to link `wrpc:rpc`")?;
         }
 
         let ty = component.component_type();
@@ -515,6 +518,7 @@ where
             engine,
             claims,
             instance_pre,
+            host_resources,
             max_execution_time: rt.max_execution_time,
             experimental_features: rt.experimental_features,
         })
@@ -656,6 +660,7 @@ where
                                 store
                             },
                             pre,
+                            Arc::clone(&self.host_resources),
                             ty,
                             "",
                             name,
@@ -719,6 +724,7 @@ where
                                             store
                                         },
                                         pre,
+                                        Arc::clone(&self.host_resources),
                                         ty,
                                         instance_name,
                                         name,

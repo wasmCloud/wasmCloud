@@ -22,8 +22,8 @@ use wasmcloud_runtime::capability::{
     self, identity, messaging0_2_0, messaging0_3_0, secrets, CallTargetInterface,
 };
 use wasmcloud_runtime::component::{
-    Bus, Bus1_0_0, Config, Identity, InvocationErrorIntrospect, InvocationErrorKind, Logging,
-    Messaging0_2, Messaging0_3, MessagingClient0_3, MessagingGuestMessage0_3,
+    Bus, Bus1_0_0, Config, Error, Identity, InvocationErrorIntrospect, InvocationErrorKind,
+    Logging, Messaging0_2, Messaging0_3, MessagingClient0_3, MessagingGuestMessage0_3,
     MessagingHostMessage0_3, ReplacedInstanceTarget, Secrets,
 };
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -213,16 +213,19 @@ impl wrpc_transport::Invoke for Handler {
             .get(target_instance)
             .map_or("default", AsRef::as_ref);
 
-        let instances = links.get(link_name).with_context(|| {
-            warn!(
-                instance,
-                link_name,
-                ?target_instance,
-                ?self.component_id,
-                "no links with link name found for instance"
-            );
-            format!("link `{link_name}` not found for instance `{target_instance}`")
-        })?;
+        let instances = links
+            .get(link_name)
+            .with_context(|| {
+                warn!(
+                    instance,
+                    link_name,
+                    ?target_instance,
+                    ?self.component_id,
+                    "no links with link name found for instance"
+                );
+                format!("link `{link_name}` not found for instance `{target_instance}`")
+            })
+            .map_err(Error::LinkNotFound)?;
 
         // Determine the lattice target ID we should be sending to
         let id = instances.get(target_instance).with_context(||{
@@ -233,7 +236,7 @@ impl wrpc_transport::Invoke for Handler {
                 "component is not linked to a lattice target for the given instance"
             );
             format!("failed to call `{func}` in instance `{instance}` (failed to find a configured link with name `{link_name}` from component `{id}`, please check your configuration)", id = self.component_id)
-        })?;
+        }).map_err(Error::LinkNotFound)?;
 
         let mut headers = injector_to_headers(&TraceContextInjector::default_with_span());
         headers.insert("source-id", &*self.component_id);
@@ -243,10 +246,14 @@ impl wrpc_transport::Invoke for Handler {
             format!("{}.{id}", &self.lattice),
             None,
         )
-        .await?;
-        nats.timeout(self.invocation_timeout)
+        .await
+        .map_err(Error::Handler)?;
+        let (tx, rx) = nats
+            .timeout(self.invocation_timeout)
             .invoke(Some(headers), instance, func, params, paths)
             .await
+            .map_err(Error::Handler)?;
+        Ok((tx, rx))
     }
 }
 
