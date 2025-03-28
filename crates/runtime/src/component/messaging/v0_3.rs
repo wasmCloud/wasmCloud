@@ -179,7 +179,6 @@ pub enum Message {
 
 impl<H> types::Host for Ctx<H> where H: Handler {}
 
-#[async_trait]
 impl<H> types::HostClient for Ctx<H>
 where
     H: Handler,
@@ -228,7 +227,6 @@ where
     }
 }
 
-#[async_trait]
 impl<H> types::HostMessage for Ctx<H>
 where
     H: Handler,
@@ -397,7 +395,6 @@ where
     }
 }
 
-#[async_trait]
 impl<H> producer::Host for Ctx<H>
 where
     H: Handler,
@@ -419,7 +416,6 @@ where
     }
 }
 
-#[async_trait]
 impl<H> request_reply::Host for Ctx<H>
 where
     H: Handler,
@@ -475,7 +471,6 @@ where
     }
 }
 
-#[async_trait]
 impl<H> request_reply::HostRequestOptions for Ctx<H>
 where
     H: Handler,

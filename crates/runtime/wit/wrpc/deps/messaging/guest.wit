@@ -1,0 +1,9 @@
+interface incoming-handler {
+    use types.{message, error, topic};
+
+    /// Whenever this guest receives a message in one of the subscribed topics, the message is
+    /// sent to this handler. The guest is responsible for matching on the topic and handling the
+    /// message accordingly. Implementors (such as hosts) calling this interface should make their
+    /// own decisions on how to handle errors returned from this function.
+    handle: func(message: message) -> result<_, error>;
+}

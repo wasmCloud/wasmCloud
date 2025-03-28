@@ -37,7 +37,6 @@ pub trait Logging {
     ) -> anyhow::Result<()>;
 }
 
-#[async_trait]
 impl<H: Handler> logging::Host for Ctx<H> {
     #[instrument(skip_all)]
     async fn log(
@@ -51,7 +50,6 @@ impl<H: Handler> logging::Host for Ctx<H> {
     }
 }
 
-#[async_trait]
 impl<H: Handler> crate::capability::unversioned_logging::logging::Host for Ctx<H> {
     #[instrument(skip_all)]
     async fn log(

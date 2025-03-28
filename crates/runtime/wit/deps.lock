@@ -4,12 +4,6 @@ sha256 = "9a2c47932e2be8804c01ba2c43bbb55bce10ebe4a6735b53ecd0021810492001"
 sha512 = "e68bdc404e33271e850fa451a00f8ca3cf3ed5b3ea693cea7293122ddc66bc21868a8b43fdb9bcdf52ba769a2f621074039972618d322a4804e6d4dbd4f8e4d7"
 deps = ["io"]
 
-[blobstore-wrpc-0-1-0]
-url = "https://github.com/wrpc/blobstore/archive/v0.1.0.tar.gz"
-sha256 = "294ded60db2a447098e8485cf2e4e7027cff71957c22e5ff6b0245a3d84895de"
-sha512 = "acb14e316884e969a1620ca38aced4b97bba08fc33779386d093e5040151776b13ea04cb208ccf5cc4820df67f5ebe43a6dacaeeb40458c2cc4326a816d08e61"
-deps = ["io"]
-
 [cli]
 sha256 = "285865a31d777181b075f39e92bcfe59c89cd6bacce660be1b9a627646956258"
 sha512 = "da2622210a9e3eea82b99f1a5b8a44ce5443d009cb943f7bca0bf9cf4360829b289913d7ee727c011f0f72994ea7dc8e661ebcc0a6b34b587297d80cd9b3f7e8"
@@ -46,11 +40,6 @@ sha512 = "49184a1b0945a889abd52d25271172ed3dc2db6968fcdddb1bab7ee0081f4a3eeee097
 url = "https://github.com/WebAssembly/wasi-keyvalue/archive/219ea3612a53f1bf5b2d137551b22d0268fd3c58.tar.gz"
 sha256 = "d2de617fe31ec0abc6072f75f97dd22bf95b3231d5b3111471d73871df9081cd"
 sha512 = "6f0b4e44c684d760c54552e2bde9bc976e0a4f6525fc1d47acb98625e030847276436242f42a41f4da1bb9169fb2968c53d659d61af9b2f709f4eb6f9880e2c7"
-
-[keyvalue-wrpc]
-url = "https://github.com/wrpc/keyvalue/archive/v0.2.0-draft.tar.gz"
-sha256 = "384d54bed5a91e7673732138b9b35c85351c64abd4d359e196aaf11a97d663ed"
-sha512 = "feabffd5a6b10b1043342aa7378132f2f6aace06c1d0bb67492e8ec8c23db62b2cf357db51f1672f21bb6b20e3bf8952347ce6fc2e108955e66766574e8e7793"
 
 [logging]
 url = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"

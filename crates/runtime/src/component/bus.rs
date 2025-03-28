@@ -22,7 +22,6 @@ pub trait Bus {
     ) -> anyhow::Result<Result<(), String>>;
 }
 
-#[async_trait]
 impl<H: Handler> lattice::Host for Ctx<H> {
     #[instrument(level = "debug", skip_all)]
     async fn set_link_name(
@@ -43,7 +42,6 @@ impl<H: Handler> lattice::Host for Ctx<H> {
     }
 }
 
-#[async_trait]
 impl<H: Handler> lattice::HostCallTargetInterface for Ctx<H> {
     #[instrument(level = "debug", skip_all)]
     async fn new(
