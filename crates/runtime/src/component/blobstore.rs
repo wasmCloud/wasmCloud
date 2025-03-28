@@ -16,7 +16,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, instrument};
 use wasmtime::component::Resource;
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
-use wasmtime_wasi::{HostInputStream, HostOutputStream, StreamError, StreamResult, Subscribe};
+use wasmtime_wasi::{DynInputStream, DynOutputStream, Pollable, StreamError, StreamResult};
 use wrpc_interface_blobstore::bindings;
 
 use crate::capability::blobstore::blobstore::ContainerName;
@@ -99,7 +99,6 @@ pub struct StreamObjectNames {
     io: OptionFuture<future::Fuse<AbortOnDropJoinHandle<anyhow::Result<()>>>>,
 }
 
-#[async_trait]
 impl<H> container::HostContainer for Ctx<H>
 where
     H: Handler,
@@ -519,7 +518,6 @@ where
     }
 }
 
-#[async_trait]
 impl<H: Handler> container::HostStreamObjectNames for Ctx<H> {
     #[instrument(skip(self))]
     async fn drop(&mut self, names: Resource<StreamObjectNames>) -> anyhow::Result<()> {
@@ -610,7 +608,7 @@ enum OutputStream {
     Error(mpsc::error::SendError<()>),
 }
 
-impl HostOutputStream for OutputStream {
+impl wasmtime_wasi::OutputStream for OutputStream {
     fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
         match mem::take(self) {
             OutputStream::Corrupted => Err(StreamError::Trap(anyhow!(
@@ -653,7 +651,7 @@ impl HostOutputStream for OutputStream {
 }
 
 #[async_trait]
-impl Subscribe for OutputStream {
+impl Pollable for OutputStream {
     async fn ready(&mut self) {
         match mem::take(self) {
             OutputStream::Corrupted => {}
@@ -667,7 +665,6 @@ impl Subscribe for OutputStream {
     }
 }
 
-#[async_trait]
 impl<H: Handler> types::HostOutgoingValue for Ctx<H> {
     #[instrument(skip(self))]
     async fn drop(&mut self, outgoing_value: Resource<OutgoingValue>) -> anyhow::Result<()> {
@@ -694,7 +691,7 @@ impl<H: Handler> types::HostOutgoingValue for Ctx<H> {
     async fn outgoing_value_write_body(
         &mut self,
         outgoing_value: Resource<OutgoingValue>,
-    ) -> anyhow::Result<Result<Resource<Box<dyn HostOutputStream>>, ()>> {
+    ) -> anyhow::Result<Result<Resource<DynOutputStream>, ()>> {
         let OutgoingValue { guest, .. } = self
             .table
             .get_mut(&outgoing_value)
@@ -702,7 +699,7 @@ impl<H: Handler> types::HostOutgoingValue for Ctx<H> {
         let GuestOutgoingValue::Init(tx) = mem::take(guest) else {
             return Ok(Err(()));
         };
-        let stream: Box<dyn HostOutputStream> = Box::new(OutputStream::Pending(tx));
+        let stream: DynOutputStream = Box::new(OutputStream::Pending(tx));
         let stream = self
             .table
             .push_child(stream, &outgoing_value)
@@ -747,7 +744,7 @@ struct InputStream {
     closed: bool,
 }
 
-impl HostInputStream for InputStream {
+impl wasmtime_wasi::InputStream for InputStream {
     fn read(&mut self, size: usize) -> StreamResult<Bytes> {
         if let Some(err) = self.error.take() {
             return Err(err);
@@ -768,7 +765,7 @@ impl HostInputStream for InputStream {
 }
 
 #[async_trait]
-impl Subscribe for InputStream {
+impl Pollable for InputStream {
     async fn ready(&mut self) {
         if !self.ready.is_empty() || self.closed {
             return;
@@ -793,7 +790,6 @@ impl Subscribe for InputStream {
     }
 }
 
-#[async_trait]
 impl<H: Handler> types::HostIncomingValue for Ctx<H> {
     #[instrument(skip(self))]
     async fn drop(&mut self, incoming_value: Resource<IncomingValue>) -> anyhow::Result<()> {
@@ -844,7 +840,7 @@ impl<H: Handler> types::HostIncomingValue for Ctx<H> {
     async fn incoming_value_consume_async(
         &mut self,
         incoming_value: Resource<IncomingValue>,
-    ) -> anyhow::Result<Result<Resource<Box<dyn HostInputStream>>>> {
+    ) -> anyhow::Result<Result<Resource<DynInputStream>>> {
         self.attach_parent_context();
         let IncomingValue { stream, status, io } = self
             .table
@@ -873,7 +869,6 @@ impl<H: Handler> types::HostIncomingValue for Ctx<H> {
 
 impl<H: Handler> types::Host for Ctx<H> {}
 
-#[async_trait]
 impl<H> blobstore::Host for Ctx<H>
 where
     H: Handler,
@@ -1070,5 +1065,4 @@ where
     }
 }
 
-#[async_trait]
 impl<H> container::Host for Ctx<H> where H: Handler {}

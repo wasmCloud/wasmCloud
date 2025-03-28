@@ -15,7 +15,6 @@ pub trait Config {
     async fn get_all(&self) -> anyhow::Result<Result<Vec<(String, String)>, config::store::Error>>;
 }
 
-#[async_trait]
 impl<H: Handler> store::Host for Ctx<H> {
     #[instrument(skip(self))]
     async fn get(
@@ -44,7 +43,6 @@ impl From<config::store::Error> for config::runtime::ConfigError {
     }
 }
 
-#[async_trait]
 impl<H: Handler> runtime::Host for Ctx<H> {
     #[instrument(skip(self))]
     async fn get(

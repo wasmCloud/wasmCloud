@@ -89,6 +89,7 @@ mod config_legacy {
 /// wRPC interface bindings
 pub mod wrpc {
     wit_bindgen_wrpc::generate!({
+        path: "wit/wrpc",
         world: "wrpc-interfaces",
         with: {
             "wasi:blobstore/types@0.2.0-draft": wrpc_interface_blobstore::bindings::wasi::blobstore::types,
