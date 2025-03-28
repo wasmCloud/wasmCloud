@@ -18,7 +18,6 @@ pub trait Bus {
     async fn set_link_name(&self, link_name: String, interfaces: Vec<Arc<CallTargetInterface>>);
 }
 
-#[async_trait]
 impl<H: Handler> lattice::Host for Ctx<H> {
     #[instrument(level = "debug", skip_all)]
     async fn set_link_name(
@@ -38,7 +37,6 @@ impl<H: Handler> lattice::Host for Ctx<H> {
     }
 }
 
-#[async_trait]
 impl<H: Handler> lattice::HostCallTargetInterface for Ctx<H> {
     async fn new(
         &mut self,

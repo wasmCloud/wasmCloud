@@ -1,7 +1,6 @@
 use core::future::Future;
 
 use anyhow::Context as _;
-use async_trait::async_trait;
 use tracing::{info_span, instrument, Instrument as _};
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use wasmtime::Store;
@@ -39,7 +38,6 @@ pub trait Messaging {
 
 impl<H> types::Host for Ctx<H> where H: Handler {}
 
-#[async_trait]
 impl<H> consumer::Host for Ctx<H>
 where
     H: Handler,

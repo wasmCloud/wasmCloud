@@ -4,7 +4,6 @@ use crate::capability::keyvalue::{atomics, batch, store};
 use crate::capability::wrpc;
 
 use anyhow::Context;
-use async_trait::async_trait;
 use bytes::Bytes;
 use std::sync::Arc;
 use tracing::{debug, instrument, trace};
@@ -33,7 +32,6 @@ impl From<wrpc::wrpc::keyvalue::store::Error> for store::Error {
     }
 }
 
-#[async_trait]
 impl<H> atomics::Host for Ctx<H>
 where
     H: Handler,
@@ -62,7 +60,6 @@ where
     }
 }
 
-#[async_trait]
 impl<H> store::Host for Ctx<H>
 where
     H: Handler,
@@ -78,7 +75,6 @@ where
     }
 }
 
-#[async_trait]
 impl<H> batch::Host for Ctx<H>
 where
     H: Handler,
@@ -163,7 +159,6 @@ where
     }
 }
 
-#[async_trait]
 impl<H> store::HostBucket for Ctx<H>
 where
     H: Handler,
