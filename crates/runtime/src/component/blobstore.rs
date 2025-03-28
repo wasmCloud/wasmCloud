@@ -860,7 +860,7 @@ impl<H: Handler> types::HostIncomingValue for Ctx<H> {
         Ok(Ok(stream))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn size(&mut self, _incoming_value: Resource<IncomingValue>) -> anyhow::Result<u64> {
         self.attach_parent_context();
         bail!("size unknown")
