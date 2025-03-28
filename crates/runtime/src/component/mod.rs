@@ -1,8 +1,16 @@
-use core::fmt::{self, Debug};
 use core::future::Future;
 use core::ops::Deref;
 use core::pin::Pin;
 use core::time::Duration;
+use core::{
+    fmt::{self, Debug},
+    ops::Bound,
+};
+
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use anyhow::{ensure, Context as _};
 use futures::{Stream, TryStreamExt as _};
@@ -15,11 +23,12 @@ use wascap::wasm::extract_claims;
 use wasi_preview1_component_adapter_provider::{
     WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME, WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
 };
-use wasmtime::component::{types, Linker, ResourceTable, ResourceTableError};
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
+use wasmtime::component::{types, Linker, ResourceTable, ResourceTableError, ResourceType};
+use wasmtime_wasi::{IoView, WasiCtx, WasiCtxBuilder, WasiView};
 use wasmtime_wasi_http::WasiHttpCtx;
 use wrpc_runtime_wasmtime::{
-    collect_component_resources, link_item, ServeExt as _, SharedResourceTable, WrpcView,
+    collect_component_resource_exports, collect_component_resource_imports, link_item, rpc,
+    RemoteResource, ServeExt as _, SharedResourceTable, WrpcView,
 };
 
 use crate::capability::{self, wrpc};
@@ -351,7 +360,96 @@ where
 
         let ty = component.component_type();
         let mut guest_resources = Vec::new();
-        collect_component_resources(&engine, &ty, &mut guest_resources);
+        let mut host_resources = BTreeMap::new();
+        collect_component_resource_exports(&engine, &ty, &mut guest_resources);
+        collect_component_resource_imports(&engine, &ty, &mut host_resources);
+        let io_err_tys = host_resources
+            .range::<str, _>((
+                Bound::Included("wasi:io/error@0.2"),
+                Bound::Excluded("wasi:io/error@0.3"),
+            ))
+            .map(|(name, instance)| {
+                instance
+                    .get("error")
+                    .copied()
+                    .with_context(|| format!("{name} instance import missing `error` resource"))
+            })
+            .collect::<anyhow::Result<Box<[_]>>>()?;
+        let io_pollable_tys = host_resources
+            .range::<str, _>((
+                Bound::Included("wasi:io/poll@0.2"),
+                Bound::Excluded("wasi:io/poll@0.3"),
+            ))
+            .map(|(name, instance)| {
+                instance
+                    .get("pollable")
+                    .copied()
+                    .with_context(|| format!("{name} instance import missing `pollable` resource"))
+            })
+            .collect::<anyhow::Result<Box<[_]>>>()?;
+        let io_input_stream_tys = host_resources
+            .range::<str, _>((
+                Bound::Included("wasi:io/streams@0.2"),
+                Bound::Excluded("wasi:io/streams@0.3"),
+            ))
+            .map(|(name, instance)| {
+                instance.get("input-stream").copied().with_context(|| {
+                    format!("{name} instance import missing `input-stream` resource")
+                })
+            })
+            .collect::<anyhow::Result<Box<[_]>>>()?;
+        let io_output_stream_tys = host_resources
+            .range::<str, _>((
+                Bound::Included("wasi:io/streams@0.2"),
+                Bound::Excluded("wasi:io/streams@0.3"),
+            ))
+            .map(|(name, instance)| {
+                instance.get("output-stream").copied().with_context(|| {
+                    format!("{name} instance import missing `output-stream` resource")
+                })
+            })
+            .collect::<anyhow::Result<Box<[_]>>>()?;
+        let rpc_err_ty = host_resources
+            .get("wrpc:rpc/error@0.1.0")
+            .map(|instance| {
+                instance
+                    .get("error")
+                    .copied()
+                    .context("`wrpc:rpc/error@0.1.0` instance import missing `error` resource")
+            })
+            .transpose()?;
+        // TODO: This should include `wasi:http` resources
+        let host_resources = host_resources
+            .into_iter()
+            .map(|(name, instance)| {
+                let instance = instance
+                    .into_iter()
+                    .map(|(name, ty)| {
+                        let host_ty = match ty {
+                            ty if Some(ty) == rpc_err_ty => ResourceType::host::<rpc::Error>(),
+                            ty if io_err_tys.contains(&ty) => {
+                                ResourceType::host::<wasmtime_wasi::bindings::io::error::Error>()
+                            }
+                            ty if io_input_stream_tys.contains(&ty) => ResourceType::host::<
+                                wasmtime_wasi::bindings::io::streams::InputStream,
+                            >(
+                            ),
+                            ty if io_output_stream_tys.contains(&ty) => ResourceType::host::<
+                                wasmtime_wasi::bindings::io::streams::OutputStream,
+                            >(
+                            ),
+                            ty if io_pollable_tys.contains(&ty) => {
+                                ResourceType::host::<wasmtime_wasi::bindings::io::poll::Pollable>()
+                            }
+                            _ => ResourceType::host::<RemoteResource>(),
+                        };
+                        (name, (ty, host_ty))
+                    })
+                    .collect::<HashMap<_, _>>();
+                (name, instance)
+            })
+            .collect::<HashMap<_, _>>();
+        let host_resources = Arc::from(host_resources);
         if !guest_resources.is_empty() {
             warn!("exported component resources are not supported in wasmCloud runtime and will be ignored, use a provider instead to enable this functionality");
         }
@@ -400,8 +498,16 @@ where
                     Some(version),
                 )) if is_0_2(version, 0) => {}
                 _ if rt.skip_feature_gated_instance(name) => {}
-                _ => link_item(&engine, &mut linker.root(), [], ty, "", name, None)
-                    .context("failed to link item")?,
+                _ => link_item(
+                    &engine,
+                    &mut linker.root(),
+                    [],
+                    Arc::clone(&host_resources),
+                    ty,
+                    "",
+                    name,
+                )
+                .context("failed to link item")?,
             };
         }
         let instance_pre = linker.instantiate_pre(&component)?;
@@ -735,11 +841,13 @@ where
     parent_context: Option<opentelemetry::Context>,
 }
 
-impl<H: Handler> WasiView for Ctx<H> {
+impl<H: Handler> IoView for Ctx<H> {
     fn table(&mut self) -> &mut ResourceTable {
         &mut self.table
     }
+}
 
+impl<H: Handler> WasiView for Ctx<H> {
     fn ctx(&mut self) -> &mut WasiCtx {
         &mut self.wasi
     }
@@ -747,6 +855,10 @@ impl<H: Handler> WasiView for Ctx<H> {
 
 impl<H: Handler> WrpcView for Ctx<H> {
     type Invoke = H;
+
+    fn context(&self) -> H::Context {
+        None
+    }
 
     fn client(&self) -> &H {
         &self.handler

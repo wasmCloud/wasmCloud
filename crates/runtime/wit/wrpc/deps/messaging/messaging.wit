@@ -1,0 +1,29 @@
+package wasmcloud:messaging@0.3.0;
+
+/// The `imports` world defines the interfaces that the component will import from the host.
+/// It includes the `producer` interface for sending messages.
+world imports {
+  import producer;
+}
+
+/// The `imports-request-reply` world extends `imports` by including the `request-reply` interface.
+/// This allows the component to perform request/reply messaging patterns.
+world imports-request-reply {
+  include imports;
+  import request-reply;
+}
+
+/// The `messaging-request-reply` world combines `imports-request-reply` with the `incoming-handler`
+/// export. This setup allows the host to interact with the component for both sending messages and
+/// handling incoming messages with request/reply capabilities.
+world messaging-request-reply {
+  include imports-request-reply;
+  export incoming-handler;
+}
+
+/// The `messaging-core` world includes the basic `imports` and exports the `incoming-handler`,
+/// enabling the component to handle incoming messages without request/reply capabilities.
+world messaging-core {
+  include imports;
+  export incoming-handler;
+}

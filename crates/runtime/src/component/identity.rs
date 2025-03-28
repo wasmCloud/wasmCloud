@@ -15,7 +15,6 @@ pub trait Identity {
     ) -> anyhow::Result<Result<Option<String>, identity::store::Error>>;
 }
 
-#[async_trait]
 impl<H: Handler> store::Host for Ctx<H> {
     #[instrument(skip(self))]
     async fn get(
