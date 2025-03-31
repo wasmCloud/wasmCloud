@@ -37,6 +37,8 @@ use crate::wasmbus::{config::ConfigBundle, Annotations};
 
 use super::Host;
 
+// Add internal provider modules to the host
+mod http_client;
 mod http_server;
 mod messaging_nats;
 
