@@ -1,10 +1,10 @@
 name = "HTTP Client"
 language = "rust"
-version = "0.13.1"
+version = "0.14.0"
 type = "provider"
 
 [rust]
-target_dir = "../../../"
+target_dir = "../../../target"
 
 [provider]
 bin_name = "http-client-provider"

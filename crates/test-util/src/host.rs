@@ -100,6 +100,7 @@ impl WasmCloudTestHost {
         let host_key = Arc::new(host_key.unwrap_or(KeyPair::new_server()));
         let experimental_features = experimental_features.unwrap_or_else(|| {
             Features::new()
+                .enable_builtin_http_client()
                 .enable_builtin_http_server()
                 .enable_builtin_messaging_nats()
                 .enable_wasmcloud_messaging_v3()
@@ -154,39 +155,12 @@ impl WasmCloudTestHost {
         };
 
         let (host_builder, ctl_server) = nats_builder.build(host_config).await?;
-
-        let mut host_started_sub = nats_client
-            .subscribe(format!("wasmbus.evt.{lattice_name}.host_started"))
-            .await
-            .context("failed to subscribe for host started event")?;
         let (host, shutdown_hook) = host_builder
             .build()
             .await
             .context("failed to initialize host")?;
 
         let ctl_server_handle = ctl_server.start(host.clone()).await?;
-
-        let host_public_key = host_key.public_key();
-        tokio::time::timeout(Duration::from_secs(30), async move {
-            while let Some(msg) = host_started_sub.next().await {
-                let evt_value: serde_json::Value = serde_json::from_slice(&msg.payload)
-                    .context("failed to deserialize host started event")?;
-                // TODO(#4408): Use strongly typed host_started event here
-                if let Some(target) = evt_value.as_object() {
-                    if let Some(data) = target.get("data") {
-                        if let Some(host_id) = data.get("id") {
-                            if *host_id == *host_public_key {
-                                return Ok(());
-                            }
-                        }
-                    }
-                }
-            }
-
-            Err(anyhow!("failed to receive host started event"))
-        })
-        .await
-        .context("failed to wait for host to start")?;
 
         Ok(Self {
             cluster_key,
