@@ -17,6 +17,7 @@ default = [
     "rustls-native-certs",
     "tokio-rustls",
     "webpki-roots",
+    "http-client-common"
 ]
 hyper-rustls = ["dep:hyper-rustls", "dep:hyper-util"]
 tokio-rustls = ["dep:tokio-rustls"]
@@ -30,12 +31,25 @@ http = [
     "dep:thiserror",
 ]
 messaging = ["dep:serde_json"]
+http-client-common = [
+    "hyper-rustls",
+    "tokio-rustls",
+    "webpki-roots",
+    "dep:http-body",
+    "dep:http-body-util",
+    "dep:hyper"
+]
 
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
 async-nats = { workspace = true, features = ["ring"] }
 base64 = { workspace = true, optional = true }
+bytes = { workspace = true }
+futures = { workspace = true, features = ["async-await", "std"] }
 http = { workspace = true, optional = true }
+http-body = { workspace = true, optional = true }
+http-body-util = { workspace = true, optional = true }
+hyper = { workspace = true, optional = true }
 hyper-rustls = { workspace = true, features = [
     "http2",
     "ring",
@@ -60,4 +74,9 @@ tracing = { workspace = true }
 unicase = { workspace = true, optional = true }
 url = { workspace = true }
 wascap = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
 webpki-roots = { workspace = true, optional = true }
+wrpc-interface-http = { workspace = true }
+
+[dev-dependencies]
+test-log = { workspace = true, features = ["color", "log", "trace", "unstable"] }

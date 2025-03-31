@@ -35,6 +35,8 @@ use crate::wasmbus::{event, injector_to_headers};
 
 use super::Host;
 
+// Add internal provider modules to the host
+mod http_client;
 mod http_server;
 mod messaging_nats;
 

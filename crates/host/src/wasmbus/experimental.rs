@@ -4,6 +4,9 @@ use tracing::warn;
 /// by default and must be explicitly enabled.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Features {
+    /// Enable the built-in HTTP client capability provider
+    /// that can be started with the reference wasmcloud+builtin://http-client
+    pub(crate) builtin_http_client: bool,
     /// Enable the built-in HTTP server capability provider
     /// that can be started with the reference wasmcloud+builtin://http-server
     pub(crate) builtin_http_server: bool,
@@ -25,6 +28,12 @@ impl Features {
     /// Create a new set of feature flags with all features disabled
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Enable the built-in HTTP client capability provider
+    pub fn enable_builtin_http_client(mut self) -> Self {
+        self.builtin_http_client = true;
+        self
     }
 
     /// Enable the built-in HTTP server capability provider
@@ -70,6 +79,7 @@ impl std::ops::BitOr for Features {
 
     fn bitor(self, rhs: Self) -> Self::Output {
         Self {
+            builtin_http_client: self.builtin_http_client || rhs.builtin_http_client,
             builtin_http_server: self.builtin_http_server || rhs.builtin_http_server,
             builtin_messaging_nats: self.builtin_messaging_nats || rhs.builtin_messaging_nats,
             wasmcloud_messaging_v3: self.wasmcloud_messaging_v3 || rhs.wasmcloud_messaging_v3,
@@ -94,6 +104,9 @@ impl std::iter::Sum for Features {
 impl From<&str> for Features {
     fn from(s: &str) -> Self {
         match &*s.to_ascii_lowercase() {
+            "builtin-http-client" | "builtin_http_client" => {
+                Self::new().enable_builtin_http_client()
+            }
             "builtin-http-server" | "builtin_http_server" => {
                 Self::new().enable_builtin_http_server()
             }
