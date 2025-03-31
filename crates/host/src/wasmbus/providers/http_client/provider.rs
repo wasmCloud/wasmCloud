@@ -1,38 +1,33 @@
-use core::convert::Infallible;
-use core::pin::pin;
-use core::time::Duration;
-
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use anyhow::Context as _;
 use bytes::Bytes;
+use core::convert::Infallible;
+use core::time::Duration;
 use futures::StreamExt as _;
 use http::uri::Scheme;
 use http_body::Frame;
 use http_body_util::{BodyExt as _, StreamBody};
+use std::sync::Arc;
+use tokio::spawn;
 use tokio::task::JoinSet;
-use tokio::time::sleep;
-use tokio::{select, spawn};
 use tracing::{debug, error, info, trace, warn, Instrument as _};
+use wasmcloud_provider_sdk::Context;
 
-use wasmcloud_provider_sdk::core::tls;
-use wasmcloud_provider_sdk::{
-    get_connection, initialize_observability, load_host_data, propagate_trace_for_ctx,
-    run_provider, Context, Provider,
-};
 use wrpc_interface_http::{
     bindings::wrpc::http::types::{ErrorCode, RequestOptions},
-    split_outgoing_http_body, try_fields_to_header_map, ServeHttp, ServeOutgoingHandlerHttp,
+    split_outgoing_http_body, try_fields_to_header_map, ServeOutgoingHandlerHttp,
 };
 
-// Import shared connection pooling infrastructure from the internal provider
+// Import shared connection pooling infrastructure
 use wasmcloud_core::http_client::{
     hyper_request_error, Cacheable, ConnPool, DEFAULT_CONNECT_TIMEOUT, DEFAULT_FIRST_BYTE_TIMEOUT,
-    DEFAULT_IDLE_TIMEOUT, DEFAULT_USER_AGENT, LOAD_NATIVE_CERTS, LOAD_WEBPKI_CERTS, SSL_CERTS_FILE,
+    DEFAULT_USER_AGENT,
 };
 
-/// HTTP client capability provider implementation struct
+/// Internal HTTP client provider implementation that handles outgoing HTTP requests
+/// from components. Maintains connection pools for both HTTP and HTTPS connections
+/// and manages TLS connections for secure requests.
+///
+/// This provider is built into the wasmCloud host and provides HTTP client capabilities
+/// to components without requiring an external provider.
 #[derive(Clone)]
 pub struct HttpClientProvider {
     /// TLS connector for establishing secure HTTPS connections
@@ -44,122 +39,31 @@ pub struct HttpClientProvider {
     tasks: Arc<JoinSet<()>>,
 }
 
-pub async fn run() -> anyhow::Result<()> {
-    info!("Starting HTTP client provider");
-    initialize_observability!(
-        "http-client-provider",
-        std::env::var_os("PROVIDER_HTTP_CLIENT_FLAMEGRAPH_PATH")
-    );
-
-    let host_data = load_host_data()?;
-    let provider = HttpClientProvider::new(&host_data.config, DEFAULT_IDLE_TIMEOUT).await?;
-
-    debug!("Initializing provider runtime");
-    let shutdown = run_provider(provider.clone(), "http-client-provider")
-        .await
-        .context("failed to run provider")?;
-
-    let connection = get_connection();
-    let wrpc = connection
-        .get_wrpc_client(connection.provider_key())
-        .await?;
-
-    debug!("Setting up wrpc interface");
-    let [(_, _, mut invocations)] =
-        wrpc_interface_http::bindings::exports::wrpc::http::outgoing_handler::serve_interface(
-            &wrpc,
-            ServeHttp(provider),
-        )
-        .await
-        .context("failed to serve exports")?;
-
-    info!("HTTP client provider ready to handle requests");
-    let mut shutdown = pin!(shutdown);
-    let mut tasks = JoinSet::new();
-
-    loop {
-        select! {
-            Some(res) = invocations.next() => {
-                match res {
-                    Ok(fut) => {
-                        tasks.spawn(async move {
-                            if let Err(err) = fut.await {
-                                warn!(?err, "failed to serve invocation");
-                            }
-                        });
-                    },
-                    Err(err) => {
-                        warn!(?err, "failed to accept invocation");
-                    }
-                }
-            },
-            () = &mut shutdown => {
-                info!("Received shutdown signal");
-                return Ok(())
-            }
-        }
-    }
-}
-
 impl HttpClientProvider {
-    pub async fn new(
-        config: &HashMap<String, String>,
+    /// Creates a new HTTP client provider with the specified configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `tls` - TLS connector for HTTPS connections
+    /// * `idle_timeout` - Duration after which idle connections are closed
+    ///
+    /// # Returns
+    ///
+    /// A new HTTP client provider or an error if initialization fails
+    pub(crate) async fn new(
+        tls: tokio_rustls::TlsConnector,
         idle_timeout: Duration,
     ) -> anyhow::Result<Self> {
-        debug!("Creating new HTTP client provider");
+        debug!(
+            target: "http_client::handle",
+            "Creating new HTTP client provider"
+        );
 
-        // Initialize TLS configuration
-        let tls = if config.is_empty() {
-            debug!("Using default TLS connector");
-            tls::DEFAULT_RUSTLS_CONNECTOR.clone()
-        } else {
-            debug!("Configuring custom TLS connector");
-            let mut ca = rustls::RootCertStore::empty();
-
-            // Load native certificates
-            if config
-                .get(LOAD_NATIVE_CERTS)
-                .map(|v| v.eq_ignore_ascii_case("true"))
-                .unwrap_or(true)
-            {
-                let (added, ignored) =
-                    ca.add_parsable_certificates(tls::NATIVE_ROOTS.iter().cloned());
-                debug!(added, ignored, "loaded native root certificate store");
-            }
-
-            // Load Mozilla trusted root certificates
-            if config
-                .get(LOAD_WEBPKI_CERTS)
-                .map(|v| v.eq_ignore_ascii_case("true"))
-                .unwrap_or(true)
-            {
-                ca.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-                debug!("loaded webpki root certificate store");
-            }
-
-            // Load root certificates from a file
-            if let Some(file_path) = config.get(SSL_CERTS_FILE) {
-                let f = std::fs::File::open(file_path)?;
-                let mut reader = std::io::BufReader::new(f);
-                let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
-                let (added, ignored) = ca.add_parsable_certificates(certs);
-                debug!(
-                    added,
-                    ignored, "added additional root certificates from file"
-                );
-            }
-            tokio_rustls::TlsConnector::from(Arc::new(
-                rustls::ClientConfig::builder()
-                    .with_root_certificates(ca)
-                    .with_no_client_auth(),
-            ))
-        };
-
-        // Initialize connection pool and eviction task
-        let conns = ConnPool::default();
+        let conns = ConnPool::<wrpc_interface_http::HttpBody>::default();
         let mut tasks = JoinSet::new();
 
         debug!(
+            target: "http_client::handle",
             "Starting connection eviction task with timeout: {:?}",
             idle_timeout
         );
@@ -167,23 +71,67 @@ impl HttpClientProvider {
             let conns = conns.clone();
             async move {
                 loop {
-                    sleep(idle_timeout).await;
+                    tokio::time::sleep(idle_timeout).await;
                     trace!("Evicting idle connections");
                     conns.evict(idle_timeout).await;
                 }
             }
         });
 
-        debug!("HTTP client provider initialization complete");
-        Ok(Self {
+        let provider = Self {
             tls,
             conns,
             tasks: Arc::new(tasks),
-        })
+        };
+
+        debug!(
+            target: "http_client::handle",
+            "HTTP client provider created successfully"
+        );
+        Ok(provider)
     }
 }
 
+// Leverages the default implementation of the `wasmcloud_provider_sdk::Provider` trait.
+/// This trait is required by the wasmCloud runtime to interact with the provider.
+impl wasmcloud_provider_sdk::Provider for HttpClientProvider {
+    /// Provider should perform any operations needed for a new link,
+    /// including setting up per-component resources, and checking authorization.
+    /// If the link is allowed, return true, otherwise return false to deny the link.
+    async fn receive_link_config_as_target(
+        &self,
+        link_config: wasmcloud_provider_sdk::LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
+        debug!(
+            target: "http_client::handle",
+            target_id = %link_config.target_id,
+            source_id = %link_config.source_id,
+            link_name = %link_config.link_name,
+            wit_namespace = %link_config.wit_metadata.0,
+            wit_package = %link_config.wit_metadata.1,
+            interfaces = ?link_config.wit_metadata.2,
+            "Received link config as target"
+        );
+        Ok(())
+    }
+}
+
+/// `ServeOutgoingHandlerHttp` trait implementation for the HTTP client provider.
+///
+/// This trait is implemented for the HTTP client provider to handle outgoing HTTP requests.
+/// It provides a method to handle HTTP requests with optional context and request options.
 impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
+    /// Handles an outgoing HTTP request with optional context and request options.
+    ///
+    /// # Arguments
+    ///
+    /// * `cx` - Optional context for the request
+    /// * `request` - The HTTP request to handle
+    /// * `options` - Optional request options
+    ///
+    /// # Returns
+    ///
+    /// A result indicating the success or failure of the operation
     #[tracing::instrument(level = "debug", skip_all)]
     async fn handle(
         &self,
@@ -196,15 +144,24 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
             ErrorCode,
         >,
     > {
+        // Extract tracing context if available
+        if let Some(ctx) = &cx {
+            if let Some(traceparent) = ctx.tracing.get("traceparent") {
+                // Add traceparent to request headers to propagate tracing context
+                request.headers_mut().insert(
+                    "traceparent",
+                    http::HeaderValue::from_str(traceparent)
+                        .map_err(|e| ErrorCode::InternalError(Some(e.to_string())))
+                        .expect("Failed to propagate trace context"),
+                );
+            }
+        }
+
         info!(
             method = %request.method(),
             uri = %request.uri(),
             "Handling outgoing HTTP request"
         );
-
-        propagate_trace_for_ctx!(cx);
-        wasmcloud_provider_sdk::wasmcloud_tracing::http::HeaderInjector(request.headers_mut())
-            .inject_context();
 
         debug!(headers = ?request.headers(), "Request headers");
 
@@ -361,14 +318,12 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
     }
 }
 
-impl Provider for HttpClientProvider {}
-
 #[cfg(test)]
 mod tests {
     use core::net::{Ipv4Addr, SocketAddr};
     use core::sync::atomic::{AtomicUsize, Ordering};
 
-    use std::collections::HashMap;
+    use std::time::Duration;
 
     use anyhow::{ensure, Context as _};
     use bytes::Bytes;
@@ -379,6 +334,8 @@ mod tests {
     use tracing::info;
 
     use super::*;
+    use wasmcloud_core::http_client::DEFAULT_IDLE_TIMEOUT;
+    use wasmcloud_provider_sdk::core::tls::DEFAULT_RUSTLS_CONNECTOR;
     use wrpc_interface_http::HttpBody;
 
     const N: usize = 20;
@@ -432,7 +389,8 @@ mod tests {
             },
             async {
                 let provider =
-                    HttpClientProvider::new(&HashMap::default(), DEFAULT_IDLE_TIMEOUT).await?;
+                    HttpClientProvider::new(DEFAULT_RUSTLS_CONNECTOR.clone(), DEFAULT_IDLE_TIMEOUT)
+                        .await?;
                 for i in 0..N {
                     info!(i, "sending request...");
                     let res =
@@ -469,7 +427,8 @@ mod tests {
     async fn test_concurrent_conn() -> anyhow::Result<()> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let addr = listener.local_addr()?;
-        let provider = HttpClientProvider::new(&HashMap::default(), DEFAULT_IDLE_TIMEOUT).await?;
+        let provider =
+            HttpClientProvider::new(DEFAULT_RUSTLS_CONNECTOR.clone(), DEFAULT_IDLE_TIMEOUT).await?;
         let mut clt = JoinSet::new();
         for i in 0..N {
             clt.spawn({
@@ -524,7 +483,8 @@ mod tests {
     async fn test_http_error_handling() -> anyhow::Result<()> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let addr = listener.local_addr()?;
-        let provider = HttpClientProvider::new(&HashMap::default(), DEFAULT_IDLE_TIMEOUT).await?;
+        let provider =
+            HttpClientProvider::new(DEFAULT_RUSTLS_CONNECTOR.clone(), DEFAULT_IDLE_TIMEOUT).await?;
         let request = new_request(addr);
 
         // Spawn server that returns error responses
