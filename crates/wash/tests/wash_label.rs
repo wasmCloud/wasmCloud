@@ -43,20 +43,19 @@ async fn integration_label_host_serial() -> Result<()> {
 async fn integration_label_host_no_hostcore_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
-    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+    let output = wash_instance
+        .wash_cmd()
         .args([
             "label",
             &wash_instance.host_id,
             "hostcore.example=test",
             "--output",
             "json",
-            "--ctl-port",
-            &wash_instance.nats_port.to_string(),
         ])
         .kill_on_drop(true)
         .output()
         .await
-        .context("failed to execute wash label")?;
+        .context("setting wash label")?;
 
     let cmd_output: LabelHostCommandOutput = serde_json::from_slice(&output.stdout)?;
     assert!(cmd_output.success, "command returned success");
