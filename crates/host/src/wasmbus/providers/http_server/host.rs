@@ -3,7 +3,7 @@ use core::net::SocketAddr;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{bail, Context as _};
+use anyhow::{bail, Context as _, Result};
 use http::header::HOST;
 use http::uri::Scheme;
 use http::Uri;
@@ -45,13 +45,13 @@ pub(crate) struct Provider {
 // Implementations of put and delete link are done in the `impl Provider` block to aid in testing
 impl wasmcloud_provider_sdk::Provider for Provider {
     #[instrument(level = "debug", skip_all)]
-    async fn receive_link_config_as_source(&self, link: LinkConfig<'_>) -> anyhow::Result<()> {
+    async fn receive_link_config_as_source(&self, link: LinkConfig<'_>) -> Result<()> {
         self.put_link(link.target_id, link.link_name, link.config)
             .await
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> Result<()> {
         self.delete_link(
             info.get_source_id(),
             info.get_target_id(),
@@ -68,7 +68,7 @@ impl Provider {
         target_id: &str,
         link_name: &str,
         config: &HashMap<String, String>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let Some(host) = config.get("host") else {
             error!(
                 ?config,
@@ -88,7 +88,7 @@ impl Provider {
             if router
                 .components
                 .get(&key)
-                .map(|val| **val != host)
+                .map(|val| **val != *host)
                 .unwrap_or(false)
             {
                 // When we can return errors from links, tell the host this was invalid
@@ -117,12 +117,7 @@ impl Provider {
     }
 
     #[instrument(level = "debug", skip(self))]
-    async fn delete_link(
-        &self,
-        source_id: &str,
-        target_id: &str,
-        link_name: &str,
-    ) -> anyhow::Result<()> {
+    async fn delete_link(&self, source_id: &str, target_id: &str, link_name: &str) -> Result<()> {
         debug!(
             source = source_id,
             target = target_id,
@@ -149,7 +144,7 @@ impl Provider {
         lattice_id: Arc<str>,
         host_id: Arc<str>,
         host_header: Option<String>,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self> {
         let host_router = Arc::new(RwLock::new(Router {
             hosts: HashMap::new(),
             components: HashMap::new(),
@@ -182,36 +177,12 @@ impl Provider {
                     let Some(host_header) = headers.get(host_router.read().await.header.as_str())
                     else {
                         warn!("received request with no host header");
-                        return anyhow::Ok(
-                            http::Response::builder()
-                                .status(http::StatusCode::BAD_REQUEST)
-                                .body(wasmtime_wasi_http::body::HyperOutgoingBody::new(
-                                    BoxBody::new(
-                                        http_body_util::Full::new(bytes::Bytes::from(
-                                            "missing host header",
-                                        ))
-                                        .map_err(|_| ErrorCode::InternalError(None)),
-                                    ),
-                                ))
-                                .context("failed to construct missing host error response")?,
-                        );
+                        return build_bad_request_error("missing host header");
                     };
 
                     let Ok(lookup_host) = host_header.to_str() else {
                         warn!("received request with invalid host header");
-                        return anyhow::Ok(
-                            http::Response::builder()
-                                .status(http::StatusCode::BAD_REQUEST)
-                                .body(wasmtime_wasi_http::body::HyperOutgoingBody::new(
-                                    BoxBody::new(
-                                        http_body_util::Full::new(bytes::Bytes::from(
-                                            "invalid host header",
-                                        ))
-                                        .map_err(|_| ErrorCode::InternalError(None)),
-                                    ),
-                                ))
-                                .context("failed to construct missing host error response")?,
-                        );
+                        return build_bad_request_error("invalid host header");
                     };
 
                     // TODO(#3705): Propagate trace context from headers
@@ -221,19 +192,15 @@ impl Provider {
                             let router = host_router.read().await;
                             let Some(component_id) = router.hosts.get(lookup_host) else {
                                 warn!(host = lookup_host, "received request for unregistered host");
-                                return anyhow::Ok(
-                                    http::Response::builder()
-                                        .status(404)
-                                        .body(wasmtime_wasi_http::body::HyperOutgoingBody::new(
-                                            BoxBody::new(
-                                                http_body_util::Empty::new()
-                                                    .map_err(|_| ErrorCode::InternalError(None)),
-                                            ),
-                                        ))
-                                        .context(
-                                            "failed to construct missing host error response",
-                                        )?,
-                                );
+                                return http::Response::builder()
+                                    .status(404)
+                                    .body(wasmtime_wasi_http::body::HyperOutgoingBody::new(
+                                        BoxBody::new(
+                                            http_body_util::Empty::new()
+                                                .map_err(|_| ErrorCode::InternalError(None)),
+                                        ),
+                                    ))
+                                    .context("failed to construct missing host error response");
                             };
                             component_id.to_string()
                         };
@@ -292,7 +259,7 @@ impl Provider {
                         )
                         .await?;
                     let res = res?;
-                    anyhow::Ok(res)
+                    Ok(res)
                 }
                 .instrument(info_span!("handle"))
             }
@@ -305,6 +272,21 @@ impl Provider {
             host_router,
         })
     }
+}
+
+/// Build a bad request error
+fn build_bad_request_error(
+    message: &str,
+) -> Result<http::Response<wasmtime_wasi_http::body::HyperOutgoingBody>> {
+    http::Response::builder()
+        .status(http::StatusCode::BAD_REQUEST)
+        .body(wasmtime_wasi_http::body::HyperOutgoingBody::new(
+            BoxBody::new(
+                http_body_util::Full::new(bytes::Bytes::copy_from_slice(message.as_bytes()))
+                    .map_err(|_| ErrorCode::InternalError(None)),
+            ),
+        ))
+        .with_context(|| format!("failed to construct host error response: {message}"))
 }
 
 #[cfg(test)]
