@@ -84,12 +84,28 @@ impl Provider {
 
         let mut router = self.host_router.write().await;
         if router.components.contains_key(&key) {
-            // When we can return errors from links, tell the host this was invalid
-            bail!("Component {target_id} already has a host registered with link name {name}");
+            // Ensure the current host doesn't differ for the given component
+            if router
+                .components
+                .get(&key)
+                .map(|val| **val != host)
+                .unwrap_or(false)
+            {
+                // When we can return errors from links, tell the host this was invalid
+                bail!("Component {target_id} already has a host registered with link name {name}");
+            }
         }
         if router.hosts.contains_key(host.as_str()) {
-            // When we can return errors from links, tell the host this was invalid
-            bail!("Host {host} already in use by a different component");
+            // Ensure the current component doesn't differ for the given host
+            if router
+                .hosts
+                .get(host.as_str())
+                .map(|val| *val != target)
+                .unwrap_or(false)
+            {
+                // When we can return errors from links, tell the host this was invalid
+                bail!("Host {host} already in use by a different component");
+            }
         }
 
         let host = Arc::from(host.clone());
