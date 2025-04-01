@@ -2,7 +2,7 @@ name = "Cron Scheduler"
 language = "rust"
 type = "provider"
 version = "0.4.0"
-wit = "../../../wit/cron/wit"
+wit = "../../../crates/provider-cron-scheduler/wit/deps/cron/"
 
 [rust]
 target_dir = "../../"

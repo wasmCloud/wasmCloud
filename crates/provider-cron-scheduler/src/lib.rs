@@ -1,12 +1,11 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-
 use anyhow::{Context as AnyhowContext, Result};
 use bytes::Bytes;
 use chrono::Utc;
 use cron::Schedule;
+use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
@@ -76,9 +75,15 @@ impl CronProvider {
     }
 }
 
+impl Default for CronProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[instrument(level = "info", skip(wrpc))]
 async fn invoke_timed_job(wrpc: &WrpcClient, job_name: &str, payload: Option<Bytes>) -> Result<()> {
-    let mut cx: async_nats::HeaderMap = async_nats::HeaderMap::new();
+    let mut cx = async_nats::header::HeaderMap::new();
     for (k, v) in
         wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector::default_with_span(
         )
@@ -86,7 +91,6 @@ async fn invoke_timed_job(wrpc: &WrpcClient, job_name: &str, payload: Option<Byt
     {
         cx.insert(k.as_str(), v.as_str())
     }
-
     let payload_data = payload.unwrap_or_else(|| Bytes::from("{}"));
 
     let _ = bindings::wasmcloud::cron::scheduler::invoke(wrpc, Some(cx), &payload_data)
