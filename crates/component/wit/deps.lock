@@ -18,7 +18,7 @@ sha256 = "31fe247a242af7abe32dfadcb4edbc7720f9c47c2bff34b7e5c75df915ab5eb9"
 sha512 = "ce5367f3a104843852236799a3386a44da12ee5e287eb94075fd5252c1400b6ef84438f3b3e19f75fb3d842d82fe3a1bc999385fe59fc8e1696fed69bad69eac"
 
 [cron]
-path = "../../../wit/cron/wit"
+path = "../../../crates/provider-cron-scheduler/wit/deps/cron/"
 sha256 = "ddd8bad0e5599aa555c6aca475448fd3ebb83c5b871fcc65948863537c182e3d"
 sha512 = "ce7ba21f30bc3f06dfd1c991ae7c2a372d2875b835c6329d01749573e8d78656d4ea9264eeaf8dc1f9216a3f416f4504c0bbafca103c365004548b27c6fccc1b"
 
