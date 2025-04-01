@@ -35,6 +35,10 @@ const WASI_WASM32_PACKAGES: [(&str, &str); 8] = [
         "../../examples/rust/components/http-keyvalue-watcher/Cargo.toml",
         "http-keyvalue-watcher",
     ),
+    (
+        "../../examples/rust/components/cron-scheduler/Cargo.toml",
+        "cron-scheduler",
+    ),
 ];
 
 /// List of packages which should have output artifacts signed
