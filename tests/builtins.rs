@@ -290,13 +290,16 @@ async fn builtin_http_host_routing() -> anyhow::Result<()> {
         )
         .try_init();
 
-    let (nats_server, nats_url, nats_client) =
-        start_nats().await.context("failed to start NATS")?;
+    let (nats_server, nats_url, nats_client) = start_nats(None, true)
+        .await
+        .context("failed to start NATS")?;
 
     // Build client for interacting with the lattice
-    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client)
-        .lattice(LATTICE.to_string())
-        .build();
+    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(
+        nats_client.expect("failed to build nats client"),
+    )
+    .lattice(LATTICE.to_string())
+    .build();
     // Build the host (builtin features are enabled on test hosts)
     let host = WasmCloudTestHost::start(&nats_url, LATTICE)
         .await
