@@ -323,9 +323,21 @@ async fn test_get_container_info() -> Result<()> {
     })?;
     assert!(res.is_ok());
 
-    // NATS doesn't store creation time; so, the provider always returns Unix epoch, which can be verified
+    // Verify container metadata
     let meta = res.unwrap();
-    assert_eq!(meta.created_at, 0);
+    // NATS metadata timestamp should be a recent Unix timestamp
+    assert!(
+        meta.created_at > 0,
+        "Container creation timestamp should be positive"
+    );
+    assert!(
+        meta.created_at
+            <= std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        "Container creation timestamp should not be in the future"
+    );
 
     // Shutdown
     provider_handle.abort();
@@ -959,8 +971,7 @@ async fn test_get_object_info() -> Result<()> {
         .with_context(||format!("should get nats_object_meta for blob '{test_blob_name}' in '{test_container_name}' @ line {}", line!()))
         .map(
             |object_info| wrpc_interface_blobstore::bindings::wrpc::blobstore::types::ObjectMetadata {
-                // NATS doesn't store the object creation time, so always return the Unix epoch
-                created_at: 0,
+                created_at: object_info.metadata.get("created_at").and_then(|ts| ts.parse::<u64>().ok()).unwrap_or(0),
                 size: object_info.size as u64,
             },
         )
@@ -1749,6 +1760,82 @@ async fn test_delete_objects() -> Result<()> {
         objects.push(object?);
     }
     assert_eq!(objects.len(), 0);
+
+    // Shutdown
+    provider_handle.abort();
+
+    Ok(())
+}
+
+/// Tests deleting a non-existent blob from a container
+///
+/// Flow:
+/// 1. Creates a container
+/// 2. Attempts to delete a non-existent blob
+/// 3. Verifies the operation succeeds (no error)
+#[ignore]
+#[tokio::test]
+async fn test_delete_nonexistent_object() -> Result<()> {
+    let test_suite_name = "test-delete-nonexistent-object";
+    let test_container_name = test_suite_name;
+    let lattice_name = "default";
+    let test_blob_name = "nonexistent.blob";
+
+    let env = TestEnv::new(lattice_name, test_suite_name)
+        .await
+        .with_context(|| format!("should setup the test environment @ line {}", line!()))?;
+
+    // Start the provider and wait longer to settle
+    let provider_handle = env.start_provider().await?;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    let wrpc = env.wrpc_client().await?;
+
+    // Create the container
+    let nats_container = env
+        .create_object_store(test_container_name)
+        .await
+        .with_context(|| {
+            format!(
+                "should create container '{test_container_name}' @ line {}",
+                line!()
+            )
+        })?;
+
+    // Verify the blob doesn't exist
+    let blob_exists = match nats_container.get(test_blob_name).await {
+        Ok(_) => true,
+        Err(e) => match e.kind() {
+            async_nats::jetstream::object_store::GetErrorKind::NotFound => false,
+            _ => return Err(e).context(format!(
+                "should check whether '{test_blob_name}' exists in '{test_container_name}' @ line {}",
+                line!()
+            ))
+        }
+    };
+    assert!(
+        !blob_exists,
+        "Blob should not exist before deletion attempt"
+    );
+
+    let test_object = ObjectId {
+        container: test_container_name.to_string(),
+        object: test_blob_name.to_string(),
+    };
+
+    // Attempt to delete the non-existent blob
+    let res = tokio::time::timeout(
+        Duration::from_secs(1),
+        blobstore::delete_object(&wrpc, env.wrpc_context(), &test_object),
+    )
+    .await?
+    .with_context(|| {
+        format!(
+            "should delete non-existent blob '{test_blob_name}' in '{test_container_name}' @ line {}",
+            line!()
+        )
+    })?;
+    assert!(res.is_ok(), "Deleting non-existent blob should succeed");
 
     // Shutdown
     provider_handle.abort();
