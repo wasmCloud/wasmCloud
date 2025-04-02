@@ -289,7 +289,9 @@ impl<T> ConnPool<T> {
         T::Data: Send,
         T::Error: Into<Box<dyn Error + Send + Sync>>,
     {
-        Err(ErrorCode::UnsupportedArchitecture)
+        Err(ErrorCode::InternalError(Some(
+            "HTTPS connections are not supported on this architecture".to_string(),
+        )))
     }
 
     /// Attempts to get an HTTPS connection for the specified authority.
@@ -483,22 +485,30 @@ async fn connect(addr: impl ToSocketAddrs) -> Result<TcpStream, ErrorCode> {
 pub fn hyper_request_error(err: hyper::Error) -> ErrorCode {
     // If there's a source, we might be able to extract an error from it.
     if let Some(cause) = err.source() {
-        // We can't downcast to E since it's a trait, not a concrete type
-        // Just log the error and return a generic HTTP protocol error
+        // Check for specific error types in the source
+        if let Some(io_err) = cause.downcast_ref::<std::io::Error>() {
+            match io_err.kind() {
+                std::io::ErrorKind::ConnectionRefused => return ErrorCode::ConnectionRefused,
+                std::io::ErrorKind::ConnectionReset => return ErrorCode::ConnectionTerminated,
+                std::io::ErrorKind::TimedOut => return ErrorCode::ConnectionTimeout,
+                _ => {}
+            }
+        }
+
+        // Log the error with its cause and return a generic HTTP protocol error
         warn!(
             target: "http_client::error",
             error=?err,
             cause=?cause,
-            error_type="hyper_with_cause",
             "HTTP request failed with underlying cause"
         );
         return ErrorCode::HttpProtocolError;
     }
 
+    // Default case: log the error and return a generic HTTP protocol error
     warn!(
         target: "http_client::error",
         error=?err,
-        error_type="hyper",
         "HTTP request failed"
     );
 
