@@ -61,10 +61,11 @@ pub struct NatsConnectionConfig {
 ///
 /// Note that when storage config is provided via link configuration
 /// the following keys are expected:
-/// - `max_age` (optional): the maximum age of any object in the container, expressed in seconds; defaults to 10 years
+/// - `max_age` (optional): the maximum age of any object in the container, expressed in seconds; defaults to 0 (unlimited)
 /// - `storage_type` (optional): the type of storage backend, File (default) and Memory
 /// - `num_replicas` (optional): how many replicas to keep for each object in a cluster, maximum 5; defaults to 1
 /// - `compression` (optional): whether the underlying stream should be compressed; defaults to false
+/// - `placement` (optional): the NATS cluster, which the object store should be placed in; fixed to the cluster the NATS client is connected to
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct StorageConfig {
     /// Maximum age of any object in the container, expressed in nanoseconds
@@ -82,6 +83,9 @@ pub struct StorageConfig {
     /// Whether the underlying stream should be compressed
     #[serde(default)]
     pub compression: bool,
+    /// The NATS cluster, which the object store should be placed in (available since `async_nats crate v0.39.0`)
+    #[serde(default)]
+    pub placement: Option<async_nats::jetstream::stream::Placement>,
 }
 
 use std::str::FromStr;
@@ -130,6 +134,7 @@ impl Default for StorageConfig {
             storage_type: StorageType::default(),
             num_replicas: 1,
             compression: false,
+            placement: None, // defaults to the cluster the NATS client is connected to (available since `async_nats crate v0.39.0`)
         }
     }
 }
@@ -355,6 +360,7 @@ mod test {
             storage_config: Some(StorageConfig {
                 storage_type: StorageType(async_nats::jetstream::stream::StorageType::File),
                 compression: true,
+                placement: None, // Default to using connected cluster
                 ..Default::default()
             }),
             max_write_wait: Some(45),
@@ -367,6 +373,7 @@ mod test {
             storage_config: Some(StorageConfig {
                 storage_type: StorageType(async_nats::jetstream::stream::StorageType::Memory),
                 compression: false,
+                placement: None, // Default to using connected cluster
                 ..Default::default()
             }),
             max_write_wait: Some(60),
@@ -382,9 +389,38 @@ mod test {
             ncc2.storage_config.clone().unwrap().storage_type
         );
         assert_eq!(
-            ncc3.storage_config.unwrap().compression,
-            ncc2.storage_config.unwrap().compression
+            ncc3.storage_config.clone().unwrap().compression,
+            ncc2.storage_config.clone().unwrap().compression
         );
+        assert_eq!(
+            ncc3.storage_config.clone().unwrap().placement,
+            ncc2.storage_config.clone().unwrap().placement
+        );
+    }
+
+    // Test that StorageConfig properly handles placement configuration
+    #[test]
+    fn test_storage_config_placement() {
+        // Test default behavior (None)
+        let default_config = StorageConfig::default();
+        assert_eq!(default_config.placement, None);
+
+        // Test explicit placement configuration
+        let placement = async_nats::jetstream::stream::Placement {
+            cluster: Some("test-cluster".to_string()),
+            tags: vec!["test-tag".to_string()],
+        };
+
+        let storage_config = StorageConfig {
+            placement: Some(placement.clone()),
+            ..Default::default()
+        };
+
+        // Verify placement is preserved when serializing/deserializing
+        let serialized = serde_json::to_string(&storage_config).unwrap();
+        let deserialized: StorageConfig = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.placement, Some(placement));
     }
 
     // Verify that a NatsConnectionConfig could be constructed from a HashMap

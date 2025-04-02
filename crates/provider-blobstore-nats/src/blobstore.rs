@@ -15,6 +15,15 @@ use wasmcloud_provider_sdk::{propagate_trace_for_ctx, Context};
 // Import the wrpc interface bindings
 use wrpc_interface_blobstore::bindings;
 
+/// Default chunk size for NATS object store (256KB); NATS default is 128KB
+const DEFAULT_CHUNK_SIZE: u32 = 256 * 1024;
+
+/// Channel capacity for streaming large data chunks (16 chunks of 256KB = 4MB total buffer)
+const DATA_CHANNEL_CAPACITY: usize = 16;
+
+/// Channel capacity for streaming metadata (object names, etc.) - can be higher since items are small
+const METADATA_CHANNEL_CAPACITY: usize = 64;
+
 impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
     for crate::NatsBlobstoreProvider
 {
@@ -42,6 +51,7 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
                 storage: blobstore.storage_config.storage_type.0,
                 num_replicas: blobstore.storage_config.num_replicas,
                 compression: blobstore.storage_config.compression,
+                // Available since `async_nats crate v0.39.0`
                 placement: None,
             };
 
@@ -142,7 +152,7 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
             String,
         >,
     > {
-        use tokio::io::AsyncReadExt; // Import the trait to use `read`
+        use tokio::io::AsyncReadExt;
 
         Ok(async {
             propagate_trace_for_ctx!(context);
@@ -160,6 +170,19 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
                 .await
                 .context("failed to get container")?;
 
+            // Get object info to determine size and chunk size
+            let object_info = container
+                .info(&id.object)
+                .await
+                .context("failed to get object info")?;
+
+            // Calculate chunk size from total size and number of chunks
+            let chunk_size = if object_info.chunks > 0 {
+                (object_info.size as f64 / object_info.chunks as f64).ceil() as usize
+            } else {
+                DEFAULT_CHUNK_SIZE as usize
+            };
+
             // Retrieve the object data as a stream
             let mut object = container
                 .get(&id.object)
@@ -167,13 +190,12 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
                 .context("failed to get object data")?;
 
             // Create a channel to stream the data
-            let (tx, rx) = mpsc::channel(16);
+            let (tx, rx) = mpsc::channel(DATA_CHANNEL_CAPACITY);
             anyhow::Ok((
                 Box::pin(ReceiverStream::new(rx)) as Pin<Box<dyn Stream<Item = _> + Send>>,
                 Box::pin(async move {
                     async move {
-                        // Stream the object data in chunks of 1024 bytes
-                        let mut buffer = vec![0; 1024];
+                        let mut buffer = vec![0; chunk_size];
                         while let Ok(bytes_read) = object.read(&mut buffer).await {
                             if bytes_read == 0 {
                                 break;
@@ -218,7 +240,22 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
             let metadata = async_nats::jetstream::object_store::ObjectMetadata {
                 name: id.object.clone(),
                 description: Some("NATS WASI Blobstore Object".to_string()),
-                chunk_size: Some(256 * 1024), // 256KB chunks
+                chunk_size: Some(DEFAULT_CHUNK_SIZE as usize), // 256KB chunks
+                // Available since `async_nats crate v0.39.0`
+                headers: None,
+                // Available since `async_nats crate v0.39.0`
+                metadata: {
+                    let mut map = std::collections::HashMap::new();
+                    map.insert(
+                        "created_at".to_string(),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                            .to_string(),
+                    );
+                    map
+                },
             };
 
             let result: Result<(), String> = async move {
@@ -288,16 +325,24 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
                 .context("failed to list container objects")?;
 
             // Create a channel to stream the data
-            let (tx, rx) = tokio::sync::mpsc::channel(16);
+            let (tx, rx) = tokio::sync::mpsc::channel(METADATA_CHANNEL_CAPACITY);
             anyhow::Ok((
                 Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
                     as Pin<Box<dyn Stream<Item = Vec<String>> + Send>>,
                 Box::pin(async move {
+                    // Set batch size to match channel capacity for metadata operations
+                    let mut batch = Vec::with_capacity(METADATA_CHANNEL_CAPACITY);
                     while let Some(object) = objects.next().await {
                         let object = object.map_err(|e| format!("{e:#}"))?;
-                        tx.send(vec![object.name])
-                            .await
-                            .map_err(|e| format!("{e:#}"))?;
+                        batch.push(object.name);
+                        if batch.len() >= METADATA_CHANNEL_CAPACITY {
+                            tx.send(batch).await.map_err(|e| format!("{e:#}"))?;
+                            batch = Vec::with_capacity(METADATA_CHANNEL_CAPACITY);
+                        }
+                    }
+                    // Send any remaining objects
+                    if !batch.is_empty() {
+                        tx.send(batch).await.map_err(|e| format!("{e:#}"))?;
                     }
                     Ok(())
                 }) as Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
@@ -432,13 +477,19 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
                 .info(id.object)
                 .await
                 .context("failed to get object info")
-                .map(
-                    |object_info| bindings::wrpc::blobstore::types::ObjectMetadata {
-                        // NATS doesn't store the object creation time, so always return the Unix epoch
-                        created_at: 0,
+                .map(|object_info| {
+                    // Taking advantage of `metadata` field available since `async_nats crate v0.39.0`
+                    let created_at = object_info
+                        .metadata
+                        .get("created_at")
+                        .and_then(|ts| ts.parse::<u64>().ok())
+                        .unwrap_or(0);
+
+                    bindings::wrpc::blobstore::types::ObjectMetadata {
+                        created_at,
                         size: object_info.size as u64,
-                    },
-                )
+                    }
+                })
                 .map_err(|e| anyhow::anyhow!(e))
         }
         .await
@@ -495,7 +546,11 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
             let metadata = async_nats::jetstream::object_store::ObjectMetadata {
                 name: destination.object.clone(),
                 description: src_object.info.description.clone(),
-                chunk_size: Some(src_object.info.chunks),
+                chunk_size: Some(
+                    (src_object.info.size as f64 / src_object.info.chunks as f64).ceil() as usize,
+                ),
+                headers: src_object.info.headers.clone(),
+                metadata: src_object.info.metadata.clone(),
             };
 
             // Put the object into the destination container
@@ -559,7 +614,11 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
             let metadata = async_nats::jetstream::object_store::ObjectMetadata {
                 name: destination.object.clone(),
                 description: src_object.info.description.clone(),
-                chunk_size: Some(src_object.info.chunks),
+                chunk_size: Some(
+                    (src_object.info.size as f64 / src_object.info.chunks as f64).ceil() as usize,
+                ),
+                headers: src_object.info.headers.clone(),
+                metadata: src_object.info.metadata.clone(),
             };
 
             // Put the object into the destination container
@@ -601,11 +660,18 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
                 .get_object_store(&id.container)
                 .await
                 .map_err(|e| e.to_string())?;
-            // Delete the object
-            let result: Result<(), String> =
-                container.delete(id.object).await.map_err(|e| e.to_string());
 
-            result
+            // Delete the object, handling non-existent objects gracefully
+            match container.delete(id.object).await {
+                Ok(()) => Ok(()),
+                Err(e)
+                    if e.kind()
+                        == async_nats::jetstream::object_store::DeleteErrorKind::NotFound =>
+                {
+                    Ok(())
+                }
+                Err(e) => Err(e.to_string()),
+            }
         }
         .await
         .map_err(|err: String| format!("{err:#}")))

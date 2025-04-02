@@ -23,7 +23,7 @@ The following storage-specific settings can also be configured via link definiti
 
 | **Property**    | **Environment Variable** | **Description**                                                                    | **Default** |
 |:----------------|:------------------------|:----------------------------------------------------------------------------------|:------------|
-| `max_age`       | `CONFIG_NATS_STORAGE_MAX_AGE` | Maximum age of any blob in the container, expressed in seconds              | `315,569,520` (10 years) |
+| `max_age`       | `CONFIG_NATS_STORAGE_MAX_AGE` | Maximum age of any blob in the container, expressed in seconds              | `0` (unlimited) |
 | `storage_type`  | `CONFIG_NATS_STORAGE_TYPE` | The type of storage backend, either `file` or `memory`                         | `file` |
 | `num_replicas`  | `CONFIG_NATS_STORAGE_NUM_REPLICAS` | How many replicas to keep for each blob in a NATS cluster             | `1` |
 | `compression`   | `CONFIG_NATS_STORAGE_COMPRESSION` | Whether the underlying stream should be compressed                       | `false` |
