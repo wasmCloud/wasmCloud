@@ -28,6 +28,7 @@ rustls-pemfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "io-util"] }
 tokio-rustls = { workspace = true }
 tracing = { workspace = true }
+wasmcloud-core = { workspace = true, features = ["http-client-common"] }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 webpki-roots = { workspace = true }
 wrpc-interface-http = { workspace = true, features = ["http-body"] }

@@ -1989,6 +1989,13 @@ impl Host {
                         .await?
                 }
                 (None, ResourceRef::Builtin(name)) => match *name {
+                    "http-client" if self.experimental_features.builtin_http_client => {
+                        self.start_http_client_provider(host_data, provider_xkey, provider_id)
+                            .await?
+                    }
+                    "http-client" => {
+                        bail!("feature `builtin-http-client` is not enabled, denying start")
+                    }
                     "http-server" if self.experimental_features.builtin_http_server => {
                         self.start_http_server_provider(host_data, provider_xkey, provider_id)
                             .await?
