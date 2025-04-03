@@ -6,6 +6,8 @@ pub const RUST_HTTP_KEYVALUE_COUNTER: &str =
 pub const RUST_HTTP_KEYVALUE_WATCHER: &str =
     concat!(env!("OUT_DIR"), "/rust-http-keyvalue-watcher.wasm");
 
+pub const RUST_CRON_SCHEDULER: &str = concat!(env!("OUT_DIR"), "/rust-cron-scheduler.wasm");
+
 pub const RUST_HTTP_KEYVALUE_COUNTER_PREVIEW2: &str =
     concat!(env!("OUT_DIR"), "/rust-http-keyvalue-counter-preview2.wasm");
 pub const RUST_HTTP_KEYVALUE_COUNTER_PREVIEW2_SIGNED: &str = concat!(
