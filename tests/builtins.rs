@@ -15,10 +15,11 @@ use tokio::try_join;
 use tracing::instrument;
 use tracing_subscriber::prelude::*;
 use wasmcloud_core::tls::NativeRootsExt as _;
+use wasmcloud_host::wasmbus::Features;
 use wasmcloud_test_util::lattice::config::assert_config_put;
 use wasmcloud_test_util::lattice::link::assert_remove_link;
 use wasmcloud_test_util::provider::{
-    assert_start_provider, assert_stop_provider, StartProviderArgs,
+    assert_start_provider, assert_start_provider_timeout, assert_stop_provider, StartProviderArgs,
 };
 use wasmcloud_test_util::{
     component::assert_scale_component, host::WasmCloudTestHost,
@@ -33,7 +34,8 @@ use common::nats::start_nats;
 
 const LATTICE: &str = "links";
 const COMPONENT_ID: &str = "http_hello_world";
-const BUILTIN_HTTP: &str = "wasmcloud+builtin://http-server";
+const BUILTIN_HTTP_SERVER: &str = "wasmcloud+builtin://http-server";
+const BUILTIN_MESSAGING_NATS: &str = "wasmcloud+builtin://messaging-nats";
 
 /// Ensure a host can serve components on multiple paths with the same HTTP listen address,
 /// properly handling de-registering and re-registering links.
@@ -114,7 +116,7 @@ async fn builtin_http_path_routing() -> anyhow::Result<()> {
                 client: &ctl_client,
                 host_id: &host_key.public_key(),
                 provider_id: &http_server_id,
-                provider_ref: BUILTIN_HTTP,
+                provider_ref: BUILTIN_HTTP_SERVER,
                 config: vec![http_server_id.to_owned()],
             })
             .await
@@ -356,7 +358,7 @@ async fn builtin_http_host_routing() -> anyhow::Result<()> {
                 client: &ctl_client,
                 host_id: &host_key.public_key(),
                 provider_id: &http_server_id,
-                provider_ref: BUILTIN_HTTP,
+                provider_ref: BUILTIN_HTTP_SERVER,
                 config: vec![http_server_id.to_owned()],
             })
             .await
@@ -533,5 +535,66 @@ async fn builtin_http_host_routing() -> anyhow::Result<()> {
         .is_err());
 
     nats_server.stop().await.context("failed to stop NATS")?;
+    Ok(())
+}
+
+/// Ensure hosts do not respond to attempts to create builtin providers if they are disabled
+#[instrument(skip_all, ret)]
+#[tokio::test]
+async fn builtin_start_ignored_when_disabled() -> anyhow::Result<()> {
+    _ = tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().compact().without_time())
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("info,cranelift_codegen=warn,wasmcloud=trace")
+            }),
+        )
+        .try_init();
+
+    // Set up NATS and the host
+    let (_nats_server, nats_url, nats_client) = start_nats(None, true)
+        .await
+        .map(|res| (res.0, res.1, res.2.unwrap()))
+        .context("failed to start NATS")?;
+    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client)
+        .lattice(LATTICE.to_string())
+        .build();
+    let host = WasmCloudTestHost::start_custom(
+        &nats_url,
+        LATTICE,
+        None,
+        None,
+        None,
+        None,
+        // Explicitly disable experimental features
+        Some(Features::default()),
+    )
+    .await
+    .context("failed to start test host")?;
+
+    // Attempting to start builtin providers should *not* fail, but instead not return
+    let host_key = host.host_key();
+    assert_start_provider_timeout(StartProviderArgs {
+        client: &ctl_client,
+        host_id: &host_key.public_key(),
+        provider_id: "not-important",
+        provider_ref: BUILTIN_HTTP_SERVER,
+        config: Vec::with_capacity(0),
+    })
+    .await
+    .context("sending start_provider for builtin http which should hang")?;
+
+    // Attempt to start the provider
+    let host_key = host.host_key();
+    assert_start_provider_timeout(StartProviderArgs {
+        client: &ctl_client,
+        host_id: &host_key.public_key(),
+        provider_id: "not-important",
+        provider_ref: BUILTIN_MESSAGING_NATS,
+        config: Vec::with_capacity(0),
+    })
+    .await
+    .context("sending start_provider for builtin messaging which should hang")?;
+
     Ok(())
 }
