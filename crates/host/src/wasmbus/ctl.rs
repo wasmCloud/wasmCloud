@@ -25,6 +25,7 @@ use crate::wasmbus::{
     event, human_friendly_uptime, injector_to_headers, Annotations, Claims, Host, Provider,
     StoredClaims,
 };
+use crate::ResourceRef;
 
 /// Implementation for the server-side handling of control interface requests.
 ///
@@ -68,7 +69,7 @@ pub(crate) trait ControlInterfaceServer {
     async fn handle_start_provider(
         self: Arc<Self>,
         request: StartProviderCommand,
-    ) -> anyhow::Result<CtlResponse<()>>;
+    ) -> anyhow::Result<Option<CtlResponse<()>>>;
 
     /// Handle a request to stop a provider. This method should return a response indicating success
     /// or failure.
@@ -466,16 +467,36 @@ impl ControlInterfaceServer for Host {
     async fn handle_start_provider(
         self: Arc<Self>,
         request: StartProviderCommand,
-    ) -> anyhow::Result<CtlResponse<()>> {
+    ) -> anyhow::Result<Option<CtlResponse<()>>> {
         if self
             .providers
             .read()
             .await
             .contains_key(request.provider_id())
         {
-            return Ok(CtlResponse::error(
+            return Ok(Some(CtlResponse::error(
                 "provider with that ID is already running",
-            ));
+            )));
+        }
+
+        // Avoid responding to start providers for builtin providers if they're not enabled
+        if let Ok(ResourceRef::Builtin(name)) = ResourceRef::try_from(request.provider_ref()) {
+            if !self.experimental_features.builtin_http_server && name == "http-server" {
+                debug!(
+                    provider_ref = request.provider_ref(),
+                    provider_id = request.provider_id(),
+                    "skipping start provider for disabled builtin http provider"
+                );
+                return Ok(None);
+            }
+            if !self.experimental_features.builtin_messaging_nats && name == "messaging-nats" {
+                debug!(
+                    provider_ref = request.provider_ref(),
+                    provider_id = request.provider_id(),
+                    "skipping start provider for disabled builtin messaging provider"
+                );
+                return Ok(None);
+            }
         }
 
         // NOTE: We log at info since starting providers can take a while
@@ -514,9 +535,10 @@ impl ControlInterfaceServer for Host {
                 }
             }
         });
-        Ok(CtlResponse::<()>::success(
+
+        Ok(Some(CtlResponse::<()>::success(
             "successfully started provider".into(),
-        ))
+        )))
     }
 
     #[instrument(level = "debug", skip_all)]
