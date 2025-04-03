@@ -1880,7 +1880,7 @@ impl Host {
     async fn handle_start_provider(
         self: Arc<Self>,
         payload: impl AsRef<[u8]>,
-    ) -> anyhow::Result<CtlResponse<()>> {
+    ) -> anyhow::Result<Option<CtlResponse<()>>> {
         let cmd = serde_json::from_slice::<StartProviderCommand>(payload.as_ref())
             .context("failed to deserialize provider start command")?;
         <Self as ControlInterfaceServer>::handle_start_provider(self, cmd).await
@@ -2194,7 +2194,6 @@ impl Host {
             (Some("provider"), Some("start"), Some(_host_id), None) => Arc::clone(&self)
                 .handle_start_provider(message.payload)
                 .await
-                .map(Some)
                 .map(serialize_ctl_response),
             (Some("provider"), Some("stop"), Some(_host_id), None) => self
                 .handle_stop_provider(message.payload)
