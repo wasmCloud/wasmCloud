@@ -4,6 +4,7 @@ use std::process::Stdio;
 use std::str::FromStr;
 
 use anyhow::{bail, Result};
+use semver::Version;
 use tokio::process::Command;
 
 use anyhow::Context;
@@ -26,6 +27,13 @@ pub const DEFAULT_NATS_WEBSOCKET_PORT: &str = "4223";
 
 /// Version of wadm used by default for wash
 pub const WADM_VERSION: &str = "v0.21.0";
+
+/// Default port for the washboard ui used by wash
+pub const DEFAULT_WASH_UI_PORT: &str = "3030";
+
+/// Default version of washboard used by wash
+pub const WASHBOARD_VERSION: &str = "v0.7.1";
+pub const WASHBOARD_VERSION_T: Version = Version::new(0, 7, 1);
 
 /// Version of wasmCloud host used by default for wash
 pub const WASMCLOUD_HOST_VERSION: &str = "v1.7.0";
