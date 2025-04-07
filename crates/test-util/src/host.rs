@@ -108,7 +108,11 @@ impl WasmCloudTestHost {
             provider_shutdown_delay: Some(Duration::from_millis(300)),
             allow_file_load: true,
             secrets_topic_prefix,
-            experimental_features,
+            experimental_features: Features::new()
+                .enable_builtin_http_client()
+                .enable_builtin_http_server()
+                .enable_builtin_messaging_nats()
+                .enable_wasmcloud_messaging_v3(),
             ..Default::default()
         };
         if let Some(psc) = policy_service_config {
