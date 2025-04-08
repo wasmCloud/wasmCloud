@@ -16,10 +16,15 @@ pub const MAX_COMPONENT_SIZE: u64 = 50 * 1024 * 1024;
 /// Default max number of components
 pub const MAX_COMPONENTS: u32 = 10_000;
 
+/// Default number of max core instances per component
+pub const DEFAULT_MAX_CORE_INSTANCES_PER_COMPONENT: u32 = 30;
+
 /// [`RuntimeBuilder`] used to configure and build a [Runtime]
 #[derive(Clone, Default)]
 pub struct RuntimeBuilder {
     engine_config: wasmtime::Config,
+    /// Number of core instances that can be used by a single component
+    max_core_instances_per_component: u32,
     max_components: u32,
     max_component_size: u64,
     max_linear_memory: u64,
@@ -45,6 +50,7 @@ impl RuntimeBuilder {
             // chonky. So this is pretty big for now.
             max_component_size: MAX_COMPONENT_SIZE,
             max_linear_memory: MAX_LINEAR_MEMORY,
+            max_core_instances_per_component: DEFAULT_MAX_CORE_INSTANCES_PER_COMPONENT,
             max_execution_time: Duration::from_secs(10 * 60),
             component_config: ComponentConfig::default(),
             force_pooling_allocator: false,
@@ -66,6 +72,15 @@ impl RuntimeBuilder {
     pub fn max_components(self, max_components: u32) -> Self {
         Self {
             max_components,
+            ..self
+        }
+    }
+
+    /// Sets the maximum number of core components per instance. Defaults to 30
+    #[must_use]
+    pub fn max_core_instances_per_component(self, max_core_instances_per_component: u32) -> Self {
+        Self {
+            max_core_instances_per_component,
             ..self
         }
     }
@@ -132,7 +147,6 @@ impl RuntimeBuilder {
         // configure all these values via something smarter that can look at total memory available
         let memories_per_component = 1;
         let tables_per_component = 1;
-        let max_core_instances_per_component = 30;
         let table_elements = 15000;
 
         #[allow(clippy::cast_possible_truncation)]
@@ -142,13 +156,15 @@ impl RuntimeBuilder {
             .total_gc_heaps(self.max_components)
             .total_stacks(self.max_components)
             .max_component_instance_size(self.max_component_size as usize)
-            .max_core_instances_per_component(max_core_instances_per_component)
+            .max_core_instances_per_component(self.max_core_instances_per_component)
             .max_tables_per_component(20)
             .table_elements(table_elements)
             // The number of memories an instance can have effectively limits the number of inner components
             // a composed component can have (since each inner component has its own memory). We default to 32 for now, and
             // we'll see how often this limit gets reached.
-            .max_memories_per_component(max_core_instances_per_component * memories_per_component)
+            .max_memories_per_component(
+                self.max_core_instances_per_component * memories_per_component,
+            )
             .total_memories(self.max_components * memories_per_component)
             .total_tables(self.max_components * tables_per_component)
             // Restrict the maximum amount of linear memory that can be used by a component,
