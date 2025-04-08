@@ -60,7 +60,7 @@ jobs:
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store-arm64"
 
-      - uses: actions/cache@36f1e144e1c8edb0a652766b484448563d8baf46
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         id: cache
         with:
           path: ${{ runner.temp }}/nix-store-oci
