@@ -542,7 +542,7 @@ jobs:
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - uses: actions/cache/restore@36f1e144e1c8edb0a652766b484448563d8baf46
+      - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: ${{ runner.temp }}/nix-store
           key: wasmcloud-cargo-doc-${{ github.sha }}
@@ -576,7 +576,7 @@ jobs:
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - uses: actions/cache/restore@36f1e144e1c8edb0a652766b484448563d8baf46
+      - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: ${{ runner.temp }}/nix-store
           key: wasmcloud-cargo-doc-${{ github.sha }}
@@ -601,7 +601,7 @@ jobs:
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - uses: actions/cache@36f1e144e1c8edb0a652766b484448563d8baf46
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         id: cache
         with:
           path: ${{ runner.temp }}/nix-store
