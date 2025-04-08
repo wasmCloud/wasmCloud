@@ -217,6 +217,15 @@ struct Args {
         env = "WASMCLOUD_MAX_COMPONENTS"
     )]
     max_components: u32,
+
+    /// The maximum number of core instances per component
+    #[clap(
+        long = "max-core-instances-per-component",
+        default_value_t = 30,
+        env = "WASMCLOUD_MAX_CORE_INSTANCES_PER_COMPONENT"
+    )]
+    max_core_instances_per_component: u32,
+
     /// If provided, allows setting a custom timeout for requesting policy decisions. Defaults to one second. Requires `policy_topic` to be set.
     #[clap(
         long = "policy-timeout-ms",
@@ -531,6 +540,7 @@ async fn main() -> anyhow::Result<()> {
         max_linear_memory: args.max_linear_memory,
         max_component_size: args.max_component_size,
         max_components: args.max_components,
+        max_core_instances_per_component: args.max_core_instances_per_component,
         heartbeat_interval: args.heartbeat_interval,
         // NOTE(brooks): Summing the feature flags "OR"s the multiple flags together.
         experimental_features: args.experimental_features.into_iter().sum(),
