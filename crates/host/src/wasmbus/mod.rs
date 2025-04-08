@@ -775,6 +775,7 @@ impl Host {
             .max_execution_time(config.max_execution_time)
             .max_linear_memory(config.max_linear_memory)
             .max_components(config.max_components)
+            .max_core_instances_per_component(config.max_core_instances_per_component)
             .max_component_size(config.max_component_size)
             .experimental_features(config.experimental_features.into())
             .build()
