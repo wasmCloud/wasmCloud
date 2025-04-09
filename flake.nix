@@ -146,6 +146,7 @@
                   ./examples/rust/components/http-hello-world/Cargo.lock
                   ./examples/rust/components/http-keyvalue-counter/Cargo.lock
                   ./tests/components/rust/Cargo.lock
+                  ./tests/virtual/rust/Cargo.lock
                 ];
               };
             }

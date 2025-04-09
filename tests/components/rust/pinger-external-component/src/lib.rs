@@ -1,4 +1,5 @@
 wit_bindgen::generate!({
+    world: "component",
     with: {
         "test-components:testing/pingpong@0.1.0": generate,
         "wasmcloud:bus/lattice@2.0.0": generate,
