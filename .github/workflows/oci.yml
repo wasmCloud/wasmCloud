@@ -111,7 +111,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
 
       - name: Install `skopeo`
-        run: nix profile install --fallback --inputs-from . 'nixpkgs#skopeo'
+        run: nix profile install --fallback --inputs-from . 'nixpkgs-unstable#skopeo'
 
       - name: Build `${{ inputs.bin }}` image
         run: |
