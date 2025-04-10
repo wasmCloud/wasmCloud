@@ -611,7 +611,12 @@ pub struct InterfaceComponentOverride {
     pub interface_spec: String,
 
     /// Configuration that should be provided to the overridden component
+    #[serde(alias = "configs")]
     pub config: Option<OneOrMore<DevConfigSpec>>,
+
+    /// Configuration that should be provided to the links generated for the overridden component
+    #[serde(alias = "link_configs")]
+    pub link_config: Option<OneOrMore<DevConfigSpec>>,
 
     /// Secrets that should be provided to the overridden component
     pub secrets: Option<OneOrMore<DevSecretSpec>>,
@@ -878,6 +883,11 @@ pub struct DevConfig {
     /// Configuration values to be passed to the component
     #[serde(default, alias = "configs")]
     pub config: Vec<DevConfigSpec>,
+
+    /// Configuration values to be set or used for the link that connects
+    /// the generated component to the import/export
+    #[serde(default, alias = "link_configs")]
+    pub link_config: Vec<DevConfigSpec>,
 
     /// Configuration values to be passed to the component
     #[serde(default)]
