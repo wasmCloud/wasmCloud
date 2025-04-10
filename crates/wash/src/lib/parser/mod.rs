@@ -551,7 +551,8 @@ pub enum DevSecretSpec {
 /// Target that specifies a single component in a given manifest path
 #[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
 pub struct DevManifestComponentTarget {
-    /// Name of the component that should be targeted
+    /// Name of the component (ex. in a WADM manifest) that should be targeted
+    #[serde(alias = "wadm_component_name")]
     pub component_name: Option<String>,
 
     /// The ID of the component that should be targeted
