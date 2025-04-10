@@ -29,8 +29,8 @@ use wasmcloud_test_util::{
 use test_components::RUST_HTTP_HELLO_WORLD;
 
 pub mod common;
-use common::free_port;
 use common::nats::start_nats;
+use common::{free_port, wait_for_http_status};
 
 const LATTICE: &str = "links";
 const COMPONENT_ID: &str = "http_hello_world";
@@ -243,8 +243,20 @@ async fn builtin_http_path_routing() -> anyhow::Result<()> {
     .await
     .context("failed to advertise link")?;
 
-    let reregistered_two_hundred = http_client.get(format!("{base_url}/three")).send().await?;
-    assert_eq!(reregistered_two_hundred.status().as_u16(), 200);
+    wait_for_http_status(
+        http_client.clone(),
+        |client| {
+            client
+                .get(format!("{base_url}/three"))
+                .build()
+                .context("building request")
+        },
+        |resp| resp.status().as_u16() == 200,
+        Duration::from_secs(1),
+        Duration::from_millis(250),
+    )
+    .await
+    .context("waiting for 200 http status from new endpoint")?;
 
     // Stop the builtin provider
     assert!(
@@ -496,12 +508,21 @@ async fn builtin_http_host_routing() -> anyhow::Result<()> {
     .await
     .context("failed to advertise link")?;
 
-    let reregistered_two_hundred = http_client
-        .get(base_url)
-        .header("Host", "three.local")
-        .send()
-        .await?;
-    assert_eq!(reregistered_two_hundred.status().as_u16(), 200);
+    wait_for_http_status(
+        http_client.clone(),
+        |client| {
+            client
+                .get(base_url)
+                .header("Host", "three.local")
+                .build()
+                .context("building request")
+        },
+        |resp| resp.status().as_u16() == 200,
+        Duration::from_secs(1),
+        Duration::from_millis(250),
+    )
+    .await
+    .context("waiting for 200 http status from new host-based endpoint ('three.local')")?;
 
     // Stop the builtin provider
     assert!(

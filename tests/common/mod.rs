@@ -121,3 +121,27 @@ pub async fn serve_incoming_http(
     info!("request served");
     Ok(response)
 }
+
+/// Utility function that enables waiting for a given HTTP status
+pub async fn wait_for_http_status(
+    client: Arc<reqwest::Client>,
+    req_fn: impl Fn(Arc<reqwest::Client>) -> Result<reqwest::Request>,
+    status_predicate: impl Fn(&reqwest::Response) -> bool,
+    timeout: tokio::time::Duration,
+    req_interval: tokio::time::Duration,
+) -> Result<reqwest::Response> {
+    tokio::time::timeout(timeout, async move {
+        loop {
+            tokio::time::sleep(req_interval).await;
+            let req = req_fn(client.clone()).context("building request")?;
+            let Ok(resp) = client.execute(req).await else {
+                continue;
+            };
+            if status_predicate(&resp) {
+                return Ok(resp);
+            }
+        }
+    })
+    .await
+    .context("waiting for http status")?
+}
