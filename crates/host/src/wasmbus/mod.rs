@@ -27,9 +27,10 @@ use futures::{join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStream
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use nkeys::{KeyPair, KeyPairType, XKey};
 use providers::Provider;
-use secrecy::Secret;
+use secrecy::SecretBox;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sysinfo::System;
 use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
 use tokio::spawn;
@@ -57,6 +58,7 @@ use wasmcloud_tracing::{global, InstrumentationScope, KeyValue};
 
 use crate::registry::RegistryCredentialExt;
 use crate::wasmbus::jetstream::create_bucket;
+use crate::workload_identity::WorkloadIdentityConfig;
 use crate::{
     fetch_component, HostMetrics, OciConfig, PolicyHostInfo, PolicyManager, PolicyResponse,
     RegistryAuth, RegistryConfig, RegistryType, ResourceRef, SecretsManager,
@@ -362,7 +364,7 @@ pub struct Host {
     host_token: Arc<jwt::Token<jwt::Host>>,
     /// The Xkey used to encrypt secrets when sending them over NATS
     secrets_xkey: Arc<XKey>,
-    labels: RwLock<BTreeMap<String, String>>,
+    labels: Arc<RwLock<BTreeMap<String, String>>>,
     ctl_topic_prefix: String,
     /// NATS client to use for control interface subscriptions and jetstream queries
     ctl_nats: async_nats::Client,
@@ -402,40 +404,106 @@ pub struct Host {
 /// Given the NATS address, authentication jwt, seed, tls requirement and optional request timeout,
 /// attempt to establish connection.
 ///
+/// This function should be used to create a NATS client for Host communication, for non-host NATS
+/// clients we recommend using async-nats directly.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - Only one of JWT or seed is specified, as we cannot authenticate with only one of them
 /// - Connection fails
-async fn connect_nats(
+pub async fn connect_nats(
     addr: impl async_nats::ToServerAddrs,
     jwt: Option<&String>,
     key: Option<Arc<KeyPair>>,
     require_tls: bool,
     request_timeout: Option<Duration>,
+    workload_identity_config: Option<WorkloadIdentityConfig>,
 ) -> anyhow::Result<async_nats::Client> {
-    let opts = async_nats::ConnectOptions::new().require_tls(require_tls);
-    let opts = match (jwt, key) {
-        (Some(jwt), Some(key)) => opts.jwt(jwt.to_string(), {
-            move |nonce| {
+    let opts = match (jwt, key, workload_identity_config) {
+        (Some(jwt), Some(key), None) => {
+            async_nats::ConnectOptions::with_jwt(jwt.to_string(), move |nonce| {
                 let key = key.clone();
                 async move { key.sign(&nonce).map_err(async_nats::AuthError::new) }
-            }
-        }),
-        (Some(_), None) | (None, Some(_)) => {
+            })
+        }
+        (Some(_), None, _) | (None, Some(_), _) => {
             bail!("cannot authenticate if only one of jwt or seed is specified")
         }
-        _ => opts,
+        (jwt, key, Some(wid_cfg)) => {
+            setup_workload_identity_nats_connect_options(jwt, key, wid_cfg).await?
+        }
+        _ => async_nats::ConnectOptions::new(),
     };
     let opts = if let Some(timeout) = request_timeout {
         opts.request_timeout(Some(timeout))
     } else {
         opts
     };
+    let opts = opts.require_tls(require_tls);
     opts.connect(addr)
         .await
         .context("failed to connect to NATS")
+}
+
+#[cfg(unix)]
+async fn setup_workload_identity_nats_connect_options(
+    jwt: Option<&String>,
+    key: Option<Arc<KeyPair>>,
+    wid_cfg: WorkloadIdentityConfig,
+) -> anyhow::Result<async_nats::ConnectOptions> {
+    let wid_cfg = Arc::new(wid_cfg);
+    let jwt = jwt.map(String::to_string).map(Arc::new);
+    let key = key.clone();
+
+    // Return an auth callback that'll get called any time the
+    // NATS connection needs to be (re-)established. This is
+    // necessary to ensure that we always provide a recently
+    // issued JWT-SVID.
+    Ok(async_nats::ConnectOptions::with_auth_callback(
+        move |nonce| {
+            let key = key.clone();
+            let jwt = jwt.clone();
+            let wid_cfg = wid_cfg.clone();
+
+            let fetch_svid_handle = tokio::spawn(async move {
+                let mut client = spiffe::WorkloadApiClient::default()
+                    .await
+                    .map_err(async_nats::AuthError::new)?;
+                client
+                    .fetch_jwt_svid(&[wid_cfg.auth_service_audience.as_str()], None)
+                    .await
+                    .map_err(async_nats::AuthError::new)
+            });
+
+            async move {
+                let svid = fetch_svid_handle
+                    .await
+                    .map_err(async_nats::AuthError::new)?
+                    .map_err(async_nats::AuthError::new)?;
+
+                let mut auth = async_nats::Auth::new();
+                if let Some(key) = key {
+                    let signature = key.sign(&nonce).map_err(async_nats::AuthError::new)?;
+                    auth.signature = Some(signature);
+                }
+                if let Some(jwt) = jwt {
+                    auth.jwt = Some(jwt.to_string());
+                }
+                auth.token = Some(svid.token().into());
+                Ok(auth)
+            }
+        },
+    ))
+}
+
+#[cfg(target_family = "windows")]
+async fn setup_workload_identity_nats_connect_options(
+    jwt: Option<&String>,
+    key: Option<Arc<KeyPair>>,
+    wid_cfg: WorkloadIdentityConfig,
+) -> anyhow::Result<async_nats::ConnectOptions> {
+    bail!("workload identity is not supported on Windows")
 }
 
 #[derive(Debug, Default)]
@@ -638,6 +706,12 @@ impl Host {
             "version": config.version,
         });
 
+        let workload_identity_config = if config.experimental_features.workload_identity_auth {
+            Some(WorkloadIdentityConfig::from_env()?)
+        } else {
+            None
+        };
+
         let ((ctl_nats, queue), rpc_nats) = try_join!(
             async {
                 debug!(
@@ -650,6 +724,7 @@ impl Host {
                     config.ctl_key.clone(),
                     config.ctl_tls,
                     None,
+                    workload_identity_config.clone(),
                 )
                 .await
                 .context("failed to establish NATS control server connection")?;
@@ -677,6 +752,7 @@ impl Host {
                     config.rpc_key.clone(),
                     config.rpc_tls,
                     Some(config.rpc_timeout),
+                    workload_identity_config.clone(),
                 )
                 .await
                 .context("failed to establish NATS RPC server connection")
@@ -699,6 +775,7 @@ impl Host {
             .max_execution_time(config.max_execution_time)
             .max_linear_memory(config.max_linear_memory)
             .max_components(config.max_components)
+            .max_core_instances_per_component(config.max_core_instances_per_component)
             .max_component_size(config.max_component_size)
             .experimental_features(config.experimental_features.into())
             .build()
@@ -764,10 +841,26 @@ impl Host {
             .with_attributes(vec![
                 KeyValue::new("host.id", host_key.public_key()),
                 KeyValue::new("host.version", config.version.clone()),
+                KeyValue::new("host.arch", ARCH),
+                KeyValue::new("host.os", OS),
+                KeyValue::new("host.osfamily", FAMILY),
+                KeyValue::new("host.friendly_name", friendly_name.clone()),
+                KeyValue::new("host.hostname", System::host_name().unwrap_or_default()),
+                KeyValue::new(
+                    "host.kernel_version",
+                    System::kernel_version().unwrap_or_default(),
+                ),
+                KeyValue::new("host.os_version", System::os_version().unwrap_or_default()),
             ])
             .build();
         let meter = global::meter_with_scope(scope);
-        let metrics = HostMetrics::new(&meter, host_key.public_key(), config.lattice.to_string());
+        let metrics = HostMetrics::new(
+            &meter,
+            host_key.public_key(),
+            config.lattice.to_string(),
+            None,
+        )
+        .context("failed to create HostMetrics instance")?;
 
         let config_generator = BundleGenerator::new(config_data.clone());
 
@@ -858,7 +951,7 @@ impl Host {
             host_key,
             host_token,
             secrets_xkey: Arc::new(XKey::new()),
-            labels: RwLock::new(labels),
+            labels: Arc::new(RwLock::new(labels)),
             ctl_nats,
             rpc_nats: Arc::new(rpc_nats),
             experimental_features: config.experimental_features,
@@ -1318,7 +1411,7 @@ impl Host {
         max_instances: NonZeroUsize,
         annotations: &Annotations,
         config: ConfigBundle,
-        secrets: HashMap<String, Secret<SecretValue>>,
+        secrets: HashMap<String, SecretBox<SecretValue>>,
     ) -> anyhow::Result<&'a mut Arc<Component>> {
         debug!(?component_ref, ?max_instances, "starting new component");
 
@@ -1350,6 +1443,7 @@ impl Host {
             },
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
             experimental_features: self.experimental_features,
+            host_labels: Arc::clone(&self.labels),
         };
         let component = wasmcloud_runtime::Component::new(&self.runtime, wasm)?;
         let component = self
@@ -1787,7 +1881,7 @@ impl Host {
     async fn handle_start_provider(
         self: Arc<Self>,
         payload: impl AsRef<[u8]>,
-    ) -> anyhow::Result<CtlResponse<()>> {
+    ) -> anyhow::Result<Option<CtlResponse<()>>> {
         let cmd = serde_json::from_slice::<StartProviderCommand>(payload.as_ref())
             .context("failed to deserialize provider start command")?;
         <Self as ControlInterfaceServer>::handle_start_provider(self, cmd).await
@@ -2101,7 +2195,6 @@ impl Host {
             (Some("provider"), Some("start"), Some(_host_id), None) => Arc::clone(&self)
                 .handle_start_provider(message.payload)
                 .await
-                .map(Some)
                 .map(serialize_ctl_response),
             (Some("provider"), Some("stop"), Some(_host_id), None) => self
                 .handle_stop_provider(message.payload)
@@ -2195,7 +2288,7 @@ impl Host {
         if let Some(reply) = message.reply {
             let headers = injector_to_headers(&TraceContextInjector::default_with_span());
 
-            let payload = match ctl_response {
+            let payload: Option<Bytes> = match ctl_response {
                 Ok(Some(Ok(payload))) => Some(payload.into()),
                 // No response from the host (e.g. auctioning provider)
                 Ok(None) => None,
@@ -2218,6 +2311,14 @@ impl Host {
             };
 
             if let Some(payload) = payload {
+                let max_payload = self.ctl_nats.server_info().max_payload;
+                if payload.len() > max_payload {
+                    warn!(
+                        size = payload.len(),
+                        max_size = max_payload,
+                        "ctl response payload is too large to publish and may fail",
+                    );
+                }
                 if let Err(err) = self
                     .ctl_nats
                     .publish_with_headers(reply.clone(), headers, payload)
@@ -2372,7 +2473,7 @@ impl Host {
         config_names: &[String],
         entity_jwt: Option<&String>,
         application: Option<&String>,
-    ) -> anyhow::Result<(ConfigBundle, HashMap<String, Secret<SecretValue>>)> {
+    ) -> anyhow::Result<(ConfigBundle, HashMap<String, SecretBox<SecretValue>>)> {
         let (secret_names, config_names) = config_names
             .iter()
             .map(|s| s.to_string())

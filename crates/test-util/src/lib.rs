@@ -60,6 +60,7 @@
 //!
 
 pub mod component;
+pub mod env;
 pub mod host;
 pub mod lattice;
 pub mod nats;

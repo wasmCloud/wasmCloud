@@ -2,6 +2,10 @@ pub const ISSUER: &str = env!("ISSUER");
 
 pub const RUST_HTTP_KEYVALUE_COUNTER: &str =
     concat!(env!("OUT_DIR"), "/rust-http-keyvalue-counter.wasm");
+
+pub const RUST_HTTP_KEYVALUE_WATCHER: &str =
+    concat!(env!("OUT_DIR"), "/rust-http-keyvalue-watcher.wasm");
+
 pub const RUST_HTTP_KEYVALUE_COUNTER_PREVIEW2: &str =
     concat!(env!("OUT_DIR"), "/rust-http-keyvalue-counter-preview2.wasm");
 pub const RUST_HTTP_KEYVALUE_COUNTER_PREVIEW2_SIGNED: &str = concat!(
@@ -52,4 +56,15 @@ pub const RUST_PONGER_CONFIG_COMPONENT_PREVIEW2: &str = concat!(
 pub const RUST_PONGER_CONFIG_COMPONENT_PREVIEW2_SIGNED: &str = concat!(
     env!("OUT_DIR"),
     "/rust-ponger-config-component-preview2.signed.wasm"
+);
+
+pub const RUST_WORKLOAD_IDENTITY_COMPONENT: &str =
+    concat!(env!("OUT_DIR"), "/rust-workload-identity-component.wasm");
+pub const RUST_WORKLOAD_IDENTITY_COMPONENT_PREVIEW2: &str = concat!(
+    env!("OUT_DIR"),
+    "/rust-workload-identity-component-preview2.wasm"
+);
+pub const RUST_WORKLOAD_IDENTITY_COMPONENT_PREVIEW2_SIGNED: &str = concat!(
+    env!("OUT_DIR"),
+    "/rust-workload-identity-component-preview2.signed.wasm"
 );

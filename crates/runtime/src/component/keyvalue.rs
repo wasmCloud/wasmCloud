@@ -1,17 +1,26 @@
-use std::sync::Arc;
-
-use anyhow::Context;
-use async_trait::async_trait;
-use bytes::Bytes;
-use tracing::instrument;
-use wasmtime::component::Resource;
+use super::{new_store, Ctx, Handler, Instance, ReplacedInstanceTarget};
 
 use crate::capability::keyvalue::{atomics, batch, store};
 use crate::capability::wrpc;
 
-use super::{Ctx, Handler, ReplacedInstanceTarget};
+use anyhow::Context;
+use bytes::Bytes;
+use std::sync::Arc;
+use tracing::{debug, instrument, trace};
+use wasmtime::component::Resource;
 
 type Result<T, E = store::Error> = core::result::Result<T, E>;
+
+pub mod keyvalue_watcher_bindings {
+    wasmtime::component::bindgen!({
+        world: "watcher",
+        async: true,
+        trappable_imports: true,
+        with: {
+            "wasi:keyvalue/store" : crate::capability::keyvalue::store,
+        }
+    });
+}
 
 impl From<wrpc::wrpc::keyvalue::store::Error> for store::Error {
     fn from(value: wrpc::wrpc::keyvalue::store::Error) -> Self {
@@ -23,7 +32,6 @@ impl From<wrpc::wrpc::keyvalue::store::Error> for store::Error {
     }
 }
 
-#[async_trait]
 impl<H> atomics::Host for Ctx<H>
 where
     H: Handler,
@@ -52,7 +60,6 @@ where
     }
 }
 
-#[async_trait]
 impl<H> store::Host for Ctx<H>
 where
     H: Handler,
@@ -68,7 +75,6 @@ where
     }
 }
 
-#[async_trait]
 impl<H> batch::Host for Ctx<H>
 where
     H: Handler,
@@ -153,7 +159,6 @@ where
     }
 }
 
-#[async_trait]
 impl<H> store::HostBucket for Ctx<H>
 where
     H: Handler,
@@ -273,6 +278,65 @@ where
         self.table
             .delete(bucket)
             .context("failed to delete bucket")?;
+        Ok(())
+    }
+}
+
+impl<H, C> wrpc::exports::wrpc::keyvalue::watcher::Handler<C> for Instance<H, C>
+where
+    H: Handler,
+    C: Send,
+{
+    #[instrument(level = "info", skip_all)]
+    async fn on_set(
+        &self,
+        _cx: C,
+        bucket: String,
+        key: String,
+        value: bytes::Bytes,
+    ) -> anyhow::Result<(), anyhow::Error> {
+        let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
+        let pre = keyvalue_watcher_bindings::WatcherPre::new(self.pre.clone())
+            .context("failed to pre-instantiate `wasi:keyvalue/watcher`")?;
+        trace!("instantiating `wasi:keyvalue/watcher`");
+        let bindings = pre
+            .instantiate_async(&mut store)
+            .await
+            .context("failed to instantiate `wasi:keyvalue/watcher.on_set`")?;
+        let bucket_repr: u32 = bucket.parse().context("failed to parse bucket as u32")?;
+        let new_bucket = Resource::new_own(bucket_repr);
+        debug!("invoking `wasi:keyvalue/watcher.on_set`");
+        bindings
+            .wasi_keyvalue_watcher()
+            .call_on_set(&mut store, new_bucket, &key, &value)
+            .await
+            .context("failed to call `wasi:keyvalue/watcher.on_set`")?;
+        Ok(())
+    }
+
+    #[instrument(level = "info", skip_all)]
+    async fn on_delete(
+        &self,
+        _cx: C,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<(), anyhow::Error> {
+        let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
+        let pre = keyvalue_watcher_bindings::WatcherPre::new(self.pre.clone())
+            .context("failed to pre-instantiate `wasi:keyvalue/watcher`")?;
+        trace!("instantiating `wasi:keyvalue/watcher`");
+        let bindings = pre
+            .instantiate_async(&mut store)
+            .await
+            .context("failed to instantiate `wasi:keyvalue/watcher.on_delete`")?;
+        let bucket_repr: u32 = bucket.parse().context("failed to parse bucket as u32")?;
+        let new_bucket = Resource::new_own(bucket_repr);
+        debug!("invoking `wasi:keyvalue/watcher.on_delete`");
+        bindings
+            .wasi_keyvalue_watcher()
+            .call_on_delete(&mut store, new_bucket, &key)
+            .await
+            .context("failed to call `wasi:keyvalue/watcher.on_delete`")?;
         Ok(())
     }
 }

@@ -395,6 +395,13 @@ async fn provider_command(path: &Path, host_data: Vec<u8>) -> anyhow::Result<pro
         let _ = child_cmd.env("RUST_LOG", rust_log);
     }
 
+    // Pass through any OTEL configuration options to the provider as well
+    for (k, v) in env::vars() {
+        if k.starts_with("OTEL_") {
+            let _ = child_cmd.env(k, v);
+        }
+    }
+
     let mut child = child_cmd
         .stdin(Stdio::piped())
         .kill_on_drop(true)

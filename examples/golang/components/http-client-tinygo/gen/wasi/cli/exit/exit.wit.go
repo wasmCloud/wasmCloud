@@ -4,7 +4,7 @@
 package exit
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
+	"go.bytecodealliance.org/cm"
 )
 
 // Exit represents the imported function "exit".
@@ -13,7 +13,7 @@ import (
 //
 //go:nosplit
 func Exit(status cm.BoolResult) {
-	status0 := cm.BoolToU32(status)
+	status0 := (uint32)(cm.BoolToU32(status))
 	wasmimport_Exit((uint32)(status0))
 	return
 }

@@ -4,7 +4,7 @@
 package runtime
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
+	"go.bytecodealliance.org/cm"
 )
 
 // ConfigError represents the variant "wasi:config/runtime@0.2.0-draft#config-error".

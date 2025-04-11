@@ -13,8 +13,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  GO_VERSION: '1.23'
-  TINYGO_VERSION: '0.34.0'
+  GO_VERSION: '1.24.1'
+  TINYGO_VERSION: '0.36.0'
 
 permissions:
   contents: read
@@ -23,30 +23,30 @@ jobs:
   meta:
     runs-on: ubuntu-latest
     outputs:
-      modified: ${{ steps.changes.outputs.any_changed }}
+      modified: ${{ steps.changes.outputs.changed }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: tj-actions/changed-files@7ac5902a02bbf88c426878d792c0728b55bb97ae
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         id: changes
         with:
-          files: |
-            ./.github/workflows/wash.yml
-            ./.github/actions/install-cached-wash-cli/action.yml
-            Cargo.lock
-            Cargo.toml
-            crates/control-interface/**
-            crates/core/**
-            crates/secrets-types/**
-            crates/tracing/**
-            crates/wash-cli/**
-            crates/wash-lib/**
-          files_ignore: |
-            !crates/**/*.md
-            !crates/wash-cli/.devcontainer
+          list-files: shell
+          filters: |
+            changed:
+              - './.github/workflows/wash.yml'
+              - './.github/actions/install-cached-wash-cli/action.yml'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'crates/control-interface/**'
+              - 'crates/core/**'
+              - 'crates/secrets-types/**'
+              - 'crates/tracing/**'
+              - 'crates/wash/**'
+              - '!crates/**/*.md'
+              - '!crates/wash/.devcontainer'
       - name: Changed files
         run: |
-          echo "Changed file(s) (${{ steps.changes.outputs.all_changed_files_count}})"
-          echo "${{ steps.changes.outputs.all_changed_files }}"
+          echo "Changed file(s) (${{ steps.changes.outputs.changed_count }})"
+          echo "${{ steps.changes.outputs.changed_files }}"
 
   unit_tests:
     needs: [meta]
@@ -58,19 +58,22 @@ jobs:
         os: [ubuntu-latest-4-cores, windows-latest, macos-13]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e
         with:
           node-version: '18.x'
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - run: rustup show
-      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
         with:
           shared-key: '${{ matrix.os }}-shared-cache'
       - name: Install nextest
-        uses: taiki-e/install-action@2c3c8dfabf5933531aca0613c6b0c173fa51745e
+        uses: taiki-e/install-action@a48a50298f98c47e46a957ae6f82c44cc4878e42 # v2.49.47
         with:
           tool: nextest,wit-bindgen-cli
-      - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a
+      - uses: taiki-e/install-action@a48a50298f98c47e46a957ae6f82c44cc4878e42 # v2.49.47
+        with:
+          tool: wasm-tools@1.225.0 # TODO: update once wit-bindgen-go is fixed
+      - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b
         with:
           go-version: ${{ env.GO_VERSION }}
       - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
@@ -82,12 +85,12 @@ jobs:
       - name: Build wash
         if: ${{ matrix.os != 'windows-latest' || github.ref == 'refs/heads/main' }}
         run: make build
-        working-directory: ./crates/wash-cli
+        working-directory: ./crates/wash
 
-      - name: Run all wash & wash-lib unit tests
+      - name: Run all wash unit tests
         if: ${{ matrix.os != 'windows-latest' || github.ref == 'refs/heads/main' }}
         run: make test-wash-ci
-        working-directory: ./crates/wash-cli
+        working-directory: ./crates/wash
 
   integration_tests:
     needs: [meta]
@@ -96,11 +99,14 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # Free disk space
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
       - run: rustup show
-      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
         with:
           shared-key: 'ubuntu-22.04-shared-cache'
-      - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a
+      - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b
         with:
           go-version: ${{ env.GO_VERSION }}
       - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
@@ -110,14 +116,17 @@ jobs:
       - name: Launch integration test services
         uses: sudo-bot/action-docker-compose@ef4c4da08a9673f93d4eb8a5da1e942bf24a37ea
         with:
-          cli-args: '-f ./crates/wash-cli/tools/docker-compose.yml up --detach'
+          cli-args: '-f ./crates/wash/tools/docker-compose.yml up --detach'
       - name: Install nextest
-        uses: taiki-e/install-action@2c3c8dfabf5933531aca0613c6b0c173fa51745e
+        uses: taiki-e/install-action@a48a50298f98c47e46a957ae6f82c44cc4878e42 # v2.49.47
         with:
-          tool: nextest,wit-bindgen-cli,wasm-tools
+          tool: nextest,wit-bindgen-cli
+      - uses: taiki-e/install-action@a48a50298f98c47e46a957ae6f82c44cc4878e42 # v2.49.47
+        with:
+          tool: wasm-tools@1.225.0 # TODO: update once wit-bindgen-go is fixed
       - name: Run integration tests
         run: make test-integration-ci
-        working-directory: ./crates/wash-cli
+        working-directory: ./crates/wash
 
   # Regression E2E tests to ensure that `wash new component` works consistently,
   # including older (released) versions of `wash`
@@ -129,7 +138,7 @@ jobs:
     strategy:
       matrix:
         wash-version:
-          - current
+          - 0.39.0
         template:
           - name: hello-world-rust
             lang: rust
@@ -155,7 +164,7 @@ jobs:
 
       # Set up Rust & trigger cargo toolchain
       - run: rustup show
-      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
         with:
           shared-key: 'ubuntu-22.04-shared-cache'
 

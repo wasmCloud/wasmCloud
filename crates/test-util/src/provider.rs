@@ -95,6 +95,34 @@ pub async fn assert_start_provider(
     Ok(())
 }
 
+/// Start a provider, ensuring that the host does not respond
+///
+/// While this cannot guarantee that the host has not undertaken this operation,
+/// for operations that should return quickly, it suggests the host has ignored
+/// the message.
+///
+/// # Errors
+///
+/// Returns an `Err` if the host responds
+pub async fn assert_start_provider_timeout(
+    StartProviderArgs {
+        client,
+        host_id,
+        provider_id,
+        provider_ref,
+        config,
+    }: StartProviderArgs<'_>,
+) -> Result<()> {
+    if let Err(e) = client
+        .start_provider(host_id, provider_ref, provider_id, None, config)
+        .await
+    {
+        ensure!(e.to_string().contains("timed out"));
+        return Ok(());
+    }
+    anyhow::bail!("start_provider should not have received a response")
+}
+
 /// Stop a provider, ensuring that the provider stops properly
 ///
 /// # Errors

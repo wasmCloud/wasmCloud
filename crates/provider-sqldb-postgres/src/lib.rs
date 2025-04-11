@@ -14,7 +14,7 @@ use anyhow::{Context as _, Result};
 use deadpool_postgres::Pool;
 use futures::TryStreamExt as _;
 use tokio::sync::RwLock;
-use tokio_postgres::Statement;
+use tokio_postgres::types::Type as PgType;
 use tracing::{error, instrument, warn};
 use ulid::Ulid;
 
@@ -34,12 +34,27 @@ use config::{extract_prefixed_conn_config, ConnectionCreateOptions};
 
 use wasmcloud_provider_sdk::Context;
 
+/// A unique identifier for a created connection
+type SourceId = String;
+
+/// A query used in the process of creating a prepared statement
+type PreparedStatementQuery = String;
+
+/// Parameters determined to be used in a statement
+///
+/// This value is usually constructed after running a prepare against a given
+/// client from a given pool, and saving the relevant type information.
+type StatementParams = Vec<PgType>;
+
+/// Information about a given prepared statement
+type PreparedStatementInfo = (PreparedStatementQuery, StatementParams, SourceId);
+
 #[derive(Clone, Default)]
 pub struct PostgresProvider {
     /// Database connections indexed by source ID name
-    connections: Arc<RwLock<HashMap<String, Pool>>>,
+    connections: Arc<RwLock<HashMap<SourceId, Pool>>>,
     /// Lookup of prepared statements to the statement and the source ID that prepared them
-    prepared_statements: Arc<RwLock<HashMap<PreparedStatementToken, (Statement, String)>>>,
+    prepared_statements: Arc<RwLock<HashMap<PreparedStatementToken, PreparedStatementInfo>>>,
 }
 
 impl PostgresProvider {
@@ -152,13 +167,13 @@ impl PostgresProvider {
     /// Prepare a statement
     async fn do_statement_prepare(
         &self,
-        connection_token: &str,
+        source_id: &str,
         query: &str,
     ) -> Result<PreparedStatementToken, StatementPrepareError> {
         let connections = self.connections.read().await;
-        let pool = connections.get(connection_token).ok_or_else(|| {
+        let pool = connections.get(source_id).ok_or_else(|| {
             StatementPrepareError::Unexpected(format!(
-                "failed to find connection pool for token [{connection_token}]"
+                "failed to find connection pool for token [{source_id}]"
             ))
         })?;
 
@@ -175,7 +190,7 @@ impl PostgresProvider {
         let mut prepared_statements = self.prepared_statements.write().await;
         prepared_statements.insert(
             statement_token.clone(),
-            (statement, connection_token.into()),
+            (query.into(), statement.params().into(), source_id.into()),
         );
 
         Ok(statement_token)
@@ -188,23 +203,36 @@ impl PostgresProvider {
         params: Vec<PgValue>,
     ) -> Result<u64, PreparedStatementExecError> {
         let statements = self.prepared_statements.read().await;
-        let (statement, connection_token) = statements.get(statement_token).ok_or_else(|| {
+        let (query, types, source_id) = statements.get(statement_token).ok_or_else(|| {
             PreparedStatementExecError::Unexpected(format!(
                 "missing prepared statement with statement ID [{statement_token}]"
             ))
         })?;
 
         let connections = self.connections.read().await;
-        let pool = connections.get(connection_token).ok_or_else(|| {
+        let pool = connections.get(source_id).ok_or_else(|| {
             PreparedStatementExecError::Unexpected(format!(
-                "missing connection pool for token [{connection_token}], statement ID [{statement_token}]"
+                "missing connection pool for token [{source_id}], statement ID [{statement_token}]"
             ))
         })?;
         let client = pool.get().await.map_err(|e| {
             PreparedStatementExecError::Unexpected(format!("failed to build client from pool: {e}"))
         })?;
 
-        let rows_affected = client.execute_raw(statement, params).await.map_err(|e| {
+        // Since the pool is not aware of already created statements managed by tokio_postgres,
+        // we may have pulled a client that has not already has this statement prepared,
+        // so we must prepare, just in case.
+        let statement = client
+            .statement_cache
+            .prepare_typed(&client, query, types)
+            .await
+            .map_err(|e| {
+                PreparedStatementExecError::Unexpected(format!(
+                    "failed to prepare statement for client in pool: {e}"
+                ))
+            })?;
+
+        let rows_affected = client.execute_raw(&statement, params).await.map_err(|e| {
             PreparedStatementExecError::Unexpected(format!(
                 "failed to execute prepared statement with token [{statement_token}]: {e}"
             ))
@@ -244,12 +272,12 @@ impl Provider for PostgresProvider {
     /// Generally we can release the resources (connections) associated with the source
     #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
     async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let component_id = info.get_source_id();
+        let source_id = info.get_source_id();
         let mut prepared_statements = self.prepared_statements.write().await;
-        prepared_statements.retain(|_stmt_token, (_conn, src_id)| component_id != *src_id);
+        prepared_statements.retain(|_stmt_token, (_query, _statement, src_id)| src_id != source_id);
         drop(prepared_statements);
         let mut connections = self.connections.write().await;
-        connections.remove(component_id);
+        connections.remove(source_id);
         drop(connections);
         Ok(())
     }

@@ -24,18 +24,18 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Set up Helm
-        uses: azure/setup-helm@fe7b79cd5ee1e45176fcad797de68ecaf3ca4814
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112
         with:
           version: ${{ env.HELM_VERSION }}
 
       # Used by helm chart-testing below
       - name: Set up Python
-        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
         with:
           python-version: '3.12.0'
 
       - name: Set up chart-testing
-        uses: helm/chart-testing-action@e6669bcd63d7cb57cb4380c33043eebe5d111992
+        uses: helm/chart-testing-action@0d28d3144d3a25ea2cc349d6e59901c4ff469b3b
         with:
           version: v3.9.0
           yamllint_version: 1.32.0
@@ -46,7 +46,7 @@ jobs:
           ct lint --config charts/wasmcloud-platform/ct.yaml
 
       - name: Create kind cluster
-        uses: helm/kind-action@ae94020eaf628e9b9b9f341a10cc0cdcf5c018fb
+        uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3
 
       - name: Run chart-testing (install)
         run: |
@@ -67,7 +67,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Set up Helm
-        uses: azure/setup-helm@fe7b79cd5ee1e45176fcad797de68ecaf3ca4814
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112
         with:
           version: ${{ env.HELM_VERSION }}
 
@@ -82,7 +82,7 @@ jobs:
           helm package $CHART_DIR -d .helm-charts
 
       - name: Login to GHCR
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}

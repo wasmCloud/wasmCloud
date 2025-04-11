@@ -1,0 +1,4 @@
+blobstore-wrpc = "https://github.com/wrpc/blobstore/archive/v0.1.0.tar.gz"
+keyvalue = "https://github.com/wrpc/keyvalue/archive/v0.2.0-draft.tar.gz"
+messaging = "https://github.com/wasmCloud/messaging/archive/3c9436badb668002d191017e50f8b97ed49e6c1c.tar.gz"
+messaging-0-2-0-rc1 = "https://github.com/wasmCloud/messaging/archive/v0.2.0-rc.1.tar.gz"

@@ -4,8 +4,8 @@
 package terminalstdin
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
 	terminalinput "github.com/wasmcloud/wasmcloud/examples/golang/components/http-client-tinygo/gen/wasi/cli/terminal-input"
+	"go.bytecodealliance.org/cm"
 )
 
 // TerminalInput represents the imported type alias "wasi:cli/terminal-stdin@0.2.0#terminal-input".

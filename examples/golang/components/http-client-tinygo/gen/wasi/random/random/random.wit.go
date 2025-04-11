@@ -4,7 +4,7 @@
 package random
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
+	"go.bytecodealliance.org/cm"
 )
 
 // GetRandomBytes represents the imported function "get-random-bytes".

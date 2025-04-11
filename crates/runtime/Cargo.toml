@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-runtime"
-version = "0.8.1"
+version = "0.10.0"
 description = "wasmCloud runtime library"
 readme = "README.md"
 
@@ -41,8 +41,11 @@ wasmtime = { workspace = true, features = [
     "coredump",
     "cranelift",
     "gc",
+    "gc-drc",
+    "gc-null",
     "parallel-compilation",
     "pooling-allocator",
+    "threads",
 ] }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }

@@ -25,7 +25,6 @@ pub trait Secrets {
     ) -> anyhow::Result<secrets::reveal::SecretValue>;
 }
 
-#[async_trait]
 impl<H: Handler> HostSecret for Ctx<H> {
     async fn drop(&mut self, secret: Resource<Secret>) -> anyhow::Result<()> {
         self.table.delete(secret)?;
@@ -33,7 +32,6 @@ impl<H: Handler> HostSecret for Ctx<H> {
     }
 }
 
-#[async_trait]
 impl<H: Handler> store::Host for Ctx<H> {
     #[instrument(skip(self))]
     async fn get(
@@ -51,7 +49,6 @@ impl<H: Handler> store::Host for Ctx<H> {
     }
 }
 
-#[async_trait]
 impl<H: Handler> reveal::Host for Ctx<H> {
     #[instrument(skip(self))]
     async fn reveal(&mut self, secret: Resource<Secret>) -> anyhow::Result<SecretValue> {

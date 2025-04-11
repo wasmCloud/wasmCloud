@@ -3,7 +3,7 @@
 package runtime
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
+	"go.bytecodealliance.org/cm"
 )
 
 // This file contains wasmimport and wasmexport declarations for "wasi:config@0.2.0-draft".

@@ -1,9 +1,9 @@
 [package]
 name = "secrets-nats-kv"
-version = "0.1.1"
+version = "0.2.0"
 readme = "README.md"
 description = "A secrets backend for wasmCloud that uses NATS as a key-value store."
-categories = ["wasmcloud", "secrets", "cryptography"]
+categories = ["cryptography"]
 keywords = ["webassembly", "wasmcloud", "nats", "cli", "kv"]
 authors.workspace = true
 edition.workspace = true
@@ -43,5 +43,5 @@ wascap = { workspace = true }
 wasmcloud-secrets-types = { workspace = true }
 
 [dev-dependencies]
-rand = { workspace = true }
+rand = { workspace = true, features = ["thread_rng"] }
 wasmcloud-secrets-client = { workspace = true }

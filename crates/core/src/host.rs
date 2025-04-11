@@ -4,8 +4,7 @@
 
 use std::collections::HashMap;
 
-use secrecy::zeroize::ZeroizeOnDrop;
-use secrecy::Zeroize;
+use secrecy::zeroize::{Zeroize, ZeroizeOnDrop};
 use serde::{Deserialize, Serialize};
 
 use crate::link::InterfaceLinkDefinition;

@@ -10,9 +10,8 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tracing::{debug, error, instrument, trace_span, warn, Instrument as _, Span};
+use wasmcloud_core::messaging::{add_tls_ca, ConnectionConfig, ConsumerConfig};
 use wasmcloud_core::HostData;
-use wasmcloud_provider_messaging_nats::ConnectionConfig;
-use wasmcloud_provider_messaging_nats::{add_tls_ca, ConsumerConfig};
 use wasmcloud_provider_sdk::provider::{
     handle_provider_commands, receive_link_for_provider, ProviderCommandReceivers,
 };

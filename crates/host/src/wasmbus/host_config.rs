@@ -9,7 +9,9 @@ use std::time::Duration;
 use nkeys::KeyPair;
 use url::Url;
 use wasmcloud_core::{logging::Level as LogLevel, OtelConfig};
-use wasmcloud_runtime::{MAX_COMPONENTS, MAX_COMPONENT_SIZE, MAX_LINEAR_MEMORY};
+use wasmcloud_runtime::{
+    DEFAULT_MAX_CORE_INSTANCES_PER_COMPONENT, MAX_COMPONENTS, MAX_COMPONENT_SIZE, MAX_LINEAR_MEMORY,
+};
 
 use crate::wasmbus::experimental::Features;
 
@@ -74,6 +76,8 @@ pub struct Host {
     pub max_component_size: u64,
     /// The maximum number of components that can be run simultaneously
     pub max_components: u32,
+    /// The maximum number of core instances that are allowed in a given component
+    pub max_core_instances_per_component: u32,
     /// The interval at which the Host will send heartbeats
     pub heartbeat_interval: Option<Duration>,
     /// Experimental features that can be enabled in the host
@@ -131,6 +135,7 @@ impl Default for Host {
             max_linear_memory: MAX_LINEAR_MEMORY,
             // 50 MB
             max_component_size: MAX_COMPONENT_SIZE,
+            max_core_instances_per_component: DEFAULT_MAX_CORE_INSTANCES_PER_COMPONENT,
             max_components: MAX_COMPONENTS,
             heartbeat_interval: None,
             experimental_features: Features::default(),

@@ -43,7 +43,7 @@ spec:
         # (and ensure that you've used `wash par crate` to create the par file below)
         #
         # image: file://../../../../crates/provider-http-server/provider-http-server.par.gz
-        image: ghcr.io/wasmcloud/http-server:0.26.0
+        image: ghcr.io/wasmcloud/http-server:0.27.0
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel

@@ -30,17 +30,25 @@ spec:
         # (i.e. making interacting with the messaging system, in this case NATS)
         - type: link
           properties:
-            target:
-              name: nats
             namespace: wasmcloud
             package: messaging
             interfaces: [consumer]
+            source:
+              name: echo
+            target:
+              name: nats
+              # This configures the (component -> provider) link
+              config:
+                - name: provider-tgt
+                  properties:
+                    subscriptions: wasmcloud.echo
+                    # cluster_uris: "nats://your-custom-nats:4222,nats://your-second-nats:5222"
 
     # Add a capability provider that implements `wasmcloud:messaging` using NATS
     - name: nats
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/messaging-nats:0.25.0
+        image: ghcr.io/wasmcloud/messaging-nats:0.26.0
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
@@ -58,13 +66,16 @@ spec:
         # so that so the provider can deliver messages to the component (by invoking the wasmcloud:messaging/handler interface) .
         - type: link
           properties:
-            target:
-              name: echo
             namespace: wasmcloud
             package: messaging
             interfaces: [handler]
+            target:
+              name: echo
+            # This configures the (provider -> component) link
             source:
+              name: nats
               config:
-                - name: simple-subscription
+                - name: provider-src
                   properties:
                     subscriptions: wasmcloud.echo
+                    # cluster_uris: "nats://your-custom-nats:4222,nats://your-second-nats:5222"

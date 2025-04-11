@@ -4,7 +4,7 @@
 package lattice
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
+	"go.bytecodealliance.org/cm"
 )
 
 // CallTargetInterface represents the imported resource "wasmcloud:bus/lattice@1.0.0#call-target-interface".

@@ -11,7 +11,6 @@
 .gitpod.yml
 .idea
 .vscode/
-/tests/fixtures
 /tmp/
 dump.rdb
 host_config.json
@@ -20,4 +19,4 @@ target/
 **/build/
 examples/**/Cargo.lock
 *-workspace
-!crates/wash-lib/src/build/
+!crates/wash/src/lib/build/

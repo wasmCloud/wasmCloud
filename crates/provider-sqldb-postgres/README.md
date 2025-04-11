@@ -4,12 +4,14 @@ This capability provider implements the [`wasmcloud:sqldb-postgres`][wasmcloud-s
 
 This provider handles concurrent component connections, and components which are linked to it should specify configuration at link time (see [the named configuration settings section](#named-configuration-settings) for more details.
 
-Want to read all the functionality included the interface? [Start from `provider.wit`](./wit/provider.wit) to read what this provider can do, and work your way to [`types.wit`](./wit/types.wit).
+Want to read all the functionality included the interface? [Start from `provider.wit`][provider-wit] to read what this provider can do, and work your way to [`types.wit`][types-wit].
 
 Note that connections are local to a single provider, so multiple providers running on the same lattice will _not_ share connections automatically.
 
 [postgres]: https://postgresql.org
 [wasmcloud-sqldb-postgres-wit]: https://github.com/vados-cosmonic/wit-wasmcloud-postgres
+[provider-wit]: https://github.com/wasmCloud/wasmCloud/blob/main/crates/provider-sqldb-postgres/wit/provider.wit
+[types-wit]: https://github.com/wasmCloud/wasmCloud/blob/main/crates/provider-sqldb-postgres/wit/types.wit
 
 ## 👟 Quickstart
 
@@ -38,13 +40,13 @@ spec:
     - name: sqldb-postgres
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/sqldb-postgres:0.8.0
+        image: ghcr.io/wasmcloud/sqldb-postgres:0.9.0
 
     # A capability provider that provides HTTP serving for the component
     - name: http-server
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.26.0
+        image: ghcr.io/wasmcloud/http-server:0.27.0
 
     # A component that uses both capability providers above (HTTP server and sqldb-postgres)
     # to provide a TODO app on http://localhost:8080
@@ -95,13 +97,14 @@ WADM files should not be checked into source control containing secrets.
 
 New named configuration can be specified by using `wash config put`.
 
-| Property                | Example     | Description                                               |
-| ----------------------- | ----------- | --------------------------------------------------------- |
-| `POSTGRES_HOST`         | `localhost` | Postgres cluster hostname                                 |
-| `POSTGRES_PORT`         | `5432`      | Postgres cluster port                                     |
-| `POSTGRES_USERNAME`     | `postgres`  | Postgres cluster username                                 |
-| `POSTGRES_DATABASE`     | `postgres`  | Postgres cluster database                                 |
-| `POSTGRES_TLS_REQUIRED` | `false`     | Whether TLS should be required for al managed connections |
+| Property                | Example     | Description                                                                                                                                                         |
+| ----------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POSTGRES_HOST`         | `localhost` | Postgres cluster hostname                                                                                                                                           |
+| `POSTGRES_PORT`         | `5432`      | Postgres cluster port                                                                                                                                               |
+| `POSTGRES_USERNAME`     | `postgres`  | Postgres cluster username                                                                                                                                           |
+| `POSTGRES_DATABASE`     | `postgres`  | Postgres cluster database                                                                                                                                           |
+| `POSTGRES_TLS_REQUIRED` | `false`     | Whether TLS should be required for all managed connections                                                                                                          |
+| `POSTGRES_POOL_SIZE`    | `12`        | Maximum size of the connection pool (configures [max_size](https://docs.rs/deadpool-postgres/0.14.1/deadpool_postgres/struct.PoolConfig.html#structfield.max_size)) |
 
 Once named configuration with the keys above is created, it can be referenced as `target_config` for a link to this provider.
 
@@ -135,13 +138,13 @@ The `querier` component in the snippet above specifies a link to a `sqldb-postgr
 
 ## 🔐 Secret Settings
 
-While most values can be specified via named configuration, sensitive values like the `POSTGRES_PASSWORD` should be specified via *secrets*.
+While most values can be specified via named configuration, sensitive values like the `POSTGRES_PASSWORD` should be specified via _secrets_.
 
 New secrets be specified by using `wash secrets put`.
 
-| Property                | Example     | Description                                               |
-| ----------------------- | ----------- | --------------------------------------------------------- |
-| `POSTGRES_PASSWORD`     | `postgres`  | Postgres cluster password                                 |
+| Property            | Example    | Description               |
+| ------------------- | ---------- | ------------------------- |
+| `POSTGRES_PASSWORD` | `postgres` | Postgres cluster password |
 
 Once a secret has been created, it can be referenced in the link to the provider.
 

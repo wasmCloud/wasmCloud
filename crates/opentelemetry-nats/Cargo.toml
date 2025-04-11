@@ -1,6 +1,6 @@
 [package]
 name = "opentelemetry-nats"
-version = "0.2.0"
+version = "0.2.1"
 description = "Convenience functions for propagating OpenTelemetry traces on NATS messages"
 
 authors.workspace = true

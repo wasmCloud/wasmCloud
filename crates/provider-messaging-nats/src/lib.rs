@@ -14,6 +14,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
+use wasmcloud_core::messaging::ConnectionConfig;
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::provider::WrpcClient;
 use wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector;
@@ -23,7 +24,6 @@ use wasmcloud_provider_sdk::{
 };
 
 mod connection;
-pub use connection::{ConnectionConfig, ConsumerConfig};
 
 mod bindings {
     wit_bindgen_wrpc::generate!({
@@ -269,7 +269,7 @@ impl Provider for NatsMessagingProvider {
             self.default_config.clone()
         } else {
             // create a config from the supplied values and merge that with the existing default
-            match ConnectionConfig::from_link_config(&link_config) {
+            match connection::from_link_config(&link_config) {
                 Ok(cc) => self.default_config.merge(&ConnectionConfig {
                     subscriptions: Box::default(),
                     ..cc
@@ -304,7 +304,7 @@ impl Provider for NatsMessagingProvider {
             self.default_config.clone()
         } else {
             // create a config from the supplied values and merge that with the existing default
-            match ConnectionConfig::from_link_config(&link_config) {
+            match connection::from_link_config(&link_config) {
                 Ok(cc) => self.default_config.merge(&cc),
                 Err(e) => {
                     error!("Failed to build connection configuration: {e:?}");

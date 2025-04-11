@@ -4,9 +4,9 @@
 package types
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
 	wallclock "github.com/wasmcloud/wasmcloud/examples/golang/components/http-client-tinygo/gen/wasi/clocks/wall-clock"
 	"github.com/wasmcloud/wasmcloud/examples/golang/components/http-client-tinygo/gen/wasi/io/streams"
+	"go.bytecodealliance.org/cm"
 )
 
 // InputStream represents the imported type alias "wasi:filesystem/types@0.2.0#input-stream".
@@ -472,7 +472,7 @@ func (self Descriptor) IsSameObject(other Descriptor) (result bool) {
 	self0 := cm.Reinterpret[uint32](self)
 	other0 := cm.Reinterpret[uint32](other)
 	result0 := wasmimport_DescriptorIsSameObject((uint32)(self0), (uint32)(other0))
-	result = cm.U32ToBool((uint32)(result0))
+	result = (bool)(cm.U32ToBool((uint32)(result0)))
 	return
 }
 

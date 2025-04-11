@@ -30,14 +30,14 @@ runs:
       if: ${{ inputs.language == 'golang' || inputs.language == 'tinygo' }}
       with:
         go-version: ${{ inputs.language-version }}
-    - uses: taiki-e/install-action@437c908c7e5ee18b63a261286cbe5147219f8a39
+    - uses: taiki-e/install-action@4a7eafa27f0bd6857fe4f46dad5c66568c426ac0 # v2.49.22
       if: ${{ inputs.language == 'golang' || inputs.language == 'tinygo' }}
       with:
         tool: wit-bindgen-cli,wasm-tools
     - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
       if: ${{ inputs.language == 'tinygo' }}
       with:
-        tinygo-version: '0.33.0'
+        tinygo-version: '0.36.0'
         install-binaryen: 'false'
 
     # Python
@@ -50,7 +50,7 @@ runs:
       shell: bash
       run: |
         pip install componentize-py==0.14.0
-    
+
     # TypeScript
     - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6
       if: ${{ inputs.language == 'typescript' }}
@@ -82,7 +82,7 @@ runs:
     # Install wash
     - name: install wash (previous version)
       if: ${{ inputs.wash-version && inputs.wash-version != 'current' }}
-      uses: taiki-e/install-action@acd25891978b4cdaebd139d3efef606d26513b14 # v2.47.0
+      uses: taiki-e/install-action@4a7eafa27f0bd6857fe4f46dad5c66568c426ac0 # v2.49.22
       with:
         tool: wash@${{ inputs.wash-version }}
 

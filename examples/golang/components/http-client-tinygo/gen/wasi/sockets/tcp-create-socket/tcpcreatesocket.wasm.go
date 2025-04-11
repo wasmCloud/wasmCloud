@@ -3,7 +3,7 @@
 package tcpcreatesocket
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
+	"go.bytecodealliance.org/cm"
 )
 
 // This file contains wasmimport and wasmexport declarations for "wasi:sockets@0.2.0".

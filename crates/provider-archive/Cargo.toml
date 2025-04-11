@@ -1,6 +1,6 @@
 [package]
 name = "provider-archive"
-version = "0.15.0"
+version = "0.16.0"
 description = "Library for reading and writing wasmCloud capability provider archive files"
 documentation = "https://docs.rs/provider-archive"
 readme = "README.md"

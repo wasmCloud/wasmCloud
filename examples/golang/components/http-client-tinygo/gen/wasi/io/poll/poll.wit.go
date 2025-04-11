@@ -4,7 +4,7 @@
 package poll
 
 import (
-	"github.com/bytecodealliance/wasm-tools-go/cm"
+	"go.bytecodealliance.org/cm"
 )
 
 // Pollable represents the imported resource "wasi:io/poll@0.2.0#pollable".
@@ -42,7 +42,7 @@ func (self Pollable) Block() {
 func (self Pollable) Ready() (result bool) {
 	self0 := cm.Reinterpret[uint32](self)
 	result0 := wasmimport_PollableReady((uint32)(self0))
-	result = cm.U32ToBool((uint32)(result0))
+	result = (bool)(cm.U32ToBool((uint32)(result0)))
 	return
 }
 

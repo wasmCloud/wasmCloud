@@ -85,12 +85,14 @@ pub const DEFAULT_RPC_TIMEOUT_MILLIS: Duration = Duration::from_millis(2000);
 pub fn with_connection_event_logging(opts: ConnectOptions) -> ConnectOptions {
     opts.event_callback(|event| async move {
         match event {
-            Event::Disconnected => warn!("nats client disconnected"),
             Event::Connected => info!("nats client connected"),
-            Event::ClientError(err) => error!("nats client error: '{:?}'", err),
-            Event::ServerError(err) => error!("nats server error: '{:?}'", err),
-            Event::SlowConsumer(val) => warn!("nats slow consumer detected ({})", val),
+            Event::Disconnected => warn!("nats client disconnected"),
+            Event::Draining => warn!("nats client draining"),
             Event::LameDuckMode => warn!("nats lame duck mode"),
+            Event::SlowConsumer(val) => warn!("nats slow consumer detected ({val})"),
+            Event::ClientError(err) => error!("nats client error: '{err:?}'"),
+            Event::ServerError(err) => error!("nats server error: '{err:?}'"),
+            Event::Closed => error!("nats client closed"),
         }
     })
 }

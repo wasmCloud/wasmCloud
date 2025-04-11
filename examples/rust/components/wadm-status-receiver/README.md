@@ -5,8 +5,8 @@ This folder contains a WebAssembly component that makes use of:
 - The [`wasmcloud:wadm/handler` WIT contract][contract]
 - The [`wadm-provider`][provider] Capability Provider
 
-[contract]: ./wit/deps/wasmcloud-wadm/package.wit
-[provider]: ../../../../crates/provider-wadm
+[contract]: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/wadm-status-receiver/wit/deps/wasmcloud-wadm-0.2.0/package.wit
+[provider]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/provider-wadm
 
 ## 📦 Dependencies
 
