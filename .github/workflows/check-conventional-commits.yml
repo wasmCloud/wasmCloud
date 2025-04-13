@@ -12,6 +12,7 @@ jobs:
     permissions:
       pull-requests: write
     steps:
+      - uses: actions/checkout@v3
       - name: Install convco
         uses: taiki-e/install-action@5e434d46449f862cf1aad510c0b87f51110e7334 # v2.49.48
         with:
@@ -23,6 +24,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: | # shell
           set +e
+
+          if ! git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+            echo "Error: Current directory is not a git repository"
+            exit 1
+          fi
+
           OUTPUT=$(gh pr view ${{ github.event.pull_request.number }} --repo wasmcloud/wasmcloud --json commits --jq '.commits[].messageHeadline' | convco check --from-stdin)
           set -e
 
