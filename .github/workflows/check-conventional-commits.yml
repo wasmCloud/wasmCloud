@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install convco
-        uses: taiki-e/install-action@5e434d46449f862cf1aad510c0b87f51110e7334 # v2.49.48
+        uses: taiki-e/install-action@be7c31b6745feec79dec5eb79178466c0670bb2d # v2.49.49
         with:
           tool: convco@0.6.1
 
