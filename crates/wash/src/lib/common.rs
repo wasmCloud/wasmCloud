@@ -37,6 +37,7 @@ pub const WASHBOARD_VERSION_T: Version = Version::new(0, 7, 1);
 
 /// Version of wasmCloud host used by default for wash
 pub const WASMCLOUD_HOST_VERSION: &str = "v1.7.0";
+pub const WASMCLOUD_HOST_VERSION_T: Version = Version::new(1, 7, 0);
 
 /// Default path to the `git` command (assumes it exists on PATH)
 const DEFAULT_GIT_PATH: &str = "git";
