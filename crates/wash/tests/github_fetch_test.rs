@@ -9,7 +9,7 @@ use wasmcloud_test_util::env::EnvVarGuard;
 use wasmcloud_test_util::testcontainers::{AsyncRunner as _, ImageExt, Mount, SquidProxy};
 
 use wash::lib::start::{
-    get_download_client, new_minor_version_compatible_with_version_string,
+    get_download_client, new_patch_or_pre_1_0_0_minor_version_after_version_string,
     new_patch_releases_after, DOWNLOAD_CLIENT_USER_AGENT,
 };
 
@@ -199,8 +199,8 @@ async fn test_http_proxy_with_basic_auth() {
 #[tokio::test]
 #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
 async fn test_fetching_wasm_cloud_patch_versions_after_v_1_0_3() {
-    let owner = &"wasmCloud";
-    let repo = &"wasmCloud";
+    let owner = "wasmCloud";
+    let repo = "wasmCloud";
     let latest_version = semver::Version::new(1, 0, 3);
     // Use 1.0.3 as the latest version, since there is a newer version
     let patch_releases = new_patch_releases_after(owner, repo, &latest_version)
@@ -233,25 +233,27 @@ async fn test_fetching_wasm_cloud_patch_versions_after_v_1_0_3() {
 #[tokio::test]
 #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
 async fn test_fetching_new_wadm_version_from_tag_name_after_v_0_20_0() {
-    let owner = &"wasmCloud";
-    let repo = &"wadm";
-
-    // Note that because this is a pre-1.0.0 version, the semver behavior is a little different. When the version is
-    // 1.0.0 and up the positions are `<major>.<minor>.<patch>` but pre-1.0.0, it's `0.<major>.<minor>`.
-    // <https://semver.org/#spec-item-4>
+    let owner = "wasmCloud";
+    let repo = "wadm";
 
     // Use 0.20.0 as the latest version, since there is a newer version
-    let release_tag_name = &"v0.20.0";
-    // Note: This starts with 'v' ──┘
+    let release_tag_name = "v0.20.0";
+    // Note: starts with 'v' ─────┘
+    // This is important because main release tags should always have a 'v' prefix, while other releases will not.
 
     let semver::Version {
         major,
         minor,
         patch,
         ..
-    } = new_minor_version_compatible_with_version_string(owner, repo, None, release_tag_name)
-        .await
-        .expect("Should have been able to fetch releases");
+    } = new_patch_or_pre_1_0_0_minor_version_after_version_string(
+        owner,
+        repo,
+        release_tag_name,
+        None,
+    )
+    .await
+    .expect("Should have been able to fetch releases");
 
     assert_eq!(major, 0, "major version is not changed");
     assert_eq!(minor, 20, "minor version is not changed");
@@ -261,16 +263,26 @@ async fn test_fetching_new_wadm_version_from_tag_name_after_v_0_20_0() {
 #[tokio::test]
 #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
 async fn test_fetching_external_tool_version() {
-    let owner = &"nats-io";
-    let repo = &"nats-server";
+    let owner = "nats-io";
+    let repo = "nats-server";
     // As of 2025-04-04, the 2.10.0 is released and 2.10.26 is the latest patch version
-    let release_tag_name = &"v2.10.0";
+    let release_tag_name = "v2.10.0";
 
-    let semver::Version { major, minor, .. } =
-        new_minor_version_compatible_with_version_string(owner, repo, None, release_tag_name)
-            .await
-            .expect("Should have been able to fetch releases");
+    let semver::Version {
+        major,
+        minor,
+        patch,
+        ..
+    } = new_patch_or_pre_1_0_0_minor_version_after_version_string(
+        owner,
+        repo,
+        release_tag_name,
+        None,
+    )
+    .await
+    .expect("Should have been able to fetch releases");
 
     assert_eq!(major, 2, "major version is not changed");
-    assert!(minor > 10, "minor version is bigger");
+    assert_eq!(minor, 10, "minor version is not changed");
+    assert!(patch > 0, "patch version is bigger");
 }
