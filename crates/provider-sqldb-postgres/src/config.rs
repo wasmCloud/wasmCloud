@@ -63,29 +63,31 @@ pub(crate) fn extract_prefixed_conn_config(
     ];
     match keys
         .iter()
-        .map(|k| config.get(k))
-        .collect::<Vec<Option<&String>>>()[..]
-    {
-        [Some(host), Some(port), Some(username), config_password, Some(database), tls_required, pool_size] =>
-        {
-            let secret_password = secrets
-                .get(&format!("{prefix}PASSWORD"))
-                .and_then(SecretValue::as_string);
-            // Check that the password was pulled from secrets, not config
-            let password = match (secret_password, config_password) {
-                (Some(s), _) => s,
+        .map(|k| {
+            // Prefer fetching from secrets, but fall back to config if not found
+            match (secrets.get(k).and_then(SecretValue::as_string), config.get(k)) {
+                (Some(s), Some(_)) => {
+                    warn!("secret value [{k}] was found in secrets, but also exists in config. The value in secrets will be used.");
+                    Some(s)
+                }
+                (Some(s), _) => Some(s),
+                // Offer a warning for the password, but other values are fine to be in config
+                (None, Some(c)) if k == &format!("{prefix}PASSWORD") => {
+                    warn!("secret value [{k}] was not found in secrets, but exists in config. Prefer using secrets for sensitive values.");
+                    Some(c.as_str())
+                }
                 (None, Some(c)) => {
-                    warn!("secret value [{prefix}PASSWORD] was not found in secrets, but exists in config. Prefer using secrets for sensitive values.", );
-                    c
+                    Some(c.as_str())
                 }
-                (_, None) => {
-                    warn!("failed to find password in config and secrets");
-                    return None;
-                }
-            };
-
+                (_, None) => None,
+            }
+        })
+        .collect::<Vec<Option<&str>>>()[..]
+    {
+        [Some(host), Some(port), Some(username), Some(password), Some(database), tls_required, pool_size] =>
+        {
             let pool_size = pool_size.and_then(|pool_size| {
-                pool_size.as_str().parse::<usize>().ok().or_else(|| {
+                pool_size.parse::<usize>().ok().or_else(|| {
                     warn!("invalid pool size value [{pool_size}], using default");
                     None
                 })
@@ -107,7 +109,7 @@ pub(crate) fn extract_prefixed_conn_config(
             })
         }
         _ => {
-            warn!("failed to find keys in configuration: [{:?}]", keys);
+            warn!("failed to find required keys in configuration: [{:?}]", keys);
             None
         }
     }
