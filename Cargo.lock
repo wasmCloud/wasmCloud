@@ -8869,7 +8869,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-azure"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8890,7 +8890,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-fs"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8907,7 +8907,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-s3"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -8932,7 +8932,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-http-client"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8956,7 +8956,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-http-server"
-version = "0.27.0"
+version = "0.27.1"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8985,7 +8985,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-keyvalue-nats"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9003,7 +9003,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-keyvalue-redis"
-version = "0.29.0"
+version = "0.29.1"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9023,7 +9023,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-keyvalue-vault"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -9050,7 +9050,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-messaging-kafka"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -9114,7 +9114,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sqldb-postgres"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "bigdecimal 0.4.8",

@@ -1,7 +1,7 @@
 name = "Messaging Kafka"
 language = "rust"
 type = "provider"
-version = "0.6.0"
+version = "0.6.1"
 wit = "../../../crates/provider-messaging-kafka/wit"
 
 [rust]
