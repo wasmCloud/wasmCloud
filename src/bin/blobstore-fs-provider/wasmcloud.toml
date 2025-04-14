@@ -1,7 +1,7 @@
 name = "Blobstore FS"
 language = "rust"
 type = "provider"
-version = "0.11.0"
+version = "0.11.1"
 wit = "../../../crates/provider-blobstore-fs/wit"
 
 [rust]
