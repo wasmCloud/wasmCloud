@@ -1,6 +1,6 @@
 use crate::lib::app::{load_app_manifest, AppManifest, AppManifestSource};
 use crate::lib::cli::{CommandOutput, OutputKind};
-use crate::lib::common::CommandGroupUsage;
+use crate::lib::common::{CommandGroupUsage, WASMCLOUD_HOST_VERSION_T};
 use crate::lib::config::{
     create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_TIMEOUT_MS,
 };
@@ -9,9 +9,10 @@ use crate::lib::context::ContextManager;
 use crate::lib::generate::emoji;
 use crate::lib::start::{
     ensure_nats_server, ensure_wadm, ensure_wasmcloud, find_wasmcloud_binary, nats_pid_path,
-    new_minor_version_compatible_with_version_string, start_nats_server, start_wadm,
-    start_wasmcloud_host, NatsConfig, WadmConfig, GITHUB_WASMCLOUD_ORG, GITHUB_WASMCLOUD_WADM_REPO,
-    GITHUB_WASMCLOUD_WASMCLOUD_REPO, NATS_SERVER_BINARY, NATS_SERVER_CONF, WADM_PID,
+    new_patch_or_pre_1_0_0_minor_version_after_version_string, parse_version_string,
+    start_nats_server, start_wadm, start_wasmcloud_host, NatsConfig, WadmConfig,
+    GITHUB_WASMCLOUD_ORG, GITHUB_WASMCLOUD_WADM_REPO, GITHUB_WASMCLOUD_WASMCLOUD_REPO,
+    NATS_SERVER_BINARY, NATS_SERVER_CONF, WADM_PID,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use async_nats::Client;
@@ -605,24 +606,9 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     } else {
         None
     };
-    let wasmcloud_version = Version::parse(
-        if let Some(version) = wasmcloud_opts.wasmcloud_version {
-            version
-        } else if let Ok(new_version) = new_minor_version_compatible_with_version_string(
-            GITHUB_WASMCLOUD_ORG,
-            GITHUB_WASMCLOUD_WASMCLOUD_REPO,
-            None,
-            WASMCLOUD_HOST_VERSION,
-        )
-        .await
-        {
-            new_version.to_string()
-        } else {
-            WASMCLOUD_HOST_VERSION.to_string()
-        }
-        .trim_start_matches('v'),
-    )
-    .context("parsing wasmcloud version")?;
+
+    let wasmcloud_version =
+        get_wasmcloud_patch_version_or_default(wasmcloud_opts.wasmcloud_version).await;
 
     // Download wasmCloud if not already installed
     let wasmcloud_bin_path = match wasmcloud_opts.host_path {
@@ -774,6 +760,27 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
 
     spinner.finish_and_clear();
     Ok(CommandOutput::new(out_text, out_json))
+}
+
+async fn get_wasmcloud_patch_version_or_default(version: Option<String>) -> Version {
+    if let Some(version) = parse_version_string(version) {
+        return version;
+    }
+
+    match new_patch_or_pre_1_0_0_minor_version_after_version_string(
+        GITHUB_WASMCLOUD_ORG,
+        GITHUB_WASMCLOUD_WASMCLOUD_REPO,
+        WASMCLOUD_HOST_VERSION,
+        None,
+    )
+    .await
+    {
+        Ok(version) => version,
+        _ => {
+            debug!("No new patch version found for wasmCloud, using {WASMCLOUD_HOST_VERSION}");
+            WASMCLOUD_HOST_VERSION_T
+        }
+    }
 }
 
 /// Check if a wasmcloud host is running
@@ -1011,11 +1018,11 @@ async fn install_patch_or_default_wadm_version(
     }
 
     let version = version.clone().unwrap_or_else(|| WADM_VERSION.to_owned());
-    if let Ok(new_patch_version) = new_minor_version_compatible_with_version_string(
+    if let Ok(new_patch_version) = new_patch_or_pre_1_0_0_minor_version_after_version_string(
         GITHUB_WASMCLOUD_ORG,
         GITHUB_WASMCLOUD_WADM_REPO,
-        None,
         &version,
+        None,
     )
     .await
     {

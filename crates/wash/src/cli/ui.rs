@@ -3,8 +3,9 @@ use crate::lib::{
     common::{DEFAULT_WASH_UI_PORT, WASHBOARD_VERSION, WASHBOARD_VERSION_T},
     config::downloads_dir,
     start::{
-        get_download_client, new_minor_version_compatible_with_version_string,
-        GITHUB_WASHBOARD_TAG_PREFIX, GITHUB_WASMCLOUD_ORG, GITHUB_WASMCLOUD_TS_REPO,
+        get_download_client, new_patch_or_pre_1_0_0_minor_version_after_version_string,
+        parse_version_string, GITHUB_WASHBOARD_TAG_PREFIX, GITHUB_WASMCLOUD_ORG,
+        GITHUB_WASMCLOUD_TS_REPO,
     },
 };
 use anyhow::{bail, Context, Result};
@@ -34,18 +35,15 @@ pub async fn handle_command(command: UiCommand, output_kind: OutputKind) -> Resu
 }
 
 async fn get_patch_version_or_default(version: Option<String>) -> Version {
-    if let Some(version) = version {
-        debug!("Using specified version: {version}");
-        return Version::parse(version.trim_start_matches('v')).unwrap_or_else(|_| {
-            panic!(r"Invalid version '{version}'. Expected semantic version (v0.1.0)");
-        });
+    if let Some(version) = parse_version_string(version) {
+        return version;
     }
 
-    match new_minor_version_compatible_with_version_string(
+    match new_patch_or_pre_1_0_0_minor_version_after_version_string(
         GITHUB_WASMCLOUD_ORG,
         GITHUB_WASMCLOUD_TS_REPO,
-        Some(GITHUB_WASHBOARD_TAG_PREFIX),
         WASHBOARD_VERSION,
+        Some(GITHUB_WASHBOARD_TAG_PREFIX),
     )
     .await
     {

@@ -4,6 +4,7 @@ use futures::future::join_all;
 use regex::Regex;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use tracing::debug;
 
 use super::get_download_client_with_user_agent;
@@ -31,12 +32,7 @@ async fn get_sorted_releases(
 ) -> Result<Vec<GitHubRelease>, anyhow::Error> {
     let releases_of_repo = fetch_latest_releases(owner, repo, after_version, tag_pattern).await?;
     let mut releases_of_repo = releases_of_repo.into_iter().collect::<Vec<GitHubRelease>>();
-    releases_of_repo.sort_by(|a, b| b.published_at.cmp(&a.published_at));
-    releases_of_repo.sort_by(|a, b| {
-        let a_version = a.get_x_y_z_version().ok();
-        let b_version = b.get_x_y_z_version().ok();
-        b_version.cmp(&a_version)
-    });
+    releases_of_repo.sort_by(|a, b| b.cmp(a));
     Ok(releases_of_repo)
 }
 
@@ -45,7 +41,7 @@ pub async fn new_patch_releases_after(
     repo: &str,
     after_version: &Version,
 ) -> Result<Vec<GitHubRelease>, Error> {
-    new_releases_after(owner, repo, None, after_version, VersionMatch::Patch).await
+    new_releases_after(owner, repo, None, after_version, Compare::Patch).await
 }
 
 pub async fn new_minor_releases_after(
@@ -53,36 +49,38 @@ pub async fn new_minor_releases_after(
     repo: &str,
     after_version: &Version,
 ) -> Result<Vec<GitHubRelease>, Error> {
-    new_releases_after(owner, repo, None, after_version, VersionMatch::Minor).await
+    new_releases_after(owner, repo, None, after_version, Compare::Compatible).await
 }
 
-pub async fn new_patch_tag_pattern_releases_after(
+pub async fn new_tag_pattern_patch_releases_after(
     owner: &str,
     repo: &str,
     after_version: &Version,
     tag_pattern: Option<&str>,
 ) -> Result<Vec<GitHubRelease>, Error> {
-    new_releases_after(owner, repo, tag_pattern, after_version, VersionMatch::Patch).await
+    new_releases_after(owner, repo, tag_pattern, after_version, Compare::Patch).await
 }
 
-pub async fn new_minor_tag_pattern_releases_after(
+pub async fn new_tag_pattern_compatible_releases_after(
     owner: &str,
     repo: &str,
     after_version: &Version,
     tag_pattern: Option<&str>,
 ) -> Result<Vec<GitHubRelease>, Error> {
-    new_releases_after(owner, repo, tag_pattern, after_version, VersionMatch::Minor).await
+    new_releases_after(owner, repo, tag_pattern, after_version, Compare::Compatible).await
 }
 
-enum VersionMatch {
-    Minor,
+enum Compare {
+    /// Compatible version `^`
+    Compatible,
+    /// Patch version `~`
     Patch,
 }
-impl VersionMatch {
+impl Compare {
     fn as_str(&self) -> &str {
         match self {
-            VersionMatch::Minor => "^",
-            VersionMatch::Patch => "~",
+            Compare::Compatible => "^",
+            Compare::Patch => "~",
         }
     }
 }
@@ -95,37 +93,62 @@ async fn new_releases_after(
     repo: &str,
     tag_pattern: Option<&str>,
     after_version: &Version,
-    comparator: VersionMatch,
+    comparator: Compare,
 ) -> Result<Vec<GitHubRelease>, Error> {
     let releases = get_sorted_releases(owner, repo, after_version, tag_pattern).await?;
     let op = comparator.as_str();
     let main_releases = releases
         .into_iter()
-        .filter(|release| match &release.get_x_y_z_version() {
-            Ok(_) => release.satisfies_constraint(&format!("{op}{v}, >{v}", v = after_version)),
-            _ => false,
+        .filter(|release| {
+            release.satisfies_constraint(&format!("{op}{v}, >{v}", v = after_version))
         })
         .collect::<Vec<GitHubRelease>>();
     Ok(main_releases)
 }
 
-/// Returns the version of a release if it is semver compatible (^) with the provided version. Optionally, a tag pattern
-/// can be provided to filter the releases. If this is not provided, only the main releases are considered.
-pub async fn new_minor_version_compatible_with_version_string(
+/// Get newest patch or pre-1.0.0 minor version after the provided version string. Optionally provide a tag pattern
+/// to filter the releases. If this is not provided, only the main releases are considered.
+///
+/// Note: In pre-1.0.0 releases, the [`semver` spec](https://semver.org/#spec-item-4) treats the third number (0.0.X) as
+/// the minor. We're ok with the minor version changing in pre-1.0.0 releases of the tools we're downloading right now.
+/// This may change in future, and if it does, this function name should change.
+pub async fn new_patch_or_pre_1_0_0_minor_version_after_version_string(
     owner: &str,
     repo: &str,
-    tag_pattern: Option<&str>,
     version_string: &str,
+    tag_pattern: Option<&str>,
 ) -> Result<Version, Error> {
     let version_string = version_string.strip_prefix('v').unwrap_or(version_string);
     let version = Version::parse(version_string).expect("failed to parse version");
-    let releases = new_minor_tag_pattern_releases_after(owner, repo, &version, tag_pattern)
+    // if the version is pre-1.0.0, we need to use the semver compatible version (^) instead of the patch version (~)
+    let comparator = match version.major == 0 {
+        true => Compare::Compatible,
+        false => Compare::Patch,
+    };
+    let releases = new_releases_after(owner, repo, tag_pattern, &version, comparator)
         .await
         .expect("failed to fetch releases");
-    releases
-        .first()
-        .expect("no releases found")
-        .get_x_y_z_version()
+    match releases.first() {
+        Some(release) => release.get_x_y_z_version(),
+        _ => Err(anyhow::Error::msg("No new semver compatible version found")),
+    }
+}
+
+pub fn parse_version_string(version: Option<String>) -> Option<Version> {
+    match version {
+        Some(version) => {
+            debug!("Using specified version: {version}");
+            Some(
+                Version::parse(version.trim_start_matches('v')).unwrap_or_else(|_| {
+                    panic!(r"Invalid version '{version}'. Expected semantic version (v0.1.0)");
+                }),
+            )
+        }
+        None => {
+            debug!("No version specified, using default version");
+            None
+        }
+    }
 }
 
 /// A GitHub release object from the GitHub API with some helper methods
@@ -134,7 +157,7 @@ pub async fn new_minor_version_compatible_with_version_string(
 /// that are necessary to determine if a release of a tool (wadm, wasmCloud, NATS, etc.) has new version available.
 ///
 /// It also provides some helper methods to check assist with these checks.
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
 pub struct GitHubRelease {
     pub tag_name: String,
     pub name: String,
@@ -144,39 +167,37 @@ pub struct GitHubRelease {
     pub prerelease: bool,
 }
 
-impl PartialEq for GitHubRelease {
-    fn eq(&self, other: &Self) -> bool {
-        self.tag_name == other.tag_name
+impl Ord for GitHubRelease {
+    /// Sorts by ascending version number, and then by earliest published date.
+    fn cmp(&self, other: &Self) -> Ordering {
+        let self_version = self.get_x_y_z_version().unwrap();
+        let other_version = other.get_x_y_z_version().unwrap();
+
+        Ord::cmp(
+            &(&self_version, &self.published_at),
+            &(&other_version, &other.published_at),
+        )
+    }
+}
+
+impl PartialOrd for GitHubRelease {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
 impl GitHubRelease {
-    /// Returns the version of the release if is a "main artifact" release. That is, if the tag name is a only a version
-    /// and not the name of a package/crate/etc. For example, `v1.0.0` will match, but `washboard-ui@1.4.0`) will not.
-    /// This is also subject to the checks in `get_published_version` to check if the release is a draft or prerelease.
-    #[must_use]
+    /// Returns the version of the release if is a "main artifact" release and is not a draft or prerelease. We consider
+    /// a "main artifact" release to be a release that only has version string as the tag name (i.e. `v1.4.0`).
     pub fn get_main_artifact_release(&self) -> Option<Version> {
-        // Main artifact should only have a version string as the tag name. e.g. v1.4.0
         // This pattern is simple, but we're only using it as an initial check. The actual version is extracted by
-        // by `Version`.
-        self.get_published_version(Some(r"^v\d\.\d+\.\d+"))
+        // by `semver::Version`.
+        self.get_published_version(r"^v\d\.\d+\.\d+")
     }
 
-    /// Returns the version of the release if it is not a draft or prerelease. If the tag_pattern is provided, it will
-    /// filter the releases based on the tag pattern. If the tag pattern is not provided, it will return only releases
-    /// that have a tag name that is a valid semver version (i.e. `v1.2.3`)
-    pub fn get_published_version(&self, tag_pattern: Option<&str>) -> Option<Version> {
-        if self.draft || self.prerelease {
-            None
-        } else if let Some(tag_pattern) = tag_pattern {
-            if self.matches_tag_pattern(tag_pattern) {
-                self.get_x_y_z_version().ok()
-            } else {
-                None
-            }
-        } else {
-            self.get_x_y_z_version().ok()
-        }
+    /// Returns the version of the release if matches the tag pattern and is not a draft or prerelease.
+    pub fn get_tagged_artifact_release(&self, tag_pattern: &str) -> Option<Version> {
+        self.get_published_version(tag_pattern)
     }
 
     /// Returns the version of the release by parsing the tag name. If the tag name does not contain a valid semver
@@ -194,12 +215,29 @@ impl GitHubRelease {
     pub fn satisfies_constraint(&self, constraint_string: &str) -> bool {
         let req = VersionReq::parse(constraint_string).unwrap_or_default();
         let version = self.get_x_y_z_version().unwrap();
+        debug!(
+            "Checking if version {} satisfies constraint {}",
+            version, constraint_string
+        );
 
         req.matches(&version)
     }
 
+    /// Returns the version of the release if it is not a draft or prerelease that match the tag pattern.
+    fn get_published_version(&self, tag_pattern: &str) -> Option<Version> {
+        if self.draft || self.prerelease {
+            return None;
+        }
+
+        if self.matches_tag_pattern(tag_pattern) {
+            self.get_x_y_z_version().ok()
+        } else {
+            None
+        }
+    }
+
     /// Returns `true` if the tag name matches a [`Regex`] created from the provided `tag_pattern`.
-    pub fn matches_tag_pattern(&self, tag_pattern: &str) -> bool {
+    fn matches_tag_pattern(&self, tag_pattern: &str) -> bool {
         let re = Regex::new(tag_pattern)
             .unwrap_or_else(|_| panic!("failed to create regex from tag pattern: {tag_pattern}"));
         re.is_match(self.tag_name.as_str())
@@ -234,12 +272,15 @@ async fn fetch_latest_releases(
             break 'fetch_loop;
         }
         for release in &batchreleases {
-            if let Some(version) = release.get_published_version(tag_pattern) {
+            if let Some(version) = match tag_pattern {
+                Some(tag_pattern) => release.get_tagged_artifact_release(tag_pattern),
+                None => release.get_main_artifact_release(),
+            } {
                 if version == *latest_interested {
                     break 'fetch_loop;
                 }
+                releases.push(release.clone());
             }
-            releases.push(release.clone());
         }
         page += GITHUB_REQUEST_BATCH_SIZE;
     }
@@ -406,7 +447,7 @@ mod tests {
             draft: false,
             prerelease: false,
         };
-        let version = release.get_published_version(Some("washboard-ui"));
+        let version = release.get_tagged_artifact_release("washboard-ui");
         assert!(version.is_some());
         assert_eq!(version.unwrap(), Version::parse("0.4.0").unwrap());
     }
@@ -421,7 +462,7 @@ mod tests {
             prerelease: false,
         };
         assert!(release
-            .get_published_version(Some("washboard-ui"))
+            .get_tagged_artifact_release("washboard-ui")
             .is_some());
 
         let release = GitHubRelease {
@@ -432,7 +473,7 @@ mod tests {
             prerelease: true,
         };
         assert!(release
-            .get_published_version(Some("washboard-ui"))
+            .get_tagged_artifact_release("washboard-ui")
             .is_none());
 
         let release = GitHubRelease {
@@ -443,7 +484,7 @@ mod tests {
             prerelease: false,
         };
         assert!(release
-            .get_published_version(Some("washboard-ui"))
+            .get_tagged_artifact_release("washboard-ui")
             .is_none());
     }
 
