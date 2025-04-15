@@ -6,13 +6,13 @@ use anyhow::{bail, Context as _, Result};
 use semver::Version;
 use tracing::{debug, trace};
 
-use wadm_types::{
-    CapabilityProperties, Component, ComponentProperties, ConfigProperty, LinkProperty, Manifest,
-    Metadata, Policy, Properties, SecretProperty, Specification, TargetConfig, TraitProperty,
-};
 use crate::lib::generate::emoji;
 use crate::lib::parser::{
     DevConfigSpec, DevSecretSpec, InterfaceComponentOverride, ProjectConfig, WitInterfaceSpec,
+};
+use wadm_types::{
+    CapabilityProperties, Component, ComponentProperties, ConfigProperty, LinkProperty, Manifest,
+    Metadata, Policy, Properties, SecretProperty, Specification, TargetConfig, TraitProperty,
 };
 use wasmcloud_core::{parse_wit_package_name, LinkName, WitInterface, WitNamespace, WitPackage};
 
@@ -122,25 +122,25 @@ impl ProjectDependencyKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DependencySpec {
     /// A dependency that receives invocations (ex. `keyvalue-nats` receiving a `wasi:keyvalue/get`)
-    Exports(DependencySpecInner),
+    Receives(DependencySpecInner),
     /// A dependency that performs invocations (ex. `http-server` invoking a component's `wasi:http/incoming-handler` export)
-    Imports(DependencySpecInner),
+    Invokes(DependencySpecInner),
 }
 
 impl DependencySpec {
     /// Retrieve the name for this dependency
     pub(crate) fn name(&self) -> String {
         match self {
-            Self::Exports(inner) => inner.name(),
-            Self::Imports(inner) => inner.name(),
+            Self::Receives(inner) => inner.name(),
+            Self::Invokes(inner) => inner.name(),
         }
     }
 
     /// Retrieve the `image_ref` for this dependency
     pub(crate) fn image_ref(&self) -> Option<&str> {
         match self {
-            Self::Exports(inner) => inner.image_ref(),
-            Self::Imports(inner) => inner.image_ref(),
+            Self::Receives(inner) => inner.image_ref(),
+            Self::Invokes(inner) => inner.image_ref(),
         }
     }
 
@@ -150,48 +150,66 @@ impl DependencySpec {
     /// to provide functionality, but it also possible for components to do so.
     pub(crate) const fn is_component(&self) -> bool {
         match self {
-            Self::Exports(inner) => inner.is_component(),
-            Self::Imports(inner) => inner.is_component(),
+            Self::Receives(inner) => inner.is_component(),
+            Self::Invokes(inner) => inner.is_component(),
         }
     }
 
     /// Retrieve configs for this component spec
     pub(crate) const fn configs(&self) -> &Vec<ConfigProperty> {
         match self {
-            Self::Exports(inner) => &inner.configs,
-            Self::Imports(inner) => &inner.configs,
+            Self::Receives(inner) => &inner.configs,
+            Self::Invokes(inner) => &inner.configs,
+        }
+    }
+
+    /// Retrieve link configs for this component spec
+    #[allow(unused)]
+    pub(crate) const fn link_configs(&self) -> &Vec<ConfigProperty> {
+        match self {
+            Self::Receives(inner) => &inner.link_configs,
+            Self::Invokes(inner) => &inner.link_configs,
         }
     }
 
     /// Retrieve the wit for this dependency
     pub(crate) const fn wit(&self) -> &WitInterfaceSpec {
         match self {
-            Self::Exports(inner) => &inner.wit,
-            Self::Imports(inner) => &inner.wit,
+            Self::Receives(inner) => &inner.wit,
+            Self::Invokes(inner) => &inner.wit,
         }
     }
 
     /// Get the inner data of the dependency spec
     pub(crate) const fn inner(&self) -> &DependencySpecInner {
         match self {
-            Self::Exports(inner) => inner,
-            Self::Imports(inner) => inner,
+            Self::Receives(inner) => inner,
+            Self::Invokes(inner) => inner,
         }
     }
 
     /// Get the inner data of the dependency spec
     pub(crate) fn inner_mut(&mut self) -> &mut DependencySpecInner {
         match self {
-            Self::Exports(inner) => inner,
-            Self::Imports(inner) => inner,
+            Self::Receives(inner) => inner,
+            Self::Invokes(inner) => inner,
         }
     }
 
     /// Add a configuration to the list of configurations on the dependency
     pub(crate) fn add_config(&mut self, cfg: impl Into<wadm_types::ConfigProperty>) {
         match self {
-            Self::Exports(inner) | Self::Imports(inner) => {
+            Self::Receives(inner) | Self::Invokes(inner) => {
                 inner.configs.push(cfg.into());
+            }
+        }
+    }
+
+    /// Add a configuration to the list of configurations for links for the dependency
+    pub(crate) fn add_link_config(&mut self, cfg: impl Into<wadm_types::ConfigProperty>) {
+        match self {
+            Self::Receives(inner) | Self::Invokes(inner) => {
+                inner.link_configs.push(cfg.into());
             }
         }
     }
@@ -205,7 +223,7 @@ impl DependencySpec {
         let name = name.as_ref();
         let new_props = new_props.into();
         match self {
-            Self::Exports(inner) | Self::Imports(inner) => {
+            Self::Receives(inner) | Self::Invokes(inner) => {
                 match inner.configs.iter_mut().find(|c| c.name == name) {
                     Some(ConfigProperty {
                         ref mut properties, ..
@@ -224,18 +242,46 @@ impl DependencySpec {
         }
     }
 
+    /// Add one or more loose properties to an existing configuration for links, creating it if it does not exist
+    pub(crate) fn add_link_config_properties_to_existing(
+        &mut self,
+        name: impl AsRef<str>,
+        new_props: impl Into<BTreeMap<String, String>>,
+    ) {
+        let name = name.as_ref();
+        let new_props = new_props.into();
+        match self {
+            Self::Receives(inner) | Self::Invokes(inner) => {
+                match inner.link_configs.iter_mut().find(|c| c.name == name) {
+                    Some(ConfigProperty {
+                        ref mut properties, ..
+                    }) => match properties {
+                        Some(properties) => properties.extend(new_props),
+                        None => {
+                            *properties = Some(HashMap::from_iter(new_props));
+                        }
+                    },
+                    None => self.add_link_config(wadm_types::ConfigProperty {
+                        name: name.into(),
+                        properties: Some(HashMap::from_iter(new_props)),
+                    }),
+                }
+            }
+        }
+    }
+
     /// Retrieve secrets for this component spec
     pub(crate) const fn secrets(&self) -> &Vec<SecretProperty> {
         match self {
-            Self::Exports(inner) => &inner.secrets,
-            Self::Imports(inner) => &inner.secrets,
+            Self::Receives(inner) => &inner.secrets,
+            Self::Invokes(inner) => &inner.secrets,
         }
     }
 
     /// Add a secret to the list of secrets on the dependency
     pub(crate) fn add_secret(&mut self, cfg: impl Into<wadm_types::SecretProperty>) {
         match self {
-            Self::Exports(inner) | Self::Imports(inner) => {
+            Self::Receives(inner) | Self::Invokes(inner) => {
                 inner.secrets.push(cfg.into());
             }
         }
@@ -244,10 +290,10 @@ impl DependencySpec {
     /// Set the image reference for this dependency spec
     pub(crate) fn set_image_ref(&mut self, s: impl AsRef<str>) {
         match self {
-            Self::Exports(DependencySpecInner { image_ref, .. }) => {
+            Self::Receives(DependencySpecInner { image_ref, .. }) => {
                 image_ref.replace(s.as_ref().to_string());
             }
-            Self::Imports(DependencySpecInner { image_ref, .. }) => {
+            Self::Invokes(DependencySpecInner { image_ref, .. }) => {
                 image_ref.replace(s.as_ref().to_string());
             }
         }
@@ -256,10 +302,10 @@ impl DependencySpec {
     /// Set the image reference for this dependency spec
     pub(crate) fn set_link_name(&mut self, s: impl AsRef<str>) {
         match self {
-            Self::Exports(DependencySpecInner { link_name, .. }) => {
+            Self::Receives(DependencySpecInner { link_name, .. }) => {
                 *link_name = s.as_ref().to_string();
             }
-            Self::Imports(DependencySpecInner { link_name, .. }) => {
+            Self::Invokes(DependencySpecInner { link_name, .. }) => {
                 *link_name = s.as_ref().to_string();
             }
         }
@@ -308,7 +354,7 @@ impl DependencySpec {
                     WIT_IFACE_ATOMICS | WIT_IFACE_STORE | WIT_IFACE_BATCH
                 ) =>
             {
-                Some(Self::Exports(DependencySpecInner {
+                Some(Self::Receives(DependencySpecInner {
                     wit: WitInterfaceSpec {
                         namespace: ns,
                         package: WIT_PKG_KEYVALUE.to_string(),
@@ -321,6 +367,7 @@ impl DependencySpec {
                     image_ref: Some(DEFAULT_KEYVALUE_PROVIDER_IMAGE.into()),
                     is_component: false,
                     configs: Default::default(),
+                    link_configs: Default::default(),
                     secrets: Default::default(),
                 }))
             }
@@ -328,7 +375,7 @@ impl DependencySpec {
             (WIT_NS_WASI, Some(WIT_PKG_HTTP), Some(interface))
                 if matches!(interface, WIT_IFACE_OUTGOING_HANDLER) =>
             {
-                Some(Self::Exports(DependencySpecInner {
+                Some(Self::Receives(DependencySpecInner {
                     wit: WitInterfaceSpec {
                         namespace: ns,
                         package: WIT_PKG_HTTP.to_string(),
@@ -341,6 +388,7 @@ impl DependencySpec {
                     image_ref: Some(DEFAULT_HTTP_CLIENT_PROVIDER_IMAGE.into()),
                     is_component: false,
                     configs: Default::default(),
+                    link_configs: Default::default(),
                     secrets: Default::default(),
                 }))
             }
@@ -348,7 +396,7 @@ impl DependencySpec {
             (WIT_NS_WASI | WIT_NS_WRPC, Some(WIT_PKG_BLOBSTORE), Some(interface))
                 if matches!(interface, WIT_IFACE_BLOBSTORE) =>
             {
-                Some(Self::Exports(DependencySpecInner {
+                Some(Self::Receives(DependencySpecInner {
                     wit: WitInterfaceSpec {
                         namespace: ns,
                         package: WIT_PKG_BLOBSTORE.to_string(),
@@ -361,6 +409,7 @@ impl DependencySpec {
                     image_ref: Some(DEFAULT_BLOBSTORE_FS_PROVIDER_IMAGE.into()),
                     is_component: false,
                     configs: Default::default(),
+                    link_configs: Default::default(),
                     secrets: Default::default(),
                 }))
             }
@@ -368,7 +417,7 @@ impl DependencySpec {
             (WIT_NS_WASMCLOUD, Some(WIT_PKG_MESSAGING), Some(interface))
                 if matches!(interface, WIT_IFACE_CONSUMER) =>
             {
-                Some(Self::Exports(DependencySpecInner {
+                Some(Self::Receives(DependencySpecInner {
                     wit: WitInterfaceSpec {
                         namespace: ns,
                         package: WIT_PKG_MESSAGING.to_string(),
@@ -381,11 +430,12 @@ impl DependencySpec {
                     image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
                     is_component: false,
                     configs: Default::default(),
+                    link_configs: Default::default(),
                     secrets: Default::default(),
                 }))
             }
             // Support wildcard interfaces
-            (_, Some(pkg), None) => Some(Self::Exports(DependencySpecInner {
+            (_, Some(pkg), None) => Some(Self::Receives(DependencySpecInner {
                 wit: WitInterfaceSpec {
                     namespace: ns,
                     package: pkg.to_string(),
@@ -398,12 +448,13 @@ impl DependencySpec {
                 image_ref: None,
                 is_component: false,
                 configs: Default::default(),
+                link_configs: Default::default(),
                 secrets: Default::default(),
             })),
             // Treat all other dependencies as custom, and track them as dependencies,
             // though they cannot be resolved to a proper dependency without an explicit override/
             // other configuration method
-            (_, Some(pkg), Some(interface)) => Some(Self::Exports(DependencySpecInner {
+            (_, Some(pkg), Some(interface)) => Some(Self::Receives(DependencySpecInner {
                 wit: WitInterfaceSpec {
                     namespace: ns,
                     package: pkg.to_string(),
@@ -416,6 +467,7 @@ impl DependencySpec {
                 image_ref: None,
                 is_component: false,
                 configs: Default::default(),
+                link_configs: Default::default(),
                 secrets: Default::default(),
             })),
         }
@@ -456,7 +508,7 @@ impl DependencySpec {
             (WIT_NS_WASI, Some(WIT_PKG_HTTP), Some(interface))
                 if matches!(interface, WIT_IFACE_INCOMING_HANDLER) =>
             {
-                Some(Self::Imports(DependencySpecInner {
+                Some(Self::Invokes(DependencySpecInner {
                     wit: WitInterfaceSpec {
                         namespace: ns,
                         package: WIT_PKG_HTTP.to_string(),
@@ -469,6 +521,7 @@ impl DependencySpec {
                     image_ref: Some(DEFAULT_HTTP_SERVER_PROVIDER_IMAGE.into()),
                     is_component: false,
                     configs: Default::default(),
+                    link_configs: Default::default(),
                     secrets: Default::default(),
                 }))
             }
@@ -476,7 +529,7 @@ impl DependencySpec {
             (WIT_NS_WASMCLOUD, Some(WIT_PKG_MESSAGING), Some(interface))
                 if matches!(interface, WIT_IFACE_HANDLER) =>
             {
-                Some(Self::Imports(DependencySpecInner {
+                Some(Self::Invokes(DependencySpecInner {
                     wit: WitInterfaceSpec {
                         namespace: ns,
                         package: WIT_PKG_MESSAGING.to_string(),
@@ -489,11 +542,12 @@ impl DependencySpec {
                     image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
                     is_component: false,
                     configs: Default::default(),
+                    link_configs: Default::default(),
                     secrets: Default::default(),
                 }))
             }
             // Support wildcard interfaces
-            (_, Some(pkg), None) => Some(Self::Exports(DependencySpecInner {
+            (_, Some(pkg), None) => Some(Self::Receives(DependencySpecInner {
                 wit: WitInterfaceSpec {
                     namespace: ns,
                     package: pkg.to_string(),
@@ -506,12 +560,13 @@ impl DependencySpec {
                 image_ref: None,
                 is_component: false,
                 configs: Default::default(),
+                link_configs: Default::default(),
                 secrets: Default::default(),
             })),
             // Treat all other dependencies as custom, and track them as dependencies,
             // though they cannot be resolved to a proper dependency without an explicit override/
             // other configuration method
-            (_, Some(pkg), Some(interface)) => Some(Self::Imports(DependencySpecInner {
+            (_, Some(pkg), Some(interface)) => Some(Self::Invokes(DependencySpecInner {
                 wit: WitInterfaceSpec {
                     namespace: ns,
                     package: pkg.to_string(),
@@ -524,6 +579,7 @@ impl DependencySpec {
                 image_ref: None,
                 is_component: false,
                 configs: Default::default(),
+                link_configs: Default::default(),
                 secrets: Default::default(),
             })),
         }
@@ -613,6 +669,101 @@ impl DependencySpec {
             traits: Some(Vec::new()),
         })
     }
+
+    /// Generate the default properties that should go on a link
+    fn default_link_configs(&self) -> Vec<ConfigProperty> {
+        let WitInterfaceSpec {
+            namespace,
+            package,
+            interfaces,
+            version,
+            ..
+        } = &self.wit();
+        let mut links = Vec::new();
+        match self {
+            DependencySpec::Receives(..) => {
+                // Make interface-specific changes
+                match (
+                    namespace.as_ref(),
+                    package.as_ref(),
+                    interfaces.as_ref(),
+                    version,
+                ) {
+                    (WIT_NS_WASI | WIT_NS_WRPC, "blobstore", interfaces, _)
+                        if interfaces.is_some_and(|interfaces| {
+                            interfaces.iter().any(|i| i == "blobstore")
+                        }) =>
+                    {
+                        links.push(ConfigProperty {
+                            name: config_name(namespace.as_str(), package.as_str()),
+                            properties: Some(HashMap::from([(
+                                "root".into(),
+                                DEFAULT_BLOBSTORE_ROOT_DIR.into(),
+                            )])),
+                        });
+                    }
+                    // Use the default bucket for the NATS KV store
+                    (WIT_NS_WASI, "keyvalue", interfaces, _)
+                        if self.image_ref().is_some_and(|image_ref| {
+                            image_ref == DEFAULT_KEYVALUE_PROVIDER_IMAGE
+                        }) && interfaces.is_some_and(|interfaces| {
+                            interfaces
+                                .iter()
+                                .any(|i| i == "atomics" || i == "store" || i == "batch")
+                        }) =>
+                    {
+                        links.push(ConfigProperty {
+                            name: config_name(namespace.as_str(), package.as_str()),
+                            properties: Some(HashMap::from([
+                                ("bucket".into(), DEFAULT_KEYVALUE_BUCKET.into()),
+                                ("enable_bucket_auto_create".into(), "true".into()),
+                            ])),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            DependencySpec::Invokes(..) => {
+                match (
+                    namespace.as_ref(),
+                    package.as_ref(),
+                    interfaces.as_ref(),
+                    version.as_ref(),
+                ) {
+                    (WIT_NS_WASI, "http", interfaces, _)
+                        if interfaces.is_some_and(|interfaces| {
+                            interfaces.iter().any(|i| i == "incoming-handler")
+                        }) =>
+                    {
+                        links.push(ConfigProperty {
+                            name: config_name(namespace.as_ref(), package.as_ref()),
+                            properties: Some(HashMap::from([(
+                                "address".into(),
+                                DEFAULT_INCOMING_HANDLER_ADDRESS.into(),
+                            )])),
+                        })
+                    }
+
+                    ("wasmcloud", "messaging", interfaces, _)
+                        if interfaces.is_some_and(|interfaces| {
+                            interfaces.iter().any(|i| i == "handler")
+                        }) =>
+                    {
+                        links.push(ConfigProperty {
+                            name: config_name(namespace.as_ref(), package.as_ref()),
+                            properties: Some(HashMap::from([(
+                                "subscriptions".into(),
+                                DEFAULT_MESSAGING_HANDLER_SUBSCRIPTION.into(),
+                            )])),
+                        })
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        links
+    }
 }
 
 /// Specification of a dependency (possibly implied)
@@ -645,6 +796,9 @@ pub struct DependencySpecInner {
 
     /// Configurations that must be created and/or consumed by this dependency
     pub(crate) configs: Vec<wadm_types::ConfigProperty>,
+
+    /// Configurations for links that are created for this dependency
+    pub(crate) link_configs: Vec<wadm_types::ConfigProperty>,
 
     /// Secrets that must be created and/or consumed by this dependency
     ///
@@ -711,6 +865,7 @@ impl DependencySpecInner {
         // NOTE: We depend on the fact that configs and secrets should be processed in order,
         // with later entries *overriding* earlier ones
         self.configs.extend(other.configs.clone());
+        self.link_configs.extend(other.link_configs.clone());
         self.secrets.extend(other.secrets.clone());
     }
 }
@@ -800,6 +955,7 @@ impl ProjectDeps {
         for (
             InterfaceComponentOverride {
                 config,
+                link_config,
                 secrets,
                 image_ref,
                 link_name,
@@ -827,6 +983,24 @@ impl ProjectDeps {
                         }
                         DevConfigSpec::Values { values } => dep_spec
                             .add_config_properties_to_existing(
+                                format!("{}-default", dep_spec.name()),
+                                values.clone(),
+                            ),
+                    }
+                }
+            }
+
+            if let Some(link_config) = link_config {
+                for link_config in link_config.iter() {
+                    match link_config {
+                        DevConfigSpec::Named { name } => {
+                            dep_spec.add_link_config(wadm_types::ConfigProperty {
+                                name: name.into(),
+                                properties: None,
+                            });
+                        }
+                        DevConfigSpec::Values { values } => dep_spec
+                            .add_link_config_properties_to_existing(
                                 format!("{}-default", dep_spec.name()),
                                 values.clone(),
                             ),
@@ -967,17 +1141,16 @@ impl ProjectDeps {
 
             // Generate links for the given component and its spec, for known interfaces
             // TODO(#3524): When secrets are supported on links, ensure we update the `contains_secrets` var
-            match dep {
-                DependencySpec::Exports(DependencySpecInner {
+            match &dep {
+                DependencySpec::Receives(DependencySpecInner {
                     wit:
                         WitInterfaceSpec {
                             namespace,
                             package,
                             interfaces,
-                            version,
                             ..
                         },
-                    image_ref,
+                    link_configs,
                     ..
                 }) => {
                     // Check to see if this link (namespace, package, target) already exists,
@@ -988,8 +1161,8 @@ impl ProjectDeps {
                         .iter_mut()
                         .any(|trt| {
                             if let TraitProperty::Link(link) = &mut trt.properties {
-                                if link.namespace == namespace
-                                    && link.package == package
+                                if link.namespace == *namespace
+                                    && link.package == *package
                                     && link.target.name == dep_component.name
                                 {
                                     if let Some(interface) = interfaces.clone() {
@@ -1016,47 +1189,22 @@ impl ProjectDeps {
                         ..Default::default()
                     };
 
-                    // Make interface-specific changes
-                    match (
-                        namespace.as_ref(),
-                        package.as_ref(),
-                        interfaces.as_ref(),
-                        version,
-                    ) {
-                        (WIT_NS_WASI | WIT_NS_WRPC, "blobstore", interfaces, _)
-                            if interfaces.is_some_and(|interfaces| {
-                                interfaces.iter().any(|i| i == "blobstore")
-                            }) =>
-                        {
-                            link_property.target.config.push(ConfigProperty {
-                                name: config_name(namespace.as_str(), package.as_str()),
-                                properties: Some(HashMap::from([(
-                                    "root".into(),
-                                    DEFAULT_BLOBSTORE_ROOT_DIR.into(),
-                                )])),
-                            });
-                        }
-                        // Use the default bucket for the NATS KV store
-                        (WIT_NS_WASI, "keyvalue", interfaces, _)
-                            if image_ref.as_ref().is_some_and(|image_ref| {
-                                image_ref == DEFAULT_KEYVALUE_PROVIDER_IMAGE
-                            }) && interfaces.is_some_and(|interfaces| {
-                                interfaces
-                                    .iter()
-                                    .any(|i| i == "atomics" || i == "store" || i == "batch")
-                            }) =>
-                        {
-                            link_property.target.config.push(ConfigProperty {
-                                name: config_name(namespace.as_str(), package.as_str()),
-                                properties: Some(HashMap::from([
-                                    ("bucket".into(), DEFAULT_KEYVALUE_BUCKET.into()),
-                                    ("enable_bucket_auto_create".into(), "true".into()),
-                                ])),
-                            });
-                        }
-                        _ => {}
+                    // Add link configurations, generating the defaults if necessary
+                    if link_configs.is_empty() {
+                        link_property
+                            .source
+                            .get_or_insert(Default::default())
+                            .config
+                            .extend(dep.default_link_configs());
+                    } else {
+                        link_property
+                            .source
+                            .get_or_insert(Default::default())
+                            .config
+                            .extend_from_slice(link_configs.as_slice());
                     }
 
+                    // Build the link trait itself, now that we have the config
                     let link_trait = wadm_types::Trait {
                         trait_type: "link".into(),
                         properties: TraitProperty::Link(link_property),
@@ -1065,15 +1213,16 @@ impl ProjectDeps {
                     // Add the trait to the app component
                     component.traits.get_or_insert(Vec::new()).push(link_trait);
                 }
-                DependencySpec::Imports(DependencySpecInner {
+
+                DependencySpec::Invokes(DependencySpecInner {
                     wit:
                         WitInterfaceSpec {
                             namespace,
                             package,
                             interfaces,
-                            version,
                             ..
                         },
+                    link_configs,
                     ..
                 }) => {
                     // Build the relevant dep->app link trait
@@ -1088,50 +1237,22 @@ impl ProjectDeps {
                         ..Default::default()
                     };
 
-                    // Make interface-specific tweaks to the generated trait
-                    match (
-                        namespace.as_ref(),
-                        package.as_ref(),
-                        interfaces.as_ref(),
-                        version,
-                    ) {
-                        (WIT_NS_WASI, "http", interfaces, _)
-                            if interfaces.is_some_and(|interfaces| {
-                                interfaces.iter().any(|i| i == "incoming-handler")
-                            }) =>
-                        {
-                            link_property
-                                .source
-                                .get_or_insert(Default::default())
-                                .config
-                                .push(ConfigProperty {
-                                    name: config_name(namespace.as_str(), package.as_str()),
-                                    properties: Some(HashMap::from([(
-                                        "address".into(),
-                                        DEFAULT_INCOMING_HANDLER_ADDRESS.into(),
-                                    )])),
-                                });
-                        }
-                        ("wasmcloud", "messaging", interfaces, _)
-                            if interfaces.is_some_and(|interfaces| {
-                                interfaces.iter().any(|i| i == "handler")
-                            }) =>
-                        {
-                            link_property
-                                .source
-                                .get_or_insert(Default::default())
-                                .config
-                                .push(ConfigProperty {
-                                    name: config_name(namespace.as_str(), package.as_str()),
-                                    properties: Some(HashMap::from([(
-                                        "subscriptions".into(),
-                                        DEFAULT_MESSAGING_HANDLER_SUBSCRIPTION.into(),
-                                    )])),
-                                });
-                        }
-                        _ => {}
+                    // Add link configurations, generating the defaults if necessary
+                    if link_configs.is_empty() {
+                        link_property
+                            .source
+                            .get_or_insert(Default::default())
+                            .config
+                            .extend(dep.default_link_configs());
+                    } else {
+                        link_property
+                            .source
+                            .get_or_insert(Default::default())
+                            .config
+                            .extend_from_slice(link_configs.as_slice());
                     }
 
+                    // Build the link trait itself, now that we have the config
                     let link_trait = wadm_types::Trait {
                         trait_type: "link".into(),
                         properties: TraitProperty::Link(link_property),

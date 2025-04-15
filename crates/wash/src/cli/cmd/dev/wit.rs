@@ -67,7 +67,7 @@ pub fn discover_dependencies_from_wit(
 
             if let Some(new_dep) = DependencySpec::from_wit_import_iface(iface_name) {
                 // If the dependency already exists for a different interface, add the interface to the existing dependency
-                if let Some(DependencySpec::Exports(ref mut dep)) = deps.iter_mut().find(|d| {
+                if let Some(DependencySpec::Receives(ref mut dep)) = deps.iter_mut().find(|d| {
                     d.wit().namespace == pkg.name.namespace && d.wit().package == pkg.name.name
                 }) {
                     if let Some(ref mut interfaces) = dep.wit.interfaces {
@@ -96,7 +96,7 @@ pub fn discover_dependencies_from_wit(
             let iface_name = &format!("{}:{}/{interface_name}", pkg.name.namespace, pkg.name.name,);
             if let Some(new_dep) = DependencySpec::from_wit_export_iface(iface_name) {
                 // If the dependency already exists for a different interface, add the interface to the existing dependency
-                if let Some(DependencySpec::Imports(ref mut dep)) = deps.iter_mut().find(|d| {
+                if let Some(DependencySpec::Invokes(ref mut dep)) = deps.iter_mut().find(|d| {
                     d.wit().namespace == pkg.name.namespace && d.wit().package == pkg.name.name
                 }) {
                     if let Some(ref mut interfaces) = dep.wit.interfaces {
