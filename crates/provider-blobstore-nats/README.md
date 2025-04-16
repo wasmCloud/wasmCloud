@@ -2,7 +2,7 @@
 
 This capability provider is an implementation of the following interfaces of `wasi:blobstore` proposal, backed by NATS [Object Store](https://docs.nats.io/nats-concepts/jetstream/obj_store):
 
-- wasi:blobstore/blobstore
+- `wasi:blobstore/blobstore`
 
 This provider is multi-threaded and can handle concurrent requests from multiple consumer components. Furthermore, consumer components can share a host supplied default configuration, or provide their bespoke provider configuration, using wasmCloud's link definitions. Each link definition declared for this provider will result in a single NATS cluster connection managed on behalf of the linked component. Connections are maintained within the provider process, so multiple instances of this provider running in the same lattice will not share connections.
 
