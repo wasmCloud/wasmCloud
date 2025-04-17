@@ -254,7 +254,7 @@ deadpool-postgres = { version = "0.14", default-features = false }
 dialoguer = { version = "0.11", default-features = false }
 docker_credential = { version = "1.3.1", default-features = false }
 etcetera = { version = "0.10", default-features = false }
-exponential-backoff = { version = "2.0", default-features = false }
+exponential-backoff = { version = "2.1", default-features = false }
 file-guard = { version = "0.2.0", default-features = false }
 futures = { version = "0.3", default-features = false }
 geo-types = { version = "0.7", default-features = false }
