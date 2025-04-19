@@ -1,0 +1,5 @@
+package wasmcloud:cron-example;
+
+world hello {
+   export wasmcloud:cron/scheduler@0.1.0;
+}
