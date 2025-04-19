@@ -48,6 +48,9 @@ on:
       - 'provider-blobstore-azure-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+'
       - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-blobstore-nats-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-blobstore-nats-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+'
       - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+'
       - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-http-client-v[0-9].[0-9]+.[0-9]+'
@@ -278,6 +281,7 @@ jobs:
         name:
           - blobstore-azure
           - blobstore-fs
+          - blobstore-nats
           - blobstore-s3
           - keyvalue-nats
           - keyvalue-redis
@@ -647,6 +651,10 @@ jobs:
 
           - name: blobstore-fs
             subject: BLOBSTORE_FS_SUBJECT
+            embed_wit: true
+
+          - name: blobstore-nats
+            subject: BLOBSTORE_NATS_SUBJECT
             embed_wit: true
 
           - name: blobstore-s3
