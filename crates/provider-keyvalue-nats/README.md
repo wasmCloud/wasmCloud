@@ -69,7 +69,7 @@ spec:
     - name: kv-nats
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/keyvalue-nats:0.4.0
+        image: ghcr.io/wasmcloud/keyvalue-nats:0.4.1
 
     # Add a capability provider that enables HTTP access
     - name: httpserver

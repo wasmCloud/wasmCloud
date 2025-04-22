@@ -40,7 +40,7 @@ spec:
       properties:
         # TBD: next version required.
         # Will need a local copy of the redis provider here, otherwise this won't work
-        image: ghcr.io/wasmcloud/keyvalue-redis:0.29.0
+        image: ghcr.io/wasmcloud/keyvalue-redis:0.29.1
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
@@ -73,7 +73,7 @@ spec:
     - name: httpclient
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-client:0.13.0
+        image: ghcr.io/wasmcloud/http-client:0.13.1
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
