@@ -40,7 +40,7 @@ spec:
     - name: sqldb-postgres
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/sqldb-postgres:0.9.0
+        image: ghcr.io/wasmcloud/sqldb-postgres:0.10.0
 
     # A capability provider that provides HTTP serving for the component
     - name: http-server

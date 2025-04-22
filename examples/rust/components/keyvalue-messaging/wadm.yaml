@@ -65,7 +65,7 @@ spec:
       type: capability
       properties:
         # image: file://../../../../src/bin/keyvalue-nats-provider/build/keyvalue-nats-provider.par.gz
-        image: ghcr.io/wasmcloud/keyvalue-nats:0.4.0
+        image: ghcr.io/wasmcloud/keyvalue-nats:0.4.1
         ## NOTE: The following is an example of how to provide default/shared configuration, to all components, which do not provide their own NATS connection configuration.
         # config:
         #   - name: nats-connection
@@ -84,7 +84,7 @@ spec:
     - name: nats-msg
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/messaging-nats:0.26.0
+        image: ghcr.io/wasmcloud/messaging-nats:0.27.0
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
