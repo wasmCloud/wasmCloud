@@ -70,7 +70,7 @@ spec:
     - name: httpclient
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-client:0.13.0
+        image: ghcr.io/wasmcloud/http-client:0.13.1
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
