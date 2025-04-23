@@ -1190,16 +1190,16 @@ impl ProjectDeps {
                     };
 
                     // Add link configurations, generating the defaults if necessary
+                    // NOTE: since this is for a "receiving" dep (e.g. calls go from wasm component -> provider),
+                    // we should be configuring the *target* of the link (i.e. the provider)
                     if link_configs.is_empty() {
                         link_property
-                            .source
-                            .get_or_insert(Default::default())
+                            .target
                             .config
                             .extend(dep.default_link_configs());
                     } else {
                         link_property
-                            .source
-                            .get_or_insert(Default::default())
+                            .target
                             .config
                             .extend_from_slice(link_configs.as_slice());
                     }
@@ -1238,6 +1238,9 @@ impl ProjectDeps {
                     };
 
                     // Add link configurations, generating the defaults if necessary
+                    //
+                    // NOTE: since this is for a "invoking" dep (e.g. calls go from provider -> wasm component/provider),
+                    // we should be configuring the *source* of the link (i.e. the provider)
                     if link_configs.is_empty() {
                         link_property
                             .source
