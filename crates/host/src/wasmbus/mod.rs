@@ -36,7 +36,7 @@ use tokio::net::TcpListener;
 use tokio::spawn;
 use tokio::sync::{mpsc, watch, RwLock, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
-use tokio::time::{interval_at, Instant};
+use tokio::time::{interval_at, timeout, Instant};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, debug_span, error, info, instrument, trace, warn, Instrument as _};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -1312,34 +1312,64 @@ impl Host {
             usize::from(max_instances).min(Semaphore::MAX_PERMITS),
         ));
         let metrics = Arc::clone(&self.metrics);
+        let component_ref = Arc::clone(&image_reference);
         Ok(Arc::new(Component {
             component,
-            id,
+            id: Arc::clone(&id),
             handler,
             events: events_tx,
             permits: Arc::clone(&permits),
             exports: spawn(async move {
+                // Since we are joining two `move` closures, we need two separate `Arc`s
+                let metrics_left = Arc::clone(&metrics);
+                let metrics_right = Arc::clone(&metrics);
                 join!(
                     async move {
                         let mut exports = stream::select_all(exports);
                         loop {
+                            let metrics_left = Arc::clone(&metrics_left);
                             let permits = Arc::clone(&permits);
                             if let Some(fut) = exports.next().await {
                                 match fut {
                                     Ok(fut) => {
                                         debug!("accepted invocation, acquiring permit");
                                         let permit = permits.acquire_owned().await;
+
+                                        // Record that an instance is active
+                                        let attributes = vec![
+                                            KeyValue::new("component.id", id.to_string()),
+                                            KeyValue::new(
+                                                "component.ref",
+                                                component_ref.to_string(),
+                                            ),
+                                            KeyValue::new(
+                                                "lattice",
+                                                metrics_left.lattice_id.clone(),
+                                            ),
+                                            KeyValue::new("host", metrics_left.host_id.clone()),
+                                        ];
+                                        metrics_left.increment_active_instance(&attributes);
                                         spawn(async move {
                                             let _permit = permit;
                                             debug!("handling invocation");
-                                            match fut.await {
-                                                Ok(()) => {
+                                            // Awaiting this future drives the execution of the component
+                                            let result = timeout(max_execution_time, fut).await;
+                                            metrics_left.decrement_active_instance(&attributes);
+
+                                            match result {
+                                                Ok(Ok(())) => {
                                                     debug!("successfully handled invocation");
                                                     Ok(())
                                                 }
-                                                Err(err) => {
+                                                Ok(Err(err)) => {
                                                     warn!(?err, "failed to handle invocation");
                                                     Err(err)
+                                                }
+                                                Err(_err) => {
+                                                    warn!("component invocation timed out");
+                                                    Err(anyhow::anyhow!(
+                                                        "component invocation timed out"
+                                                    ))
                                                 }
                                             }
                                         });
@@ -1380,7 +1410,7 @@ impl Host {
                                             ..
                                         },
                                     success,
-                                } => metrics.record_component_invocation(
+                                } => metrics_right.record_component_invocation(
                                     u64::try_from(start_at.elapsed().as_nanos())
                                         .unwrap_or_default(),
                                     attributes,
@@ -1395,7 +1425,7 @@ impl Host {
             }),
             annotations: annotations.clone(),
             max_instances,
-            image_reference,
+            image_reference: Arc::clone(&image_reference),
         }))
     }
 
