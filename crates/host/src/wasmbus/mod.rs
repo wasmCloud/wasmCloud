@@ -1311,8 +1311,16 @@ impl Host {
         let permits = Arc::new(Semaphore::new(
             usize::from(max_instances).min(Semaphore::MAX_PERMITS),
         ));
+        let component_attributes = Arc::new(vec![
+            KeyValue::new("component.id", id.to_string()),
+            KeyValue::new("component.ref", image_reference.to_string()),
+            KeyValue::new("lattice", self.host_config.lattice.clone()),
+            KeyValue::new("host", self.host_key.public_key()),
+        ]);
+        self.metrics
+            .set_max_instances(max_instances.get() as u64, &component_attributes);
+
         let metrics = Arc::clone(&self.metrics);
-        let component_ref = Arc::clone(&image_reference);
         Ok(Arc::new(Component {
             component,
             id: Arc::clone(&id),
@@ -1328,6 +1336,7 @@ impl Host {
                         let mut exports = stream::select_all(exports);
                         loop {
                             let metrics_left = Arc::clone(&metrics_left);
+                            let component_attributes = Arc::clone(&component_attributes);
                             let permits = Arc::clone(&permits);
                             if let Some(fut) = exports.next().await {
                                 match fut {
@@ -1336,25 +1345,15 @@ impl Host {
                                         let permit = permits.acquire_owned().await;
 
                                         // Record that an instance is active
-                                        let attributes = vec![
-                                            KeyValue::new("component.id", id.to_string()),
-                                            KeyValue::new(
-                                                "component.ref",
-                                                component_ref.to_string(),
-                                            ),
-                                            KeyValue::new(
-                                                "lattice",
-                                                metrics_left.lattice_id.clone(),
-                                            ),
-                                            KeyValue::new("host", metrics_left.host_id.clone()),
-                                        ];
-                                        metrics_left.increment_active_instance(&attributes);
+                                        metrics_left
+                                            .increment_active_instance(&component_attributes);
                                         spawn(async move {
                                             let _permit = permit;
                                             debug!("handling invocation");
                                             // Awaiting this future drives the execution of the component
                                             let result = timeout(max_execution_time, fut).await;
-                                            metrics_left.decrement_active_instance(&attributes);
+                                            metrics_left
+                                                .decrement_active_instance(&component_attributes);
 
                                             match result {
                                                 Ok(Ok(())) => {

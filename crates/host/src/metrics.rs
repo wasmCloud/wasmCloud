@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use sysinfo::System;
 use tokio::task::JoinHandle;
-use wasmcloud_tracing::{Counter, Histogram, KeyValue, Meter, ObservableGauge, UpDownCounter};
+use wasmcloud_tracing::{
+    Counter, Gauge, Histogram, KeyValue, Meter, ObservableGauge, UpDownCounter,
+};
 
 const DEFAULT_REFRESH_TIME: Duration = Duration::from_secs(5);
 
@@ -17,8 +19,10 @@ pub struct HostMetrics {
     pub component_invocations: Counter<u64>,
     /// The count of the number of times an component invocation resulted in an error.
     pub component_errors: Counter<u64>,
-    /// The
+    /// The number of active instances of a component.
     pub component_active_instances: UpDownCounter<i64>,
+    /// The maximum number of instances of a component.
+    pub component_max_instances: Gauge<u64>,
 
     /// The total amount of available system memory in bytes.
     pub system_total_memory_bytes: ObservableGauge<u64>,
@@ -95,6 +99,11 @@ impl HostMetrics {
             .with_description("Number of active component instances")
             .build();
 
+        let component_max_instances = meter
+            .u64_gauge("wasmcloud_host.component.max_instances")
+            .with_description("Maximum number of component instances")
+            .build();
+
         let mut system = System::new();
         // Get the initial metrics
         system.refresh_memory();
@@ -167,6 +176,7 @@ impl HostMetrics {
             component_invocations: component_invocation_count,
             component_errors: component_error_count,
             component_active_instances,
+            component_max_instances,
             system_total_memory_bytes: system_memory_total_bytes,
             system_used_memory_bytes: system_memory_used_bytes,
             system_cpu_usage,
@@ -184,6 +194,11 @@ impl HostMetrics {
     /// Decrement the number of active instances of a component.
     pub(crate) fn decrement_active_instance(&self, attributes: &[KeyValue]) {
         self.component_active_instances.add(-1, attributes);
+    }
+
+    /// Set the maximum number of instances of a component.
+    pub(crate) fn set_max_instances(&self, max: u64, attributes: &[KeyValue]) {
+        self.component_max_instances.record(max, attributes);
     }
 
     /// Record the result of invoking a component, including the elapsed time, any attributes, and whether the invocation resulted in an error.
