@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "otel")]
 use anyhow::Context as _;
+use opentelemetry::{global, KeyValue};
 #[cfg(feature = "otel")]
 use opentelemetry_otlp::WithExportConfig;
 use tracing::{Event, Subscriber};
@@ -61,6 +62,22 @@ where
 pub struct FlushGuard {
     _stderr: tracing_appender::non_blocking::WorkerGuard,
     _flame: Option<tracing_flame::FlushGuard<BufWriter<File>>>,
+}
+
+pub struct ErrorCounter {
+    dropped_lines: usize,
+}
+
+impl ErrorCounter {
+    fn new() -> Self {
+        ErrorCounter { dropped_lines: 0 }
+    }
+    pub fn increment(&mut self) {
+        self.dropped_lines += 1;
+    }
+    pub fn get_count(&self) -> usize {
+        self.dropped_lines
+    }
 }
 
 /// Configures a global tracing subscriber, which includes:
@@ -166,9 +183,30 @@ pub fn configure_tracing(
     let stderr = std::io::stderr();
     let ansi = stderr.is_terminal();
     let (stderr, stderr_guard) = tracing_appender::non_blocking(stderr);
+    // otel metric counter to count dropped lines
+    let meter = global::meter("wasmcloud log tracing");
+    let otel_counter = meter
+        .u64_counter("Wasmcloud u64_counter")
+        .with_description("Counting the number of dropped lines")
+        .build()
+        .init();
+
+    let mut error_counter = ErrorCounter::new();
     let fmt = tracing_subscriber::fmt::layer()
         .with_writer(stderr)
-        .with_ansi(ansi);
+        .with_ansi(ansi)
+        .with_filter(move |meta| {
+            error_counter.increment();
+
+            if error_counter.get_count() == 1 {
+                tracing::error!(
+                    "Dropped {} lines due to full buffer",
+                    error_counter.get_count()
+                );
+                otel_counter.add(1, &[]);
+            }
+            true
+        });
 
     let dispatch = if use_structured_logging {
         registry
