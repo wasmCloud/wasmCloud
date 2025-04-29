@@ -1,5 +1,6 @@
 //! Utilities for managing wasmCloud hosts locally or remotely via the lattice
 
+use std::collections::{BTreeMap, HashMap};
 use std::pin::Pin;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
@@ -7,9 +8,11 @@ use std::{future::Future, sync::Arc};
 use anyhow::{anyhow, Context as _, Result};
 use async_nats::{Client as NatsClient, ServerAddr};
 use nkeys::KeyPair;
+use tokio::task::JoinSet;
 use url::Url;
 
 use wasmcloud_control_interface::{Client as WasmcloudCtlClient, ClientBuilder};
+use wasmcloud_host::nats::connect_nats;
 use wasmcloud_host::wasmbus::host_config::PolicyService;
 use wasmcloud_host::wasmbus::{Features, Host, HostConfig};
 
@@ -53,6 +56,7 @@ pub struct WasmCloudTestHost {
     cluster_key: Arc<KeyPair>,
     host_key: Arc<KeyPair>,
     nats_url: ServerAddr,
+    ctl_server_handle: JoinSet<anyhow::Result<()>>,
     lattice_name: String,
     host: Arc<Host>,
     shutdown_hook: Pin<Box<dyn Future<Output = Result<()>>>>,
@@ -100,28 +104,66 @@ impl WasmCloudTestHost {
                 .enable_wasmcloud_messaging_v3()
         });
 
-        let mut host_config = HostConfig {
-            ctl_nats_url: nats_url.clone(),
+        let host_config = HostConfig {
             rpc_nats_url: nats_url.clone(),
             lattice: lattice_name.into(),
-            host_key: Some(Arc::clone(&host_key)),
+            host_key: Arc::clone(&host_key),
             provider_shutdown_delay: Some(Duration::from_millis(300)),
             allow_file_load: true,
-            secrets_topic_prefix,
             experimental_features,
             ..Default::default()
         };
-        if let Some(psc) = policy_service_config {
-            host_config.policy_service_config = psc;
-        }
 
-        let (host, shutdown_hook) = Host::new(host_config)
+        let nats_client = connect_nats(nats_url.as_str(), None, None, false, None, None)
+            .await
+            .context("failed to connect to NATS")?;
+
+        let nats_builder = wasmcloud_host::nats::builder::NatsHostBuilder::new(
+            nats_client.clone(),
+            None,
+            lattice_name.into(),
+            None,
+            None,
+            BTreeMap::new(),
+            false,
+            false,
+            false,
+        )
+        .await?
+        .with_event_publisher(host_key.public_key());
+
+        let nats_builder = if let Some(secrets_topic_prefix) = secrets_topic_prefix {
+            nats_builder.with_secrets_manager(secrets_topic_prefix)?
+        } else {
+            nats_builder
+        };
+
+        let nats_builder = if let Some(psc) = policy_service_config {
+            nats_builder
+                .with_policy_manager(
+                    host_key.clone(),
+                    HashMap::new(),
+                    psc.policy_topic,
+                    psc.policy_timeout_ms,
+                    psc.policy_changes_topic,
+                )
+                .await?
+        } else {
+            nats_builder
+        };
+
+        let (host_builder, ctl_server) = nats_builder.build(host_config).await?;
+        let (host, shutdown_hook) = host_builder
+            .build()
             .await
             .context("failed to initialize host")?;
+
+        let ctl_server_handle = ctl_server.start(host.clone()).await?;
 
         Ok(Self {
             cluster_key,
             host_key,
+            ctl_server_handle,
             nats_url: ServerAddr::from_url(nats_url.clone())
                 .context("failed to build NATS server address from URL")?,
             lattice_name: lattice_name.into(),
