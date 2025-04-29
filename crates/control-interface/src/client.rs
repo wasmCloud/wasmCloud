@@ -970,7 +970,7 @@ mod tests {
             .update_component(
                 &host.id,
                 "nonexistantcomponentID",
-                "wasmcloud.azurecr.io/kvcounter:0.4.0",
+                "ghcr.io/wasmcloud/components/http-keyvalue-counter-rust:0.1.0",
                 None,
             )
             .await
@@ -988,7 +988,7 @@ mod tests {
         // Provider Auction
         let provider_acks = client
             .perform_provider_auction(
-                "wasmcloud.azurecr.io/httpserver:0.19.1",
+                "ghcr.io/wasmcloud/http-server:0.26.0",
                 "httpserver",
                 BTreeMap::new(),
             )

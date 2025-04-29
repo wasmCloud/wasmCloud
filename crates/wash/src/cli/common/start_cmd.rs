@@ -1,8 +1,8 @@
 use crate::appearance::spinner::Spinner;
 
-use anyhow::Result;
 use crate::lib::cli::start::{handle_start_component, handle_start_provider, StartCommand};
 use crate::lib::cli::{CommandOutput, OutputKind};
+use anyhow::Result;
 
 pub async fn handle_command(
     command: StartCommand,
@@ -35,8 +35,8 @@ mod test {
 
     use crate::ctl::CtlCliCommand;
 
-    use clap::Parser;
     use crate::lib::cli::start::{StartComponentCommand, StartProviderCommand};
+    use clap::Parser;
 
     #[derive(Parser)]
     struct Cmd {
@@ -73,7 +73,7 @@ mod test {
             "arch=x86_64",
             "--host-id",
             HOST_ID,
-            "wasmcloud.azurecr.io/component:v1",
+            "ghcr.io/component:v1",
             "mycomponent",
         ])?;
         match start_component_all.command {
@@ -91,10 +91,7 @@ mod test {
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(auction_timeout_ms, 2002);
                 assert_eq!(host_id.unwrap(), HOST_ID.to_string());
-                assert_eq!(
-                    component_ref,
-                    "wasmcloud.azurecr.io/component:v1".to_string()
-                );
+                assert_eq!(component_ref, "ghcr.io/component:v1".to_string());
                 assert_eq!(component_id, "mycomponent".to_string());
                 assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
             }
@@ -121,7 +118,7 @@ mod test {
             "--link-name",
             "default",
             "--skip-wait",
-            "wasmcloud.azurecr.io/provider:v1",
+            "ghcr.io/provider:v1",
             "providerv1",
         ])?;
         match start_provider_all.command {
@@ -144,7 +141,7 @@ mod test {
                 assert_eq!(link_name, "default".to_string());
                 assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
                 assert_eq!(host_id.unwrap(), HOST_ID.to_string());
-                assert_eq!(provider_ref, "wasmcloud.azurecr.io/provider:v1".to_string());
+                assert_eq!(provider_ref, "ghcr.io/provider:v1".to_string());
                 assert_eq!(provider_id, "providerv1".to_string());
                 assert!(config.is_empty());
                 assert!(skip_wait);

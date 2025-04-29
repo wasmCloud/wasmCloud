@@ -410,8 +410,10 @@ mod test {
     /// so that the API does not change in between versions
     fn test_inspect_comprehensive() {
         const LOCAL: &str = "./coolthing.par.gz";
-        const REMOTE: &str = "wasmcloud.azurecr.io/coolthing.par.gz";
-        const SUBSCRIBER_OCI: &str = "wasmcloud.azurecr.io/subscriber:0.2.0";
+        const REMOTE: &str = "ghcr.io/coolthing.par.gz";
+        const HELLO_WORLD_OCI: &str = "ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0";
+        const HELLO_WORLD_SHA: &str =
+            "sha256:079275a324c0fcd0c201878f0c158120c4984472215ec3f64eb91ba9ee139f72";
 
         let inspect_long: Cmd = Parser::try_parse_from([
             "inspect",
@@ -489,9 +491,9 @@ mod test {
 
         let cmd: Cmd = Parser::try_parse_from([
             "inspect",
-            SUBSCRIBER_OCI,
+            HELLO_WORLD_OCI,
             "--digest",
-            "sha256:5790f650cff526fcbc1271107a05111a6647002098b74a9a5e2e26e3c0a116b8",
+            HELLO_WORLD_SHA,
             "--user",
             "name",
             "--password",
@@ -515,11 +517,8 @@ mod test {
             no_cache,
             wit,
         } = cmd.command;
-        assert_eq!(target, SUBSCRIBER_OCI);
-        assert_eq!(
-            digest.unwrap(),
-            "sha256:5790f650cff526fcbc1271107a05111a6647002098b74a9a5e2e26e3c0a116b8"
-        );
+        assert_eq!(target, HELLO_WORLD_OCI);
+        assert_eq!(digest.unwrap(), HELLO_WORLD_SHA);
         assert_eq!(user.unwrap(), "name");
         assert_eq!(password.unwrap(), "opensesame");
         assert!(allow_latest);
@@ -531,9 +530,9 @@ mod test {
 
         let short_cmd: Cmd = Parser::try_parse_from([
             "inspect",
-            SUBSCRIBER_OCI,
+            HELLO_WORLD_OCI,
             "-d",
-            "sha256:5790f650cff526fcbc1271107a05111a6647002098b74a9a5e2e26e3c0a116b8",
+            HELLO_WORLD_SHA,
             "-u",
             "name",
             "-p",
@@ -558,11 +557,8 @@ mod test {
             no_cache,
             wit,
         } = short_cmd.command;
-        assert_eq!(target, SUBSCRIBER_OCI);
-        assert_eq!(
-            digest.unwrap(),
-            "sha256:5790f650cff526fcbc1271107a05111a6647002098b74a9a5e2e26e3c0a116b8"
-        );
+        assert_eq!(target, HELLO_WORLD_OCI);
+        assert_eq!(digest.unwrap(), HELLO_WORLD_SHA);
         assert_eq!(user.unwrap(), "name");
         assert_eq!(password.unwrap(), "opensesame");
         assert!(allow_latest);

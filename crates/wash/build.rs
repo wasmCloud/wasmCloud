@@ -49,6 +49,5 @@ async fn main() {
         record_reachability("github.com"),
         record_reachability("raw.githubusercontent.com"),
         record_reachability("ghcr.io"),
-        record_reachability("wasmcloud.azurecr.io"),
     );
 }

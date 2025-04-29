@@ -225,7 +225,7 @@ mod tests {
 
     use crate::common::registry_cmd::RegistryPushCommand;
 
-    const ECHO_WASM: &str = "wasmcloud.azurecr.io/echo:0.2.0";
+    const HELLO_WORLD_WASM: &str = "ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0";
     const LOCAL_REGISTRY: &str = "localhost:5001";
     const TESTDIR: &str = "./tests/fixtures";
 
@@ -242,17 +242,22 @@ mod tests {
     /// changes syntax, ordering of required elements, or flags.
     fn test_pull_comprehensive() -> Result<()> {
         // test basic `wash reg pull`
-        let pull_basic: Cmd = Parser::try_parse_from(["wash", "pull", ECHO_WASM])
+        let pull_basic: Cmd = Parser::try_parse_from(["wash", "pull", HELLO_WORLD_WASM])
             .context("failed to perform wash pull")?;
         ensure!(matches!(
             pull_basic.sub,
-            RegistryCommand::Pull(RegistryPullCommand { url, .. }) if url == ECHO_WASM,
+            RegistryCommand::Pull(RegistryPullCommand { url, .. }) if url == HELLO_WORLD_WASM,
         ));
 
         // test `wash pull`
-        let pull_all_flags: Cmd =
-            Parser::try_parse_from(["wash", "pull", ECHO_WASM, "--allow-latest", "--insecure"])
-                .context("failed to pull with all flags")?;
+        let pull_all_flags: Cmd = Parser::try_parse_from([
+            "wash",
+            "pull",
+            HELLO_WORLD_WASM,
+            "--allow-latest",
+            "--insecure",
+        ])
+        .context("failed to pull with all flags")?;
         ensure!(matches!(
             pull_all_flags.sub,
             RegistryCommand::Pull(RegistryPullCommand {
@@ -260,14 +265,14 @@ mod tests {
                 allow_latest,
                 opts,
                 ..
-            }) if url == ECHO_WASM && allow_latest && opts.insecure
+            }) if url == HELLO_WORLD_WASM && allow_latest && opts.insecure
         ));
 
         // test `wash pull`
         let pull_all_options: Cmd = Parser::try_parse_from([
             "wash",
             "pull",
-            ECHO_WASM,
+            HELLO_WORLD_WASM,
             "--destination",
             TESTDIR,
             "--digest",
@@ -286,7 +291,7 @@ mod tests {
                 digest,
                 opts,
                 ..
-            }) if url == ECHO_WASM
+            }) if url == HELLO_WORLD_WASM
                 && destination == Some(TESTDIR.into())
                 && digest == Some("sha256:a17a163afa8447622055deb049587641a9e23243a6cc4411eb33bd4267214cf3".into())
                 && opts.user == Some("user".into())
