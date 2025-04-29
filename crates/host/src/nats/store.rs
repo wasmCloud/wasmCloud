@@ -1,4 +1,4 @@
-//! Implementation of the [ConfigManager] trait for NATS JetStream KV [Store].
+//! Implementation of the [crate::config::ConfigManager] and [crate::store::StoreManager] traits for NATS JetStream KV [Store].
 
 use std::{collections::HashMap, sync::Arc};
 

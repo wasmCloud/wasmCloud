@@ -92,13 +92,13 @@ impl SecretsManager for NatsSecretsManager {
     ///
     /// # Arguments
     /// * `secret_names` - A list of secret names to fetch from the secret store
-    /// * `entity_jwt` - The JWT of the entity requesting the secrets. Must be provided unless this [`Manager`] is not
+    /// * `entity_jwt` - The JWT of the entity requesting the secrets. Must be provided unless this [SecretsManager] is not
     ///  configured with a secret store topic.
     /// * `host_jwt` - The JWT of the host requesting the secrets
     /// * `application` - The name of the application the entity is a part of, if any
     ///
     /// # Returns
-    /// A HashMap from secret name to the [`secrecy::Secret`] wrapped [`SecretValue`].
+    /// A HashMap from secret name to the [SecretBox] wrapped [SecretValue].
     #[instrument(level = "debug", skip(self, host_jwt))]
     async fn fetch_secrets(
         &self,

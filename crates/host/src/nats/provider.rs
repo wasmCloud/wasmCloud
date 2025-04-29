@@ -6,7 +6,7 @@ use wasmcloud_tracing::context::TraceContextInjector;
 
 use crate::wasmbus::{injector_to_headers, providers::ProviderManager};
 
-/// NATS implementation of the wasmCloud [crate::wasmbus::provider::ProviderManager] extension trait
+/// NATS implementation of the wasmCloud [crate::wasmbus::providers::ProviderManager] extension trait
 pub struct NatsProviderManager {
     pub(crate) nats_client: Arc<async_nats::Client>,
     pub(crate) lattice: String,
