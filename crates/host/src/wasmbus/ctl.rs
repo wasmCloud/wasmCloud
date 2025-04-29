@@ -1002,8 +1002,7 @@ impl ControlInterfaceServer for Host {
             .uptime_seconds(uptime.as_secs())
             .uptime_human(human_friendly_uptime(uptime))
             .version(self.host_config.version.clone())
-            // TODO(brooksmtownsend): how get this value? Why does it matter?
-            // .ctl_host(self.host_config.ctl_nats_url.to_string())
+            .ctl_host(self.host_config.rpc_nats_url.to_string())
             .rpc_host(self.host_config.rpc_nats_url.to_string())
             .lattice(self.host_config.lattice.to_string());
 

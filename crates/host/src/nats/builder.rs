@@ -92,7 +92,6 @@ impl NatsHostBuilder {
             merge_registry_config(&mut registry_config, oci_opts).await;
         }
 
-        // TODO(brooksmtownsend): figure this out where go
         let config_generator = BundleGenerator::new(Arc::new(config_data.clone()));
 
         Ok(Self {

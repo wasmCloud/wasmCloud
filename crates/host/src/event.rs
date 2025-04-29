@@ -7,7 +7,8 @@ use wasmcloud_control_interface::Link;
 /// A trait for publishing wasmbus events. This can be implemented by any transport or bus
 /// implementation that can send the serialized event to the appropriate destination.
 ///
-/// TODO(brooksmtownsend): file an issue for this: This trait can certainly be enhanced by adding methods specific to the event
+/// TODO(#4408): This trait can certainly be enhanced by having a more strongly typed event,
+/// e.g. WasmbusEvent which implements Serialize.
 #[async_trait::async_trait]
 pub trait EventPublisher: Send + Sync {
     /// Publish an event that occurred in the host. The event name is the type of event being published, and the
