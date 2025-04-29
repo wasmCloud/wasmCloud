@@ -53,7 +53,6 @@ pub async fn merge_registry_config(
     registry_config: &mut HashMap<String, RegistryConfig>,
     oci_opts: OciConfig,
 ) {
-    // let mut registry_config = registry_config.write().await;
     let allow_latest = oci_opts.allow_latest;
     let additional_ca_paths = oci_opts.additional_ca_paths;
 

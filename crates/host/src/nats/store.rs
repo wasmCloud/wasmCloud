@@ -238,7 +238,6 @@ impl crate::wasmbus::Host {
     }
 }
 
-//TODO(brooksmtownsend): Make sure that the configbundle accomplishes this for config
 /// Watch the JetStream bucket for changes to the ComponentSpec and claims data
 pub async fn data_watch(
     tasks: &mut JoinSet<anyhow::Result<()>>,
@@ -274,10 +273,7 @@ pub async fn data_watch(
                     }
                 })
                 .await;
-            // TODO(brooksmtownsend): Do we need this?
-            // let mut data_watch = Abortable::new(data_watch, data_watch_abort_reg);
             data_watch
-                // .by_ref()
                 .for_each({
                     let host = Arc::clone(&host);
                     move |entry| {
@@ -295,11 +291,6 @@ pub async fn data_watch(
                 .await;
             let deadline = { *host.stop_rx.borrow() };
             host.stop_tx.send_replace(deadline);
-            // if data_watch.is_aborted() {
-            //     info!("data watch task gracefully stopped");
-            // } else {
-            //     error!("data watch task unexpectedly stopped");
-            // }
             Ok(())
         }
     });
