@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use tracing::{instrument, trace};
 use wascap::{jwt, prelude::ClaimsBuilder};
+
 // TODO: remove StoredClaims in #1093
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -258,14 +259,14 @@ impl From<StoredClaims> for Claims {
 
 impl super::Host {
     #[instrument(level = "debug", skip_all)]
+    /// Store claims in the data store
     pub(crate) async fn store_claims(&self, claims: Claims) -> anyhow::Result<()> {
         match &claims {
             Claims::Component(claims) => {
                 self.store_component_claims(claims.clone()).await?;
             }
             Claims::Provider(claims) => {
-                let mut provider_claims = self.provider_claims.write().await;
-                provider_claims.insert(claims.subject.clone(), claims.clone());
+                self.store_provider_claims(claims.clone()).await?;
             }
         };
         let claims: StoredClaims = claims.try_into()?;
@@ -279,10 +280,50 @@ impl super::Host {
         let bytes = serde_json::to_vec(&claims)
             .context("failed to serialize claims")?
             .into();
-        self.data
-            .put(key, bytes)
+        self.data_store
+            .put(&key, bytes)
             .await
             .context("failed to put claims")?;
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    /// Store claims in the host in-memory cache
+    pub(crate) async fn store_component_claims(
+        &self,
+        claims: jwt::Claims<jwt::Component>,
+    ) -> anyhow::Result<()> {
+        self.component_claims
+            .write()
+            .await
+            .insert(claims.subject.clone(), claims);
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    /// Remove claims from the host in-memory cache
+    pub(crate) async fn delete_component_claims(&self, subject: &str) -> anyhow::Result<()> {
+        self.component_claims.write().await.remove(subject);
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    /// Store claims in the host in-memory cache
+    pub(crate) async fn store_provider_claims(
+        &self,
+        claims: jwt::Claims<jwt::CapabilityProvider>,
+    ) -> anyhow::Result<()> {
+        self.provider_claims
+            .write()
+            .await
+            .insert(claims.subject.clone(), claims);
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    /// Remove claims from the host in-memory cache
+    pub(crate) async fn delete_provider_claims(&self, subject: &str) -> anyhow::Result<()> {
+        self.provider_claims.write().await.remove(subject);
         Ok(())
     }
 }

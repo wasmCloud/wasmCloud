@@ -1,14 +1,15 @@
 //! Module with structs for use in managing and accessing config used by various wasmCloud entities
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
-use anyhow::{bail, Context};
-use async_nats::jetstream::kv::{Operation, Store};
-use futures::{future::AbortHandle, stream::Abortable, TryStreamExt};
+use anyhow::{bail, Context as _};
+use futures::{future::AbortHandle, stream::Abortable};
 use tokio::sync::{
     watch::{self, Receiver, Sender},
     RwLock, RwLockReadGuard,
 };
 use tracing::{error, warn, Instrument};
+
+use crate::config::ConfigManager;
 
 type LockedConfig = Arc<RwLock<HashMap<String, String>>>;
 /// A cache of named config mapped to an existing receiver
@@ -192,19 +193,17 @@ impl ConfigBundle {
 /// A struct used for generating a config bundle given a list of named configs
 #[derive(Clone)]
 pub struct BundleGenerator {
-    store: Store,
+    store: Arc<dyn ConfigManager>,
     watch_cache: WatchCache,
-    watch_handles: Arc<RwLock<AbortHandles>>,
 }
 
 impl BundleGenerator {
     /// Create a new bundle generator
     #[must_use]
-    pub fn new(store: Store) -> Self {
+    pub fn new(store: Arc<dyn ConfigManager>) -> Self {
         Self {
             store,
             watch_cache: Arc::default(),
-            watch_handles: Arc::default(),
         }
     }
 
@@ -228,105 +227,16 @@ impl BundleGenerator {
             });
         }
 
-        // We need to actually try and fetch the config here. If we don't do this, then a watch will
-        // just blindly watch even if the key doesn't exist. We should return an error if the config
-        // doesn't exist or has data issues. It also allows us to set the initial value
-        let config: HashMap<String, String> = match self.store.get(&name).await {
-            Ok(Some(data)) => serde_json::from_slice(&data)
-                .context("Data corruption error, unable to decode data from store")?,
-            Ok(None) => return Err(anyhow::anyhow!("Config {} does not exist", name)),
-            Err(e) => return Err(anyhow::anyhow!("Error fetching config {}: {}", name, e)),
-        };
-
-        // Otherwise we need to setup the watcher. We start by setting up the watch so we don't miss
-        // any events after we query the initial config
-        let (tx, rx) = watch::channel(config);
-        let (done, wait) = tokio::sync::oneshot::channel();
-        let (handle, reg) = AbortHandle::new_pair();
-        tokio::task::spawn(Abortable::new(
-            watcher_loop(self.store.clone(), name.clone(), tx, done),
-            reg,
-        ));
-
-        wait.await
-            .context("Error waiting for watcher to start")?
-            .context("Error waiting for watcher to start")?;
-
-        // NOTE(thomastaylor312): We should probably find a way to clear out this cache. The Sender
-        // part of the channel can tell you how many receivers it has, but we pass that along to the
-        // watcher, so there would need to be more work to expose that, probably via a struct. We
-        // could also do something with a resource counter and track that way with a cleanup task.
-        // But for now going the easy route as we already cache everything anyway
-        self.watch_handles.write().await.handles.push(handle);
+        let receiver = self
+            .store
+            .watch(&name)
+            .await
+            .context(format!("error setting up watcher for {name}"))?;
         self.watch_cache
             .write()
             .await
-            .insert(name.clone(), rx.clone());
-
-        Ok(ConfigReceiver { name, receiver: rx })
-    }
-}
-
-async fn watcher_loop(
-    store: Store,
-    name: String,
-    tx: watch::Sender<HashMap<String, String>>,
-    done: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
-) {
-    // We need to watch with history so we can get the initial config.
-    let mut watcher = match store.watch(&name).await {
-        Ok(watcher) => {
-            done.send(Ok(())).expect(
-                "Receiver for watcher setup should not have been dropped. This is programmer error",
-            );
-            watcher
-        }
-        Err(e) => {
-            done.send(Err(anyhow::anyhow!(
-                "Error setting up watcher for {}: {}",
-                name,
-                e
-            )))
-            .expect(
-                "Receiver for watcher setup should not have been dropped. This is programmer error",
-            );
-            return;
-        }
-    };
-    loop {
-        match watcher.try_next().await {
-            Ok(Some(entry)) if matches!(entry.operation, Operation::Delete | Operation::Purge) => {
-                // NOTE(thomastaylor312): We should probably do something and notify something up
-                // the chain if we get a delete or purge event of a config that is still being used.
-                // For now we just zero it out
-                tx.send_replace(HashMap::new());
-            }
-            Ok(Some(entry)) => {
-                let config: HashMap<String, String> = match serde_json::from_slice(&entry.value) {
-                    Ok(config) => config,
-                    Err(e) => {
-                        error!(%name, error = %e, "Error decoding config from store during watch");
-                        continue;
-                    }
-                };
-                tx.send_if_modified(|current| {
-                    if current == &config {
-                        false
-                    } else {
-                        *current = config;
-                        true
-                    }
-                });
-            }
-            Ok(None) => {
-                error!(%name, "Watcher for config has closed");
-                return;
-            }
-            Err(e) => {
-                error!(%name, error = %e, "Error reading from watcher for config. Will wait for next entry");
-                continue;
-            }
-        }
+            .insert(name.clone(), receiver.clone());
+        Ok(ConfigReceiver { name, receiver })
     }
 }
 

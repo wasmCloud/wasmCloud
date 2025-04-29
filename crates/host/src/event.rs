@@ -1,14 +1,32 @@
 use std::collections::{BTreeMap, HashMap};
 
-use anyhow::Context;
-use cloudevents::{EventBuilder, EventBuilderV10};
 use serde_json::json;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
-use tracing::{instrument, warn};
-use ulid::Ulid;
-use uuid::Uuid;
 use wascap::jwt;
 use wasmcloud_control_interface::Link;
+
+/// A trait for publishing wasmbus events. This can be implemented by any transport or bus
+/// implementation that can send the serialized event to the appropriate destination.
+///
+/// TODO(brooksmtownsend): file an issue for this: This trait can certainly be enhanced by adding methods specific to the event
+#[async_trait::async_trait]
+pub trait EventPublisher: Send + Sync {
+    /// Publish an event that occurred in the host. The event name is the type of event being published, and the
+    /// data is the payload of the event. It's up to the implementation to
+    /// determine how to handle events. By default, this is a no-op.
+    async fn publish_event(
+        &self,
+        _event_name: &str,
+        _data: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// A default implementation of the EventPublisher trait that does nothing.
+/// This is useful for testing or when no event publishing is required.
+#[derive(Default)]
+pub struct DefaultEventPublisher {}
+impl EventPublisher for DefaultEventPublisher {}
 
 fn format_component_claims(claims: &jwt::Claims<jwt::Component>) -> serde_json::Value {
     let issuer = &claims.issuer;
@@ -40,6 +58,18 @@ fn format_component_claims(claims: &jwt::Claims<jwt::Component>) -> serde_json::
     }
 }
 
+/// Generates an event payload for when a component is scaled
+///
+/// # Arguments
+/// * `claims` - Optional component claims
+/// * `annotations` - Key-value pairs of metadata annotations
+/// * `host_id` - ID of the host where scaling occurred
+/// * `max_instances` - Maximum number of instances to scale to
+/// * `image_ref` - Reference to the component image
+/// * `component_id` - Unique identifier for the component
+///
+/// # Returns
+/// JSON object containing scaling details and component metadata
 pub fn component_scaled(
     claims: Option<&jwt::Claims<jwt::Component>>,
     annotations: &BTreeMap<String, String>,
@@ -69,6 +99,19 @@ pub fn component_scaled(
     }
 }
 
+/// Generates an event payload for when component scaling fails
+///
+/// # Arguments
+/// * `claims` - Optional component claims
+/// * `annotations` - Key-value pairs of metadata annotations
+/// * `host_id` - ID of the host where scaling failed
+/// * `image_ref` - Reference to the component image
+/// * `component_id` - Unique identifier for the component
+/// * `max_instances` - Target number of instances that failed to scale
+/// * `error` - The error that caused the scaling failure
+///
+/// # Returns
+/// JSON object containing scaling failure details and error information
 pub fn component_scale_failed(
     claims: Option<&jwt::Claims<jwt::Component>>,
     annotations: &BTreeMap<String, String>,
@@ -100,6 +143,13 @@ pub fn component_scale_failed(
     }
 }
 
+/// Generates an event payload for when a link definition is set
+///
+/// # Arguments
+/// * `link` - Link definition containing source, target, and interface information
+///
+/// # Returns
+/// JSON object containing complete link definition details
 pub fn linkdef_set(link: &Link) -> serde_json::Value {
     json!({
         "source_id": link.source_id(),
@@ -113,6 +163,14 @@ pub fn linkdef_set(link: &Link) -> serde_json::Value {
     })
 }
 
+/// Generates an event payload for when setting a link definition fails
+///
+/// # Arguments
+/// * `link` - Link definition that failed to be set
+/// * `error` - The error that caused the link definition failure
+///
+/// # Returns
+/// JSON object containing link definition details and error information
 pub fn linkdef_set_failed(link: &Link, error: &anyhow::Error) -> serde_json::Value {
     json!({
         "source_id": link.source_id(),
@@ -127,6 +185,18 @@ pub fn linkdef_set_failed(link: &Link, error: &anyhow::Error) -> serde_json::Val
     })
 }
 
+/// Generates an event payload for when a link definition is deleted
+///
+/// # Arguments
+/// * `source_id` - ID of the source component
+/// * `target` - Optional target component ID
+/// * `name` - Name of the link
+/// * `wit_namespace` - WIT namespace for the link
+/// * `wit_package` - WIT package name
+/// * `interfaces` - Optional list of interface names
+///
+/// # Returns
+/// JSON object containing link deletion details
 pub fn linkdef_deleted(
     source_id: impl AsRef<str>,
     target: Option<&String>,
@@ -156,6 +226,17 @@ pub fn linkdef_deleted(
     }
 }
 
+/// Generates an event payload for when a provider starts
+///
+/// # Arguments
+/// * `claims` - Optional capability provider claims
+/// * `annotations` - Key-value pairs of metadata annotations
+/// * `host_id` - ID of the host where provider started
+/// * `image_ref` - Reference to the provider image
+/// * `provider_id` - Unique identifier for the provider
+///
+/// # Returns
+/// JSON object containing provider startup details and metadata
 pub fn provider_started(
     claims: Option<&jwt::Claims<jwt::CapabilityProvider>>,
     annotations: &BTreeMap<String, String>,
@@ -201,6 +282,16 @@ pub fn provider_started(
     }
 }
 
+/// Generates an event payload for when a provider fails to start
+///
+/// # Arguments
+/// * `provider_ref` - Reference to the provider image
+/// * `provider_id` - Unique identifier for the provider
+/// * `host_id` - ID of the host where start failed
+/// * `error` - The error that caused the start failure
+///
+/// # Returns
+/// JSON object containing provider start failure details
 pub fn provider_start_failed(
     provider_ref: impl AsRef<str>,
     provider_id: impl AsRef<str>,
@@ -217,6 +308,16 @@ pub fn provider_start_failed(
     })
 }
 
+/// Generates an event payload for when a provider stops
+///
+/// # Arguments
+/// * `annotations` - Key-value pairs of metadata annotations
+/// * `host_id` - ID of the host where provider stopped
+/// * `provider_id` - Unique identifier for the provider
+/// * `reason` - Reason for stopping the provider
+///
+/// # Returns
+/// JSON object containing provider stop details
 pub fn provider_stopped(
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
@@ -235,6 +336,14 @@ pub fn provider_stopped(
     })
 }
 
+/// Generates an event payload for provider health checks
+///
+/// # Arguments
+/// * `host_id` - ID of the host performing the health check
+/// * `provider_id` - Unique identifier for the provider being checked
+///
+/// # Returns
+/// JSON object containing health check details
 pub fn provider_health_check(
     host_id: impl AsRef<str>,
     provider_id: impl AsRef<str>,
@@ -245,18 +354,40 @@ pub fn provider_health_check(
     })
 }
 
+/// Generates an event payload for when a config is set
+///
+/// # Arguments
+/// * `config_name` - Name of the configuration being set
+///
+/// # Returns
+/// JSON object containing config set details
 pub fn config_set(config_name: impl AsRef<str>) -> serde_json::Value {
     json!({
         "config_name": config_name.as_ref(),
     })
 }
 
+/// Generates an event payload for when a config is deleted
+///
+/// # Arguments
+/// * `config_name` - Name of the configuration being deleted
+///
+/// # Returns
+/// JSON object containing config deletion details
 pub fn config_deleted(config_name: impl AsRef<str>) -> serde_json::Value {
     json!({
         "config_name": config_name.as_ref(),
     })
 }
 
+/// Generates an event payload for when host labels are changed
+///
+/// # Arguments
+/// * `host_id` - ID of the host whose labels changed
+/// * `labels` - New set of labels as key-value pairs
+///
+/// # Returns
+/// JSON object containing updated label information
 pub fn labels_changed(
     host_id: impl AsRef<str>,
     labels: impl Into<HashMap<String, String>>,
@@ -265,40 +396,4 @@ pub fn labels_changed(
         "host_id": host_id.as_ref(),
         "labels": labels.into(),
     })
-}
-
-#[instrument(level = "debug", skip(event_builder, ctl_nats, data))]
-pub(crate) async fn publish(
-    event_builder: &EventBuilderV10,
-    ctl_nats: &async_nats::Client,
-    lattice: &str,
-    name: &str,
-    data: serde_json::Value,
-) -> anyhow::Result<()> {
-    let now = OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .context("failed to format current time")?;
-    let ev = event_builder
-        .clone()
-        .ty(format!("com.wasmcloud.lattice.{name}"))
-        .id(Uuid::from_u128(Ulid::new().into()).to_string())
-        .time(now)
-        .data("application/json", data)
-        .build()
-        .context("failed to build cloud event")?;
-    let ev = serde_json::to_vec(&ev).context("failed to serialize event")?;
-    let max_payload = ctl_nats.server_info().max_payload;
-    if ev.len() > max_payload {
-        warn!(
-            size = ev.len(),
-            max_size = max_payload,
-            event = name,
-            lattice = lattice,
-            "event payload is too large to publish and may fail",
-        );
-    }
-    ctl_nats
-        .publish(format!("wasmbus.evt.{lattice}.{name}"), ev.into())
-        .await
-        .with_context(|| format!("failed to publish `{name}` event"))
 }
