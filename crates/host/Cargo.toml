@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-host"
-version = "0.25.1"
+version = "0.26.0"
 description = "wasmCloud host library"
 readme = "README.md"
 

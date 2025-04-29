@@ -59,6 +59,16 @@ pub struct Handler {
     /// Instance specification does not include a version
     pub targets: Arc<RwLock<HashMap<Box<str>, Arc<str>>>>,
 
+    // TODO(brooksmtownsend): The target of a link should not be managed here, it should be an API that you
+    // can call to get the target of a link.
+    //
+    // Same thing for configuration with providers, it should be able to ask when necessary.
+    //
+    // Same thing probably for any configuration, even the host could ask for config when it starts
+    // instead of having it passed in (the default could be that, though)
+    //
+    // So then there needs to be some supervisor, sidecar, or sideways embedded that can respond to these
+    // things. The default can be NATS, but then we can replace that with something else.
     /// Map of link names -> instance -> Target
     ///
     /// While a target may often be a component ID, it is not guaranteed to be one, and could be
