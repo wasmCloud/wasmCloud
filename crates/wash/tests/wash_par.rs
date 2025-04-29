@@ -28,11 +28,12 @@ fn integration_par_create_and_insert() {
     remove_dir_all(test_dir).unwrap();
 }
 #[test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 fn integration_par_inspect() {
     const SUBFOLDER: &str = "par_inspect";
-    const HTTP_OCI: &str = "wasmcloud.azurecr.io/httpclient:0.3.5";
+    const HTTP_OCI: &str = "ghcr.io/wasmcloud/http-client:0.13.0";
     const HTTP_ISSUER: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
-    const HTTP_SERVICE: &str = "VCCVLH4XWGI3SGARFNYKYT2A32SUYA2KVAIV2U2Q34DQA7WWJPFRKIKM";
+    const HTTP_SERVICE: &str = "VAJBKGSN2RA7XUFC2PY7M52AC7VV3OS3QRAQ26OVPRTZWOFILZEDIUPP";
     let inspect_dir = test_dir_with_subfolder(SUBFOLDER);
     let httpclient_parinspect = &format!("{LOCAL_REGISTRY}/httpclient:parinspect");
 
@@ -108,12 +109,13 @@ fn integration_par_inspect() {
 }
 
 #[test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 fn integration_par_inspect_cached() {
-    const HTTP_OCI: &str = "wasmcloud.azurecr.io/httpclient:0.3.5";
+    const HTTP_OCI: &str = "ghcr.io/wasmcloud/http-client:0.13.0";
     const HTTP_FAKE_OCI: &str = "foo.bar.io/httpclient:0.3.5";
     const HTTP_FAKE_CACHED: &str = "foo_bar_io_httpclient_0_3_5";
     const HTTP_ISSUER: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
-    const HTTP_SERVICE: &str = "VCCVLH4XWGI3SGARFNYKYT2A32SUYA2KVAIV2U2Q34DQA7WWJPFRKIKM";
+    const HTTP_SERVICE: &str = "VAJBKGSN2RA7XUFC2PY7M52AC7VV3OS3QRAQ26OVPRTZWOFILZEDIUPP";
 
     let mut http_client_cache_path = temp_dir().join("wasmcloud_ocicache").join(HTTP_FAKE_CACHED);
     let _ = ::std::fs::create_dir_all(&http_client_cache_path);

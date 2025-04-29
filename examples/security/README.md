@@ -33,7 +33,7 @@ First, try starting a component that wasn't signed by wasmCloud:
 
 ```bash
 export HOST_ID=$(nats req "wasmbus.ctl.default.host.ping" '{}' --raw | jq -r '.response.id')
-nats req "wasmbus.ctl.default.component.scale.$HOST_ID" '{"component_id": "hello_world", "component_ref": "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.0", "count": 1}'
+nats req "wasmbus.ctl.v1.default.component.scale.$HOST_ID" '{"component_id": "hello_world", "component_ref": "ghcr.io/brooksmtownsend/components/http-hello-world-rust:0.1.0", "count": 1}'
 ```
 
 You'll get a success message from the control interface telling you the request was received, but in the host logs you'll see:
@@ -46,13 +46,14 @@ Now, try starting a provider that was signed by wasmCloud:
 
 ```bash
 export HOST_ID=$(nats req "wasmbus.ctl.default.host.ping" '{}' --raw | jq -r '.response.id')
-nats req "wasmbus.ctl.default.provider.start.$HOST_ID" '{"provider_id": "httpserver", "provider_ref": "wasmcloud.azurecr.io/httpserver:0.19.1"}'
+nats req "wasmbus.ctl.v1.default.provider.start.$HOST_ID" '{"provider_id": "kvredis", "provider_ref": "ghcr.io/wasmcloud/keyvalue-redis:0.29.1"}'
+wash start provider
 ```
 
 ```bash
-2024-03-01T19:13:53.727940Z  INFO wasmcloud_host::wasmbus: handling start provider provider_ref="wasmcloud.azurecr.io/httpserver:0.19.1" provider_id="httpserver"
-2024-03-01T19:13:54.965168Z  INFO wasmcloud_host::wasmbus: provider started provider_ref="wasmcloud.azurecr.io/httpserver:0.19.1" provider_id="httpserver"
-Starting capability provider httpserver instance 4cf4db66-d679-4ed3-b00f-8410148e2b6f with nats url nats://127.0.0.1:4222
+2024-03-01T19:13:53.727940Z  INFO wasmcloud_host::wasmbus: handling start provider provider_ref="ghcr.io/wasmcloud/keyvalue-redis:0.29.1" provider_id="kvredis"
+2024-03-01T19:13:54.965168Z  INFO wasmcloud_host::wasmbus: provider started provider_ref="ghcr.io/wasmcloud/keyvalue-redis:0.29.1" provider_id="kvredis"
+Starting capability provider kvredis instance 4cf4db66-d679-4ed3-b00f-8410148e2b6f with nats url nats://127.0.0.1:4222
 2024-03-01T19:13:55.066322Z  INFO wasmbus_rpc::rpc_client: nats client connected
 ```
 

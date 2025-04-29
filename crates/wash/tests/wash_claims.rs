@@ -12,10 +12,11 @@ use std::{
 use assert_json_diff::assert_json_include;
 use serde_json::json;
 
-const ECHO_OCI: &str = "ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0";
-const ECHO_ACC: &str = "ADVIWF6Z3BFZNWUXJYT5NEAZZ2YX4T6NRKI3YOR3HKOSQQN7IVDGWSNO";
-const ECHO_MOD: &str = "MBFFVNGFK3IA2ZXXG5DQXQNYM6TNG45PHJMJIJFVFI6YKS3XTXL3DRRK";
-const ECHO_SHA: &str = "sha256:079275a324c0fcd0c201878f0c158120c4984472215ec3f64eb91ba9ee139f72";
+const HELLO_WORLD_OCI: &str = "ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0";
+const HELLO_WORLD_ACC: &str = "ADVIWF6Z3BFZNWUXJYT5NEAZZ2YX4T6NRKI3YOR3HKOSQQN7IVDGWSNO";
+const HELLO_WORLD_MOD: &str = "MBFFVNGFK3IA2ZXXG5DQXQNYM6TNG45PHJMJIJFVFI6YKS3XTXL3DRRK";
+const HELLO_WORLD_SHA: &str =
+    "sha256:079275a324c0fcd0c201878f0c158120c4984472215ec3f64eb91ba9ee139f72";
 
 #[test]
 #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
@@ -31,7 +32,12 @@ fn integration_claims_sign() {
     // as signing an unsigned wasm
     let echo = test_dir_file(SUBFOLDER, "echo.wasm");
     let get_hello_wasm = wash()
-        .args(["pull", ECHO_OCI, "--destination", echo.to_str().unwrap()])
+        .args([
+            "pull",
+            HELLO_WORLD_OCI,
+            "--destination",
+            echo.to_str().unwrap(),
+        ])
         .output()
         .expect("failed to pull echo for claims sign test");
     assert!(get_hello_wasm.status.success());
@@ -141,10 +147,7 @@ fn integration_claims_sign() {
 }
 
 #[test]
-#[cfg_attr(
-    not(can_reach_wasmcloud_azurecr_io),
-    ignore = "wasmcloud.azurecr.io is not reachable"
-)]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 fn integration_claims_inspect() {
     const SUBFOLDER: &str = "claims_inspect";
     let inspect_dir = test_dir_with_subfolder(SUBFOLDER);
@@ -153,7 +156,12 @@ fn integration_claims_inspect() {
     // Pull the echo module and push to local registry to test local inspect
     let echo = test_dir_file(SUBFOLDER, "echo.wasm");
     let get_hello_wasm = wash()
-        .args(["pull", ECHO_OCI, "--destination", echo.to_str().unwrap()])
+        .args([
+            "pull",
+            HELLO_WORLD_OCI,
+            "--destination",
+            echo.to_str().unwrap(),
+        ])
         .output()
         .expect("failed to pull echo for claims sign test");
     assert!(get_hello_wasm.status.success());
@@ -179,8 +187,8 @@ fn integration_claims_inspect() {
     let local_inspect_output = get_json_output(local_inspect).unwrap();
 
     let expected_inspect_output = json!({
-        "account": ECHO_ACC,
-        "component": ECHO_MOD,
+        "account": HELLO_WORLD_ACC,
+        "component": HELLO_WORLD_MOD,
         "can_be_used": "immediately",
         "expires": "never",
         "version": "0.1.0"
@@ -205,7 +213,13 @@ fn integration_claims_inspect() {
 
     let remote_inspect = wash()
         .args([
-            "claims", "inspect", ECHO_OCI, "--digest", ECHO_SHA, "-o", "json",
+            "claims",
+            "inspect",
+            HELLO_WORLD_OCI,
+            "--digest",
+            HELLO_WORLD_SHA,
+            "-o",
+            "json",
         ])
         .output()
         .expect("failed to inspect local registry wasm");
@@ -221,10 +235,7 @@ fn integration_claims_inspect() {
 }
 
 #[test]
-#[cfg_attr(
-    not(can_reach_wasmcloud_azurecr_io),
-    ignore = "wasmcloud.azurecr.io is not reachable"
-)]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 fn integration_claims_inspect_cached() {
     const ECHO_FAKE_OCI: &str = "foo.bar.io/echo:0.2.1";
     const ECHO_FAKE_CACHED: &str = "foo_bar_io_echo_0_2_1";
@@ -236,7 +247,7 @@ fn integration_claims_inspect_cached() {
     let get_hello_wasm = wash()
         .args([
             "pull",
-            ECHO_OCI,
+            HELLO_WORLD_OCI,
             "--destination",
             echo_cache_path.to_str().unwrap(),
         ])
@@ -250,7 +261,7 @@ fn integration_claims_inspect_cached() {
             "inspect",
             ECHO_FAKE_OCI,
             "--digest",
-            ECHO_SHA,
+            HELLO_WORLD_SHA,
             "-o",
             "json",
         ])
@@ -259,8 +270,8 @@ fn integration_claims_inspect_cached() {
     assert!(remote_inspect.status.success());
     let remote_inspect_output = get_json_output(remote_inspect).unwrap();
     let expected_inspect_output = json!({
-        "account": ECHO_ACC,
-        "component": ECHO_MOD,
+        "account": HELLO_WORLD_ACC,
+        "component": HELLO_WORLD_MOD,
         "can_be_used": "immediately",
         "expires": "never",
         "version": "0.1.0"
@@ -277,7 +288,7 @@ fn integration_claims_inspect_cached() {
             "inspect",
             ECHO_FAKE_OCI,
             "--digest",
-            ECHO_SHA,
+            HELLO_WORLD_SHA,
             "-o",
             "json",
             "--no-cache",

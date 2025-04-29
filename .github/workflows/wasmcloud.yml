@@ -700,8 +700,6 @@ jobs:
     secrets:
       issuer: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
       subject: ${{ secrets[matrix.subject] }}
-      azurecr_username: ${{ secrets.AZURECR_PUSH_USER }}
-      azurecr_password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
 
   deploy-doc:
     runs-on: ubuntu-24.04
@@ -733,9 +731,6 @@ jobs:
       prefix: wash-
     secrets:
       CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      AZURECR_PUSH_URL: ${{ secrets.AZURECR_PUSH_URL }}
-      AZURECR_PUSH_USER: ${{ secrets.AZURECR_PUSH_USER }}
-      AZURECR_PUSH_PASSWORD: ${{ secrets.AZURECR_PUSH_PASSWORD }}
       DOCKERHUB_PUSH_USER: ${{ secrets.DOCKERHUB_PUSH_USER }}
       DOCKERHUB_PUSH_PASSWORD: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
   oci-wasmcloud:
@@ -753,9 +748,6 @@ jobs:
       prefix: ''
     secrets:
       CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      AZURECR_PUSH_URL: ${{ secrets.AZURECR_PUSH_URL }}
-      AZURECR_PUSH_USER: ${{ secrets.AZURECR_PUSH_USER }}
-      AZURECR_PUSH_PASSWORD: ${{ secrets.AZURECR_PUSH_PASSWORD }}
       DOCKERHUB_PUSH_USER: ${{ secrets.DOCKERHUB_PUSH_USER }}
       DOCKERHUB_PUSH_PASSWORD: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
 

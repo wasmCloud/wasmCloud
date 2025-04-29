@@ -13,8 +13,8 @@ use common::{
     test_dir_file, test_dir_with_subfolder, wash,
 };
 
-const ECHO_WASM: &str = "ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0";
-const LOGGING_PAR: &str = "wasmcloud.azurecr.io/logging:0.9.1";
+const HELLO_WORLD_WASM: &str = "ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0";
+const KEYVALUE_PAR: &str = "ghcr.io/wasmcloud/keyvalue-redis:0.29.0";
 const LOCAL_REGISTRY: &str = "localhost:5001";
 
 #[test]
@@ -28,13 +28,13 @@ fn integration_reg_pull_basic() {
     let pull_basic = wash()
         .args([
             "pull",
-            ECHO_WASM,
+            HELLO_WORLD_WASM,
             "--destination",
             basic_echo.to_str().unwrap(),
             "--allow-latest",
         ])
         .output()
-        .unwrap_or_else(|_| panic!("failed to pull {ECHO_WASM}"));
+        .unwrap_or_else(|_| panic!("failed to pull {HELLO_WORLD_WASM}"));
     assert!(pull_basic.status.success());
     // Very important
     assert!(output_to_string(pull_basic).unwrap().contains('\u{1F6BF}'));
@@ -49,12 +49,12 @@ fn integration_reg_pull_comprehensive() {
     let pull_dir = test_dir_with_subfolder(SUBFOLDER);
 
     let comprehensive_echo = test_dir_file(SUBFOLDER, "comprehensive_echo.wasm");
-    let comprehensive_logging = test_dir_file(SUBFOLDER, "comprehensive_logging.par.gz");
+    let comprehensive_keyvalue = test_dir_file(SUBFOLDER, "keyvalue.par.gz");
 
     let pull_echo_comprehensive = wash()
         .args([
             "pull",
-            ECHO_WASM,
+            HELLO_WORLD_WASM,
             "--destination",
             comprehensive_echo.to_str().unwrap(),
             "--digest",
@@ -63,7 +63,7 @@ fn integration_reg_pull_comprehensive() {
             "json",
         ])
         .output()
-        .unwrap_or_else(|_| panic!("failed to pull {ECHO_WASM}"));
+        .unwrap_or_else(|_| panic!("failed to pull {HELLO_WORLD_WASM}"));
 
     assert!(pull_echo_comprehensive.status.success());
     let output = get_json_output(pull_echo_comprehensive).unwrap();
@@ -75,21 +75,21 @@ fn integration_reg_pull_comprehensive() {
     let pull_logging_comprehensive = wash()
         .args([
             "pull",
-            LOGGING_PAR,
+            KEYVALUE_PAR,
             "--destination",
-            comprehensive_logging.to_str().unwrap(),
+            comprehensive_keyvalue.to_str().unwrap(),
             "--digest",
-            "sha256:169f2764e529c2b57ad20abb87e0854d67bf6f0912896865e2911dee1bf6af98",
+            "sha256:b737b9ead2f38af828df6d04f0417f21cbed467cfa902dc96ef958379a1c39d0",
             "--output",
             "json",
         ])
         .output()
-        .unwrap_or_else(|_| panic!("failed to pull {ECHO_WASM}"));
+        .unwrap_or_else(|_| panic!("failed to pull {KEYVALUE_PAR}"));
 
     assert!(pull_logging_comprehensive.status.success());
     let output = get_json_output(pull_logging_comprehensive).unwrap();
 
-    let expected_json = json!({"file": comprehensive_logging.to_str().unwrap(), "success": true});
+    let expected_json = json!({"file": comprehensive_keyvalue.to_str().unwrap(), "success": true});
 
     assert_eq!(output, expected_json);
 
@@ -109,14 +109,14 @@ fn integration_reg_push_basic() {
     wash()
         .args([
             "pull",
-            ECHO_WASM,
+            HELLO_WORLD_WASM,
             "--destination",
             pull_echo_wasm.to_str().unwrap(),
         ])
         .stderr(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())
         .output()
-        .unwrap_or_else(|_| panic!("failed to pull {ECHO_WASM} for push basic"));
+        .unwrap_or_else(|_| panic!("failed to pull {HELLO_WORLD_WASM} for push basic"));
 
     // Push echo.wasm and pull from local registry
     let echo_push_basic = &format!("{LOCAL_REGISTRY}/echo:pushbasic");
@@ -160,10 +160,7 @@ fn integration_reg_push_basic() {
 
 // NOTE: This test will fail without a local docker registry running
 #[tokio::test]
-#[cfg_attr(
-    not(can_reach_wasmcloud_azurecr_io),
-    ignore = "wasmcloud.azurecr.io is not reachable"
-)]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 async fn integration_reg_push_comprehensive() -> Result<()> {
     const SUBFOLDER: &str = "push_comprehensive";
     let push_dir = test_dir_with_subfolder(SUBFOLDER);
@@ -175,21 +172,21 @@ async fn integration_reg_push_comprehensive() -> Result<()> {
     wash()
         .args([
             "pull",
-            ECHO_WASM,
+            HELLO_WORLD_WASM,
             "--destination",
             pull_echo_wasm.to_str().unwrap(),
         ])
         .output()
-        .unwrap_or_else(|_| panic!("failed to pull {ECHO_WASM} for push basic"));
+        .unwrap_or_else(|_| panic!("failed to pull {HELLO_WORLD_WASM} for push basic"));
     wash()
         .args([
             "pull",
-            LOGGING_PAR,
+            KEYVALUE_PAR,
             "--destination",
             pull_logging_par.to_str().unwrap(),
         ])
         .output()
-        .unwrap_or_else(|_| panic!("failed to pull {LOGGING_PAR} for push basic"));
+        .unwrap_or_else(|_| panic!("failed to pull {KEYVALUE_PAR} for push basic"));
 
     let config_json = test_dir_file(SUBFOLDER, "config.json");
     let mut config = File::create(config_json.clone()).unwrap();
@@ -213,7 +210,7 @@ async fn integration_reg_push_comprehensive() -> Result<()> {
             "localuser",
         ])
         .output()
-        .unwrap_or_else(|_| panic!("failed to push {LOGGING_PAR} for push comprehensive"));
+        .unwrap_or_else(|_| panic!("failed to push {KEYVALUE_PAR} for push comprehensive"));
     assert!(push_all_options.status.success());
 
     let output = get_json_output(push_all_options).unwrap();
@@ -230,10 +227,7 @@ async fn integration_reg_push_comprehensive() -> Result<()> {
 
 // NOTE: This test will fail without a local docker registry running
 #[tokio::test]
-#[cfg_attr(
-    not(can_reach_wasmcloud_azurecr_io),
-    ignore = "wasmcloud.azurecr.io is not reachable"
-)]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 async fn integration_reg_config() -> Result<()> {
     //===== Initial project setup and build component artifact
     let test_setup = init(
