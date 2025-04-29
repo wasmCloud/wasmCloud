@@ -371,7 +371,6 @@ pub struct Host {
     data_store: Arc<dyn StoreManager>,
 
     /// The generator for creating configuration bundles.
-    //TODO(brooksmtownsend): Trait, that maybe the host doesn't need to manage explicitly
     config_generator: BundleGenerator,
 
     /// A set of tasks managed by the host.
@@ -388,7 +387,6 @@ pub struct HostBuilder {
     registry_config: HashMap<String, RegistryConfig>,
 
     // Host trait extensions
-    // TODO(brooksmtownsend): This should probably be a part of the config store
     bundle_generator: Option<BundleGenerator>,
     /// The configuration store to use for managing configuration data
     config_store: Option<Arc<dyn StoreManager>>,
@@ -708,8 +706,9 @@ impl HostBuilder {
             config_generator: self
                 .bundle_generator
                 .unwrap_or_else(|| BundleGenerator::new(Arc::new(DefaultStore::default()))),
-            // TODO(brooksmtownsend): We should have one for builtins, and a generic one.
-            // For now, because of coupling, keep it simple with NATS
+            // TODO(#4407): This trait abstraction isn't actually abstracted since all capability
+            // providers are NATS based. As we revise communication with providers, we can update
+            // this to be a trait object from the builder instead.
             provider_manager: Arc::new(NatsProviderManager::new(
                 rpc_nats,
                 self.config.lattice.to_string(),
@@ -982,7 +981,6 @@ impl Host {
                 .clamp(MIN_INVOCATION_CHANNEL_SIZE, MAX_INVOCATION_CHANNEL_SIZE),
         );
         let prefix = Arc::from(format!("{}.{id}", &self.host_config.lattice));
-        // TODO(brooksmtownsend): fetch wrpc client from RPC service
         let nats = wrpc_transport_nats::Client::new(
             Arc::clone(&self.rpc_nats),
             Arc::clone(&prefix),
@@ -1152,9 +1150,6 @@ impl Host {
             .unwrap_or_else(|| ComponentSpecification::new(&component_ref));
         self.store_component_spec(&component_id, &component_spec)
             .await?;
-        // TODO(brooksmtownsend): This will deadlock because of the way we hold a components lock.
-        // self.update_host_with_spec(&component_id, &component_spec)
-        //     .await?;
 
         // Map the imports to pull out the result types of the functions for lookup when invoking them
         let handler = Handler {

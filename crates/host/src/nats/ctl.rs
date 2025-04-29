@@ -101,6 +101,7 @@ impl crate::wasmbus::Host {
     pub(crate) async fn handle_ctl_message(
         self: Arc<Self>,
         message: async_nats::Message,
+        ctl_subject_prefix: &str,
     ) -> Option<Bytes> {
         // NOTE: if log level is not `trace`, this won't have an effect, since the current span is
         // disabled. In most cases that's fine, since we aren't aware of any control interface
@@ -111,9 +112,7 @@ impl crate::wasmbus::Host {
         let subject = message.subject;
         let mut parts = subject
             .trim()
-            // TODO(brooksmtownsend): topic prefix parsing elsewhere
-            // .trim_start_matches(&self.ctl_topic_prefix)
-            .trim_start_matches("wasmbus.ctl")
+            .trim_start_matches(ctl_subject_prefix)
             .trim_start_matches('.')
             .split('.')
             .skip(2);
@@ -326,21 +325,22 @@ impl NatsControlInterfaceServer {
         tasks.spawn({
             let ctl_nats = Arc::clone(&self.ctl_nats);
             let host = Arc::clone(&host);
+            let ctl_subject_prefix = Arc::new(self.ctl_topic_prefix.clone());
             async move {
                 queue
                     .for_each_concurrent(None, {
                         let host = Arc::clone(&host);
                         let ctl_nats = Arc::clone(&ctl_nats);
+                        let ctl_subject_prefix = Arc::clone(&ctl_subject_prefix);
                         move |msg| {
                             let host = Arc::clone(&host);
                             let ctl_nats = Arc::clone(&ctl_nats);
+                            let ctl_subject_prefix = Arc::clone(&ctl_subject_prefix);
                             async move {
                                 let msg_subject = msg.subject.clone();
                                 let msg_reply = msg.reply.clone();
-                                let payload = host.handle_ctl_message(msg).await;
+                                let payload = host.handle_ctl_message(msg, &ctl_subject_prefix).await;
                                 if let Some(reply) = msg_reply {
-                                    // TODO(brooksmtownsend): parse subject here
-                                    // TODO(brooksmtownsend): ensure this is instrumented properly
                                     let headers = injector_to_headers(&TraceContextInjector::default_with_span());
                                     if let Some(payload) = payload {
                                         let max_payload = ctl_nats.server_info().max_payload;
