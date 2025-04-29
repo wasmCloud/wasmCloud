@@ -15,7 +15,6 @@ use async_nats::Client;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use bytes::Bytes;
-use cloudevents::EventBuilderV10;
 use futures::{stream, Future, StreamExt};
 use nkeys::XKey;
 use tokio::io::AsyncWriteExt;
@@ -29,14 +28,33 @@ use wasmcloud_core::{provider_config_update_subject, HealthCheckResponse, HostDa
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_tracing::context::TraceContextInjector;
 
+use crate::event::EventPublisher;
 use crate::jwt;
+use crate::wasmbus::injector_to_headers;
 use crate::wasmbus::{config::ConfigBundle, Annotations};
-use crate::wasmbus::{event, injector_to_headers};
 
 use super::Host;
 
 mod http_server;
 mod messaging_nats;
+
+/// A trait for sending and receiving messages to/from a provider
+#[async_trait::async_trait]
+pub trait ProviderManager: Send + Sync {
+    /// Put a link to the provider
+    async fn put_link(
+        &self,
+        link: &wasmcloud_core::InterfaceLinkDefinition,
+        target: &str,
+    ) -> anyhow::Result<()>;
+
+    /// Delete a link from the provider
+    async fn delete_link(
+        &self,
+        link: &wasmcloud_core::InterfaceLinkDefinition,
+        target: &str,
+    ) -> anyhow::Result<()>;
+}
 
 /// An Provider instance
 #[derive(Debug)]
@@ -165,8 +183,6 @@ impl Host {
         // The provider itself needs to know its private key
         let provider_xkey_private_key = if let Ok(seed) = provider_xkey.seed() {
             seed
-        } else if self.host_config.secrets_topic_prefix.is_none() {
-            "".to_string()
         } else {
             // This should never happen since this returns an error when an Xkey is
             // created from a public key, but if we can't generate one for whatever
@@ -237,8 +253,7 @@ impl Host {
         // Spawn a task to check the health of the provider every 30 seconds
         tasks.spawn(check_health(
             Arc::clone(&self.rpc_nats),
-            self.ctl_nats.clone(),
-            self.event_builder.clone(),
+            self.event_publisher.clone(),
             Arc::clone(&self.host_config.lattice),
             self.host_key.public_key(),
             provider_id.to_string(),
@@ -427,8 +442,7 @@ async fn provider_command(path: &Path, host_data: Vec<u8>) -> anyhow::Result<pro
 /// health every 30 seconds until the health receiver gets a message to stop
 fn check_health(
     rpc_nats: Arc<Client>,
-    ctl_nats: Client,
-    event_builder: EventBuilderV10,
+    event_publisher: Arc<dyn EventPublisher + Send + Sync>,
     lattice: Arc<str>,
     host_id: String,
     provider_id: String,
@@ -461,14 +475,12 @@ fn check_health(
                     (Ok(HealthCheckResponse { healthy: true, .. }), false) => {
                         trace!(?provider_id, "provider health check succeeded");
                         previous_healthy = true;
-                        if let Err(e) = event::publish(
-                            &event_builder,
-                            &ctl_nats,
-                            &lattice,
-                            "health_check_passed",
-                            event::provider_health_check(&host_id, &provider_id),
-                        )
-                        .await
+                        if let Err(e) = event_publisher
+                            .publish_event(
+                                "health_check_passed",
+                                crate::event::provider_health_check(&host_id, &provider_id),
+                            )
+                            .await
                         {
                             warn!(
                                 ?e,
@@ -480,14 +492,12 @@ fn check_health(
                     (Ok(HealthCheckResponse { healthy: false, .. }), true) => {
                         trace!(?provider_id, "provider health check failed");
                         previous_healthy = false;
-                        if let Err(e) = event::publish(
-                            &event_builder,
-                            &ctl_nats,
-                            &lattice,
-                            "health_check_failed",
-                            event::provider_health_check(&host_id, &provider_id),
-                        )
-                        .await
+                        if let Err(e) = event_publisher
+                            .publish_event(
+                                "health_check_failed",
+                                crate::event::provider_health_check(&host_id, &provider_id),
+                            )
+                            .await
                         {
                             warn!(
                                 ?e,
@@ -498,14 +508,12 @@ fn check_health(
                     }
                     // If the provider health status didn't change, we simply publish a health check status event
                     (Ok(_), _) => {
-                        if let Err(e) = event::publish(
-                            &event_builder,
-                            &ctl_nats,
-                            &lattice,
-                            "health_check_status",
-                            event::provider_health_check(&host_id, &provider_id),
-                        )
-                        .await
+                        if let Err(e) = event_publisher
+                            .publish_event(
+                                "health_check_status",
+                                crate::event::provider_health_check(&host_id, &provider_id),
+                            )
+                            .await
                         {
                             warn!(
                                 ?e,
