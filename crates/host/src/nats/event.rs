@@ -1,4 +1,4 @@
-//! NATS implementation of the wasmCloud [crate::wasmbus::event::EventPublisher] extension trait
+//! NATS implementation of the wasmCloud [crate::event::EventPublisher] extension trait
 
 use anyhow::Context;
 use cloudevents::{EventBuilder, EventBuilderV10};
@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::event::EventPublisher;
 
-/// NATS implementation of the wasmCloud [crate::wasmbus::event::EventPublisher] extension trait,
+/// NATS implementation of the wasmCloud [crate::event::EventPublisher] extension trait,
 /// sending events to the NATS message bus with a CloudEvents payload envelope.
 pub struct NatsEventPublisher {
     event_builder: EventBuilderV10,

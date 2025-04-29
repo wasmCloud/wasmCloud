@@ -17,22 +17,22 @@ pub mod builder;
 /// NATS implementation of the wasmCloud control interface
 pub mod ctl;
 
-/// NATS implementation of the wasmCloud [crate::wasmbus::event::EventPublisher] extension trait,
+/// NATS implementation of the wasmCloud [crate::event::EventPublisher] extension trait,
 /// sending events to the NATS message bus with a CloudEvents payload envelope.
 pub mod event;
 
 /// NATS implementation of the wasmCloud [crate::policy::PolicyManager] trait
 pub mod policy;
 
-/// NATS implementation of the wasmCloud [crate::wasmbus::provider::ProviderManager] extension trait
+/// NATS implementation of the wasmCloud [crate::wasmbus::providers::ProviderManager] extension trait
 /// which sends provider commands over the NATS message bus.
 pub mod provider;
 
-/// NATS implementation of the [crate::wasmbus::secrets::SecretsManager] extension trait
+/// NATS implementation of the [crate::secrets::SecretsManager] extension trait
 /// for fetching encrypted secrets from a secret store.
 pub mod secrets;
 
-/// NATS implementation of the wasmCloud [crate::wasmbus::store::StoreManager] extension trait
+/// NATS implementation of the wasmCloud [crate::store::StoreManager] extension trait
 /// using JetStream as a backing store.
 pub mod store;
 
