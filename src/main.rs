@@ -14,13 +14,14 @@ use tokio::time::{timeout, timeout_at};
 use tokio::{select, signal};
 use tracing::{warn, Level as TracingLogLevel};
 use tracing_subscriber::util::SubscriberInitExt as _;
+use url::Url;
 use wasmcloud_core::logging::Level as WasmcloudLogLevel;
 use wasmcloud_core::{OtelConfig, OtelProtocol};
+use wasmcloud_host::nats::builder::NatsHostBuilder;
 use wasmcloud_host::oci::Config as OciConfig;
-use wasmcloud_host::url::Url;
-use wasmcloud_host::wasmbus::host_config::PolicyService as PolicyServiceConfig;
-use wasmcloud_host::wasmbus::Features;
+use wasmcloud_host::workload_identity::WorkloadIdentityConfig;
 use wasmcloud_host::WasmbusHostConfig;
+use wasmcloud_host::{nats::connect_nats, wasmbus::Features};
 use wasmcloud_tracing::configure_observability;
 
 #[derive(Debug, Parser)]
@@ -452,7 +453,8 @@ async fn main() -> anyhow::Result<()> {
         .map(KeyPair::from_seed)
         .transpose()
         .context("failed to construct host key pair from seed")?
-        .map(Arc::new);
+        .map(Arc::new)
+        .unwrap_or_else(|| Arc::new(KeyPair::new_server()));
     let (nats_jwt, nats_key) =
         parse_nats_credentials(args.nats_creds, args.nats_jwt, args.nats_seed)
             .await
@@ -471,17 +473,7 @@ async fn main() -> anyhow::Result<()> {
         oci_user: args.oci_user,
         oci_password: args.oci_password,
     };
-    if let Some(policy_topic) = args.policy_topic.as_deref() {
-        anyhow::ensure!(
-            validate_nats_subject(policy_topic).is_ok(),
-            "Invalid policy topic"
-        );
-    }
-    let policy_service_config = PolicyServiceConfig {
-        policy_topic: args.policy_topic,
-        policy_changes_topic: args.policy_changes_topic,
-        policy_timeout_ms: args.policy_timeout_ms,
-    };
+
     let mut labels = args
         .label
         .unwrap_or_default()
@@ -511,45 +503,106 @@ async fn main() -> anyhow::Result<()> {
             "Invalid secrets topic"
         );
     }
-    let (host, shutdown) = Box::pin(wasmcloud_host::wasmbus::Host::new(WasmbusHostConfig {
-        ctl_nats_url,
-        lattice: Arc::from(args.lattice),
-        host_key,
-        config_service_enabled: args.config_service_enabled,
-        js_domain: args.js_domain,
-        labels,
-        provider_shutdown_delay: Some(args.provider_shutdown_delay),
-        oci_opts,
-        ctl_jwt: ctl_jwt.or_else(|| nats_jwt.clone()),
-        ctl_key: ctl_key.or_else(|| nats_key.clone()),
-        ctl_tls: args.ctl_tls,
-        ctl_topic_prefix: args.ctl_topic_prefix,
-        rpc_nats_url,
-        rpc_timeout: args.rpc_timeout_ms,
-        rpc_jwt: rpc_jwt.or_else(|| nats_jwt.clone()),
-        rpc_key: rpc_key.or_else(|| nats_key.clone()),
-        rpc_tls: args.rpc_tls,
-        allow_file_load: args.allow_file_load,
-        log_level,
-        enable_structured_logging: args.enable_structured_logging,
-        otel_config,
-        policy_service_config,
-        secrets_topic_prefix: args.secrets_topic_prefix,
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        max_execution_time: args.max_execution_time,
-        max_linear_memory: args.max_linear_memory,
-        max_component_size: args.max_component_size,
-        max_components: args.max_components,
-        max_core_instances_per_component: args.max_core_instances_per_component,
-        heartbeat_interval: args.heartbeat_interval,
-        // NOTE(brooks): Summing the feature flags "OR"s the multiple flags together.
-        experimental_features: args.experimental_features.into_iter().sum(),
-        http_admin: args.http_admin,
-        enable_component_auction: args.enable_component_auction.unwrap_or(true),
-        enable_provider_auction: args.enable_provider_auction.unwrap_or(true),
-    }))
+
+    // NOTE(brooksmtownsend): Summing the feature flags "OR"s the multiple flags together.
+    let experimental_features: Features = args.experimental_features.into_iter().sum();
+    let workload_identity_config = if experimental_features.workload_identity_auth_enabled() {
+        Some(WorkloadIdentityConfig::from_env()?)
+    } else {
+        None
+    };
+    let ctl_nats = connect_nats(
+        ctl_nats_url.as_str(),
+        ctl_jwt.or_else(|| nats_jwt.clone()).as_ref(),
+        ctl_key.or_else(|| nats_key.clone()),
+        args.ctl_tls,
+        None,
+        workload_identity_config.clone(),
+    )
     .await
-    .context("failed to initialize host")?;
+    .context("failed to establish NATS control connection")?;
+
+    let builder = NatsHostBuilder::new(
+        ctl_nats,
+        Some(args.ctl_topic_prefix),
+        args.lattice.clone(),
+        args.js_domain.clone(),
+        Some(oci_opts.clone()),
+        labels.clone().into_iter().collect(),
+        args.config_service_enabled,
+        args.enable_component_auction.unwrap_or(true),
+        args.enable_provider_auction.unwrap_or(true),
+    )
+    .await?
+    .with_event_publisher(host_key.public_key());
+
+    let builder = if let Some(policy_topic) = args.policy_topic.as_deref() {
+        anyhow::ensure!(
+            validate_nats_subject(policy_topic).is_ok(),
+            "Invalid policy topic"
+        );
+        builder
+            .with_policy_manager(
+                host_key.clone(),
+                labels.clone(),
+                args.policy_topic.clone(),
+                args.policy_timeout_ms,
+                args.policy_changes_topic.clone(),
+            )
+            .await?
+    } else {
+        builder
+    };
+
+    let builder = if let Some(secrets_topic) = args.secrets_topic_prefix {
+        anyhow::ensure!(
+            validate_nats_subject(&secrets_topic).is_ok(),
+            "Invalid secrets topic"
+        );
+        builder.with_secrets_manager(secrets_topic)?
+    } else {
+        builder
+    };
+
+    let (host_builder, nats_ctl_server) = builder
+        .build(WasmbusHostConfig {
+            lattice: Arc::from(args.lattice.clone()),
+            host_key: host_key.clone(),
+            config_service_enabled: args.config_service_enabled,
+            js_domain: args.js_domain,
+            labels,
+            provider_shutdown_delay: Some(args.provider_shutdown_delay),
+            oci_opts,
+            rpc_nats_url,
+            rpc_timeout: args.rpc_timeout_ms,
+            rpc_jwt: rpc_jwt.or_else(|| nats_jwt.clone()),
+            rpc_key: rpc_key.or_else(|| nats_key.clone()),
+            rpc_tls: args.rpc_tls,
+            allow_file_load: args.allow_file_load,
+            log_level,
+            enable_structured_logging: args.enable_structured_logging,
+            otel_config,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            max_execution_time: args.max_execution_time,
+            max_linear_memory: args.max_linear_memory,
+            max_component_size: args.max_component_size,
+            max_components: args.max_components,
+            max_core_instances_per_component: args.max_core_instances_per_component,
+            heartbeat_interval: args.heartbeat_interval,
+            experimental_features,
+            http_admin: args.http_admin,
+            enable_component_auction: args.enable_component_auction.unwrap_or(true),
+            enable_provider_auction: args.enable_provider_auction.unwrap_or(true),
+        })
+        .await?;
+    let (host, shutdown) = host_builder
+        .build()
+        .await
+        .context("failed to initialize host")?;
+
+    // Start the control interface server
+    let mut ctl = nats_ctl_server.start(host.clone()).await?;
+
     #[cfg(unix)]
     let deadline = {
         let mut terminate = signal::unix::signal(signal::unix::SignalKind::terminate())?;
@@ -570,6 +623,8 @@ async fn main() -> anyhow::Result<()> {
         },
         deadline = host.stopped() => deadline?,
     };
+    // TODO(brooksmtownsend): Consider a drain of sorts that can wrap up pending persistent work
+    ctl.abort_all();
     drop(host);
     if let Some(deadline) = deadline {
         timeout_at(deadline, shutdown)
