@@ -140,6 +140,7 @@ regex = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tracing = { workspace = true } # TODO: revisit the 'release_max_level_info' feature https://github.com/wasmCloud/wasmCloud/issues/468
 tracing-subscriber = { workspace = true, optional = true }
+url = { workspace = true }
 wascap = { workspace = true, optional = true }
 wasmcloud-core = { workspace = true, features = ["otel"], optional = true }
 wasmcloud-host = { workspace = true, optional = true }
@@ -370,7 +371,7 @@ wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-component = { version = "0", path = "crates/component", default-features = false }
 wasmcloud-control-interface = { version = "2.4.0", path = "./crates/control-interface", default-features = false }
 wasmcloud-core = { version = "^0.18.0", path = "./crates/core", default-features = false }
-wasmcloud-host = { version = "^0.25.0", path = "./crates/host", default-features = false }
+wasmcloud-host = { version = "^0.26.0", path = "./crates/host", default-features = false }
 wasmcloud-provider-blobstore-azure = { version = "*", path = "./crates/provider-blobstore-azure", default-features = false }
 wasmcloud-provider-blobstore-fs = { version = "*", path = "./crates/provider-blobstore-fs", default-features = false }
 wasmcloud-provider-blobstore-s3 = { version = "*", path = "./crates/provider-blobstore-s3", default-features = false }
