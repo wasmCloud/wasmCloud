@@ -756,9 +756,7 @@ impl ControlInterfaceServer for Host {
         ))
     }
 
-    /// Handle a new link by modifying the relevant source [ComponentSpecification]. Once
-    /// the change is written to the LATTICEDATA store, each host in the lattice (including this one)
-    /// will handle the new specification and update their own internal link maps via [process_component_spec_put].
+    /// Handle a new link by modifying the relevant source [crate::wasmbus::ComponentSpecification].
     #[instrument(level = "debug", skip_all)]
     async fn handle_link_put(&self, request: Link) -> anyhow::Result<CtlResponse<()>> {
         let link_set_result: anyhow::Result<()> = async {
