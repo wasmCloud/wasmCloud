@@ -52,7 +52,7 @@ jobs:
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: artifacts
           pattern: ${{ inputs.name }}-provider-*
@@ -63,7 +63,7 @@ jobs:
       - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-pc-windows-gnu/bin/${{ inputs.name }}-provider.exe"
       - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-unknown-linux-musl/bin/${{ inputs.name }}-provider"
 
-      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: wash-x86_64-unknown-linux-musl
 
@@ -151,7 +151,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       # Set up wash
-      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: wash-x86_64-unknown-linux-musl
           path: artifact
