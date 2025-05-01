@@ -365,7 +365,7 @@ wasi = { version = "0.13.3", default-features = false }
 wasm-pkg-client = { version = "0.10", default-features = false }
 wasm-pkg-core = { version = "0.10", default-features = false }
 wasi-preview1-component-adapter-provider = { version = "31", default-features = false }
-wasm-encoder = { version = "0.228", default-features = false }
+wasm-encoder = { version = "0.229", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-component = { version = "0", path = "crates/component", default-features = false }
 wasmcloud-control-interface = { version = "2.4.0", path = "./crates/control-interface", default-features = false }
