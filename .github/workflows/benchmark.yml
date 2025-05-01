@@ -35,7 +35,7 @@ jobs:
         run: |
           echo "${HOME}/bin" >> $GITHUB_PATH
 
-      - uses: taiki-e/install-action@9903ab6feadaec33945de535fe9d181b91802a55 # v2.50.0
+      - uses: taiki-e/install-action@33734a118689b0b418824fb78ea2bf18e970b43b # v2.50.4
         with:
           tool: wash
 
