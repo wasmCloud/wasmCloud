@@ -61,7 +61,7 @@ jobs:
       # Download wash binary & install to path
       - name: install wash (${{ matrix.wash-version }})
         if: ${{ matrix.wash-version && matrix.wash-version != 'current' }}
-        uses: taiki-e/install-action@9903ab6feadaec33945de535fe9d181b91802a55 # v2.50.0
+        uses: taiki-e/install-action@ba0a04e0afd83836a25f30f6f33e6ebdd81a8ff1 # v2.50.5
         with:
           tool: wash@${{ matrix.wash-version }}
 
@@ -102,12 +102,12 @@ jobs:
         working-directory: examples/${{ matrix.project.lang }}/providers/${{ matrix.project.name }}
 
       # Install wit-bindgen
-      - uses: taiki-e/install-action@9903ab6feadaec33945de535fe9d181b91802a55 # v2.50.0
+      - uses: taiki-e/install-action@ba0a04e0afd83836a25f30f6f33e6ebdd81a8ff1 # v2.50.5
         with:
           tool: wit-bindgen-cli
 
       # Install wasm-tools for golang projects
-      - uses: taiki-e/install-action@9903ab6feadaec33945de535fe9d181b91802a55 # v2.50.0
+      - uses: taiki-e/install-action@ba0a04e0afd83836a25f30f6f33e6ebdd81a8ff1 # v2.50.5
         if: ${{ matrix.project.lang == 'golang' }}
         with:
           tool: wasm-tools@1.225.0
