@@ -7,6 +7,7 @@ use anyhow::bail;
 use clap::{self, Arg, ArgMatches, Command, FromArgMatches, Parser, Subcommand};
 use console::style;
 use crossterm::style::Stylize;
+use semver::Version;
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
 use wash::lib::cli::capture::{CaptureCommand, CaptureSubcommand};
@@ -23,7 +24,11 @@ use wash::lib::cli::stop::StopCommand;
 use wash::lib::cli::update::UpdateCommand;
 use wash::lib::cli::{CommandOutput, OutputKind};
 use wash::lib::drain::Drain as DrainSelection;
+use wash::lib::generate::emoji;
 use wash::lib::plugin::subcommand::{DirMapping, SubcommandRunner};
+use wash::lib::start::{
+    get_sorted_releases, GITHUB_WASMCLOUD_ORG, GITHUB_WASMCLOUD_WASMCLOUD_REPO,
+};
 
 use wash::cli::app::{self, AppCliCommand};
 use wash::cli::build::{self, BuildCommand};
@@ -385,6 +390,8 @@ async fn main() {
         .with_writer(std::io::stderr)
         .with_env_filter(EnvFilter::from_default_env())
         .init();
+
+    let _ = inform_new_wash_version().await;
 
     let mut command = Cli::command();
 
@@ -764,4 +771,28 @@ async fn ensure_plugin_scratch_dir_exists(
         }
     }
     Ok(dir)
+}
+
+async fn inform_new_wash_version() -> anyhow::Result<()> {
+    let wash_version = Version::parse(clap::crate_version!())?;
+    let tag_pattern = "wash-v.*";
+    let releases = get_sorted_releases(
+        GITHUB_WASMCLOUD_ORG,
+        GITHUB_WASMCLOUD_WASMCLOUD_REPO,
+        &wash_version,
+        Some(tag_pattern),
+    )
+    .await?;
+    if let Some(latest_release) = releases
+        .first()
+        .map(|x| x.get_x_y_z_version())
+        .transpose()?
+    {
+        eprintln!(
+            "{} Consider upgrading to newest wash version: v{}",
+            emoji::INFO_SQUARE,
+            latest_release
+        );
+    }
+    Ok(())
 }

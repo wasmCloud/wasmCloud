@@ -24,7 +24,7 @@ const VERSION_FETCHER_CLIENT_USER_AGENT: &str =
 /// Gets a list of releases that are more newer, but semver compatible with the provided `after_version`. They are
 /// sorted by the version number, and the published date. Optionally, a tag pattern can be provided to filter the
 /// releases. If this is not provided, only the main releases are considered.
-async fn get_sorted_releases(
+pub async fn get_sorted_releases(
     owner: &str,
     repo: &str,
     after_version: &Version,
