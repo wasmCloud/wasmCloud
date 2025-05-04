@@ -182,8 +182,9 @@ pub struct ConnectionOpts {
     /// RPC Host for connection, defaults to 127.0.0.1 for local nats
     #[clap(
         short = 'r',
-        long = "rpc-host",
-        env = "WASMCLOUD_RPC_HOST",
+        long = "nats-host",
+        alias = "rpc_host",
+        env = "WASMCLOUD_NATS_HOST",
         default_value = "127.0.0.1"
     )]
     rpc_host: String,
@@ -191,16 +192,18 @@ pub struct ConnectionOpts {
     /// RPC Port for connections, defaults to 4222 for local nats
     #[clap(
         short = 'p',
-        long = "rpc-port",
-        env = "WASMCLOUD_RPC_PORT",
+        long = "nats-port",
+        alias = "rpc-port",
+        env = "WASMCLOUD_NATS_PORT",
         default_value = "4222"
     )]
     rpc_port: String,
 
     /// JWT file for RPC authentication. Must be supplied with `rpc_seed`.
     #[clap(
-        long = "rpc-jwt",
-        env = "WASMCLOUD_RPC_JWT",
+        long = "nats-jwt",
+        alias = "rpc-jwt",
+        env = "WASMCLOUD_NATS_JWT",
         hide_env_values = true,
         requires = "rpc_seed"
     )]
@@ -208,8 +211,9 @@ pub struct ConnectionOpts {
 
     /// Seed file or literal for RPC authentication. Must be supplied with `rpc_jwt`.
     #[clap(
-        long = "rpc-seed",
-        env = "WASMCLOUD_RPC_SEED",
+        long = "nats-seed",
+        alias = "rpc-seed",
+        env = "WASMCLOUD_NATS_SEED",
         hide_env_values = true,
         requires = "rpc_jwt"
     )]
@@ -640,9 +644,9 @@ mod test {
             "some-context",
             "--lattice",
             DEFAULT_LATTICE,
-            "--rpc-host",
+            "--nats-host",
             RPC_HOST,
-            "--rpc-port",
+            "--nats-port",
             RPC_PORT,
             "--rpc-timeout-ms",
             "0",
