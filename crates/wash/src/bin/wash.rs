@@ -3,10 +3,11 @@ use std::fmt::{Display, Formatter};
 use std::io::{stdout, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use clap::{self, Arg, ArgMatches, Command, FromArgMatches, Parser, Subcommand};
 use console::style;
 use crossterm::style::Stylize;
+use semver::Version;
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
 use wash::lib::cli::capture::{CaptureCommand, CaptureSubcommand};
@@ -23,7 +24,11 @@ use wash::lib::cli::stop::StopCommand;
 use wash::lib::cli::update::UpdateCommand;
 use wash::lib::cli::{CommandOutput, OutputKind};
 use wash::lib::drain::Drain as DrainSelection;
+use wash::lib::generate::emoji;
 use wash::lib::plugin::subcommand::{DirMapping, SubcommandRunner};
+use wash::lib::start::{
+    get_sorted_releases, GITHUB_WASMCLOUD_ORG, GITHUB_WASMCLOUD_WASMCLOUD_REPO,
+};
 
 use wash::cli::app::{self, AppCliCommand};
 use wash::cli::build::{self, BuildCommand};
@@ -480,6 +485,14 @@ async fn main() {
         }
     };
 
+    // print info on new wash version if available
+    if cli.experimental {
+        if let Err(e) = inform_new_wash_version().await {
+            eprintln!("Error while checking for new wash version: {e}");
+            std::process::exit(2);
+        }
+    }
+
     let output_kind = cli.output;
 
     // Implements clap_markdown for markdown generation of command line documentation. Most straightforward way to invoke is probably `wash app get --help-markdown > help.md`
@@ -764,4 +777,29 @@ async fn ensure_plugin_scratch_dir_exists(
         }
     }
     Ok(dir)
+}
+
+async fn inform_new_wash_version() -> anyhow::Result<()> {
+    let wash_version = Version::parse(clap::crate_version!())
+        .context("failed to parse version from current crate")?;
+    const TAG_PATTERN: &str = "wash-v.*";
+    let releases = get_sorted_releases(
+        GITHUB_WASMCLOUD_ORG,
+        GITHUB_WASMCLOUD_WASMCLOUD_REPO,
+        &wash_version,
+        Some(TAG_PATTERN),
+    )
+    .await
+    .context("failed to retrieve sorted wash releases")?;
+    if let Some(latest_release) = releases
+        .first()
+        .map(|x| x.get_x_y_z_version())
+        .transpose()?
+    {
+        eprintln!(
+            "{} Consider upgrading to newest wash version: v{latest_release}",
+            emoji::INFO_SQUARE,
+        );
+    }
+    Ok(())
 }
