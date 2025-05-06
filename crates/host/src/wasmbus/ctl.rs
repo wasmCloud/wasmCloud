@@ -254,6 +254,7 @@ impl ControlInterfaceServer for Host {
         let config = request.config().clone();
         let allow_update = request.allow_update();
         let host_id = request.host_id();
+        let wait_for_completion = request.wait_for_completion();
 
         debug!(
             component_ref,
@@ -303,29 +304,69 @@ impl ControlInterfaceServer for Host {
             _ => String::with_capacity(0),
         };
 
-        let component_id = Arc::from(component_id);
-        let component_ref = Arc::from(component_ref);
         // Spawn a task to perform the scaling and possibly an update of the component afterwards
-        spawn(async move {
-            // Fetch the component from the reference
-            let component_and_claims =
-                self.fetch_component(&component_ref)
+        let scale_handle = spawn({
+            let component_id = Arc::from(component_id);
+            let component_ref = Arc::from(component_ref);
+            async move {
+                // Fetch the component from the reference
+                let component_and_claims =
+                    self.fetch_component(&component_ref)
+                        .await
+                        .map(|component_bytes| {
+                            // Pull the claims token from the component, this returns an error only if claims are embedded
+                            // and they are invalid (expired, tampered with, etc)
+                            let claims_token =
+                                wasmcloud_runtime::component::claims_token(&component_bytes);
+                            (component_bytes, claims_token)
+                        });
+                let (wasm, claims_token, retrieval_error) = match component_and_claims {
+                    Ok((wasm, Ok(claims_token))) => (Some(wasm), claims_token, None),
+                    Ok((_, Err(e))) => {
+                        if let Err(e) = self
+                            .publish_event(
+                                "component_scale_failed",
+                                event::component_scale_failed(
+                                    None,
+                                    &annotations,
+                                    host_id,
+                                    &component_ref,
+                                    &component_id,
+                                    max_instances,
+                                    &e,
+                                ),
+                            )
+                            .await
+                        {
+                            error!(%component_ref, %component_id, err = ?e, "failed to publish component scale failed event");
+                        }
+                        return Err(e);
+                    }
+                    Err(e) => (None, None, Some(e)),
+                };
+                // Scale the component
+                if let Err(e) = self
+                    .handle_scale_component_task(
+                        Arc::clone(&component_ref),
+                        Arc::clone(&component_id),
+                        &host_id,
+                        max_instances,
+                        &annotations,
+                        config,
+                        wasm.ok_or_else(|| {
+                            retrieval_error
+                                .unwrap_or_else(|| anyhow!("unexpected missing wasm binary"))
+                        }),
+                        claims_token.as_ref(),
+                    )
                     .await
-                    .map(|component_bytes| {
-                        // Pull the claims token from the component, this returns an error only if claims are embedded
-                        // and they are invalid (expired, tampered with, etc)
-                        let claims_token =
-                            wasmcloud_runtime::component::claims_token(&component_bytes);
-                        (component_bytes, claims_token)
-                    });
-            let (wasm, claims_token, retrieval_error) = match component_and_claims {
-                Ok((wasm, Ok(claims_token))) => (Some(wasm), claims_token, None),
-                Ok((_, Err(e))) => {
+                {
+                    error!(%component_ref, %component_id, err = ?e, "failed to scale component");
                     if let Err(e) = self
                         .publish_event(
                             "component_scale_failed",
                             event::component_scale_failed(
-                                None,
+                                claims_token.map(|c| c.claims).as_ref(),
                                 &annotations,
                                 host_id,
                                 &component_ref,
@@ -338,63 +379,43 @@ impl ControlInterfaceServer for Host {
                     {
                         error!(%component_ref, %component_id, err = ?e, "failed to publish component scale failed event");
                     }
-                    return;
+                    return Err(e);
                 }
-                Err(e) => (None, None, Some(e)),
-            };
-            // Scale the component
-            if let Err(e) = self
-                .handle_scale_component_task(
-                    Arc::clone(&component_ref),
-                    Arc::clone(&component_id),
-                    &host_id,
-                    max_instances,
-                    &annotations,
-                    config,
-                    wasm.ok_or_else(|| {
-                        retrieval_error.unwrap_or_else(|| anyhow!("unexpected missing wasm binary"))
-                    }),
-                    claims_token.as_ref(),
-                )
-                .await
-            {
-                error!(%component_ref, %component_id, err = ?e, "failed to scale component");
-                if let Err(e) = self
-                    .publish_event(
-                        "component_scale_failed",
-                        event::component_scale_failed(
-                            claims_token.map(|c| c.claims).as_ref(),
-                            &annotations,
-                            host_id,
-                            &component_ref,
-                            &component_id,
-                            max_instances,
-                            &e,
-                        ),
-                    )
-                    .await
-                {
-                    error!(%component_ref, %component_id, err = ?e, "failed to publish component scale failed event");
-                }
-                return;
-            }
 
-            if perform_post_update {
-                if let Err(e) = self
-                    .handle_update_component_task(
-                        Arc::clone(&component_id),
-                        Arc::clone(&component_ref),
-                        &host_id,
-                        None,
-                    )
-                    .await
-                {
-                    error!(%component_ref, %component_id, err = ?e, "failed to update component after scale");
+                if perform_post_update {
+                    if let Err(e) = self
+                        .handle_update_component_task(
+                            Arc::clone(&component_id),
+                            Arc::clone(&component_ref),
+                            &host_id,
+                            None,
+                        )
+                        .await
+                    {
+                        error!(%component_ref, %component_id, err = ?e, "failed to update component after scale");
+                        return Err(e);
+                    }
                 }
+
+                Ok(())
             }
         });
 
-        Ok(CtlResponse::<()>::success(message))
+        // Instead of early-acking, we can wait here for the task to complete and return the result
+        if wait_for_completion {
+            match scale_handle.await {
+                Ok(Ok(())) => Ok(CtlResponse::<()>::success(message)),
+                Ok(Err(e)) => Ok(CtlResponse::error(&e.to_string())),
+                Err(e) => {
+                    error!(%component_ref, %component_id, err = ?e, "failed to scale component, task was aborted");
+                    Ok(CtlResponse::error(
+                        "failed to scale component, task was aborted",
+                    ))
+                }
+            }
+        } else {
+            Ok(CtlResponse::<()>::success(message))
+        }
     }
 
     // TODO(#1548): With component IDs, new component references, configuration, etc, we're going to need to do some
@@ -409,6 +430,7 @@ impl ControlInterfaceServer for Host {
         let annotations = request.annotations().cloned();
         let new_component_ref = request.new_component_ref();
         let host_id = request.host_id();
+        let wait_for_completion = request.wait_for_completion();
 
         debug!(
             component_id,
@@ -444,23 +466,44 @@ impl ControlInterfaceServer for Host {
         let message = format!(
             "component {component_id} updating from {component_ref} to {new_component_ref}"
         );
-        let component_id = Arc::from(component_id);
-        let new_component_ref = Arc::from(new_component_ref);
-        spawn(async move {
-            if let Err(e) = self
-                .handle_update_component_task(
-                    Arc::clone(&component_id),
-                    Arc::clone(&new_component_ref),
-                    &host_id,
-                    annotations,
-                )
-                .await
-            {
-                error!(%new_component_ref, %component_id, err = ?e, "failed to update component");
+        let update_handle = spawn({
+            let component_id = Arc::from(component_id);
+            let new_component_ref = Arc::from(new_component_ref);
+            async move {
+                if let Err(e) = self
+                    .handle_update_component_task(
+                        Arc::clone(&component_id),
+                        Arc::clone(&new_component_ref),
+                        &host_id,
+                        annotations,
+                    )
+                    .await
+                {
+                    error!(%new_component_ref, %component_id, err = ?e, "failed to update component");
+                    Err(e)
+                } else {
+                    Ok(())
+                }
             }
         });
 
-        Ok(CtlResponse::<()>::success(message))
+        // Instead of early-acking, we can wait here for the task to complete and return the result
+        if wait_for_completion {
+            match update_handle.await {
+                Ok(Ok(())) => Ok(CtlResponse::<()>::success(message)),
+                Ok(Err(e)) => {
+                    return Ok(CtlResponse::error(&e.to_string()));
+                }
+                Err(e) => {
+                    error!(%new_component_ref, %component_id, err = ?e, "failed to update component, task was aborted");
+                    return Ok(CtlResponse::error(
+                        "failed to update component, task was aborted",
+                    ));
+                }
+            }
+        } else {
+            Ok(CtlResponse::<()>::success(message))
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -468,77 +511,93 @@ impl ControlInterfaceServer for Host {
         self: Arc<Self>,
         request: StartProviderCommand,
     ) -> anyhow::Result<Option<CtlResponse<()>>> {
-        if self
-            .providers
-            .read()
-            .await
-            .contains_key(request.provider_id())
-        {
+        let provider_ref = request.provider_ref();
+        let provider_id = request.provider_id();
+        let annotations = request.annotations();
+        let config = request.config();
+        let host_id = request.host_id();
+        let wait_for_completion = request.wait_for_completion();
+
+        if self.providers.read().await.contains_key(provider_id) {
             return Ok(Some(CtlResponse::error(
                 "provider with that ID is already running",
             )));
         }
 
         // Avoid responding to start providers for builtin providers if they're not enabled
-        if let Ok(ResourceRef::Builtin(name)) = ResourceRef::try_from(request.provider_ref()) {
+        if let Ok(ResourceRef::Builtin(name)) = ResourceRef::try_from(provider_ref) {
             if !self.experimental_features.builtin_http_server && name == "http-server" {
                 debug!(
-                    provider_ref = request.provider_ref(),
-                    provider_id = request.provider_id(),
-                    "skipping start provider for disabled builtin http provider"
+                    provider_ref,
+                    provider_id, "skipping start provider for disabled builtin http provider"
                 );
                 return Ok(None);
             }
             if !self.experimental_features.builtin_messaging_nats && name == "messaging-nats" {
                 debug!(
-                    provider_ref = request.provider_ref(),
-                    provider_id = request.provider_id(),
-                    "skipping start provider for disabled builtin messaging provider"
+                    provider_ref,
+                    provider_id, "skipping start provider for disabled builtin messaging provider"
                 );
                 return Ok(None);
             }
         }
 
         // NOTE: We log at info since starting providers can take a while
-        info!(
-            provider_ref = request.provider_ref(),
-            provider_id = request.provider_id(),
-            "handling start provider"
-        );
+        info!(provider_ref, provider_id, "handling start provider");
 
-        let host_id = request.host_id().to_string();
-        spawn(async move {
-            let config = request.config();
-            let provider_id = request.provider_id();
-            let provider_ref = request.provider_ref();
-            let annotations = request.annotations();
-
-            if let Err(err) = Arc::clone(&self)
-                .handle_start_provider_task(
-                    config,
-                    provider_id,
-                    provider_ref,
-                    annotations.cloned().unwrap_or_default(),
-                    &host_id,
-                )
-                .await
-            {
-                error!(provider_ref, provider_id, ?err, "failed to start provider");
-                if let Err(err) = self
-                    .publish_event(
-                        "provider_start_failed",
-                        event::provider_start_failed(provider_ref, provider_id, host_id, &err),
+        let start_handle = spawn({
+            let provider_id = Arc::from(provider_id);
+            let provider_ref = Arc::from(provider_ref);
+            let config = config.clone();
+            let annotations = annotations.cloned();
+            let host_id = Arc::from(host_id);
+            async move {
+                if let Err(e) = Arc::clone(&self)
+                    .handle_start_provider_task(
+                        &config,
+                        &provider_id,
+                        &provider_ref,
+                        annotations.unwrap_or_default(),
+                        &host_id,
                     )
                     .await
                 {
-                    error!(?err, "failed to publish provider_start_failed event");
+                    error!(%provider_ref, %provider_id, ?e, "failed to start provider");
+                    if let Err(e) = self
+                        .publish_event(
+                            "provider_start_failed",
+                            event::provider_start_failed(provider_ref, provider_id, host_id, &e),
+                        )
+                        .await
+                    {
+                        error!(?e, "failed to publish provider_start_failed event");
+                    }
+                    Err(e)
+                } else {
+                    Ok(())
                 }
             }
         });
 
-        Ok(Some(CtlResponse::<()>::success(
-            "successfully started provider".into(),
-        )))
+        // Instead of early-acking, we can wait here for the task to complete and return the result
+        if wait_for_completion {
+            match start_handle.await {
+                Ok(Ok(())) => Ok(Some(CtlResponse::<()>::success(
+                    "successfully started provider".into(),
+                ))),
+                Ok(Err(e)) => Ok(Some(CtlResponse::error(&e.to_string()))),
+                Err(e) => {
+                    error!(?e, "failed to start provider, task was aborted");
+                    Ok(Some(CtlResponse::error(
+                        "failed to start provider, task was aborted",
+                    )))
+                }
+            }
+        } else {
+            Ok(Some(CtlResponse::<()>::success(
+                "received request, starting provider".into(),
+            )))
+        }
     }
 
     #[instrument(level = "debug", skip_all)]

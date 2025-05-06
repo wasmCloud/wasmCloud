@@ -616,6 +616,7 @@ impl Client {
             component_id: IdentifierKind::is_component_id(existing_component_id)?,
             new_component_ref: IdentifierKind::is_component_ref(new_component_ref)?,
             annotations,
+            wait_for_completion: false,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),

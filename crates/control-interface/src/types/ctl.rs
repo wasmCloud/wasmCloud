@@ -109,13 +109,16 @@ pub struct ScaleComponentCommand {
     /// 6}
     #[serde(default)]
     pub(crate) config: Vec<String>,
-    #[serde(default)]
     /// Whether to perform an update if the details of the component (ex. component ID) change as
     /// part of the scale request.
     ///
     /// Normally this is implemented by the receiver (ex. wasmcloud host) as a *separate* update component call
     /// being made shortly after this command (scale) is processed.
+    #[serde(default)]
     pub(crate) allow_update: bool,
+    /// Whether to wait for the scale operation to complete before returning a response.
+    #[serde(default)]
+    pub(crate) wait_for_completion: bool,
 }
 
 impl ScaleComponentCommand {
@@ -155,6 +158,11 @@ impl ScaleComponentCommand {
     }
 
     #[must_use]
+    pub fn wait_for_completion(&self) -> bool {
+        self.wait_for_completion
+    }
+
+    #[must_use]
     pub fn builder() -> ScaleComponentCommandBuilder {
         ScaleComponentCommandBuilder::default()
     }
@@ -171,6 +179,7 @@ pub struct ScaleComponentCommandBuilder {
     host_id: Option<String>,
     config: Option<Vec<String>>,
     allow_update: Option<bool>,
+    wait_for_completion: bool,
 }
 
 impl ScaleComponentCommandBuilder {
@@ -221,6 +230,12 @@ impl ScaleComponentCommandBuilder {
         self
     }
 
+    #[must_use]
+    pub fn wait_for_completion(mut self, v: bool) -> Self {
+        self.wait_for_completion = v;
+        self
+    }
+
     pub fn build(self) -> Result<ScaleComponentCommand> {
         Ok(ScaleComponentCommand {
             component_ref: self
@@ -236,6 +251,7 @@ impl ScaleComponentCommandBuilder {
                 .ok_or_else(|| "host id is required for scaling hosts host".to_string())?,
             config: self.config.unwrap_or_default(),
             allow_update: self.allow_update.unwrap_or_default(),
+            wait_for_completion: self.wait_for_completion,
         })
     }
 }
@@ -264,6 +280,9 @@ pub struct StartProviderCommand {
     /// example, autonomous agents may wish to "tag" start requests as part of a given deployment
     #[serde(default, skip_serializing_if = "Option::is_none")]
     annotations: Option<BTreeMap<String, String>>,
+    /// Whether to wait for the start operation to complete before returning a response.
+    #[serde(default)]
+    pub(crate) wait_for_completion: bool,
 }
 
 impl StartProviderCommand {
@@ -293,6 +312,11 @@ impl StartProviderCommand {
     }
 
     #[must_use]
+    pub fn wait_for_completion(&self) -> bool {
+        self.wait_for_completion
+    }
+
+    #[must_use]
     pub fn builder() -> StartProviderCommandBuilder {
         StartProviderCommandBuilder::default()
     }
@@ -307,6 +331,7 @@ pub struct StartProviderCommandBuilder {
     provider_ref: Option<String>,
     annotations: Option<BTreeMap<String, String>>,
     config: Option<Vec<String>>,
+    wait_for_completion: bool,
 }
 
 impl StartProviderCommandBuilder {
@@ -345,6 +370,12 @@ impl StartProviderCommandBuilder {
         self
     }
 
+    #[must_use]
+    pub fn wait_for_completion(mut self, v: bool) -> Self {
+        self.wait_for_completion = v;
+        self
+    }
+
     pub fn build(self) -> Result<StartProviderCommand> {
         Ok(StartProviderCommand {
             provider_ref: self
@@ -358,6 +389,7 @@ impl StartProviderCommandBuilder {
                 .host_id
                 .ok_or_else(|| "host id is required for starting providers".to_string())?,
             config: self.config.unwrap_or_default(),
+            wait_for_completion: self.wait_for_completion,
         })
     }
 }
@@ -513,6 +545,9 @@ pub struct UpdateComponentCommand {
     /// The new image reference of the upgraded version of this component
     #[serde(default)]
     pub(crate) new_component_ref: String,
+    /// Whether to wait for the update operation to complete before returning a response.
+    #[serde(default)]
+    pub(crate) wait_for_completion: bool,
 }
 
 impl UpdateComponentCommand {
@@ -537,6 +572,11 @@ impl UpdateComponentCommand {
     }
 
     #[must_use]
+    pub fn wait_for_completion(&self) -> bool {
+        self.wait_for_completion
+    }
+
+    #[must_use]
     pub fn builder() -> UpdateComponentCommandBuilder {
         UpdateComponentCommandBuilder::default()
     }
@@ -550,6 +590,7 @@ pub struct UpdateComponentCommandBuilder {
     component_id: Option<String>,
     new_component_ref: Option<String>,
     annotations: Option<BTreeMap<String, String>>,
+    wait_for_completion: bool,
 }
 
 impl UpdateComponentCommandBuilder {
@@ -582,6 +623,12 @@ impl UpdateComponentCommandBuilder {
         self
     }
 
+    #[must_use]
+    pub fn wait_for_completion(mut self, v: bool) -> Self {
+        self.wait_for_completion = v;
+        self
+    }
+
     pub fn build(self) -> Result<UpdateComponentCommand> {
         Ok(UpdateComponentCommand {
             host_id: self
@@ -594,6 +641,7 @@ impl UpdateComponentCommandBuilder {
                 "new component ref is required for updating components".to_string()
             })?,
             annotations: self.annotations,
+            wait_for_completion: self.wait_for_completion,
         })
     }
 }
@@ -618,6 +666,7 @@ mod tests {
                 allow_update: true,
                 annotations: Some(BTreeMap::from([("a".into(), "b".into())])),
                 max_instances: 1,
+                wait_for_completion: false,
             },
             ScaleComponentCommand::builder()
                 .component_ref("component_ref")
@@ -627,6 +676,7 @@ mod tests {
                 .allow_update(true)
                 .annotations(BTreeMap::from([("a".into(), "b".into())]))
                 .max_instances(1)
+                .wait_for_completion(false)
                 .build()
                 .unwrap()
         )
@@ -641,6 +691,7 @@ mod tests {
                 host_id: "host_id".into(),
                 config: vec!["p".into()],
                 annotations: Some(BTreeMap::from([("a".into(), "b".into())])),
+                wait_for_completion: false,
             },
             StartProviderCommand::builder()
                 .provider_id("provider_id")
@@ -648,6 +699,7 @@ mod tests {
                 .host_id("host_id")
                 .config(vec!["p".into()])
                 .annotations(BTreeMap::from([("a".into(), "b".into())]))
+                .wait_for_completion(false)
                 .build()
                 .unwrap()
         )
@@ -691,12 +743,14 @@ mod tests {
                 component_id: "component_id".into(),
                 new_component_ref: "new_component_ref".into(),
                 annotations: Some(BTreeMap::from([("a".into(), "b".into())])),
+                wait_for_completion: false,
             },
             UpdateComponentCommand::builder()
                 .host_id("host_id")
                 .component_id("component_id")
                 .new_component_ref("new_component_ref")
                 .annotations(BTreeMap::from([("a".into(), "b".into())]))
+                .wait_for_completion(false)
                 .build()
                 .unwrap()
         )
