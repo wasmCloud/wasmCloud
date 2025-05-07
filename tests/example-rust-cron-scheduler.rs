@@ -28,7 +28,7 @@ async fn example_rust_cron_scheduler() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer().compact().without_time())
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("info,cranelift_codegen=warn,wasmcloud=trace")
+                tracing_subscriber::EnvFilter::new("debug,cranelift_codegen=warn,wasmcloud=trace")
             }),
         )
         .init();
@@ -50,7 +50,7 @@ async fn example_rust_cron_scheduler() -> anyhow::Result<()> {
     let cron_config_name = "cron-config".to_string();
 
     // Loads the Key-Operation pairs to be watched
-    let cron_config = r#"demo=*/1 * * * * ?:{"x1":"x2"}"#.to_string();
+    let cron_config = r#"demo=*/3 * * * * ?:{"x1":"x2"}"#.to_string();
 
     let (rust_cron_scheduler, rust_http_client) = join!(
         providers::rust_cron_scheduler(),
@@ -65,7 +65,10 @@ async fn example_rust_cron_scheduler() -> anyhow::Result<()> {
             try_join!(assert_config_put(
                 &ctl_client,
                 &cron_config_name,
-                [("cronjobs".to_string(), cron_config)],
+                [
+                    ("cronjobs".to_string(), cron_config),
+                    ("cluster_uris".to_string(), nats_url.as_str().to_string())
+                ],
             ),)
             .context("failed to put configuration")
         },
@@ -185,8 +188,8 @@ async fn example_rust_cron_scheduler() -> anyhow::Result<()> {
     server_handle.abort();
 
     let execution_count = counter.load(std::sync::atomic::Ordering::SeqCst);
-    let min_expected = test_duration_secs - 2;
-    let max_expected = test_duration_secs + 2;
+    let min_expected = test_duration_secs / 3 - 2;
+    let max_expected = test_duration_secs / 3 + 2;
 
     assert!(
         execution_count >= min_expected as usize && execution_count <= max_expected as usize,

@@ -420,6 +420,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-nats"
+version = "0.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e23419d455dc57d3ae60a2f4278cf561fc74fe866e548e14d2b0ad3e1b8ca0b2"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures",
+ "memchr",
+ "nkeys",
+ "nuid",
+ "once_cell",
+ "pin-project",
+ "portable-atomic",
+ "rand 0.8.5",
+ "regex",
+ "ring",
+ "rustls-native-certs 0.7.3",
+ "rustls-pemfile 2.2.0",
+ "rustls-webpki 0.102.8",
+ "serde",
+ "serde_json",
+ "serde_nanos",
+ "serde_repr",
+ "thiserror 1.0.69",
+ "time",
+ "tokio",
+ "tokio-rustls 0.26.2",
+ "tokio-util",
+ "tokio-websockets",
+ "tracing",
+ "tryhard",
+ "url",
+]
+
+[[package]]
 name = "async-process"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9224,10 +9260,13 @@ name = "wasmcloud-provider-cron-scheduler"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.39.0",
+ "async-nats 0.40.0",
  "bytes",
  "chrono",
  "cron",
+ "futures",
+ "rustls-pemfile 2.2.0",
  "serde",
  "tokio",
  "tracing",

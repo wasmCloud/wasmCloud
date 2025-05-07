@@ -2,7 +2,7 @@
 name = "wasmcloud-provider-cron-scheduler"
 version = "0.1.0"
 description = """
-A capability provider template built for implementation of custom capabilities.
+A capability provider template built for distributed cronjob scheduling.
 """
 
 authors.workspace = true
@@ -15,13 +15,20 @@ repository.workspace = true
 status = "actively-developed"
 
 [dependencies]
-async-nats = { workspace = true, features = ["ring"] }
+anyhow = { workspace = true }
+async-nats-39 = { package = "async-nats" , version = "0.39" }
+async-nats-40 = { package = "async-nats", version = "0.40", features = ["ring","server_2_11"]}
 bytes = { workspace = true } 
 chrono = { workspace = true }
 cron = "0.12"
-anyhow = {workspace = true}
+futures = { workspace = true, features = ["async-await", "std"] }
+rustls-pemfile = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["full"] }
-tracing = {workspace = true}
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+wasmcloud-core = { workspace = true, features = ["messaging"] }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wasmcloud-provider-messaging-nats ={ workspace = true }
 wit-bindgen-wrpc = "0.9.0"
+wascap ={ workspace = true }
