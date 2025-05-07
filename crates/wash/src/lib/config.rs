@@ -286,8 +286,8 @@ pub async fn create_nats_client_from_opts(
             opts = opts.tls_first();
         }
 
-        opts = opts.name("wash-lib").retry_on_initial_connect();
-        opts.connect(&nats_url)
+        opts.name("wash-lib")
+            .connect(&nats_url)
             .await
             .with_context(|| format!("Failed to connect to NATS {}", &nats_url))?
     };
