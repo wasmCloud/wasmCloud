@@ -396,7 +396,7 @@ wasmtime-wasi = { version = "31", default-features = false }
 wasmtime-wasi-http = { version = "31", default-features = false }
 wasmtime-wit-bindgen = { version = "31", default-features = false }
 wat = { version = "1", default-features = false }
-webpki-roots = { version = "0.26", default-features = false }
+webpki-roots = { version = "1.0", default-features = false }
 which = { version = "7", default-features = false }
 wit-bindgen = { version = "0.38.0", default-features = false }
 wit-bindgen-core = { version = "0.38.0", default-features = false }
