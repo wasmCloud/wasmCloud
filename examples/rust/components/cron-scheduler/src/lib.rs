@@ -2,8 +2,8 @@ wit_bindgen::generate!({ generate_all });
 
 use crate::wasi::http::outgoing_handler;
 use crate::wasi::http::types::*;
-use wasmcloud_component::wasi::logging::logging::{log, Level};
 use serde_json::Value;
+use wasmcloud_component::wasi::logging::logging::{log, Level};
 
 use crate::exports::wasmcloud::cron::scheduler::Guest as CronDemoGuest;
 
@@ -14,7 +14,7 @@ impl CronDemoGuest for CronDemo {
     fn invoke(payload: Vec<u8>) -> Result<(), String> {
         // Unmarshall the Byte payload into JSON
         let json_result: Result<Value, _> = serde_json::from_slice(&payload);
-        
+
         match json_result {
             Ok(json_data) => {
                 log(
@@ -22,14 +22,10 @@ impl CronDemoGuest for CronDemo {
                     "cronjob-scheduler",
                     &format!("Received JSON payload: {}", json_data),
                 );
-                
-                let x1 = json_data.get("x1")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("default_x1");
-                    
-                let x2 = json_data.get("x2")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("default_x2");
+
+                let x1 = json_data.get("x1").and_then(|v| v.as_str()).unwrap_or("default_x1");
+
+                let x2 = json_data.get("x2").and_then(|v| v.as_str()).unwrap_or("default_x2");
 
                 let req = outgoing_handler::OutgoingRequest::new(Fields::new());
                 req.set_scheme(Some(&Scheme::Http)).unwrap();
@@ -46,8 +42,11 @@ impl CronDemoGuest for CronDemo {
                                 log(
                                     Level::Info,
                                     "cronjob-scheduler",
-                                    format!("HTTP request completed with status {}", response.status())
-                                        .as_str(),
+                                    format!(
+                                        "HTTP request completed with status {}",
+                                        response.status()
+                                    )
+                                    .as_str(),
                                 );
                             }
                             Some(Ok(Err(code))) => {
@@ -74,7 +73,7 @@ impl CronDemoGuest for CronDemo {
                         );
                     }
                 }
-            },
+            }
             Err(e) => {
                 log(
                     Level::Error,
@@ -84,7 +83,7 @@ impl CronDemoGuest for CronDemo {
                 return Err(format!("JSON parsing error: {}", e));
             }
         }
-        
+
         Ok(())
     }
 }
