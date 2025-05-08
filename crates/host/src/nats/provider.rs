@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use tracing::instrument;
+use wasmcloud_core::{link_del_subject, link_put_subject};
 use wasmcloud_tracing::context::TraceContextInjector;
 
 use crate::wasmbus::{injector_to_headers, providers::ProviderManager};
@@ -35,7 +36,7 @@ impl ProviderManager for NatsProviderManager {
             serde_json::to_vec(link).context("failed to serialize provider link definition")?;
         self.nats_client
             .publish_with_headers(
-                format!("wasmbus.rpc.{lattice}.{target}.linkdefs.put"),
+                link_put_subject(lattice, target),
                 injector_to_headers(&TraceContextInjector::default_with_span()),
                 payload.into(),
             )
@@ -55,7 +56,7 @@ impl ProviderManager for NatsProviderManager {
             serde_json::to_vec(link).context("failed to serialize provider link definition")?;
         self.nats_client
             .publish_with_headers(
-                format!("wasmbus.rpc.{lattice}.{target}.linkdefs.del"),
+                link_del_subject(lattice, target),
                 injector_to_headers(&TraceContextInjector::default_with_span()),
                 payload.into(),
             )

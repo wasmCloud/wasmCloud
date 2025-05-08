@@ -24,7 +24,9 @@ use tokio::task::JoinSet;
 use tracing::{error, instrument, trace, warn};
 use uuid::Uuid;
 use wascap::jwt::{CapabilityProvider, Token};
-use wasmcloud_core::{provider_config_update_subject, HealthCheckResponse, HostData, OtelConfig};
+use wasmcloud_core::{
+    health_subject, provider_config_update_subject, HealthCheckResponse, HostData, OtelConfig,
+};
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_tracing::context::TraceContextInjector;
 
@@ -449,8 +451,7 @@ fn check_health(
     host_id: String,
     provider_id: String,
 ) -> impl Future<Output = ()> {
-    let health_subject =
-        async_nats::Subject::from(format!("wasmbus.rpc.{lattice}.{provider_id}.health"));
+    let health_subject = async_nats::Subject::from(health_subject(&lattice, &provider_id));
 
     // Check the health of the provider every 30 seconds
     let mut health_check = tokio::time::interval(Duration::from_secs(30));
