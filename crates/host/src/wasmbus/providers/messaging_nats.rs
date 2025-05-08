@@ -124,8 +124,13 @@ async fn handle_message(
                 start_at: Instant::now(),
                 attributes: vec![
                     KeyValue::new("component.ref", Arc::clone(&component.image_reference)),
+                    KeyValue::new("component.id", Arc::clone(&component.id)),
                     KeyValue::new("lattice", lattice_id),
                     KeyValue::new("host", host_id),
+                    KeyValue::new(
+                        "export.operation",
+                        "wasmcloud:messaging/handler.handle-message",
+                    ),
                 ],
             },
             wrpc::wasmcloud::messaging0_2_0::types::BrokerMessage {
