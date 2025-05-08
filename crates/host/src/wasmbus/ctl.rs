@@ -18,6 +18,7 @@ use wasmcloud_control_interface::{
     ProviderAuctionAck, ProviderAuctionRequest, RegistryCredential, ScaleComponentCommand,
     StartProviderCommand, StopHostCommand, StopProviderCommand, UpdateComponentCommand,
 };
+use wasmcloud_core::shutdown_subject;
 use wasmcloud_tracing::context::TraceContextInjector;
 
 use crate::registry::RegistryCredentialExt;
@@ -588,10 +589,7 @@ impl ControlInterfaceServer for Host {
         if let Err(e) = self
             .rpc_nats
             .send_request(
-                format!(
-                    "wasmbus.rpc.{}.{provider_id}.default.shutdown",
-                    self.host_config.lattice
-                ),
+                shutdown_subject(&self.host_config.lattice, provider_id, "default"),
                 req,
             )
             .await
