@@ -183,8 +183,8 @@ pub struct ConnectionOpts {
     #[clap(
         short = 'r',
         long = "nats-host",
-        alias = "rpc_host",
-        env = "WASMCLOUD_NATS_HOST",
+        alias = "rpc-host",
+        env = "WASMCLOUD_NATS_RPC_HOST",
         default_value = "127.0.0.1"
     )]
     rpc_host: String,
@@ -194,7 +194,7 @@ pub struct ConnectionOpts {
         short = 'p',
         long = "nats-port",
         alias = "rpc-port",
-        env = "WASMCLOUD_NATS_PORT",
+        env = "WASMCLOUD_NATS_RPC_PORT",
         default_value = "4222"
     )]
     rpc_port: String,
@@ -203,7 +203,7 @@ pub struct ConnectionOpts {
     #[clap(
         long = "nats-jwt",
         alias = "rpc-jwt",
-        env = "WASMCLOUD_NATS_JWT",
+        env = "WASMCLOUD_NATS_RPC_JWT",
         hide_env_values = true,
         requires = "rpc_seed"
     )]
@@ -213,7 +213,7 @@ pub struct ConnectionOpts {
     #[clap(
         long = "nats-seed",
         alias = "rpc-seed",
-        env = "WASMCLOUD_NATS_SEED",
+        env = "WASMCLOUD_NATS_RPC_SEED",
         hide_env_values = true,
         requires = "rpc_jwt"
     )]
