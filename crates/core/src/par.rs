@@ -33,7 +33,7 @@ fn native_target() -> String {
 ///
 /// # Arguments
 /// * `host_id` - The host ID this provider is starting on. Required in order to isolate provider caches
-///            for different hosts
+///   for different hosts
 /// * `provider_ref` - The provider reference, e.g. file or OCI
 pub fn cache_path(host_id: impl AsRef<str>, provider_ref: impl AsRef<str>) -> PathBuf {
     let provider_ref = normalize_for_filename(provider_ref.as_ref());
@@ -79,7 +79,7 @@ async fn open_file(path: impl AsRef<Path>) -> Result<Option<File>> {
 /// # Arguments
 /// * `path` - The path to the provider archive
 /// * `host_id` - The host ID this provider is starting on. Required in order to isolate provider caches
-///           for different hosts
+///   for different hosts
 /// * `provider_ref` - The reference to the provider (e.g. file or OCI). Required to cache provider for future fetches
 pub async fn read(
     path: impl AsRef<Path>,

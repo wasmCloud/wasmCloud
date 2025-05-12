@@ -511,7 +511,7 @@ where
                     name,
                 )
                 .context("failed to link item")?,
-            };
+            }
         }
         let instance_pre = linker.instantiate_pre(&component)?;
         Ok(Self {
