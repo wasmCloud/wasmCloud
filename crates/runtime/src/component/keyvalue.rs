@@ -295,7 +295,12 @@ where
         key: String,
         value: bytes::Bytes,
     ) -> anyhow::Result<(), anyhow::Error> {
-        let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
+        let mut store = new_store(
+            &self.engine,
+            self.handler.clone(),
+            self.max_execution_time,
+            Some(self.max_memory_limit),
+        );
         let pre = keyvalue_watcher_bindings::WatcherPre::new(self.pre.clone())
             .context("failed to pre-instantiate `wasi:keyvalue/watcher`")?;
         trace!("instantiating `wasi:keyvalue/watcher`");
@@ -321,7 +326,12 @@ where
         bucket: String,
         key: String,
     ) -> anyhow::Result<(), anyhow::Error> {
-        let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
+        let mut store = new_store(
+            &self.engine,
+            self.handler.clone(),
+            self.max_execution_time,
+            Some(self.max_memory_limit),
+        );
         let pre = keyvalue_watcher_bindings::WatcherPre::new(self.pre.clone())
             .context("failed to pre-instantiate `wasi:keyvalue/watcher`")?;
         trace!("instantiating `wasi:keyvalue/watcher`");
