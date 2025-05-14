@@ -26,9 +26,7 @@ use wash::lib::cli::{CommandOutput, OutputKind};
 use wash::lib::drain::Drain as DrainSelection;
 use wash::lib::generate::emoji;
 use wash::lib::plugin::subcommand::{DirMapping, SubcommandRunner};
-use wash::lib::start::{
-    get_sorted_releases, GITHUB_WASMCLOUD_ORG, GITHUB_WASMCLOUD_WASMCLOUD_REPO,
-};
+use wash::lib::start::get_wash_versions_newer_than;
 
 use wash::cli::app::{self, AppCliCommand};
 use wash::cli::build::{self, BuildCommand};
@@ -782,15 +780,9 @@ async fn ensure_plugin_scratch_dir_exists(
 async fn inform_new_wash_version() -> anyhow::Result<()> {
     let wash_version = Version::parse(clap::crate_version!())
         .context("failed to parse version from current crate")?;
-    const TAG_PATTERN: &str = "wash-v.*";
-    let releases = get_sorted_releases(
-        GITHUB_WASMCLOUD_ORG,
-        GITHUB_WASMCLOUD_WASMCLOUD_REPO,
-        &wash_version,
-        Some(TAG_PATTERN),
-    )
-    .await
-    .context("failed to retrieve sorted wash releases")?;
+    let releases = get_wash_versions_newer_than(&wash_version)
+        .await
+        .context("failed to retrieve newer wash releases")?;
     if let Some(latest_release) = releases
         .first()
         .map(|x| x.get_x_y_z_version())

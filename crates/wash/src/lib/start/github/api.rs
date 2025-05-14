@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use tracing::debug;
 
-use super::get_download_client_with_user_agent;
+use super::{
+    get_download_client_with_user_agent, GITHUB_WASMCLOUD_ORG, GITHUB_WASMCLOUD_WASMCLOUD_REPO,
+};
 
 type DateTimeUtc = DateTime<Utc>;
 
@@ -24,7 +26,7 @@ const VERSION_FETCHER_CLIENT_USER_AGENT: &str =
 /// Gets a list of releases that are more newer, but semver compatible with the provided `after_version`. They are
 /// sorted by the version number, and the published date. Optionally, a tag pattern can be provided to filter the
 /// releases. If this is not provided, only the main releases are considered.
-pub async fn get_sorted_releases(
+async fn get_sorted_releases(
     owner: &str,
     repo: &str,
     after_version: &Version,
@@ -34,6 +36,19 @@ pub async fn get_sorted_releases(
     let mut releases_of_repo = releases_of_repo.into_iter().collect::<Vec<GitHubRelease>>();
     releases_of_repo.sort_by(|a, b| b.cmp(a));
     Ok(releases_of_repo)
+}
+
+pub async fn get_wash_versions_newer_than(
+    after_version: &Version,
+) -> Result<Vec<GitHubRelease>, anyhow::Error> {
+    const TAG_PATTERN: &str = "wash-v.*";
+    get_sorted_releases(
+        GITHUB_WASMCLOUD_ORG,
+        GITHUB_WASMCLOUD_WASMCLOUD_REPO,
+        after_version,
+        Some(TAG_PATTERN),
+    )
+    .await
 }
 
 pub async fn new_patch_releases_after(
