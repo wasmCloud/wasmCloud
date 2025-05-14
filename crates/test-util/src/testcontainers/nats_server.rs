@@ -40,7 +40,7 @@ impl Image for NatsServer {
     }
 
     fn tag(&self) -> &str {
-        "2.10.26-alpine"
+        "2.11.3-alpine"
     }
 
     fn ready_conditions(&self) -> Vec<WaitFor> {
