@@ -34,6 +34,10 @@ pub struct ComponentDescription {
     /// The maximum number of concurrent requests this instance can handle
     #[serde(default)]
     pub(crate) max_instances: u32,
+
+    /// The maximum linear memory that a component can allocate during it's lifetime
+    #[serde(default)]
+    pub(crate) max_linear_memory: Option<usize>,
 }
 
 #[derive(Default, Clone, PartialEq, Eq)]
@@ -45,6 +49,7 @@ pub struct ComponentDescriptionBuilder {
     annotations: Option<BTreeMap<String, String>>,
     revision: Option<i32>,
     max_instances: Option<u32>,
+    max_linear_memory: Option<usize>,
 }
 
 impl ComponentDescriptionBuilder {
@@ -79,6 +84,12 @@ impl ComponentDescriptionBuilder {
     }
 
     #[must_use]
+    pub fn max_linear_memory(mut self, v: usize) -> Self {
+        self.max_linear_memory = Some(v);
+        self
+    }
+
+    #[must_use]
     pub fn annotations(mut self, v: BTreeMap<String, String>) -> Self {
         self.annotations = Some(v);
         self
@@ -94,6 +105,7 @@ impl ComponentDescriptionBuilder {
             revision: self.revision.unwrap_or_default(),
             max_instances: self.max_instances.unwrap_or_default(),
             annotations: self.annotations,
+            max_linear_memory: self.max_linear_memory,
         })
     }
 }
@@ -127,6 +139,10 @@ impl ComponentDescription {
     /// Get the revision of the component
     pub fn max_instances(&self) -> u32 {
         self.max_instances
+    }
+
+    pub fn max_linear_memory(&self) -> usize {
+        self.max_linear_memory.unwrap()
     }
 
     #[must_use]
@@ -264,6 +280,7 @@ mod tests {
                 annotations: Some(BTreeMap::from([("a".into(), "b".into())])),
                 revision: 0,
                 max_instances: 1,
+                max_linear_memory: None,
             },
             ComponentDescription::builder()
                 .id("id".into())
@@ -273,6 +290,7 @@ mod tests {
                 .annotations(BTreeMap::from([("a".into(), "b".into())]))
                 .revision(0)
                 .max_instances(1)
+                .max_linear_memory(0)
                 .build()
                 .unwrap()
         )

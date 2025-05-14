@@ -207,7 +207,7 @@ struct Args {
     max_execution_time: Duration,
     /// The maximum amount of memory bytes that a component can allocate (default 256 MiB)
     #[clap(long = "max-linear-memory-bytes", default_value_t = 256 * 1024 * 1024, env = "WASMCLOUD_MAX_LINEAR_MEMORY")]
-    max_linear_memory: u64,
+    max_linear_memory: u32,
     /// The maximum byte size of a component binary that can be loaded (default 50 MiB)
     #[clap(long = "max-component-size-bytes", default_value_t = 50 * 1024 * 1024, env = "WASMCLOUD_MAX_COMPONENT_SIZE")]
     max_component_size: u64,
