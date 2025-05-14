@@ -76,7 +76,7 @@ pub async fn write_artifact(
     let outfile = output.unwrap_or_else(|| {
         format!(
             "{}{file_extension}",
-            image.repository().split('/').last().unwrap(),
+            image.repository().split('/').next_back().unwrap(),
         )
     });
     let mut f = File::create(&outfile).await?;
