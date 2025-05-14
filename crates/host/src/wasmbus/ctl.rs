@@ -240,7 +240,6 @@ impl ControlInterfaceServer for Host {
             "successfully handled stop host".into(),
         ))
     }
-
     #[instrument(level = "debug", skip_all)]
     async fn handle_scale_component(
         self: Arc<Self>,
@@ -250,6 +249,7 @@ impl ControlInterfaceServer for Host {
         let component_id = request.component_id();
         let annotations = request.annotations();
         let max_instances = request.max_instances();
+        let component_limits = request.component_limits();
         let config = request.config().clone();
         let allow_update = request.allow_update();
         let host_id = request.host_id();
@@ -349,6 +349,7 @@ impl ControlInterfaceServer for Host {
                     Arc::clone(&component_id),
                     &host_id,
                     max_instances,
+                    component_limits,
                     &annotations,
                     config,
                     wasm.ok_or_else(|| {

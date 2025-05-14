@@ -55,6 +55,7 @@ pub async fn assert_start_component(
             component_id.as_ref(),
             count,
             None,
+            None,
             config,
         )
         .await
@@ -114,6 +115,7 @@ pub async fn assert_scale_component(
             component_ref,
             component_id,
             count,
+            None,
             annotations,
             config,
         )
