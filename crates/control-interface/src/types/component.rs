@@ -1,6 +1,6 @@
 //! Data types used when dealing with components on a wasmCloud lattice
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +34,10 @@ pub struct ComponentDescription {
     /// The maximum number of concurrent requests this instance can handle
     #[serde(default)]
     pub(crate) max_instances: u32,
+
+    /// The collective resource constraints for this component, such as memory limits and maximum execution time
+    #[serde(default)]
+    pub(crate) limits: Option<HashMap<String, String>>,
 }
 
 #[derive(Default, Clone, PartialEq, Eq)]
@@ -45,6 +49,7 @@ pub struct ComponentDescriptionBuilder {
     annotations: Option<BTreeMap<String, String>>,
     revision: Option<i32>,
     max_instances: Option<u32>,
+    limits: Option<HashMap<String, String>>,
 }
 
 impl ComponentDescriptionBuilder {
@@ -79,6 +84,12 @@ impl ComponentDescriptionBuilder {
     }
 
     #[must_use]
+    pub fn limits(mut self, v: Option<HashMap<String, String>>) -> Self {
+        self.limits = v;
+        self
+    }
+
+    #[must_use]
     pub fn annotations(mut self, v: BTreeMap<String, String>) -> Self {
         self.annotations = Some(v);
         self
@@ -94,6 +105,7 @@ impl ComponentDescriptionBuilder {
             revision: self.revision.unwrap_or_default(),
             max_instances: self.max_instances.unwrap_or_default(),
             annotations: self.annotations,
+            limits: self.limits,
         })
     }
 }
@@ -127,6 +139,10 @@ impl ComponentDescription {
     /// Get the revision of the component
     pub fn max_instances(&self) -> u32 {
         self.max_instances
+    }
+
+    pub fn limits(&self) -> Option<HashMap<String, String>> {
+        self.limits.clone()
     }
 
     #[must_use]
@@ -264,6 +280,7 @@ mod tests {
                 annotations: Some(BTreeMap::from([("a".into(), "b".into())])),
                 revision: 0,
                 max_instances: 1,
+                limits: None,
             },
             ComponentDescription::builder()
                 .id("id".into())
@@ -273,6 +290,7 @@ mod tests {
                 .annotations(BTreeMap::from([("a".into(), "b".into())]))
                 .revision(0)
                 .max_instances(1)
+                .limits(None)
                 .build()
                 .unwrap()
         )

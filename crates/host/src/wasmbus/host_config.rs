@@ -57,7 +57,7 @@ pub struct Host {
     /// The maximum execution time for a component instance
     pub max_execution_time: Duration,
     /// The maximum linear memory that a component instance can allocate
-    pub max_linear_memory: u64,
+    pub max_linear_memory: u32,
     /// The maximum size of a component binary that can be loaded
     pub max_component_size: u64,
     /// The maximum number of components that can be run simultaneously

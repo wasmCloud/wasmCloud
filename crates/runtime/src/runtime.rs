@@ -10,7 +10,7 @@ use anyhow::Context;
 use wasmtime::{InstanceAllocationStrategy, PoolingAllocationConfig};
 
 /// Default max linear memory for a component (256 MiB)
-pub const MAX_LINEAR_MEMORY: u64 = 256 * 1024 * 1024;
+pub const MAX_LINEAR_MEMORY: u32 = 256 * 1024 * 1024;
 /// Default max component size (50 MiB)
 pub const MAX_COMPONENT_SIZE: u64 = 50 * 1024 * 1024;
 /// Default max number of components
@@ -27,7 +27,7 @@ pub struct RuntimeBuilder {
     max_core_instances_per_component: u32,
     max_components: u32,
     max_component_size: u64,
-    max_linear_memory: u64,
+    max_linear_memory: u32,
     max_execution_time: Duration,
     component_config: ComponentConfig,
     force_pooling_allocator: bool,
@@ -96,7 +96,7 @@ impl RuntimeBuilder {
 
     /// Sets the maximum amount of linear memory that can be used by all components. Defaults to 10MB
     #[must_use]
-    pub fn max_linear_memory(self, max_linear_memory: u64) -> Self {
+    pub fn max_linear_memory(self, max_linear_memory: u32) -> Self {
         Self {
             max_linear_memory,
             ..self
@@ -177,7 +177,7 @@ impl RuntimeBuilder {
             .linear_memory_keep_resident(10 * 1024)
             .table_keep_resident(10 * 1024);
         self.engine_config
-            .allocation_strategy(InstanceAllocationStrategy::Pooling(pooling_config));
+            .allocation_strategy(InstanceAllocationStrategy::Pooling(pooling_config.clone()));
         let engine = match wasmtime::Engine::new(&self.engine_config)
             .context("failed to construct engine")
         {
@@ -202,12 +202,17 @@ impl RuntimeBuilder {
                 engine.increment_epoch();
             })
         };
+        let max_memory_limits = self.max_linear_memory as usize;
+        let pool_config = pooling_config.clone();
         Ok((
             Runtime {
+                engine_config: self.engine_config,
+                pooling_config: pool_config,
                 engine,
                 component_config: self.component_config,
                 max_execution_time: self.max_execution_time,
                 experimental_features: self.experimental_features,
+                max_linear_memory: max_memory_limits,
             },
             epoch,
         ))
@@ -225,10 +230,13 @@ impl TryFrom<RuntimeBuilder> for (Runtime, thread::JoinHandle<Result<(), ()>>) {
 /// Shared wasmCloud runtime
 #[derive(Clone)]
 pub struct Runtime {
+    pub(crate) engine_config: wasmtime::Config,
     pub(crate) engine: wasmtime::Engine,
     pub(crate) component_config: ComponentConfig,
     pub(crate) max_execution_time: Duration,
     pub(crate) experimental_features: Features,
+    pub(crate) pooling_config: wasmtime::PoolingAllocationConfig,
+    pub(crate) max_linear_memory: usize,
 }
 
 impl Debug for Runtime {
@@ -237,6 +245,8 @@ impl Debug for Runtime {
             .field("component_config", &self.component_config)
             .field("runtime", &"wasmtime")
             .field("max_execution_time", &"max_execution_time")
+            .field("pooling_config", &self.pooling_config)
+            .field("engine_config", &self.engine_config)
             .finish_non_exhaustive()
     }
 }
