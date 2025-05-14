@@ -103,7 +103,7 @@ pub struct NatsOpts {
     )]
     pub connect_only: bool,
 
-    /// NATS server version to download, e.g. `v2.10.26`. See <https://github.com/nats-io/nats-server/releases>/ for releases
+    /// NATS server version to download, e.g. `v2.11.3`. See <https://github.com/nats-io/nats-server/releases>/ for releases
     #[clap(long = "nats-version", default_value = NATS_SERVER_VERSION, env = "NATS_VERSION")]
     pub nats_version: String,
 
@@ -1250,7 +1250,7 @@ mod tests {
             "--nats-remote-url",
             "tls://remote.global",
             "--nats-version",
-            "v2.10.26",
+            "v2.11.3",
             "--provider-delay",
             "500",
             "--rpc-credsfile",
@@ -1344,7 +1344,7 @@ mod tests {
             up_all_flags.wasmcloud_opts.wasmcloud_js_domain,
             Some("domain".to_string())
         );
-        assert_eq!(up_all_flags.nats_opts.nats_version, "v2.10.26".to_string());
+        assert_eq!(up_all_flags.nats_opts.nats_version, "v2.11.3".to_string());
         assert_eq!(
             up_all_flags.nats_opts.nats_remote_url,
             Some("tls://remote.global".to_string())

@@ -19,7 +19,7 @@
 //!     let install_dir = PathBuf::from("/tmp");
 //!
 //!     // Download NATS if not already installed
-//!     let nats_binary = ensure_nats_server("v2.10.26", &install_dir).await?;
+//!     let nats_binary = ensure_nats_server("v2.11.3", &install_dir).await?;
 //!
 //!     // Start NATS server, redirecting output to a log file
 //!     let nats_log_path = install_dir.join("nats.log");
