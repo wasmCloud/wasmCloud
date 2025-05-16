@@ -473,12 +473,9 @@ impl CronProvider {
         // new incoming messages would be rejected, only once the MaxAge constraint is fulfilled
         // the message will expire and subject delete marker woould be propagated and then the cycle would repeat
         // This config makes use of NATS's idempotency to automatically ensure deduplication.
-        let stream_config = async_nats_40::jetstream::stream::Config {
+        let mut stream_config = async_nats_40::jetstream::stream::Config {
             name: stream_name.clone(),
             subjects: vec![subject_name.clone()],
-            // Note :  remove this max_age after Nats ver 2.11.2 is assimilated into wasmcloud
-            // And implement the per message ttl
-            max_age: Duration::from_secs(initial_ttl),
             max_messages: 1,
             allow_message_ttl: true,
             subject_delete_marker_ttl: Some(Duration::from_secs(SUBJECT_DELETE_MARKER_TTL_SECS)),
@@ -491,21 +488,20 @@ impl CronProvider {
             ..Default::default()
         };
 
+        // For fixed interval jobs, set max_age in the stream config
+        if let CronJobType::FixedInterval(_) = job_type {
+            stream_config.max_age = Duration::from_secs(initial_ttl);
+        }
+
         // Create or update the stream
         let stream = match js.create_stream(stream_config.clone()).await {
             Ok(stream) => {
-                debug!(
-                    "Created stream {} for job {} with TTL {} seconds",
-                    stream_name, job_id.job_name, initial_ttl
-                );
+                debug!("Created stream {} for job {}", stream_name, job_id.job_name);
                 stream
             }
             Err(e) => {
                 // If the stream already exists, update its config
                 if e.to_string().contains("already in use") {
-                    warn!("Stream {} already exists, updating config", stream_name);
-                    // Update the stream config
-                    js.update_stream(stream_config).await?;
                     // Then get the stream object
                     js.get_stream(&stream_name).await?
                 } else {
@@ -531,8 +527,35 @@ impl CronProvider {
             })
             .await?;
 
-        // Initial tick to start the job cycle
-        let _ = js.publish(subject_name.clone(), "tick".into()).await?;
+        // Publish initial tick differently based on job type
+        match job_type {
+            CronJobType::FixedInterval(_) => {
+                // For fixed interval jobs, publish without headers since max_age is set in the stream
+                if let Err(e) = js.publish(subject_name, "tick".into()).await {
+                    error!(
+                        "Failed to publish tick for job '{}': {}",
+                        job_id.job_name, e
+                    );
+                }
+            }
+            CronJobType::DynamicInterval => {
+                // For dynamic interval jobs, use headers with TTL
+                let ttl_duration = initial_ttl.to_string();
+                let mut hmap = async_nats_40::HeaderMap::new();
+                hmap.append(async_nats_40::header::NATS_MESSAGE_TTL, ttl_duration);
+
+                // Initial tick to start the job cycle
+                if let Err(e) = js
+                    .publish_with_headers(subject_name, hmap, "tick".into())
+                    .await
+                {
+                    error!(
+                        "Failed to publish tick for job '{}': {}",
+                        job_id.job_name, e
+                    );
+                }
+            }
+        }
 
         Ok(stream_name)
     }
@@ -717,7 +740,7 @@ impl CronProvider {
                                                     {
                                                         // Update TTL for dynamic interval jobs
                                                         if let Err(e) = provider_clone
-                                                            .update_stream_ttl_and_republish(
+                                                            .update_ttl_republish(
                                                                 &job_id_clone,
                                                                 &job_config_clone,
                                                                 nats,
@@ -813,42 +836,37 @@ impl CronProvider {
     }
 
     /// Update stream TTL and republish tick for dynamic interval jobs
-    async fn update_stream_ttl_and_republish(
+    async fn update_ttl_republish(
         &self,
         job_id: &CronJobId,
         job_config: &CronJobConfig,
         nats: &async_nats_40::Client,
     ) -> Result<()> {
-        let js = self.get_jetstream().await?;
         let subject_name = format!("cronjob.{}.{}", job_id.link_id.target_id, job_id.job_name);
-        let stream_name = job_config
-            .stream_name
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Stream name not set"))?;
-
         // Calculate time until next execution
         let next_execution_secs = self
             .time_until_next_execution(&job_config.expression)
             .await?;
-
         debug!(
-            "Updating stream {} TTL to {} seconds for next execution of job '{}'",
-            stream_name, next_execution_secs, job_id.job_name
+            "Republishing message with updated TTL of {} seconds for job '{}'",
+            next_execution_secs, job_id.job_name
         );
 
-        // Get current stream info to preserve other settings
-        let info = js.get_stream(stream_name).await?;
-        let con = info.info_builder().fetch().await?;
-        let mut config = con.info.config.clone();
+        let ttl_duration = next_execution_secs.to_string();
 
-        // Update max_age
-        config.max_age = Duration::from_secs(next_execution_secs);
-
-        // Update the stream
-        js.update_stream(config).await?;
+        let mut hmap = async_nats_40::HeaderMap::new();
+        hmap.append(async_nats_40::header::NATS_MESSAGE_TTL, ttl_duration);
 
         // Republish the tick that will expire at the right time
-        nats.publish(subject_name, "tick".into()).await?;
+        if let Err(e) = nats
+            .publish_with_headers(subject_name, hmap, "tick".into())
+            .await
+        {
+            error!(
+                "Failed to publish tick for job '{}': {}",
+                job_id.job_name, e
+            );
+        }
 
         Ok(())
     }
@@ -860,11 +878,11 @@ fn has_fixed_interval(expression: &str) -> Result<bool> {
     let mut upcoming = schedule.upcoming(Utc);
     let mut intervals = Vec::new();
 
-    // Collect 5 intervals to check for consistency
+    // Collect 10 intervals to check for consistency
     let mut prev_time = upcoming
         .next()
         .ok_or_else(|| anyhow::anyhow!("Could not determine first execution time"))?;
-    for _ in 0..5 {
+    for _ in 0..10 {
         if let Some(next_time) = upcoming.next() {
             let interval = next_time.signed_duration_since(prev_time).num_seconds();
             intervals.push(interval);
@@ -874,7 +892,7 @@ fn has_fixed_interval(expression: &str) -> Result<bool> {
         }
     }
     // Check if all intervals are the same (with a small tolerance for leap seconds, etc.)
-    if intervals.len() >= 3 {
+    if intervals.len() >= 5 {
         let first_interval = intervals[0];
         let all_same = intervals.iter().all(|&i| (i - first_interval).abs() < 2); // 2 seconds tolerance
         Ok(all_same)
