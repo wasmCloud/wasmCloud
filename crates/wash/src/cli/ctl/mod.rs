@@ -1,6 +1,5 @@
 use clap::Subcommand;
 
-pub use output::*;
 use crate::lib::cli::{
     get::{GetClaimsCommand, GetHostInventoriesCommand, GetHostsCommand},
     link::LinkCommand,
@@ -9,6 +8,7 @@ use crate::lib::cli::{
     stop::StopCommand,
     update::UpdateCommand,
 };
+pub use output::*;
 
 mod output;
 
@@ -317,7 +317,7 @@ mod test {
             "--host-id",
             HOST_ID,
             COMPONENT_ID,
-            "wasmcloud.azurecr.io/component:v2",
+            "ghcr.io/component:v2",
         ])?;
         match update_all.command {
             CtlCliCommand::Update(UpdateCommand::Component(UpdateComponentCommand {
@@ -332,10 +332,7 @@ mod test {
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, Some(HOST_ID.to_string()));
                 assert_eq!(component_id, COMPONENT_ID);
-                assert_eq!(
-                    new_component_ref,
-                    "wasmcloud.azurecr.io/component:v2".to_string()
-                );
+                assert_eq!(new_component_ref, "ghcr.io/component:v2".to_string());
             }
             cmd => panic!("ctl get claims constructed incorrect command {cmd:?}"),
         }
@@ -353,7 +350,7 @@ mod test {
             "--timeout-ms",
             "2001",
             HOST_ID,
-            "wasmcloud.azurecr.io/component:v2",
+            "ghcr.io/component:v2",
             "mycomponentv2",
             "--count",
             "1",
@@ -382,10 +379,7 @@ mod test {
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, HOST_ID);
-                assert_eq!(
-                    component_ref,
-                    "wasmcloud.azurecr.io/component:v2".to_string()
-                );
+                assert_eq!(component_ref, "ghcr.io/component:v2".to_string());
                 assert_eq!(component_id, "mycomponentv2".to_string());
                 assert_eq!(max_instances, 1);
                 assert_eq!(annotations, vec!["foo=bar".to_string()]);

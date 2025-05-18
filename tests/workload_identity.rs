@@ -21,7 +21,7 @@ use tokio::time::sleep;
 use tokio::try_join;
 use tracing_subscriber::prelude::*;
 use wasmcloud_core::tls::NativeRootsExt as _;
-use wasmcloud_host::wasmbus::connect_nats;
+use wasmcloud_host::nats::connect_nats;
 use wasmcloud_host::workload_identity::WorkloadIdentityConfig;
 use wasmcloud_test_util::component::assert_scale_component;
 use wasmcloud_test_util::env::EnvVarGuard;

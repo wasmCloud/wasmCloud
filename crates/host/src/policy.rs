@@ -1,26 +1,72 @@
-use core::time::Duration;
-
 use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::Context;
-use futures::{
-    stream::{AbortHandle, Abortable},
-    StreamExt,
-};
 use serde::{Deserialize, Serialize};
-use tokio::spawn;
-use tokio::sync::RwLock;
-use tracing::{debug, error, instrument, trace, warn};
-use ulid::Ulid;
 use uuid::Uuid;
 use wascap::jwt;
 
 // NOTE: All requests will be v1 until the schema changes, at which point we can change the version
 // per-request type
-const POLICY_TYPE_VERSION: &str = "v1";
+pub(crate) const POLICY_TYPE_VERSION: &str = "v1";
+
+/// A trait for evaluating policy decisions
+#[async_trait::async_trait]
+pub trait PolicyManager: Send + Sync {
+    /// Evaluate whether a component may be started
+    async fn evaluate_start_component(
+        &self,
+        _component_id: &str,
+        _image_ref: &str,
+        _max_instances: u32,
+        _annotations: &BTreeMap<String, String>,
+        _claims: Option<&jwt::Claims<jwt::Component>>,
+    ) -> anyhow::Result<Response> {
+        Ok(Response {
+            request_id: Uuid::new_v4().to_string(),
+            permitted: true,
+            message: None,
+        })
+    }
+
+    /// Evaluate whether a provider may be started
+    async fn evaluate_start_provider(
+        &self,
+        _provider_id: &str,
+        _provider_ref: &str,
+        _annotations: &BTreeMap<String, String>,
+        _claims: Option<&jwt::Claims<jwt::CapabilityProvider>>,
+    ) -> anyhow::Result<Response> {
+        Ok(Response {
+            request_id: Uuid::new_v4().to_string(),
+            permitted: true,
+            message: None,
+        })
+    }
+
+    /// Evaluate whether a component may perform an invocation
+    async fn evaluate_perform_invocation(
+        &self,
+        _component_id: &str,
+        _image_ref: &str,
+        _annotations: &BTreeMap<String, String>,
+        _claims: Option<&jwt::Claims<jwt::Component>>,
+        _interface: String,
+        _function: String,
+    ) -> anyhow::Result<Response> {
+        Ok(Response {
+            request_id: Uuid::new_v4().to_string(),
+            permitted: true,
+            message: None,
+        })
+    }
+}
+
+/// A default policy manager that always returns true for all requests
+/// This is used when no policy manager is configured
+#[derive(Default)]
+pub struct DefaultPolicyManager;
+impl super::PolicyManager for DefaultPolicyManager {}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Hash)]
 /// Claims associated with a policy request, if embedded inside the component or provider
@@ -156,23 +202,23 @@ impl From<&RequestBody> for RequestKey {
 
 /// A request for a policy decision
 #[derive(Serialize)]
-struct Request {
+pub(crate) struct Request {
     /// A unique request id. This value is returned in the response
     #[serde(rename = "requestId")]
     #[allow(clippy::struct_field_names)]
-    request_id: String,
+    pub(crate) request_id: String,
     /// The kind of policy request being made
-    kind: RequestKind,
+    pub(crate) kind: RequestKind,
     /// The version of the policy request body
-    version: String,
+    pub(crate) version: String,
     /// The policy request body
-    request: RequestBody,
+    pub(crate) request: RequestBody,
     /// Information about the host making the request
-    host: HostInfo,
+    pub(crate) host: HostInfo,
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
-struct RequestKey {
+pub(crate) struct RequestKey {
     /// The kind of request being made
     kind: RequestKind,
     /// Information about this request combined to form a unique string.
@@ -224,221 +270,5 @@ impl From<&jwt::Claims<jwt::CapabilityProvider>> for PolicyClaims {
             expires_at: claims.expires,
             expired: claims.expires.is_some_and(is_expired),
         }
-    }
-}
-
-/// Encapsulates making requests for policy decisions, and receiving updated decisions
-#[derive(Debug)]
-pub struct Manager {
-    nats: async_nats::Client,
-    host_info: HostInfo,
-    policy_topic: Option<String>,
-    policy_timeout: Duration,
-    decision_cache: Arc<RwLock<HashMap<RequestKey, Response>>>,
-    request_to_key: Arc<RwLock<HashMap<String, RequestKey>>>,
-    /// An abort handle for the policy changes subscription
-    pub policy_changes: AbortHandle,
-}
-
-impl Manager {
-    /// Construct a new policy manager. Can fail if policy_changes_topic is set but we fail to subscribe to it
-    #[instrument(skip(nats))]
-    pub async fn new(
-        nats: async_nats::Client,
-        host_info: HostInfo,
-        policy_topic: Option<String>,
-        policy_timeout: Option<Duration>,
-        policy_changes_topic: Option<String>,
-    ) -> anyhow::Result<Arc<Self>> {
-        const DEFAULT_POLICY_TIMEOUT: Duration = Duration::from_secs(1);
-
-        let (policy_changes_abort, policy_changes_abort_reg) = AbortHandle::new_pair();
-
-        let manager = Manager {
-            nats: nats.clone(),
-            host_info,
-            policy_topic,
-            policy_timeout: policy_timeout.unwrap_or(DEFAULT_POLICY_TIMEOUT),
-            decision_cache: Arc::default(),
-            request_to_key: Arc::default(),
-            policy_changes: policy_changes_abort,
-        };
-        let manager = Arc::new(manager);
-
-        if let Some(policy_changes_topic) = policy_changes_topic {
-            let policy_changes = nats
-                .subscribe(policy_changes_topic)
-                .await
-                .context("failed to subscribe to policy changes")?;
-
-            let _policy_changes = spawn({
-                let manager = Arc::clone(&manager);
-                Abortable::new(policy_changes, policy_changes_abort_reg).for_each(move |msg| {
-                    let manager = Arc::clone(&manager);
-                    async move {
-                        if let Err(e) = manager.override_decision(msg).await {
-                            error!("failed to process policy decision override: {}", e);
-                        }
-                    }
-                })
-            });
-        }
-
-        Ok(manager)
-    }
-
-    #[instrument(level = "trace", skip_all)]
-    /// Use the policy manager to evaluate whether a component may be started
-    pub async fn evaluate_start_component(
-        &self,
-        component_id: impl AsRef<str>,
-        image_ref: impl AsRef<str>,
-        max_instances: u32,
-        annotations: &BTreeMap<String, String>,
-        claims: Option<&jwt::Claims<jwt::Component>>,
-    ) -> anyhow::Result<Response> {
-        let request = ComponentInformation {
-            component_id: component_id.as_ref().to_string(),
-            image_ref: image_ref.as_ref().to_string(),
-            max_instances,
-            annotations: annotations.clone(),
-            claims: claims.map(PolicyClaims::from),
-        };
-        self.evaluate_action(RequestBody::StartComponent(request))
-            .await
-    }
-
-    /// Use the policy manager to evaluate whether a provider may be started
-    #[instrument(level = "trace", skip_all)]
-    pub async fn evaluate_start_provider(
-        &self,
-        provider_id: impl AsRef<str>,
-        provider_ref: impl AsRef<str>,
-        annotations: &BTreeMap<String, String>,
-        claims: Option<&jwt::Claims<jwt::CapabilityProvider>>,
-    ) -> anyhow::Result<Response> {
-        let request = ProviderInformation {
-            provider_id: provider_id.as_ref().to_string(),
-            image_ref: provider_ref.as_ref().to_string(),
-            annotations: annotations.clone(),
-            claims: claims.map(PolicyClaims::from),
-        };
-        self.evaluate_action(RequestBody::StartProvider(request))
-            .await
-    }
-
-    /// Use the policy manager to evaluate whether a component may be invoked
-    #[instrument(level = "trace", skip_all)]
-    pub async fn evaluate_perform_invocation(
-        &self,
-        component_id: impl AsRef<str>,
-        image_ref: impl AsRef<str>,
-        annotations: &BTreeMap<String, String>,
-        claims: Option<&jwt::Claims<jwt::Component>>,
-        interface: String,
-        function: String,
-    ) -> anyhow::Result<Response> {
-        let request = PerformInvocationRequest {
-            interface,
-            function,
-            target: ComponentInformation {
-                component_id: component_id.as_ref().to_string(),
-                image_ref: image_ref.as_ref().to_string(),
-                max_instances: 0,
-                annotations: annotations.clone(),
-                claims: claims.map(PolicyClaims::from),
-            },
-        };
-        self.evaluate_action(RequestBody::PerformInvocation(request))
-            .await
-    }
-
-    /// Sends a policy request to the policy server and caches the response
-    #[instrument(level = "trace", skip_all)]
-    pub async fn evaluate_action(&self, request: RequestBody) -> anyhow::Result<Response> {
-        let Some(policy_topic) = self.policy_topic.clone() else {
-            // Ensure we short-circuit and allow the request if no policy topic is configured
-            return Ok(Response {
-                request_id: String::new(),
-                permitted: true,
-                message: None,
-            });
-        };
-
-        let kind = match request {
-            RequestBody::StartComponent(_) => RequestKind::StartComponent,
-            RequestBody::StartProvider(_) => RequestKind::StartProvider,
-            RequestBody::PerformInvocation(_) => RequestKind::PerformInvocation,
-            RequestBody::Unknown => RequestKind::Unknown,
-        };
-        let cache_key = (&request).into();
-        if let Some(entry) = self.decision_cache.read().await.get(&cache_key) {
-            trace!(?cache_key, ?entry, "using cached policy decision");
-            return Ok(entry.clone());
-        }
-
-        let request_id = Uuid::from_u128(Ulid::new().into()).to_string();
-        trace!(?cache_key, "requesting policy decision");
-        let payload = serde_json::to_vec(&Request {
-            request_id: request_id.clone(),
-            request,
-            kind,
-            version: POLICY_TYPE_VERSION.to_string(),
-            host: self.host_info.clone(),
-        })
-        .context("failed to serialize policy request")?;
-        let request = async_nats::Request::new()
-            .payload(payload.into())
-            .timeout(Some(self.policy_timeout));
-        let res = self
-            .nats
-            .send_request(policy_topic, request)
-            .await
-            .context("policy request failed")?;
-        let decision = serde_json::from_slice::<Response>(&res.payload)
-            .context("failed to deserialize policy response")?;
-
-        self.decision_cache
-            .write()
-            .await
-            .insert(cache_key.clone(), decision.clone()); // cache policy decision
-        self.request_to_key
-            .write()
-            .await
-            .insert(request_id, cache_key); // cache request id -> decision key
-        Ok(decision)
-    }
-
-    #[instrument(skip(self))]
-    async fn override_decision(&self, msg: async_nats::Message) -> anyhow::Result<()> {
-        let Response {
-            request_id,
-            permitted,
-            message,
-        } = serde_json::from_slice(&msg.payload)
-            .context("failed to deserialize policy decision override")?;
-
-        debug!(request_id, "received policy decision override");
-
-        let mut decision_cache = self.decision_cache.write().await;
-        let request_to_key = self.request_to_key.read().await;
-
-        if let Some(key) = request_to_key.get(&request_id) {
-            decision_cache.insert(
-                key.clone(),
-                Response {
-                    request_id: request_id.clone(),
-                    permitted,
-                    message,
-                },
-            );
-        } else {
-            warn!(
-                request_id,
-                "received policy decision override for unknown request id"
-            );
-        }
-
-        Ok(())
     }
 }

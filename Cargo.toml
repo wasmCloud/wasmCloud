@@ -140,6 +140,7 @@ regex = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tracing = { workspace = true } # TODO: revisit the 'release_max_level_info' feature https://github.com/wasmCloud/wasmCloud/issues/468
 tracing-subscriber = { workspace = true, optional = true }
+url = { workspace = true }
 wascap = { workspace = true, optional = true }
 wasmcloud-core = { workspace = true, features = ["otel"], optional = true }
 wasmcloud-host = { workspace = true, optional = true }
@@ -243,7 +244,7 @@ cidr = { version = "0.2", default-features = false }
 claims = { version = "0.8", default-features = false }
 clap = { version = "4", default-features = false }
 clap_complete = { version = "4", default-features = false }
-clap-markdown = { version = "0.1.4", default-features = false }
+clap-markdown = { version = "0.1.5", default-features = false }
 cloudevents-sdk = { version = "0.8", default-features = false }
 command-group = { version = "5", default-features = false }
 config = { version = "0.15", default-features = false }
@@ -252,7 +253,7 @@ crossterm = { version = "0.28.1", default-features = false }
 data-encoding = { version = "2", default-features = false }
 deadpool-postgres = { version = "0.14", default-features = false }
 dialoguer = { version = "0.11", default-features = false }
-docker_credential = { version = "1.3.1", default-features = false }
+docker_credential = { version = "1.3.2", default-features = false }
 etcetera = { version = "0.10", default-features = false }
 exponential-backoff = { version = "2.1", default-features = false }
 file-guard = { version = "0.2.0", default-features = false }
@@ -365,12 +366,12 @@ wasi = { version = "0.13.3", default-features = false }
 wasm-pkg-client = { version = "0.10", default-features = false }
 wasm-pkg-core = { version = "0.10", default-features = false }
 wasi-preview1-component-adapter-provider = { version = "31", default-features = false }
-wasm-encoder = { version = "0.228", default-features = false }
+wasm-encoder = { version = "0.229", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-component = { version = "0", path = "crates/component", default-features = false }
 wasmcloud-control-interface = { version = "2.4.0", path = "./crates/control-interface", default-features = false }
 wasmcloud-core = { version = "^0.18.0", path = "./crates/core", default-features = false }
-wasmcloud-host = { version = "^0.25.0", path = "./crates/host", default-features = false }
+wasmcloud-host = { version = "^0.26.0", path = "./crates/host", default-features = false }
 wasmcloud-provider-blobstore-azure = { version = "*", path = "./crates/provider-blobstore-azure", default-features = false }
 wasmcloud-provider-blobstore-fs = { version = "*", path = "./crates/provider-blobstore-fs", default-features = false }
 wasmcloud-provider-blobstore-s3 = { version = "*", path = "./crates/provider-blobstore-s3", default-features = false }
@@ -395,7 +396,7 @@ wasmtime-wasi = { version = "31", default-features = false }
 wasmtime-wasi-http = { version = "31", default-features = false }
 wasmtime-wit-bindgen = { version = "31", default-features = false }
 wat = { version = "1", default-features = false }
-webpki-roots = { version = "0.26", default-features = false }
+webpki-roots = { version = "1.0", default-features = false }
 which = { version = "7", default-features = false }
 wit-bindgen = { version = "0.38.0", default-features = false }
 wit-bindgen-core = { version = "0.38.0", default-features = false }

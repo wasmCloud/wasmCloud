@@ -25,9 +25,9 @@ confidence-threshold = 0.8
 # Allow 1 or more licenses on a per-crate basis, so that particular licenses
 # aren't accepted for every possible crate as with the normal allow list
 exceptions = [
-    # This license is allowed via exception in the CNCF: https://github.com/cncf/foundation/blob/509ed956a2fb549458f324c7a2962d98b0800fb5/license-exceptions/cncf-exceptions-2022-04-12.spdx#L12
+    # NOTE(thomastaylor312): Pretty sure this license is ok because it comes from the LF: https://www.linuxfoundation.org/press/press-release/enabling-easier-collaboration-on-open-data-for-ai-and-ml-with-cdla-permissive-2-0
     { name = "webpki-roots", allow = [
-        "MPL-2.0",
+        "CDLA-Permissive-2.0",
     ] },
     # Ring has a...complicated license. However, since it is at the core of a large number of rust
     # projects, we are manually allowing the OpenSSL part of the license

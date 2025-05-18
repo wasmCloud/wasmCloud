@@ -364,7 +364,7 @@ jobs:
           echo "ref-prefix=$REF_PREFIX" >> $GITHUB_OUTPUT;
           echo "wasmcloud-toml-path=examples/${{ matrix.project.lang }}/components/${{ matrix.project.folder }}/wasmcloud.toml" >> $GITHUB_OUTPUT;
       # Download all artifacts (example component binaries) to work dir
-      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: artifacts
       - name: install wash (current)
@@ -388,19 +388,3 @@ jobs:
           WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
           wash push ghcr.io/${{ github.repository_owner }}/components/${{ matrix.project.folder }}-${{ matrix.project.lang }}:${{ steps.meta.outputs.version }} artifacts/${{ steps.meta.outputs.bin-name }}
-      # (wasmCloud/wasmCloud repository only)
-      # Push the project to Azure Container Registry under various tags, if this is a release tag
-      - name: Push SHA-tagged WebAssembly binary to AzureCR
-        if: ${{ startsWith(github.ref, steps.meta.outputs.ref-prefix) && github.repository_owner == 'wasmCloud' }}
-        run: |
-          wash push wasmcloud.azurecr.io/${{ github.repository_owner }}/components/${{ matrix.project.folder }}-${{ matrix.project.lang }}:${{ github.sha }} artifacts/${{ steps.meta.outputs.bin-name }}
-        env:
-          WASH_REG_USER: ${{ secrets.AZURECR_PUSH_USER }}
-          WASH_REG_PASSWORD: ${{ secrets.AZURECR_PUSH_PASSWORD }}
-      - name: Push version-tagged WebAssembly binary to AzureCR
-        if: ${{ startsWith(github.ref, steps.meta.outputs.ref-prefix) && github.repository_owner == 'wasmCloud' }}
-        run: |
-          wash push wasmcloud.azurecr.io/${{ github.repository_owner }}/components/${{ matrix.project.folder }}-${{ matrix.project.lang }}:${{ steps.meta.outputs.version }} artifacts/${{ steps.meta.outputs.bin-name }}
-        env:
-          WASH_REG_USER: ${{ secrets.AZURECR_PUSH_USER }}
-          WASH_REG_PASSWORD: ${{ secrets.AZURECR_PUSH_PASSWORD }}

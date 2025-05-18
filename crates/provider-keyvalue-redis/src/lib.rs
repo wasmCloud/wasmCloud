@@ -577,7 +577,7 @@ impl Provider for KvRedisProvider {
                     };
                     // The Channel is in the format __keyspace@0__:key
                     // While the payload is the event (ie set | del)
-                    let mkey = match channel.split(':').last() {
+                    let mkey = match channel.split(':').next_back() {
                         Some(key) => key,
                         None => {
                             error!(channel = %channel, "Malformed Redis channel name: expected '__keyspace@0__:key' format");

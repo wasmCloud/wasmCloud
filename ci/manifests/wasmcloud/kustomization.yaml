@@ -15,7 +15,7 @@ images:
     newTag: v0.20.1
   - name: nats
     newName: nats
-    newTag: 2.10.26-alpine
+    newTag: 2.11.3-alpine
   - name: nats-config-reloader
     newName: natsio/nats-server-config-reloader
     newTag: 0.16.0

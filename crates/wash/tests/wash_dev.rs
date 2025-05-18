@@ -386,6 +386,7 @@ async fn integration_override_via_interface_serial() -> Result<()> {
 [[dev.overrides.imports]]
 interface =  "wasi:http/incoming-handler@0.2.0"
 config = { name = "value" }
+link_config = { values = { address = "127.0.0.1:8083" } }
 secrets = { name = "existing-secret", source = { policy = "nats-kv", key = "test" } }
 image_ref = "ghcr.io/wasmcloud/http-server:0.23.0" # intentionally slightly older!
 link_name = "default"
@@ -503,6 +504,25 @@ link_name = "default"
                 Properties::Capability { ref properties } if properties.image.as_ref().is_some_and(|i| i == "ghcr.io/wasmcloud/http-server:0.23.0"))
         })
         .context("missing http provider component in manifest w/ updated image_ref")?;
+
+    // Ensure that the overridden address is present
+    assert!(generated_manifest.links().any(|l| {
+        matches!(&l.properties,
+            TraitProperty::Link(LinkProperty {
+                namespace, package, interfaces, source, ..
+            }) if
+                 namespace == "wasi"
+                 && package == "http"
+                 && interfaces.contains(&"incoming-handler".to_string())
+                 && source.as_ref().is_some_and(|s| {
+                     s.config.iter().any(|c| {
+                         c.properties.as_ref().is_some_and(|ps| {
+                             ps.get("address").is_some_and(|v| v == "127.0.0.1:8083")
+                         })
+                     })
+                 })
+        )
+    }));
 
     let process_pid = dev_cmd
         .write()

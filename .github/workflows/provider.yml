@@ -17,10 +17,6 @@ on:
         description: Capability provider issuer subject key
       issuer:
         description: Capability provider issuer key
-      azurecr_username:
-        description: wasmCloud AzureCR username
-      azurecr_password:
-        description: wasmCloud AzureCR password
 
 permissions:
   contents: read
@@ -56,7 +52,7 @@ jobs:
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: artifacts
           pattern: ${{ inputs.name }}-provider-*
@@ -67,7 +63,7 @@ jobs:
       - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-pc-windows-gnu/bin/${{ inputs.name }}-provider.exe"
       - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-unknown-linux-musl/bin/${{ inputs.name }}-provider"
 
-      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: wash-x86_64-unknown-linux-musl
 
@@ -132,40 +128,6 @@ jobs:
           WASH_REG_USER: ${{ github.repository_owner }}
           WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
 
-      # wasmCloud AzureCR
-
-      - name: Push `${{ inputs.name }}` provider `${{ github.sha }}` tag to wasmCloud Azure Container Registry
-        if: startswith(github.ref, format('refs/tags/provider-{0}-v', inputs.name)) || github.ref == 'refs/heads/main'
-        continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
-        run: ./wash push wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:${{ github.sha }} "${{ inputs.name }}.par.gz"
-        env:
-          WASH_REG_USER: ${{ secrets.azurecr_username }}
-          WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}
-
-      - name: Push `${{ inputs.name }}` provider `${{ steps.ctx.outputs.sha_short }}` tag to wasmCloud Azure Container Registry
-        if: startswith(github.ref, format('refs/tags/provider-{0}-v', inputs.name)) || github.ref == 'refs/heads/main'
-        continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
-        run: ./wash push wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:${{ steps.ctx.outputs.sha_short }} "${{ inputs.name }}.par.gz"
-        env:
-          WASH_REG_USER: ${{ secrets.azurecr_username }}
-          WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}
-
-      - name: Push `${{ inputs.name }}` provider `canary` tag to wasmCloud Azure Container Registry
-        if: github.ref == 'refs/heads/main'
-        continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
-        run: ./wash push wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:canary "${{ inputs.name }}.par.gz"
-        env:
-          WASH_REG_USER: ${{ secrets.azurecr_username }}
-          WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}
-
-      - name: Push `${{ inputs.name }}` provider version tag to wasmCloud Azure Container Registry
-        if: startswith(github.ref, format('refs/tags/provider-{0}-v', inputs.name))
-        continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
-        run: ./wash push wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:${{ steps.ctx.outputs.version }} "${{ inputs.name }}.par.gz"
-        env:
-          WASH_REG_USER: ${{ secrets.azurecr_username }}
-          WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}
-
   # Ensure that `wash build` and `wash app validate` works for all providers
   wash-build:
     name: build
@@ -189,7 +151,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       # Set up wash
-      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: wash-x86_64-unknown-linux-musl
           path: artifact

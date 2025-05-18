@@ -62,6 +62,36 @@ impl Features {
         self.rpc_interface = true;
         self
     }
+
+    /// Check if the built-in HTTP server capability provider is enabled
+    pub fn builtin_http_server_enabled(&self) -> bool {
+        self.builtin_http_server
+    }
+
+    /// Check if the built-in NATS messaging capability provider is enabled
+    pub fn builtin_messaging_nats_enabled(&self) -> bool {
+        self.builtin_messaging_nats
+    }
+
+    /// Check if the wasmcloud:messaging@v3 interface support is enabled
+    pub fn wasmcloud_messaging_v3_enabled(&self) -> bool {
+        self.wasmcloud_messaging_v3
+    }
+
+    /// Check if workload identity authentication is enabled
+    pub fn workload_identity_auth_enabled(&self) -> bool {
+        self.workload_identity_auth
+    }
+
+    /// Check if the wasmcloud:identity interface support is enabled
+    pub fn workload_identity_interface_enabled(&self) -> bool {
+        self.workload_identity_interface
+    }
+
+    /// Check if the wrpc:rpc interface support is enabled
+    pub fn rpc_interface_enabled(&self) -> bool {
+        self.rpc_interface
+    }
 }
 
 /// This enables unioning feature flags together

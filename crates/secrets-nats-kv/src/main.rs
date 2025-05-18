@@ -198,6 +198,7 @@ async fn run(args: RunCommand) -> anyhow::Result<()> {
 
     let nats_client = match args.global.nats_creds_file {
         Some(creds_file) => async_nats::ConnectOptions::new()
+            .name("secrets-nats-kv")
             .credentials_file(creds_file.clone())
             .await
             .context(format!(
@@ -245,6 +246,7 @@ async fn put(args: PutCommand) -> anyhow::Result<()> {
                 "failed to read NATS credentials file '{}'",
                 &creds_file
             ))?
+            .name("secrets-nats-kv")
             .connect(&args.nats_address)
             .await
             .with_context(|| {
@@ -253,7 +255,9 @@ async fn put(args: PutCommand) -> anyhow::Result<()> {
                     args.nats_address, creds_file
                 )
             })?,
-        None => async_nats::connect(&args.nats_address)
+        None => async_nats::ConnectOptions::new()
+            .name("secrets-nats-kv")
+            .connect(&args.nats_address)
             .await
             .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?,
     };
@@ -293,6 +297,7 @@ async fn get(args: GetCommand) -> anyhow::Result<()> {
                 "failed to read NATS credentials file '{}'",
                 &creds_file
             ))?
+            .name("secrets-nats-kv")
             .connect(&args.nats_address)
             .await
             .with_context(|| {
@@ -301,7 +306,9 @@ async fn get(args: GetCommand) -> anyhow::Result<()> {
                     args.nats_address
                 )
             })?,
-        None => async_nats::connect(&args.nats_address)
+        None => async_nats::ConnectOptions::new()
+            .name("secrets-nats-kv")
+            .connect(&args.nats_address)
             .await
             .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?,
     };
@@ -349,6 +356,7 @@ async fn add_mapping(args: AddSecretMappingCommand) -> anyhow::Result<()> {
                 "failed to read NATS credentials file '{}'",
                 &creds_file
             ))?
+            .name("secrets-nats-kv")
             .connect(&args.nats_address)
             .await
             .with_context(|| {
@@ -357,7 +365,9 @@ async fn add_mapping(args: AddSecretMappingCommand) -> anyhow::Result<()> {
                     args.nats_address, creds_file
                 )
             })?,
-        None => async_nats::connect(&args.nats_address)
+        None => async_nats::ConnectOptions::new()
+            .name("secrets-nats-kv")
+            .connect(&args.nats_address)
             .await
             .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?,
     };
@@ -390,6 +400,7 @@ async fn remove_mapping(args: RemoveSecretMappingCommand) -> anyhow::Result<()> 
                 "failed to read NATS credentials file '{}'",
                 &creds_file
             ))?
+            .name("secrets-nats-kv")
             .connect(&args.nats_address)
             .await
             .with_context(|| {
@@ -398,7 +409,9 @@ async fn remove_mapping(args: RemoveSecretMappingCommand) -> anyhow::Result<()> 
                     args.nats_address, creds_file
                 )
             })?,
-        None => async_nats::connect(&args.nats_address)
+        None => async_nats::ConnectOptions::new()
+            .name("secrets-nats-kv")
+            .connect(&args.nats_address)
             .await
             .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?,
     };
