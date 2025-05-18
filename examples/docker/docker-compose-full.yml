@@ -81,7 +81,7 @@ services:
       WASMCLOUD_ALLOW_FILE_LOAD: "true"
       WASMCLOUD_OCI_ALLOWED_INSECURE: registry:5000
       WASMCLOUD_OBSERVABILITY_ENABLED: "true"
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4318
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otelcol:4318
     ports:
       - "8000-8100:8000-8100" # Expose ports 8000-8100 for examples that use an HTTP server
 
