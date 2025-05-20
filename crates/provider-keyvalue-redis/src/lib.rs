@@ -72,6 +72,9 @@ const CONFIG_REDIS_BACKEND_RESPONSE_TIMEOUT_MS_KEY: &str = "BACKEND_RESPONSE_TIM
 /// Maximum amount of time (in milliseconds) to wait in between reconnection attempts
 const DEFAULT_REDIS_BACKEND_RESPONSE_TIMEOUT_MS: u64 = 1000;
 
+/// Whether to disable default connection
+const CONFIG_DISABLE_DEFAULT_CONNECTION_KEY: &str = "DISABLE_DEFAULT_CONNECTION";
+
 type Result<T, E = keyvalue::store::Error> = core::result::Result<T, E>;
 
 /// The default connection available for the redis client
@@ -113,16 +116,16 @@ type WatchTaskMap = HashMap<LinkId, JoinHandle<()>>;
 /// Redis `wrpc:keyvalue` provider implementation.
 #[derive(Clone)]
 pub struct KvRedisProvider {
-    // store redis connections per source ID & link name
+    /// Store redis connections per source ID & link name
     sources: Arc<RwLock<HashMap<(String, String), ConnectionManager>>>,
-    // default connection, which may be uninitialized
-    default_connection: Arc<RwLock<DefaultConnection>>,
-    // Stores information about watched keys for keyspace notifications
-    // The outer HashMap uses the key as its key, and the HashSet contains
-    // WatchedKeyInfo structs for each watcher of that key, allowing multiple
-    // components to watch the same key for different event types.
+    /// Default connection, which may be uninitialized
+    default_connection: Option<Arc<RwLock<DefaultConnection>>>,
+    /// Stores information about watched keys for keyspace notifications
+    /// The outer HashMap uses the key as its key, and the HashSet contains
+    /// WatchedKeyInfo structs for each watcher of that key, allowing multiple
+    /// components to watch the same key for different event types.
     watched_keys: Arc<RwLock<HashMap<String, HashSet<WatchedKeyInfo>>>>,
-    // Stores background tasks that handle keyspace notifications for each link
+    /// Stores background tasks that handle keyspace notifications for each link
     watch_tasks: Arc<RwLock<WatchTaskMap>>,
 }
 
@@ -158,12 +161,20 @@ impl KvRedisProvider {
 
     #[must_use]
     pub fn from_config(config: HashMap<String, String>) -> Self {
+        let default_connection_disabled = config
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY));
+
         KvRedisProvider {
             sources: Arc::default(),
-            default_connection: Arc::new(RwLock::new(DefaultConnection::ClientConfig {
-                config,
-                secrets: None,
-            })),
+            default_connection: if default_connection_disabled {
+                None
+            } else {
+                Some(Arc::new(RwLock::new(DefaultConnection::ClientConfig {
+                    config,
+                    secrets: None,
+                })))
+            },
             watched_keys: Arc::new(RwLock::new(HashMap::new())),
             watch_tasks: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -171,12 +182,21 @@ impl KvRedisProvider {
 
     #[must_use]
     pub fn from_host_data(host_data: &HostData) -> Self {
+        let default_connection_disabled = host_data
+            .config
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY));
+
         KvRedisProvider {
             sources: Arc::default(),
-            default_connection: Arc::new(RwLock::new(DefaultConnection::ClientConfig {
-                config: host_data.config.clone(),
-                secrets: Some(host_data.secrets.clone()),
-            })),
+            default_connection: if default_connection_disabled {
+                None
+            } else {
+                Some(Arc::new(RwLock::new(DefaultConnection::ClientConfig {
+                    config: host_data.config.clone(),
+                    secrets: Some(host_data.secrets.clone()),
+                })))
+            },
             watched_keys: Arc::new(RwLock::new(HashMap::new())),
             watch_tasks: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -184,14 +204,18 @@ impl KvRedisProvider {
 
     #[instrument(level = "trace", skip_all)]
     async fn get_default_connection(&self) -> anyhow::Result<ConnectionManager> {
+        let Some(ref default_connection) = self.default_connection else {
+            bail!("default connection is disabled via config, please provide valid configuration");
+        };
+
         // NOTE: The read lock is only held for the duration of the `if let` block so we can acquire
         // the write lock to update the default connection if needed.
-        if let DefaultConnection::Conn(conn) = &*self.default_connection.read().await {
+        if let DefaultConnection::Conn(conn) = &*default_connection.read().await {
             return Ok(conn.clone());
         }
 
-        // Build the default conenction
-        let mut default_conn = self.default_connection.write().await;
+        // Build the default connection
+        let mut default_conn = default_connection.write().await;
         match &mut *default_conn {
             DefaultConnection::Conn(conn) => Ok(conn.clone()),
             DefaultConnection::ClientConfig { config, secrets } => {
@@ -470,6 +494,10 @@ impl Provider for KvRedisProvider {
                     .and_then(|url_key| config.get(url_key))
             });
 
+        let default_connection_disabled = config
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY));
+
         // Create initial configuration for the connection that is intended to fail fast
         let cfg = build_connection_mgr_config(config);
         let conn = if let Some(url) = url {
@@ -497,6 +525,17 @@ impl Provider for KvRedisProvider {
                 }
             }
         } else {
+            // Disallow default connections if disabled via link config
+            if default_connection_disabled {
+                error!(
+                    component = source_id,
+                    "using the default connection is disabled via link configuration"
+                );
+                bail!(
+                    "using the default connection is disabled via link configuration for component [{source_id}]"
+                );
+            }
+
             self.get_default_connection().await.map_err(|err| {
                 error!(error = ?err, "failed to get default connection for link");
                 err
