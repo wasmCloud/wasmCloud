@@ -11,10 +11,11 @@ use core::num::NonZeroU64;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Context as _};
 use bytes::Bytes;
-use redis::aio::ConnectionManager;
+use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{Cmd, FromRedisValue};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -46,6 +47,30 @@ const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
 
 /// Configuration key that will be used to search for Redis config
 const CONFIG_REDIS_URL_KEY: &str = "URL";
+
+/// Key that configures a set number of retries
+const CONFIG_REDIS_BACKEND_RECONNECT_NUM_RETRIES_KEY: &str = "BACKEND_RECONNECT_NUM_RETRIES";
+
+/// Number of retries to perform when connecting to redis
+const DEFAULT_REDIS_BACKEND_RECONNECT_NUM_RETRIES: usize = 3;
+
+/// Key that configures the max amount of of time to wait between reconnection attempts
+const CONFIG_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS_KEY: &str = "BACKEND_RECONNECT_MAX_DELAY_MS";
+
+/// Maximum amount of time (in milliseconds) to wait in between reconnection attempts
+const DEFAULT_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS: u64 = 300;
+
+/// Key that configures the connection timeout amount of of time to wait between reconnection attempts
+const CONFIG_REDIS_BACKEND_CONNECTION_TIMEOUT_MS_KEY: &str = "BACKEND_CONNECTION_TIMEOUT_MS";
+
+/// Maximum amount of time (in milliseconds) to wait in between reconnection attempts
+const DEFAULT_REDIS_BACKEND_CONNECTION_TIMEOUT_MS: u64 = 3000;
+
+/// Key that configures the connection timeout amount of of time to wait between reconnection attempts
+const CONFIG_REDIS_BACKEND_RESPONSE_TIMEOUT_MS_KEY: &str = "BACKEND_RESPONSE_TIMEOUT_MS";
+
+/// Maximum amount of time (in milliseconds) to wait in between reconnection attempts
+const DEFAULT_REDIS_BACKEND_RESPONSE_TIMEOUT_MS: u64 = 1000;
 
 type Result<T, E = keyvalue::store::Error> = core::result::Result<T, E>;
 
@@ -445,9 +470,11 @@ impl Provider for KvRedisProvider {
                     .and_then(|url_key| config.get(url_key))
             });
 
+        // Create initial configuration for the connection that is intended to fail fast
+        let cfg = build_connection_mgr_config(config);
         let conn = if let Some(url) = url {
             match redis::Client::open(url.to_string()) {
-                Ok(client) => match client.get_connection_manager().await {
+                Ok(client) => match ConnectionManager::new_with_config(client, cfg).await {
                     Ok(conn) => {
                         info!(url, "established link");
                         conn
@@ -840,6 +867,43 @@ fn check_bucket_name(bucket: &str) {
     if !bucket.is_empty() {
         warn!(bucket, "non-empty bucket names are not yet supported; ignoring non-empty bucket name (using a non-empty bucket name may become an error in the future).")
     }
+}
+
+/// Build configuration for a backend redis connection from existing config
+fn build_connection_mgr_config(config: &HashMap<String, String>) -> ConnectionManagerConfig {
+    let mut cfg = ConnectionManagerConfig::new();
+
+    for (k, v) in config.iter() {
+        if k.eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_RECONNECT_NUM_RETRIES_KEY) {
+            cfg = cfg.set_number_of_retries(
+                v.parse()
+                    .unwrap_or(DEFAULT_REDIS_BACKEND_RECONNECT_NUM_RETRIES),
+            );
+        }
+
+        if k.eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS_KEY) {
+            cfg = cfg.set_max_delay(
+                v.parse()
+                    .unwrap_or(DEFAULT_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS),
+            );
+        }
+
+        if k.eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_CONNECTION_TIMEOUT_MS_KEY) {
+            cfg = cfg.set_connection_timeout(Duration::from_millis(
+                v.parse()
+                    .unwrap_or(DEFAULT_REDIS_BACKEND_CONNECTION_TIMEOUT_MS),
+            ));
+        }
+
+        if k.eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_RESPONSE_TIMEOUT_MS_KEY) {
+            cfg = cfg.set_response_timeout(Duration::from_millis(
+                v.parse()
+                    .unwrap_or(DEFAULT_REDIS_BACKEND_RESPONSE_TIMEOUT_MS),
+            ));
+        }
+    }
+
+    cfg
 }
 
 #[cfg(test)]
