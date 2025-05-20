@@ -130,13 +130,19 @@ impl Provider for HttpServerProvider {
             // If a handler does not already exist, make a new server and insert
             std::collections::hash_map::Entry::Vacant(v) => {
                 // Start a server instance that calls the given component
-                let http_server = HttpServerCore::new(
+                let http_server = match HttpServerCore::new(
                     Arc::new(settings),
                     link_config.target_id,
                     self.handlers_by_socket.clone(),
                 )
                 .await
-                .context("httpserver failed to start listener for component")?;
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("failed to start listener for component: {e:?}");
+                        bail!(e);
+                    }
+                };
                 v.insert((Arc::new(http_server), vec![component_meta]));
             }
         }
