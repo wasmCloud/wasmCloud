@@ -20,10 +20,11 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
 use unicase::UniCase;
+use wasmcloud_provider_sdk::core::secrets::SecretValue;
 use wasmcloud_provider_sdk::provider::WrpcClient;
 use wasmcloud_provider_sdk::{
-    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
-    LinkDeleteInfo, Provider,
+    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, HostData,
+    LinkConfig, LinkDeleteInfo, Provider,
 };
 use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 
@@ -48,9 +49,18 @@ const CONFIG_REDIS_URL_KEY: &str = "URL";
 
 type Result<T, E = keyvalue::store::Error> = core::result::Result<T, E>;
 
+/// The default connection available for the redis client
+///
+/// This enum can be in different states which normally correspond to whether
+/// the provider has started up (and the default connection has been created yet).
 #[derive(Clone)]
 pub enum DefaultConnection {
-    ClientConfig(HashMap<String, String>),
+    /// Pre-supplied/available client configuration from config
+    ClientConfig {
+        config: HashMap<String, String>,
+        secrets: Option<HashMap<String, SecretValue>>,
+    },
+    /// An already-initialized connection
     Conn(ConnectionManager),
 }
 
@@ -108,7 +118,7 @@ impl KvRedisProvider {
             .map(String::from)
             .or_else(|| std::env::var("PROVIDER_KEYVALUE_REDIS_FLAMEGRAPH_PATH").ok());
         initialize_observability!(Self::name(), flamegraph_path);
-        let provider = KvRedisProvider::new(host_data.config.clone());
+        let provider = KvRedisProvider::from_host_data(host_data);
         let shutdown = run_provider(provider.clone(), KvRedisProvider::name())
             .await
             .context("failed to run provider")?;
@@ -122,12 +132,26 @@ impl KvRedisProvider {
     }
 
     #[must_use]
-    pub fn new(initial_config: HashMap<String, String>) -> Self {
+    pub fn from_config(config: HashMap<String, String>) -> Self {
         KvRedisProvider {
             sources: Arc::default(),
-            default_connection: Arc::new(RwLock::new(DefaultConnection::ClientConfig(
-                initial_config,
-            ))),
+            default_connection: Arc::new(RwLock::new(DefaultConnection::ClientConfig {
+                config,
+                secrets: None,
+            })),
+            watched_keys: Arc::new(RwLock::new(HashMap::new())),
+            watch_tasks: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    #[must_use]
+    pub fn from_host_data(host_data: &HostData) -> Self {
+        KvRedisProvider {
+            sources: Arc::default(),
+            default_connection: Arc::new(RwLock::new(DefaultConnection::ClientConfig {
+                config: host_data.config.clone(),
+                secrets: Some(host_data.secrets.clone()),
+            })),
             watched_keys: Arc::new(RwLock::new(HashMap::new())),
             watch_tasks: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -141,11 +165,12 @@ impl KvRedisProvider {
             return Ok(conn.clone());
         }
 
+        // Build the default conenction
         let mut default_conn = self.default_connection.write().await;
         match &mut *default_conn {
             DefaultConnection::Conn(conn) => Ok(conn.clone()),
-            DefaultConnection::ClientConfig(cfg) => {
-                let conn = redis::Client::open(retrieve_default_url(cfg))
+            DefaultConnection::ClientConfig { config, secrets } => {
+                let conn = redis::Client::open(retrieve_default_url(config, secrets))
                     .context("failed to construct default Redis client")?
                     .get_connection_manager()
                     .await
@@ -697,7 +722,29 @@ impl Provider for KvRedisProvider {
 
 /// Fetch the default URL to use for connecting to Redis from the configuration, defaulting
 /// to `DEFAULT_CONNECT_URL` if no URL is found in the configuration.
-pub fn retrieve_default_url(config: &HashMap<String, String>) -> String {
+fn retrieve_default_url(
+    config: &HashMap<String, String>,
+    secrets: &Option<HashMap<String, SecretValue>>,
+) -> String {
+    // Use connect URL provided by secrets first, if present
+    if let Some(secrets) = secrets {
+        if let Some(url) = secrets
+            .keys()
+            .find(|sk| sk.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+            .and_then(|k| secrets.get(k))
+        {
+            if let Some(s) = url.as_string() {
+                debug!(
+                    url = ?url, // NOTE: this is the SecretValue redacted output
+                    "using Redis URL from secrets"
+                );
+                return s.into();
+            } else {
+                warn!("invalid secret value for URL (expected string, found bytes). Falling back to config");
+            }
+        }
+    }
+
     // To aid in user experience, find the URL key in the config that matches "URL" in a case-insensitive manner
     let config_supplied_url = config
         .keys()
@@ -810,9 +857,12 @@ mod test {
         let uppercase_config = HashMap::from_iter([("URL".to_string(), PROPER_URL.to_string())]);
         let initial_caps_config = HashMap::from_iter([("Url".to_string(), PROPER_URL.to_string())]);
 
-        assert_eq!(PROPER_URL, retrieve_default_url(&lowercase_config));
-        assert_eq!(PROPER_URL, retrieve_default_url(&uppercase_config));
-        assert_eq!(PROPER_URL, retrieve_default_url(&initial_caps_config));
+        assert_eq!(PROPER_URL, retrieve_default_url(&lowercase_config, &None));
+        assert_eq!(PROPER_URL, retrieve_default_url(&uppercase_config, &None));
+        assert_eq!(
+            PROPER_URL,
+            retrieve_default_url(&initial_caps_config, &None)
+        );
     }
 
     #[test]
