@@ -106,9 +106,13 @@ For more information on what you can do with the component, see the [`http-keyva
 
 ## Link Definition Secret Settings
 
-| Name  | Description                                                                                                                                                                                                |
-|-------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `URL` | The connection string for the Redis database. Note that all authentication information must also be contained in this URL. The URL _must_ start with the `redis://` scheme. (ex. `redis://127.0.0.1:6379`) |
+| Name                             | Default                    | Description                                                                                                                                             |
+|----------------------------------|----------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `URL`                            | `"redis://localhost:6379"` | Redis backend connection string (including credentials where necessary). The URL _must_ start with the `redis://` scheme (ex. `redis://127.0.0.1:6379`) |
+| `BACKEND_RECONNECT_NUM_RETRIES`  | `"3"`                      | Number of retries to perform on the Redis backend                                                                                                       |
+| `BACKEND_RECONNECT_MAX_DELAY_MS` | `"300"`                    | Max delay in milliseconds to use when reconnecting to the Redis backend                                                                                 |
+| `BACKEND_CONNECTION_TIMEOUT_MS`  | `"3000"`                   | Redis timeout for connection establishment                                                                                                              |
+| `BACKEND_RESPONSE_TIMEOUT_MS`    | `"1000"`                   | Redis timeout for individual responses                                                                                                                  |
 
 > ![WARNING]
 > Putting sensitive configuration values in WADM files should be avoided.
