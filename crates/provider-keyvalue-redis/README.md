@@ -113,6 +113,7 @@ For more information on what you can do with the component, see the [`http-keyva
 | `BACKEND_RECONNECT_MAX_DELAY_MS` | `"300"`                    | Max delay in milliseconds to use when reconnecting to the Redis backend                                                                                 |
 | `BACKEND_CONNECTION_TIMEOUT_MS`  | `"3000"`                   | Redis timeout for connection establishment                                                                                                              |
 | `BACKEND_RESPONSE_TIMEOUT_MS`    | `"1000"`                   | Redis timeout for individual responses                                                                                                                  |
+| `DISABLE_DEFAULT_CONNECTION`     | N/A                        | Whether to disable the default connection (also available at the provider config level, for all connections)                                            |
 
 > ![WARNING]
 > Putting sensitive configuration values in WADM files should be avoided.
