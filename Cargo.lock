@@ -9065,6 +9065,7 @@ dependencies = [
  "async-nats",
  "bytes",
  "redis",
+ "sha2",
  "tempfile",
  "tokio",
  "tracing",
