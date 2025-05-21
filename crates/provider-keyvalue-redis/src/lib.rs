@@ -17,6 +17,7 @@ use anyhow::{bail, Context as _};
 use bytes::Bytes;
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{Cmd, FromRedisValue};
+use sha2::{Digest as _, Sha256};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
@@ -75,6 +76,12 @@ const DEFAULT_REDIS_BACKEND_RESPONSE_TIMEOUT_MS: u64 = 1000;
 /// Whether to disable default connection
 const CONFIG_DISABLE_DEFAULT_CONNECTION_KEY: &str = "DISABLE_DEFAULT_CONNECTION";
 
+/// Whether to share connections by URL
+///
+/// This option indicates that URLs with identical connection URLs will be shared/reused by
+/// components that are linked with the same URLs
+const CONFIG_SHARE_CONNECTIONS_BY_URL_KEY: &str = "SHARE_CONNECTIONS_BY_URL";
+
 type Result<T, E = keyvalue::store::Error> = core::result::Result<T, E>;
 
 /// The default connection available for the redis client
@@ -113,11 +120,32 @@ struct LinkId {
 /// Type for storing watch tasks associated with links
 type WatchTaskMap = HashMap<LinkId, JoinHandle<()>>;
 
+/// Shared connection keys are keys that identify shared connections
+///
+/// Normally, this would be the URL of a connection, hashed.
+///
+/// Note this key should *not* be the URL of the connection directly,
+/// to avoid printing it inadvertently.
+type SharedConnectionKey = String;
+
+/// URL of a redis connection
+#[derive(Clone)]
+enum RedisConnection {
+    /// Direct connection
+    Direct(ConnectionManager),
+    /// Shared connection, identified by the hash of the connection URL
+    Shared(String),
+}
+
 /// Redis `wrpc:keyvalue` provider implementation.
 #[derive(Clone)]
 pub struct KvRedisProvider {
     /// Store redis connections per source ID & link name
-    sources: Arc<RwLock<HashMap<(String, String), ConnectionManager>>>,
+    sources: Arc<RwLock<HashMap<(String, String), RedisConnection>>>,
+
+    /// Redis connections indexed by URL
+    shared_connections: Arc<RwLock<HashMap<SharedConnectionKey, ConnectionManager>>>,
+
     /// Default connection, which may be uninitialized
     default_connection: Option<Arc<RwLock<DefaultConnection>>>,
     /// Stores information about watched keys for keyspace notifications
@@ -175,6 +203,7 @@ impl KvRedisProvider {
                     secrets: None,
                 })))
             },
+            shared_connections: Arc::new(RwLock::new(HashMap::new())),
             watched_keys: Arc::new(RwLock::new(HashMap::new())),
             watch_tasks: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -197,6 +226,7 @@ impl KvRedisProvider {
                     secrets: Some(host_data.secrets.clone()),
                 })))
             },
+            shared_connections: Arc::new(RwLock::new(HashMap::new())),
             watched_keys: Arc::new(RwLock::new(HashMap::new())),
             watch_tasks: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -247,7 +277,20 @@ impl KvRedisProvider {
             bail!("No Redis connection found for component [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL")
         };
 
-        Ok(conn.clone())
+        // Resolve the connection as a direct or shared one
+        match conn {
+            RedisConnection::Direct(c) => Ok(c.clone()),
+            RedisConnection::Shared(key) => {
+                let shared = self.shared_connections.read().await;
+                match shared.get(key) {
+                    Some(c) => Ok(c.clone()),
+                    None => {
+                        error!(key, "no shared Redis connection found with given key");
+                        bail!("No shared Redis connection found with key [{key}]");
+                    }
+                }
+            }
+        }
     }
 
     /// Execute Redis async command
@@ -498,6 +541,27 @@ impl Provider for KvRedisProvider {
             .keys()
             .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY));
 
+        let share_connections_by_url = config
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case(CONFIG_SHARE_CONNECTIONS_BY_URL_KEY));
+
+        let key = (source_id.to_string(), link_name.to_string());
+
+        // If the shared connection is already present with the given URL (hashed)
+        // make the association and exit early.
+        {
+            if let (Some(url), true) = (url, share_connections_by_url) {
+                let shared_connections = self.shared_connections.read().await;
+                let shared_key = format!("{:X}", Sha256::digest(url));
+                if shared_connections.contains_key(&shared_key) {
+                    // SAFETY: shared_connections should always be locked first
+                    let mut sources = self.sources.write().await;
+                    sources.insert(key, RedisConnection::Shared(shared_key));
+                    return Ok(());
+                }
+            }
+        }
+
         // Create initial configuration for the connection that is intended to fail fast
         let cfg = build_connection_mgr_config(config);
         let conn = if let Some(url) = url {
@@ -541,8 +605,30 @@ impl Provider for KvRedisProvider {
                 err
             })?
         };
-        let mut sources = self.sources.write().await;
-        sources.insert((source_id.to_string(), link_name.to_string()), conn);
+
+        match (url, share_connections_by_url) {
+            // If there was a URL (non-default connection) and connections should be shared by URL,
+            // update both shared connections and sources
+            (Some(url), true) => {
+                let shared_key = format!("{:X}", Sha256::digest(url));
+
+                // SAFETY: shared_connections should always be locked first
+                let mut shared_connections = self.shared_connections.write().await;
+                shared_connections.insert(shared_key.clone(), conn);
+                drop(shared_connections);
+
+                let mut sources = self.sources.write().await;
+                sources.insert(key, RedisConnection::Shared(shared_key));
+                drop(sources);
+            }
+            // In the case of a default connection in use (implicitly shared) or if share connections is turned off,
+            // save the direct connection.
+            _ => {
+                let mut sources = self.sources.write().await;
+                sources.insert(key, RedisConnection::Direct(conn));
+                drop(sources);
+            }
+        }
 
         Ok(())
     }
@@ -720,8 +806,12 @@ impl Provider for KvRedisProvider {
                 task,
             );
         }
+
         let mut sources = self.sources.write().await;
-        sources.insert((target_id.to_string(), link_name.to_string()), conn);
+        sources.insert(
+            (target_id.to_string(), link_name.to_string()),
+            RedisConnection::Direct(conn),
+        );
 
         Ok(())
     }
