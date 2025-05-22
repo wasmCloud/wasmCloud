@@ -116,7 +116,7 @@ For more information on what you can do with the component, see the [`http-keyva
 | `DISABLE_DEFAULT_CONNECTION`     | N/A                        | Whether to disable the default connection (also available at the provider config level, for all connections)                                            |
 | `SHARE_CONNECTIONS_BY_URL`       | N/A                        | Whether to share/reuse connections for components that have the same connection URL                                                                     |
 
-> ![WARNING]
+> [!WARNING]
 > Putting sensitive configuration values in WADM files should be avoided.
 >
 > Please use the secrets feature to provide sensitive values like a Redis connection URL
