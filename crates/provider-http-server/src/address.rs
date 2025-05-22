@@ -235,7 +235,7 @@ async fn handle_request(
     };
 
     let timeout = settings.timeout_ms.map(Duration::from_millis);
-    let req = build_request(request, scheme, authority, &settings)?;
+    let req = build_request(request, scheme, authority, &settings).map_err(|err| *err)?;
     axum::response::Result::<_, axum::response::ErrorResponse>::Ok(
         invoke_component(
             &wrpc,

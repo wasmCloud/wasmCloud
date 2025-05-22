@@ -244,7 +244,7 @@ async fn handle_request(
     request: extract::Request,
 ) -> impl axum::response::IntoResponse {
     let timeout = settings.timeout_ms.map(Duration::from_millis);
-    let req = build_request(request, scheme, authority, &settings)?;
+    let req = build_request(request, scheme, authority, &settings).map_err(|err| *err)?;
 
     let Some(host_header) = req.headers().get(router.read().await.header.as_str()) else {
         Err((http::StatusCode::BAD_REQUEST, "missing host header"))?
