@@ -199,8 +199,7 @@ impl OutgoingBody for &[u8] {
     ) -> std::io::Result<()> {
         stream.write_all(self)?;
         drop(stream);
-        wasi::http::types::OutgoingBody::finish(body, None)
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
+        wasi::http::types::OutgoingBody::finish(body, None).map_err(std::io::Error::other)
     }
 }
 
@@ -265,13 +264,12 @@ impl OutgoingBody for InputStream {
                 Ok(0) | Err(StreamError::Closed) => break,
                 Ok(_) => continue,
                 Err(StreamError::LastOperationFailed(err)) => {
-                    return Err(std::io::Error::new(std::io::ErrorKind::Other, err));
+                    return Err(std::io::Error::other(err));
                 }
             }
         }
         drop(stream);
-        wasi::http::types::OutgoingBody::finish(body, None)
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
+        wasi::http::types::OutgoingBody::finish(body, None).map_err(std::io::Error::other)
     }
 }
 
@@ -289,7 +287,7 @@ impl OutgoingBody for wasi::http::types::IncomingBody {
                 Ok(0) | Err(StreamError::Closed) => break,
                 Ok(_) => continue,
                 Err(StreamError::LastOperationFailed(err)) => {
-                    return Err(std::io::Error::new(std::io::ErrorKind::Other, err));
+                    return Err(std::io::Error::other(err));
                 }
             }
         }
@@ -307,8 +305,7 @@ impl OutgoingBody for wasi::http::types::IncomingBody {
         //let trailers = trailers.map_err(|()| std::io::Error::from(std::io::ErrorKind::Other))?;
         //let trailers =
         //    trailers.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
-        wasi::http::types::OutgoingBody::finish(body, None)
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
+        wasi::http::types::OutgoingBody::finish(body, None).map_err(std::io::Error::other)
     }
 }
 
@@ -323,16 +320,13 @@ impl OutgoingBody for IncomingBody {
                 Ok(0) | Err(StreamError::Closed) => break,
                 Ok(_) => continue,
                 Err(StreamError::LastOperationFailed(err)) => {
-                    return Err(std::io::Error::new(std::io::ErrorKind::Other, err));
+                    return Err(std::io::Error::other(err));
                 }
             }
         }
         drop(stream);
-        let trailers = self
-            .into_trailers_wasi()
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
-        wasi::http::types::OutgoingBody::finish(body, trailers)
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
+        let trailers = self.into_trailers_wasi().map_err(std::io::Error::other)?;
+        wasi::http::types::OutgoingBody::finish(body, trailers).map_err(std::io::Error::other)
     }
 }
 
@@ -348,8 +342,7 @@ impl<T: Read> OutgoingBody for ReadBody<T> {
     ) -> std::io::Result<()> {
         std::io::copy(&mut self.0, &mut stream)?;
         drop(stream);
-        wasi::http::types::OutgoingBody::finish(body, None)
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
+        wasi::http::types::OutgoingBody::finish(body, None).map_err(std::io::Error::other)
     }
 }
 
