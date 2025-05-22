@@ -8962,7 +8962,7 @@ dependencies = [
  "futures",
  "hyper-rustls 0.25.0",
  "rand 0.9.1",
- "rustls 0.22.4",
+ "rustls 0.23.26",
  "serde",
  "serde_json",
  "tokio",
