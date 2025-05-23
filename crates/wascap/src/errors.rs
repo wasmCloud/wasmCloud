@@ -132,7 +132,7 @@ impl From<std::io::Error> for Error {
 
 impl From<BinaryReaderError> for Error {
     fn from(source: BinaryReaderError) -> Error {
-        let io_error = ::std::io::Error::new(::std::io::ErrorKind::Other, source.to_string());
+        let io_error = ::std::io::Error::other(source.to_string());
         Error(Box::new(ErrorKind::IO(io_error)))
     }
 }

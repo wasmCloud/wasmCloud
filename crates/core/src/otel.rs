@@ -109,17 +109,17 @@ impl OtelConfig {
         if let Some(endpoint) = signal_endpoint_override {
             return endpoint;
         }
-
         if let Some(endpoint) = self.observability_endpoint.clone() {
             return match self.protocol {
                 OtelProtocol::Grpc => self.resolve_grpc_endpoint(endpoint),
                 OtelProtocol::Http => self.resolve_http_endpoint(signal, endpoint),
             };
         }
-
-        // If we have no match, fall back to empty string to let the opentelemetry-otlp
-        // library handling turn into the signal-specific default endpoint.
-        String::new()
+        // Set sensible defaults if nothing is provided
+        match self.protocol {
+            OtelProtocol::Grpc => "http://127.0.0.1:4317".to_string(),
+            OtelProtocol::Http => format!("http://127.0.0.1:4318{}", signal),
+        }
     }
 
     // opentelemetry-otlp expects the gRPC endpoint to not have path components
@@ -215,13 +215,13 @@ mod tests {
     use super::{OtelConfig, OtelProtocol};
 
     #[test]
-    fn test_grpc_resolves_to_empty_string_without_overrides() {
+    fn test_grpc_resolves_to_defaults_without_overrides() {
         let config = OtelConfig {
             protocol: OtelProtocol::Grpc,
             ..Default::default()
         };
 
-        let expected = String::from("");
+        let expected = String::from("http://127.0.0.1:4317");
 
         assert_eq!(expected, config.traces_endpoint());
         assert_eq!(expected, config.metrics_endpoint());
@@ -254,7 +254,7 @@ mod tests {
         };
 
         let expected_traces = String::from("https://example.com:4318/path/does/not/exist");
-        let expected_others = String::from("");
+        let expected_others = String::from("http://127.0.0.1:4317");
 
         assert_eq!(expected_traces, config.traces_endpoint());
         assert_eq!(expected_others, config.metrics_endpoint());
@@ -262,17 +262,19 @@ mod tests {
     }
 
     #[test]
-    fn test_http_resolves_to_empty_string_without_overrides() {
+    fn test_http_resolves_to_defaults_without_overrides() {
         let config = OtelConfig {
             protocol: OtelProtocol::Http,
             ..Default::default()
         };
 
-        let expected = String::from("");
+        let expected_traces = String::from("http://127.0.0.1:4318/v1/traces");
+        let expected_metrics = String::from("http://127.0.0.1:4318/v1/metrics");
+        let expected_logs = String::from("http://127.0.0.1:4318/v1/logs");
 
-        assert_eq!(expected, config.traces_endpoint());
-        assert_eq!(expected, config.metrics_endpoint());
-        assert_eq!(expected, config.logs_endpoint());
+        assert_eq!(expected_traces, config.traces_endpoint());
+        assert_eq!(expected_metrics, config.metrics_endpoint());
+        assert_eq!(expected_logs, config.logs_endpoint());
     }
 
     #[test]
@@ -286,11 +288,12 @@ mod tests {
         };
 
         let expected_traces = String::from("https://example.com:4318/v1/traces/or/something");
-        let expected_others = String::from("");
+        let expected_metrics = String::from("http://127.0.0.1:4318/v1/metrics");
+        let expected_logs = String::from("http://127.0.0.1:4318/v1/logs");
 
         assert_eq!(expected_traces, config.traces_endpoint());
-        assert_eq!(expected_others, config.metrics_endpoint());
-        assert_eq!(expected_others, config.logs_endpoint());
+        assert_eq!(expected_metrics, config.metrics_endpoint());
+        assert_eq!(expected_logs, config.logs_endpoint());
     }
 
     #[test]
