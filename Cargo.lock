@@ -8833,7 +8833,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-core"
-version = "0.18.0"
+version = "0.20.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -8998,7 +8998,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-http-server"
-version = "0.27.1"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9109,7 +9109,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-messaging-nats"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9130,7 +9130,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sdk"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9209,7 +9209,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-runtime"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9270,7 +9270,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-test-util"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9293,7 +9293,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-tracing"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "bytes",
