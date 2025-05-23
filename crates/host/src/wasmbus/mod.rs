@@ -141,6 +141,7 @@ struct Component {
     annotations: Annotations,
     /// Maximum number of instances of this component that can be running at once
     max_instances: NonZeroUsize,
+    max_linear_memory: Option<usize>,
     image_reference: Arc<str>,
     events: mpsc::Sender<WrpcServeEvent<<WrpcServer as wrpc_transport::Serve>::Context>>,
     permits: Arc<Semaphore>,
@@ -963,6 +964,7 @@ impl Host {
         image_reference: Arc<str>,
         id: Arc<str>,
         max_instances: NonZeroUsize,
+        max_linear_memory: Option<usize>,
         mut component: wasmcloud_runtime::Component<Handler>,
         handler: Handler,
     ) -> anyhow::Result<Arc<Component>> {
@@ -1118,6 +1120,7 @@ impl Host {
             }),
             annotations: annotations.clone(),
             max_instances,
+            max_linear_memory,
             image_reference: Arc::clone(&image_reference),
         }))
     }
@@ -1132,6 +1135,7 @@ impl Host {
         component_ref: Arc<str>,
         component_id: Arc<str>,
         max_instances: NonZeroUsize,
+        max_linear_memory: Option<usize>,
         annotations: &Annotations,
         config: ConfigBundle,
         secrets: HashMap<String, SecretBox<SecretValue>>,
@@ -1168,13 +1172,14 @@ impl Host {
             experimental_features: self.experimental_features,
             host_labels: Arc::clone(&self.labels),
         };
-        let component = wasmcloud_runtime::Component::new(&self.runtime, wasm)?;
+        let component = wasmcloud_runtime::Component::new(&self.runtime, wasm, max_linear_memory)?;
         let component = self
             .instantiate_component(
                 annotations,
                 Arc::clone(&component_ref),
                 Arc::clone(&component_id),
                 max_instances,
+                max_linear_memory,
                 component,
                 handler,
             )
@@ -1307,6 +1312,7 @@ impl Host {
         component_id: Arc<str>,
         host_id: &str,
         max_instances: u32,
+        max_linear_memory: Option<usize>,
         annotations: &Annotations,
         config: Vec<String>,
         wasm: anyhow::Result<Vec<u8>>,
@@ -1374,6 +1380,7 @@ impl Host {
                             Arc::clone(&component_ref),
                             Arc::clone(&component_id),
                             max,
+                            max_linear_memory,
                             annotations,
                             config,
                             secrets,
@@ -1468,6 +1475,7 @@ impl Host {
                             Arc::clone(&component_ref),
                             Arc::clone(&component.id),
                             max,
+                            max_linear_memory,
                             component.component.clone(),
                             handler,
                         )
@@ -1527,10 +1535,12 @@ impl Host {
                 info!(%component_id, %new_component_ref, "component already updated");
                 return Ok(());
             }
+            let max_linear_memory = existing_component.max_linear_memory;
 
             let new_component = self.fetch_component(&new_component_ref).await?;
-            let new_component = wasmcloud_runtime::Component::new(&self.runtime, &new_component)
-                .context("failed to initialize component")?;
+            let new_component =
+                wasmcloud_runtime::Component::new(&self.runtime, &new_component, max_linear_memory)
+                    .context("failed to initialize component")?;
             let new_claims = new_component.claims().cloned();
             if let Some(ref claims) = new_claims {
                 self.store_claims(Claims::Component(claims.clone()))
@@ -1545,6 +1555,7 @@ impl Host {
                     Arc::clone(&new_component_ref),
                     Arc::clone(&component_id),
                     max,
+                    max_linear_memory,
                     new_component,
                     existing_component.handler.copy_for_new(),
                 )
