@@ -450,7 +450,7 @@ async fn main() -> anyhow::Result<()> {
                 metrics_endpoint = %otel_config.metrics_endpoint(),
                 logs_endpoint = %otel_config.logs_endpoint(),
                 protocol = ?otel_config.protocol,
-                "Effective OpenTelemetry configuration after merging CLI args, environment variables, and defaults"
+                "combined OpenTelemetry configuration (cli > env > defaults)"
             );
 
             Some(guard)
