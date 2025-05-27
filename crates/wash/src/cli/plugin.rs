@@ -147,7 +147,7 @@ pub async fn handle_install(
             }
             let mut stream_reader = tokio_util::io::StreamReader::new(
                 resp.bytes_stream()
-                    .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err)),
+                    .map_err(std::io::Error::other),
             );
             tokio::io::copy(&mut stream_reader, &mut file)
                 .await

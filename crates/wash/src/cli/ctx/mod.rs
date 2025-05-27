@@ -5,16 +5,16 @@ use std::{
     process::Command,
 };
 
-use anyhow::{bail, Result};
-use clap::{Args, Subcommand};
-use serde_json::json;
-use tracing::warn;
 use crate::lib::{
     cli::CommandOutput,
     config::{DEFAULT_LATTICE, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS},
     context::{fs::ContextDir, ContextManager, WashContext, HOST_CONFIG_NAME},
     id::ClusterSeed,
 };
+use anyhow::{bail, Result};
+use clap::{Args, Subcommand};
+use serde_json::json;
+use tracing::warn;
 
 use crate::lib::generate::{
     interactive::{prompt_for_choice, user_question},
@@ -169,7 +169,12 @@ fn handle_del(cmd: DelCommand) -> Result<CommandOutput> {
     };
 
     dir.delete_context(&ctx_to_delete)?;
-    Ok(CommandOutput::from("Removed file successfully"))
+
+    const SUCCESS_MSG: &str = "Removed file successfully";
+    Ok(CommandOutput::new(
+        SUCCESS_MSG,
+        HashMap::from([("message".to_string(), json!(SUCCESS_MSG))]),
+    ))
 }
 
 /// Handles creating a new context by writing the default `WashContext` object to the specified path

@@ -21,8 +21,9 @@ use tokio::{
 use wash::cli::config::{WADM_VERSION, WASMCLOUD_HOST_VERSION};
 use wash::lib::cli::output::{
     AppDeleteCommandOutput, AppDeployCommandOutput, AppGetCommandOutput, AppListCommandOutput,
-    AppUndeployCommandOutput, CallCommandOutput, GetHostsCommandOutput, PullCommandOutput,
-    StartCommandOutput, StopCommandOutput, UpCommandOutput,
+    AppUndeployCommandOutput, CallCommandOutput, CreateContextCommandOutput,
+    DeleteContextCommandOutput, GetHostsCommandOutput, PullCommandOutput, StartCommandOutput,
+    StopCommandOutput, UpCommandOutput,
 };
 use wash::lib::common::CommandGroupUsage;
 use wash::lib::config::{host_pid_file, wadm_pid_file};
@@ -374,6 +375,16 @@ impl TestWashInstance {
         })
     }
 
+    /// Get the test dir currently used by this instance
+    pub fn test_dir(&self) -> &Path {
+        self.test_dir.path()
+    }
+
+    /// Get the current nats port
+    pub fn nats_port(&self) -> u16 {
+        self.nats_port
+    }
+
     /// Returns a [`Command`] that can be used for running wash. This command is preconfigured to
     /// use the test instance's directory and the proper NATS ports.
     pub fn wash_cmd(&self) -> Command {
@@ -649,6 +660,56 @@ impl TestWashInstance {
             .context("failed to undeploy all apps")?;
         serde_json::from_slice(&output.stdout)
             .context("failed to parse output of `wash app undeploy --all`")
+    }
+
+    /// Create a wash context
+    pub(crate) async fn create_context(
+        &self,
+        dir: impl AsRef<Path>,
+        name: &str,
+    ) -> Result<CreateContextCommandOutput> {
+        let output = self
+            .wash_cmd()
+            .args([
+                "ctx",
+                "new",
+                name,
+                "--directory",
+                &format!("{}", dir.as_ref().display()),
+                "--output",
+                "json",
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .with_context(|| format!("failed to create context [{name}]"))?;
+        serde_json::from_slice(&output.stdout)
+            .context("failed to parse output of `wash ctx create`")
+    }
+
+    /// Delete a wash context
+    pub(crate) async fn delete_context(
+        &self,
+        dir: impl AsRef<Path>,
+        name: &str,
+    ) -> Result<DeleteContextCommandOutput> {
+        let output = self
+            .wash_cmd()
+            .args([
+                "ctx",
+                "del",
+                "--directory",
+                &format!("{}", dir.as_ref().display()),
+                "--output",
+                "json",
+                name,
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .with_context(|| format!("failed to delete context [{name}]"))?;
+        serde_json::from_slice(&output.stdout)
+            .context("failed to parse output of `wash ctx delete`")
     }
 }
 
