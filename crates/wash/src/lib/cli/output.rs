@@ -79,7 +79,8 @@ pub struct ScaleCommandOutput {
 #[derive(Debug, Deserialize)]
 pub struct CallCommandOutput {
     pub success: bool,
-    pub response: serde_json::Value,
+    pub response: Option<serde_json::Value>,
+    pub result: Option<serde_json::Value>,
 }
 
 /// JSON output representation of the `wash pull` command
@@ -148,4 +149,17 @@ pub struct AppUndeployCommandOutput {
 #[derive(Debug, Deserialize)]
 pub struct AppDeleteCommandOutput {
     pub success: bool,
+}
+
+/// JSON Output representation of the `wash ctx new` command
+#[derive(Debug, Deserialize)]
+pub struct CreateContextCommandOutput {
+    pub success: bool,
+}
+
+/// JSON Output representation of the `wash ctx del` command
+#[derive(Debug, Deserialize)]
+pub struct DeleteContextCommandOutput {
+    pub success: bool,
+    pub message: String,
 }

@@ -121,7 +121,7 @@ impl KeyManager for KeyDir {
 pub fn read_key(p: impl AsRef<Path>) -> std::io::Result<KeyPair> {
     let raw = std::fs::read_to_string(p)?;
 
-    KeyPair::from_seed(&raw).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    KeyPair::from_seed(&raw).map_err(std::io::Error::other)
 }
 
 #[cfg(unix)]
