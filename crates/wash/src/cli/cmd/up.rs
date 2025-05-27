@@ -42,16 +42,16 @@ use crate::config::{
     DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_WEBSOCKET_PORT,
     DEFAULT_PROV_SHUTDOWN_DELAY_MS, DEFAULT_RPC_TIMEOUT_MS, DEFAULT_STRUCTURED_LOG_LEVEL,
     NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_ALLOW_FILE_LOAD, WASMCLOUD_CLUSTER_ISSUERS,
-    WASMCLOUD_CLUSTER_SEED, WASMCLOUD_CONFIG_SERVICE, WASMCLOUD_CTL_CREDSFILE, WASMCLOUD_CTL_HOST,
-    WASMCLOUD_CTL_JWT, WASMCLOUD_CTL_PORT, WASMCLOUD_CTL_SEED, WASMCLOUD_CTL_TLS,
+    WASMCLOUD_CLUSTER_SEED, WASMCLOUD_CONFIG_SERVICE, WASMCLOUD_CTL_CREDSFILE,WASMCLOUD_CTL_TLS,
     WASMCLOUD_CTL_TLS_CA_FILE, WASMCLOUD_CTL_TLS_FIRST, WASMCLOUD_ENABLE_IPV6,
     WASMCLOUD_HOST_LOG_PATH, WASMCLOUD_HOST_PATH, WASMCLOUD_HOST_SEED, WASMCLOUD_HOST_VERSION,
     WASMCLOUD_JS_DOMAIN, WASMCLOUD_LATTICE, WASMCLOUD_LOG_LEVEL, WASMCLOUD_MAX_EXECUTION_TIME_MS,
     WASMCLOUD_OCI_ALLOWED_INSECURE, WASMCLOUD_OCI_ALLOW_LATEST, WASMCLOUD_POLICY_TOPIC,
-    WASMCLOUD_PROV_SHUTDOWN_DELAY_MS, WASMCLOUD_RPC_CREDSFILE, WASMCLOUD_RPC_HOST,
-    WASMCLOUD_RPC_JWT, WASMCLOUD_RPC_PORT, WASMCLOUD_RPC_SEED, WASMCLOUD_RPC_TIMEOUT_MS,
+    WASMCLOUD_PROV_SHUTDOWN_DELAY_MS, WASMCLOUD_RPC_CREDSFILE, WASMCLOUD_RPC_TIMEOUT_MS,
     WASMCLOUD_RPC_TLS, WASMCLOUD_RPC_TLS_CA_FILE, WASMCLOUD_RPC_TLS_FIRST, WASMCLOUD_SECRETS_TOPIC,
-    WASMCLOUD_STRUCTURED_LOGGING_ENABLED,
+    WASMCLOUD_STRUCTURED_LOGGING_ENABLED,WASMCLOUD_NATS_RPC_HOST,WASMCLOUD_NATS_RPC_PORT,WASMCLOUD_NATS_RPC_SEED,
+    WASMCLOUD_NATS_RPC_JWT,WASMCLOUD_NATS_CTL_HOST,WASMCLOUD_NATS_CTL_PORT,WASMCLOUD_NATS_CTL_SEED,
+    WASMCLOUD_NATS_CTL_JWT,
 };
 
 use crate::down::stop_nats;
@@ -174,15 +174,15 @@ pub struct WasmcloudOpts {
     pub host_seed: Option<String>,
 
     /// An IP address or DNS name to use to connect to NATS for RPC messages, defaults to the value supplied to --nats-host if not supplied
-    #[clap(long = "rpc-host", env = WASMCLOUD_RPC_HOST)]
+    #[clap(long = "nats-rpc-host", alias = "rpc-host", env = WASMCLOUD_NATS_RPC_HOST)]
     pub rpc_host: Option<String>,
 
     /// A port to use to connect to NATS for RPC messages, defaults to the value supplied to --nats-port if not supplied
-    #[clap(long = "rpc-port", env = WASMCLOUD_RPC_PORT)]
+    #[clap(long = "nats-rpc-port", alias = "rpc-port", env = WASMCLOUD_NATS_RPC_PORT)]
     pub rpc_port: Option<u16>,
 
     /// A seed nkey to use to authenticate to NATS for RPC messages
-    #[clap(long = "rpc-seed", env = WASMCLOUD_RPC_SEED, requires = "rpc_jwt")]
+    #[clap(long = "nats-rpc-seed", alias = "rpc-seed", env = WASMCLOUD_NATS_RPC_SEED, requires = "rpc_jwt")]
     pub rpc_seed: Option<String>,
 
     /// Timeout in milliseconds for all RPC calls
@@ -190,7 +190,7 @@ pub struct WasmcloudOpts {
     pub rpc_timeout_ms: Option<u64>,
 
     /// A user JWT to use to authenticate to NATS for RPC messages
-    #[clap(long = "rpc-jwt", env = WASMCLOUD_RPC_JWT, requires = "rpc_seed")]
+    #[clap(long = "nats-rpc-jwt", alias = "rpc-jwt", env = WASMCLOUD_NATS_RPC_JWT, requires = "rpc_seed")]
     pub rpc_jwt: Option<String>,
 
     /// Optional flag to enable host communication with a NATS server over TLS for RPC messages
@@ -210,19 +210,19 @@ pub struct WasmcloudOpts {
     pub rpc_credsfile: Option<PathBuf>,
 
     /// An IP address or DNS name to use to connect to NATS for Control Interface (CTL) messages, defaults to the value supplied to --nats-host if not supplied
-    #[clap(long = "ctl-host", env = WASMCLOUD_CTL_HOST)]
+    #[clap(long = "nats-ctl-host",alias = "ctl-host", env = WASMCLOUD_NATS_CTL_HOST)]
     pub ctl_host: Option<String>,
 
     /// A port to use to connect to NATS for CTL messages, defaults to the value supplied to --nats-port if not supplied
-    #[clap(long = "ctl-port", env = WASMCLOUD_CTL_PORT)]
+    #[clap(long = "nats-ctl-port",alias = "ctl-port", env = WASMCLOUD_NATS_CTL_PORT)]
     pub ctl_port: Option<u16>,
 
     /// A seed nkey to use to authenticate to NATS for CTL messages
-    #[clap(long = "ctl-seed", env = WASMCLOUD_CTL_SEED, requires = "ctl_jwt")]
+    #[clap(long = "nats-ctl-seed",alias = "ctl-seed", env = WASMCLOUD_NATS_CTL_SEED, requires = "ctl_jwt")]
     pub ctl_seed: Option<String>,
 
     /// A user JWT to use to authenticate to NATS for CTL messages
-    #[clap(long = "ctl-jwt", env = WASMCLOUD_CTL_JWT, requires = "ctl_seed")]
+    #[clap(long = "nats-ctl-jwt", alias = "ctl-jwt", env = WASMCLOUD_NATS_CTL_JWT, requires = "ctl_seed")]
     pub ctl_jwt: Option<String>,
 
     /// Convenience flag for CTL authentication, internally this parses the JWT and seed from the credsfile
