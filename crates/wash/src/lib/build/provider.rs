@@ -174,7 +174,7 @@ fn build_rust_provider(
             .iter()
             .find_map(|p| {
                 p.targets.iter().find_map(|t| {
-                    if t.kind.iter().any(|k| *k == TargetKind::Bin) {
+                    if t.kind.contains(&TargetKind::Bin) {
                         Some(t.name.clone())
                     } else {
                         None
