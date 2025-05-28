@@ -36,31 +36,31 @@ provider-sqldb-postgres = ["dep:wasmcloud-provider-sqldb-postgres"]
 provider-wadm = ["dep:wasmcloud-provider-wadm"]
 
 wasmcloud = [
-    "dep:clap",
-    "dep:clap-markdown",
-    "dep:nkeys",
-    "dep:regex",
-    "dep:tracing-subscriber",
-    "dep:wascap",
-    "dep:wasmcloud-core",
-    "dep:wasmcloud-host",
-    "dep:wasmcloud-tracing",
+  "dep:clap",
+  "dep:clap-markdown",
+  "dep:nkeys",
+  "dep:regex",
+  "dep:tracing-subscriber",
+  "dep:wascap",
+  "dep:wasmcloud-core",
+  "dep:wasmcloud-host",
+  "dep:wasmcloud-tracing",
 ]
 
 default = [
-    "provider-blobstore-azure",
-    "provider-blobstore-fs",
-    "provider-blobstore-s3",
-    "provider-http-client",
-    "provider-http-server",
-    "provider-keyvalue-nats",
-    "provider-keyvalue-redis",
-    "provider-keyvalue-vault",
-    "provider-messaging-kafka",
-    "provider-messaging-nats",
-    "provider-sqldb-postgres",
-    "provider-wadm",
-    "wasmcloud",
+  "provider-blobstore-azure",
+  "provider-blobstore-fs",
+  "provider-blobstore-s3",
+  "provider-http-client",
+  "provider-http-server",
+  "provider-keyvalue-nats",
+  "provider-keyvalue-redis",
+  "provider-keyvalue-vault",
+  "provider-messaging-kafka",
+  "provider-messaging-nats",
+  "provider-sqldb-postgres",
+  "provider-wadm",
+  "wasmcloud",
 ]
 
 
@@ -125,14 +125,14 @@ lto = true
 wasmcloud-provider-wadm = { workspace = true, optional = true }
 anyhow = { workspace = true }
 clap = { workspace = true, features = [
-    "color",
-    "derive",
-    "env",
-    "error-context",
-    "help",
-    "std",
-    "suggestions",
-    "usage",
+  "color",
+  "derive",
+  "env",
+  "error-context",
+  "help",
+  "std",
+  "suggestions",
+  "usage",
 ], optional = true }
 clap-markdown = { workspace = true, optional = true }
 nkeys = { workspace = true, optional = true }
@@ -172,9 +172,9 @@ once_cell = { workspace = true }
 provider-archive = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true, features = [
-    "aio",
-    "connection-manager",
-    "tokio-comp",
+  "aio",
+  "connection-manager",
+  "tokio-comp",
 ] }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
@@ -189,11 +189,11 @@ test-components = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tokio-stream = { workspace = true }
 tracing-subscriber = { workspace = true, features = [
-    "ansi",
-    "env-filter",
-    "fmt",
-    "json",
-    "std",
+  "ansi",
+  "env-filter",
+  "fmt",
+  "json",
+  "std",
 ] }
 url = { workspace = true }
 uuid = { workspace = true }
@@ -201,8 +201,8 @@ vaultrs = { workspace = true, features = ["rustls"] }
 wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true, features = [
-    "reqwest",
-    "rustls-native-certs",
+  "reqwest",
+  "rustls-native-certs",
 ] }
 wasmcloud-test-util = { workspace = true, features = ["testcontainers"] }
 wrpc-interface-http = { workspace = true, features = ["hyper"] }
@@ -370,26 +370,26 @@ wasm-encoder = { version = "0.229", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-component = { version = "0", path = "crates/component", default-features = false }
 wasmcloud-control-interface = { version = "2.4.0", path = "./crates/control-interface", default-features = false }
-wasmcloud-core = { version = "*", path = "./crates/core", default-features = false }
-wasmcloud-host = { version = "*", path = "./crates/host", default-features = false }
+wasmcloud-core = { version = "^0.20.0", path = "./crates/core", default-features = false }
+wasmcloud-host = { version = "^0.26.0", path = "./crates/host", default-features = false }
 wasmcloud-provider-blobstore-azure = { version = "*", path = "./crates/provider-blobstore-azure", default-features = false }
 wasmcloud-provider-blobstore-fs = { version = "*", path = "./crates/provider-blobstore-fs", default-features = false }
 wasmcloud-provider-blobstore-s3 = { version = "*", path = "./crates/provider-blobstore-s3", default-features = false }
 wasmcloud-provider-http-client = { version = "*", path = "./crates/provider-http-client", default-features = false }
-wasmcloud-provider-http-server = { version = "*", path = "./crates/provider-http-server", default-features = false }
+wasmcloud-provider-http-server = { version = "^0.28.0", path = "./crates/provider-http-server", default-features = false }
 wasmcloud-provider-keyvalue-nats = { version = "*", path = "./crates/provider-keyvalue-nats", default-features = false }
 wasmcloud-provider-keyvalue-redis = { version = "*", path = "./crates/provider-keyvalue-redis", default-features = false }
 wasmcloud-provider-keyvalue-vault = { version = "*", path = "./crates/provider-keyvalue-vault", default-features = false }
 wasmcloud-provider-messaging-kafka = { version = "*", path = "./crates/provider-messaging-kafka", default-features = false }
-wasmcloud-provider-messaging-nats = { version = "*", path = "./crates/provider-messaging-nats", default-features = false }
-wasmcloud-provider-sdk = { version = "*", path = "./crates/provider-sdk", default-features = false }
+wasmcloud-provider-messaging-nats = { version = "^0.28.0", path = "./crates/provider-messaging-nats", default-features = false }
+wasmcloud-provider-sdk = { version = "^0.16.0", path = "./crates/provider-sdk", default-features = false }
 wasmcloud-provider-sqldb-postgres = { version = "*", path = "./crates/provider-sqldb-postgres", default-features = false }
 wasmcloud-provider-wadm = { version = "*", path = "./crates/provider-wadm", default-features = false }
-wasmcloud-runtime = { version = "*", path = "./crates/runtime", default-features = false }
-wasmcloud-secrets-client = { version = "*", path = "./crates/secrets-client", default-features = false }
-wasmcloud-secrets-types = { version = "*", path = "./crates/secrets-types", default-features = false }
-wasmcloud-test-util = { version = "*", path = "./crates/test-util", default-features = false }
-wasmcloud-tracing = { version = "*", path = "./crates/tracing", default-features = false }
+wasmcloud-runtime = { version = "^0.11.0", path = "./crates/runtime", default-features = false }
+wasmcloud-secrets-client = { version = "^0.7.0", path = "./crates/secrets-client", default-features = false }
+wasmcloud-secrets-types = { version = "^0.7.0", path = "./crates/secrets-types", default-features = false }
+wasmcloud-test-util = { version = "^0.18.0", path = "./crates/test-util", default-features = false }
+wasmcloud-tracing = { version = "^0.15.0", path = "./crates/tracing", default-features = false }
 wasmparser = { version = "0.228", default-features = false }
 wasmtime = { version = "31", default-features = false }
 wasmtime-wasi = { version = "31", default-features = false }
@@ -409,7 +409,7 @@ wrpc-interface-http = { version = "0.32.1", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.28", default-features = false }
 wrpc-transport = { version = "0.28", default-features = false }
 wrpc-transport-nats = { version = "0.28.1", default-features = false, features = [
-    "async-nats-0_39",
+  "async-nats-0_39",
 ] }
 
 [package.metadata.cargo-machete]
