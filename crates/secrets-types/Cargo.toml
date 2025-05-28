@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-secrets-types"
-version = "0.6.0"
+version = "0.7.0"
 description = "Types, traits, and structs for interacting with secrets in wasmCloud"
 authors.workspace = true
 categories.workspace = true
