@@ -5,7 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v0.42.0 (2025-05-22)
+## v0.42.0 (2025-05-28)
+
+<csr-id-b23ea0bcd310d234ecf3dce0ad2bc1287dde2652/>
+<csr-id-52b618bfe7ca6c80f1a35bb5ea4c0292d3da62c4/>
+<csr-id-2959c391b28b0cb4efa64d2b2438345df852d005/>
+<csr-id-84678bdd8abf1da843fdb1af4c8b20e6aa82aefe/>
+<csr-id-571e3685effd3558c9c1000c7ed0f9a5fee2e840/>
+<csr-id-e34846b7d2ee6bf51e40510db5ab951bd5858f18/>
+<csr-id-56ac4cc8415fd895dc791cee6a6323981e7eca68/>
+<csr-id-c32373af45f4e50b6a742db476c52168065d9a9a/>
+<csr-id-fec5e21037b75eb27b55db323dc7d3d3ff3f6b68/>
 
 ### Chore
 
@@ -27,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-571e3685effd3558c9c1000c7ed0f9a5fee2e840/> adjust URL formatting in help
  - <csr-id-e34846b7d2ee6bf51e40510db5ab951bd5858f18/> fix tests for patch vs minor
  - <csr-id-56ac4cc8415fd895dc791cee6a6323981e7eca68/> update `wash` to new wasmtime
+
+### Chore
+
+ - <csr-id-31c93117b34bb964ad4e6196bc2b577b71cc7f7c/> release v0.42.0
 
 ### New Features
 
@@ -63,6 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    command (but with no actual internal wash command matching), and
    printing help.
  - <csr-id-575636a1f874af341774298272e04011fb4a44dd/> disallow setting hostcore label
+ - <csr-id-0fac633e67de6616dcb32d2f922e01cbfaf64ce5/> use context during wash call
+   This commit allows wash call to use established context (e.g. set up
+   with `wash ctx`) when performing component calls.
 
 ### Refactor
 
@@ -76,9 +93,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 21 commits contributed to the release over the course of 51 calendar days.
- - 61 days passed between releases.
- - 21 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 23 commits contributed to the release over the course of 57 calendar days.
+ - 67 days passed between releases.
+ - 23 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -88,6 +105,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Use context during wash call ([`0fac633`](https://github.com/wasmCloud/wasmCloud/commit/0fac633e67de6616dcb32d2f922e01cbfaf64ce5))
+    - Release v0.42.0 ([`31c9311`](https://github.com/wasmCloud/wasmCloud/commit/31c93117b34bb964ad4e6196bc2b577b71cc7f7c))
     - Update default host version to 1.8.0 ([`b23ea0b`](https://github.com/wasmCloud/wasmCloud/commit/b23ea0bcd310d234ecf3dce0ad2bc1287dde2652))
     - Bump tempfile from 3.19.1 to 3.20.0 ([`52b618b`](https://github.com/wasmCloud/wasmCloud/commit/52b618bfe7ca6c80f1a35bb5ea4c0292d3da62c4))
     - Move wash version checks into more meaningful function ([`c32373a`](https://github.com/wasmCloud/wasmCloud/commit/c32373af45f4e50b6a742db476c52168065d9a9a))
@@ -112,6 +131,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.41.0 (2025-03-21)
+
+<csr-id-00bbe658e43987e4df7a6a4536ec5c49f3188f3b/>
+<csr-id-3078c88f0ebed96027e20997bccc1c125583fad4/>
+<csr-id-bccf4fcf886a9307a68371cda2c58dc695eb767f/>
+<csr-id-9d9d1c52b260f8fa66140ca9951893b482363a8a/>
+<csr-id-3bdc04d17e8ca55d81e54f6a0b38c13c421e4698/>
+<csr-id-b4f50a1c693693f9c700a6d24cab44b86427a659/>
+<csr-id-5f7e0132362f7eda0710a1a69d5944140fd74b07/>
 
 ### Chore
 
@@ -193,6 +220,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.40.0 (2025-03-10)
+
+<csr-id-aa5bb1cf754582e1cb936dbcde182d5b052137f6/>
 
 ### Chore
 
