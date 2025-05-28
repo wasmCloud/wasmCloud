@@ -390,7 +390,7 @@ wasmcloud-secrets-client = { version = "^0.7.0", path = "./crates/secrets-client
 wasmcloud-secrets-types = { version = "^0.7.0", path = "./crates/secrets-types", default-features = false }
 wasmcloud-test-util = { version = "^0.18.0", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "^0.15.0", path = "./crates/tracing", default-features = false }
-wasmparser = { version = "0.228", default-features = false }
+wasmparser = { version = "0.232", default-features = false }
 wasmtime = { version = "31", default-features = false }
 wasmtime-wasi = { version = "31", default-features = false }
 wasmtime-wasi-http = { version = "31", default-features = false }
