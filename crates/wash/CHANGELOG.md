@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v0.42.0 (2025-05-28)
+## v0.42.0 (2025-05-29)
 
 <csr-id-b23ea0bcd310d234ecf3dce0ad2bc1287dde2652/>
 <csr-id-52b618bfe7ca6c80f1a35bb5ea4c0292d3da62c4/>
@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-56ac4cc8415fd895dc791cee6a6323981e7eca68/>
 <csr-id-c32373af45f4e50b6a742db476c52168065d9a9a/>
 <csr-id-fec5e21037b75eb27b55db323dc7d3d3ff3f6b68/>
+<csr-id-31c93117b34bb964ad4e6196bc2b577b71cc7f7c/>
 
 ### Chore
 
@@ -37,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-571e3685effd3558c9c1000c7ed0f9a5fee2e840/> adjust URL formatting in help
  - <csr-id-e34846b7d2ee6bf51e40510db5ab951bd5858f18/> fix tests for patch vs minor
  - <csr-id-56ac4cc8415fd895dc791cee6a6323981e7eca68/> update `wash` to new wasmtime
+
+### Chore
+
+ - <csr-id-c199174d2d4e0ea9e05ec56573e881b6b9922824/> bump wash v0.42.0
 
 ### Chore
 
@@ -93,9 +98,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 23 commits contributed to the release over the course of 57 calendar days.
- - 67 days passed between releases.
- - 23 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 24 commits contributed to the release over the course of 58 calendar days.
+ - 68 days passed between releases.
+ - 24 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -105,6 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Bump wash v0.42.0 ([`c199174`](https://github.com/wasmCloud/wasmCloud/commit/c199174d2d4e0ea9e05ec56573e881b6b9922824))
     - Use context during wash call ([`0fac633`](https://github.com/wasmCloud/wasmCloud/commit/0fac633e67de6616dcb32d2f922e01cbfaf64ce5))
     - Release v0.42.0 ([`31c9311`](https://github.com/wasmCloud/wasmCloud/commit/31c93117b34bb964ad4e6196bc2b577b71cc7f7c))
     - Update default host version to 1.8.0 ([`b23ea0b`](https://github.com/wasmCloud/wasmCloud/commit/b23ea0bcd310d234ecf3dce0ad2bc1287dde2652))
