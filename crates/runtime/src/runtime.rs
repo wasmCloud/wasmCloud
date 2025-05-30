@@ -177,7 +177,7 @@ impl RuntimeBuilder {
             .linear_memory_keep_resident(10 * 1024)
             .table_keep_resident(10 * 1024);
         self.engine_config
-            .allocation_strategy(InstanceAllocationStrategy::Pooling(pooling_config));
+            .allocation_strategy(InstanceAllocationStrategy::Pooling(pooling_config.clone()));
         let engine = match wasmtime::Engine::new(&self.engine_config)
             .context("failed to construct engine")
         {
@@ -202,8 +202,11 @@ impl RuntimeBuilder {
                 engine.increment_epoch();
             })
         };
+        let pool_config = pooling_config.clone();
         Ok((
             Runtime {
+                engine_config: self.engine_config,
+                pooling_config: pool_config,
                 engine,
                 component_config: self.component_config,
                 max_execution_time: self.max_execution_time,
@@ -225,10 +228,12 @@ impl TryFrom<RuntimeBuilder> for (Runtime, thread::JoinHandle<Result<(), ()>>) {
 /// Shared wasmCloud runtime
 #[derive(Clone)]
 pub struct Runtime {
+    pub(crate) engine_config: wasmtime::Config,
     pub(crate) engine: wasmtime::Engine,
     pub(crate) component_config: ComponentConfig,
     pub(crate) max_execution_time: Duration,
     pub(crate) experimental_features: Features,
+    pub(crate) pooling_config: wasmtime::PoolingAllocationConfig,
 }
 
 impl Debug for Runtime {
@@ -237,6 +242,8 @@ impl Debug for Runtime {
             .field("component_config", &self.component_config)
             .field("runtime", &"wasmtime")
             .field("max_execution_time", &"max_execution_time")
+            .field("pooling_config", &self.pooling_config)
+            .field("engine_config", &self.engine_config)
             .finish_non_exhaustive()
     }
 }
