@@ -8820,7 +8820,7 @@ dependencies = [
  "rand 0.9.1",
  "tokio",
  "uuid 1.16.0",
- "wasi 0.13.3+wasi-0.2.2",
+ "wasi 0.14.2+wasi-0.2.4",
  "wit-bindgen 0.38.0",
 ]
 
