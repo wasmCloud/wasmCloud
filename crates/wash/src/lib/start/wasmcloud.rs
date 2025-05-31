@@ -257,7 +257,7 @@ fn wasmcloud_url(version: &Version) -> String {
     let os = "unknown-linux-gnu";
 
     #[cfg(target_os = "windows")]
-    let os = "pc-windows-msvc.exe";
+    let os = "pc-windows-gnu.exe";
     format!(
         "{WASMCLOUD_GITHUB_RELEASE_URL}/v{version}/wasmcloud-{arch}-{os}",
         arch = std::env::consts::ARCH,
