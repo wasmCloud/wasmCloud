@@ -46,7 +46,6 @@ pub(crate) mod blobstore;
 mod bus;
 mod bus1_0_0;
 mod config;
-mod cron;
 mod http;
 mod identity;
 mod keyvalue;
@@ -252,13 +251,6 @@ pub enum WrpcServeEvent<C> {
     },
     /// dynamic export return event
     DynamicExportReturned {
-        /// Invocation context
-        context: C,
-        /// Whether the invocation was successfully handled
-        success: bool,
-    },
-    /// `wasmcloud:cron/scheduler.timed-invoke` return event
-    CronInvocationReturned {
         /// Invocation context
         context: C,
         /// Whether the invocation was successfully handled
@@ -626,14 +618,6 @@ where
                     .await
                     .context("failed to serve `wrpc:http/incoming-handler`")?;
                     invocations.push(handle);
-                }
-                ("wasmcloud:cron/scheduler@0.1.0", types::ComponentItem::ComponentInstance(..)) => {
-                    let instance = instance.clone();
-                    let [(_, _, invoke)] =
-                        wrpc::exports::wasmcloud::cron::scheduler::serve_interface(srv, instance)
-                            .await
-                            .context("failed to serve `wrpc:keyvalue/watcher`")?;
-                    invocations.push(invoke);
                 }
                 (
                     "wasmcloud:messaging/handler@0.2.0"

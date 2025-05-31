@@ -1103,15 +1103,6 @@ impl Host {
                                             ..
                                         },
                                     success,
-                                }
-                                | WrpcServeEvent::CronInvocationReturned {
-                                    context:
-                                        InvocationContext {
-                                            start_at,
-                                            ref attributes,
-                                            ..
-                                        },
-                                    success,
                                 } => metrics_right.record_component_invocation(
                                     u64::try_from(start_at.elapsed().as_nanos())
                                         .unwrap_or_default(),

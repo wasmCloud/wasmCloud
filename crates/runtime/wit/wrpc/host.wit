@@ -6,7 +6,6 @@ world wrpc-interfaces {
     import wrpc:keyvalue/store@0.2.0-draft;
     import wrpc:keyvalue/batch@0.2.0-draft;
     export wrpc:keyvalue/watcher@0.2.0-draft;
-    export wasmcloud:cron/scheduler@0.1.0;
 
     import wrpc:blobstore/blobstore@0.1.0;
 
