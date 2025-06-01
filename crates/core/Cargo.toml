@@ -79,4 +79,9 @@ webpki-roots = { workspace = true, optional = true }
 wrpc-interface-http = { workspace = true }
 
 [dev-dependencies]
-test-log = { workspace = true, features = ["color", "log", "trace", "unstable"] }
+test-log = { workspace = true, features = [
+    "color",
+    "log",
+    "trace",
+    "unstable",
+] }

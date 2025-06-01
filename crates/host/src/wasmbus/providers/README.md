@@ -1,8 +1,8 @@
 # wasmCloud Internal Capability Providers
 
-[Capability providers](https://wasmcloud.com/docs/concepts/providers/) are [wasmCloud host](https://wasmcloud.com/docs/concepts/hosts/) extensions, which make external services available to WASI `Components` running on the host. While in accordnce with security and operational best practices the capability providers are mostly implemented as external executables, some of the broadly used WASI and wasmCloud interfaces are implemented as internal, or built-in, host extensions.
+[Capability providers](https://wasmcloud.com/docs/concepts/providers/) are [wasmCloud host](https://wasmcloud.com/docs/concepts/hosts/) extensions, which make external services available to WASI `Components` running on the host. While in accordance with security and operational best practices the capability providers are mostly implemented as external executables, some of the broadly used WASI and wasmCloud interfaces are implemented as internal, or built-in, host extensions.
 
-These could be further divded into two categories:
+These could be further divided into two categories:
 
 - Core capabilities such as access to `logging`, `configuration`, and `clocks`, which are built into the fabric of the wasmCloud platform, and are always `enabled` and available.
 - Frequently used capabilities, including `http-client`, `http-server`, and `messaging-nats`, which are implemented as internal host extensions, have alternative external providers, and are `disabled` by default.
@@ -11,7 +11,7 @@ These optional built-in providers offer the following capabilities:
 
 | Capability | Interface | Features |
 |------------|-----------|----------|
-| `http-client-provider` | `wasi-http/outgoing-handler` | `path mode` and `address mode` |
+| `http-client-provider` | `wasi-http/outgoing-handler` |                                    |
 | `http-server-provider` | `wasi-http/incoming-handler` | `path mode` and `address mode` |
 | `messaging-nats-provider` | `wasmcloud:provider-messaging-nats` | `pub/sub` and `request/response` |
 
