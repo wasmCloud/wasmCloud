@@ -1,0 +1,8 @@
+package wasmcloud:blobby;
+
+world blobby {
+  import wasi:blobstore/blobstore@0.2.0-draft; 
+  import wasi:logging/logging@0.1.0-draft;
+  
+  export wasi:http/incoming-handler@0.2.1;
+}

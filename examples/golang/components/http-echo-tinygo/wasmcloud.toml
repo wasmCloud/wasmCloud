@@ -1,0 +1,27 @@
+#
+# This project is a component example written in TinyGo,
+# which returns details for all HTTP requests sent to it.
+# 
+# This component leverages the WebAssembly Component Model[0], along with
+# WebAssembly Interface Types[1] ("WIT") bindings to generate the 
+# higher level interface definitions that the WebAssembly uses.
+#
+# 1. Build the project with `wash build`
+# 2. Deploy the project with `wash app deploy wadm.yaml` 
+#
+# [0]: https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md
+# [1]: https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md
+#
+name = "http-echo-tinygo-component"
+language = "tinygo"
+type = "component"
+version = "0.1.0"
+
+[component]
+claims = [
+  "wasmcloud:httpserver",
+  "wasmcloud:keyvalue",
+  "wasmcloud:builtin:logging",
+]
+wit_world = "echo"
+wasm_target = "wasm32-wasip2"

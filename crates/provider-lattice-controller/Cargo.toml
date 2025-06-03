@@ -1,0 +1,23 @@
+[package]
+name = "wasmcloud-provider-lattice-controller"
+version = "0.13.0"
+description = """
+Capability provider that allows actors to interact with lattice control interfaces
+"""
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+anyhow = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+wascap = { workspace = true }
+wasmcloud-control-interface = { workspace = true }

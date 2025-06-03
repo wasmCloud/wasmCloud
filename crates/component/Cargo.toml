@@ -1,0 +1,30 @@
+[package]
+name = "wasmcloud-component"
+version = "0.2.1"
+description = "wasmCloud component library giving access to interfaces provided by wasmCloud host runtime"
+readme = "README.md"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = [
+    "futures",
+    "http",
+    "rand",
+    "tokio",
+    "uuid",
+]
+
+[dependencies]
+anyhow = { workspace = true }
+http = { workspace = true, optional = true }
+futures = { workspace = true, optional = true, features = ["std"] }
+rand = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+wasi = { workspace = true, features = ["std"] }
+wit-bindgen = { workspace = true, features = ["macros"] }

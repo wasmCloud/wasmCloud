@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wasmcloud-host.nats-config-name" . }}
+  labels:
+    {{- include "wasmcloud-host.labels" . | nindent 4 }}
+data:
+  nats.conf: |
+    jetstream {
+        domain={{ .Values.config.leafNodeDomain | quote }}
+        store_dir="/tmp/nats-leaf-jetstream"
+    }
+
+    listen: "127.0.0.1:4222"
+    leafnodes {
+        remotes = [
+            {
+              {{- include "wasmcloud-host.nats.address" . | nindent 14 }}
+              {{- if .Values.config.natsCredentialsSecret }}
+              credentials: "/nats/nats.creds"
+              {{- end }}
+            },
+        ]
+    }

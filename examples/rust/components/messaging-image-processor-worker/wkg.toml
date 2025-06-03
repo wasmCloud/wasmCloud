@@ -1,0 +1,2 @@
+[overrides]
+"wasmcloud:task-manager" = { path = "../http-task-manager/wit" }

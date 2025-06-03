@@ -1,0 +1,25 @@
+{{- if .Values.test.enabled }}
+The k6 benchmark should now be running! To get the logs and output of the test, you can run:
+
+    kubectl logs -n {{ .Release.Namespace }} -l k6_cr={{ include "benchmark.fullname" . }}-test,runner=true --tail=-1
+
+To wait for the tests to complete, you can run:
+
+    kubectl wait -n {{ .Release.Namespace }} --timeout 90s --for=jsonpath='{.status.stage}'=finished testruns/{{ include "benchmark.fullname" . }}-test
+
+Note that you may need to change the timeout value to a value that is longer than the test duration if you speciify a longer duration in the test.
+
+The test results will be output to ConfigMaps in the {{ .Release.Namespace }} namespace. To fetch all results and combine them into a single JSON array, you can run:
+
+    kubectl get cm -n {{ .Release.Namespace }} -o json -l chart-revision={{ .Release.Revision }},k6-result=true,k6-test-name={{ include "benchmark.fullname" . }}-test | jq  '[.items[].data.results | fromjson ]'
+
+To clear all test results for this chart, you can run:
+
+    kubectl delete cm -n {{ .Release.Namespace }} -l k6-result=true,k6-test-name={{ include "benchmark.fullname" . }}-test
+{{- end }}
+
+If you'd like to view dashboards during or after your tests, port-forward to the Grafana instance:
+
+    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ .Release.Name }}-grafana 3000:80
+
+Then open http://localhost:3000 in your browser and navigate to the "Test Environment" dashboard in the dashboards section.

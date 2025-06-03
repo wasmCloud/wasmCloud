@@ -1,0 +1,12 @@
+name = "KV Vault"
+language = "rust"
+type = "provider"
+version = "0.12.1"
+wit = "../../../crates/provider-keyvalue-vault/wit"
+
+[rust]
+target_path = "../../../target"
+
+[provider]
+bin_name = "keyvalue-vault-provider"
+vendor = "wasmCloud"

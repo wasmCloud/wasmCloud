@@ -1,0 +1,5 @@
+package wasmcloud:provider-lattice-controller;
+
+world provider {
+    export wasmcloud:lattice-control/lattice-controller;
+}

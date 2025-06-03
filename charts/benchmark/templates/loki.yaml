@@ -1,0 +1,137 @@
+# The normal Loki chart is way overkill for what we need, even in its most simple use case, so this
+# is a stripped down version just for us
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    {{- include "benchmark.lokiLabels" . | nindent 4 }}
+  name: {{ include "benchmark.fullname" . }}-loki
+spec:
+  podManagementPolicy: Parallel
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "benchmark.lokiLabels" . | nindent 6 }}
+  serviceName: {{ include "benchmark.fullname" . }}-loki-headless
+  template:
+    metadata:
+      labels:
+        {{- include "benchmark.lokiLabels" . | nindent 8 }}
+    spec:
+      initContainers:
+        - name: volume-mount-hack
+          image: busybox
+          # 10001 is the id of user 'loki'
+          command: ["sh", "-c", "chown -R 10001:10001 /data"]
+          volumeMounts:
+            - name: {{ include "benchmark.fullname" . }}-loki-data
+              mountPath: /data
+      containers:
+        - args:
+            - "-config.file=/etc/loki-config/loki-config.yaml"
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.name
+            - name: SERVER_NAME
+              value: $(POD_NAME)
+          image: "{{ .Values.loki.image.repository }}:{{ .Values.loki.image.tag }}"
+          imagePullPolicy: {{ .Values.loki.image.pullPolicy }}
+          name: loki
+          ports:
+            - containerPort: 3100
+              name: loki
+              protocol: TCP
+          securityContext:
+            capabilities:
+              drop:
+                - NET_RAW
+          volumeMounts:
+            - mountPath: /etc/loki-config
+              name: config
+            - mountPath: /data
+              name: {{ include "benchmark.fullname" . }}-loki-data
+      dnsPolicy: ClusterFirst
+      enableServiceLinks: false
+      restartPolicy: Always
+      shareProcessNamespace: true
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - configMap:
+            defaultMode: 420
+            name: {{ include "benchmark.fullname" . }}-loki
+          name: config
+        - emptyDir: {}
+          name: pid
+  updateStrategy:
+    rollingUpdate:
+      partition: 0
+    type: RollingUpdate
+  # NOTE: For now we aren't making this configurable, but we can if needed
+  volumeClaimTemplates:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: {{ include "benchmark.fullname" . }}-loki-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+        volumeMode: Filesystem
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+  labels:
+    {{- include "benchmark.lokiLabels" . | nindent 4 }}
+  name: {{ include "benchmark.fullname" . }}-loki-headless
+spec:
+  clusterIP: None
+  internalTrafficPolicy: Cluster
+  ports:
+    - appProtocol: tcp
+      name: loki
+      port: 3100
+      protocol: TCP
+      targetPort: loki
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "benchmark.lokiSelectorLabels" . | nindent 4 }}
+  sessionAffinity: None
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    {{- include "benchmark.lokiLabels" . | nindent 4 }}
+  # Uses just the release name because this name gets passed into the subchart which has different values
+  name: {{ .Release.Name }}-loki
+spec:
+  internalTrafficPolicy: Cluster
+  ports:
+    - appProtocol: tcp
+      name: loki
+      port: 3100
+      protocol: TCP
+      targetPort: loki
+  selector:
+    {{- include "benchmark.lokiSelectorLabels" . | nindent 4 }}
+  sessionAffinity: None
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "benchmark.fullname" . }}-loki
+  labels:
+    {{- include "benchmark.lokiLabels" . | nindent 4 }}
+data:
+  loki-config.yaml: |-
+    {{- toYaml .Values.loki.config | nindent 4 }}

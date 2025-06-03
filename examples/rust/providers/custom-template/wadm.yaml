@@ -1,0 +1,52 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: custom-template-provider
+  annotations:
+    version: v0.0.1
+    description: 'An application with a provider and component built for extending wasmCloud with custom capabilities'
+spec:
+  components:
+    - name: test-component
+      type: component
+      properties:
+        image: file://./component/build/custom_template_test_component.wasm
+        ## To configure OTEL integration for this provider specifically, uncomment the lines below
+        # config:
+        #   - name: otel
+        #     properties:
+        #       otel_exporter_otlp_endpoint: "http://all-in-one:4318"
+        #       otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
+        #       otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
+        #       otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"
+      traits:
+        - type: spreadscaler
+          properties:
+            instances: 1
+        # Link the component to the provider on wasmcloud:example/system-info
+        - type: link
+          properties:
+            target:
+              name: custom-template
+            namespace: wasmcloud
+            package: example
+            interfaces: [system-info]
+
+    - name: custom-template
+      type: capability
+      properties:
+        image: file://./build/wasmcloud-provider-custom-template.par.gz
+        id: custom-template
+        config:
+          - name: provider-config
+            properties:
+              foo: bar
+      traits:
+        # Link the provider to the component on wasmcloud:example/process-data
+        - type: link
+          properties:
+            target:
+              name: test-component
+            namespace: wasmcloud
+            package: example
+            interfaces: [process-data]

@@ -1,0 +1,81 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: rust-echo-messaging
+  annotations:
+    version: v0.0.1
+    description: 'Echo demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/echo-messaging/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/echo-messaging/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/echo-messaging
+    wasmcloud.dev/categories: |
+      messaging,echo,nats,rust,example
+spec:
+  components:
+    - name: echo
+      type: component
+      properties:
+        # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
+        # image: file://./build/echo_messaging_s.wasm
+        image: ghcr.io/wasmcloud/components/echo-messaging-rust:0.1.0
+        id: echo
+      traits:
+        # Govern the spread/scheduling of the component
+        - type: spreadscaler
+          properties:
+            instances: 1
+        # Establish a unidirectional link to the messaging capability provider (powered by NATS),
+        # so the `echo` component can make use of messaging interface functionality
+        # (i.e. making interacting with the messaging system, in this case NATS)
+        - type: link
+          properties:
+            namespace: wasmcloud
+            package: messaging
+            interfaces: [consumer]
+            source:
+              name: echo
+            target:
+              name: nats
+              # This configures the (component -> provider) link
+              config:
+                - name: provider-tgt
+                  properties:
+                    subscriptions: wasmcloud.echo
+                    # cluster_uris: "nats://your-custom-nats:4222,nats://your-second-nats:5222"
+
+    # Add a capability provider that implements `wasmcloud:messaging` using NATS
+    - name: nats
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/messaging-nats:0.27.0
+        ## To configure OTEL integration for this provider specifically, uncomment the lines below
+        # config:
+        #   - name: otel
+        #     properties:
+        #       otel_exporter_otlp_endpoint: "http://all-in-one:4318"
+        #       otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
+        #       otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
+        #       otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"
+      traits:
+        # Since the `nats` capability provider calls an component to handle messages
+        # coming over subscriptions, this provider needs a unidirectional link to the
+        # component that will be called.
+        #
+        # Here we link the `nats` provider (the "source"), to the `echo` component (the "target"),
+        # so that so the provider can deliver messages to the component (by invoking the wasmcloud:messaging/handler interface) .
+        - type: link
+          properties:
+            namespace: wasmcloud
+            package: messaging
+            interfaces: [handler]
+            target:
+              name: echo
+            # This configures the (provider -> component) link
+            source:
+              name: nats
+              config:
+                - name: provider-src
+                  properties:
+                    subscriptions: wasmcloud.echo
+                    # cluster_uris: "nats://your-custom-nats:4222,nats://your-second-nats:5222"

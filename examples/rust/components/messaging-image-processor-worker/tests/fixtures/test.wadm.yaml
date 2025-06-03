@@ -1,0 +1,112 @@
+---
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: test
+  annotations:
+    description: |
+      messaging-image-processor test
+spec:
+  components:
+    - name: http-task-mgr
+      type: component
+      properties:
+        image: ghcr.io/wasmcloud/components/http-task-manager-rust:0.1.0
+      traits:
+        - type: spreadscaler
+          properties:
+            instances: 1
+        - type: link
+          properties:
+            target:
+              name: sqldb-postgres
+              config:
+                - name: test-default-postgres
+            namespace: wasmcloud
+            package: postgres
+            interfaces: [query]
+
+    - name: messaging-image-processor
+      type: component
+      properties:
+        image: file://../../build/messaging_image_processor_worker_s.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            instances: 1
+        - type: link
+          properties:
+            target:
+              name: blobstore-fs
+              config:
+                - name: root-directory
+                  properties:
+                    root: '/tmp/test-messaging-processor'
+            namespace: wasi
+            package: blobstore
+            interfaces: [blobstore]
+        - type: link
+          properties:
+            target:
+              name: http-task-mgr
+            namespace: wasmcloud
+            package: task-manager
+            interfaces: [tasks]
+        - type: link
+          properties:
+            target:
+              name: httpclient
+            namespace: wasi
+            package: http
+            interfaces: [outgoing-handler]
+
+    - name: httpserver
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/http-server:0.23.2
+      traits:
+        - type: link
+          properties:
+            target:
+              name: http-task-mgr
+            namespace: wasi
+            package: http
+            interfaces: [incoming-handler]
+            source:
+              config:
+                - name: default-http
+                  properties:
+                    address: 0.0.0.0:8000
+
+    - name: httpclient
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/http-client:0.12.1
+
+    - name: blobstore-fs
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/blobstore-fs:0.10.1
+
+    - name: sqldb-postgres
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/sqldb-postgres:0.7.1
+        config:
+          - name: test-default-postgres
+
+    - name: messaging-nats
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/messaging-nats:0.23.1
+      traits:
+        - type: link
+          properties:
+            target:
+              name: messaging-image-processor
+            namespace: wasmcloud
+            package: messaging
+            interfaces: [handler]
+            source:
+              config:
+                - name: test-default-messaging

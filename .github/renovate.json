@@ -1,0 +1,54 @@
+{
+    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+    "extends": [
+        "config:base", ":gitSignOff"
+    ],
+    "enabledManagers": [
+        "custom.regex"
+    ],
+    "gitAuthor": "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>",
+    "repositories": [
+        "wasmCloud/wasmCloud"
+    ],
+    "ignorePaths": [
+        "**/node_modules/**",
+        "**/bower_components/**",
+        "**/vendor/**",
+        "**/__tests__/**",
+        "**/test/**",
+        "**/tests/**"
+    ],
+    "includePaths": [
+        "**/examples/**/*wadm.yaml",
+        "**/README.md"
+    ],
+    "customManagers": [
+        {
+            "customType": "regex",
+            "description": "Update images in every example wadm.yaml and READMEs",
+            "fileMatch": [
+                ".*wadm.yaml$",
+                "README.md"
+            ],
+            "matchStrings": [
+                "image:\\s*([a-zA-Z0-9]+://)?(?<depName>[a-zA-Z0-9./:_-]+):(?<currentValue>[a-zA-Z0-9._-]+)"
+            ],
+            "datasourceTemplate": "docker",
+            "depNameTemplate": "{{depName}}",
+            "versioningTemplate": "docker"
+        }
+    ],
+    "prHourlyLimit": 10,
+    "prConcurrentLimit": 1,
+    "branchConcurrentLimit": 1,
+    "packageRules": [
+        {
+            "matchUpdateTypes": [
+                "minor",
+                "patch",
+                "major"
+            ],
+            "groupName": "example (local.)wadm.yaml and README files"
+        }
+    ]
+}

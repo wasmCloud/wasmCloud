@@ -1,0 +1,56 @@
+# This is a full example of how to run the kvcounter component exposed with an HTTP server.
+#
+# Using this example requires you to have a Redis server running locally
+#  (though the linkdef can be modified to use a Redis server you have running elsewhere).
+#
+# You also need to have WADM running:
+# https://github.com/wasmCloud/wadm/tree/main/wadm.
+#
+# You can deploy this example with a simple command:
+# `wash app deploy wadm.yaml`
+---
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: http-echo-tinygo-component
+  annotations:
+    version: v0.0.1
+    description: 'HTTP Echo demo in Golang (TinyGo), using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/components/http-echo-tinygo/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/components/http-echo-tinygo/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/golang/components/http-echo-tinygo
+    wasmcloud.dev/categories: |
+      http,outgoing-http,http-server,golang,tinygo,example,golang
+spec:
+  components:
+    - name: http-echo-tinygo
+      type: component
+      properties:
+        image: file://./build/http-echo-tinygo-component_s.wasm
+      traits:
+        # Govern the spread/scheduling of the component
+        - type: spreadscaler
+          properties:
+            instances: 1
+
+    # Add a capability provider that mediates HTTP access
+    - name: httpserver
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/http-server:0.27.0
+      traits:
+        # Link to Echo, and inform it to listen on port 8000
+        # on the local machine
+        - type: link
+          properties:
+            target:
+              name: http-echo-tinygo
+            namespace: wasi
+            package: http
+            interfaces: [incoming-handler]
+            source:
+              config:
+                - name: default-http
+                  properties:
+                    address: "0.0.0.0:8000"

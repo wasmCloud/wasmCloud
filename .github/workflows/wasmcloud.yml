@@ -1,0 +1,1125 @@
+name: wasmcloud
+
+on:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      crate:
+        type: choice
+        description: crate to smart-release
+        options:
+          - wascap
+          - wash
+          - wasmcloud
+          - wasmcloud-component
+          - wasmcloud-control-interface
+          - wasmcloud-core
+          - wasmcloud-host
+          - wasmcloud-provider-sdk
+          - wasmcloud-runtime
+          - wasmcloud-secrets-client
+          - wasmcloud-secrets-types
+          - wasmcloud-test-util
+          - wasmcloud-tracing
+      do-release:
+        type: boolean
+        description: Leave unchecked to create a pull request with changes for verification, then check to create a release directly with changes
+      additional-args:
+        type: string
+        description: Advanced; Additional arguments to pass to `smart-release`
+  push:
+    branches:
+      - main
+    tags:
+      - 'component-v[0-9].[0-9]+.[0-9]+'
+      - 'component-v[0-9].[0-9]+.[0-9]+-*'
+      - 'control-interface-v[0-9].[0-9]+.[0-9]+'
+      - 'control-interface-v[0-9].[0-9]+.[0-9]+-*'
+      - 'core-v[0-9].[0-9]+.[0-9]+'
+      - 'core-v[0-9].[0-9]+.[0-9]+-*'
+      - 'host-v[0-9].[0-9]+.[0-9]+'
+      - 'host-v[0-9].[0-9]+.[0-9]+-*'
+      - 'opentelemetry-nats-v[0-9].[0-9]+.[0-9]+'
+      - 'opentelemetry-nats-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-archive-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-archive-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-blobstore-azure-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-blobstore-azure-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-http-client-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-http-client-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-http-server-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-http-server-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-keyvalue-nats-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-keyvalue-nats-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-keyvalue-redis-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-keyvalue-redis-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-keyvalue-vault-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-keyvalue-vault-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-messaging-kafka-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-messaging-kafka-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-sdk-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-sdk-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+-*'
+      - 'runtime-v[0-9].[0-9]+.[0-9]+'
+      - 'runtime-v[0-9].[0-9]+.[0-9]+-*'
+      - 'secrets-client-v[0-9].[0-9]+.[0-9]+'
+      - 'secrets-client-v[0-9].[0-9]+.[0-9]+-*'
+      - 'secrets-types-v[0-9].[0-9]+.[0-9]+'
+      - 'secrets-types-v[0-9].[0-9]+.[0-9]+-*'
+      - 'test-util-v[0-9].[0-9]+.[0-9]+'
+      - 'test-util-v[0-9].[0-9]+.[0-9]+-*'
+      - 'tracing-v[0-9].[0-9]+.[0-9]+'
+      - 'tracing-v[0-9].[0-9]+.[0-9]+-*'
+      - 'v[0-9].[0-9]+.[0-9]+'
+      - 'v[0-9].[0-9]+.[0-9]+-*'
+      - 'wascap-v[0-9].[0-9]+.[0-9]+'
+      - 'wascap-v[0-9].[0-9]+.[0-9]+-*'
+      - 'wash-v[0-9].[0-9]+.[0-9]+'
+      - 'wash-v[0-9].[0-9]+.[0-9]+-*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      wasmcloud_modified: ${{ steps.changes.outputs.wasmcloud }}
+      providers_modified: ${{ steps.changes.outputs.providers }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: changes
+        with:
+          # Consider wasmCloud changed if any Rust file other than
+          # capability providers change
+          #
+          # Somewhat naive assumption that providers will be under `crates/provider-<interface>-<vendor>`
+          # as that is our naming convention for providers.
+          filters: |
+            wasmcloud:
+              - './.github/actions/build-nix/action.yml'
+              - './.github/actions/install-nix/action.yml'
+              - './.github/workflows/wasmcloud.yml'
+              - './.github/workflows/oci.yml'
+              - './.config/nextest.toml'
+              - 'nix/images/default.nix'
+              - 'flake.lock'
+              - 'flake.nix'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'rust-toolchain.toml'
+              - 'crates/**/*.{rs,toml,wit}'
+              - 'src/**/*.{rs,toml,wit}'
+              - 'tests/**/*.{rs,toml,wit}'
+              - 'wit/**/*.wit'
+              - '!crates/provider-*/**'
+              - '!crates/wash/**'
+            providers:
+              - './.github/actions/build-nix/action.yml'
+              - './.github/actions/install-nix/action.yml'
+              - './.github/workflows/provider.yml'
+              - './.github/workflows/wasmcloud.yml'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'crates/provider-*/*.{rs,toml,wit}'
+              - 'flake.lock'
+              - 'flake.nix'
+              - 'rust-toolchain.toml'
+              - '!crates/**/*.md'
+  build-wash-bin:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || startsWith(github.ref, 'refs/tags/wash-v')  || startswith(github.ref, 'refs/tags/provider-') }}
+    strategy:
+      matrix:
+        config:
+          - target: aarch64-unknown-linux-musl
+            test-bin: |
+              nix profile install --fallback --inputs-from . 'nixpkgs-unstable#qemu'
+              qemu-aarch64 ./result/bin/wash --version
+            test-oci: docker load < ./result
+
+          - target: aarch64-apple-darwin
+            test-bin: |
+              file ./result/bin/wash
+            test-oci: docker load < ./result
+
+          - target: aarch64-linux-android
+            test-bin: |
+              file ./result/bin/wash
+            test-oci: docker load < ./result
+
+          - target: riscv64gc-unknown-linux-gnu-fhs
+            test-bin: |
+              nix build --fallback -L '.#wash-riscv64gc-unknown-linux-gnu'
+              nix shell --fallback --inputs-from . 'nixpkgs-unstable#qemu' -c qemu-riscv64 ./result/bin/wash --version
+
+          - target: x86_64-apple-darwin
+            test-bin: |
+              file ./result/bin/wash
+            test-oci: docker load < ./result
+
+          # TODO: Build for GNU once https://github.com/rust-lang/rust/issues/92212 is resolved
+          #- target: x86_64-pc-windows-gnu
+          #  test-bin: |
+          #    nix profile install --fallback --inputs-from . 'nixpkgs-unstable#wine64'
+          #    wine64 ./result/bin/wash.exe --version
+          #  test-oci: docker load < ./result
+
+          - target: x86_64-unknown-linux-musl
+            test-bin: |
+              ./result/bin/wash --version
+            test-oci: |
+              docker load < ./result
+              docker run --rm wash:$(nix eval --raw .#wash-x86_64-unknown-linux-musl-oci.imageTag) wash --version
+
+    name: wash-${{ matrix.config.target }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        # need to run condition inside job steps so that job will pass if all steps are skipped
+        # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: ./.github/actions/build-nix
+        with:
+          package: wash-${{ matrix.config.target }}
+      - run: ${{ matrix.config.test-bin }}
+      - uses: ./.github/actions/build-nix
+        if: ${{ !endsWith(matrix.config.target, 'fhs') }}
+        with:
+          package: wash-${{ matrix.config.target }}-oci
+      - run: ${{ matrix.config.test-oci }}
+        if: ${{ !endsWith(matrix.config.target, 'fhs') }}
+
+  build-wasmcloud-bin:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || startsWith(github.ref, 'refs/tags/v') }}
+    strategy:
+      matrix:
+        config:
+          - target: aarch64-unknown-linux-musl
+            test-bin: |
+              nix profile install --fallback --inputs-from . 'nixpkgs-unstable#qemu'
+              qemu-aarch64 ./result/bin/wasmcloud --version
+            test-oci: docker load < ./result
+
+          - target: aarch64-apple-darwin
+            test-bin: |
+              file ./result/bin/wasmcloud
+            test-oci: docker load < ./result
+
+          - target: aarch64-linux-android
+            test-bin: |
+              file ./result/bin/wasmcloud
+            test-oci: docker load < ./result
+
+          - target: riscv64gc-unknown-linux-gnu-fhs
+            test-bin: |
+              nix build --fallback -L '.#wasmcloud-riscv64gc-unknown-linux-gnu'
+              nix shell --fallback --inputs-from . 'nixpkgs-unstable#qemu' -c qemu-riscv64 ./result/bin/wasmcloud --version
+
+          - target: x86_64-apple-darwin
+            test-bin: |
+              file ./result/bin/wasmcloud
+            test-oci: docker load < ./result
+
+          - target: x86_64-pc-windows-gnu
+            test-bin: |
+              nix profile install --fallback --inputs-from . 'nixpkgs-unstable#wine64'
+              wine64 ./result/bin/wasmcloud.exe --version
+            test-oci: docker load < ./result
+
+          - target: x86_64-unknown-linux-musl
+            test-bin: |
+              ./result/bin/wasmcloud --version
+            test-oci: |
+              docker load < ./result
+              docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-x86_64-unknown-linux-musl-oci.imageTag) wasmcloud --version
+
+    name: wasmcloud-${{ matrix.config.target }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        # need to run condition inside job steps so that job will pass if all steps are skipped
+        # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: ./.github/actions/build-nix
+        with:
+          package: wasmcloud-${{ matrix.config.target }}
+      - run: ${{ matrix.config.test-bin }}
+      - uses: ./.github/actions/build-nix
+        if: ${{ !endsWith(matrix.config.target, 'fhs') }}
+        with:
+          package: wasmcloud-${{ matrix.config.target }}-oci
+      - run: ${{ matrix.config.test-oci }}
+        if: ${{ !endsWith(matrix.config.target, 'fhs') }}
+
+  build-provider-bin:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.providers_modified == 'true' || startswith(github.ref, 'refs/tags/provider-') }}
+    strategy:
+      matrix:
+        name:
+          - blobstore-azure
+          - blobstore-fs
+          - blobstore-s3
+          - keyvalue-nats
+          - keyvalue-redis
+          - keyvalue-vault
+          - http-client
+          - http-server
+          - messaging-kafka
+          - messaging-nats
+          - sqldb-postgres
+
+        target:
+          - aarch64-apple-darwin
+          - aarch64-unknown-linux-musl
+          - x86_64-apple-darwin
+          - x86_64-pc-windows-gnu
+          - x86_64-unknown-linux-musl
+
+    name: ${{ matrix.name }}-provider-${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        # need to run condition inside job steps so that job will pass if all steps are skipped
+        # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: ./.github/actions/build-nix
+        with:
+          package: ${{ matrix.name }}-provider-${{ matrix.target }}
+
+  build-wash-windows:
+    if: ${{ startswith(github.ref, 'refs/tags/wash-v') || github.ref == 'refs/heads/main'}}
+    name: wash-x86_64-pc-windows-msvc
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - run: rustup show
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
+        with:
+          shared-key: windows-latest-8-cores-shared-cache
+        if: ${{ !startswith(github.ref, 'refs/tags/') }}
+      - run: cargo build --release -p wash --bin wash
+      - run: mkdir "artifact/bin"
+      - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wash-x86_64-pc-windows-msvc
+          path: artifact
+
+  build-wash-lipo:
+    name: wash-universal-darwin
+    needs: build-wash-bin
+    runs-on: macos-15
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wash-aarch64-apple-darwin
+          path: aarch64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wash-x86_64-apple-darwin
+          path: x86_64
+
+      - run: mkdir -p ./artifact/bin
+      - run: lipo -create ./aarch64/bin/wash ./x86_64/bin/wash -output ./artifact/bin/wash
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wash-universal-darwin
+          path: artifact
+
+  build-wasmcloud-lipo:
+    name: wasmcloud-universal-darwin
+    needs: build-wasmcloud-bin
+    runs-on: macos-15
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wasmcloud-aarch64-apple-darwin
+          path: aarch64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wasmcloud-x86_64-apple-darwin
+          path: x86_64
+
+      - run: mkdir -p ./artifact/bin
+      - run: lipo -create ./aarch64/bin/wasmcloud ./x86_64/bin/wasmcloud -output ./artifact/bin/wasmcloud
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wasmcloud-universal-darwin
+          path: artifact
+
+  test-wash-linux-aarch64:
+    runs-on: ubuntu-24.04-arm
+    needs: build-wash-bin
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wash-aarch64-unknown-linux-musl
+      - run: chmod +x ./bin/wash
+      - run: ./bin/wash --version
+
+  test-wash-linux-aarch64-oci:
+    runs-on: ubuntu-24.04-arm
+    needs: build-wash-bin
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wash-aarch64-unknown-linux-musl-oci
+      - run: docker load < ./wash-aarch64-unknown-linux-musl-oci
+      - run: docker run --rm wash:$(nix eval --raw .#wash-aarch64-unknown-linux-musl-oci.imageTag) wash --version
+
+  test-wash-linux-x86_64:
+    runs-on: ubuntu-24.04
+    needs: build-wash-bin
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wash-x86_64-unknown-linux-musl
+      - run: chmod +x ./bin/wash
+      - run: ./bin/wash --version
+
+  test-wash-macos-aarch64:
+    runs-on: macos-15
+    needs:
+      - build-wash-bin
+      - build-wash-lipo
+    strategy:
+      matrix:
+        artifact:
+          - wash-aarch64-apple-darwin
+          - wash-universal-darwin
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ matrix.artifact }}
+      - run: chmod +x ./bin/wash
+      - run: ./bin/wash --version
+      - run: codesign --verify ./bin/wash
+
+  test-wash-macos-x86_64:
+    runs-on: macos-13
+    needs:
+      - build-wash-bin
+      - build-wash-lipo
+    strategy:
+      matrix:
+        artifact:
+          - wash-x86_64-apple-darwin
+          - wash-universal-darwin
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ matrix.artifact }}
+      - run: chmod +x ./bin/wash
+      - run: ./bin/wash --version
+      - run: codesign --verify ./bin/wash
+
+  test-wash-windows-x86_64:
+    runs-on: windows-latest
+    needs: build-wash-windows
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wash-x86_64-pc-windows-msvc
+      - run: .\bin\wash.exe --version
+
+  test-wasmcloud-linux-aarch64:
+    runs-on: ubuntu-24.04-arm
+    needs: build-wasmcloud-bin
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wasmcloud-aarch64-unknown-linux-musl
+      - run: chmod +x ./bin/wasmcloud
+      - run: ./bin/wasmcloud --version
+
+  test-wasmcloud-linux-aarch64-oci:
+    runs-on: ubuntu-24.04-arm
+    needs: build-wasmcloud-bin
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wasmcloud-aarch64-unknown-linux-musl-oci
+      - run: docker load < ./wasmcloud-aarch64-unknown-linux-musl-oci
+      - run: docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-aarch64-unknown-linux-musl-oci.imageTag) wasmcloud --version
+
+  test-wasmcloud-linux-x86_64:
+    runs-on: ubuntu-24.04
+    needs: build-wasmcloud-bin
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wasmcloud-x86_64-unknown-linux-musl
+      - run: chmod +x ./bin/wasmcloud
+      - run: ./bin/wasmcloud --version
+
+  test-wasmcloud-macos-aarch64:
+    runs-on: macos-15
+    needs:
+      - build-wasmcloud-bin
+      - build-wasmcloud-lipo
+    strategy:
+      matrix:
+        artifact:
+          - wasmcloud-aarch64-apple-darwin
+          - wasmcloud-universal-darwin
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ matrix.artifact }}
+      - run: chmod +x ./bin/wasmcloud
+      - run: ./bin/wasmcloud --version
+      - run: codesign --verify ./bin/wasmcloud
+
+  test-wasmcloud-macos-x86_64:
+    runs-on: macos-13
+    needs:
+      - build-wasmcloud-bin
+      - build-wasmcloud-lipo
+    strategy:
+      matrix:
+        artifact:
+          - wasmcloud-x86_64-apple-darwin
+          - wasmcloud-universal-darwin
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ matrix.artifact }}
+      - run: chmod +x ./bin/wasmcloud
+      - run: ./bin/wasmcloud --version
+      - run: codesign --verify ./bin/wasmcloud
+
+  test-wasmcloud-windows-x86_64:
+    runs-on: windows-latest
+    needs: build-wasmcloud-bin
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wasmcloud-x86_64-pc-windows-gnu
+      - run: .\bin\wasmcloud.exe --version
+
+  cargo-nextest:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || needs.meta.outputs.providers_modified == 'true' || startsWith(github.ref, 'refs/tags/') }}
+
+    name: cargo nextest
+    runs-on: ubuntu-latest-8-cores
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ runner.temp }}/nix-store
+          key: wasmcloud-cargo-doc-${{ github.sha }}
+          restore-keys: |
+            wasmcloud-cargo-doc-
+            wasmcloud-x86_64_unknown-linux-musl-${{ github.sha }}
+            wasmcloud-x86_64_unknown-linux-musl-
+            wash-x86_64_unknown-linux-musl-
+            wasmcloud-
+            wash-
+      - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store"
+        continue-on-error: true
+      - run: rm -rf "${{ runner.temp }}/nix-store"
+      - run: nix build --fallback -L .#checks.x86_64-linux.nextest
+
+  cargo:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || needs.meta.outputs.providers_modified == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    strategy:
+      matrix:
+        check:
+          - audit
+          - fmt
+          - clippy
+          - doctest
+
+    name: cargo ${{ matrix.check }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ runner.temp }}/nix-store
+          key: wasmcloud-cargo-doc-${{ github.sha }}
+          restore-keys: |
+            wasmcloud-cargo-doc-
+            wasmcloud-x86_64_unknown-linux-musl-${{ github.sha }}
+            wasmcloud-x86_64_unknown-linux-musl-
+            wash-x86_64_unknown-linux-musl-
+            wasmcloud-
+            wash-
+      - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store"
+        continue-on-error: true
+      - run: rm -rf "${{ runner.temp }}/nix-store"
+      - run: nix build --fallback -L .#checks.x86_64-linux.${{ matrix.check }}
+
+  build-doc:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        id: cache
+        with:
+          path: ${{ runner.temp }}/nix-store
+          key: wasmcloud-cargo-doc-${{ github.sha }}
+          restore-keys: |
+            wasmcloud-cargo-doc-
+            wasmcloud-x86_64_unknown-linux-musl-${{ github.sha }}
+            wasmcloud-x86_64_unknown-linux-musl-
+            wash-x86_64_unknown-linux-musl-
+            wasmcloud-
+            wash-
+      - run: nix copy --no-check-sigs --all --from "file://${{ runner.temp }}/nix-store"
+        continue-on-error: true
+      - run: rm -rf "${{ runner.temp }}/nix-store"
+      - run: nix build --fallback -L .#checks.x86_64-linux.doc
+      - run: cp --no-preserve=mode -R ./result/share/doc ./doc
+      - run: rm -f doc/.lock
+      - name: Create `.nojekyll`
+        run: touch doc/.nojekyll
+      - name: Write `index.html`
+        run: |
+          cat <<EOF > doc/index.html
+            <!DOCTYPE html>
+            <meta charset="utf-8">
+            <title>Redirecting to wasmcloud_host/index.html</title>
+            <meta http-equiv="refresh" content="0; URL=wasmcloud_host/index.html">
+            <link rel="canonical" href="https://${{ github.repository_owner }}.github.io/wasmCloud/wasmcloud_host/index.html">
+          EOF
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
+        with:
+          path: doc
+      - run: nix copy --to "file://${{ runner.temp }}/nix-store" .#checks.x86_64-linux.doc
+        if: steps.cache.outputs.cache-hit != 'true'
+
+  providers:
+    if: ${{ needs.meta.outputs.providers_modified == 'true' || startswith(github.ref, 'refs/tags/provider-') }}
+    strategy:
+      matrix:
+        include:
+          - name: blobstore-azure
+            subject: BLOBSTORE_AZURE_SUBJECT
+            embed_wit: true
+
+          - name: blobstore-fs
+            subject: BLOBSTORE_FS_SUBJECT
+            embed_wit: true
+
+          - name: blobstore-s3
+            subject: BLOBSTORE_S3_SUBJECT
+            embed_wit: true
+
+          - name: keyvalue-nats
+            subject: KEYVALUE_NATS_SUBJECT
+            embed_wit: true
+
+          - name: keyvalue-redis
+            subject: KEYVALUE_REDIS_SUBJECT
+            embed_wit: true
+
+          - name: keyvalue-vault
+            subject: KEYVALUE_VAULT_SUBJECT
+            embed_wit: true
+
+          - name: http-client
+            subject: HTTP_CLIENT_SUBJECT
+            embed_wit: false
+
+          - name: http-server
+            subject: HTTP_SERVER_SUBJECT
+            embed_wit: false
+
+          - name: messaging-kafka
+            subject: MESSAGING_KAFKA_SUBJECT
+            embed_wit: true
+
+          - name: messaging-nats
+            subject: MESSAGING_NATS_SUBJECT
+            embed_wit: true
+
+          - name: sqldb-postgres
+            subject: SQLDB_POSTGRES_SUBJECT
+            embed_wit: true
+
+    needs:
+      - meta
+      - build-wash-bin
+      - build-provider-bin
+      - test-wash-linux-x86_64
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/provider.yml
+    with:
+      name: ${{ matrix.name }}
+      embed_wit: ${{ matrix.embed_wit }}
+    secrets:
+      issuer: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
+      subject: ${{ secrets[matrix.subject] }}
+
+  deploy-doc:
+    runs-on: ubuntu-24.04
+    needs: build-doc
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+        id: deployment
+
+  oci-wash:
+    needs:
+      - build-wash-bin
+      - test-wash-linux-aarch64
+      - test-wash-linux-aarch64-oci
+      - test-wash-linux-x86_64
+    uses: ./.github/workflows/oci.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      bin: wash
+      prefix: wash-
+    secrets:
+      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      DOCKERHUB_PUSH_USER: ${{ secrets.DOCKERHUB_PUSH_USER }}
+      DOCKERHUB_PUSH_PASSWORD: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
+  oci-wasmcloud:
+    needs:
+      - build-wasmcloud-bin
+      - test-wasmcloud-linux-aarch64
+      - test-wasmcloud-linux-aarch64-oci
+      - test-wasmcloud-linux-x86_64
+    uses: ./.github/workflows/oci.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      bin: wasmcloud
+      prefix: ''
+    secrets:
+      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      DOCKERHUB_PUSH_USER: ${{ secrets.DOCKERHUB_PUSH_USER }}
+      DOCKERHUB_PUSH_PASSWORD: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
+
+  release-wasmcloud:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build-doc
+      - build-wasmcloud-bin
+      - build-wasmcloud-lipo
+      - cargo
+      - cargo-nextest
+      - oci-wasmcloud
+      - test-wasmcloud-linux-aarch64
+      - test-wasmcloud-linux-aarch64-oci
+      - test-wasmcloud-linux-x86_64
+      - test-wasmcloud-macos-aarch64
+      - test-wasmcloud-macos-x86_64
+      - test-wasmcloud-windows-x86_64
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: artifacts
+          pattern: wasmcloud-*
+      - run: |
+          for dir in ./artifacts/wasmcloud-*; do
+            target=${dir#./artifacts/wasmcloud-}
+            for bin_path in $(find ${dir}/bin -type f); do
+              chmod +x ${bin_path}
+              bin=$(basename ${bin_path})
+              case "$bin" in
+                *.exe)
+                  bin="${bin%.exe}"
+                  mkdir -p ./${bin}
+                  mv ${bin_path} ./${bin}/${bin}-${target}.exe
+                ;;
+                *)
+                  mkdir -p ./${bin}
+                  mv ${bin_path} ./${bin}/${bin}-${target%-fhs}
+                ;;
+              esac
+            done
+          done
+
+      - uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        with:
+          draft: true
+          prerelease: true
+          generate_release_notes: true
+          files: ./wasmcloud/*
+
+  release-wash-cli:
+    if: startsWith(github.ref, 'refs/tags/wash-v')
+    needs:
+      - build-doc
+      - build-wash-bin
+      - build-wash-lipo
+      - cargo
+      - cargo-nextest
+      - oci-wash
+      - test-wash-linux-aarch64
+      - test-wash-linux-aarch64-oci
+      - test-wash-linux-x86_64
+      - test-wash-macos-aarch64
+      - test-wash-macos-x86_64
+      - test-wash-windows-x86_64
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: artifacts
+          pattern: wash-*
+      - run: |
+          for dir in ./artifacts/wash-*; do
+            target=${dir#./artifacts/wash-}
+            for bin_path in $(find ${dir}/bin -type f); do
+              chmod +x ${bin_path}
+              bin=$(basename ${bin_path})
+              case "$bin" in
+                *.exe)
+                  bin="${bin%.exe}"
+                  mkdir -p ./${bin}
+                  mv ${bin_path} ./${bin}/${bin}-${target}.exe
+                ;;
+                *)
+                  mkdir -p ./${bin}
+                  mv ${bin_path} ./${bin}/${bin}-${target%-fhs}
+                ;;
+              esac
+            done
+          done
+
+      - uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        if: startsWith(github.ref, 'refs/tags/wash-v')
+        with:
+          draft: true
+          prerelease: true
+          generate_release_notes: true
+          files: ./wash/*
+
+      - name: Extract version
+        if: startsWith(github.ref, 'refs/tags/wash-v')
+        run: |
+          VERSION=$(echo "${GITHUB_REF##*/}" | sed -e 's/wash-v//')
+          echo "wash_version=$VERSION" >> $GITHUB_ENV
+      - name: Release homebrew
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0
+        if: startsWith(github.ref, 'refs/tags/wash-v')
+        with:
+          token: ${{ secrets.HOMEBREW_CHOCOLATEY_DISPATCH_TOKEN }}
+          repository: wasmCloud/homebrew-wasmcloud
+          event-type: brew-formula-update
+          client-payload: |
+            {"tag_prefix": "wash", "tag_version": "${{ env.wash_version }}"}
+      - name: Release chocolatey
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0
+        if: startsWith(github.ref, 'refs/tags/wash-v')
+        with:
+          token: ${{ secrets.HOMEBREW_CHOCOLATEY_DISPATCH_TOKEN }}
+          repository: wasmCloud/chocolatey-wash
+          event-type: choco-formula-update
+          client-payload: |
+            {"wash_version": "${{ env.wash_version }}"}
+
+  nfpm:
+    if: startsWith(github.ref, 'refs/tags/wash-v')
+    env:
+      REF: ${{ github.ref }}
+      PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_API_TOKEN }}
+    needs:
+      - cargo
+      - cargo-nextest
+      - build-wash-bin
+      - test-wash-linux-x86_64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - name: Install NFPM
+        run: nix profile install -L --inputs-from . 'nixpkgs-unstable#nfpm'
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wash-aarch64-unknown-linux-musl
+          path: ./crates/wash/aarch64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wash-x86_64-unknown-linux-musl
+          path: ./crates/wash/x86_64
+      - name: Make wash executable
+        working-directory: ./crates/wash
+        run: |
+          chmod +x ./aarch64/bin/wash
+          chmod +x ./x86_64/bin/wash
+
+      - name: Build `deb` and `rpm`
+        working-directory: ./crates/wash
+        run: |
+          export VERSION=$(echo $REF| cut -d- -f3 | tr -d "v")
+          nfpm pkg --packager deb -f build/nfpm.amd64.yaml
+          nfpm pkg --packager deb -f build/nfpm.arm64.yaml
+          nfpm pkg --packager rpm -f build/nfpm.amd64.yaml
+          nfpm pkg --packager rpm -f build/nfpm.arm64.yaml
+      - name: Push `deb`
+        working-directory: ./crates/wash
+        run: |
+          debs=(35 203 206 207 210 215 219 220 221 233 235 237 261 266 278 284)
+          for distro_version in "${debs[@]}"; do
+            curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash_*_amd64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
+            curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash_*_arm64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
+          done
+      - name: Push `rpm`
+        working-directory: ./crates/wash
+        run: |
+          rpms=(194 204 209 216 226 231 236 239 240 244 260 273 279 283 302)
+          for distro_version in "${rpms[@]}"; do
+            curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash-*.aarch64.rpm)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
+            curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash-*.x86_64.rpm)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
+          done
+
+  crates:
+    strategy:
+      matrix:
+        include:
+          - crate: component
+            workspace-dependencies: true
+
+          - crate: control-interface
+            workspace-dependencies: true
+
+          - crate: core
+            workspace-dependencies: true
+
+          - crate: host
+            workspace-dependencies: true
+
+          - crate: opentelemetry-nats
+
+          - crate: provider-archive
+            workspace-dependencies: true
+
+          - crate: provider-http-server
+            workspace-dependencies: true
+
+          - crate: provider-messaging-nats
+            workspace-dependencies: true
+
+          - crate: provider-sdk
+            workspace-dependencies: true
+
+          - crate: runtime
+            workspace-dependencies: true
+
+          - crate: test-util
+            workspace-dependencies: true
+
+          - crate: tracing
+            workspace-dependencies: true
+
+          - crate: secrets-types
+            workspace-dependencies: true
+
+          - crate: secrets-client
+            workspace-dependencies: true
+
+          - crate: wascap
+
+          - crate: wash
+            workspace-dependencies: true
+
+    name: publish ${{ matrix.crate }} to crates.io
+    needs: cargo
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Extract tag context
+        id: ctx
+        run: |
+          version=${GITHUB_REF_NAME#${{ matrix.crate }}-v}
+          echo "version is ${version}"
+          if [[ $version == *"-"* ]]; then
+            echo "version ${version} is a pre-release"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: dry-run publish ${{ matrix.crate }} to crates.io
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        continue-on-error: ${{ matrix.workspace-dependencies }} # publish may fail due to workspace crates not being published yet
+        run: cargo publish --dry-run
+        working-directory: ./crates/${{ matrix.crate }}
+
+      - name: publish ${{ matrix.crate }} to crates.io
+        if: startsWith(github.ref, format('refs/tags/{0}-v', matrix.crate))
+        continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
+        run: cargo publish --token ${{ secrets.CRATES_PUBLISH_TOKEN }}
+        working-directory: ./crates/${{ matrix.crate }}
+
+  smart-release:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Install cmake for smart-release
+        run: sudo apt update && sudo apt install cmake -y
+
+      - run: rustup show
+      - name: install smart-release
+        env:
+          RUSTFLAGS: ''
+        # NOTE(brooksmtownsend): Installing from my fork as updating workspace dependencies is not yet supported in the mainline
+        # PR to follow: https://github.com/Byron/cargo-smart-release/pull/17
+        run: cargo install cargo-smart-release --git https://github.com/brooksmtownsend/cargo-smart-release --branch feat/update-workspace-dependencies
+
+      - name: dry run release
+        if: ${{ !inputs.do-release }}
+        run: |
+          git config --global user.email "automation@wasmcloud.com"
+          git config --global user.name "wasmCloud automation"
+          cargo smart-release --update-crates-index --no-publish --execute --no-changelog-preview --no-push ${{ inputs.additional-args }} ${{ inputs.crate }} --allow-dirty
+
+      - name: Create Pull Request
+        if: ${{ !inputs.do-release }}
+        uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e
+        with:
+          branch: release-${{ inputs.crate }}
+          signoff: true
+          committer: wasmCloud Automation <automation@wasmcloud.com>
+          title: Release ${{ inputs.crate }}
+          commit-message: 'release(${{ inputs.crate }}): release and update CHANGELOG'
+
+      - name: release
+        if: ${{ inputs.do-release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_PUBLISH_TOKEN }}
+        run: |
+          git config --global user.email "automation@wasmcloud.com"
+          git config --global user.name "wasmCloud automation"
+          cargo smart-release --update-crates-index --execute --no-changelog-preview --no-changelog ${{ inputs.additional-args }} ${{ inputs.crate }}
+
+  # This check always runs, and succeeds either if no relevant wasmCloud files were modified or jobs are successful.
+  wasmcloud_successful_checks:
+    needs:
+      - meta
+      - build-provider-bin
+      - build-wash-bin
+      - build-wash-lipo
+      - build-wash-windows
+      - build-wasmcloud-bin
+      - build-wasmcloud-lipo
+      - test-wash-linux-aarch64
+      - test-wash-linux-x86_64
+      - test-wash-macos-aarch64
+      - test-wash-macos-x86_64
+      - test-wash-windows-x86_64
+      - test-wasmcloud-linux-aarch64
+      - test-wasmcloud-linux-x86_64
+      - test-wasmcloud-macos-aarch64
+      - test-wasmcloud-macos-x86_64
+      - test-wasmcloud-windows-x86_64
+      - cargo
+      - cargo-nextest
+      - build-doc
+      - providers
+      - deploy-doc
+      - oci-wash
+      - oci-wasmcloud
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Results
+        run: |
+          echo 'needs.build-provider-bin.result: ${{ needs.build-provider-bin.result }}'
+          echo 'needs.build-wash-bin.result: ${{ needs.build-wash-bin.result }}'
+          echo 'needs.build-wash-windows.result: ${{ needs.build-wash-windows.result }}'
+          echo 'needs.build-wash-lipo.result: ${{ needs.build-wash-lipo.result }}'
+          echo 'needs.build-wasmcloud-bin.result: ${{ needs.build-wasmcloud-bin.result }}'
+          echo 'needs.build-wasmcloud-lipo.result: ${{ needs.build-wasmcloud-lipo.result }}'
+          echo 'needs.test-wash-linux-aarch64.result: ${{ needs.test-wash-linux-aarch64.result }}'
+          echo 'needs.test-wash-linux-x86_64.result: ${{ needs.test-wash-linux-x86_64.result }}'
+          echo 'needs.test-wash-macos-aarch64.result: ${{ needs.test-wash-macos-aarch64.result }}'
+          echo 'needs.test-wash-macos-x86_64.result: ${{ needs.test-wash-macos-x86_64.result }}'
+          echo 'needs.test-wash-windows-x86_64.result: ${{ needs.test-wash-windows-x86_64.result }}'
+          echo 'needs.test-wasmcloud-linux-aarch64.result: ${{ needs.test-wasmcloud-linux-aarch64.result }}'
+          echo 'needs.test-wasmcloud-linux-x86_64.result: ${{ needs.test-wasmcloud-linux-x86_64.result }}'
+          echo 'needs.test-wasmcloud-macos-aarch64.result: ${{ needs.test-wasmcloud-macos-aarch64.result }}'
+          echo 'needs.test-wasmcloud-macos-x86_64.result: ${{ needs.test-wasmcloud-macos-x86_64.result }}'
+          echo 'needs.test-wasmcloud-windows-x86_64.result: ${{ needs.test-wasmcloud-windows-x86_64.result }}'
+          echo 'needs.cargo.result: ${{ needs.cargo.result }}'
+          echo 'needs.cargo-nextest.result: ${{ needs.cargo-nextest.result }}'
+          echo 'needs.build-doc.result: ${{ needs.build-doc.result }}'
+          echo 'needs.providers.result: ${{ needs.providers.result }}'
+          echo 'needs.deploy-doc.result: ${{ needs.deploy-doc.result }}'
+          echo 'needs.oci-wash.result: ${{ needs.oci-wash.result }}'
+          echo 'needs.oci-wasmcloud.result: ${{ needs.oci-wasmcloud.result }}'
+      - name: Verify jobs
+        # All jobs must succeed or be skipped.
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1

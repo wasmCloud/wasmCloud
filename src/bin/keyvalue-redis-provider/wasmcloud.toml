@@ -1,0 +1,12 @@
+name = "KV Redis"
+language = "rust"
+type = "provider"
+version = "0.29.1"
+wit = "../../../crates/provider-keyvalue-redis/wit"
+
+[rust]
+target_path = "../../../target"
+
+[provider]
+bin_name = "keyvalue-redis-provider"
+vendor = "wasmCloud"

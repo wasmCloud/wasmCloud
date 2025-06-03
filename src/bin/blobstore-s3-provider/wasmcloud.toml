@@ -1,0 +1,12 @@
+name = "Blobstore S3"
+language = "rust"
+version = "0.12.1"
+type = "provider"
+wit = "../../../crates/provider-blobstore-s3/wit"
+
+[rust]
+target_dir = "../../../"
+
+[provider]
+bin_name = "blobstore-s3-provider"
+vendor = "wasmCloud"

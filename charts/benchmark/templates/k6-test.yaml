@@ -1,0 +1,54 @@
+{{- if .Values.test.enabled }}
+apiVersion: k6.io/v1alpha1
+kind: TestRun
+metadata:
+  name: {{ include "benchmark.fullname" . }}-test
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+spec:
+  arguments: "-o experimental-opentelemetry"
+  parallelism: {{ .Values.test.parallelism }}
+  separate: {{ .Values.test.separate }}
+  script:
+    configMap:
+      name: {{ include "benchmark.fullname" . }}-test-config
+      file: test.js
+  runner:
+    image: {{ .Values.test.image.repository }}:{{ .Values.test.image.tag }}
+    serviceAccountName: {{ include "benchmark.fullname" . }}-test
+    {{- with .Values.nodeSelector }}
+    nodeSelector:
+      {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.affinity }}
+    affinity:
+      {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.tolerations }}
+    tolerations:
+      {{- toYaml . | nindent 8 }}
+    {{- end }}
+    env:
+      - name: K6_OTEL_GRPC_EXPORTER_INSECURE
+        value: "true"
+      - name: K6_OTEL_GRPC_EXPORTER_ENDPOINT
+        value: "{{ .Release.Name }}-opentelemetry-collector:4317"
+      - name: K6_OTEL_METRIC_PREFIX
+        value: "k6_"
+      - name: K6_NO_USAGE_REPORT
+        value: "true"
+      - name: GOMEMLIMIT
+        valueFrom:
+          resourceFieldRef:
+            resource: limits.memory
+      - name: GOMAXPROCS
+        valueFrom:
+          resourceFieldRef:
+            resource: limits.cpu
+      - name: MY_POD_NAME
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.name
+      - name: TEST_UUID
+        value: {{ uuidv4 | quote }}
+{{- end }}

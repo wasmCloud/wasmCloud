@@ -1,0 +1,32 @@
+[package]
+name = "wasmcloud-provider-messaging-nats"
+version = "0.28.0"
+description = """
+A capability provider that satisfies the 'wasmcloud:messaging' contract using NATS as a backend.
+"""
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+anyhow = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
+bytes = { workspace = true }
+futures = { workspace = true }
+opentelemetry-nats = { workspace = true }
+rustls-pemfile = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+tracing-futures = { workspace = true }
+wascap = { workspace = true }
+wasmcloud-core = { workspace = true, features = ["messaging"] }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wit-bindgen-wrpc = { workspace = true }

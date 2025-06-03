@@ -1,0 +1,12 @@
+package wasmcloud:custom;
+
+world component {
+  // Import logging for processing data
+  import wasi:logging/logging@0.1.0-draft;
+
+  // Notice here the component has the inverse direction for importing/exporting interfaces
+  // compared to the provider. This allows us to compose the component with the provider, each
+  // import linking up to an export.
+  import wasmcloud:example/system-info;
+  export wasmcloud:example/process-data;
+}

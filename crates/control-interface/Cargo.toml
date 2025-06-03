@@ -1,0 +1,35 @@
+[package]
+name = "wasmcloud-control-interface"
+version = "2.4.0"
+homepage = "https://wasmcloud.com"
+description = "A client library for communicating with hosts on a wasmCloud lattice"
+documentation = "https://docs.rs/wasmcloud-control-interface"
+readme = "README.md"
+keywords = ["webassembly", "wasm", "wasmcloud", "control", "ctl"]
+categories = ["wasm", "api-bindings"]
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
+cloudevents-sdk = { workspace = true }
+futures = { workspace = true }
+oci-client = { workspace = true, features = ["rustls-tls"] }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = [
+    "trace",
+    "logs",
+    "rt-tokio",
+] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["cloudevents-sdk"]

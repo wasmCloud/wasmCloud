@@ -1,0 +1,37 @@
+{
+    "name": "wasmCloud",
+    "dockerComposeFile": "docker-compose.yml",
+    "service": "dev",
+    "workspaceFolder": "/workspace",
+    "userEnvProbe": "loginShell",
+    "updateRemoteUserUID": false,
+    "onCreateCommand": "${containerWorkspaceFolder}/.devcontainer/setup.sh",
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "git.alwaysSignOff": true,
+                "nix.enableLanguageServer": true,
+                "nix.serverPath": "nixd"
+            },
+            "runItOn": {
+                "commands": [
+                    {
+                        "match": "flake\\.{toml,lock}|rust-toolchain.toml",
+                        "isShellCommand": false,
+                        "cmd": "nixEnvSelector.hitEnv"
+                    }
+                ]
+            },
+            "extensions": [
+                "arrterian.nix-env-selector",
+                "jnoortheen.nix-ide",
+                "fsevenm.run-it-on",
+                "panicbit.cargo",
+                "rust-lang.rust-analyzer",
+                "serayuzgur.crates",
+                "yzhang.markdown-all-in-one",
+                "tamasfe.even-better-toml"
+            ]
+        }
+    }
+}

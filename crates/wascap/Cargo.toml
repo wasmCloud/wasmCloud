@@ -1,0 +1,26 @@
+[package]
+name = "wascap"
+version = "0.16.1"
+description = "Wascap - wasmCloud Capabilities. Library for extracting, embedding, and validating claims"
+homepage = "https://wasmcloud.com"
+documentation = "https://docs.rs/wascap"
+readme = "README.md"
+keywords = ["jwt", "crypto", "ed25519", "security", "webassembly"]
+categories = ["cryptography", "authentication", "wasm"]
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+data-encoding = { workspace = true }
+humantime = { workspace = true }
+nkeys = { workspace = true }
+nuid = { workspace = true }
+ring = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
+wasm-encoder = { workspace = true, features = ["component-model"] }
+wasm-gen = { workspace = true }
+wasmparser = { workspace = true, features = ["component-model"] }

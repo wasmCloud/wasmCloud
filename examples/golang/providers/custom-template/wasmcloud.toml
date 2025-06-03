@@ -1,0 +1,9 @@
+# NOTE: Not yet supported
+name = "KeyValue Go"
+language = "go"
+type = "provider"
+version = "0.1.0"
+
+[provider]
+vendor = "wasmCloud"
+bin_name = "custom-template"

@@ -1,0 +1,12 @@
+name = "typescript-http-hello-world"
+language = "typescript"
+type = "component"
+version = "0.1.0"
+
+[component]
+wit_world = "hello"
+wasm_target = "wasm32-wasip2"
+
+build_command = "npm run install-and-build"
+build_artifact = "dist/http-hello-world.wasm"
+destination = "build/http_hello_world_s.wasm"

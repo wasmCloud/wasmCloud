@@ -1,0 +1,61 @@
+[package]
+name = "wasmcloud-tracing"
+version = "0.15.0"
+description = "wasmCloud tracing functionality"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+otel = [
+    "opentelemetry",
+    "opentelemetry_sdk",
+    "opentelemetry-appender-tracing",
+    "tracing-opentelemetry",
+    "opentelemetry-otlp",
+    "wasmcloud-core/otel",
+    "wasmcloud-core/rustls-native-certs",
+]
+
+[dependencies]
+anyhow = { workspace = true }
+bytes = { workspace = true }
+heck = { workspace = true }
+once_cell = { workspace = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true, features = [
+    "logs",
+    "metrics",
+    "trace",
+    "rt-tokio",
+    "experimental_async_runtime",
+    "experimental_trace_batch_span_processor_with_async_runtime",
+    "experimental_metrics_periodicreader_with_async_runtime",
+    "experimental_logs_batch_log_processor_with_async_runtime",
+] }
+opentelemetry-appender-tracing = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, features = [
+    "grpc-tonic",
+    "http-proto",
+    "logs",
+    "trace",
+    "metrics",
+    "reqwest-client",
+], optional = true }
+reqwest = { workspace = true, features = ["rustls-tls"] }
+tracing = { workspace = true, features = ["log"] }
+tracing-appender = { workspace = true }
+tracing-flame = { workspace = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, features = [
+    "ansi",
+    "env-filter",
+    "fmt",
+    "json",
+] }
+http = { workspace = true }
+wasmcloud-core = { workspace = true }

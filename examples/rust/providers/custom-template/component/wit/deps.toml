@@ -1,0 +1,2 @@
+custom = "../../wit"
+logging = "https://github.com/WebAssembly/wasi-logging/archive/d31c41d0d9eed81aabe02333d0025d42acf3fb75.tar.gz"

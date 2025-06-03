@@ -1,0 +1,34 @@
+[package]
+name = "wasmcloud-provider-keyvalue-redis"
+version = "0.30.0"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-nats = { workspace = true }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+redis = { workspace = true, features = [
+    "aio",
+    "connection-manager",
+    "tls-rustls-webpki-roots",
+    "tokio-rustls-comp",
+] }
+sha2 = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+unicase = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wit-bindgen-wrpc = { workspace = true }
+
+[dev-dependencies]
+async-nats = { workspace = true, features = ["ring"] }
+tempfile = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true, features = ["v4", "fast-rng"] }
+wasmcloud-control-interface = { workspace = true }
+wasmcloud-test-util = { workspace = true }

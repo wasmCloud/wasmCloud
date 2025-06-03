@@ -1,0 +1,34 @@
+[package]
+name = "wasmcloud-provider-blobstore-azure"
+version = "0.6.1"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
+azure_storage = { workspace = true, features = [
+    "enable_reqwest_rustls",
+    "hmac_rust",
+], default-features = false }
+azure_storage_blobs = { workspace = true, features = [
+    "enable_reqwest_rustls",
+    "hmac_rust",
+], default-features = false }
+bytes = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true, features = ["fs"] }
+tracing = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wrpc-interface-blobstore = { workspace = true }
+
+[dev-dependencies]
+wasmcloud-test-util = { workspace = true, features = ["testcontainers"] }
+wrpc-transport-nats = { workspace = true }

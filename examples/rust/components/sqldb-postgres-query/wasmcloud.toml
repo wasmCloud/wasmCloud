@@ -1,0 +1,28 @@
+name = "sqldb-postgres-query"
+version = "0.1.0"
+language = "rust"
+type = "component"
+
+[component]
+wit_world = "component"
+wasm_target = "wasm32-wasip2"
+
+#
+# Normally, `wash dev` is able to automatically create required dependencies
+# for your application, but it cannot yet spawn a postgres instances to serve
+# the `wasmcloud:postgres` WIT interface.
+#
+# To make this project work with *local* usage of `wash dev`:
+#
+# 1. Start Postgres (ex. in a container, with `pg_ctl`, see README.md)
+# 2. Ensure the `default-postgres` configuration is properly set up (see README.md)
+#   - NOTE: In production, use wasmCloud secrets (not config) for the provider
+# 3. Run `wash dev`
+#
+# The configuration below instructs `wash dev` to use the local manifest (rather than generating one)
+# which will have configuration that is easy to modify/tweak to connect to your local postgres instance
+#
+[dev]
+manifests = [
+  { component_name = "querier", path = "local.wadm.yaml" }
+]

@@ -1,0 +1,147 @@
+name: example-providers
+
+on:
+  merge_group:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/examples-providers.yml
+      - crates/wash/**
+      - examples/rust/providers/**
+      - examples/golang/providers/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # build/cache wash-cli so following steps can use the cached version
+  prepare-wash-cache:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/install-cached-wash-cli
+
+  # Ensure that `wash build` and `wash app validate` works for all example projects below
+  wash-build:
+    name: ${{ matrix.project.name }}:${{ matrix.project.lang_version && format('{0}@{1}', matrix.project.lang, matrix.project.lang_version) || matrix.project.lang }} (wash@${{ matrix.wash-version }})
+    runs-on: ubuntu-22.04
+    needs: [prepare-wash-cache]
+    strategy:
+      fail-fast: false
+      matrix:
+        wash-version:
+          - current
+        project:
+          # Golang example providers
+          - name: 'custom-template'
+            lang: 'golang'
+            lang_version: '1.24.1'
+            tinygo_version: '0.36.0'
+            test_deploy: wadm.yaml
+          # Rust example providers
+          - name: 'custom-template'
+            lang: 'rust'
+            test_deploy: wadm.yaml
+          - name: 'messaging-nats'
+            lang: 'rust'
+            test_deploy: local.wadm.yaml
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # Download wash binary & install to path
+      - name: install wash (${{ matrix.wash-version }})
+        if: ${{ matrix.wash-version && matrix.wash-version != 'current' }}
+        uses: taiki-e/install-action@2ee2c006bbe55b0c2924d63f440aa76ecdd09aea # v2.52.3
+        with:
+          tool: wash@${{ matrix.wash-version }}
+
+      - name: install wash (current)
+        if: ${{ matrix.wash-version && matrix.wash-version == 'current' }}
+        uses: ./.github/actions/install-cached-wash-cli
+
+      # Language specific setup
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        if: ${{ matrix.project.lang == 'golang' }}
+        with:
+          go-version: ${{ matrix.project.lang_version }}
+      - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
+        if: ${{ matrix.project.lang == 'golang' }}
+        with:
+          tinygo-version: ${{ matrix.project.tinygo_version }}
+          install-binaryen: 'false'
+      - name: install wit-bindgen-wrpc
+        shell: bash
+        run: |
+          curl -LO https://github.com/bytecodealliance/wrpc/releases/download/v0.11.1/wit-bindgen-wrpc-x86_64-unknown-linux-musl;
+          echo "7ae7607987a208eda2a44a0dfc376ebf681321443151589a0f0004f53da43258  wit-bindgen-wrpc-x86_64-unknown-linux-musl" | sha256sum -c -;
+          mv wit-bindgen-wrpc-x86_64-unknown-linux-musl wit-bindgen-wrpc
+          chmod +x wit-bindgen-wrpc
+          install -m 755 wit-bindgen-wrpc /usr/local/bin/
+
+      # Validate example [local.]wadm.yaml if present
+      - name: validate wadm.yaml
+        working-directory: examples/${{ matrix.project.lang }}/providers/${{ matrix.project.name }}
+        shell: bash
+        run: |
+          [[ ! -f wadm.yaml ]] || wash app validate wadm.yaml
+          [[ ! -f local.wadm.yaml ]] || wash app validate local.wadm.yaml
+
+      # Build example project(s)
+      - name: build project
+        run: wash build
+        working-directory: examples/${{ matrix.project.lang }}/providers/${{ matrix.project.name }}
+
+      # Install wit-bindgen
+      - uses: taiki-e/install-action@2ee2c006bbe55b0c2924d63f440aa76ecdd09aea # v2.52.3
+        with:
+          tool: wit-bindgen-cli
+
+      # Install wasm-tools for golang projects
+      - uses: taiki-e/install-action@2ee2c006bbe55b0c2924d63f440aa76ecdd09aea # v2.52.3
+        if: ${{ matrix.project.lang == 'golang' }}
+        with:
+          tool: wasm-tools@1.225.0
+
+      # Build required project if necessary
+      - name: Build dependent component if present
+        shell: bash
+        working-directory: examples/${{ matrix.project.lang }}/providers/${{ matrix.project.name }}
+        run: |
+          if [[ -f component/wasmcloud.toml ]]; then
+             wash build -p component/wasmcloud.toml;
+          fi
+
+      # Run the local.wadm that comes with the example
+      - name: test provider load
+        if: ${{ matrix.project.test_deploy && matrix.wash-version == 'current' }}
+        shell: bash
+        working-directory: examples/${{ matrix.project.lang }}/providers/${{ matrix.project.name }}
+        run: |
+          set -xe
+          wash up &
+          WASH_PID=$!
+          sleep 4;
+          wash app deploy ${{ matrix.project.test_deploy }};
+          TRIES=0
+          while [[ $(wash get inventory --output=json | jq '.inventories[0].providers | length') -eq 0 ]] ; do
+            if [[ $TRIES -gt 10 ]]; then
+              echo "❌ failed to find provider in inventory output after deploying example manifest";
+              exit -1;
+            fi
+            TRIES=$((TRIES+1));
+            sleep 1;
+          done;
+          echo "✅ successfully started at least one provider";
+          wash app delete ${{ matrix.project.test_deploy }};
+          kill $WASH_PID;
+          exit 0;

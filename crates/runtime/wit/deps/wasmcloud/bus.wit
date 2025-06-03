@@ -1,0 +1,51 @@
+package wasmcloud:bus@2.0.1;
+
+@since(version = 2.0.0)
+interface lattice {
+    /// Interface target. This represents an interface, which can be selected by `set-link-name`.
+    @since(version = 2.0.0)
+    resource call-target-interface {
+        constructor(namespace: string, %package: string, %interface: string);
+    }
+
+    /// Set a link name to use for all interfaces specified. This is advanced functionality only
+    /// available within wasmcloud and, as such, is exposed here as part of the wasmcloud:bus package.
+    /// This is used when you are linking multiple of the same interfaces
+    /// (i.e. a keyvalue implementation for caching and another one for secrets) to a component.
+    /// 
+    /// Will return an error if a link does not exist at call time with the specified name and interfaces.
+    @since(version = 2.0.0)
+    set-link-name: func(name: string, interfaces: list<call-target-interface>) -> result<_, string>;
+}
+
+@since(version = 2.0.1)
+interface error {
+    @since(version = 2.0.1)
+    use wasi:io/error@0.2.0.{error as io-error};
+    @since(version = 2.0.1)
+    use wrpc:rpc/error@0.1.0.{error as rpc-error};
+
+    /// A resource which represents wasmCloud lattice error information.
+    @since(version = 2.0.1)
+    resource error {
+        /// Converts `wrpc:rpc/error.error` into `error`.
+        @since(version = 2.0.1)
+        from-rpc-error: static func(error: rpc-error) -> error;
+
+        /// Attempts to convert `wasi:io/error.error` into `error`.
+        ///
+        /// Returns the original `wasi:io/error.error` in case of mismatch.
+        @since(version = 2.0.1)
+        from-io-error: static func(error: io-error) -> result<error, io-error>;
+
+        /// Returns a string that is suitable to assist humans in debugging
+        /// this error.
+        ///
+        /// WARNING: The returned string should not be consumed mechanically!
+        /// It may change across platforms, hosts, or other implementation
+        /// details. Parsing this string is a major platform-compatibility
+        /// hazard.
+        @since(version = 2.0.1)
+        to-debug-string: func() -> string;
+    }
+}

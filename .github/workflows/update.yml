@@ -1,0 +1,67 @@
+name: nix-flake-update
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nix-flake-update:
+    if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: rvolosatovs/nix-flake-update-action@7249aa67d87e2a195c376fe34c230af0862a9900
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          assignees: rvolosatovs
+          reviewers: rvolosatovs
+          delete-branch: true
+          signoff: true
+          labels: dependencies
+
+  oci-base-update:
+    if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: app-token
+        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3 # v17
+
+      - name: Update OCI image bases
+        id: update
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email github-actions[bot]@users.noreply.github.com
+
+          ./nix/update-images.sh
+          if ! git diff --exit-code; then
+            echo "updated=true" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
+        if: ${{ steps.update.outputs.updated == 'true' }}
+        with:
+          assignees: rvolosatovs, joonas
+          reviewers: rvolosatovs, joonas
+          author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
+          body: |
+            ## Description
+
+            Automated OCI image base update
+          branch: build/update-oci-bases
+          commit-message: 'build(nix): update OCI image bases'
+          delete-branch: true
+          labels: dependencies
+          signoff: true
+          title: 'build(nix): update OCI image bases'
+          token: ${{ steps.app-token.outputs.token }}

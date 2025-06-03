@@ -1,0 +1,11 @@
+name = "HTTP Client"
+language = "rust"
+version = "0.13.1"
+type = "provider"
+
+[rust]
+target_dir = "../../../"
+
+[provider]
+bin_name = "http-client-provider"
+vendor = "wasmCloud"

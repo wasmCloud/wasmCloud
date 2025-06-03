@@ -1,0 +1,21 @@
+name: install Nix
+
+inputs:
+  cachixAuthToken:
+    description: auth token for https://app.cachix.org/organization/wasmcloud/cache/wasmcloud
+
+runs:
+  using: composite
+  steps:
+    # Install Nix
+    - uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3
+      with:
+        extra-conf: |
+          accept-flake-config = true
+
+    # Setup Cachix cache
+    - uses: cachix/cachix-action@0fc020193b5a1fa3ac4575aa3a7d3aa6a35435ad
+      continue-on-error: true
+      with:
+        name: wasmcloud
+        authToken: "${{ inputs.cachixAuthToken }}"

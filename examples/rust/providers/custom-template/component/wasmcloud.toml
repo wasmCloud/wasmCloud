@@ -1,0 +1,5 @@
+name = "Custom template test component"
+language = "rust"
+type = "component"
+
+[component]

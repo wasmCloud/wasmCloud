@@ -1,0 +1,28 @@
+package wasmcloud:identity@0.0.1;
+
+/// This WIT interface powers workload identity support for components
+///
+/// See RFC #4111 https://github.com/wasmCloud/wasmCloud/issues/4111
+interface store {
+  /// An error type that encapsulates the different errors that can occur fetching identity.
+  variant error {
+    /// This indicates an error from an I/O operation.
+    /// As this could be almost _anything_ (such as a file read, network connection, etc),
+    /// the error message is a string.
+    /// Depending on how this ends up being consumed,
+    /// we may consider moving this to use the `wasi:io/error` type instead.
+    /// For simplicity right now in supporting multiple implementations, it is being left as a string.
+    io(string),
+    /// Matching identity could not be found
+    not-found,
+    /// A catch all for other types of errors
+    other(string),
+  }
+
+  /// Gets a single JWT-SVID represented in the form of a (token) string.
+  ///
+  /// The value is returned as an `option<string>`. If the identity is not found,
+  /// `Ok(none)` is returned. If an error occurs, an `Err(error)` is returned.
+  get: func(audience: string) -> result<option<string>, error>;
+}
+

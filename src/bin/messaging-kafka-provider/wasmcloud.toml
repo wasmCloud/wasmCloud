@@ -1,0 +1,12 @@
+name = "Messaging Kafka"
+language = "rust"
+type = "provider"
+version = "0.6.1"
+wit = "../../../crates/provider-messaging-kafka/wit"
+
+[rust]
+target_dir = "../../"
+
+[provider]
+bin_name = "messaging-kafka-provider"
+vendor = "wasmCloud"

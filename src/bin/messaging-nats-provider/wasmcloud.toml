@@ -1,0 +1,13 @@
+name = "Messaging NATS"
+language = "rust"
+type = "provider"
+version = "0.27.0"
+wit = "../../../crates/provider-messaging-nats/wit"
+
+[rust]
+target_dir = "../../../"
+
+[provider]
+bin_name = "messaging-nats-provider"
+vendor = "wasmCloud"
+wit_world = "interfaces"

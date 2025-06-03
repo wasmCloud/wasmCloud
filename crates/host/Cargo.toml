@@ -1,0 +1,75 @@
+[package]
+name = "wasmcloud-host"
+version = "0.26.0"
+description = "wasmCloud host library"
+readme = "README.md"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+anyhow = { workspace = true, features = ["std"] }
+async-nats = { workspace = true, features = ["ring"] }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+cloudevents-sdk = { workspace = true }
+futures = { workspace = true, features = ["async-await", "std"] }
+http = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true, features = ["server"] }
+humantime = { workspace = true }
+names = { workspace = true }
+nkeys = { workspace = true }
+opentelemetry-nats = { workspace = true }
+secrecy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sysinfo = { workspace = true, features = ["system"] }
+time = { workspace = true, features = ["formatting"] }
+tokio = { workspace = true, features = [
+    "fs",
+    "io-std",
+    "io-util",
+    "process",
+    "rt-multi-thread",
+    "time",
+] }
+tokio-stream = { workspace = true, features = ["net", "time"] }
+tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+ulid = { workspace = true, features = ["std"] }
+url = { workspace = true, features = ["serde"] }
+uuid = { workspace = true, features = ["serde"] }
+wascap = { workspace = true }
+wasmcloud-control-interface = { workspace = true }
+wasmcloud-core = { workspace = true, features = [
+    "oci",
+    "otel",
+    "rustls-native-certs",
+    "http",
+    "messaging",
+] }
+wasmcloud-provider-sdk = { workspace = true }
+wasmcloud-runtime = { workspace = true }
+wasmcloud-secrets-client = { workspace = true }
+wasmcloud-secrets-types = { workspace = true }
+wasmcloud-tracing = { workspace = true, features = ["otel"] }
+wasmtime-wasi-http = { workspace = true }
+wrpc-transport = { workspace = true }
+wrpc-interface-http = { workspace = true }
+wrpc-transport-nats = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+spiffe = { workspace = true, features = ["default"] }
+spire-api = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["cloudevents-sdk"]

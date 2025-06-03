@@ -1,0 +1,44 @@
+version: 2
+updates:
+- package-ecosystem: "cargo"
+  directory: "/"
+  schedule:
+    interval: "daily"
+  groups:
+    wasmtime: # wasmtime dependencies need to be updated together
+      patterns:
+      - "wasmtime*"
+- package-ecosystem: "cargo"
+  directory: "/tests/components/rust"
+  schedule:
+    interval: "daily"
+- package-ecosystem: "cargo"
+  directory: "/examples/rust/components/http-hello-world"
+  schedule:
+    interval: "daily"
+- package-ecosystem: "cargo"
+  directory: "/examples/rust/components/http-keyvalue-counter"
+  schedule:
+    interval: "daily"
+- package-ecosystem: "github-actions"
+  directory: "/"
+  schedule:
+    interval: "daily"
+  groups:
+    upload-download-artifact:
+      patterns:
+      - "*upload-artifact*"
+      - "*download-artifact*"
+- package-ecosystem: "github-actions"
+  directory: "/.github/actions/build-nix"
+  schedule:
+    interval: "daily"
+- package-ecosystem: "github-actions"
+  directory: "/.github/actions/install-nix"
+  schedule:
+    interval: "daily"
+- package-ecosystem: "docker"
+  directories:
+    - "**/*Dockerfile*"
+  schedule:
+    interval: "daily"

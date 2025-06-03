@@ -1,0 +1,23 @@
+[package]
+name = "wasmcloud-provider-keyvalue-vault"
+version = "0.12.1"
+description = """
+Hashicorp Vault capability provider for the 'wrpc:keyvalue' capability contract
+"""
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+bytes = { workspace = true }
+base64 = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+vaultrs = { workspace = true, features = ["rustls"] }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wit-bindgen-wrpc = { workspace = true }

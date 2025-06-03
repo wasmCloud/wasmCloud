@@ -1,0 +1,19 @@
+[package]
+name = "wasmcloud-secrets-client"
+description = "Client library for interacting with wasmCloud secrets backends"
+version = "0.8.0"
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+async-nats = { workspace = true, features = ["ring", "server_2_10"] }
+nkeys = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+wasmcloud-secrets-types = { workspace = true }

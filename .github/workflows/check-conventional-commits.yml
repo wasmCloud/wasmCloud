@@ -1,0 +1,225 @@
+name: check-conventional-commits
+
+on: [pull_request_target]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install convco
+        uses: taiki-e/install-action@2ee2c006bbe55b0c2924d63f440aa76ecdd09aea # v2.52.3
+        with:
+          tool: convco@0.6.1
+
+      - name: Check commits for formatting
+        id: lint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: | # shell
+          set +e
+
+          if ! git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+            echo "Error: Current directory is not a git repository"
+            exit 1
+          fi
+
+          OUTPUT=$(gh pr view ${{ github.event.pull_request.number }} --repo wasmcloud/wasmcloud --json commits --jq '.commits[].messageHeadline' | convco check --from-stdin)
+          set -e
+
+          # output results
+          if [[ $OUTPUT =~ FAIL ]]; then
+            echo '---- errors found ----'
+            RAW_ERRORS=$(echo "$OUTPUT" | grep -x '^FAIL.*$')
+            echo "$RAW_ERRORS"
+            JSON_OUTPUT=$(echo "$RAW_ERRORS" | jq -R -c -s 'split("\n") | map(split("  ") | { "sha": .[1], "error": .[2], "message": .[3] }) | { "commits": ., "errors": length }')
+            echo '-------- json --------'
+            echo "$JSON_OUTPUT"
+            echo '----------------------'
+            {
+              echo "json_output=$JSON_OUTPUT"
+              echo "raw_output<<EOF"
+              echo "$OUTPUT"
+              echo "EOF"
+              echo "raw_errors=$RAW_ERRORS"
+            } >> "$GITHUB_OUTPUT"
+            exit 1
+          else
+            echo '---- no errors found ----'
+            {
+              echo "json_output=$(jq -n -c '{ "commits": [], "count": 0 }')" >> "$GITHUB_OUTPUT"
+              echo 'raw_errors=""'
+              echo "raw_output<<EOF"
+              echo "$OUTPUT"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+      - name: Job Summary
+        if: always()
+        env:
+          JOB_OUTPUT: ${{ steps.lint.outputs.raw_output }}
+          JOB_STATUS: ${{ steps.lint.outcome == 'success' && '✅' || steps.lint.outcome == 'failure' && '❌' || steps.lint.outcome == 'cancelled' && '🚫' }}
+        run: |
+          JOB_OUTPUT=${JOB_OUTPUT:-"Commit messages are formatted correctly!"}
+          {
+            echo "## $JOB_STATUS Conventional Commits"
+            echo '```'
+            echo "$JOB_OUTPUT"
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Parse Errors
+        if: always()
+        id: parse
+        env:
+          JSON_OUTPUT: ${{ steps.lint.outputs.json_output }}
+        run: | # shell
+          if [[ -z "$JSON_OUTPUT" ]]; then
+            echo "Failed to parse errors"
+            exit 1
+          fi
+
+          # Parse the JSON output from the linting step
+          echo "md-error-rows=$(echo "$JSON_OUTPUT" | jq -r '.commits | map("| **\(.sha)** | \(.error) | \(.message) |") | join("\n")')" >> "$GITHUB_OUTPUT"
+          echo "md-error-count=${{ fromJson(steps.lint.outputs.json_output).count || 0 }}" >> "$GITHUB_OUTPUT"
+
+      - name: Create PR Comment
+        # If the workflow failed and the error parsing was successful, create a comment on the PR with the errors
+        if: failure() && steps.parse.outcome == 'success'
+        uses: marocchino/sticky-pull-request-comment@67d0dec7b07ed060a405f9b2a64b8ab319fdd7db # v2.9.2
+        with:
+          number: ${{ github.event.pull_request.number }}
+          header: tip-conventional-commits
+          recreate: true
+          hide_and_recreate: true
+          skip_unchanged: true
+          message: | # markdown
+            ### :warning: It looks like your commit is not formatted in line with Conventional Commits
+
+            This repository uses [Conventional Commits][cc] to enable automation and ensure consistent commit messages across the project.
+
+            ### Errors
+
+            | SHA | Error | Commit Message |
+            | --- | ----- | -------------- |
+            ${{ steps.parse.outputs.md_error_rows }}
+
+            ### How to fix this issue
+
+            > [!NOTE]
+            > If you don't feel comfortable doing this, don't worry—a project maintainer will help correct this for you, before merging.
+
+            <details>
+
+            <summary>Expand for instructions</summary>
+
+            Please amend your commit message to follow the [Conventional Commits][cc] format. You can do this by running the following commands:
+
+            ```
+            git rebase -i HEAD~${{ steps.parse.outputs.md_error_count }}
+            ```
+
+            This will open an editor with a list of commits. Mark the commit you want to amend with `edit`, save and close the editor. Then run:
+
+            ```console
+            git commit --amend
+            ```
+
+            This will open an editor with the commit message. Please update the commit message to follow the [Conventional Commits][cc] format. Save and close the editor.
+
+            Finally, run:
+
+            ```console
+            git rebase --continue
+            ```
+
+            This will continue the rebase process.
+
+            Finally, push your changes to your fork:
+
+            ```console
+            git push --force-with-lease
+            ```
+
+            </details>
+
+            [cc]: https://www.conventionalcommits.org/en/v1.0.0
+
+      - name: Hide PR Comment
+        # If the workflow is now successful, we can resolve the original comment
+        if: success()
+        uses: marocchino/sticky-pull-request-comment@67d0dec7b07ed060a405f9b2a64b8ab319fdd7db # v2.9.2
+        with:
+          number: ${{ github.event.pull_request.number }}
+          header: tip-conventional-commits
+          hide: true
+          hide_classify: 'RESOLVED'
+          append: true
+          skip_unchanged: true
+          only_update: true
+          message: 'This PR is now formatted in line with Conventional Commits'
+
+  label-pr:
+    if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
+    needs: lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Get pull request commits
+        id: get_commits
+        run: |
+          PR_COMMITS=$(gh pr view ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --json commits --jq '.commits[].messageHeadline')
+          echo "COMMITS<<EOF" >> $GITHUB_ENV
+          echo "$PR_COMMITS" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Parse commit messages and determine labels
+        id: parse_labels
+        run: |
+          LABELS=()
+          while IFS= read -r line; do
+            if [[ "$line" =~ ^([a-z]+)(\(([^\)]+)\))?!?: ]]; then
+              TYPE="${BASH_REMATCH[1]}"
+              SCOPE="${BASH_REMATCH[3]}"
+              if [[ "$line" =~ !: ]]; then
+                LABELS+=("impact:breaking")
+              fi
+              case "$TYPE" in
+                fix) LABELS+=("type:fix") ;;
+                feat) LABELS+=("type:feature") ;;
+                ci) LABELS+=("type:ci") ;;
+                docs) LABELS+=("type:docs") ;;
+              esac
+              case "$SCOPE" in
+                wash|wash-cli|wash-lib) LABELS+=("scope:wash") ;;
+                wasmcloud|host|runtime|core) LABELS+=("scope:wasmcloud") ;;
+                control-interface|ctl) LABELS+=("scope:control-interface") ;;
+                "") ;; # Ignore empty scope
+                *) ;; # Ignore unknown scopes. To enable adding any scope as a label, use this: # *) LABELS+=("$SCOPE") ;;
+              esac
+            fi
+          done <<< "$COMMITS"
+          UNIQUE_LABELS=($(echo "${LABELS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
+          echo "LABELS=${UNIQUE_LABELS[*]}" >> $GITHUB_ENV
+
+      - name: Apply labels to PR
+        if: ${{ env.LABELS != '' }}
+        run: |
+          for label in ${LABELS[@]}; do
+            gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label "$label"
+          done
+        env:
+          LABELS: ${{ env.LABELS }}
+          GH_TOKEN: ${{ github.token }}

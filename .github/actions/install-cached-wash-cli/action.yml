@@ -1,0 +1,49 @@
+name: Install Cached Wash CLI
+
+description: |
+  This action will install the Wash CLI from a given repository and revision. If there are no changes that might affect the build, the action will build and install the Wash CLI from the current commit. Otherwise, it will build and install the Wash CLI from the base ref.
+
+runs:
+  using: composite
+  steps:
+    - name: Check for changes that might affect the build for wash
+      if: ${{ github.event_name == 'pull_request' }}
+      # It'd be a little nicer if we calculated if wash was affected by the changes, but this will do for now
+      id: changes
+      uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+      with:
+        filters: |
+          changed:
+            - '**'
+            - '!adr/**'
+            - '!brand/**'
+            - '!examples/**'
+            - '!**/*.md'
+
+    - name: Set wash revision to build/cache
+      id: base-ref
+      shell: bash
+      run: |
+        # Determine the revision to build from
+        if [[ ${{ github.event_name == 'pull_request' }} == false ]]; then
+          echo "Not a pull-request. Building from the base ref."
+          REVISION=${{ github.sha }}
+        elif [ ${{ github.event.pull_request.base.sha }} == null ]; then
+          echo "No base ref, building from the current commit"
+          REVISION=${{ github.sha }}
+        elif [ ${{ steps.changes.outcome == 'success' && steps.changes.outputs.changed_count || 0 }} -gt 0 ]; then
+          echo "Something changed that might affect the build, building from the current commit"
+          REVISION=${{ github.sha }}
+        else
+          echo "Building from the base ref"
+          REVISION=${{ github.event.pull_request.base.sha }}
+        fi
+        echo "target_revision=$REVISION" >> $GITHUB_OUTPUT
+        echo "Using $REVISION as the target revision"
+
+    - name: Build wash
+      uses: taiki-e/cache-cargo-install-action@caa6f48d18d42462f9c30df89e2b4f71a42b7c2c # v2.0.1
+      with:
+        tool: wash
+        git: https://github.com/${{ github.repository }}
+        rev: ${{ github.sha }}

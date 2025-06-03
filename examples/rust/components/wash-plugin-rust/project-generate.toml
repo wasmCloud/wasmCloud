@@ -1,0 +1,11 @@
+[template]
+
+raw = [
+  "*.wasm"
+]
+
+exclude = [
+  "target/",
+  "keys/",
+  "build/"
+]

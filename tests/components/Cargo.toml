@@ -1,0 +1,32 @@
+[package]
+name = "test-components"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[features]
+docs = []
+
+[package.metadata.docs.rs]
+features = ["docs"]
+
+[build-dependencies]
+anyhow = { workspace = true, features = ["std"] }
+futures = { workspace = true, features = ["alloc", "async-await"] }
+heck = { workspace = true }
+nkeys = { workspace = true }
+rustversion = { workspace = true }
+semver = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = [
+    "fs",
+    "macros",
+    "process",
+    "rt-multi-thread",
+] }
+url = { workspace = true, features = ["serde"] }
+wascap = { workspace = true }
+wasi-preview1-component-adapter-provider = { workspace = true }
+wit-component = { workspace = true }

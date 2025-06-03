@@ -1,0 +1,63 @@
+[package]
+name = "wasmcloud-core"
+version = "0.20.0"
+description = "wasmCloud core functionality shared throughout the ecosystem"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = [
+    "hyper-rustls",
+    "oci",
+    "reqwest",
+    "rustls-native-certs",
+    "tokio-rustls",
+    "webpki-roots",
+]
+hyper-rustls = ["dep:hyper-rustls", "dep:hyper-util"]
+tokio-rustls = ["dep:tokio-rustls"]
+otel = []
+oci = ["dep:oci-client", "dep:oci-wasm"]
+http = [
+    "dep:base64",
+    "dep:http",
+    "dep:unicase",
+    "dep:serde_json",
+    "dep:thiserror",
+]
+messaging = ["dep:serde_json"]
+
+[dependencies]
+anyhow = { workspace = true, features = ["std"] }
+async-nats = { workspace = true, features = ["ring"] }
+base64 = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
+hyper-rustls = { workspace = true, features = [
+    "http2",
+    "ring",
+], optional = true }
+hyper-util = { workspace = true, optional = true }
+oci-client = { workspace = true, features = ["rustls-tls"], optional = true }
+oci-wasm = { workspace = true, features = ["rustls-tls"], optional = true }
+once_cell = { workspace = true }
+provider-archive = { workspace = true }
+reqwest = { workspace = true, features = ["rustls-tls"], optional = true }
+rustls = { workspace = true, features = ["std"] }
+rustls-native-certs = { workspace = true, optional = true }
+rustls-pemfile = { workspace = true }
+tokio-rustls = { workspace = true, optional = true }
+semver = { workspace = true }
+secrecy = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+unicase = { workspace = true, optional = true }
+url = { workspace = true }
+wascap = { workspace = true }
+webpki-roots = { workspace = true, optional = true }

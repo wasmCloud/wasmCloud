@@ -1,0 +1,44 @@
+[package]
+name = "wasmcloud-provider-http-server"
+version = "0.28.0"
+description = "Http server for wasmcloud, using Axum. This package provides a library, and a capability provider"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+anyhow = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
+axum = { workspace = true, features = ["http1", "http2", "tokio", "tracing"] }
+axum-extra = { workspace = true }
+axum-server = { workspace = true, features = ["tls-rustls-no-provider"] }
+base64 = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+http-body = { workspace = true }
+pin-project-lite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
+tower-http = { workspace = true, features = ["cors"] }
+tracing = { workspace = true }
+unicase = { workspace = true }
+wasmcloud-core = { workspace = true, features = ["http"] }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wrpc-interface-http = { workspace = true, features = ["http-body"] }
+
+[dev-dependencies]
+reqwest = { workspace = true }
+wasmcloud-test-util = { workspace = true, features = [
+    "http",
+    "os",
+    "testcontainers",
+] }

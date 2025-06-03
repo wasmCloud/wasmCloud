@@ -1,0 +1,59 @@
+# This docker-compose file starts supporting services for a wasmCloud ecosystem, including:
+#   a local OCI registry
+#   grafana + otel-collector +  prometheus + tempo for metrics and tracing
+# This file is intended to be used with `wash up` to start a NATS server, wasmCloud host, and WADM server
+
+version: "3"
+services:
+  registry:
+    image: registry:2.8
+    ports:
+      - "5000:5000"
+
+  grafana:
+    image: grafana/grafana:10.0.10
+    ports:
+      - 5050:3000
+    volumes:
+      - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    depends_on:
+      - prometheus
+      - tempo
+
+  otelcol:
+    depends_on:
+      - prometheus
+      - tempo
+    image: otel/opentelemetry-collector-contrib:0.93.0
+    ports:
+      - 4317:4317
+      - 4318:4318
+    command:
+      - "--config=/etc/otelcol/config.yaml"
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml
+
+  prometheus:
+    image: prom/prometheus:v2.49.1
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--web.enable-remote-write-receiver'
+      - '--enable-feature=native-histograms'
+    ports:
+      - 9090:9090
+    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+  tempo:
+    image: grafana/tempo:2.3.1
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml
+    ports:
+      - 4318 # This port is used for sending traces from otel-collector to tempo
+      - 7999:7999 # tempo

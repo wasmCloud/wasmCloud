@@ -1,0 +1,10 @@
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  # Uses just the release name because this name gets passed into the subchart which has different values
+  name: {{ .Release.Name }}-grafana-dashboards
+  labels:
+    {{- include "benchmark.labels" . | nindent 4 }}
+data:
+{{ (.Files.Glob "dashboards/*").AsConfig | indent 2 }}
+  

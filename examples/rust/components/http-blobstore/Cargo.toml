@@ -1,0 +1,12 @@
+[package]
+name = "http-blobstore"
+edition = "2021"
+version = "0.2.0"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.32"

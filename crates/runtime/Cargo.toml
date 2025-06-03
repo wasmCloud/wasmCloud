@@ -1,0 +1,71 @@
+[package]
+name = "wasmcloud-runtime"
+version = "0.11.0"
+description = "wasmCloud runtime library"
+readme = "README.md"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[features]
+log = ["tracing/log"]
+
+[dependencies]
+anyhow = { workspace = true, features = ["std"] }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true, features = ["async-await", "std"] }
+http = { workspace = true }
+secrecy = { workspace = true }
+semver = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "sync"] }
+tokio-stream = { workspace = true }
+tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+opentelemetry = { workspace = true }
+wascap = { workspace = true }
+wasi-preview1-component-adapter-provider = { workspace = true }
+wasmcloud-core = { workspace = true }
+wasmparser = { workspace = true }
+wasmtime = { workspace = true, features = [
+    "addr2line",
+    "async",
+    "cache",
+    "component-model",
+    "coredump",
+    "cranelift",
+    "gc",
+    "gc-drc",
+    "gc-null",
+    "parallel-compilation",
+    "pooling-allocator",
+    "threads",
+] }
+wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
+wit-bindgen-wrpc = { workspace = true }
+wit-component = { workspace = true }
+wrpc-interface-blobstore = { workspace = true }
+wrpc-interface-http = { workspace = true, features = ["wasmtime-wasi-http"] }
+wrpc-runtime-wasmtime = { workspace = true }
+wrpc-transport = { workspace = true }
+
+[dev-dependencies]
+once_cell = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-std", "macros", "net"] }
+tracing-subscriber = { workspace = true, features = [
+    "ansi",
+    "env-filter",
+    "fmt",
+    "json",
+    "std",
+] }
+wasmcloud-component = { workspace = true, features = ["uuid"] }

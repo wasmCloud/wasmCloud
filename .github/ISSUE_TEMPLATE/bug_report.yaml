@@ -1,0 +1,69 @@
+name: Bug Report
+description: Help us improve!
+title: "[BUG] <title>"
+labels: ["bug", "triage"]
+body:
+  - type: checkboxes
+    attributes:
+      label: Affected project(s)
+      description: Select all that apply
+      options:
+        - label: documentation
+          required: false
+        - label: examples
+          required: false
+        - label: wasmCloud host
+          required: false
+        - label: wasmCloud CLI (wash)
+          required: false
+        - label: wasmCloud dashboard UI (washboard)
+          required: false
+        - label: capability providers
+          required: false
+        - label: provider bindgen
+          required: false
+        - label: control interface client
+          required: false
+        - label: other / not sure
+          required: false
+  - type: textarea
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what the bug is.
+      placeholder: This doesn't seem right...
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+      description: Steps to reproduce the unexpected behavior.
+      placeholder: |
+        1. Run command '...'
+        1. Run other command '...'
+        1. See error
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected behavior
+      description: A clear and concise description of what you expected to happen.
+      placeholder: I expected to see...
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Environment
+      description: Information about your system.
+      value: |
+        - OS: [e.g. Linux, MacOS]
+        - Shell [e.g. bash, zsh, powershell]
+        - wasmcloud Version [e.g. 0.81.0]
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Screenshots / Logs / Additional context
+      description: If applicable, include additional artifacts or context to help explain your problem.
+      placeholder: Attach files here
+    validations:
+      required: false

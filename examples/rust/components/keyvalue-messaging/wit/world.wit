@@ -1,0 +1,13 @@
+package wasmcloud:demo;
+
+world demo {
+    import wasi:logging/logging@0.1.0-draft;
+    import wasi:config/runtime@0.2.0-draft;
+    import wasi:keyvalue/atomics@0.2.0-draft;
+    import wasi:keyvalue/batch@0.2.0-draft;
+    import wasi:keyvalue/store@0.2.0-draft;
+    import wasmcloud:messaging/consumer@0.2.0;
+    import wasmcloud:bus/lattice@1.0.0;
+
+    export wasmcloud:messaging/handler@0.2.0;
+}

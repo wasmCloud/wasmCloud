@@ -1,0 +1,7 @@
+name = "wash-plugin-rust"
+language = "rust"
+type = "component"
+
+[component]
+wit_world = "plugin"
+wasm_target = "wasm32-wasip2"

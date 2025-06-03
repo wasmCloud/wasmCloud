@@ -1,0 +1,30 @@
+# This file lists build byproducts,
+# IDE-specific files (unless shared by your team)
+
+## Build
+/build
+/dist/
+/target
+**target
+
+## File system
+.DS_Store
+desktop.ini
+
+## Editor
+*.swp
+*.swo
+Session.vim
+.cproject
+.idea
+*.iml
+.vscode
+.project
+.favorites.json
+.settings/
+
+## Temporary files
+*~
+\#*
+\#*\#
+.#*

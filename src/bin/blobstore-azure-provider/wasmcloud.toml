@@ -1,0 +1,12 @@
+name = "Blobstore Azure"
+language = "rust"
+type = "provider"
+version = "0.6.1"
+wit = "../../../crates/provider-blobstore-azure/wit"
+
+[rust]
+target_path = "../../../target"
+
+[provider]
+bin_name = "blobstore-azure-provider"
+vendor = "wasmCloud"

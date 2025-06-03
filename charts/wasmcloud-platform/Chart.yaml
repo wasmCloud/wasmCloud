@@ -1,0 +1,62 @@
+apiVersion: v2
+name: wasmcloud-platform
+description: wasmCloud Platform Helm Chart provides a turnkey solution, for running WebAssembly applications on Kubernetes.
+
+# Note: Ensure you bump this `version` field in a separate PR than what you plan
+# to tag as the updated wasmCloud version. To be safe, bump and release wasmCloud
+# in one PR, then open a new PR updating this `version` and `appVersion`.
+version: 0.1.2
+
+type: application
+appVersion: "1.2.1"
+
+kubeVersion: ">=1.24.0-0"
+
+dependencies:
+  - name: nats
+    version: 1.2.3
+    repository: https://nats-io.github.io/k8s/helm/charts/
+    condition: nats.enabled
+    tags:
+      - nats-cluster
+  - name: wadm
+    version: 0.2.7
+    repository: oci://ghcr.io/wasmcloud/charts
+    condition: wadm.enabled
+    tags:
+      - wadm
+  - name: wasmcloud-operator
+    alias: operator
+    version: 0.1.5
+    repository: oci://ghcr.io/wasmcloud/charts
+    condition: operator.enabled
+    tags:
+      - wasmcloud-operator
+  - name: wasmcloud-host
+    alias: host
+    version: 0.8.4
+    repository: oci://ghcr.io/wasmcloud/charts
+    condition: host.enabled
+    tags:
+      - wasmcloud-host
+
+home: https://github.com/wasmCloud/wasmcloud
+icon: https://github.com/wasmCloud/wasmCloud/blob/main/brand/icon/green/wasmCloud.icon-green.svg
+sources:
+  - https://github.com/wasmCloud/wasmCloud
+  - https://github.com/wasmCloud/wadm
+  - https://github.com/nats-io/nats-server
+  - https://github.com/wasmCloud/wasmcloud-operator
+
+deprecated: false
+
+keywords:
+  - wasmcloud
+  - wasi
+  - webassembly
+  - wadm
+  - nats
+  - cncf
+
+annotations:
+  license: Apache-2.0

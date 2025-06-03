@@ -1,0 +1,7 @@
+package wasmcloud:hello;
+
+world hello {
+  import wasi:http/outgoing-handler@0.2.2;
+
+  export wasi:http/incoming-handler@0.2.2;
+}

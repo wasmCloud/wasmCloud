@@ -1,0 +1,12 @@
+[package]
+name = "http-keyvalue-counter"
+edition = "2021"
+version = "0.1.0"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasmcloud-component = "0.2.0"

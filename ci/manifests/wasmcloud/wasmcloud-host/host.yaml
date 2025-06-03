@@ -1,0 +1,103 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: wasmcloud
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wasmcloud
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wasmcloud
+    spec:
+      containers:
+        - name: wasmcloud
+          image: wasmcloud
+          imagePullPolicy: Always
+          command:
+            - wasmcloud
+          env:
+            - name: WASMCLOUD_EXPERIMENTAL_FEATURES
+              value: "builtin-messaging-nats,builtin-http-server"
+            - name: WASMCLOUD_STRUCTURED_LOGGING_ENABLED
+              value: "true"
+            - name: WASMCLOUD_JS_DOMAIN
+              value: default
+            - name: WASMCLOUD_LATTICE
+              value: default
+            - name: WASMCLOUD_NATS_HOST
+              value: nats-headless
+            - name: WASMCLOUD_NATS_PORT
+              value: "4222"
+            - name: WASMCLOUD_LABEL_kubernetes
+              value: "true"
+            - name: WASMCLOUD_LABEL_kubernetes_pod_name
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.name
+            - name: WASMCLOUD_LABEL_kubernetes_node_name
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+          ports:
+            - name: local
+              containerPort: 8080
+              protocol: TCP
+            - name: remote
+              containerPort: 8081
+              protocol: TCP
+      dnsPolicy: ClusterFirst
+      terminationGracePeriodSeconds: 0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/name: wasmcloud
+  name: wasmcloud-headless
+spec:
+  clusterIP: None
+  internalTrafficPolicy: Cluster
+  ports:
+    - appProtocol: tcp
+      name: local
+      port: 8080
+      protocol: TCP
+      targetPort: local
+    - appProtocol: tcp
+      name: remote
+      port: 8081
+      protocol: TCP
+      targetPort: remote
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: wasmcloud
+  sessionAffinity: None
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/name: wasmcloud
+  name: wasmcloud
+spec:
+  internalTrafficPolicy: Cluster
+  ports:
+    - appProtocol: tcp
+      name: local
+      port: 8080
+      protocol: TCP
+      targetPort: local
+    - appProtocol: tcp
+      name: remote
+      port: 8081
+      protocol: TCP
+      targetPort: remote
+  selector:
+    app.kubernetes.io/name: wasmcloud
+  sessionAffinity: None
+  type: ClusterIP

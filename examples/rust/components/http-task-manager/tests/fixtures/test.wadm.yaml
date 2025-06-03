@@ -1,0 +1,52 @@
+---
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: http-task-manager
+  annotations:
+    description: |
+      Task manager which is accessed via HTTP, enabling storage, leasing and completion of jobs
+spec:
+  components:
+    - name: http-task-mgr
+      type: component
+      properties:
+        image: file://../../build/http_task_manager_s.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            instances: 1
+        - type: link
+          properties:
+            target:
+              name: sqldb-postgres
+              config:
+                - name: test-default-postgres
+            namespace: wasmcloud
+            package: postgres
+            interfaces: [query]
+
+    - name: httpserver
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/http-server:0.23.2
+      traits:
+        - type: link
+          properties:
+            target:
+              name: http-task-mgr
+            namespace: wasi
+            package: http
+            interfaces: [incoming-handler]
+            source:
+              config:
+                - name: default-http
+                  properties:
+                    address: 0.0.0.0:8000
+
+    - name: sqldb-postgres
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/sqldb-postgres:0.7.1
+        config:
+          - name: test-default-postgres

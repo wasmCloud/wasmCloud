@@ -1,0 +1,36 @@
+[package]
+name = "wasmcloud-provider-http-client"
+version = "0.13.1"
+description = """
+HTTP client for wasmCloud, using hyper. This package provides a capability provider that satisfies the 'wrpc:http/outgoing-handler' contract.
+"""
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+anyhow = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+http-body = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true }
+rustls = { workspace = true, features = ["std"] }
+rustls-pemfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "io-util"] }
+tokio-rustls = { workspace = true }
+tracing = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+webpki-roots = { workspace = true }
+wrpc-interface-http = { workspace = true, features = ["http-body"] }
+
+[dev-dependencies]
+test-log = { workspace = true, features = ["color", "log", "trace", "unstable"] }

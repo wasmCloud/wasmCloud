@@ -1,0 +1,47 @@
+[package]
+name = "secrets-nats-kv"
+version = "0.2.0"
+readme = "README.md"
+description = "A secrets backend for wasmCloud that uses NATS as a key-value store."
+categories = ["cryptography"]
+keywords = ["webassembly", "wasmcloud", "nats", "cli", "kv"]
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "secrets_nats_kv"
+path = "src/lib.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = { workspace = true }
+async-nats = { workspace = true, features = ["server_2_10", "ring"] }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true, features = [
+    "derive",
+    "std",
+    "help",
+    "suggestions",
+    "color",
+    "usage",
+    "env",
+] }
+exponential-backoff = { workspace = true }
+futures = { workspace = true }
+nkeys = { workspace = true, features = ["xkeys"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
+wascap = { workspace = true }
+wasmcloud-secrets-types = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true, features = ["thread_rng"] }
+wasmcloud-secrets-client = { workspace = true }

@@ -1,0 +1,67 @@
+package wrpc:rpc@0.1.0;
+
+interface error {
+    use wasi:io/error@0.2.0.{error as io-error};
+
+    /// A resource which represents some error information.
+    ///
+    /// The only method provided by this resource is `to-debug-string`,
+    /// which provides some human-readable information about the error.
+    resource error {
+        /// Attempts to convert `wasi:io/error.error` into `error`.
+        ///
+        /// Returns the original `wasi:io/error.error` in case of mismatch.
+        from-io-error: static func(error: io-error) -> result<error, io-error>;
+
+        /// Returns a string that is suitable to assist humans in debugging
+        /// this error.
+        ///
+        /// WARNING: The returned string should not be consumed mechanically!
+        /// It may change across platforms, hosts, or other implementation
+        /// details. Parsing this string is a major platform-compatibility
+        /// hazard.
+        to-debug-string: func() -> string;
+    }
+}
+
+interface context {
+    resource context {
+        default: static func() -> context;
+    }
+}
+
+interface transport {
+    use wasi:io/poll@0.2.0.{pollable};
+    use wasi:io/streams@0.2.0.{input-stream, output-stream};
+
+    use error.{error};
+
+    resource incoming-channel {
+        data: func() -> option<input-stream>;
+        index: func(path: list<u32>) -> result<incoming-channel, error>;
+    }
+
+    resource outgoing-channel {
+        data: func() -> option<output-stream>;
+        index: func(path: list<u32>) -> result<outgoing-channel, error>;
+    }
+
+    resource invocation {
+        /// Returns a pollable, which will be ready once the invocation has been transmitted
+        subscribe: func() -> pollable;
+        /// Finish will consume this invocation returning an error, if any.
+        finish: static func(this: invocation) -> result<tuple<outgoing-channel, incoming-channel>, error>;
+    }
+}
+
+interface invoker {
+    use context.{context};
+    use transport.{invocation};
+
+    /// Asynchronously invoke a function.
+    invoke: func(cx: context, instance: string, name: string, params: list<u8>, paths: list<list<option<u32>>>) -> invocation;
+}
+
+world imports {
+    import invoker;
+}

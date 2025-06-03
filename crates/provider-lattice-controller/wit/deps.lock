@@ -1,0 +1,4 @@
+[lattice-control]
+path = "../../../../wit/wasmcloud/lattice-control"
+sha256 = "4a2425bb052510a875113e4dd62241824ee44f1f22d1aa03d3d1aa24d60337ee"
+sha512 = "8b7d5bbe87e4e335e70c60ec5023e079e5903bd6db228d0684ba674d482f2bbb4f7318ceccd3d4e22749944507a7e288da8007ea20b50f3d5b2351b63618e534"

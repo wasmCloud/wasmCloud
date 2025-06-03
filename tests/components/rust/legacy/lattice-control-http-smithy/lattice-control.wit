@@ -1,0 +1,534 @@
+package wasmcloud:lattice-control;
+
+/// This interface represents the functions necessary
+/// to implement the [lattice-control wasmCloud interface](https://github.com/wasmCloud/interfaces/blob/main/lattice-control/lattice-control-interface.smithy)
+///
+/// Derived from https://github.com/wasmCloud/interfaces/blob/a418af8a0073dd29202deaeae3d0b2c7b9df000d/lattice-control/lattice-control-interface.smithy
+interface lattice-controller {
+    /// A link definition
+    record link-definition {
+      /// A unique identifier (i.e. public key) of the actor
+      actor-id: string,
+
+      /// A unique identifier (i.e. public key) of the capability provider
+      provider-id: string,
+
+      /// Link name (ex. 'default')
+      link-name: string,
+
+      /// Contract ID (ex. 'wasmcloud:httpserver')
+      contract-id: string,
+
+      /// Values (i.e. settings) to be passed on the link
+      //
+      // This member expects/requires the use of bindgen's `replace_witified_maps` option,
+      // which will turn this member into `values: Vec<HashMap<String, String>>`
+      values-map: option<list<tuple<string, string>>>,
+    }
+
+    /// A request to advertise/publish a link definition on a given lattice
+    record advertise-link-request {
+      /// The ID of the lattice for this request
+      lattice-id: string,
+
+      /// The link definition that should be advertised/published
+      link: link-definition,
+    }
+
+    /// A request to obtain claims from a given lattice
+    record get-claims-request {
+      /// The ID of the lattice for this request
+      lattice-id: string,
+    }
+
+    /// A request to query the inventory of a given host within a given lattice
+    record get-host-inventory-request {
+      /// The ID of the lattice for this request
+      lattice-id: string,
+
+      /// The ID (i.e. public key) of the host being targeted for this request
+      host-id: string,
+    }
+
+    /// A request to obtain the list of hosts responding within a given lattice
+    record get-hosts-request {
+      /// The ID of the lattice for this request
+      lattice-id: string,
+    }
+
+    /// A request to set/store the credentials that correspond to a given lattice ID
+    record set-lattice-credentials-request {
+      /// The ID of the lattice for this request
+      lattice-id: string,
+
+      /// Contains the user JWT to be used for authenticating against NATS to alow
+      /// access to the lattice.
+      ///
+      /// If not supplied, the capability provider will assume/set anonymous access
+      /// for the lattice.
+      user-jwt: option<string>,
+
+      /// The seed key used for user authentication against NATS for the lattice
+      ///
+      /// The user seed must be supplied if the user JWT has been supplied.
+      user-seed: option<string>,
+
+      /// URL and port for establishing connections for the given lattice
+      nats-url: option<string>,
+
+      /// Jetstream domain (if required) for communicating with the underlying KV metadata bucket
+      /// for the lattice.
+      js-domain: option<string>,
+    }
+
+    /// A request to locate a suitable host for a capability provider.
+    ///
+    /// Providers are uniquely identified by reference & link name, which is
+    /// used to rule out sites on which the provider may already be running.
+    record provider-auction-request {
+      /// The ID of the lattice for this request
+      lattice-id: string,
+
+      /// The reference for the provider, taking any form that uniquely identifies a provider
+      provider-ref: string,
+
+      /// The link name of the provider
+      link-name: string,
+
+      /// The set of constraints to which a suitable target host must conform
+      //
+      // This member expects/requires the use of bindgen's `replace_witified_maps` option,
+      // which will turn this member into `constraints: Vec<HashMap<String, String>>`
+      constraints-map: list<tuple<string,string>>,
+    }
+
+    /// Acknowledgement of a provider auction
+    ///
+    /// This is only one of a many of potential responses to a provider auction
+    record provider-auction-ack {
+      /// The reference for the provider, taking any form that uniquely identifies a provider
+      provider-ref: string,
+
+      /// The link name of the provider
+      link-name: string,
+
+      /// The host ID of the "bidder" for the auction
+      host-id: string,
+    }
+
+    /// A request to locate a suitable host for a given actor.
+    record actor-auction-request {
+      /// The ID of the lattice for this request
+      lattice-id: string,
+
+      /// The reference for the actor, which can take any form that uniquely identifies a actor
+      actor-ref: string,
+
+      /// The set of constraints to which a suitable target host must conform
+      //
+      // This member expects/requires the use of bindgen's `replace_witified_maps` option,
+      // which will turn this member into `constraints: Vec<HashMap<String, String>>`
+      constraints-map: list<tuple<string,string>>,
+    }
+
+    /// Acknowledgement of a actor auction
+    ///
+    /// This is only one of a many of potential responses to a actor auction
+    record actor-auction-ack {
+      /// The reference for the actor, which can take any form that uniquely identifies a actor
+      actor-ref: string,
+
+      /// The host ID of the "bidder" for the auction
+      host-id: string,
+    }
+
+    /// Describes the known contents of a given host
+    record host-inventory {
+      /// The host's unique ID
+      host-id: string,
+
+      /// The host's labels
+      //
+      // This member expects/requires the use of bindgen's `replace_witified_maps` option,
+      // which will turn this member into `labels: Vec<HashMap<String, String>>`
+      labels-map: list<tuple<string,string>>,
+
+      /// Actors running on the host
+      actors: list<actor-description>,
+
+      /// Providers running on the host
+      providers: list<provider-description>,
+    }
+
+    /// A description of an actor within a host inventory
+    record actor-description {
+      /// Actor's 56-character unique ID
+      id: string,
+
+      /// Image reference for this actor, if applicable
+      image-ref: option<string>,
+
+      /// Name of the actor, if one exists
+      name: option<string>,
+
+      /// Individual instances of this actor
+      instances: list<actor-instance>,
+    }
+
+    /// An instance of an actor
+    record actor-instance {
+      /// the instnace's unique (GU)ID
+      instance-id: string,
+
+      /// The revision number for this actor instance
+      revision: s32,
+
+      /// Annotations that were used when starting this instance
+      //
+      // This member expects/requires the use of bindgen's `replace_witified_maps` option,
+      // which will turn this member into `annotations: Vec<HashMap<String, String>>`
+      annotations-map: option<list<tuple<string,string>>>,
+    }
+
+    /// A description of an capability provider within a host inventory
+    record provider-description {
+      /// Provider's 56-character unique ID
+      id: string,
+
+      /// Provider's link name
+      link-name: string,
+
+      /// Image reference for this provider, if applicable
+      image-ref: option<string>,
+
+      /// Name of the provider, if one exists
+      name: option<string>,
+
+      /// The revision number for this actor instance
+      revision: s32,
+
+      /// Annotations that were used when starting this instance
+      //
+      // This member expects/requires the use of bindgen's `replace_witified_maps` option,
+      // which will turn this member into `annotations: Vec<HashMap<String, String>>`
+      annotations-map: option<list<tuple<string,string>>>,
+    }
+
+    /// A command sent to a specific host instructing it to start an actor
+    record start-actor-command {
+      /// The ID of the lattice for this request
+      lattice-id: string,
+
+      /// The reference for the actor, which can take any form that uniquely identifies a actor
+      actor-ref: string,
+
+      /// Host ID on which the actor should start
+      host-id: string,
+
+      /// Annotations that were used when starting this instance
+      //
+      // This member expects/requires the use of bindgen's `replace_witified_maps` option,
+      // which will turn this member into `annotations: Vec<HashMap<String, String>>`
+      annotations-map: list<tuple<string,string>>,
+
+      /// The number of actors to start (a zero value will be interpreted as 1)
+      count: u16,
+    }
+
+    /// A command sent to a specific host instructing it to start a capability provider
+    record start-provider-command {
+      /// The ID of the lattice for this request
+      lattice-id: string,
+
+      /// The host ID on which to start the provider
+      host-id: string,
+
+      /// The image reerence of the provider to be started
+      provider-ref: string,
+
+      /// The link name of the provider to be started
+      link-name: string,
+
+      /// Annotations that were used when starting this instance
+      //
+      // This member expects/requires the use of bindgen's `replace_witified_maps` option,
+      // which will turn this member into `annotations: Vec<HashMap<String, String>>`
+      annotations-map: list<tuple<string,string>>,
+
+      /// Provider configuration in the form of an opaque string.
+      ///
+      /// Many providers prefer base64-encoded JSON, whose data should not exceed 500KB
+      configuration: string,
+    }
+
+    /// A command sent to a specific host instructing it to scale an actor
+    record scale-actor-command {
+      /// The ID of the lattice for this request
+      lattice-id: string,
+
+      /// Reference for the actor. Can be any of the acceptable forms of unique identification.
+      actor-ref: string,
+
+      /// Public key ID of the actor to scale
+      actor-id: string,
+
+      /// The host ID on which to scale the actor
+      host-id: string,
+
+      /// Annotations that were used when starting this instance
+      //
+      // This member expects/requires the use of bindgen's `replace_witified_maps` option,
+      // which will turn this member into `annotations: Vec<HashMap<String, String>>`
+      annotations-map: list<tuple<string,string>>,
+
+      /// The target number of actors
+      count: u32,
+    }
+
+    /// A request to stop the given provider on the indicated host
+    record stop-provider-command {
+      /// The ID of the lattice for this request
+      lattice-id: string,
+
+      /// The host ID on which to stop the provider
+      host-id: string,
+
+      /// The public key of the capability provider to stop
+      provider-id: string,
+
+      /// Link name for this provider
+      link-name: string,
+
+      /// Contract ID of the capability provider
+      contract-id: string,
+
+      /// Annotations that were used when starting this instance
+      //
+      // This member expects/requires the use of bindgen's `replace_witified_maps` option,
+      // which will turn this member into `annotations: Vec<HashMap<String, String>>`
+      annotations-map: list<tuple<string,string>>,
+    }
+
+    /// A request to stop the given host
+    record stop-host-command {
+      /// The ID of the lattice for this request
+      lattice-id: string,
+
+      /// The ID of the host to stop
+      host-id: string,
+
+      /// An optional timeout (in seconds)
+      timeout: option<u64>,
+    }
+
+    /// A command requesting a host to perform a live update on an indicated actor,
+    /// supplying a new image reference.
+    ///
+    /// Note that live updates are only possibly through image references.
+    record update-actor-command {
+      /// The ID of the lattice for this request
+      lattice-id: string,
+
+      /// The host ID on which to perform the live actor update
+      host-id: string,
+
+      /// The public key of the actor to update
+      actor-id: string,
+
+      /// The new image reference of the upgraded version of this actor
+      new-actor-ref: string,
+
+      /// Optional set of annotations used to describe the nature of this update request.
+      ///
+      /// Only actor instances that have matching annotations will be upgraded, allowing for instance
+      /// isolation by autonomous agent deployment spec (ex. wadm), for example.
+      //
+      // This member expects/requires the use of bindgen's `replace_witified_maps` option,
+      // which will turn this member into `annotations: Vec<HashMap<String, String>>`
+      annotations-map: option<list<tuple<string,string>>>,
+    }
+
+    /// Standard response for control interface operations
+    record ctl-operation-ack {
+      /// Whether the operation was accepted
+      accepted: bool,
+
+      /// If an error occurred, a string representing the error
+      error: string,
+    }
+
+    /// Representation of a wasmcloud Host
+    record host {
+      /// The ID of the host
+      id: string,
+
+      /// Uptime in seconds of the host
+      uptime-seconds: u64,
+
+      /// Human-friendly uptime description
+      uptime-human: option<string>,
+
+      /// map of key-value pairs which serve as labels of the host
+      //
+      // This member expects/requires the use of bindgen's `replace_witified_maps` option,
+      // which will turn this member into `annotations: Vec<HashMap<String, String>>`
+      labels-map: option<list<tuple<string,string>>>,
+
+      /// Human-friendly uptime description
+      version: option<string>,
+
+      /// Comma-delimited list of valid cluster issuer public keys known to this host
+      cluster-issuers: option<string>,
+
+      /// JetStream domain (if applicable) in use by this host
+      js-domain: option<string>,
+
+      /// NATS server host used for the control interface
+      ctl-host: option<string>,
+
+      /// NATS server host used for provider RPC
+      ///
+      /// This field has been deprecated and is now equivalent to rpc-host, but is left here for
+      /// backwards compatibility with the original smithy contract.
+      prov-rpc-host: option<string>,
+
+      /// NATS server host used for regular RPC
+      rpc-host: option<string>,
+
+      /// Lattice prefix/ID used by the host
+      lattice-prefix: option<string>,
+    }
+
+    /// A response containing the full list of known claims within the lattice
+    record get-claims-response {
+      // This member expects/requires the use of bindgen's `replace_witified_maps` option, which
+      // will turn this member into `claims: Vec<HashMap<String, String>>`
+      claims-map: list<list<tuple<string,string>>>,
+    }
+
+    /// A request to remove a link definition and detach the relevant actor from the given provider
+    record remove-link-definition-request {
+      /// The ID of the lattice for this request
+      lattice-id: string,
+
+      /// The actor's public key. This cannot be an image reference
+      actor-id: string,
+
+      /// Contract ID for the link
+      contract-id: string,
+
+      /// Name of the link
+      link-name: string,
+    }
+
+    record set-registry-credentials-request {
+      /// The ID of the lattice on which this request will be performed
+      lattice-id: string,
+
+      /// Registry credentials to be set for the given lattice
+      credentials: option<list<tuple<string, registry-credential>>>
+    }
+
+    record registry-credential {
+      /// The ID of the lattice on which this request will be performed
+      token: option<string>,
+
+      /// Username to use for HTTP basic auth
+      username: option<string>,
+
+      /// Password to use for HTTP basic auth
+      password: option<string>,
+
+      /// Type of registry (i.e. either "oci" or "bindle")
+      registry-type: option<string>,
+    }
+
+    /// Find suitable hosts for a capability provider given a set of host label constraints.
+    ///
+    /// Hosts on which this provider is already running will not be among the successful "bidders"
+    /// in the auction.
+    auction-provider: func(req: provider-auction-request) -> list<provider-auction-ack>;
+
+    /// Seek out a list of suitable hosts for an actor given a set of host label constraints
+    auction-actor: func(req: actor-auction-request) -> list<actor-auction-ack>;
+
+    /// Queries the list of hosts currently visible to the lattice.
+    ///
+    /// This "gather" operation can be influenced by short timeouts, network partition events, etc.
+    get-hosts: func(lattice-id: string) -> list<host>;
+
+    /// Queries the contents of a host given the supplied 56-character unique ID
+    get-host-inventory: func(req: get-host-inventory-request) -> host-inventory;
+
+    /// Queries the lattice for the list of known/cached claims by taking the response
+    /// from the first host that answers the query.
+    get-claims: func(lattice-id: string) -> get-claims-response;
+
+    /// Publish a link definition into the lattice, allowing it to be cached and
+    /// delivered to the appropriate capability provider instances
+    advertise-link: func(req: advertise-link-request) -> ctl-operation-ack;
+
+    /// Requests the removal of a link definition.
+    ///
+    /// The definition will be removed from teh cache and the relevant capability providers
+    /// will be given a chance to de-provision any used resources
+    remove-link: func(req: remove-link-definition-request) -> ctl-operation-ack;
+
+    ///////////////////////
+    /// Actor Operations //
+    ///////////////////////
+
+    /// Instructs a given host to start the indicated actor
+    start-actor: func(cmd: start-actor-command) -> ctl-operation-ack;
+
+    /// Instructs a given host to scale the indicated actor
+    scale-actor: func(cmd: scale-actor-command) -> ctl-operation-ack;
+
+    /// Instructs a given host to perform a live update on the indicated actor
+    update-actor: func(cmd: update-actor-command) -> ctl-operation-ack;
+
+    ////////////////////////////////
+    // Link definition Operations //
+    ////////////////////////////////
+
+    /// Queries all current link definitions in the specified lattice.
+    ///
+    /// The first host that receives this response will reply with the distributed cache contents
+    get-links: func(lattice-id: string) -> list<link-definition>;
+
+    //////////////////////////
+    /// Provider Operations //
+    //////////////////////////
+
+    /// Requests that the given host start the given capability provider
+    start-provider: func(cmd: start-provider-command) -> ctl-operation-ack;
+
+    /// Requests that the given capability provider be stopped on the indicated host
+    stop-provider: func(cmd: stop-provider-command) -> ctl-operation-ack;
+
+    //////////////////////
+    /// Host Operations //
+    //////////////////////
+
+    /// Requests that a single host stops operating
+    stop-host: func(cmd: stop-host-command) -> ctl-operation-ack;
+
+    ////////////////////
+    /// Configuration //
+    ////////////////////
+
+    /// Instructs all listening hosts to use the enclosed credential map for authentication
+    /// in securing artifact (OCI/bindle) registries.
+    ///
+    /// Any host that receives this message will _delete_ its previous credential map and replace it
+    /// with the enclosed.
+    ///
+    /// The credential map for a lattice can be purged by sending this message with an empty map.
+    set-registry-credentials: func(cmd: set-registry-credentials-request);
+
+    /// Instructs the provider to store the NATS credentials/URL for a given lattice.
+    ///
+    /// This is designed to allow a single capability provider (or multiple instances of the same) to
+    /// manage multiple lattices, reducing overhead and better supporting secure multi-tenancy.
+    set-lattice-credentials: func(cmd: set-lattice-credentials-request) -> ctl-operation-ack;
+}

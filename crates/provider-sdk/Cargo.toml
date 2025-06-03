@@ -1,0 +1,50 @@
+[package]
+name = "wasmcloud-provider-sdk"
+version = "0.16.0"
+description = "wasmCloud provider SDK"
+readme = "README.md"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[package.metadata.docs.rs]
+features = ["otel"]
+
+[features]
+default = []
+otel = ["opentelemetry", "tracing-opentelemetry"]
+
+[dependencies]
+anyhow = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
+base64 = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+nkeys = { workspace = true, features = ["xkeys"] }
+once_cell = { workspace = true }
+opentelemetry = { workspace = true, optional = true }
+rmp-serde = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true, features = ["log"] }
+tracing-subscriber = { workspace = true, features = ["std"] }
+tracing-futures = { workspace = true, features = ["default"] }
+tracing-opentelemetry = { workspace = true, optional = true }
+wasmcloud-core = { workspace = true, features = [
+    "hyper-rustls",
+    "otel",
+    "rustls-native-certs",
+    "tokio-rustls",
+    "webpki-roots",
+] }
+wasmcloud-tracing = { workspace = true, features = ["otel"] }
+wrpc-transport = { workspace = true }
+wrpc-transport-nats = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["opentelemetry", "tracing-futures", "tracing-opentelemetry"]

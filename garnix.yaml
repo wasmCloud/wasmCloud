@@ -1,0 +1,23 @@
+builds:
+  include:
+  - 'checks.aarch64-darwin.*'
+  - 'checks.x86_64-linux.*'
+
+  - devShells.aarch64-darwin
+  - devShells.aarch64-linux
+  - devShells.x86_64-linux
+
+  - packages.aarch64-darwin.default
+  - packages.aarch64-darwin.wasmcloud
+  - packages.aarch64-darwin.wasmcloud-aarch64-apple-darwin
+  - packages.aarch64-darwin.wasmcloud-aarch64-apple-darwin-oci
+
+  - packages.x86_64-linux.default
+  - packages.x86_64-linux.wasmcloud
+  - packages.x86_64-linux.wasmcloud-aarch64-unknown-linux-musl
+  - packages.x86_64-linux.wasmcloud-aarch64-unknown-linux-musl-oci
+  - packages.x86_64-linux.wasmcloud-x86_64-unknown-linux-musl
+  - packages.x86_64-linux.wasmcloud-x86_64-unknown-linux-musl-oci
+
+  exclude:
+  - checks.aarch64-darwin.nextest # Garnix CI runners cannot listen on TCP

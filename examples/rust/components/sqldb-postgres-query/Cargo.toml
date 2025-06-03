@@ -1,0 +1,15 @@
+[package]
+name = "sqldb-postgres-query"
+edition = "2021"
+version = "0.1.0"
+description = """
+An example component that performs queries with the wasmcloud-sqldb-postgres provider, using only the wasmcloud:postgres interface.
+"""
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.32"

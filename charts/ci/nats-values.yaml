@@ -1,0 +1,10 @@
+config:
+  leafnodes:
+    enabled: true
+  jetstream:
+    enabled: true
+    fileStore:
+      pvc:
+        enabled: false
+    merge:
+      domain: default

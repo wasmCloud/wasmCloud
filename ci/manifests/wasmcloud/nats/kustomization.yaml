@@ -1,0 +1,10 @@
+resources:
+  - nats.yaml
+
+configMapGenerator:
+  - name: nats-leaf-config
+    files:
+      - nats-leaf.conf
+  - name: nats-config
+    files:
+      - nats.conf

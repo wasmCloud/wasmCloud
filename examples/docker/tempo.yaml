@@ -1,0 +1,22 @@
+server:
+  http_listen_port: 7999
+
+distributor:
+  log_received_spans:
+    enabled: true
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: "0.0.0.0:4318"
+
+storage:
+  trace:
+    backend: local
+    block:
+      v2_encoding: zstd
+    wal:
+      path: /tmp/tempo/wal
+      v2_encoding: none
+    local:
+      path: /tmp/tempo/blocks

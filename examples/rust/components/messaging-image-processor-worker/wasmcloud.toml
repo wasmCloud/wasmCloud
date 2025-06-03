@@ -1,0 +1,8 @@
+name = "messaging-image-processor-worker"
+language = "rust"
+type = "component"
+
+[component]
+# NOTE: rustix does not yet allow use of unstable library feature wasip2,
+# we must allow wash to auto-adapt this component
+wasm_target = "wasm32-wasip1"

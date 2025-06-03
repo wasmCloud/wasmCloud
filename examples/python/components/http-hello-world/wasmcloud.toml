@@ -1,0 +1,10 @@
+name = "python-http-hello-world"
+language = "python" 
+type = "component"
+version = "0.1.0"
+
+[component]
+# NOTE: The that the 'build' directory must be available, otherwise the build command will fail.
+build_command = "componentize-py -d ./wit -w hello componentize app -o build/http_hello_world.wasm"
+build_artifact = "build/http_hello_world.wasm"
+destination = "build/http_hello_world_s.wasm"
