@@ -74,7 +74,7 @@ jobs:
         if: ${{ matrix.project.lang == 'golang' }}
         with:
           go-version: ${{ matrix.project.lang_version }}
-      - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
+      - uses: acifani/setup-tinygo@db56321a62b9a67922bb9ac8f9d085e218807bb3
         if: ${{ matrix.project.lang == 'golang' }}
         with:
           tinygo-version: ${{ matrix.project.tinygo_version }}
