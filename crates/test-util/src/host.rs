@@ -9,7 +9,6 @@ use anyhow::{anyhow, Context as _, Result};
 use async_nats::{Client as NatsClient, ServerAddr};
 use nkeys::KeyPair;
 use tokio::task::JoinSet;
-use tokio_stream::StreamExt as _;
 use url::Url;
 
 use wasmcloud_control_interface::{Client as WasmcloudCtlClient, ClientBuilder};
