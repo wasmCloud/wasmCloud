@@ -108,12 +108,14 @@ impl WkgFetcher {
                 RegistryPullSource::RemoteHttp(s) => {
                     let url = Url::parse(s)
                         .with_context(|| format!("invalid registry pull source url [{s}]"))?;
-                    let tempdir = tempfile::tempdir()
-                        .with_context(|| {
-                            format!("failed to create temp dir for downloading [{url}]")
-                        })?
-                        .keep();
-                    let output_path = tempdir.join("unpacked");
+                    let tempdir =
+                        tempfile::Builder::new()
+                            .keep(true)
+                            .tempdir()
+                            .with_context(|| {
+                                format!("failed to create temp dir for downloading [{url}]")
+                            })?;
+                    let output_path = tempdir.path().join("unpacked");
                     let http_client = crate::lib::start::get_download_client()?;
                     let req = http_client.get(url.clone()).send().await.with_context(|| {
                         format!("failed to retrieve WIT output from URL [{}]", &url)
@@ -141,11 +143,13 @@ impl WkgFetcher {
                     let url = Url::parse(s)
                         .with_context(|| format!("invalid registry pull source url [{s}]"))?;
                     let query_pairs = url.query_pairs().collect::<HashMap<_, _>>();
-                    let tempdir = tempfile::tempdir()
-                        .with_context(|| {
-                            format!("failed to create temp dir for downloading [{url}]")
-                        })?
-                        .keep();
+                    let tempdir =
+                        tempfile::Builder::new()
+                            .keep(true)
+                            .tempdir()
+                            .with_context(|| {
+                                format!("failed to create temp dir for downloading [{url}]")
+                            })?;
 
                     // Determine the right git ref to use, based on the submitted query params
                     let git_ref = match (
