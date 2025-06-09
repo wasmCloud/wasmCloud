@@ -99,6 +99,9 @@ pub struct ScaleComponentCommand {
     // NOTE: renaming to `count` lets us remain backwards compatible for a few minor versions
     #[serde(default, alias = "count", rename = "count")]
     pub(crate) max_instances: u32,
+    /// The Maximun linear memory that an instance can allocate
+    #[serde(default)]
+    pub(crate) max_linear_memory: Option<usize>,
     /// Host ID on which to scale this component
     #[serde(default)]
     pub(crate) host_id: String,
@@ -150,6 +153,11 @@ impl ScaleComponentCommand {
     }
 
     #[must_use]
+    pub fn max_linear_memory(&self) -> Option<usize> {
+        self.max_linear_memory
+    }
+
+    #[must_use]
     pub fn host_id(&self) -> &str {
         &self.host_id
     }
@@ -168,6 +176,7 @@ pub struct ScaleComponentCommandBuilder {
     component_id: Option<String>,
     annotations: Option<BTreeMap<String, String>>,
     max_instances: Option<u32>,
+    max_linear_memory: Option<usize>,
     host_id: Option<String>,
     config: Option<Vec<String>>,
     allow_update: Option<bool>,
@@ -204,6 +213,12 @@ impl ScaleComponentCommandBuilder {
     }
 
     #[must_use]
+    pub fn max_linear_memory(mut self, v: usize) -> Self {
+        self.max_linear_memory = Some(v);
+        self
+    }
+
+    #[must_use]
     pub fn host_id(mut self, v: &str) -> Self {
         self.host_id = Some(v.into());
         self
@@ -231,6 +246,7 @@ impl ScaleComponentCommandBuilder {
                 .ok_or_else(|| "component id is required for scaling components".to_string())?,
             annotations: self.annotations,
             max_instances: self.max_instances.unwrap_or(0),
+            max_linear_memory: self.max_linear_memory,
             host_id: self
                 .host_id
                 .ok_or_else(|| "host id is required for scaling hosts host".to_string())?,
@@ -618,6 +634,7 @@ mod tests {
                 allow_update: true,
                 annotations: Some(BTreeMap::from([("a".into(), "b".into())])),
                 max_instances: 1,
+                max_linear_memory: None,
             },
             ScaleComponentCommand::builder()
                 .component_ref("component_ref")
