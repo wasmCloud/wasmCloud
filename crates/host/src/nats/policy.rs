@@ -5,6 +5,7 @@ use core::time::Duration;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Context;
 use futures::{
@@ -24,6 +25,111 @@ use crate::policy::{
     POLICY_TYPE_VERSION,
 };
 
+#[derive(Debug)]
+struct CacheEntry<T>
+where
+    T: Clone,
+{
+    value: T,
+    last_updated: Instant,
+}
+
+impl<T> CacheEntry<T>
+where
+    T: Clone,
+{
+    fn new(value: T) -> Self {
+        Self {
+            value,
+            last_updated: Instant::now(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DecisionCache<K, V>
+where
+    K: std::hash::Hash + Eq + std::fmt::Debug + Send + Sync + 'static,
+    V: std::fmt::Debug + Clone + Send + Sync + 'static,
+{
+    cache: Arc<RwLock<HashMap<K, CacheEntry<V>>>>,
+    ttl: Duration,
+    _cleanup_handle: tokio::task::AbortHandle,
+}
+
+impl<K, V> DecisionCache<K, V>
+where
+    K: std::hash::Hash + Eq + std::fmt::Debug + Send + Sync + 'static,
+    V: std::fmt::Debug + Clone + Send + Sync + 'static,
+{
+    fn new(ttl: Duration) -> Self {
+        Self::with_cleanup(ttl, ttl / 2)
+    }
+
+    fn with_cleanup(ttl: Duration, interval: Duration) -> Self {
+        let cache = Arc::new(RwLock::new(HashMap::<K, CacheEntry<V>>::new()));
+        let cleanup_cache = Arc::clone(&cache);
+        let cleanup_handle = spawn(async move {
+            let mut interval = tokio::time::interval(interval);
+            loop {
+                interval.tick().await;
+                cleanup_cache
+                    .write()
+                    .await
+                    .retain(|_, entry| entry.last_updated.elapsed() < ttl);
+            }
+        });
+        Self {
+            cache,
+            ttl,
+            _cleanup_handle: cleanup_handle.abort_handle(),
+        }
+    }
+
+    async fn get(&self, cache_key: &K) -> Option<V> {
+        self.cache
+            .read()
+            .await
+            .get(cache_key)
+            .filter(|entry| entry.last_updated.elapsed() < self.ttl)
+            .map(|entry| entry.value.clone())
+    }
+
+    async fn insert(&self, cache_key: K, cache_value: V) {
+        self.cache
+            .write()
+            .await
+            .insert(cache_key, CacheEntry::new(cache_value));
+    }
+
+    async fn clear_ttl(&self) {
+        self.cache
+            .write()
+            .await
+            .retain(|_, entry| entry.last_updated.elapsed() < self.ttl);
+    }
+}
+
+impl<K, V> Drop for DecisionCache<K, V>
+where
+    K: std::hash::Hash + Eq + std::fmt::Debug + Send + Sync + 'static,
+    V: std::fmt::Debug + Clone + Send + Sync + 'static,
+{
+    fn drop(&mut self) {
+        self._cleanup_handle.abort();
+    }
+}
+
+impl<K, V> Default for DecisionCache<K, V>
+where
+    K: std::hash::Hash + Eq + std::fmt::Debug + Send + Sync + 'static,
+    V: std::fmt::Debug + Clone + Send + Sync + 'static,
+{
+    fn default() -> Self {
+        Self::new(Duration::from_secs(60))
+    }
+}
+
 /// Encapsulates making requests for policy decisions, and receiving updated decisions
 #[derive(Debug, Clone)]
 pub struct NatsPolicyManager {
@@ -31,7 +137,7 @@ pub struct NatsPolicyManager {
     host_info: HostInfo,
     policy_topic: Option<String>,
     policy_timeout: Duration,
-    decision_cache: Arc<RwLock<HashMap<RequestKey, Response>>>,
+    decision_cache: DecisionCache<RequestKey, Response>,
     request_to_key: Arc<RwLock<HashMap<String, RequestKey>>>,
     /// An abort handle for the policy changes subscription
     pub policy_changes: AbortHandle,
@@ -46,17 +152,20 @@ impl NatsPolicyManager {
         policy_topic: Option<String>,
         policy_timeout: Option<Duration>,
         policy_changes_topic: Option<String>,
+        decision_cache_ttl: Option<Duration>,
     ) -> anyhow::Result<Self> {
         const DEFAULT_POLICY_TIMEOUT: Duration = Duration::from_secs(1);
 
         let (policy_changes_abort, policy_changes_abort_reg) = AbortHandle::new_pair();
+
+        let decision_cache_ttl = decision_cache_ttl.unwrap_or(Duration::from_secs(60));
 
         let manager = NatsPolicyManager {
             nats: nats.clone(),
             host_info,
             policy_topic,
             policy_timeout: policy_timeout.unwrap_or(DEFAULT_POLICY_TIMEOUT),
-            decision_cache: Arc::default(),
+            decision_cache: DecisionCache::new(decision_cache_ttl),
             request_to_key: Arc::default(),
             policy_changes: policy_changes_abort,
         };
@@ -102,7 +211,7 @@ impl NatsPolicyManager {
             RequestBody::Unknown => RequestKind::Unknown,
         };
         let cache_key = (&request).into();
-        if let Some(entry) = self.decision_cache.read().await.get(&cache_key) {
+        if let Some(entry) = self.decision_cache.get(&cache_key).await {
             trace!(?cache_key, ?entry, "using cached policy decision");
             return Ok(entry.clone());
         }
@@ -129,9 +238,7 @@ impl NatsPolicyManager {
             .context("failed to deserialize policy response")?;
 
         self.decision_cache
-            .write()
-            .await
-            .insert(cache_key.clone(), decision.clone()); // cache policy decision
+            .insert(cache_key.clone(), decision.clone()).await; // cache policy decision
         self.request_to_key
             .write()
             .await
@@ -150,18 +257,17 @@ impl NatsPolicyManager {
 
         debug!(request_id, "received policy decision override");
 
-        let mut decision_cache = self.decision_cache.write().await;
         let request_to_key = self.request_to_key.read().await;
 
         if let Some(key) = request_to_key.get(&request_id) {
-            decision_cache.insert(
+            self.decision_cache.insert(
                 key.clone(),
                 Response {
                     request_id: request_id.clone(),
                     permitted,
                     message,
                 },
-            );
+            ).await;
         } else {
             warn!(
                 request_id,
@@ -239,5 +345,140 @@ impl PolicyManager for NatsPolicyManager {
         };
         self.evaluate_action(RequestBody::PerformInvocation(request))
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::time::{sleep, Duration};
+
+    #[tokio::test]
+    async fn test_cache_basic_operations() {
+        let cache = DecisionCache::<String, String>::new(Duration::from_secs(10));
+        
+        // Test insert and get
+        cache.insert("key1".to_string(), "value1".to_string()).await;
+        let result = cache.get(&"key1".to_string()).await;
+        assert_eq!(result, Some("value1".to_string()));
+        
+        // Test non-existent key
+        let result = cache.get(&"nonexistent".to_string()).await;
+        assert!(result.is_none());
+        
+        // Test multiple keys
+        cache.insert("key2".to_string(), "value2".to_string()).await;
+        cache.insert("key3".to_string(), "value3".to_string()).await;
+        
+        assert_eq!(cache.get(&"key1".to_string()).await, Some("value1".to_string()));
+        assert_eq!(cache.get(&"key2".to_string()).await, Some("value2".to_string()));
+        assert_eq!(cache.get(&"key3".to_string()).await, Some("value3".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_cache_ttl_expiration() {
+        let cache = DecisionCache::<String, String>::new(Duration::from_millis(100));
+        
+        cache.insert("key1".to_string(), "value1".to_string()).await;
+        
+        // Should exist immediately
+        assert!(cache.get(&"key1".to_string()).await.is_some());
+        
+        // Wait for TTL to expire
+        sleep(Duration::from_millis(150)).await;
+        
+        // Should be expired and return None
+        assert!(cache.get(&"key1".to_string()).await.is_none());
+    }
+
+
+    #[tokio::test]
+    async fn test_cache_cleanup_task_abort() {
+        let cache = DecisionCache::<String, String>::new(Duration::from_secs(1));
+        
+        // Insert some data
+        cache.insert("key1".to_string(), "value1".to_string()).await;
+        assert!(cache.get(&"key1".to_string()).await.is_some());
+        
+        // Drop the cache (should abort cleanup task)
+        drop(cache);
+        
+        // Test passes if no panic or hanging occurs
+        // Give a moment for cleanup
+        sleep(Duration::from_millis(10)).await;
+    }
+
+    #[tokio::test]
+    async fn test_cache_clear_ttl() {
+        let cache = DecisionCache::<String, String>::new(Duration::from_millis(100));
+        
+        // Insert some data
+        cache.insert("key1".to_string(), "value1".to_string()).await;
+        cache.insert("key2".to_string(), "value2".to_string()).await;
+        
+        // Wait for expiration
+        sleep(Duration::from_millis(150)).await;
+        
+        // Manually trigger cleanup
+        cache.clear_ttl().await;
+        
+        // Both should be gone after manual cleanup
+        assert!(cache.get(&"key1".to_string()).await.is_none());
+        assert!(cache.get(&"key2".to_string()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cache_mixed_ttl() {
+        let cache = DecisionCache::<String, String>::new(Duration::from_millis(200));
+        
+        // Insert first item
+        cache.insert("key1".to_string(), "value1".to_string()).await;
+        
+        // Wait a bit
+        sleep(Duration::from_millis(100)).await;
+        
+        // Insert second item
+        cache.insert("key2".to_string(), "value2".to_string()).await;
+        
+        // Wait for first item to expire but not second
+        sleep(Duration::from_millis(150)).await;
+        
+        // First should be expired, second should still exist
+        assert!(cache.get(&"key1".to_string()).await.is_none());
+        assert_eq!(cache.get(&"key2".to_string()).await, Some("value2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_cache_concurrent_access() {
+        let cache = Arc::new(DecisionCache::<String, String>::new(Duration::from_secs(10)));
+        let mut handles = vec![];
+
+        // Spawn multiple tasks doing concurrent operations
+        for i in 0..10 {
+            let cache_clone = Arc::clone(&cache);
+            let handle = tokio::spawn(async move {
+                let key = format!("key{}", i);
+                let value = format!("value{}", i);
+                
+                cache_clone.insert(key.clone(), value.clone()).await;
+                
+                // Verify we can read back what we wrote
+                let result = cache_clone.get(&key).await;
+                assert_eq!(result, Some(value));
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all tasks to complete
+        for handle in handles {
+            handle.await.expect("Task should complete successfully");
+        }
+
+        // Verify all keys are present
+        for i in 0..10 {
+            let key = format!("key{}", i);
+            let expected_value = format!("value{}", i);
+            assert_eq!(cache.get(&key).await, Some(expected_value));
+        }
     }
 }
