@@ -163,6 +163,7 @@ wasmcloud-provider-messaging-kafka = { workspace = true, optional = true }
 wasmcloud-provider-messaging-nats = { workspace = true, optional = true }
 wasmcloud-provider-sqldb-postgres = { workspace = true, optional = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"], optional = true }
+tokio-util = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
 axum = { workspace = true, features = ["query"] }

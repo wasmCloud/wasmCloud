@@ -147,6 +147,8 @@ impl WasmCloudTestHost {
                     psc.policy_topic,
                     psc.policy_timeout_ms,
                     psc.policy_changes_topic,
+                    psc.policy_cache_ttl,
+
                 )
                 .await?
         } else {

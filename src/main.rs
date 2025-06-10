@@ -202,6 +202,11 @@ struct Args {
         requires = "policy_topic"
     )]
     policy_changes_topic: Option<String>,
+
+    /// Policy Response Cache TTL in seconds
+    #[clap(long = "policy-cache-ttl", env = "WASMCLOUD_POLICY_CACHE_TTL", value_parser = parse_duration_secs)]
+    policy_cache_ttl: Option<Duration>,
+
     /// If provided, allows to set a custom Max Execution time for the Host in ms.
     #[clap(long = "max-execution-time-ms", default_value = "600000", env = "WASMCLOUD_MAX_EXECUTION_TIME_MS", value_parser = parse_duration_millis)]
     max_execution_time: Duration,
@@ -575,6 +580,8 @@ async fn main() -> anyhow::Result<()> {
                 args.policy_topic.clone(),
                 args.policy_timeout_ms,
                 args.policy_changes_topic.clone(),
+                args.policy_cache_ttl,
+
             )
             .await?
     } else {
