@@ -64,7 +64,7 @@ const DEFAULT_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS: u64 = 300;
 /// Key that configures the connection timeout amount of of time to wait between reconnection attempts
 const CONFIG_REDIS_BACKEND_CONNECTION_TIMEOUT_MS_KEY: &str = "BACKEND_CONNECTION_TIMEOUT_MS";
 
-/// Maximum amount of time (in milliseconds) to wait in between reconnection attempts
+/// Maximum amount of time (in milliseconds) to wait for a query to complete
 const DEFAULT_REDIS_BACKEND_CONNECTION_TIMEOUT_MS: u64 = 3000;
 
 /// Key that configures the connection timeout amount of of time to wait between reconnection attempts
@@ -294,6 +294,7 @@ impl KvRedisProvider {
     }
 
     /// Execute Redis async command
+    #[instrument(level = "debug", skip(self, context, cmd))]
     async fn exec_cmd<T: FromRedisValue>(
         &self,
         context: Option<Context>,
@@ -537,13 +538,19 @@ impl Provider for KvRedisProvider {
                     .and_then(|url_key| config.get(url_key))
             });
 
-        let default_connection_disabled = config
+        let default_connection_disabled = secrets
             .keys()
-            .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY));
+            .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY))
+            || config
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY));
 
-        let share_connections_by_url = config
+        let share_connections_by_url = secrets
             .keys()
-            .any(|k| k.eq_ignore_ascii_case(CONFIG_SHARE_CONNECTIONS_BY_URL_KEY));
+            .any(|k| k.eq_ignore_ascii_case(CONFIG_SHARE_CONNECTIONS_BY_URL_KEY))
+            || config
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case(CONFIG_SHARE_CONNECTIONS_BY_URL_KEY));
 
         let key = (source_id.to_string(), link_name.to_string());
 
@@ -1002,33 +1009,77 @@ fn check_bucket_name(bucket: &str) {
 fn build_connection_mgr_config(config: &HashMap<String, String>) -> ConnectionManagerConfig {
     let mut cfg = ConnectionManagerConfig::new();
 
+    // Set default values for the connection manager configuration
+    cfg = cfg
+        .set_number_of_retries(DEFAULT_REDIS_BACKEND_RECONNECT_NUM_RETRIES)
+        .set_max_delay(DEFAULT_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS)
+        .set_connection_timeout(Duration::from_millis(
+            DEFAULT_REDIS_BACKEND_CONNECTION_TIMEOUT_MS,
+        ))
+        .set_response_timeout(Duration::from_millis(
+            DEFAULT_REDIS_BACKEND_RESPONSE_TIMEOUT_MS,
+        ));
+
+    // Override defaults with values from the config if they are present
     for (k, v) in config.iter() {
         if k.eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_RECONNECT_NUM_RETRIES_KEY) {
-            cfg = cfg.set_number_of_retries(
-                v.parse()
-                    .unwrap_or(DEFAULT_REDIS_BACKEND_RECONNECT_NUM_RETRIES),
-            );
+            if let Ok(val) = v.parse::<usize>() {
+                cfg = cfg.set_number_of_retries(val);
+            } else {
+                warn!(
+                    key = %CONFIG_REDIS_BACKEND_RECONNECT_NUM_RETRIES_KEY,
+                    value = %v,
+                    "Invalid value for number of retries, using default"
+                );
+            }
         }
 
-        if k.eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS_KEY) {
-            cfg = cfg.set_max_delay(
-                v.parse()
-                    .unwrap_or(DEFAULT_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS),
-            );
+        if let Some(max_delay) = if k
+            .eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS_KEY)
+        {
+            match v.parse() {
+                Ok(val) => Some(val),
+                Err(_) => {
+                    warn!(key = %CONFIG_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS_KEY, value = %v, "Invalid value for max delay, using default");
+                    Some(DEFAULT_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS)
+                }
+            }
+        } else {
+            None
+        } {
+            cfg = cfg.set_max_delay(max_delay);
         }
 
-        if k.eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_CONNECTION_TIMEOUT_MS_KEY) {
-            cfg = cfg.set_connection_timeout(Duration::from_millis(
-                v.parse()
-                    .unwrap_or(DEFAULT_REDIS_BACKEND_CONNECTION_TIMEOUT_MS),
-            ));
+        if let Some(timeout) = if k
+            .eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_CONNECTION_TIMEOUT_MS_KEY)
+        {
+            match v.parse() {
+                Ok(val) => Some(val),
+                Err(_) => {
+                    warn!(key = %CONFIG_REDIS_BACKEND_CONNECTION_TIMEOUT_MS_KEY,value = %v,"Invalid value for connection timeout, using default");
+                    Some(DEFAULT_REDIS_BACKEND_CONNECTION_TIMEOUT_MS)
+                }
+            }
+        } else {
+            None
+        } {
+            cfg = cfg.set_connection_timeout(Duration::from_millis(timeout));
         }
 
-        if k.eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_RESPONSE_TIMEOUT_MS_KEY) {
-            cfg = cfg.set_response_timeout(Duration::from_millis(
-                v.parse()
-                    .unwrap_or(DEFAULT_REDIS_BACKEND_RESPONSE_TIMEOUT_MS),
-            ));
+        if let Some(timeout) = if k
+            .eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_RESPONSE_TIMEOUT_MS_KEY)
+        {
+            match v.parse() {
+                Ok(val) => Some(val),
+                Err(_) => {
+                    warn!(key = %CONFIG_REDIS_BACKEND_RESPONSE_TIMEOUT_MS_KEY,value = %v,"Invalid value for response timeout, using default");
+                    Some(DEFAULT_REDIS_BACKEND_RESPONSE_TIMEOUT_MS)
+                }
+            }
+        } else {
+            None
+        } {
+            cfg = cfg.set_response_timeout(Duration::from_millis(timeout));
         }
     }
 
