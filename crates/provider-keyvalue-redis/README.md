@@ -65,7 +65,7 @@ spec:
     - name: kvredis
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/keyvalue-redis:0.29.1
+        image: ghcr.io/wasmcloud/keyvalue-redis:0.30.0
 
     # Add a capability provider that enables HTTP access
     - name: httpserver

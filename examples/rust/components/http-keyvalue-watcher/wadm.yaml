@@ -40,7 +40,7 @@ spec:
       properties:
         # TBD: next version required.
         # Will need a local copy of the redis provider here, otherwise this won't work
-        image: ghcr.io/wasmcloud/keyvalue-redis:0.29.1
+        image: ghcr.io/wasmcloud/keyvalue-redis:0.30.0
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
