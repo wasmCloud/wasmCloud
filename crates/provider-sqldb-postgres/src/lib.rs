@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{bail, Context as _, Result};
+use bytes::Bytes;
 use deadpool_postgres::Pool;
 use futures::TryStreamExt as _;
 use tokio::sync::RwLock;
@@ -56,8 +57,8 @@ pub struct PostgresProvider {
     connections: Arc<RwLock<HashMap<SourceId, Pool>>>,
     /// Lookup of prepared statements to the statement and the source ID that prepared them
     prepared_statements: Arc<RwLock<HashMap<PreparedStatementToken, PreparedStatementInfo>>>,
-    /// Lookup of transaction ID to the [TransactionManager] which stores statements for execution on commit
-    transactions: Arc<RwLock<HashMap<ResourceBorrow<Transaction>, TransactionManager>>>,
+    /// Lookup of transaction ID (as Bytes) to the [TransactionManager] which stores statements for execution on commit
+    transactions: Arc<RwLock<HashMap<Bytes, TransactionManager>>>,
 }
 
 impl PostgresProvider {
@@ -432,12 +433,12 @@ impl bindings::transaction::HandlerTransaction<Option<Context>> for PostgresProv
 
                 let transaction_id = Ulid::new().to_string();
                 let resource = ResourceOwn::new(transaction_id.clone());
-                let key = resource.as_borrow();
+                let key: &Bytes = resource.as_ref();
 
                 self.transactions
                     .write()
                     .await
-                    .insert(key, TransactionManager::new(resource.clone()));
+                    .insert(key.to_owned(), TransactionManager::new(resource.clone()));
                 return Ok(resource);
             } else {
                 bail!("unexpectedly missing source ID");
@@ -456,10 +457,11 @@ impl bindings::transaction::HandlerTransaction<Option<Context>> for PostgresProv
         params: Vec<PgValue>,
     ) -> anyhow::Result<Result<(), QueryError>> {
         propagate_trace_for_ctx!(ctx);
+        let key: &Bytes = transaction.as_ref();
         self.transactions
             .write()
             .await
-            .get_mut(&transaction)
+            .get_mut(key)
             .ok_or_else(|| QueryError::Unexpected("missing transaction".into()))?
             .add_query(query, params);
 
@@ -474,10 +476,11 @@ impl bindings::transaction::HandlerTransaction<Option<Context>> for PostgresProv
         query: String,
     ) -> anyhow::Result<Result<(), QueryError>> {
         propagate_trace_for_ctx!(ctx);
+        let key: &Bytes = transaction.as_ref();
         self.transactions
             .write()
             .await
-            .get_mut(&transaction)
+            .get_mut(key)
             .ok_or_else(|| QueryError::Unexpected("missing transaction".into()))?
             .add_query(query, Vec::with_capacity(0));
 
@@ -508,11 +511,13 @@ impl bindings::transaction::HandlerTransaction<Option<Context>> for PostgresProv
                     QueryError::Unexpected(format!("failed to start transaction: {e}"))
                 })?;
 
+                let key: &Bytes = transaction.as_ref();
+
                 let manager = self
                     .transactions
                     .write()
                     .await
-                    .remove(&transaction.as_borrow())
+                    .remove(key)
                     .context("failed to find transaction")?;
                 manager.commit(tx).await.map_err(|e| {
                     QueryError::Unexpected(format!("failed to commit transaction: {e}"))
