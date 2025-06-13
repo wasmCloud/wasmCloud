@@ -10,12 +10,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{Context as _, Result};
+use anyhow::{bail, Context as _, Result};
 use deadpool_postgres::Pool;
 use futures::TryStreamExt as _;
 use tokio::sync::RwLock;
 use tokio_postgres::types::Type as PgType;
-use tracing::{error, instrument, warn};
+use tracing::{error, instrument, warn, Instrument};
 use ulid::Ulid;
 
 use wasmcloud_provider_sdk::{
@@ -25,14 +25,15 @@ use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 
 mod bindings;
 use bindings::{
-    into_result_row, PgValue, PreparedStatementExecError, PreparedStatementToken, QueryError,
-    ResultRow, StatementPrepareError,
+    into_result_row, transaction::Transaction, PgValue, PreparedStatementExecError,
+    PreparedStatementToken, QueryError, ResultRow, StatementPrepareError,
 };
 
 mod config;
 use config::{extract_prefixed_conn_config, ConnectionCreateOptions};
 
 use wasmcloud_provider_sdk::Context;
+use wit_bindgen_wrpc::wrpc_transport::{ResourceBorrow, ResourceOwn};
 
 /// A unique identifier for a created connection
 type SourceId = String;
@@ -55,6 +56,8 @@ pub struct PostgresProvider {
     connections: Arc<RwLock<HashMap<SourceId, Pool>>>,
     /// Lookup of prepared statements to the statement and the source ID that prepared them
     prepared_statements: Arc<RwLock<HashMap<PreparedStatementToken, PreparedStatementInfo>>>,
+    /// Lookup of transaction ID to the [TransactionManager] which stores statements for execution on commit
+    transactions: Arc<RwLock<HashMap<ResourceBorrow<Transaction>, TransactionManager>>>,
 }
 
 impl PostgresProvider {
@@ -113,6 +116,7 @@ impl PostgresProvider {
     }
 
     /// Perform a query
+    #[instrument(level = "debug", skip_all, fields(source_id))]
     async fn do_query(
         &self,
         source_id: &str,
@@ -132,6 +136,7 @@ impl PostgresProvider {
 
         let rows = client
             .query_raw(query, params)
+            .in_current_span()
             .await
             .map_err(|e| QueryError::Unexpected(format!("failed to perform query: {e}")))?;
 
@@ -139,6 +144,7 @@ impl PostgresProvider {
         // replace this with a mapped stream
         rows.map_ok(into_result_row)
             .try_collect::<Vec<_>>()
+            .in_current_span()
             .await
             .map_err(|e| QueryError::Unexpected(format!("failed to evaluate full row: {e}")))
     }
@@ -367,6 +373,154 @@ impl bindings::prepared::Handler<Option<Context>> for PostgresProvider {
     ) -> Result<Result<u64, PreparedStatementExecError>> {
         propagate_trace_for_ctx!(ctx);
         Ok(self.do_statement_execute(&statement_token, params).await)
+    }
+}
+
+pub struct TransactionManager {
+    /// The resource that this transaction manager is associated with. This must
+    /// be stored for the lifetime of the transaction and then dropped when the transaction is committed or rolled back.
+    #[allow(unused)]
+    resource: ResourceOwn<Transaction>,
+    queries: Vec<(String, Vec<PgValue>)>,
+}
+
+impl TransactionManager {
+    pub fn new(resource: ResourceOwn<Transaction>) -> Self {
+        Self {
+            resource,
+            queries: Vec::new(),
+        }
+    }
+
+    /// Add a query to be executed when the transaction is committed
+    pub fn add_query(&mut self, query: String, params: Vec<PgValue>) {
+        self.queries.push((query, params));
+    }
+
+    async fn commit(self, tx: deadpool_postgres::Transaction<'_>) -> anyhow::Result<()> {
+        for (query, params) in self.queries {
+            // NOTE: Transactions that fail are automatically rolled back
+            let statement = tx
+                .prepare_cached(&query)
+                .await
+                .context("failed to prepare statement in transaction, rolling back")?;
+            tx.execute_raw(&statement, params)
+                .await
+                .context("failed to execute query in transaction, rolling back")?;
+        }
+
+        Ok(())
+    }
+}
+
+impl bindings::transaction::Handler<Option<Context>> for PostgresProvider {}
+/// Implement the `wasmcloud:postgres/prepared` interface for [`PostgresProvider`]
+impl bindings::transaction::HandlerTransaction<Option<Context>> for PostgresProvider {
+    #[instrument(level = "debug", skip_all)]
+    async fn new(&self, ctx: Option<Context>) -> anyhow::Result<ResourceOwn<Transaction>> {
+        propagate_trace_for_ctx!(ctx);
+        if let Some(ctx) = ctx {
+            if let Some(source_id) = ctx.component {
+                // Ensure that we have a connection pool for the source ID
+                let connections = self.connections.read().await;
+                let _pool = connections.get(&source_id).ok_or_else(|| {
+                    QueryError::Unexpected(format!(
+                        "missing connection pool for source [{source_id}] while querying"
+                    ))
+                })?;
+                drop(connections);
+
+                let transaction_id = Ulid::new().to_string();
+                let resource = ResourceOwn::new(transaction_id.clone());
+                let key = resource.as_borrow();
+
+                self.transactions
+                    .write()
+                    .await
+                    .insert(key, TransactionManager::new(resource.clone()));
+                return Ok(resource);
+            } else {
+                bail!("unexpectedly missing source ID");
+            }
+        } else {
+            bail!("unexpectedly missing invocation context");
+        }
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn query(
+        &self,
+        ctx: Option<Context>,
+        transaction: ResourceBorrow<Transaction>,
+        query: String,
+        params: Vec<PgValue>,
+    ) -> anyhow::Result<Result<(), QueryError>> {
+        propagate_trace_for_ctx!(ctx);
+        self.transactions
+            .write()
+            .await
+            .get_mut(&transaction)
+            .ok_or_else(|| QueryError::Unexpected("missing transaction".into()))?
+            .add_query(query, params);
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn query_batch(
+        &self,
+        ctx: Option<Context>,
+        transaction: ::wit_bindgen_wrpc::wrpc_transport::ResourceBorrow<Transaction>,
+        query: String,
+    ) -> anyhow::Result<Result<(), QueryError>> {
+        propagate_trace_for_ctx!(ctx);
+        self.transactions
+            .write()
+            .await
+            .get_mut(&transaction)
+            .ok_or_else(|| QueryError::Unexpected("missing transaction".into()))?
+            .add_query(query, Vec::with_capacity(0));
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn commit(
+        &self,
+        ctx: Option<wasmcloud_provider_sdk::Context>,
+        transaction: ResourceOwn<Transaction>,
+    ) -> anyhow::Result<Result<(), QueryError>> {
+        propagate_trace_for_ctx!(ctx);
+
+        if let Some(ctx) = ctx {
+            if let Some(source_id) = ctx.component {
+                // Ensure that we have a connection pool for the source ID
+                let connections = self.connections.read().await;
+                let pool = connections.get(&source_id).ok_or_else(|| {
+                    QueryError::Unexpected(format!(
+                        "missing connection pool for source [{source_id}] while querying"
+                    ))
+                })?;
+                let mut client = pool.get().await.map_err(|e| {
+                    QueryError::Unexpected(format!("failed to build client from pool: {e}"))
+                })?;
+                let tx = client.build_transaction().start().await.map_err(|e| {
+                    QueryError::Unexpected(format!("failed to start transaction: {e}"))
+                })?;
+
+                let manager = self
+                    .transactions
+                    .write()
+                    .await
+                    .remove(&transaction.as_borrow())
+                    .context("failed to find transaction")?;
+                manager.commit(tx).await.map_err(|e| {
+                    QueryError::Unexpected(format!("failed to commit transaction: {e}"))
+                })?;
+            }
+        }
+
+        Ok(Ok(()))
     }
 }
 
