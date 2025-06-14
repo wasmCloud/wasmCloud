@@ -362,7 +362,7 @@ walkdir = { version = "2", default-features = false }
 warp = { version = "0.3", default-features = false }
 wascap = { version = "^0.16.0", path = "./crates/wascap", default-features = false }
 wash = { version = "0", path = "./crates/wash", default-features = false }
-wasi = { version = "0.13.3", default-features = false }
+wasi = { version = "0.14.2", default-features = false }
 wasm-pkg-client = { version = "0.10", default-features = false }
 wasm-pkg-core = { version = "0.10", default-features = false }
 wasi-preview1-component-adapter-provider = { version = "31", default-features = false }
