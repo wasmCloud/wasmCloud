@@ -67,6 +67,9 @@ async fn builtin_http_path_routing() -> anyhow::Result<()> {
 
     let http_port = free_port().await?;
 
+    // This can be flaky in CI so give it a second
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
     // Using this as the ID and the configuration name for simplicity
     let http_server_id = "http-server".to_string();
     assert_config_put(
@@ -308,6 +311,9 @@ async fn builtin_http_host_routing() -> anyhow::Result<()> {
         .context("failed to start test host")?;
 
     let http_port = free_port().await?;
+
+    // This can be flaky in CI so give it a second
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Using this as the ID and the configuration name for simplicity
     let http_server_id = "http-server".to_string();
@@ -571,6 +577,9 @@ async fn builtin_start_ignored_when_disabled() -> anyhow::Result<()> {
     )
     .await
     .context("failed to start test host")?;
+
+    // This can be flaky in CI so give it a second
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Attempting to start builtin providers should *not* fail, but instead not return
     let host_key = host.host_key();

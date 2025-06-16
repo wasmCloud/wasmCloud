@@ -55,7 +55,7 @@ use wascap::jwt;
 use wasmcloud_core::{OciFetcher, RegistryConfig};
 
 #[derive(PartialEq)]
-enum ResourceRef<'a> {
+pub(crate) enum ResourceRef<'a> {
     File(PathBuf),
     Oci(&'a str),
     Builtin(&'a str),
@@ -168,7 +168,7 @@ pub async fn fetch_component(
 
 /// Fetch a provider from a reference.
 #[instrument(skip(registry_config, host_id), fields(provider_ref = %provider_ref.as_ref()))]
-pub async fn fetch_provider(
+pub(crate) async fn fetch_provider(
     provider_ref: &ResourceRef<'_>,
     host_id: impl AsRef<str>,
     allow_file_load: bool,
