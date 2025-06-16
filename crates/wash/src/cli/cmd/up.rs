@@ -2,7 +2,7 @@ use crate::lib::app::{load_app_manifest, AppManifest, AppManifestSource};
 use crate::lib::cli::{CommandOutput, OutputKind};
 use crate::lib::common::{CommandGroupUsage, WASMCLOUD_HOST_VERSION_T};
 use crate::lib::config::{
-    create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_TIMEOUT_MS,
+    self, create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_TIMEOUT_MS,
     WADM_PID_FILE,
 };
 use crate::lib::context::fs::ContextDir;
@@ -400,7 +400,7 @@ pub async fn handle_command(command: UpCommand, output_kind: OutputKind) -> Resu
 }
 
 pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<CommandOutput> {
-    let install_dir = downloads_dir()?;
+    let install_dir = config::WASH_DOWNLOADS_DIR.to_path_buf();
     create_dir_all(&install_dir).await?;
     let spinner = Spinner::new(&output_kind)?;
 
