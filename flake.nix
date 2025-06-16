@@ -157,7 +157,7 @@
                   pkgs.redis
                   pkgs.spire-agent
                   pkgs.spire-server
-                  pkgs.vault
+                  pkgs.vault-bin
 
                   pkgs.pkgsUnstable.nats-server
                 ];
@@ -653,7 +653,7 @@
               pkgs.skopeo
               pkgs.spire-agent
               pkgs.tinygo
-              pkgs.vault
+              pkgs.vault-bin
               pkgs.wit-deps
 
               pkgs.pkgsUnstable.go
