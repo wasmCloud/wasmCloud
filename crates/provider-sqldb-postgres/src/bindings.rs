@@ -25,15 +25,17 @@ use uuid::Uuid;
 // Bindgen happens here
 wit_bindgen_wrpc::generate!({
   with: {
-      "wasmcloud:postgres/types@0.1.1-draft": generate,
-      "wasmcloud:postgres/query@0.1.1-draft": generate,
-      "wasmcloud:postgres/prepared@0.1.1-draft": generate,
+      "wasmcloud:postgres/types@0.2.0-draft": generate,
+      "wasmcloud:postgres/query@0.2.0-draft": generate,
+      "wasmcloud:postgres/prepared@0.2.0-draft": generate,
+      "wasmcloud:postgres/transaction@0.2.0-draft": generate,
   },
 });
 
 // Start bindgen-generated type imports
 pub(crate) use exports::wasmcloud::postgres::prepared;
 pub(crate) use exports::wasmcloud::postgres::query;
+pub(crate) use exports::wasmcloud::postgres::transaction;
 
 pub(crate) use query::{PgValue, QueryError, ResultRow};
 

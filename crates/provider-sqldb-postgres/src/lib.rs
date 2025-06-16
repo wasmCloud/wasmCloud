@@ -398,6 +398,7 @@ impl TransactionManager {
         self.queries.push((query, params));
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn commit(self, tx: deadpool_postgres::Transaction<'_>) -> anyhow::Result<()> {
         for (query, params) in self.queries {
             // NOTE: Transactions that fail are automatically rolled back
@@ -410,6 +411,8 @@ impl TransactionManager {
                 .context("failed to execute query in transaction, rolling back")?;
         }
 
+        tx.commit().await.context("failed to commit transaction")?;
+
         Ok(())
     }
 }
@@ -420,32 +423,34 @@ impl bindings::transaction::HandlerTransaction<Option<Context>> for PostgresProv
     #[instrument(level = "debug", skip_all)]
     async fn new(&self, ctx: Option<Context>) -> anyhow::Result<ResourceOwn<Transaction>> {
         propagate_trace_for_ctx!(ctx);
-        if let Some(ctx) = ctx {
-            if let Some(source_id) = ctx.component {
-                // Ensure that we have a connection pool for the source ID
-                let connections = self.connections.read().await;
-                let _pool = connections.get(&source_id).ok_or_else(|| {
-                    QueryError::Unexpected(format!(
-                        "missing connection pool for source [{source_id}] while querying"
-                    ))
-                })?;
-                drop(connections);
 
-                let transaction_id = Ulid::new().to_string();
-                let resource = ResourceOwn::new(transaction_id.clone());
-                let key: &Bytes = resource.as_ref();
-
-                self.transactions
-                    .write()
-                    .await
-                    .insert(key.to_owned(), TransactionManager::new(resource.clone()));
-                return Ok(resource);
-            } else {
-                bail!("unexpectedly missing source ID");
-            }
-        } else {
+        let Some(ctx) = ctx else {
             bail!("unexpectedly missing invocation context");
-        }
+        };
+
+        let Some(source_id) = ctx.component else {
+            bail!("unexpectedly missing source ID");
+        };
+
+        // Ensure that we have a connection pool for the source ID
+        let connections = self.connections.read().await;
+        let _pool = connections.get(&source_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing connection pool for source [{source_id}] while creating transaction"
+            )
+        })?;
+        drop(connections);
+
+        let transaction_id = Ulid::new().to_string();
+        let resource = ResourceOwn::new(transaction_id.clone());
+        let key: &Bytes = resource.as_ref();
+
+        self.transactions
+            .write()
+            .await
+            .insert(key.to_owned(), TransactionManager::new(resource.clone()));
+
+        Ok(resource)
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -458,14 +463,14 @@ impl bindings::transaction::HandlerTransaction<Option<Context>> for PostgresProv
     ) -> anyhow::Result<Result<(), QueryError>> {
         propagate_trace_for_ctx!(ctx);
         let key: &Bytes = transaction.as_ref();
-        self.transactions
-            .write()
-            .await
-            .get_mut(key)
-            .ok_or_else(|| QueryError::Unexpected("missing transaction".into()))?
-            .add_query(query, params);
 
-        Ok(Ok(()))
+        match self.transactions.write().await.get_mut(key) {
+            Some(manager) => {
+                manager.add_query(query, params);
+                Ok(Ok(()))
+            }
+            None => Ok(Err(QueryError::Unexpected("missing transaction".into()))),
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -477,14 +482,14 @@ impl bindings::transaction::HandlerTransaction<Option<Context>> for PostgresProv
     ) -> anyhow::Result<Result<(), QueryError>> {
         propagate_trace_for_ctx!(ctx);
         let key: &Bytes = transaction.as_ref();
-        self.transactions
-            .write()
-            .await
-            .get_mut(key)
-            .ok_or_else(|| QueryError::Unexpected("missing transaction".into()))?
-            .add_query(query, Vec::with_capacity(0));
 
-        Ok(Ok(()))
+        match self.transactions.write().await.get_mut(key) {
+            Some(manager) => {
+                manager.add_query(query, Vec::with_capacity(0));
+                Ok(Ok(()))
+            }
+            None => Ok(Err(QueryError::Unexpected("missing transaction".into()))),
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -495,37 +500,61 @@ impl bindings::transaction::HandlerTransaction<Option<Context>> for PostgresProv
     ) -> anyhow::Result<Result<(), QueryError>> {
         propagate_trace_for_ctx!(ctx);
 
-        if let Some(ctx) = ctx {
-            if let Some(source_id) = ctx.component {
-                // Ensure that we have a connection pool for the source ID
-                let connections = self.connections.read().await;
-                let pool = connections.get(&source_id).ok_or_else(|| {
-                    QueryError::Unexpected(format!(
-                        "missing connection pool for source [{source_id}] while querying"
-                    ))
-                })?;
-                let mut client = pool.get().await.map_err(|e| {
-                    QueryError::Unexpected(format!("failed to build client from pool: {e}"))
-                })?;
-                let tx = client.build_transaction().start().await.map_err(|e| {
-                    QueryError::Unexpected(format!("failed to start transaction: {e}"))
-                })?;
+        let Some(ctx) = ctx else {
+            return Ok(Err(QueryError::Unexpected(
+                "unexpectedly missing invocation context".into(),
+            )));
+        };
 
-                let key: &Bytes = transaction.as_ref();
+        let Some(source_id) = ctx.component else {
+            return Ok(Err(QueryError::Unexpected(
+                "unexpectedly missing source ID".into(),
+            )));
+        };
 
-                let manager = self
-                    .transactions
-                    .write()
-                    .await
-                    .remove(key)
-                    .context("failed to find transaction")?;
-                manager.commit(tx).await.map_err(|e| {
-                    QueryError::Unexpected(format!("failed to commit transaction: {e}"))
-                })?;
+        // Ensure that we have a connection pool for the source ID
+        let connections = self.connections.read().await;
+        let Some(pool) = connections.get(&source_id) else {
+            return Ok(Err(QueryError::Unexpected(format!(
+                "missing connection pool for source [{source_id}] while querying"
+            ))));
+        };
+
+        let mut client = match pool.get().await {
+            Ok(client) => client,
+            Err(e) => {
+                return Ok(Err(QueryError::Unexpected(format!(
+                    "failed to build client from pool: {e}"
+                ))));
             }
-        }
+        };
 
-        Ok(Ok(()))
+        let tx = match client.build_transaction().start().await {
+            Ok(tx) => tx,
+            Err(e) => {
+                return Ok(Err(QueryError::Unexpected(format!(
+                    "failed to start transaction: {e}"
+                ))));
+            }
+        };
+
+        let key: &Bytes = transaction.as_ref();
+
+        let manager = match self.transactions.write().await.remove(key) {
+            Some(manager) => manager,
+            None => {
+                return Ok(Err(QueryError::Unexpected(
+                    "failed to find transaction".into(),
+                )));
+            }
+        };
+
+        match manager.commit(tx).await {
+            Ok(()) => Ok(Ok(())),
+            Err(e) => Ok(Err(QueryError::Unexpected(format!(
+                "failed to commit transaction: {e}"
+            )))),
+        }
     }
 }
 
