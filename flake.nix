@@ -655,6 +655,7 @@
               pkgs.tinygo
               pkgs.vault
               pkgs.wit-deps
+              pkgs.wasm-tools
 
               pkgs.pkgsUnstable.go
               pkgs.pkgsUnstable.kubectl
