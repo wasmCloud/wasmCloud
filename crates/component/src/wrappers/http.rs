@@ -352,8 +352,8 @@ impl<T: Read> OutgoingBody for ReadBody<T> {
 /// for this type will read the bytes from the stream and write them to the
 /// output stream.
 pub struct IncomingBody {
-    stream: InputStream,
-    body: wasi::http::types::IncomingBody,
+    pub(crate) stream: InputStream,
+    pub(crate) body: wasi::http::types::IncomingBody,
 }
 
 impl TryFrom<wasi::http::types::IncomingBody> for IncomingBody {

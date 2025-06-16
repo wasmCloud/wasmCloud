@@ -8936,8 +8936,11 @@ name = "wasmcloud-component"
 version = "0.2.1"
 dependencies = [
  "anyhow",
+ "bytes",
  "futures",
  "http 1.3.1",
+ "http-body 1.0.1",
+ "http-body-util",
  "rand 0.9.1",
  "tokio",
  "uuid 1.16.0",

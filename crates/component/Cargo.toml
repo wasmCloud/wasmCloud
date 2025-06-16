@@ -14,14 +14,19 @@ repository.workspace = true
 default = [
     "futures",
     "http",
+    "http-body",
     "rand",
     "tokio",
     "uuid",
 ]
+http-body = ["dep:http-body", "dep:http-body-util", "dep:bytes", "http"]
 
 [dependencies]
 anyhow = { workspace = true }
 http = { workspace = true, optional = true }
+http-body = { workspace = true, optional = true }
+http-body-util = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
 futures = { workspace = true, optional = true, features = ["std"] }
 rand = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
