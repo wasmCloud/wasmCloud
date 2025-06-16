@@ -1,8 +1,11 @@
 //! Common config constants and functions for loading, finding, and consuming configuration data
-use std::{fs, path::PathBuf};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock as Lazy;
 
 use anyhow::{Context, Result};
 use async_nats::Client;
+use etcetera::{app_strategy, AppStrategy, AppStrategyArgs};
 use tokio::io::AsyncReadExt;
 use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClientBuilder};
 
@@ -23,11 +26,118 @@ pub const DEFAULT_COMPONENT_OPERATION_TIMEOUT_MS: u64 = 5_000;
 pub const DEFAULT_START_PROVIDER_TIMEOUT_MS: u64 = 60_000;
 pub const DEFAULT_CTX_DIR_NAME: &str = "contexts";
 
+pub static WASH_APP_STRATEGY: Lazy<WashAppStrategy> = Lazy::new(|| {
+    let args = AppStrategyArgs {
+        top_level_domain: "com".to_string(),
+        author: "wasmCloud".to_string(),
+        app_name: "wash".to_string(),
+    };
+
+    let strategy = app_strategy::choose_app_strategy(args).unwrap();
+    #[cfg(target_os = "windows")]
+    {
+        WashAppStrategy::Windows(strategy)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        WashAppStrategy::Xdg(strategy)
+    }
+});
+
+pub enum WashAppStrategy {
+    Xdg(app_strategy::Xdg),
+    Windows(app_strategy::Windows),
+}
+
+impl AppStrategy for WashAppStrategy {
+    fn home_dir(&self) -> &std::path::Path {
+        match self {
+            Self::Xdg(s) => s.home_dir(),
+            Self::Windows(s) => s.home_dir(),
+        }
+    }
+
+    fn config_dir(&self) -> PathBuf {
+        var_path("WASH_CONFIG_DIR").unwrap_or_else(|_| match self {
+            Self::Xdg(s) => s.config_dir(),
+            Self::Windows(s) => s.config_dir(),
+        })
+    }
+
+    fn data_dir(&self) -> PathBuf {
+        var_path("WASH_DATA_DIR").unwrap_or_else(|_| match self {
+            Self::Xdg(s) => s.data_dir(),
+            Self::Windows(s) => s.data_dir(),
+        })
+    }
+
+    fn cache_dir(&self) -> PathBuf {
+        var_path("WASH_CACHE_DIR").unwrap_or_else(|_| match self {
+            Self::Xdg(s) => s.cache_dir(),
+            Self::Windows(s) => s.cache_dir(),
+        })
+    }
+
+    fn state_dir(&self) -> Option<PathBuf> {
+        match self {
+            Self::Xdg(s) => s.state_dir(),
+            Self::Windows(s) => s.state_dir(),
+        }
+    }
+
+    fn runtime_dir(&self) -> Option<PathBuf> {
+        match self {
+            Self::Xdg(s) => s.runtime_dir(),
+            Self::Windows(s) => s.runtime_dir(),
+        }
+    }
+}
+
+pub static WASH_DOWNLOADS_DIR: Lazy<PathBuf> = Lazy::new(|| {
+    var_path("WASH_DOWNLOADS_DIR").unwrap_or_else(|_| WASH_APP_STRATEGY.in_data_dir("downloads"))
+});
+
+pub static WASH_LOGS_DIR: Lazy<PathBuf> = Lazy::new(|| {
+    var_path("WASH_LOGS_DIR").unwrap_or_else(|_| WASH_APP_STRATEGY.in_data_dir("logs"))
+});
+
+pub static WASH_KEYS_DIR: Lazy<PathBuf> = Lazy::new(|| {
+    var_path("WASH_KEYS_DIR").unwrap_or_else(|_| WASH_APP_STRATEGY.in_data_dir("keys"))
+});
+
+pub static WASH_PLUGINS_DIR: Lazy<PathBuf> = Lazy::new(|| {
+    var_path("WASH_PLUGINS_DIR").unwrap_or_else(|_| WASH_APP_STRATEGY.in_data_dir("plugins"))
+});
+
+pub static WASH_PACKAGE_CACHE_DIR: Lazy<PathBuf> = Lazy::new(|| {
+    var_path("WASH_PACKAGE_CACHE_DIR")
+        .unwrap_or_else(|_| WASH_APP_STRATEGY.in_cache_dir("package_cache"))
+});
+
+pub static WASH_DEV_DIR: Lazy<PathBuf> =
+    Lazy::new(|| var_path("WASH_DEV_DIR").unwrap_or_else(|_| WASH_APP_STRATEGY.in_data_dir("dev")));
+
+fn var_path(key: &str) -> Result<PathBuf> {
+    std::env::var_os(key)
+        .map(PathBuf::from)
+        .context("variable not found")
+        .and_then(replace_path)
+}
+
+fn replace_path<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
+    let path = path.as_ref();
+    Ok(match path.starts_with("~/") {
+        true => {
+            let home = etcetera::home_dir().context("no home directory found. Please set $HOME")?;
+            home.join(path.strip_prefix("~/").unwrap())
+        }
+        false => path.to_path_buf(),
+    })
+}
+
 /// Get the path to the `.wash` configuration directory. Creates the directory if it does not exist.
 pub fn cfg_dir() -> Result<PathBuf> {
-    let home = etcetera::home_dir().context("no home directory found. Please set $HOME")?;
-
-    let wash = home.join(WASH_DIR);
+    let wash = WASH_APP_STRATEGY.config_dir();
 
     if !wash.exists() {
         fs::create_dir_all(&wash)
@@ -37,24 +147,14 @@ pub fn cfg_dir() -> Result<PathBuf> {
     Ok(wash)
 }
 
-/// The path to the dev sessions directory for wash
-pub fn dev_dir() -> Result<PathBuf> {
-    Ok(cfg_dir()?.join(DEV_DIR))
-}
-
-/// The path to the downloads directory for wash
-pub fn downloads_dir() -> Result<PathBuf> {
-    Ok(cfg_dir()?.join(DOWNLOADS_DIR))
-}
-
 /// The path to the running wasmCloud Host PID file for wash
 pub fn host_pid_file() -> Result<PathBuf> {
-    Ok(downloads_dir()?.join(WASMCLOUD_PID_FILE))
+    Ok(WASH_DOWNLOADS_DIR.join(WASMCLOUD_PID_FILE))
 }
 
 /// The path to the running wadm PID file for wash
 pub fn wadm_pid_file() -> Result<PathBuf> {
-    Ok(downloads_dir()?.join(WADM_PID_FILE))
+    Ok(WASH_DOWNLOADS_DIR.join(WADM_PID_FILE))
 }
 
 #[derive(Clone, Default)]
