@@ -49,7 +49,7 @@ const DEFAULT_PROVIDER_STOP_TIMEOUT_MS: u64 = 3000;
 
 /// The path to the dev directory for wash
 async fn dev_dir() -> Result<PathBuf> {
-    let dir = crate::lib::config::WASH_DEV_DIR.to_path_buf();
+    let dir = crate::lib::config::WASH_DIRECTORIES.dev_dir();
     if !tokio::fs::try_exists(&dir)
         .await
         .context("failed to check if dev dir exists")?
