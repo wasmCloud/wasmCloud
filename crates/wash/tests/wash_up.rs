@@ -377,7 +377,7 @@ async fn integration_up_works_with_specific_wasmcloud_host_version() -> Result<(
 #[tokio::test]
 #[serial]
 async fn integration_up_works_with_specified_wadm_version() -> Result<()> {
-    use wash::lib::config::{DOWNLOADS_DIR, WASH_DIR};
+    use wash::lib::config::WASH_DIRECTORIES;
     use wash::lib::start::WADM_BINARY;
     // 0.12.0 is a sufficient version to test the latest is 0.12.2
     let previous_wadm_version = "v0.12.0";
@@ -387,8 +387,7 @@ async fn integration_up_works_with_specified_wadm_version() -> Result<()> {
     let wadm_path = instance
         .test_dir
         .path()
-        .join(WASH_DIR)
-        .join(DOWNLOADS_DIR)
+        .join(WASH_DIRECTORIES.downloads_dir())
         .join(WADM_BINARY)
         .canonicalize()
         .context("failed to canonicalize wadm binary path")?;

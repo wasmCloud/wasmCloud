@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::lib::config::{cfg_dir, DEFAULT_CTX_DIR_NAME};
+use crate::lib::config::WASH_DIRECTORIES;
 
 use super::{ContextManager, WashContext, HOST_CONFIG_NAME};
 
@@ -101,7 +101,7 @@ impl ContextDir {
 }
 
 fn default_context_dir() -> Result<PathBuf> {
-    Ok(cfg_dir()?.join(DEFAULT_CTX_DIR_NAME))
+    Ok(WASH_DIRECTORIES.context_dir())
 }
 
 fn initialize_context_dir(context_dir: &Path, default_path: &PathBuf) -> Result<()> {

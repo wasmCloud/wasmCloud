@@ -1,4 +1,5 @@
 //! Common config constants and functions for loading, finding, and consuming configuration data
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock as Lazy;
@@ -11,10 +12,6 @@ use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClien
 
 use crate::lib::context::WashContext;
 
-pub const WASH_DIR: &str = ".wash";
-
-pub const DEV_DIR: &str = "dev";
-pub const DOWNLOADS_DIR: &str = "downloads";
 pub const WASMCLOUD_PID_FILE: &str = "wasmcloud.pid";
 pub const WADM_PID_FILE: &str = "wadm.pid";
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
@@ -24,9 +21,8 @@ pub const DEFAULT_NATS_TIMEOUT_MS: u64 = 2_000;
 pub const DEFAULT_START_COMPONENT_TIMEOUT_MS: u64 = 10_000;
 pub const DEFAULT_COMPONENT_OPERATION_TIMEOUT_MS: u64 = 5_000;
 pub const DEFAULT_START_PROVIDER_TIMEOUT_MS: u64 = 60_000;
-pub const DEFAULT_CTX_DIR_NAME: &str = "contexts";
 
-pub static WASH_APP_STRATEGY: Lazy<WashAppStrategy> = Lazy::new(|| {
+pub static WASH_DIRECTORIES: Lazy<WashAppStrategy> = Lazy::new(|| {
     let args = AppStrategyArgs {
         top_level_domain: "com".to_string(),
         author: "wasmCloud".to_string(),
@@ -93,29 +89,231 @@ impl AppStrategy for WashAppStrategy {
     }
 }
 
-pub static WASH_DOWNLOADS_DIR: Lazy<PathBuf> = Lazy::new(|| {
-    var_path("WASH_DOWNLOADS_DIR").unwrap_or_else(|_| WASH_APP_STRATEGY.in_data_dir("downloads"))
-});
+macro_rules! in_dir_method {
+    ($self: ident, $path_extra: expr, $dir_method_name: ident) => {{
+        let mut path = $self.$dir_method_name();
+        path.push(Path::new(&$path_extra));
+        path
+    }};
+}
 
-pub static WASH_LOGS_DIR: Lazy<PathBuf> = Lazy::new(|| {
-    var_path("WASH_LOGS_DIR").unwrap_or_else(|_| WASH_APP_STRATEGY.in_data_dir("logs"))
-});
+macro_rules! create_dir_method {
+    ($self: ident, $dir_method_name: ident) => {{
+        let path = $self.$dir_method_name();
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create directory `{}`", path.display()))?;
+        Ok(path)
+    }};
+}
 
-pub static WASH_KEYS_DIR: Lazy<PathBuf> = Lazy::new(|| {
-    var_path("WASH_KEYS_DIR").unwrap_or_else(|_| WASH_APP_STRATEGY.in_data_dir("keys"))
-});
+macro_rules! create_in_dir_method {
+    ($self: ident, $path_extra: expr, $file_extra: expr, $dir_method_name: ident, $in_dir_method_name: ident) => {{
+        let mut path = if let Some(subdir) = $path_extra {
+            $self.$in_dir_method_name(subdir)
+        } else {
+            $self.$dir_method_name()
+        };
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create directory `{}`", path.display()))?;
+        if let Some(file) = $file_extra {
+            path.push(Path::new(&file));
+        }
+        Ok(path)
+    }};
+}
 
-pub static WASH_PLUGINS_DIR: Lazy<PathBuf> = Lazy::new(|| {
-    var_path("WASH_PLUGINS_DIR").unwrap_or_else(|_| WASH_APP_STRATEGY.in_data_dir("plugins"))
-});
+impl WashAppStrategy {
+    /// Creates the directory in which to store configuration in and returns the path to it.
+    pub fn create_config_dir(&self) -> Result<PathBuf> {
+        create_dir_method!(self, config_dir)
+    }
 
-pub static WASH_PACKAGE_CACHE_DIR: Lazy<PathBuf> = Lazy::new(|| {
-    var_path("WASH_PACKAGE_CACHE_DIR")
-        .unwrap_or_else(|_| WASH_APP_STRATEGY.in_cache_dir("package_cache"))
-});
+    /// Creates the directory in which to store configuration in and returns the path to it
+    /// potentially concatenated with a filename.
+    pub fn create_in_config_dir<P: AsRef<OsStr>>(
+        &self,
+        subdir: Option<P>,
+        file: Option<P>,
+    ) -> Result<PathBuf> {
+        create_in_dir_method!(self, subdir, file, config_dir, in_config_dir)
+    }
 
-pub static WASH_DEV_DIR: Lazy<PathBuf> =
-    Lazy::new(|| var_path("WASH_DEV_DIR").unwrap_or_else(|_| WASH_APP_STRATEGY.in_data_dir("dev")));
+    /// Returns the path to the directory where to store keys.
+    pub fn keys_dir(&self) -> PathBuf {
+        var_path("WASH_KEYS_DIR").unwrap_or_else(|_| self.in_data_dir("keys"))
+    }
+
+    /// Concatenates a path in the keys directory.
+    pub fn in_keys_dir<P: AsRef<std::ffi::OsStr>>(&self, path: P) -> PathBuf {
+        in_dir_method!(self, path, keys_dir)
+    }
+
+    /// Creates the directory in which to store keys in and returns the path to it.
+    pub fn create_keys_dir(&self) -> Result<PathBuf> {
+        create_dir_method!(self, keys_dir)
+    }
+
+    /// Creates the directory in which to store keys in and returns the path to it potentially
+    /// concatenated with a filename.
+    pub fn create_in_keys_dir<P: AsRef<OsStr>>(
+        &self,
+        subdir: Option<P>,
+        file: Option<P>,
+    ) -> Result<PathBuf> {
+        create_in_dir_method!(self, subdir, file, keys_dir, in_keys_dir)
+    }
+
+    /// Returns the path to the directory where to store logs.
+    pub fn logs_dir(&self) -> PathBuf {
+        var_path("WASH_LOGS_DIR").unwrap_or_else(|_| WASH_DIRECTORIES.in_data_dir("logs"))
+    }
+
+    /// Concatenates a path in the logs directory.
+    pub fn in_logs_dir<P: AsRef<std::ffi::OsStr>>(&self, path: P) -> PathBuf {
+        in_dir_method!(self, path, logs_dir)
+    }
+
+    /// Creates the directory in which to store logs in and returns the path to it.
+    pub fn create_logs_dir(&self) -> Result<PathBuf> {
+        create_dir_method!(self, logs_dir)
+    }
+
+    /// Creates the directory in which to store logs in and returns the path to it potentially
+    /// concatenated with a filename.
+    pub fn create_in_logs_dir<P: AsRef<OsStr>>(
+        &self,
+        subdir: Option<P>,
+        file: Option<P>,
+    ) -> Result<PathBuf> {
+        create_in_dir_method!(self, subdir, file, logs_dir, in_logs_dir)
+    }
+
+    /// Returns the path to the directory where to store downloads.
+    pub fn downloads_dir(&self) -> PathBuf {
+        var_path("WASH_DOWNLOADS_DIR").unwrap_or_else(|_| WASH_DIRECTORIES.in_data_dir("downloads"))
+    }
+
+    /// Concatenates a path in the downloads directory.
+    pub fn in_downloads_dir<P: AsRef<std::ffi::OsStr>>(&self, path: P) -> PathBuf {
+        in_dir_method!(self, path, downloads_dir)
+    }
+
+    /// Creates the directory in which to store downloads in and returns the path to it.
+    pub fn create_downloads_dir(&self) -> Result<PathBuf> {
+        create_dir_method!(self, downloads_dir)
+    }
+
+    /// Creates the directory in which to store downloads in and returns the path to it potentially
+    /// concatenated with a filename.
+    pub fn create_in_downloads_dir<P: AsRef<OsStr>>(
+        &self,
+        subdir: Option<P>,
+        file: Option<P>,
+    ) -> Result<PathBuf> {
+        create_in_dir_method!(self, subdir, file, downloads_dir, in_downloads_dir)
+    }
+
+    /// Returns the path to the directory where to store plugins.
+    pub fn plugins_dir(&self) -> PathBuf {
+        var_path("WASH_PLUGINS_DIR").unwrap_or_else(|_| WASH_DIRECTORIES.in_data_dir("plugins"))
+    }
+
+    /// Concatenates a path in the plugins directory.
+    pub fn in_plugins_dir<P: AsRef<std::ffi::OsStr>>(&self, path: P) -> PathBuf {
+        in_dir_method!(self, path, plugins_dir)
+    }
+
+    /// Creates the directory in which to store plugins in and returns the path to it.
+    pub fn create_plugins_dir(&self) -> Result<PathBuf> {
+        create_dir_method!(self, plugins_dir)
+    }
+
+    /// Creates the directory in which to store plugins in and returns the path to it potentially
+    /// concatenated with a filename.
+    pub fn create_in_plugins_dir<P: AsRef<OsStr>>(
+        &self,
+        subdir: Option<P>,
+        file: Option<P>,
+    ) -> Result<PathBuf> {
+        create_in_dir_method!(self, subdir, file, plugins_dir, in_plugins_dir)
+    }
+
+    /// Returns the path to the directory where to store the package cache.
+    pub fn package_cache_dir(&self) -> PathBuf {
+        var_path("WASH_PACKAGE_CACHE_DIR")
+            .unwrap_or_else(|_| WASH_DIRECTORIES.in_cache_dir("package_cache"))
+    }
+
+    /// Concatenates a path in the package cache directory.
+    pub fn in_package_cache_dir<P: AsRef<std::ffi::OsStr>>(&self, path: P) -> PathBuf {
+        in_dir_method!(self, path, package_cache_dir)
+    }
+
+    /// Creates the directory in which to store cached packages in and returns the path to it.
+    pub fn create_package_cache_dir(&self) -> Result<PathBuf> {
+        create_dir_method!(self, package_cache_dir)
+    }
+
+    /// Creates the directory in which to store the package cache in and returns the path to it
+    /// potentially concatenated with a filename.
+    pub fn create_in_package_cache_dir<P: AsRef<OsStr>>(
+        &self,
+        subdir: Option<P>,
+        file: Option<P>,
+    ) -> Result<PathBuf> {
+        create_in_dir_method!(self, subdir, file, package_cache_dir, in_package_cache_dir)
+    }
+
+    /// Returns the path to the directory where to store the development stuff.
+    pub fn dev_dir(&self) -> PathBuf {
+        var_path("WASH_DEV_DIR").unwrap_or_else(|_| WASH_DIRECTORIES.in_data_dir("dev"))
+    }
+
+    /// Concatenates a path in the development directory.
+    pub fn in_dev_dir<P: AsRef<std::ffi::OsStr>>(&self, path: P) -> PathBuf {
+        in_dir_method!(self, path, dev_dir)
+    }
+
+    /// Creates the directory in which to store dev stuff in and returns the path to it.
+    pub fn create_dev_dir(&self) -> Result<PathBuf> {
+        create_dir_method!(self, dev_dir)
+    }
+
+    /// Creates the directory in which to store dev in and returns the path to it potentially
+    /// concatenated with a filename.
+    pub fn create_in_dev_dir<P: AsRef<OsStr>>(
+        &self,
+        subdir: Option<P>,
+        file: Option<P>,
+    ) -> Result<PathBuf> {
+        create_in_dir_method!(self, subdir, file, dev_dir, in_dev_dir)
+    }
+
+    /// Returns the path to the directory where to store contexts.
+    pub fn context_dir(&self) -> PathBuf {
+        var_path("WASH_CONTEXT_DIR").unwrap_or_else(|_| WASH_DIRECTORIES.in_config_dir("contexts"))
+    }
+
+    /// Concatenates a path in the context directory.
+    pub fn in_context_dir<P: AsRef<std::ffi::OsStr>>(&self, path: P) -> PathBuf {
+        in_dir_method!(self, path, context_dir)
+    }
+
+    /// Creates the directory in which to store contexts in and returns the path to it.
+    pub fn create_context_dir(&self) -> Result<PathBuf> {
+        create_dir_method!(self, context_dir)
+    }
+
+    /// Creates the directory in which to store context in and returns the path to it potentially
+    /// concatenated with a filename.
+    pub fn create_in_context_dir<P: AsRef<OsStr>>(
+        &self,
+        subdir: Option<P>,
+        file: Option<P>,
+    ) -> Result<PathBuf> {
+        create_in_dir_method!(self, subdir, file, context_dir, in_context_dir)
+    }
+}
 
 fn var_path(key: &str) -> Result<PathBuf> {
     std::env::var_os(key)
@@ -135,26 +333,14 @@ fn replace_path<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
     })
 }
 
-/// Get the path to the `.wash` configuration directory. Creates the directory if it does not exist.
-pub fn cfg_dir() -> Result<PathBuf> {
-    let wash = WASH_APP_STRATEGY.config_dir();
-
-    if !wash.exists() {
-        fs::create_dir_all(&wash)
-            .with_context(|| format!("failed to create directory `{}`", wash.display()))?;
-    }
-
-    Ok(wash)
-}
-
 /// The path to the running wasmCloud Host PID file for wash
 pub fn host_pid_file() -> Result<PathBuf> {
-    Ok(WASH_DOWNLOADS_DIR.join(WASMCLOUD_PID_FILE))
+    WASH_DIRECTORIES.create_in_downloads_dir(None, Some(WASMCLOUD_PID_FILE))
 }
 
 /// The path to the running wadm PID file for wash
 pub fn wadm_pid_file() -> Result<PathBuf> {
-    Ok(WASH_DOWNLOADS_DIR.join(WADM_PID_FILE))
+    WASH_DIRECTORIES.create_in_downloads_dir(None, Some(WADM_PID_FILE))
 }
 
 #[derive(Clone, Default)]
