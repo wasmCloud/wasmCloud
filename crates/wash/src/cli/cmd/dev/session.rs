@@ -12,7 +12,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use tokio::process::Child;
 
-use crate::lib::config;
+use crate::lib::config::WASH_DIRECTORIES;
 use crate::lib::generate::emoji;
 use crate::lib::id::ServerId;
 use crate::lib::start::{
@@ -242,7 +242,7 @@ impl WashDevSession {
 
         let session_dir = self.base_dir().await?;
 
-        let install_dir = config::WASH_DOWNLOADS_DIR.to_path_buf();
+        let install_dir = WASH_DIRECTORIES.downloads_dir();
         let nats_host = nats_opts.nats_host.clone().unwrap_or_else(|| {
             wasmcloud_opts
                 .ctl_host

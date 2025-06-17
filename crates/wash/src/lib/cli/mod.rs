@@ -26,8 +26,8 @@ use wasm_pkg_client::{
 
 use crate::lib::{
     config::{
-        self, WashConnectionOptions, DEFAULT_LATTICE, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
-        DEFAULT_NATS_TIMEOUT_MS,
+        WashConnectionOptions, DEFAULT_LATTICE, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
+        DEFAULT_NATS_TIMEOUT_MS, WASH_DIRECTORIES,
     },
     context::{default_timeout_ms, fs::ContextDir, ContextManager},
     keys::{
@@ -308,7 +308,7 @@ impl CommonPackageArgs {
             }
             // Otherwise we got nothing and attempt to load the default config locations
             (None, None) => {
-                let path = config::cfg_dir()?.join("package_config.toml");
+                let path = WASH_DIRECTORIES.create_in_config_dir(None, Some("package_config.toml"))?;
                 // Check if the config file exists before loading so we can error properly
                 if tokio::fs::metadata(&path).await.is_ok() {
                     let loaded = wasm_pkg_client::Config::from_file(&path)
@@ -354,7 +354,7 @@ impl CommonPackageArgs {
             // We have a cache dir provided by the user via `WKG` env var
             (None, Some(path)) => PathBuf::from(path),
             // Otherwise we got nothing and attempt to load the default cache dir
-            (None, None) => config::WASH_PACKAGE_CACHE_DIR.to_path_buf(),
+            (None, None) => WASH_DIRECTORIES.package_cache_dir(),
         };
         FileCache::new(dir).await
     }
@@ -502,7 +502,7 @@ fn determine_directory(directory: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(d) = directory {
         Ok(d)
     } else {
-        let d = config::WASH_KEYS_DIR.to_path_buf();
+        let d = WASH_DIRECTORIES.keys_dir();
         Ok(d)
     }
 }
@@ -574,7 +574,7 @@ mod test {
     use serial_test::serial;
 
     use crate::lib::{
-        config::{WashConnectionOptions, DEFAULT_CTX_DIR_NAME, DEFAULT_LATTICE},
+        config::{WashConnectionOptions, DEFAULT_LATTICE},
         context::{fs::ContextDir, ContextManager, WashContext},
     };
 
@@ -651,7 +651,7 @@ mod test {
         let context_dir = ContextDir::from_dir(Some(
             tempdir
                 .path()
-                .join(format!(".config/wash/{DEFAULT_CTX_DIR_NAME}")),
+                .join(format!(".config/wash/contexts")),
         ))?;
 
         // when opts.lattice.is_none() && opts.context.is_some(), use the lattice from the specified context...
