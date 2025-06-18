@@ -5,7 +5,7 @@ description: wasmCloud Platform Helm Chart provides a turnkey solution, for runn
 # Note: Ensure you bump this `version` field in a separate PR than what you plan
 # to tag as the updated wasmCloud version. To be safe, bump and release wasmCloud
 # in one PR, then open a new PR updating this `version` and `appVersion`.
-version: 0.1.2
+version: 0.1.3
 
 type: application
 appVersion: "1.2.1"
@@ -20,7 +20,7 @@ dependencies:
     tags:
       - nats-cluster
   - name: wadm
-    version: 0.2.7
+    version: 0.2.10
     repository: oci://ghcr.io/wasmcloud/charts
     condition: wadm.enabled
     tags:
