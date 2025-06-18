@@ -308,7 +308,8 @@ impl CommonPackageArgs {
             }
             // Otherwise we got nothing and attempt to load the default config locations
             (None, None) => {
-                let path = WASH_DIRECTORIES.create_in_config_dir(None, Some("package_config.toml"))?;
+                let path =
+                    WASH_DIRECTORIES.create_in_config_dir(None, Some("package_config.toml"))?;
                 // Check if the config file exists before loading so we can error properly
                 if tokio::fs::metadata(&path).await.is_ok() {
                     let loaded = wasm_pkg_client::Config::from_file(&path)
@@ -648,11 +649,7 @@ mod test {
         let wash_opts = WashConnectionOptions::try_from(cli_opts)?;
         assert_eq!(wash_opts.get_lattice(), "hal9000".to_string());
 
-        let context_dir = ContextDir::from_dir(Some(
-            tempdir
-                .path()
-                .join(format!(".config/wash/contexts")),
-        ))?;
+        let context_dir = ContextDir::from_dir(Some(tempdir.path().join(".config/wash/contexts")))?;
 
         // when opts.lattice.is_none() && opts.context.is_some(), use the lattice from the specified context...
         context_dir.save_context(&WashContext {
