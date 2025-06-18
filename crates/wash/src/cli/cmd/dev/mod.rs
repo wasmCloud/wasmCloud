@@ -255,6 +255,7 @@ pub async fn handle_command(
     };
 
     // See if the host is running by retrieving an inventory
+    std::thread::sleep(std::time::Duration::from_secs(1));
     if let Err(_e) = ctl_client.get_host_inventory(&host_id).await {
         eprintln!(
             "{} Failed to retrieve inventory from host [{host_id}]... Exiting developer loop",
