@@ -518,7 +518,7 @@ pub async fn is_host_up(
         backoff: tokio::time::Duration,
     ) -> Result<()> {
         loop {
-            if let Ok(_) = ctl_client.get_host_inventory(host_id).await {
+            if (ctl_client.get_host_inventory(host_id).await).is_ok() {
                 break;
             }
             tokio::time::sleep(backoff).await;
