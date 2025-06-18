@@ -17,6 +17,8 @@ use crate::lib::id::ServerId;
 use crate::lib::parser::load_config;
 use tracing::trace;
 
+use wasmcloud_control_interface::Client;
+
 use crate::cmd::up::{
     nats_client_from_wasmcloud_opts, remove_wadm_pidfile, NatsOpts, WadmOpts, WasmcloudOpts,
 };
@@ -254,9 +256,15 @@ pub async fn handle_command(
         output_kind,
     };
 
-    // See if the host is running by retrieving an inventory
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    if let Err(_e) = ctl_client.get_host_inventory(&host_id).await {
+    // Wait for host to come up
+    if let Err(_e) = is_host_up(
+        &host_id,
+        &ctl_client,
+        tokio::time::Duration::from_secs(1),
+        tokio::time::Duration::from_millis(100),
+    )
+    .await
+    {
         eprintln!(
             "{} Failed to retrieve inventory from host [{host_id}]... Exiting developer loop",
             emoji::ERROR
@@ -493,4 +501,30 @@ async fn stop_dev_session(
     }
 
     Ok(())
+}
+
+/// Checks whether a wasmCloud host is up by trying to get its inventory. It will repeat after
+/// waiting for `backoff` duraction in case of error. It will fail after `timeout` duration if the
+/// inventory could still not be retrieved.
+pub async fn is_host_up(
+    host_id: &str,
+    ctl_client: &Client,
+    timeout: tokio::time::Duration,
+    backoff: tokio::time::Duration,
+) -> Result<()> {
+    async fn func(
+        host_id: &str,
+        ctl_client: &Client,
+        backoff: tokio::time::Duration,
+    ) -> Result<()> {
+        loop {
+            if let Ok(_) = ctl_client.get_host_inventory(host_id).await {
+                break;
+            }
+            tokio::time::sleep(backoff).await;
+        }
+        Ok(())
+    }
+
+    tokio::time::timeout(timeout, func(host_id, ctl_client, backoff)).await?
 }
