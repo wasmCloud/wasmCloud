@@ -52,7 +52,7 @@ pub enum ShellSelection {
 
 /// Displays a message one time after wash install
 pub fn first_run_suggestion() -> Result<Option<String>> {
-    let token = WASH_DIRECTORIES.create_in_config_dir(None, Some(TOKEN_FILE))?;
+    let token = WASH_DIRECTORIES.create_in_config_dir(TOKEN_FILE)?;
     if token.is_file() {
         return Ok(None);
     }
