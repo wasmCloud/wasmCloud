@@ -574,7 +574,7 @@ mod test {
     use serial_test::serial;
 
     use crate::lib::{
-        config::{WashConnectionOptions, DEFAULT_LATTICE},
+        config::{WashConnectionOptions, DEFAULT_LATTICE, WASH_DIRECTORIES},
         context::{fs::ContextDir, ContextManager, WashContext},
     };
 
@@ -798,6 +798,41 @@ mod test {
         assert!(
             assert_registry_mapping(wasmcloud_registry, "adifferentone.com"),
             "Should have the proper registry for wasmcloud",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_config_directory_overrides() {
+        use etcetera::AppStrategy;
+        let tempdir = tempfile::tempdir().expect("failed to create tempdir");
+        let _xdg_config_home = EnvVar::set("XDG_CONFIG_HOME", tempdir.path().join(".config"));
+        assert_eq!(
+            WASH_DIRECTORIES.config_dir(),
+            tempdir.path().join(".config/wash"),
+            "Should retrieve XDG conform wash config directory"
+        );
+        assert_eq!(
+            WASH_DIRECTORIES.context_dir(),
+            tempdir.path().join(".config/wash/contexts"),
+            "Should retrieve XDG conform wash context directory"
+        );
+        let _wash_config_dir = EnvVar::set("WASH_CONFIG_DIR", tempdir.path().join(".wash"));
+        assert_eq!(
+            WASH_DIRECTORIES.config_dir(),
+            tempdir.path().join(".wash"),
+            "Should retrieve custom wash config directory"
+        );
+        assert_eq!(
+            WASH_DIRECTORIES.context_dir(),
+            tempdir.path().join(".wash/contexts"),
+            "Should retrieve contexts directory in custom wash config directory"
+        );
+        let _wash_context_dir = EnvVar::set("WASH_CONTEXT_DIR", tempdir.path().join("contexts"));
+        assert_eq!(
+            WASH_DIRECTORIES.context_dir(),
+            tempdir.path().join("contexts"),
+            "Should retrieve custom contexts config directory"
         );
     }
 
