@@ -308,8 +308,7 @@ impl CommonPackageArgs {
             }
             // Otherwise we got nothing and attempt to load the default config locations
             (None, None) => {
-                let path =
-                    WASH_DIRECTORIES.create_in_config_dir(None, Some("package_config.toml"))?;
+                let path = WASH_DIRECTORIES.create_in_config_dir("package_config.toml")?;
                 // Check if the config file exists before loading so we can error properly
                 if tokio::fs::metadata(&path).await.is_ok() {
                     let loaded = wasm_pkg_client::Config::from_file(&path)
