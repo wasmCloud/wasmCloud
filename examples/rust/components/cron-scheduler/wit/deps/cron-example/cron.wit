@@ -1,0 +1,5 @@
+package wasmcloud:cron@0.1.0;
+
+interface scheduler {
+       invoke : func(payload: list<u8>) -> result<_, string>;
+}
