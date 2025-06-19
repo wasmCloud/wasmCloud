@@ -89,53 +89,20 @@ impl AppStrategy for WashAppStrategy {
     }
 }
 
-macro_rules! in_dir_method {
-    ($self: ident, $path_extra: expr, $dir_method_name: ident) => {{
-        let mut path = $self.$dir_method_name();
-        path.push(Path::new(&$path_extra));
-        path
-    }};
-}
-
-macro_rules! create_dir_method {
-    ($self: ident, $dir_method_name: ident) => {{
-        let path = $self.$dir_method_name();
-        fs::create_dir_all(&path)
-            .with_context(|| format!("failed to create directory `{}`", path.display()))?;
-        Ok(path)
-    }};
-}
-
-macro_rules! create_in_dir_method {
-    ($self: ident, $path_extra: expr, $file_extra: expr, $dir_method_name: ident, $in_dir_method_name: ident) => {{
-        let mut path = if let Some(subdir) = $path_extra {
-            $self.$in_dir_method_name(subdir)
-        } else {
-            $self.$dir_method_name()
-        };
-        fs::create_dir_all(&path)
-            .with_context(|| format!("failed to create directory `{}`", path.display()))?;
-        if let Some(file) = $file_extra {
-            path.push(Path::new(&file));
-        }
-        Ok(path)
-    }};
-}
-
 impl WashAppStrategy {
     /// Creates the directory in which to store configuration in and returns the path to it.
     pub fn create_config_dir(&self) -> Result<PathBuf> {
-        create_dir_method!(self, config_dir)
+        let path = self.config_dir();
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create directory `{}`", path.display()))?;
+        Ok(path)
     }
 
     /// Creates the directory in which to store configuration in and returns the path to it
-    /// potentially concatenated with a filename.
-    pub fn create_in_config_dir<P: AsRef<OsStr>>(
-        &self,
-        subdir: Option<P>,
-        file: Option<P>,
-    ) -> Result<PathBuf> {
-        create_in_dir_method!(self, subdir, file, config_dir, in_config_dir)
+    /// concatenated with a filename.
+    pub fn create_in_config_dir<P: AsRef<OsStr>>(&self, path: P) -> Result<PathBuf> {
+        self.create_config_dir()?;
+        Ok(self.in_config_dir(path))
     }
 
     /// Returns the path to the directory where to store keys.
@@ -145,22 +112,24 @@ impl WashAppStrategy {
 
     /// Concatenates a path in the keys directory.
     pub fn in_keys_dir<P: AsRef<std::ffi::OsStr>>(&self, path: P) -> PathBuf {
-        in_dir_method!(self, path, keys_dir)
+        let mut basepath = self.keys_dir();
+        basepath.push(Path::new(&path));
+        basepath
     }
 
     /// Creates the directory in which to store keys in and returns the path to it.
     pub fn create_keys_dir(&self) -> Result<PathBuf> {
-        create_dir_method!(self, keys_dir)
+        let path = self.keys_dir();
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create directory `{}`", path.display()))?;
+        Ok(path)
     }
 
-    /// Creates the directory in which to store keys in and returns the path to it potentially
+    /// Creates the directory in which to store keys in and returns the path to it
     /// concatenated with a filename.
-    pub fn create_in_keys_dir<P: AsRef<OsStr>>(
-        &self,
-        subdir: Option<P>,
-        file: Option<P>,
-    ) -> Result<PathBuf> {
-        create_in_dir_method!(self, subdir, file, keys_dir, in_keys_dir)
+    pub fn create_in_keys_dir<P: AsRef<OsStr>>(&self, path: P) -> Result<PathBuf> {
+        self.create_keys_dir()?;
+        Ok(self.in_keys_dir(path))
     }
 
     /// Returns the path to the directory where to store logs.
@@ -170,22 +139,24 @@ impl WashAppStrategy {
 
     /// Concatenates a path in the logs directory.
     pub fn in_logs_dir<P: AsRef<std::ffi::OsStr>>(&self, path: P) -> PathBuf {
-        in_dir_method!(self, path, logs_dir)
+        let mut basepath = self.logs_dir();
+        basepath.push(Path::new(&path));
+        basepath
     }
 
     /// Creates the directory in which to store logs in and returns the path to it.
     pub fn create_logs_dir(&self) -> Result<PathBuf> {
-        create_dir_method!(self, logs_dir)
+        let path = self.logs_dir();
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create directory `{}`", path.display()))?;
+        Ok(path)
     }
 
-    /// Creates the directory in which to store logs in and returns the path to it potentially
+    /// Creates the directory in which to store logs in and returns the path to it
     /// concatenated with a filename.
-    pub fn create_in_logs_dir<P: AsRef<OsStr>>(
-        &self,
-        subdir: Option<P>,
-        file: Option<P>,
-    ) -> Result<PathBuf> {
-        create_in_dir_method!(self, subdir, file, logs_dir, in_logs_dir)
+    pub fn create_in_logs_dir<P: AsRef<OsStr>>(&self, path: P) -> Result<PathBuf> {
+        self.create_logs_dir()?;
+        Ok(self.in_logs_dir(path))
     }
 
     /// Returns the path to the directory where to store downloads.
@@ -195,22 +166,24 @@ impl WashAppStrategy {
 
     /// Concatenates a path in the downloads directory.
     pub fn in_downloads_dir<P: AsRef<std::ffi::OsStr>>(&self, path: P) -> PathBuf {
-        in_dir_method!(self, path, downloads_dir)
+        let mut basepath = self.downloads_dir();
+        basepath.push(Path::new(&path));
+        basepath
     }
 
     /// Creates the directory in which to store downloads in and returns the path to it.
     pub fn create_downloads_dir(&self) -> Result<PathBuf> {
-        create_dir_method!(self, downloads_dir)
+        let path = self.downloads_dir();
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create directory `{}`", path.display()))?;
+        Ok(path)
     }
 
-    /// Creates the directory in which to store downloads in and returns the path to it potentially
+    /// Creates the directory in which to store downloads in and returns the path to it
     /// concatenated with a filename.
-    pub fn create_in_downloads_dir<P: AsRef<OsStr>>(
-        &self,
-        subdir: Option<P>,
-        file: Option<P>,
-    ) -> Result<PathBuf> {
-        create_in_dir_method!(self, subdir, file, downloads_dir, in_downloads_dir)
+    pub fn create_in_downloads_dir<P: AsRef<OsStr>>(&self, path: P) -> Result<PathBuf> {
+        self.create_downloads_dir()?;
+        Ok(self.in_downloads_dir(path))
     }
 
     /// Returns the path to the directory where to store plugins.
@@ -220,22 +193,24 @@ impl WashAppStrategy {
 
     /// Concatenates a path in the plugins directory.
     pub fn in_plugins_dir<P: AsRef<std::ffi::OsStr>>(&self, path: P) -> PathBuf {
-        in_dir_method!(self, path, plugins_dir)
+        let mut basepath = self.plugins_dir();
+        basepath.push(Path::new(&path));
+        basepath
     }
 
     /// Creates the directory in which to store plugins in and returns the path to it.
     pub fn create_plugins_dir(&self) -> Result<PathBuf> {
-        create_dir_method!(self, plugins_dir)
+        let path = self.plugins_dir();
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create directory `{}`", path.display()))?;
+        Ok(path)
     }
 
-    /// Creates the directory in which to store plugins in and returns the path to it potentially
+    /// Creates the directory in which to store plugins in and returns the path to it
     /// concatenated with a filename.
-    pub fn create_in_plugins_dir<P: AsRef<OsStr>>(
-        &self,
-        subdir: Option<P>,
-        file: Option<P>,
-    ) -> Result<PathBuf> {
-        create_in_dir_method!(self, subdir, file, plugins_dir, in_plugins_dir)
+    pub fn create_in_plugins_dir<P: AsRef<OsStr>>(&self, path: P) -> Result<PathBuf> {
+        self.create_plugins_dir()?;
+        Ok(self.in_plugins_dir(path))
     }
 
     /// Returns the path to the directory where to store the package cache.
@@ -246,22 +221,24 @@ impl WashAppStrategy {
 
     /// Concatenates a path in the package cache directory.
     pub fn in_package_cache_dir<P: AsRef<std::ffi::OsStr>>(&self, path: P) -> PathBuf {
-        in_dir_method!(self, path, package_cache_dir)
+        let mut basepath = self.package_cache_dir();
+        basepath.push(Path::new(&path));
+        basepath
     }
 
     /// Creates the directory in which to store cached packages in and returns the path to it.
     pub fn create_package_cache_dir(&self) -> Result<PathBuf> {
-        create_dir_method!(self, package_cache_dir)
+        let path = self.package_cache_dir();
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create directory `{}`", path.display()))?;
+        Ok(path)
     }
 
     /// Creates the directory in which to store the package cache in and returns the path to it
-    /// potentially concatenated with a filename.
-    pub fn create_in_package_cache_dir<P: AsRef<OsStr>>(
-        &self,
-        subdir: Option<P>,
-        file: Option<P>,
-    ) -> Result<PathBuf> {
-        create_in_dir_method!(self, subdir, file, package_cache_dir, in_package_cache_dir)
+    /// concatenated with a filename.
+    pub fn create_in_package_cache_dir<P: AsRef<OsStr>>(&self, path: P) -> Result<PathBuf> {
+        self.create_package_cache_dir()?;
+        Ok(self.in_package_cache_dir(path))
     }
 
     /// Returns the path to the directory where to store the development stuff.
@@ -271,22 +248,24 @@ impl WashAppStrategy {
 
     /// Concatenates a path in the development directory.
     pub fn in_dev_dir<P: AsRef<std::ffi::OsStr>>(&self, path: P) -> PathBuf {
-        in_dir_method!(self, path, dev_dir)
+        let mut basepath = self.dev_dir();
+        basepath.push(Path::new(&path));
+        basepath
     }
 
     /// Creates the directory in which to store dev stuff in and returns the path to it.
     pub fn create_dev_dir(&self) -> Result<PathBuf> {
-        create_dir_method!(self, dev_dir)
+        let path = self.dev_dir();
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create directory `{}`", path.display()))?;
+        Ok(path)
     }
 
-    /// Creates the directory in which to store dev in and returns the path to it potentially
+    /// Creates the directory in which to store dev in and returns the path to it
     /// concatenated with a filename.
-    pub fn create_in_dev_dir<P: AsRef<OsStr>>(
-        &self,
-        subdir: Option<P>,
-        file: Option<P>,
-    ) -> Result<PathBuf> {
-        create_in_dir_method!(self, subdir, file, dev_dir, in_dev_dir)
+    pub fn create_in_dev_dir<P: AsRef<OsStr>>(&self, path: P) -> Result<PathBuf> {
+        self.create_dev_dir()?;
+        Ok(self.in_dev_dir(path))
     }
 
     /// Returns the path to the directory where to store contexts.
@@ -296,22 +275,24 @@ impl WashAppStrategy {
 
     /// Concatenates a path in the context directory.
     pub fn in_context_dir<P: AsRef<std::ffi::OsStr>>(&self, path: P) -> PathBuf {
-        in_dir_method!(self, path, context_dir)
+        let mut basepath = self.context_dir();
+        basepath.push(Path::new(&path));
+        basepath
     }
 
     /// Creates the directory in which to store contexts in and returns the path to it.
     pub fn create_context_dir(&self) -> Result<PathBuf> {
-        create_dir_method!(self, context_dir)
+        let path = self.context_dir();
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create directory `{}`", path.display()))?;
+        Ok(path)
     }
 
-    /// Creates the directory in which to store context in and returns the path to it potentially
+    /// Creates the directory in which to store context in and returns the path to it
     /// concatenated with a filename.
-    pub fn create_in_context_dir<P: AsRef<OsStr>>(
-        &self,
-        subdir: Option<P>,
-        file: Option<P>,
-    ) -> Result<PathBuf> {
-        create_in_dir_method!(self, subdir, file, context_dir, in_context_dir)
+    pub fn create_in_context_dir<P: AsRef<OsStr>>(&self, path: P) -> Result<PathBuf> {
+        self.create_context_dir()?;
+        Ok(self.in_context_dir(path))
     }
 }
 
@@ -335,12 +316,12 @@ fn replace_path<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
 
 /// The path to the running wasmCloud Host PID file for wash
 pub fn host_pid_file() -> Result<PathBuf> {
-    WASH_DIRECTORIES.create_in_downloads_dir(None, Some(WASMCLOUD_PID_FILE))
+    WASH_DIRECTORIES.create_in_downloads_dir(WASMCLOUD_PID_FILE)
 }
 
 /// The path to the running wadm PID file for wash
 pub fn wadm_pid_file() -> Result<PathBuf> {
-    WASH_DIRECTORIES.create_in_downloads_dir(None, Some(WADM_PID_FILE))
+    WASH_DIRECTORIES.create_in_downloads_dir(WADM_PID_FILE)
 }
 
 #[derive(Clone, Default)]
