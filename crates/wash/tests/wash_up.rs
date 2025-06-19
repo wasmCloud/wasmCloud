@@ -2,6 +2,7 @@ use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
+use etcetera::AppStrategy;
 use regex::Regex;
 use semver::Version;
 use serial_test::serial;
@@ -384,10 +385,15 @@ async fn integration_up_works_with_specified_wadm_version() -> Result<()> {
 
     let instance =
         TestWashInstance::create_with_extra_args(["--wadm-version", previous_wadm_version]).await?;
+    let downloads_dir = WASH_DIRECTORIES.downloads_dir();
     let wadm_path = instance
         .test_dir
         .path()
-        .join(WASH_DIRECTORIES.downloads_dir())
+        .join(
+            downloads_dir
+                .strip_prefix(WASH_DIRECTORIES.home_dir())
+                .context("failed to remove home prefix of wash downloads directory")?,
+        )
         .join(WADM_BINARY)
         .canonicalize()
         .context("failed to canonicalize wadm binary path")?;
