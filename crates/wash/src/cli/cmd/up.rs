@@ -3,6 +3,7 @@ use crate::lib::cli::{CommandOutput, OutputKind};
 use crate::lib::common::{CommandGroupUsage, WASMCLOUD_HOST_VERSION_T};
 use crate::lib::config::{
     create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_TIMEOUT_MS,
+    WADM_PID_FILE,
 };
 use crate::lib::context::fs::ContextDir;
 use crate::lib::context::ContextManager;
@@ -12,7 +13,7 @@ use crate::lib::start::{
     new_patch_or_pre_1_0_0_minor_version_after_version_string, parse_version_string,
     start_nats_server, start_wadm, start_wasmcloud_host, NatsConfig, WadmConfig,
     GITHUB_WASMCLOUD_ORG, GITHUB_WASMCLOUD_WADM_REPO, GITHUB_WASMCLOUD_WASMCLOUD_REPO,
-    NATS_SERVER_BINARY, NATS_SERVER_CONF, WADM_PID,
+    NATS_SERVER_BINARY, NATS_SERVER_CONF,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use async_nats::Client;
@@ -1170,7 +1171,7 @@ pub(crate) async fn remove_wadm_pidfile<P>(install_dir: P) -> Result<()>
 where
     P: AsRef<Path>,
 {
-    if let Err(err) = tokio::fs::remove_file(install_dir.as_ref().join(WADM_PID)).await {
+    if let Err(err) = tokio::fs::remove_file(install_dir.as_ref().join(WADM_PID_FILE)).await {
         if err.kind() != ErrorKind::NotFound {
             bail!(err);
         }

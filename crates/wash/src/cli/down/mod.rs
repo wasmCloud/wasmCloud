@@ -2,19 +2,19 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
+use crate::lib::cli::{stop::stop_hosts, CommandOutput, OutputKind};
+use crate::lib::config::{
+    create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_HOST,
+    DEFAULT_NATS_PORT, WADM_PID_FILE,
+};
+use crate::lib::id::ServerId;
+use crate::lib::start::{nats_pid_path, NATS_SERVER_BINARY};
 use anyhow::{bail, Context as _, Result};
 use clap::Parser;
 use futures::future::join_all;
 use serde_json::json;
 use tokio::process::Command;
 use tracing::warn;
-use crate::lib::cli::{stop::stop_hosts, CommandOutput, OutputKind};
-use crate::lib::config::{
-    create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_HOST,
-    DEFAULT_NATS_PORT,
-};
-use crate::lib::id::ServerId;
-use crate::lib::start::{nats_pid_path, NATS_SERVER_BINARY, WADM_PID};
 
 use crate::appearance::spinner::Spinner;
 use crate::config::{
@@ -109,7 +109,8 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
     let nats_client = create_nats_client_from_opts(
         &cmd.ctl_host
             .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string()),
-        &cmd.ctl_port.map_or_else(|| DEFAULT_NATS_PORT.to_string(), |port| port.to_string()),
+        &cmd.ctl_port
+            .map_or_else(|| DEFAULT_NATS_PORT.to_string(), |port| port.to_string()),
         cmd.ctl_jwt,
         cmd.ctl_seed,
         cmd.ctl_credsfile,
@@ -156,7 +157,7 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
 
     match stop_wadm(&install_dir).await {
         Ok(_) => {
-            let pid_file_path = &install_dir.join(WADM_PID);
+            let pid_file_path = &install_dir.join(WADM_PID_FILE);
             // Failing to find the pid file is not an error that should prevent stopping other resources
             if let Err(e) = tokio::fs::remove_file(&pid_file_path)
                 .await
@@ -280,7 +281,7 @@ pub async fn stop_wadm<P>(install_dir: P) -> Result<Output>
 where
     P: AsRef<Path>,
 {
-    let wadm_pidfile_path = install_dir.as_ref().join(WADM_PID);
+    let wadm_pidfile_path = install_dir.as_ref().join(WADM_PID_FILE);
     if let Ok(pid) = tokio::fs::read_to_string(&wadm_pidfile_path).await {
         tokio::process::Command::new("kill")
             .arg(pid)
