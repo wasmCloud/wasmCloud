@@ -128,7 +128,7 @@ fn assert_http_run(
         .set(&String::from("foo"), &[b"bar".to_vec()])
         .expect("failed to set `foo` header");
     headers_clone
-        .append(&String::from("foo"), &b"baz".to_vec())
+        .append(&String::from("foo"), b"baz".as_ref())
         .expect("failed to append `foo` header");
     assert_eq!(
         headers_clone.get(&String::from("foo")),
