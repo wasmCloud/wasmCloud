@@ -1,5 +1,6 @@
 use wash::lib::common::CommandGroupUsage;
-use wash::lib::start::{ensure_wadm, start_wadm, WadmConfig, WADM_BINARY, WADM_PID};
+use wash::lib::config::WADM_PID_FILE;
+use wash::lib::start::{ensure_wadm, start_wadm, WadmConfig, WADM_BINARY};
 
 use anyhow::Result;
 use tempfile::tempdir;
@@ -56,7 +57,7 @@ async fn can_download_and_start_wadm() -> Result<()> {
 
     // Assert that the pid file get created in the expected state_dir,
     // which in this case is set to install_dir.
-    let pid_path = install_dir.path().join(WADM_PID);
+    let pid_path = install_dir.path().join(WADM_PID_FILE);
     assert!(tokio::fs::try_exists(pid_path).await?);
 
     // Different OS-es have different error codes, but all I care about is that wadm executed at all

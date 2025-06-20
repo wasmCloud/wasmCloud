@@ -8,9 +8,9 @@ use tracing::warn;
 
 use super::download_binary_from_github;
 use crate::lib::common::CommandGroupUsage;
+use crate::lib::config::WADM_PID_FILE;
 
 const WADM_GITHUB_RELEASE_URL: &str = "https://github.com/wasmcloud/wadm/releases/download";
-pub const WADM_PID: &str = "wadm.pid";
 #[cfg(target_family = "unix")]
 pub const WADM_BINARY: &str = "wadm";
 #[cfg(target_family = "windows")]
@@ -190,7 +190,7 @@ where
         .id()
         .context("unexpectedly missing pid for spawned process")?;
 
-    let pid_path = state_dir.as_ref().join(WADM_PID);
+    let pid_path = state_dir.as_ref().join(WADM_PID_FILE);
     if let Err(e) = tokio::fs::write(pid_path, pid.to_string()).await {
         warn!("Couldn't write wadm pidfile: {e}");
     }
