@@ -1,7 +1,7 @@
 use crate::lib::{
     cli::{CommandOutput, OutputKind},
     common::{DEFAULT_WASH_UI_PORT, WASHBOARD_VERSION, WASHBOARD_VERSION_T},
-    config::downloads_dir,
+    config::WASH_DIRECTORIES,
     start::{
         get_download_client, new_patch_or_pre_1_0_0_minor_version_after_version_string,
         parse_version_string, GITHUB_WASHBOARD_TAG_PREFIX, GITHUB_WASMCLOUD_ORG,
@@ -60,7 +60,7 @@ async fn get_patch_version_or_default(version: Option<String>) -> Version {
 
 pub async fn handle_ui(cmd: UiCommand, _output_kind: OutputKind) -> Result<()> {
     let washboard_version = get_patch_version_or_default(cmd.version).await;
-    let washboard_path = downloads_dir()?.join("washboard");
+    let washboard_path = WASH_DIRECTORIES.in_downloads_dir("washboard");
     let washboard_assets = ensure_washboard(&washboard_version, washboard_path).await?;
     let static_files = warp::fs::dir(washboard_assets);
     let washboard_port = cmd.port;

@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::lib::{
-    config::{cfg_dir, DEFAULT_NATS_TIMEOUT_MS},
-    plugin::{subcommand::SubcommandRunner, PLUGIN_DIR},
+    config::{DEFAULT_NATS_TIMEOUT_MS, WASH_DIRECTORIES},
+    plugin::subcommand::SubcommandRunner,
 };
 use anyhow::{Context, Result};
 use term_table::{Table, TableStyle};
@@ -45,19 +45,12 @@ pub fn json_str_to_msgpack_bytes(payload: &str) -> Result<Vec<u8>> {
 
 /// Ensure that the given plugin directory exists or return the default plugin dir path
 pub async fn ensure_plugin_dir(dir: Option<impl AsRef<Path>>) -> Result<PathBuf> {
-    let plugin_dir = match dir.map(|dir| dir.as_ref().to_path_buf()) {
-        Some(dir) => dir,
-        None => cfg_dir()?.join(PLUGIN_DIR),
-    };
-
-    if !tokio::fs::try_exists(&plugin_dir).await.unwrap_or(false) {
-        if let Err(e) = tokio::fs::create_dir(&plugin_dir).await {
-            if e.kind() != std::io::ErrorKind::AlreadyExists {
-                return Err(e.into());
-            }
-        }
+    if let Some(plugin_dir) = dir.map(|dir| dir.as_ref().to_path_buf()) {
+        tokio::fs::create_dir_all(&plugin_dir).await?;
+        Ok(plugin_dir)
+    } else {
+        WASH_DIRECTORIES.create_plugins_dir()
     }
-    Ok(plugin_dir)
 }
 
 /// Helper for loading plugins from the given directory
