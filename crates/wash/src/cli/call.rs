@@ -12,13 +12,11 @@ use serde_json::json;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use tracing::debug;
 
+use crate::lib::cli::{validate_component_id, CommandOutput};
+use crate::lib::config::DEFAULT_LATTICE;
 use wasmcloud_core::parse_wit_meta_from_operation;
 use wit_bindgen_wrpc::wrpc_transport::InvokeExt as _;
 
-use crate::lib::cli::{validate_component_id, CommandOutput};
-use crate::lib::config::DEFAULT_LATTICE;
-use crate::lib::context::fs::ContextDir;
-use crate::lib::context::ContextManager;
 use crate::util::{default_timeout_ms, extract_arg_value, msgpack_to_json_val};
 
 const DEFAULT_HTTP_SCHEME: &str = "http";
@@ -98,8 +96,7 @@ pub struct CallCli {
 }
 
 impl CallCli {
-    #[must_use]
-    pub fn command(self) -> CallCommand {
+    #[must_use] pub fn command(self) -> CallCommand {
         self.command
     }
 }
@@ -183,17 +180,30 @@ pub async fn handle_command(
 #[derive(Debug, Clone, Args)]
 pub struct ConnectionOpts {
     /// RPC Host for connection, defaults to 127.0.0.1 for local nats
-    #[clap(short = 'r', long = "rpc-host", env = "WASMCLOUD_RPC_HOST")]
-    rpc_host: Option<String>,
+    #[clap(
+        short = 'r',
+        long = "nats-host",
+        alias = "rpc-host",
+        env = "WASMCLOUD_NATS_RPC_HOST",
+        default_value = "127.0.0.1"
+    )]
+    rpc_host: String,
 
     /// RPC Port for connections, defaults to 4222 for local nats
-    #[clap(short = 'p', long = "rpc-port", env = "WASMCLOUD_RPC_PORT")]
-    rpc_port: Option<String>,
+    #[clap(
+        short = 'p',
+        long = "nats-port",
+        alias = "rpc-port",
+        env = "WASMCLOUD_NATS_RPC_PORT",
+        default_value = "4222"
+    )]
+    rpc_port: String,
 
     /// JWT file for RPC authentication. Must be supplied with `rpc_seed`.
     #[clap(
-        long = "rpc-jwt",
-        env = "WASMCLOUD_RPC_JWT",
+        long = "nats-jwt",
+        alias = "rpc-jwt",
+        env = "WASMCLOUD_NATS_RPC_JWT",
         hide_env_values = true,
         requires = "rpc_seed"
     )]
@@ -201,8 +211,9 @@ pub struct ConnectionOpts {
 
     /// Seed file or literal for RPC authentication. Must be supplied with `rpc_jwt`.
     #[clap(
-        long = "rpc-seed",
-        env = "WASMCLOUD_RPC_SEED",
+        long = "nats-seed",
+        alias = "rpc-seed",
+        env = "WASMCLOUD_NATS_RPC_SEED",
         hide_env_values = true,
         requires = "rpc_jwt"
     )]
@@ -238,10 +249,6 @@ pub struct ConnectionOpts {
     /// Name of the context to use for RPC connection, authentication, and cluster seed invocation signing
     #[clap(long = "context")]
     pub context: Option<String>,
-
-    /// Directory in which to find contexts to use
-    #[clap(long = "context-dir")]
-    pub context_dir: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -391,9 +398,7 @@ async fn wrpc_invoke_http_handler(
                 HashMap::<String, String>::from_iter(resp.headers().into_iter().map(|(k, v)| {
                     (
                         k.as_str().into(),
-                        v.to_str()
-                            .map(std::string::ToString::to_string)
-                            .unwrap_or_default(),
+                        v.to_str().map(std::string::ToString::to_string).unwrap_or_default(),
                     )
                 }));
 
@@ -525,27 +530,15 @@ pub fn call_output(
 /// Normally we would use `create_nats_client_from_opts` here, but until the schism between [`async_nats_wrpc`]
 /// and [`async_nats`] is resolved, we must replicate that logic here, as upstream `async_nats` does not match.
 async fn create_client_from_opts_wrpc(opts: &ConnectionOpts) -> Result<async_nats::Client> {
-    // Load context
-    let context_dir = ContextDir::from_dir(opts.context_dir.as_ref())?;
-    let context = opts
-        .context
-        .clone()
-        .or_else(|| context_dir.default_context_name().ok())
-        .context("failed to derive context")?;
-    let ctx = context_dir
-        .load_context(&context)
-        .with_context(|| format!("failed to load named context [{context}]"))?;
-
-    let host = opts.rpc_host.as_ref().unwrap_or(&ctx.rpc_host);
-    let port = opts
-        .rpc_port
-        .as_ref()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(ctx.rpc_port);
-    let jwt = opts.rpc_jwt.as_ref().or(ctx.rpc_jwt.as_ref());
-    let seed = opts.rpc_seed.as_ref().or(ctx.rpc_seed.as_ref());
-    let credsfile = opts.rpc_credsfile.as_ref().or(ctx.rpc_credsfile.as_ref());
-    let tls_ca_file = opts.rpc_ca_file.as_ref().or(ctx.rpc_tls_ca_file.as_ref());
+    let ConnectionOpts {
+        rpc_host: host,
+        rpc_port: port,
+        rpc_jwt: jwt,
+        rpc_seed: seed,
+        rpc_credsfile: credsfile,
+        rpc_ca_file: tls_ca_file,
+        ..
+    } = opts;
 
     let nats_url = format!("{host}:{port}");
     use async_nats::ConnectOptions;
@@ -569,21 +562,18 @@ async fn create_client_from_opts_wrpc(opts: &ConnectionOpts) -> Result<async_nat
             async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
         });
 
-        if let Some(ca_file) = tls_ca_file {
+        if let Some(ref ca_file) = tls_ca_file {
             opts = opts
-                .add_root_certificates(ca_file.to_path_buf())
+                .add_root_certificates(ca_file.clone())
                 .require_tls(true);
         }
 
-        opts.name("wash-cli")
-            .connect(&nats_url)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to connect to NATS server {}:{} while creating client",
-                    &host, &port
-                )
-            })?
+        opts.connect(&nats_url).await.with_context(|| {
+            format!(
+                "Failed to connect to NATS server {}:{} while creating client",
+                &host, &port
+            )
+        })?
     } else if let Some(credsfile_path) = credsfile {
         let mut opts = ConnectOptions::with_credentials_file(credsfile_path.clone())
             .await
@@ -600,15 +590,12 @@ async fn create_client_from_opts_wrpc(opts: &ConnectionOpts) -> Result<async_nat
                 .require_tls(true);
         }
 
-        opts.name("wash-cli")
-            .connect(&nats_url)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to connect to NATS {} with credentials file {:?}",
-                    &nats_url, &credsfile_path
-                )
-            })?
+        opts.connect(&nats_url).await.with_context(|| {
+            format!(
+                "Failed to connect to NATS {} with credentials file {:?}",
+                &nats_url, &credsfile_path
+            )
+        })?
     } else {
         let mut opts = ConnectOptions::new();
 
@@ -618,8 +605,7 @@ async fn create_client_from_opts_wrpc(opts: &ConnectionOpts) -> Result<async_nat
                 .require_tls(true);
         }
 
-        opts.name("wash-cli")
-            .connect(&nats_url)
+        opts.connect(&nats_url)
             .await
             .with_context(|| format!("Failed to connect to NATS {}", &nats_url))?
     };
@@ -658,9 +644,9 @@ mod test {
             "some-context",
             "--lattice",
             DEFAULT_LATTICE,
-            "--rpc-host",
+            "--nats-host",
             RPC_HOST,
-            "--rpc-port",
+            "--nats-port",
             RPC_PORT,
             "--rpc-timeout-ms",
             "0",
@@ -674,8 +660,8 @@ mod test {
                 function,
                 ..
             } => {
-                assert_eq!(opts.rpc_host, Some(RPC_HOST.into()));
-                assert_eq!(opts.rpc_port, Some(RPC_PORT.into()));
+                assert_eq!(&opts.rpc_host, RPC_HOST);
+                assert_eq!(&opts.rpc_port, RPC_PORT);
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 0);
                 assert_eq!(opts.context, Some("some-context".to_string()));
@@ -685,13 +671,6 @@ mod test {
             #[allow(unreachable_patterns)]
             cmd => panic!("call constructed incorrect command: {cmd:?}"),
         }
-        Ok(())
-    }
-
-    /// Ensure wash call uses context
-    #[test]
-    fn test_use_context() -> Result<()> {
-        // TODO: add a context
         Ok(())
     }
 }
