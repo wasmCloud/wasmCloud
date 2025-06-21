@@ -250,6 +250,7 @@ impl ControlInterfaceServer for Host {
         let component_id = request.component_id();
         let annotations = request.annotations();
         let max_instances = request.max_instances();
+        let max_linear_memory = request.max_linear_memory();
         let config = request.config().clone();
         let allow_update = request.allow_update();
         let host_id = request.host_id();
@@ -349,6 +350,7 @@ impl ControlInterfaceServer for Host {
                     Arc::clone(&component_id),
                     &host_id,
                     max_instances,
+                    max_linear_memory,
                     &annotations,
                     config,
                     wasm.ok_or_else(|| {
