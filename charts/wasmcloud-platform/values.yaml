@@ -39,7 +39,7 @@ wadm:
   # Source: https://github.com/wasmCloud/wasmcloud-operator/blob/main/examples/quickstart/wadm-values.yaml
   wadm:
     image:
-      tag: v0.15.0
+      tag: v0.21.0
     config:
       nats:
         server: "nats://nats-headless.default.svc.cluster.local"
@@ -75,7 +75,7 @@ hostConfig:
   # # Number of hosts (pods). Defaults to 1.
   # hostReplicas: 1
   # Which version of wasmCloud to use; defaults to "latest"
-  version: "1.2.1"
+  version: "1.8.0"
   # registryCredentialsFile: config.json
   # natsCredentialsFile: secret.yaml
   resources:

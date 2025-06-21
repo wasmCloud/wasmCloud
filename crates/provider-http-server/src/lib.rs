@@ -98,7 +98,7 @@ pub(crate) fn build_request(
     scheme: http::uri::Scheme,
     authority: String,
     settings: &ServiceSettings,
-) -> Result<http::Request<axum::body::Body>, axum::response::ErrorResponse> {
+) -> Result<http::Request<axum::body::Body>, Box<axum::response::ErrorResponse>> {
     let method = request.method();
     if let Some(readonly_mode) = settings.readonly_mode {
         if readonly_mode
@@ -106,10 +106,10 @@ pub(crate) fn build_request(
             && method != http::method::Method::HEAD
         {
             debug!("only GET and HEAD allowed in read-only mode");
-            Err((
+            Err(axum::response::ErrorResponse::from((
                 http::StatusCode::METHOD_NOT_ALLOWED,
                 "only GET and HEAD allowed in read-only mode",
-            ))?;
+            )))?;
         }
     }
     let (
@@ -130,19 +130,25 @@ pub(crate) fn build_request(
     if let Some(path_and_query) = path_and_query {
         uri = uri.path_and_query(path_and_query);
     }
-    let uri = uri
-        .build()
-        .map_err(|err| (http::StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+    let uri = uri.build().map_err(|err| {
+        axum::response::ErrorResponse::from((
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            err.to_string(),
+        ))
+    })?;
     let mut req = http::Request::builder();
-    *req.headers_mut().ok_or((
-        http::StatusCode::INTERNAL_SERVER_ERROR,
-        "invalid request generated",
-    ))? = headers;
-    let req = req
-        .uri(uri)
-        .method(method)
-        .body(body)
-        .map_err(|err| (http::StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+    *req.headers_mut().ok_or_else(|| {
+        axum::response::ErrorResponse::from((
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            "invalid request generated",
+        ))
+    })? = headers;
+    let req = req.uri(uri).method(method).body(body).map_err(|err| {
+        axum::response::ErrorResponse::from((
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            err.to_string(),
+        ))
+    })?;
 
     Ok(req)
 }

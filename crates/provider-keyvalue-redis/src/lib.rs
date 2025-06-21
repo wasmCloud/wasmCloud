@@ -11,19 +11,22 @@ use core::num::NonZeroU64;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Context as _};
 use bytes::Bytes;
-use redis::aio::ConnectionManager;
+use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{Cmd, FromRedisValue};
+use sha2::{Digest as _, Sha256};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
 use unicase::UniCase;
+use wasmcloud_provider_sdk::core::secrets::SecretValue;
 use wasmcloud_provider_sdk::provider::WrpcClient;
 use wasmcloud_provider_sdk::{
-    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
-    LinkDeleteInfo, Provider,
+    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, HostData,
+    LinkConfig, LinkDeleteInfo, Provider,
 };
 use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 
@@ -46,11 +49,53 @@ const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
 /// Configuration key that will be used to search for Redis config
 const CONFIG_REDIS_URL_KEY: &str = "URL";
 
+/// Key that configures a set number of retries
+const CONFIG_REDIS_BACKEND_RECONNECT_NUM_RETRIES_KEY: &str = "BACKEND_RECONNECT_NUM_RETRIES";
+
+/// Number of retries to perform when connecting to redis
+const DEFAULT_REDIS_BACKEND_RECONNECT_NUM_RETRIES: usize = 3;
+
+/// Key that configures the max amount of of time to wait between reconnection attempts
+const CONFIG_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS_KEY: &str = "BACKEND_RECONNECT_MAX_DELAY_MS";
+
+/// Maximum amount of time (in milliseconds) to wait in between reconnection attempts
+const DEFAULT_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS: u64 = 300;
+
+/// Key that configures the connection timeout amount of of time to wait between reconnection attempts
+const CONFIG_REDIS_BACKEND_CONNECTION_TIMEOUT_MS_KEY: &str = "BACKEND_CONNECTION_TIMEOUT_MS";
+
+/// Maximum amount of time (in milliseconds) to wait for a query to complete
+const DEFAULT_REDIS_BACKEND_CONNECTION_TIMEOUT_MS: u64 = 3000;
+
+/// Key that configures the connection timeout amount of of time to wait between reconnection attempts
+const CONFIG_REDIS_BACKEND_RESPONSE_TIMEOUT_MS_KEY: &str = "BACKEND_RESPONSE_TIMEOUT_MS";
+
+/// Maximum amount of time (in milliseconds) to wait in between reconnection attempts
+const DEFAULT_REDIS_BACKEND_RESPONSE_TIMEOUT_MS: u64 = 1000;
+
+/// Whether to disable default connection
+const CONFIG_DISABLE_DEFAULT_CONNECTION_KEY: &str = "DISABLE_DEFAULT_CONNECTION";
+
+/// Whether to share connections by URL
+///
+/// This option indicates that URLs with identical connection URLs will be shared/reused by
+/// components that are linked with the same URLs
+const CONFIG_SHARE_CONNECTIONS_BY_URL_KEY: &str = "SHARE_CONNECTIONS_BY_URL";
+
 type Result<T, E = keyvalue::store::Error> = core::result::Result<T, E>;
 
+/// The default connection available for the redis client
+///
+/// This enum can be in different states which normally correspond to whether
+/// the provider has started up (and the default connection has been created yet).
 #[derive(Clone)]
 pub enum DefaultConnection {
-    ClientConfig(HashMap<String, String>),
+    /// Pre-supplied/available client configuration from config
+    ClientConfig {
+        config: HashMap<String, String>,
+        secrets: Option<HashMap<String, SecretValue>>,
+    },
+    /// An already-initialized connection
     Conn(ConnectionManager),
 }
 
@@ -75,19 +120,40 @@ struct LinkId {
 /// Type for storing watch tasks associated with links
 type WatchTaskMap = HashMap<LinkId, JoinHandle<()>>;
 
+/// Shared connection keys are keys that identify shared connections
+///
+/// Normally, this would be the URL of a connection, hashed.
+///
+/// Note this key should *not* be the URL of the connection directly,
+/// to avoid printing it inadvertently.
+type SharedConnectionKey = String;
+
+/// URL of a redis connection
+#[derive(Clone)]
+enum RedisConnection {
+    /// Direct connection
+    Direct(ConnectionManager),
+    /// Shared connection, identified by the hash of the connection URL
+    Shared(String),
+}
+
 /// Redis `wrpc:keyvalue` provider implementation.
 #[derive(Clone)]
 pub struct KvRedisProvider {
-    // store redis connections per source ID & link name
-    sources: Arc<RwLock<HashMap<(String, String), ConnectionManager>>>,
-    // default connection, which may be uninitialized
-    default_connection: Arc<RwLock<DefaultConnection>>,
-    // Stores information about watched keys for keyspace notifications
-    // The outer HashMap uses the key as its key, and the HashSet contains
-    // WatchedKeyInfo structs for each watcher of that key, allowing multiple
-    // components to watch the same key for different event types.
+    /// Store redis connections per source ID & link name
+    sources: Arc<RwLock<HashMap<(String, String), RedisConnection>>>,
+
+    /// Redis connections indexed by URL
+    shared_connections: Arc<RwLock<HashMap<SharedConnectionKey, ConnectionManager>>>,
+
+    /// Default connection, which may be uninitialized
+    default_connection: Option<Arc<RwLock<DefaultConnection>>>,
+    /// Stores information about watched keys for keyspace notifications
+    /// The outer HashMap uses the key as its key, and the HashSet contains
+    /// WatchedKeyInfo structs for each watcher of that key, allowing multiple
+    /// components to watch the same key for different event types.
     watched_keys: Arc<RwLock<HashMap<String, HashSet<WatchedKeyInfo>>>>,
-    // Stores background tasks that handle keyspace notifications for each link
+    /// Stores background tasks that handle keyspace notifications for each link
     watch_tasks: Arc<RwLock<WatchTaskMap>>,
 }
 
@@ -108,7 +174,7 @@ impl KvRedisProvider {
             .map(String::from)
             .or_else(|| std::env::var("PROVIDER_KEYVALUE_REDIS_FLAMEGRAPH_PATH").ok());
         initialize_observability!(Self::name(), flamegraph_path);
-        let provider = KvRedisProvider::new(host_data.config.clone());
+        let provider = KvRedisProvider::from_host_data(host_data);
         let shutdown = run_provider(provider.clone(), KvRedisProvider::name())
             .await
             .context("failed to run provider")?;
@@ -122,12 +188,45 @@ impl KvRedisProvider {
     }
 
     #[must_use]
-    pub fn new(initial_config: HashMap<String, String>) -> Self {
+    pub fn from_config(config: HashMap<String, String>) -> Self {
+        let default_connection_disabled = config
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY));
+
         KvRedisProvider {
             sources: Arc::default(),
-            default_connection: Arc::new(RwLock::new(DefaultConnection::ClientConfig(
-                initial_config,
-            ))),
+            default_connection: if default_connection_disabled {
+                None
+            } else {
+                Some(Arc::new(RwLock::new(DefaultConnection::ClientConfig {
+                    config,
+                    secrets: None,
+                })))
+            },
+            shared_connections: Arc::new(RwLock::new(HashMap::new())),
+            watched_keys: Arc::new(RwLock::new(HashMap::new())),
+            watch_tasks: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    #[must_use]
+    pub fn from_host_data(host_data: &HostData) -> Self {
+        let default_connection_disabled = host_data
+            .config
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY));
+
+        KvRedisProvider {
+            sources: Arc::default(),
+            default_connection: if default_connection_disabled {
+                None
+            } else {
+                Some(Arc::new(RwLock::new(DefaultConnection::ClientConfig {
+                    config: host_data.config.clone(),
+                    secrets: Some(host_data.secrets.clone()),
+                })))
+            },
+            shared_connections: Arc::new(RwLock::new(HashMap::new())),
             watched_keys: Arc::new(RwLock::new(HashMap::new())),
             watch_tasks: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -135,17 +234,22 @@ impl KvRedisProvider {
 
     #[instrument(level = "trace", skip_all)]
     async fn get_default_connection(&self) -> anyhow::Result<ConnectionManager> {
+        let Some(ref default_connection) = self.default_connection else {
+            bail!("default connection is disabled via config, please provide valid configuration");
+        };
+
         // NOTE: The read lock is only held for the duration of the `if let` block so we can acquire
         // the write lock to update the default connection if needed.
-        if let DefaultConnection::Conn(conn) = &*self.default_connection.read().await {
+        if let DefaultConnection::Conn(conn) = &*default_connection.read().await {
             return Ok(conn.clone());
         }
 
-        let mut default_conn = self.default_connection.write().await;
+        // Build the default connection
+        let mut default_conn = default_connection.write().await;
         match &mut *default_conn {
             DefaultConnection::Conn(conn) => Ok(conn.clone()),
-            DefaultConnection::ClientConfig(cfg) => {
-                let conn = redis::Client::open(retrieve_default_url(cfg))
+            DefaultConnection::ClientConfig { config, secrets } => {
+                let conn = redis::Client::open(retrieve_default_url(config, secrets))
                     .context("failed to construct default Redis client")?
                     .get_connection_manager()
                     .await
@@ -173,10 +277,24 @@ impl KvRedisProvider {
             bail!("No Redis connection found for component [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL")
         };
 
-        Ok(conn.clone())
+        // Resolve the connection as a direct or shared one
+        match conn {
+            RedisConnection::Direct(c) => Ok(c.clone()),
+            RedisConnection::Shared(key) => {
+                let shared = self.shared_connections.read().await;
+                match shared.get(key) {
+                    Some(c) => Ok(c.clone()),
+                    None => {
+                        error!(key, "no shared Redis connection found with given key");
+                        bail!("No shared Redis connection found with key [{key}]");
+                    }
+                }
+            }
+        }
     }
 
     /// Execute Redis async command
+    #[instrument(level = "debug", skip(self, context, cmd))]
     async fn exec_cmd<T: FromRedisValue>(
         &self,
         context: Option<Context>,
@@ -420,9 +538,42 @@ impl Provider for KvRedisProvider {
                     .and_then(|url_key| config.get(url_key))
             });
 
+        let default_connection_disabled = secrets
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY))
+            || config
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY));
+
+        let share_connections_by_url = secrets
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case(CONFIG_SHARE_CONNECTIONS_BY_URL_KEY))
+            || config
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case(CONFIG_SHARE_CONNECTIONS_BY_URL_KEY));
+
+        let key = (source_id.to_string(), link_name.to_string());
+
+        // If the shared connection is already present with the given URL (hashed)
+        // make the association and exit early.
+        {
+            if let (Some(url), true) = (url, share_connections_by_url) {
+                let shared_connections = self.shared_connections.read().await;
+                let shared_key = format!("{:X}", Sha256::digest(url));
+                if shared_connections.contains_key(&shared_key) {
+                    // SAFETY: shared_connections should always be locked first
+                    let mut sources = self.sources.write().await;
+                    sources.insert(key, RedisConnection::Shared(shared_key));
+                    return Ok(());
+                }
+            }
+        }
+
+        // Create initial configuration for the connection that is intended to fail fast
+        let cfg = build_connection_mgr_config(config);
         let conn = if let Some(url) = url {
             match redis::Client::open(url.to_string()) {
-                Ok(client) => match client.get_connection_manager().await {
+                Ok(client) => match ConnectionManager::new_with_config(client, cfg).await {
                     Ok(conn) => {
                         info!(url, "established link");
                         conn
@@ -445,13 +596,46 @@ impl Provider for KvRedisProvider {
                 }
             }
         } else {
+            // Disallow default connections if disabled via link config
+            if default_connection_disabled {
+                error!(
+                    component = source_id,
+                    "using the default connection is disabled via link configuration"
+                );
+                bail!(
+                    "using the default connection is disabled via link configuration for component [{source_id}]"
+                );
+            }
+
             self.get_default_connection().await.map_err(|err| {
                 error!(error = ?err, "failed to get default connection for link");
                 err
             })?
         };
-        let mut sources = self.sources.write().await;
-        sources.insert((source_id.to_string(), link_name.to_string()), conn);
+
+        match (url, share_connections_by_url) {
+            // If there was a URL (non-default connection) and connections should be shared by URL,
+            // update both shared connections and sources
+            (Some(url), true) => {
+                let shared_key = format!("{:X}", Sha256::digest(url));
+
+                // SAFETY: shared_connections should always be locked first
+                let mut shared_connections = self.shared_connections.write().await;
+                shared_connections.insert(shared_key.clone(), conn);
+                drop(shared_connections);
+
+                let mut sources = self.sources.write().await;
+                sources.insert(key, RedisConnection::Shared(shared_key));
+                drop(sources);
+            }
+            // In the case of a default connection in use (implicitly shared) or if share connections is turned off,
+            // save the direct connection.
+            _ => {
+                let mut sources = self.sources.write().await;
+                sources.insert(key, RedisConnection::Direct(conn));
+                drop(sources);
+            }
+        }
 
         Ok(())
     }
@@ -629,8 +813,12 @@ impl Provider for KvRedisProvider {
                 task,
             );
         }
+
         let mut sources = self.sources.write().await;
-        sources.insert((target_id.to_string(), link_name.to_string()), conn);
+        sources.insert(
+            (target_id.to_string(), link_name.to_string()),
+            RedisConnection::Direct(conn),
+        );
 
         Ok(())
     }
@@ -697,7 +885,29 @@ impl Provider for KvRedisProvider {
 
 /// Fetch the default URL to use for connecting to Redis from the configuration, defaulting
 /// to `DEFAULT_CONNECT_URL` if no URL is found in the configuration.
-pub fn retrieve_default_url(config: &HashMap<String, String>) -> String {
+fn retrieve_default_url(
+    config: &HashMap<String, String>,
+    secrets: &Option<HashMap<String, SecretValue>>,
+) -> String {
+    // Use connect URL provided by secrets first, if present
+    if let Some(secrets) = secrets {
+        if let Some(url) = secrets
+            .keys()
+            .find(|sk| sk.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+            .and_then(|k| secrets.get(k))
+        {
+            if let Some(s) = url.as_string() {
+                debug!(
+                    url = ?url, // NOTE: this is the SecretValue redacted output
+                    "using Redis URL from secrets"
+                );
+                return s.into();
+            } else {
+                warn!("invalid secret value for URL (expected string, found bytes). Falling back to config");
+            }
+        }
+    }
+
     // To aid in user experience, find the URL key in the config that matches "URL" in a case-insensitive manner
     let config_supplied_url = config
         .keys()
@@ -795,6 +1005,87 @@ fn check_bucket_name(bucket: &str) {
     }
 }
 
+/// Build configuration for a backend redis connection from existing config
+fn build_connection_mgr_config(config: &HashMap<String, String>) -> ConnectionManagerConfig {
+    let mut cfg = ConnectionManagerConfig::new();
+
+    // Set default values for the connection manager configuration
+    cfg = cfg
+        .set_number_of_retries(DEFAULT_REDIS_BACKEND_RECONNECT_NUM_RETRIES)
+        .set_max_delay(DEFAULT_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS)
+        .set_connection_timeout(Duration::from_millis(
+            DEFAULT_REDIS_BACKEND_CONNECTION_TIMEOUT_MS,
+        ))
+        .set_response_timeout(Duration::from_millis(
+            DEFAULT_REDIS_BACKEND_RESPONSE_TIMEOUT_MS,
+        ));
+
+    // Override defaults with values from the config if they are present
+    for (k, v) in config.iter() {
+        if k.eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_RECONNECT_NUM_RETRIES_KEY) {
+            if let Ok(val) = v.parse::<usize>() {
+                cfg = cfg.set_number_of_retries(val);
+            } else {
+                warn!(
+                    key = %CONFIG_REDIS_BACKEND_RECONNECT_NUM_RETRIES_KEY,
+                    value = %v,
+                    "Invalid value for number of retries, using default"
+                );
+            }
+        }
+
+        if let Some(max_delay) = if k
+            .eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS_KEY)
+        {
+            match v.parse() {
+                Ok(val) => Some(val),
+                Err(_) => {
+                    warn!(key = %CONFIG_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS_KEY, value = %v, "Invalid value for max delay, using default");
+                    Some(DEFAULT_REDIS_BACKEND_RECONNECT_MAX_DELAY_MS)
+                }
+            }
+        } else {
+            None
+        } {
+            cfg = cfg.set_max_delay(max_delay);
+        }
+
+        if let Some(timeout) = if k
+            .eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_CONNECTION_TIMEOUT_MS_KEY)
+        {
+            match v.parse() {
+                Ok(val) => Some(val),
+                Err(_) => {
+                    warn!(key = %CONFIG_REDIS_BACKEND_CONNECTION_TIMEOUT_MS_KEY,value = %v,"Invalid value for connection timeout, using default");
+                    Some(DEFAULT_REDIS_BACKEND_CONNECTION_TIMEOUT_MS)
+                }
+            }
+        } else {
+            None
+        } {
+            cfg = cfg.set_connection_timeout(Duration::from_millis(timeout));
+        }
+
+        if let Some(timeout) = if k
+            .eq_ignore_ascii_case(CONFIG_REDIS_BACKEND_RESPONSE_TIMEOUT_MS_KEY)
+        {
+            match v.parse() {
+                Ok(val) => Some(val),
+                Err(_) => {
+                    warn!(key = %CONFIG_REDIS_BACKEND_RESPONSE_TIMEOUT_MS_KEY,value = %v,"Invalid value for response timeout, using default");
+                    Some(DEFAULT_REDIS_BACKEND_RESPONSE_TIMEOUT_MS)
+                }
+            }
+        } else {
+            None
+        } {
+            cfg = cfg.set_response_timeout(Duration::from_millis(timeout));
+        }
+    }
+
+    cfg
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -810,9 +1101,12 @@ mod test {
         let uppercase_config = HashMap::from_iter([("URL".to_string(), PROPER_URL.to_string())]);
         let initial_caps_config = HashMap::from_iter([("Url".to_string(), PROPER_URL.to_string())]);
 
-        assert_eq!(PROPER_URL, retrieve_default_url(&lowercase_config));
-        assert_eq!(PROPER_URL, retrieve_default_url(&uppercase_config));
-        assert_eq!(PROPER_URL, retrieve_default_url(&initial_caps_config));
+        assert_eq!(PROPER_URL, retrieve_default_url(&lowercase_config, &None));
+        assert_eq!(PROPER_URL, retrieve_default_url(&uppercase_config, &None));
+        assert_eq!(
+            PROPER_URL,
+            retrieve_default_url(&initial_caps_config, &None)
+        );
     }
 
     #[test]

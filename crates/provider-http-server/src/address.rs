@@ -130,13 +130,19 @@ impl Provider for HttpServerProvider {
             // If a handler does not already exist, make a new server and insert
             std::collections::hash_map::Entry::Vacant(v) => {
                 // Start a server instance that calls the given component
-                let http_server = HttpServerCore::new(
+                let http_server = match HttpServerCore::new(
                     Arc::new(settings),
                     link_config.target_id,
                     self.handlers_by_socket.clone(),
                 )
                 .await
-                .context("httpserver failed to start listener for component")?;
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("failed to start listener for component: {e:?}");
+                        bail!(e);
+                    }
+                };
                 v.insert((Arc::new(http_server), vec![component_meta]));
             }
         }
@@ -229,7 +235,7 @@ async fn handle_request(
     };
 
     let timeout = settings.timeout_ms.map(Duration::from_millis);
-    let req = build_request(request, scheme, authority, &settings)?;
+    let req = build_request(request, scheme, authority, &settings).map_err(|err| *err)?;
     axum::response::Result::<_, axum::response::ErrorResponse>::Ok(
         invoke_component(
             &wrpc,

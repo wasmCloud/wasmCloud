@@ -161,7 +161,7 @@ where
 
     let burrito_bites_stream = download_response
         .bytes_stream()
-        .map(|result| result.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err)));
+        .map(|result| result.map_err(std::io::Error::other));
     let mut wasmcloud_host_burrito = StreamReader::new(burrito_bites_stream);
     let version_dir = dir.as_ref().join(format!("v{version}"));
     let file_path = version_dir.join(WASMCLOUD_HOST_BIN);
@@ -257,7 +257,7 @@ fn wasmcloud_url(version: &Version) -> String {
     let os = "unknown-linux-gnu";
 
     #[cfg(target_os = "windows")]
-    let os = "pc-windows-msvc.exe";
+    let os = "pc-windows-gnu.exe";
     format!(
         "{WASMCLOUD_GITHUB_RELEASE_URL}/v{version}/wasmcloud-{arch}-{os}",
         arch = std::env::consts::ARCH,

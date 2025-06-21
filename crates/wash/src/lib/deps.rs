@@ -112,7 +112,7 @@ impl WkgFetcher {
                         .with_context(|| {
                             format!("failed to create temp dir for downloading [{url}]")
                         })?
-                        .into_path();
+                        .keep();
                     let output_path = tempdir.join("unpacked");
                     let http_client = crate::lib::start::get_download_client()?;
                     let req = http_client.get(url.clone()).send().await.with_context(|| {
@@ -145,7 +145,7 @@ impl WkgFetcher {
                         .with_context(|| {
                             format!("failed to create temp dir for downloading [{url}]")
                         })?
-                        .into_path();
+                        .keep();
 
                     // Determine the right git ref to use, based on the submitted query params
                     let git_ref = match (

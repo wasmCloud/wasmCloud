@@ -231,7 +231,7 @@ async fn handle_request(
     request: extract::Request,
 ) -> impl axum::response::IntoResponse {
     let timeout = settings.timeout_ms.map(Duration::from_millis);
-    let req = build_request(request, scheme, authority, &settings)?;
+    let req = build_request(request, scheme, authority, &settings).map_err(|err| *err)?;
     let path = req.uri().path();
     let Some((target_component, wrpc)) = router.read().await.paths.get(path).cloned() else {
         Err((http::StatusCode::NOT_FOUND, "path not found"))?

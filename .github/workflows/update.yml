@@ -35,7 +35,7 @@ jobs:
 
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: DeterminateSystems/nix-installer-action@e50d5f73bfe71c2dd0aa4218de8f4afa59f8f81d # v16
+      - uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3 # v17
 
       - name: Update OCI image bases
         id: update
@@ -51,8 +51,8 @@ jobs:
       - uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
         if: ${{ steps.update.outputs.updated == 'true' }}
         with:
-          assignees: rvolosatovs, joonas
-          reviewers: rvolosatovs, joonas
+          assignees: rvolosatovs
+          reviewers: rvolosatovs
           author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
           body: |
             ## Description
