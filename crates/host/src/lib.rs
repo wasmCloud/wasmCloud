@@ -54,10 +54,14 @@ use url::Url;
 use wascap::jwt;
 use wasmcloud_core::{OciFetcher, RegistryConfig};
 
+/// A reference to a resource, either a file, an OCI image, or a builtin provider
 #[derive(PartialEq)]
-enum ResourceRef<'a> {
+pub enum ResourceRef<'a> {
+    /// A file reference
     File(PathBuf),
+    /// An OCI reference
     Oci(&'a str),
+    /// A builtin provider reference
     Builtin(&'a str),
 }
 

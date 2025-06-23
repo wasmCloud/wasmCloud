@@ -280,6 +280,18 @@ where
     /// If `wasm` represents a core Wasm module, then it will first be turned into a component.
     #[instrument(level = "trace", skip_all)]
     pub fn new(rt: &Runtime, wasm: &[u8]) -> anyhow::Result<Self> {
+        Self::new_with_linker(rt, wasm, |_| Ok(()))
+    }
+    /// Extracts [Claims](jwt::Claims) from WebAssembly component and compiles it using [Runtime].
+    /// The `linker_fn` is used to link additional interfaces to the component.
+    ///
+    /// If `wasm` represents a core Wasm module, then it will first be turned into a component.
+    #[instrument(level = "trace", skip_all)]
+    pub fn new_with_linker(
+        rt: &Runtime,
+        wasm: &[u8],
+        linker_fn: impl FnOnce(&mut Linker<Ctx<H>>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<Self> {
         if wasmparser::Parser::is_core_wasm(wasm) {
             let wasm = wit_component::ComponentEncoder::default()
                 .module(wasm)
@@ -305,6 +317,8 @@ where
             .context("failed to link core WASI interfaces")?;
         wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
             .context("failed to link `wasi:http`")?;
+
+        linker_fn(&mut linker)?;
 
         capability::blobstore::blobstore::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasi:blobstore/blobstore`")?;
@@ -834,7 +848,7 @@ where
 
 type TableResult<T> = Result<T, ResourceTableError>;
 
-pub(crate) struct Ctx<H>
+pub struct Ctx<H>
 where
     H: Handler,
 {
