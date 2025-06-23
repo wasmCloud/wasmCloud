@@ -848,6 +848,9 @@ where
 
 type TableResult<T> = Result<T, ResourceTableError>;
 
+/// Wasmtime Context for a component instance, with access to
+/// WASI context, HTTP context, and WRPC Invocation context.
+/// This is a low-level API and has to be paired with `Component::new_with_linker`.
 pub struct Ctx<H>
 where
     H: Handler,
