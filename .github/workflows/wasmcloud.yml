@@ -104,7 +104,7 @@ jobs:
         id: changes
         with:
           # Consider wasmCloud changed if any Rust file other than
-          # capability providers change
+          # capability providers or wash change
           #
           # Somewhat naive assumption that providers will be under `crates/provider-<interface>-<vendor>`
           # as that is our naming convention for providers.
@@ -121,12 +121,10 @@ jobs:
               - 'Cargo.lock'
               - 'Cargo.toml'
               - 'rust-toolchain.toml'
-              - 'crates/**/*.{rs,toml,wit}'
+              - 'crates/!(wash|provider-*)/**/*.{rs,toml,wit}'
               - 'src/**/*.{rs,toml,wit}'
               - 'tests/**/*.{rs,toml,wit}'
               - 'wit/**/*.wit'
-              - '!crates/provider-*/**'
-              - '!crates/wash/**'
             providers:
               - './.github/actions/build-nix/action.yml'
               - './.github/actions/install-nix/action.yml'
@@ -138,7 +136,6 @@ jobs:
               - 'flake.lock'
               - 'flake.nix'
               - 'rust-toolchain.toml'
-              - '!crates/**/*.md'
   build-wash-bin:
     needs: [meta]
     if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || startsWith(github.ref, 'refs/tags/wash-v')  || startswith(github.ref, 'refs/tags/provider-') }}
