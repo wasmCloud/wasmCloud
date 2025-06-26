@@ -263,10 +263,11 @@ impl wrpc_transport::Serve for WrpcServer {
                         start_at: Instant::now(),
                         // TODO(metrics): insert information about the source once we have concrete context data
                         attributes: vec![
+                            KeyValue::new("component.id", id),
                             KeyValue::new("component.ref", image_reference),
                             KeyValue::new("lattice", metrics.lattice_id.clone()),
                             KeyValue::new("host", metrics.host_id.clone()),
-                            KeyValue::new("operation", format!("{instance}/{func}")),
+                            KeyValue::new("export.operation", format!("{instance}/{func}")),
                         ],
                         span,
                     },
@@ -1167,6 +1168,7 @@ impl Host {
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
             experimental_features: self.experimental_features,
             host_labels: Arc::clone(&self.labels),
+            host_metrics: Arc::clone(&self.metrics),
         };
         let component = wasmcloud_runtime::Component::new(&self.runtime, wasm)?;
         let component = self
