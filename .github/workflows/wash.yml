@@ -13,8 +13,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: 0         # Don't waste time writing out incremental build files
-  CARGO_PROFILE_TEST_DEBUG: 0  # These are thrown away anyways, don't produce them
+  CARGO_INCREMENTAL: 0 # Don't waste time writing out incremental build files
+  CARGO_PROFILE_TEST_DEBUG: 0 # These are thrown away anyways, don't produce them
   GO_VERSION: '1.24.1'
   TINYGO_VERSION: '0.36.0'
 
@@ -43,8 +43,6 @@ jobs:
               - 'crates/secrets-types/**'
               - 'crates/tracing/**'
               - 'crates/wash/**'
-              - '!crates/**/*.md'
-              - '!crates/wash/.devcontainer'
       - name: Changed files
         run: |
           echo "Changed file(s) (${{ steps.changes.outputs.changed_count }})"
