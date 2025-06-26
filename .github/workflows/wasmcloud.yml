@@ -50,6 +50,8 @@ on:
       - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+'
       - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-cron-scheduler-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-cron-scheduler-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-http-client-v[0-9].[0-9]+.[0-9]+'
       - 'provider-http-client-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-http-server-v[0-9].[0-9]+.[0-9]+'
@@ -279,6 +281,7 @@ jobs:
           - blobstore-azure
           - blobstore-fs
           - blobstore-s3
+          - cron-scheduler
           - keyvalue-nats
           - keyvalue-redis
           - keyvalue-vault
@@ -651,6 +654,10 @@ jobs:
 
           - name: blobstore-s3
             subject: BLOBSTORE_S3_SUBJECT
+            embed_wit: true
+
+          - name: cron-scheduler
+            subject: CRON_SCHEDULER_SUBJECT
             embed_wit: true
 
           - name: keyvalue-nats

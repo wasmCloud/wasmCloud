@@ -8,6 +8,8 @@ on:
     tags:
       - component-blobby-v[0-9]+.[0-9]+.[0-9]+*
       - component-blobby-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-cron-scheduler-v[0-9]+.[0-9]+.[0-9]+*
+      - component-cron-scheduler-v[0-9]+.[0-9]+.[0-9]+-*
       - component-dog-fetcher-v[0-9]+.[0-9]+.[0-9]+*
       - component-dog-fetcher-v[0-9]+.[0-9]+.[0-9]+-*
       - component-echo-messaging-v[0-9]+.[0-9]+.[0-9]+*
@@ -26,6 +28,8 @@ on:
       - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-keyvalue-counter-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-keyvalue-counter-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-http-keyvalue-watcher-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-keyvalue-watcher-v[0-9]+.[0-9]+.[0-9]+-*
       - component-keyvalue-messaging-v[0-9]+.[0-9]+.[0-9]+*
       - component-keyvalue-messaging-v[0-9]+.[0-9]+.[0-9]+-*
       - component-sqldb-postgres-query-v[0-9]+.[0-9]+.[0-9]+*

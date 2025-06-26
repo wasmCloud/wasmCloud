@@ -162,3 +162,17 @@ pub async fn rust_messaging_nats() -> &'static Provider {
         })
         .await
 }
+
+static RUST_CRON_SCHEDULER: OnceCell<Provider> = OnceCell::const_new();
+pub async fn rust_cron_scheduler() -> &'static Provider {
+    RUST_CRON_SCHEDULER
+        .get_or_init(|| async {
+            Provider::new(
+                "wasmcloud-provider-cron-scheduler",
+                env!("CARGO_BIN_EXE_cron-scheduler-provider"),
+            )
+            .await
+            .expect("failed to build cron-scheduler PAR")
+        })
+        .await
+}

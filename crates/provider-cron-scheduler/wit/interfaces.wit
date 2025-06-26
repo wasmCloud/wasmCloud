@@ -1,0 +1,5 @@
+package wasmcloud:provider-cron-scheduler;
+
+world interfaces{
+    import wasmcloud:cron/scheduler@0.1.0;
+}
