@@ -105,6 +105,7 @@ New named configuration can be specified by using `wash config put`.
 | `POSTGRES_DATABASE`     | `postgres`  | Postgres cluster database                                                                                                                                           |
 | `POSTGRES_TLS_REQUIRED` | `false`     | Whether TLS should be required for all managed connections                                                                                                          |
 | `POSTGRES_POOL_SIZE`    | `12`        | Maximum size of the connection pool (configures [max_size](https://docs.rs/deadpool-postgres/0.14.1/deadpool_postgres/struct.PoolConfig.html#structfield.max_size)) |
+| `POSTGRES_SHARE_CONNECTIONS_BY_URL` | `false` | Whether connection pools should be shared for identical connections |
 
 Once named configuration with the keys above is created, it can be referenced as `target_config` for a link to this provider.
 
