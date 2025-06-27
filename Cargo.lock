@@ -9355,6 +9355,7 @@ dependencies = [
  "postgres-types",
  "rustls 0.23.26",
  "serde_json",
+ "sha2",
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
