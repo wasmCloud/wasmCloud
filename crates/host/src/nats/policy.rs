@@ -13,11 +13,13 @@ use futures::{
 };
 use tokio::spawn;
 use tokio::sync::RwLock;
+
 use tracing::{debug, error, instrument, trace, warn};
 use ulid::Ulid;
 use uuid::Uuid;
 use wascap::jwt;
 
+use crate::cache::Cache;
 use crate::policy::{
     ComponentInformation, HostInfo, PerformInvocationRequest, PolicyClaims, PolicyManager,
     ProviderInformation, Request, RequestBody, RequestKey, RequestKind, Response,
@@ -31,7 +33,7 @@ pub struct NatsPolicyManager {
     host_info: HostInfo,
     policy_topic: Option<String>,
     policy_timeout: Duration,
-    decision_cache: Arc<RwLock<HashMap<RequestKey, Response>>>,
+    decision_cache: Cache<RequestKey, Response>,
     request_to_key: Arc<RwLock<HashMap<String, RequestKey>>>,
     /// An abort handle for the policy changes subscription
     pub policy_changes: AbortHandle,
@@ -46,17 +48,24 @@ impl NatsPolicyManager {
         policy_topic: Option<String>,
         policy_timeout: Option<Duration>,
         policy_changes_topic: Option<String>,
+        decision_cache_ttl: Option<Duration>,
     ) -> anyhow::Result<Self> {
         const DEFAULT_POLICY_TIMEOUT: Duration = Duration::from_secs(1);
 
         let (policy_changes_abort, policy_changes_abort_reg) = AbortHandle::new_pair();
+
+        let decision_cache = Cache::builder()
+        .with_lazy_expiration(true)
+        .with_purge_cycles(1000)
+        .with_ttl(decision_cache_ttl.unwrap_or(Duration::from_secs(300)))
+        .build();
 
         let manager = NatsPolicyManager {
             nats: nats.clone(),
             host_info,
             policy_topic,
             policy_timeout: policy_timeout.unwrap_or(DEFAULT_POLICY_TIMEOUT),
-            decision_cache: Arc::default(),
+            decision_cache,
             request_to_key: Arc::default(),
             policy_changes: policy_changes_abort,
         };
@@ -102,7 +111,7 @@ impl NatsPolicyManager {
             RequestBody::Unknown => RequestKind::Unknown,
         };
         let cache_key = (&request).into();
-        if let Some(entry) = self.decision_cache.read().await.get(&cache_key) {
+        if let Some(entry) = self.decision_cache.get(&cache_key).await {
             trace!(?cache_key, ?entry, "using cached policy decision");
             return Ok(entry.clone());
         }
@@ -129,9 +138,7 @@ impl NatsPolicyManager {
             .context("failed to deserialize policy response")?;
 
         self.decision_cache
-            .write()
-            .await
-            .insert(cache_key.clone(), decision.clone()); // cache policy decision
+            .insert(cache_key.clone(), decision.clone()).await; // cache policy decision
         self.request_to_key
             .write()
             .await
@@ -150,18 +157,17 @@ impl NatsPolicyManager {
 
         debug!(request_id, "received policy decision override");
 
-        let mut decision_cache = self.decision_cache.write().await;
         let request_to_key = self.request_to_key.read().await;
 
         if let Some(key) = request_to_key.get(&request_id) {
-            decision_cache.insert(
+            self.decision_cache.insert(
                 key.clone(),
                 Response {
                     request_id: request_id.clone(),
                     permitted,
                     message,
                 },
-            );
+            ).await;
         } else {
             warn!(
                 request_id,
