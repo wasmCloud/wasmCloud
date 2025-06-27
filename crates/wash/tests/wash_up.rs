@@ -2,6 +2,7 @@ use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
+use etcetera::AppStrategy;
 use regex::Regex;
 use semver::Version;
 use serial_test::serial;
@@ -377,18 +378,22 @@ async fn integration_up_works_with_specific_wasmcloud_host_version() -> Result<(
 #[tokio::test]
 #[serial]
 async fn integration_up_works_with_specified_wadm_version() -> Result<()> {
-    use wash::lib::config::{DOWNLOADS_DIR, WASH_DIR};
+    use wash::lib::config::WASH_DIRECTORIES;
     use wash::lib::start::WADM_BINARY;
     // 0.12.0 is a sufficient version to test the latest is 0.12.2
     let previous_wadm_version = "v0.12.0";
 
     let instance =
         TestWashInstance::create_with_extra_args(["--wadm-version", previous_wadm_version]).await?;
+    let downloads_dir = WASH_DIRECTORIES.downloads_dir();
     let wadm_path = instance
         .test_dir
         .path()
-        .join(WASH_DIR)
-        .join(DOWNLOADS_DIR)
+        .join(
+            downloads_dir
+                .strip_prefix(WASH_DIRECTORIES.home_dir())
+                .context("failed to remove home prefix of wash downloads directory")?,
+        )
         .join(WADM_BINARY)
         .canonicalize()
         .context("failed to canonicalize wadm binary path")?;

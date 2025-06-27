@@ -2,8 +2,8 @@ use crate::lib::app::{load_app_manifest, AppManifest, AppManifestSource};
 use crate::lib::cli::{CommandOutput, OutputKind};
 use crate::lib::common::{CommandGroupUsage, WASMCLOUD_HOST_VERSION_T};
 use crate::lib::config::{
-    create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_TIMEOUT_MS,
-    WADM_PID_FILE,
+    create_nats_client_from_opts, host_pid_file, DEFAULT_NATS_TIMEOUT_MS, WADM_PID_FILE,
+    WASH_DIRECTORIES,
 };
 use crate::lib::context::fs::ContextDir;
 use crate::lib::context::ContextManager;
@@ -28,7 +28,6 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use sysinfo::System;
-use tokio::fs::create_dir_all;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Child,
@@ -400,8 +399,7 @@ pub async fn handle_command(command: UpCommand, output_kind: OutputKind) -> Resu
 }
 
 pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<CommandOutput> {
-    let install_dir = downloads_dir()?;
-    create_dir_all(&install_dir).await?;
+    let install_dir = WASH_DIRECTORIES.create_downloads_dir()?;
     let spinner = Spinner::new(&output_kind)?;
 
     let ctx = ContextDir::new()?
