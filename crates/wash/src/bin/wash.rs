@@ -7,6 +7,7 @@ use anyhow::{bail, Context};
 use clap::{self, Arg, ArgMatches, Command, FromArgMatches, Parser, Subcommand};
 use console::style;
 use crossterm::style::Stylize;
+use etcetera::AppStrategy;
 use semver::Version;
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
@@ -489,6 +490,17 @@ async fn main() {
             eprintln!("Error while checking for new wash version: {e}");
             std::process::exit(2);
         }
+    }
+
+    let old_config_dir = WASH_DIRECTORIES.home_dir().join(".wash");
+    if tokio::fs::try_exists(&old_config_dir)
+        .await
+        .unwrap_or(false)
+    {
+        eprintln!(
+            "Old configuration directory '{}' found, consider migrating to new configuration structure.",
+            old_config_dir.display(),
+        );
     }
 
     let output_kind = cli.output;
