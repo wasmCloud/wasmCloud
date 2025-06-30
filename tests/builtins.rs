@@ -41,6 +41,8 @@ const BUILTIN_MESSAGING_NATS: &str = "wasmcloud+builtin://messaging-nats";
 /// properly handling de-registering and re-registering links.
 #[instrument(skip_all, ret)]
 #[tokio::test]
+// NOTE(#4595): This test is unusually flaky and it affects PRs that are not related to it.
+#[ignore]
 async fn builtin_http_path_routing() -> anyhow::Result<()> {
     _ = tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().compact().without_time())

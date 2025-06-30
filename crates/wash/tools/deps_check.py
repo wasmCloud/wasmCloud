@@ -16,6 +16,11 @@ if tinygo is None:
     print('tinygo not found. Please install it from https://tinygo.org/')
     exit(1)
 
+wasmtools = shutil.which('wasm-tools')
+if wasmtools is None:
+    print('wasm-tools not found. Installing..."')
+    subprocess.run('cargo install wasm-tools --locked', shell=True)
+
 targets = subprocess.run("rustup target list --installed", shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True).stdout
 if "wasm32-unknown-unknown" not in targets:
     print('Rust wasm32-unknown-unknown target not found. Installing..."')
