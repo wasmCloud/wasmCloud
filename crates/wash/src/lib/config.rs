@@ -29,7 +29,7 @@ pub static WASH_DIRECTORIES: Lazy<WashAppStrategy> = Lazy::new(|| {
         app_name: "wash".to_string(),
     };
 
-    let strategy = app_strategy::choose_app_strategy(args).unwrap();
+    let strategy = app_strategy::choose_app_strategy(args).expect("failed to get AppStrategy");
     #[cfg(target_os = "windows")]
     {
         WashAppStrategy::Windows(strategy)
