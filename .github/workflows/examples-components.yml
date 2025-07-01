@@ -368,7 +368,7 @@ jobs:
         with:
           path: artifacts
       - name: install wash (current)
-        uses: taiki-e/cache-cargo-install-action@5c9abe9a3f79d831011df7c47177debbeb320405 # v2.1.2
+        uses: taiki-e/cache-cargo-install-action@1bb5728d7988b14bfdd9690a8e5399fc8a3f75ab # v2.2.0
         with:
           tool: wash
           git: https://github.com/${{ github.repository }}
