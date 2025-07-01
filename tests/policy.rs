@@ -50,6 +50,7 @@ async fn policy_always_deny() -> anyhow::Result<()> {
             policy_topic: Some("test-policy".into()),
             policy_changes_topic: Some("test-policy-changes".into()),
             policy_timeout_ms: Some(Duration::from_millis(100)),
+            policy_cache_ttl: Some(Duration::from_millis(100)),
         }),
         None,
         None,
