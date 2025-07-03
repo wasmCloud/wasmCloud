@@ -26,8 +26,8 @@ use wasm_pkg_client::{
 
 use crate::lib::{
     config::{
-        cfg_dir, WashConnectionOptions, DEFAULT_LATTICE, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
-        DEFAULT_NATS_TIMEOUT_MS,
+        WashConnectionOptions, DEFAULT_LATTICE, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
+        DEFAULT_NATS_TIMEOUT_MS, WASH_DIRECTORIES,
     },
     context::{default_timeout_ms, fs::ContextDir, ContextManager},
     keys::{
@@ -308,7 +308,7 @@ impl CommonPackageArgs {
             }
             // Otherwise we got nothing and attempt to load the default config locations
             (None, None) => {
-                let path = cfg_dir()?.join("package_config.toml");
+                let path = WASH_DIRECTORIES.create_in_config_dir("package_config.toml")?;
                 // Check if the config file exists before loading so we can error properly
                 if tokio::fs::metadata(&path).await.is_ok() {
                     let loaded = wasm_pkg_client::Config::from_file(&path)
@@ -354,7 +354,7 @@ impl CommonPackageArgs {
             // We have a cache dir provided by the user via `WKG` env var
             (None, Some(path)) => PathBuf::from(path),
             // Otherwise we got nothing and attempt to load the default cache dir
-            (None, None) => cfg_dir()?.join("package_cache"),
+            (None, None) => WASH_DIRECTORIES.package_cache_dir(),
         };
         FileCache::new(dir).await
     }
@@ -502,7 +502,7 @@ fn determine_directory(directory: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(d) = directory {
         Ok(d)
     } else {
-        let d = cfg_dir()?.join("keys");
+        let d = WASH_DIRECTORIES.keys_dir();
         Ok(d)
     }
 }
@@ -574,7 +574,7 @@ mod test {
     use serial_test::serial;
 
     use crate::lib::{
-        config::{WashConnectionOptions, DEFAULT_CTX_DIR_NAME, DEFAULT_LATTICE, WASH_DIR},
+        config::{WashConnectionOptions, DEFAULT_LATTICE, WASH_DIRECTORIES},
         context::{fs::ContextDir, ContextManager, WashContext},
     };
 
@@ -632,6 +632,8 @@ mod test {
         let tempdir = tempfile::tempdir()?;
         let _dir = CurDir::cwd(&tempdir)?;
         let _home_var = EnvVar::set("HOME", tempdir.path());
+        let _xdg_config_home = EnvVar::set("XDG_CONFIG_HOME", tempdir.path().join(".config"));
+        let _xdg_data_home = EnvVar::set("XDG_DATA_HOME", tempdir.path().join(".local/share"));
 
         // when opts.lattice.is_none() && opts.context.is_none() && user didn't set a default context, use the lattice from the preset default context...
         let cli_opts = CliConnectionOpts::default();
@@ -646,11 +648,7 @@ mod test {
         let wash_opts = WashConnectionOptions::try_from(cli_opts)?;
         assert_eq!(wash_opts.get_lattice(), "hal9000".to_string());
 
-        let context_dir = ContextDir::from_dir(Some(
-            tempdir
-                .path()
-                .join(format!("{WASH_DIR}/{DEFAULT_CTX_DIR_NAME}")),
-        ))?;
+        let context_dir = ContextDir::from_dir(Some(tempdir.path().join(".config/wash/contexts")))?;
 
         // when opts.lattice.is_none() && opts.context.is_some(), use the lattice from the specified context...
         context_dir.save_context(&WashContext {
@@ -688,10 +686,14 @@ mod test {
     async fn test_config_loading() {
         let tempdir = tempfile::tempdir().expect("failed to create tempdir");
 
-        let wash_path = tempdir.path().join(".wash");
-        tokio::fs::create_dir_all(&wash_path)
+        let wash_config_path = tempdir.path().join(".config/wash");
+        tokio::fs::create_dir_all(&wash_config_path)
             .await
-            .expect("failed to create wash dir");
+            .expect("failed to create wash config dir");
+        let wash_data_path = tempdir.path().join(".local/share/wash");
+        tokio::fs::create_dir_all(&wash_data_path)
+            .await
+            .expect("failed to create wash data dir");
         let wkg_conf = tempdir.path().join("wkg");
         tokio::fs::create_dir_all(&wkg_conf)
             .await
@@ -711,6 +713,8 @@ mod test {
         );
 
         let _home_env = EnvVar::set("HOME", tempdir.path());
+        let _xdg_config_home = EnvVar::set("XDG_CONFIG_HOME", tempdir.path().join(".config"));
+        let _xdg_data_home = EnvVar::set("XDG_DATA_HOME", tempdir.path().join(".local/share"));
 
         let expected_reg =
             wasm_pkg_client::RegistryMapping::Registry("hellothere.com".parse().unwrap());
@@ -718,7 +722,7 @@ mod test {
         let mut config_for_wash = wasm_pkg_client::Config::default();
         config_for_wash.set_namespace_registry("foo".parse().unwrap(), expected_reg.clone());
         config_for_wash
-            .to_file(wash_path.join("package_config.toml"))
+            .to_file(wash_config_path.join("package_config.toml"))
             .await
             .expect("failed to write config");
 
@@ -794,6 +798,41 @@ mod test {
         assert!(
             assert_registry_mapping(wasmcloud_registry, "adifferentone.com"),
             "Should have the proper registry for wasmcloud",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_config_directory_overrides() {
+        use etcetera::AppStrategy;
+        let tempdir = tempfile::tempdir().expect("failed to create tempdir");
+        let _xdg_config_home = EnvVar::set("XDG_CONFIG_HOME", tempdir.path().join(".config"));
+        assert_eq!(
+            WASH_DIRECTORIES.config_dir(),
+            tempdir.path().join(".config/wash"),
+            "Should retrieve XDG conform wash config directory"
+        );
+        assert_eq!(
+            WASH_DIRECTORIES.context_dir(),
+            tempdir.path().join(".config/wash/contexts"),
+            "Should retrieve XDG conform wash context directory"
+        );
+        let _wash_config_dir = EnvVar::set("WASH_CONFIG_DIR", tempdir.path().join(".wash"));
+        assert_eq!(
+            WASH_DIRECTORIES.config_dir(),
+            tempdir.path().join(".wash"),
+            "Should retrieve custom wash config directory"
+        );
+        assert_eq!(
+            WASH_DIRECTORIES.context_dir(),
+            tempdir.path().join(".wash/contexts"),
+            "Should retrieve contexts directory in custom wash config directory"
+        );
+        let _wash_context_dir = EnvVar::set("WASH_CONTEXT_DIR", tempdir.path().join("contexts"));
+        assert_eq!(
+            WASH_DIRECTORIES.context_dir(),
+            tempdir.path().join("contexts"),
+            "Should retrieve custom contexts config directory"
         );
     }
 
