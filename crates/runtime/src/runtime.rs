@@ -274,6 +274,12 @@ impl Runtime {
         env!("CARGO_PKG_VERSION")
     }
 
+    /// Returns the [`wasmtime::Engine`] used by this runtime
+    #[must_use]
+    pub fn engine(&self) -> &wasmtime::Engine {
+        &self.engine
+    }
+
     /// Returns a boolean indicating whether the runtime should skip linking a feature-gated instance
     pub(crate) fn skip_feature_gated_instance(&self, instance: &str) -> bool {
         match instance {
