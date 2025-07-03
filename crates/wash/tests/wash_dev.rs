@@ -10,6 +10,7 @@ use std::thread;
 use anyhow::{anyhow, bail, Context as _, Result};
 use nkeys::KeyPair;
 use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 use wadm_types::{LinkProperty, Manifest, Properties, TraitProperty};
@@ -48,10 +49,12 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
 
     let nats_port = find_open_port().await?;
     let mut nats = start_nats(nats_port, &dir).await?;
+    let ui_port = find_open_port().await?;
 
     let dev_cmd = Arc::new(RwLock::new(
         test_setup
             .base_command()
+            .env("WASH_DEV_DASHBOARD_PORT", ui_port.to_string())
             .args([
                 "dev",
                 "--nats-connect-only",
@@ -61,6 +64,7 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
                 nats_port.to_string().as_ref(),
                 "--rpc-port",
                 nats_port.to_string().as_ref(),
+                "--dashboard",
             ])
             .kill_on_drop(true)
             .spawn()
@@ -95,6 +99,13 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
     if !signed_file_path.exists() {
         bail!("signed component file was not built");
     }
+
+    let _stream = tokio::time::timeout(
+        Duration::from_secs(5),
+        TcpStream::connect(("127.0.0.1", ui_port)),
+    )
+    .await
+    .context("timed out connecting to dashboard")??;
 
     let process_pid = dev_cmd
         .write()
