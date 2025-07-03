@@ -67,7 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    This code enables setting `link_config` on an override, which modifies
    the generated link (and related config properties).
  - <csr-id-cd5c01bffa2f5f3ad73b3ab4629d7e06df47daee/> add wadm_component_name alias for manifest targeting
- - <csr-id-0a5d216b6a264bf4c4a9c56b304511561c3fd25a/> check for semver compatible versions of tools
+- <csr-id-0a5d216b6a264bf4c4a9c56b304511561c3fd25a/> check for semver compatible versions of tools
+- add optional `--dashboard` flag for `wash dev` to automatically serve washboard
 
 ### Bug Fixes
 
