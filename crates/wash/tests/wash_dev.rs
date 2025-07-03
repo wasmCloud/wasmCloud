@@ -54,7 +54,7 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
     let dev_cmd = Arc::new(RwLock::new(
         test_setup
             .base_command()
-            .env("WASH_DEV_DASHBOARD_PORT", ui_port.to_string())
+            .env("WASMCLOUD_WASH_UI_PORT", ui_port.to_string())
             .args([
                 "dev",
                 "--nats-connect-only",
