@@ -1,10 +1,15 @@
-use std::{collections::HashMap, sync::{atomic::{AtomicU32, Ordering}}, task::{Context, Poll}, time::Instant};
-use std::sync::Arc;
 use std::marker::PhantomData;
-use tokio::sync::RwLock;
-use tokio_util::time::{DelayQueue, delay_queue};
-use tokio::time::Duration;
+use std::sync::Arc;
 use std::task::ready;
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicU32, Ordering},
+    task::{Context, Poll},
+    time::Instant,
+};
+use tokio::sync::RwLock;
+use tokio::time::Duration;
+use tokio_util::time::{delay_queue, DelayQueue};
 
 #[derive(Debug, Clone)]
 struct CacheEntry<V>
@@ -13,7 +18,6 @@ where
 {
     value: V,
     created_at: Instant,
-
 }
 
 impl<V> CacheEntry<V>
@@ -21,7 +25,10 @@ where
     V: std::fmt::Debug + Clone + Send + Sync + 'static,
 {
     fn new(value: V) -> Self {
-        Self { value, created_at: Instant::now() }
+        Self {
+            value,
+            created_at: Instant::now(),
+        }
     }
 
     fn get_value(&self) -> V {
@@ -33,10 +40,8 @@ where
     }
 }
 
-
-
 #[derive(Debug)]
-struct  CacheInternal<K, V>
+struct CacheInternal<K, V>
 where
     K: std::hash::Hash + Eq + std::fmt::Debug + Send + Sync + 'static,
     V: std::fmt::Debug + Clone + Send + Sync + 'static,
@@ -53,22 +58,25 @@ where
     V: std::fmt::Debug + Clone + Send + Sync + 'static,
 {
     fn new(ttl: Duration) -> Self {
-        Self { 
-            data: HashMap::new(), 
-            expirations: DelayQueue::new(), 
-            ttl, 
-            lazy: true, 
+        Self {
+            data: HashMap::new(),
+            expirations: DelayQueue::new(),
+            ttl,
+            lazy: true,
         }
     }
 
     fn insert(&mut self, key: K, value: V) {
         let delay = self.expirations.insert(key.clone(), self.ttl);
-        self.data.insert(key.clone(), (CacheEntry::new(value), delay));
+        self.data
+            .insert(key.clone(), (CacheEntry::new(value), delay));
     }
 
     fn get(&mut self, key: &K) -> Option<V> {
         match self.data.entry(key.clone()) {
-            std::collections::hash_map::Entry::Occupied(entry) if entry.get().0.get_created_at().elapsed() < self.ttl => {
+            std::collections::hash_map::Entry::Occupied(entry)
+                if entry.get().0.get_created_at().elapsed() < self.ttl =>
+            {
                 Some(entry.get().0.get_value())
             }
             std::collections::hash_map::Entry::Occupied(entry) => {
@@ -81,7 +89,6 @@ where
             std::collections::hash_map::Entry::Vacant(_) => None,
         }
     }
-
 
     fn remove(&mut self, key: &K) {
         if let Some((_, cache_key)) = self.data.remove(key) {
@@ -116,7 +123,7 @@ where
 {
     /// Create a new cache with the specified TTL
     pub fn new(ttl: Duration) -> Self {
-        Self { 
+        Self {
             internal: Arc::new(RwLock::new(CacheInternal::new(ttl))),
             purge_cycles: None,
             purge_cycle_count: AtomicU32::new(0),
@@ -161,8 +168,6 @@ where
     }
 }
 
-
-        
 impl<K, V> std::fmt::Debug for Cache<K, V>
 where
     K: std::hash::Hash + Eq + Clone + std::fmt::Debug + Send + Sync + 'static,
@@ -171,7 +176,10 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Cache")
             .field("purge_cycles", &self.purge_cycles)
-            .field("purge_cycle_count", &self.purge_cycle_count.load(Ordering::Relaxed))
+            .field(
+                "purge_cycle_count",
+                &self.purge_cycle_count.load(Ordering::Relaxed),
+            )
             .finish()
     }
 }
@@ -192,7 +200,7 @@ where
 
 /// A builder for creating a new cache with configurable settings
 ///
-/// Example: 
+/// Example:
 /// ```
 /// use std::time::Duration;
 /// use wasmcloud_host::cache::Cache;
@@ -237,38 +245,38 @@ where
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     /// Set the time-to-live (TTL) for cache entries
     pub fn with_ttl(mut self, ttl: Duration) -> Self {
         self.ttl = ttl;
         self
     }
-    
+
     /// Set the number of operations after which to run a purge cycle
     /// If None, purging only happens on explicit timer expiration
     pub fn with_purge_cycles(mut self, cycles: u32) -> Self {
         self.purge_cycles = Some(cycles);
         self
     }
-    
+
     /// Disable automatic purge cycles (default behavior)
     pub fn without_purge_cycles(mut self) -> Self {
         self.purge_cycles = None;
         self
     }
-    
+
     /// Set whether to use lazy expiration (check expiration on access)
     /// If false, entries are only removed during purge cycles
     pub fn with_lazy_expiration(mut self, lazy: bool) -> Self {
         self.lazy = lazy;
         self
     }
-    
+
     /// Build the cache with the configured settings
     pub fn build(self) -> Cache<K, V> {
         let mut internal = CacheInternal::new(self.ttl);
         internal.lazy = self.lazy;
-        
+
         Cache {
             internal: Arc::new(RwLock::new(internal)),
             purge_cycles: self.purge_cycles,
@@ -285,22 +293,31 @@ mod tests {
     #[tokio::test]
     async fn test_basic_insert_and_get() {
         let cache = Cache::new(Duration::from_millis(100));
-        
+
         cache.insert("key1".to_string(), "value1".to_string()).await;
         cache.insert("key2".to_string(), "value2".to_string()).await;
-        
-        assert_eq!(cache.get(&"key1".to_string()).await, Some("value1".to_string()));
-        assert_eq!(cache.get(&"key2".to_string()).await, Some("value2".to_string()));
+
+        assert_eq!(
+            cache.get(&"key1".to_string()).await,
+            Some("value1".to_string())
+        );
+        assert_eq!(
+            cache.get(&"key2".to_string()).await,
+            Some("value2".to_string())
+        );
         assert_eq!(cache.get(&"nonexistent".to_string()).await, None);
     }
 
     #[tokio::test]
     async fn test_remove() {
         let cache = Cache::new(Duration::from_millis(100));
-        
+
         cache.insert("key1".to_string(), "value1".to_string()).await;
-        assert_eq!(cache.get(&"key1".to_string()).await, Some("value1".to_string()));
-        
+        assert_eq!(
+            cache.get(&"key1".to_string()).await,
+            Some("value1".to_string())
+        );
+
         cache.remove(&"key1".to_string()).await;
         assert_eq!(cache.get(&"key1".to_string()).await, None);
     }
@@ -308,10 +325,13 @@ mod tests {
     #[tokio::test]
     async fn test_ttl_expiration() {
         let cache = Cache::new(Duration::from_millis(100));
-        
+
         cache.insert("key1".to_string(), "value1".to_string()).await;
-        assert_eq!(cache.get(&"key1".to_string()).await, Some("value1".to_string()));
-        
+        assert_eq!(
+            cache.get(&"key1".to_string()).await,
+            Some("value1".to_string())
+        );
+
         // Wait for TTL to expire
         sleep(Duration::from_millis(150)).await;
         assert_eq!(cache.get(&"key1".to_string()).await, None);
@@ -320,15 +340,20 @@ mod tests {
     #[tokio::test]
     async fn test_ttl_not_expired() {
         let cache = Cache::new(Duration::from_millis(200));
-        
+
         cache.insert("key1".to_string(), "value1".to_string()).await;
-        assert_eq!(cache.get(&"key1".to_string()).await, Some("value1".to_string()));
-        
+        assert_eq!(
+            cache.get(&"key1".to_string()).await,
+            Some("value1".to_string())
+        );
+
         // Wait less than TTL
         sleep(Duration::from_millis(50)).await;
-        assert_eq!(cache.get(&"key1".to_string()).await, Some("value1".to_string()));
+        assert_eq!(
+            cache.get(&"key1".to_string()).await,
+            Some("value1".to_string())
+        );
     }
-
 
     #[tokio::test]
     async fn test_expiration_with_purge_cycles() {
@@ -337,20 +362,25 @@ mod tests {
             .with_purge_cycles(2)
             .with_lazy_expiration(false)
             .build();
-        
+
         cache.insert("key1".to_string(), "value1".to_string()).await;
-        
-        assert_eq!(cache.get(&"key1".to_string()).await, Some("value1".to_string()));
+
+        assert_eq!(
+            cache.get(&"key1".to_string()).await,
+            Some("value1".to_string())
+        );
 
         sleep(Duration::from_millis(150)).await;
         assert_eq!(cache.get(&"key1".to_string()).await, None);
         // The key should still be in the cache because the purge cycle has not been triggered
         assert_eq!(cache.internal.read().await.data.len(), 1);
         cache.insert("key2".to_string(), "value2".to_string()).await;
-        assert_eq!(cache.get(&"key2".to_string()).await, Some("value2".to_string()));
+        assert_eq!(
+            cache.get(&"key2".to_string()).await,
+            Some("value2".to_string())
+        );
         // There should be one because the key1 is expired and purge cycle was triggered
         assert_eq!(cache.internal.read().await.data.len(), 1);
-
     }
 
     #[tokio::test]
@@ -360,17 +390,23 @@ mod tests {
             .without_purge_cycles()
             .with_lazy_expiration(false)
             .build();
-        
+
         cache.insert("key1".to_string(), "value1".to_string()).await;
-        
-        assert_eq!(cache.get(&"key1".to_string()).await, Some("value1".to_string()));
+
+        assert_eq!(
+            cache.get(&"key1".to_string()).await,
+            Some("value1".to_string())
+        );
 
         sleep(Duration::from_millis(150)).await;
         assert_eq!(cache.get(&"key1".to_string()).await, None);
         // The key should still be in the cache because the purge cycle has not been triggered
         assert_eq!(cache.internal.read().await.data.len(), 1);
         cache.insert("key2".to_string(), "value2".to_string()).await;
-        assert_eq!(cache.get(&"key2".to_string()).await, Some("value2".to_string()));
+        assert_eq!(
+            cache.get(&"key2".to_string()).await,
+            Some("value2".to_string())
+        );
         // The should be two because the key1 is expired and purge cycle was not triggered
         assert_eq!(cache.internal.read().await.data.len(), 2);
     }
@@ -381,10 +417,13 @@ mod tests {
             .with_ttl(Duration::from_millis(100))
             .with_lazy_expiration(true)
             .build();
-        
+
         cache.insert("key1".to_string(), "value1".to_string()).await;
-        assert_eq!(cache.get(&"key1".to_string()).await, Some("value1".to_string()));
-        
+        assert_eq!(
+            cache.get(&"key1".to_string()).await,
+            Some("value1".to_string())
+        );
+
         sleep(Duration::from_millis(150)).await;
         assert_eq!(cache.get(&"key1".to_string()).await, None);
     }
@@ -392,16 +431,16 @@ mod tests {
     #[tokio::test]
     async fn test_manual_purge() {
         let cache = Cache::new(Duration::from_millis(50));
-        
+
         cache.insert("key1".to_string(), "value1".to_string()).await;
         cache.insert("key2".to_string(), "value2".to_string()).await;
-        
+
         // Wait for entries to expire
         sleep(Duration::from_millis(100)).await;
-        
+
         // Manual purge should remove expired entries
         cache.poll_purge_once().await;
-        
+
         // Even with lazy expiration, purged entries should be gone
         assert_eq!(cache.get(&"key1".to_string()).await, None);
         assert_eq!(cache.get(&"key2".to_string()).await, None);
@@ -410,15 +449,25 @@ mod tests {
     #[tokio::test]
     async fn test_cache_clone() {
         let cache1 = Cache::new(Duration::from_millis(100));
-        cache1.insert("key1".to_string(), "value1".to_string()).await;
-        
+        cache1
+            .insert("key1".to_string(), "value1".to_string())
+            .await;
+
         let cache2 = cache1.clone();
-        
+
         // Both caches should share the same data
-        assert_eq!(cache2.get(&"key1".to_string()).await, Some("value1".to_string()));
-        
-        cache2.insert("key2".to_string(), "value2".to_string()).await;
-        assert_eq!(cache1.get(&"key2".to_string()).await, Some("value2".to_string()));
+        assert_eq!(
+            cache2.get(&"key1".to_string()).await,
+            Some("value1".to_string())
+        );
+
+        cache2
+            .insert("key2".to_string(), "value2".to_string())
+            .await;
+        assert_eq!(
+            cache1.get(&"key2".to_string()).await,
+            Some("value2".to_string())
+        );
     }
 
     #[tokio::test]
@@ -427,7 +476,7 @@ mod tests {
             .with_ttl(Duration::from_millis(100))
             .with_purge_cycles(10)
             .build();
-        
+
         let debug_str = format!("{:?}", cache);
         assert!(debug_str.contains("Cache"));
         assert!(debug_str.contains("purge_cycles"));
@@ -437,10 +486,10 @@ mod tests {
     #[tokio::test]
     async fn test_cache_with_different_types() {
         let cache = Cache::new(Duration::from_millis(100));
-        
+
         cache.insert(1_u32, vec![1, 2, 3]).await;
         cache.insert(2_u32, vec![4, 5, 6]).await;
-        
+
         assert_eq!(cache.get(&1_u32).await, Some(vec![1, 2, 3]));
         assert_eq!(cache.get(&2_u32).await, Some(vec![4, 5, 6]));
         assert_eq!(cache.get(&3_u32).await, None);
@@ -449,12 +498,18 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite_existing_key() {
         let cache = Cache::new(Duration::from_millis(100));
-        
+
         cache.insert("key1".to_string(), "value1".to_string()).await;
-        assert_eq!(cache.get(&"key1".to_string()).await, Some("value1".to_string()));
-        
+        assert_eq!(
+            cache.get(&"key1".to_string()).await,
+            Some("value1".to_string())
+        );
+
         cache.insert("key1".to_string(), "value2".to_string()).await;
-        assert_eq!(cache.get(&"key1".to_string()).await, Some("value2".to_string()));
+        assert_eq!(
+            cache.get(&"key1".to_string()).await,
+            Some("value2".to_string())
+        );
     }
 
     #[tokio::test]
@@ -463,35 +518,37 @@ mod tests {
             .with_ttl(Duration::from_millis(100))
             .with_purge_cycles(10)
             .build();
-        
+
         // Perform operations that should trigger purge cycle checking
         cache.insert("key1".to_string(), "value1".to_string()).await;
         assert_eq!(cache.purge_cycle_count.load(Ordering::Relaxed), 1);
-        
+
         cache.get(&"key1".to_string()).await;
         assert_eq!(cache.purge_cycle_count.load(Ordering::Relaxed), 1);
-        
+
         cache.insert("key2".to_string(), "value2".to_string()).await;
         assert_eq!(cache.purge_cycle_count.load(Ordering::Relaxed), 2);
 
         cache.poll_purge_once().await;
         assert_eq!(cache.purge_cycle_count.load(Ordering::Relaxed), 0);
-        
     }
 
     #[tokio::test]
     async fn test_builder_default() {
         let cache = Cache::<String, String>::builder().build();
-        
+
         cache.insert("key1".to_string(), "value1".to_string()).await;
-        assert_eq!(cache.get(&"key1".to_string()).await, Some("value1".to_string()));
+        assert_eq!(
+            cache.get(&"key1".to_string()).await,
+            Some("value1".to_string())
+        );
     }
 
     #[tokio::test]
     async fn test_cache_entry_creation_time() {
         let entry = CacheEntry::new("test_value".to_string());
         let created_at = entry.get_created_at();
-        
+
         assert_eq!(entry.get_value(), "test_value".to_string());
         assert!(created_at.elapsed() < Duration::from_millis(100));
     }
@@ -499,28 +556,28 @@ mod tests {
     #[tokio::test]
     async fn test_concurrent_access() {
         let cache = Arc::new(Cache::new(Duration::from_millis(100)));
-        
+
         let mut handles = vec![];
-        
+
         // Spawn multiple tasks that access the cache concurrently
         for i in 0..10 {
             let cache_clone = Arc::clone(&cache);
             let handle = tokio::spawn(async move {
                 let key = format!("key_{}", i);
                 let value = format!("value_{}", i);
-                
+
                 cache_clone.insert(key.clone(), value.clone()).await;
                 let retrieved = cache_clone.get(&key).await;
                 assert_eq!(retrieved, Some(value));
             });
             handles.push(handle);
         }
-        
+
         // Wait for all tasks to complete
         for handle in handles {
             handle.await.unwrap();
         }
-        
+
         // Verify all entries are in the cache
         for i in 0..10 {
             let key = format!("key_{}", i);
@@ -529,4 +586,3 @@ mod tests {
         }
     }
 }
-
