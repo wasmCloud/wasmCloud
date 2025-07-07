@@ -20,7 +20,7 @@ Organization: Synadia
 
 Name: Taylor Thomas  
 GitHub: @thomastaylor312  
-Organization: Cosmonic
+Organization: Self
 
 Name: Brooks Townsend  
 GitHub: @brooksmtownsend  
@@ -34,7 +34,7 @@ Organization: Adobe
 
 Name: Taylor Thomas  
 GitHub: @thomastaylor312  
-Organization: Cosmonic
+Organization: Self
 
 Name: Brooks Townsend  
 GitHub: @brooksmtownsend  
@@ -52,7 +52,7 @@ Organization: Cosmonic
 
 Name: Taylor Thomas  
 GitHub: @thomastaylor312  
-Organization: Cosmonic
+Organization: Self
 
 Name: Brooks Townsend  
 GitHub: @brooksmtownsend  
@@ -66,11 +66,15 @@ Name: Victor Adossi
 GitHub: @vados-cosmonic  
 Organization: Cosmonic
 
+Name: Masoud Baharlouie  
+GitHub: @ossfellow  
+Organization: Operatik Inc.
+
 ## @wasmCloud/wash-maintainers
 
 Name: Taylor Thomas  
 GitHub: @thomastaylor312  
-Organization: Cosmonic
+Organization: Self
 
 Name: Brooks Townsend  
 GitHub: @brooksmtownsend  
@@ -110,7 +114,7 @@ Organization: Cosmonic
 
 Name: Taylor Thomas  
 GitHub: @thomastaylor312  
-Organization: Cosmonic
+Organization: Self
 
 Name: Brooks Townsend  
 GitHub: @brooksmtownsend  
@@ -124,11 +128,15 @@ Name: Victor Adossi
 GitHub: @vados-cosmonic  
 Organization: Cosmonic
 
+Name: Lachlan Heywood  
+GitHub: @lachieh  
+Organization: Cosmonic
+
 ## @wasmCloud/wascap-maintainers
 
 Name: Taylor Thomas  
 GitHub: @thomastaylor312  
-Organization: Cosmonic
+Organization: Self
 
 Name: Brooks Townsend  
 GitHub: @brooksmtownsend  
@@ -150,7 +158,7 @@ Organization: Cosmonic
 
 Name: Taylor Thomas  
 GitHub: @thomastaylor312  
-Organization: Cosmonic
+Organization: Self
 
 Name: Brooks Townsend  
 GitHub: @brooksmtownsend  
@@ -164,7 +172,7 @@ Organization: Cosmonic
 
 Name: Taylor Thomas  
 GitHub: @thomastaylor312  
-Organization: Cosmonic
+Organization: Self
 
 Name: Brooks Townsend  
 GitHub: @brooksmtownsend  
@@ -190,7 +198,7 @@ Organization: Cosmonic
 
 Name: Taylor Thomas  
 GitHub: @thomastaylor312  
-Organization: Cosmonic
+Organization: Self
 
 Name: Brooks Townsend  
 GitHub: @brooksmtownsend  
@@ -206,24 +214,20 @@ Organization: Synadia
 
 ## @wasmCloud/triage-maintainers
 
-Name: Jiaxiao Zhou
-GitHub: @Mossaka
+Name: Jiaxiao Zhou  
+GitHub: @Mossaka  
 Organization: Microsoft
 
-Name: Masoud Baharlouie
-GitHub: @ossfellow
-Organization: Operatik Inc.
-
-Name: Aditya Salunkhe
-GitHub: @Aditya1404Sal
+Name: Aditya Salunkhe  
+GitHub: @Aditya1404Sal  
 Organization: Self
 
-Name: Márk Kővári
-GitHub: @markkovari
+Name: Márk Kővári  
+GitHub: @markkovari  
 Organization: commercetools
 
-Name: Luke Jones
-GitHub: @LUK3ARK
+Name: Luke Jones  
+GitHub: @LUK3ARK  
 Organization: Lattica
 
 ## Emeritus Maintainers
