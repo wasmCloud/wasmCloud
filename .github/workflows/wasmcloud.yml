@@ -214,17 +214,14 @@ jobs:
             test-bin: |
               nix profile install --fallback --inputs-from . 'nixpkgs-unstable#qemu'
               qemu-aarch64 ./result/bin/wasmcloud --version
-            test-oci: docker load < ./result
 
           - target: aarch64-apple-darwin
             test-bin: |
               file ./result/bin/wasmcloud
-            test-oci: docker load < ./result
 
           - target: aarch64-linux-android
             test-bin: |
               file ./result/bin/wasmcloud
-            test-oci: docker load < ./result
 
           - target: riscv64gc-unknown-linux-gnu-fhs
             test-bin: |
@@ -234,20 +231,15 @@ jobs:
           - target: x86_64-apple-darwin
             test-bin: |
               file ./result/bin/wasmcloud
-            test-oci: docker load < ./result
 
           - target: x86_64-pc-windows-gnu
             test-bin: |
               nix profile install --fallback --inputs-from . 'nixpkgs-unstable#wine64'
               wine64 ./result/bin/wasmcloud.exe --version
-            test-oci: docker load < ./result
 
           - target: x86_64-unknown-linux-musl
             test-bin: |
               ./result/bin/wasmcloud --version
-            test-oci: |
-              docker load < ./result
-              docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-x86_64-unknown-linux-musl-oci.imageTag) wasmcloud --version
 
     name: wasmcloud-${{ matrix.config.target }}
     runs-on: ubuntu-24.04
@@ -262,12 +254,6 @@ jobs:
         with:
           package: wasmcloud-${{ matrix.config.target }}
       - run: ${{ matrix.config.test-bin }}
-      - uses: ./.github/actions/build-nix
-        if: ${{ !endsWith(matrix.config.target, 'fhs') }}
-        with:
-          package: wasmcloud-${{ matrix.config.target }}-oci
-      - run: ${{ matrix.config.test-oci }}
-        if: ${{ !endsWith(matrix.config.target, 'fhs') }}
 
   build-provider-bin:
     needs: [meta]
@@ -461,20 +447,6 @@ jobs:
           name: wasmcloud-aarch64-unknown-linux-musl
       - run: chmod +x ./bin/wasmcloud
       - run: ./bin/wasmcloud --version
-
-  test-wasmcloud-linux-aarch64-oci:
-    runs-on: ubuntu-24.04-arm
-    needs: build-wasmcloud-bin
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: ./.github/actions/install-nix
-        with:
-          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: wasmcloud-aarch64-unknown-linux-musl-oci
-      - run: docker load < ./wasmcloud-aarch64-unknown-linux-musl-oci
-      - run: docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-aarch64-unknown-linux-musl-oci.imageTag) wasmcloud --version
 
   test-wasmcloud-linux-x86_64:
     runs-on: ubuntu-24.04
@@ -737,23 +709,6 @@ jobs:
       CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
       DOCKERHUB_PUSH_USER: ${{ secrets.DOCKERHUB_PUSH_USER }}
       DOCKERHUB_PUSH_PASSWORD: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
-  oci-wasmcloud:
-    needs:
-      - build-wasmcloud-bin
-      - test-wasmcloud-linux-aarch64
-      - test-wasmcloud-linux-aarch64-oci
-      - test-wasmcloud-linux-x86_64
-    uses: ./.github/workflows/oci.yml
-    permissions:
-      contents: read
-      packages: write
-    with:
-      bin: wasmcloud
-      prefix: ''
-    secrets:
-      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      DOCKERHUB_PUSH_USER: ${{ secrets.DOCKERHUB_PUSH_USER }}
-      DOCKERHUB_PUSH_PASSWORD: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
 
   release-wasmcloud:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -763,9 +718,7 @@ jobs:
       - build-wasmcloud-lipo
       - cargo
       - cargo-nextest
-      - oci-wasmcloud
       - test-wasmcloud-linux-aarch64
-      - test-wasmcloud-linux-aarch64-oci
       - test-wasmcloud-linux-x86_64
       - test-wasmcloud-macos-aarch64
       - test-wasmcloud-macos-x86_64
@@ -1094,7 +1047,6 @@ jobs:
       - providers
       - deploy-doc
       - oci-wash
-      - oci-wasmcloud
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -1122,7 +1074,6 @@ jobs:
           echo 'needs.providers.result: ${{ needs.providers.result }}'
           echo 'needs.deploy-doc.result: ${{ needs.deploy-doc.result }}'
           echo 'needs.oci-wash.result: ${{ needs.oci-wash.result }}'
-          echo 'needs.oci-wasmcloud.result: ${{ needs.oci-wasmcloud.result }}'
       - name: Verify jobs
         # All jobs must succeed or be skipped.
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')

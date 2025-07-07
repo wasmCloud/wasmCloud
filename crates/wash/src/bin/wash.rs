@@ -7,6 +7,7 @@ use anyhow::{bail, Context};
 use clap::{self, Arg, ArgMatches, Command, FromArgMatches, Parser, Subcommand};
 use console::style;
 use crossterm::style::Stylize;
+use etcetera::AppStrategy;
 use semver::Version;
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
@@ -23,6 +24,7 @@ use wash::lib::cli::start::StartCommand;
 use wash::lib::cli::stop::StopCommand;
 use wash::lib::cli::update::UpdateCommand;
 use wash::lib::cli::{CommandOutput, OutputKind};
+use wash::lib::config::WASH_DIRECTORIES;
 use wash::lib::drain::Drain as DrainSelection;
 use wash::lib::generate::emoji;
 use wash::lib::plugin::subcommand::{DirMapping, SubcommandRunner};
@@ -49,7 +51,6 @@ use wash::cli::plugin::{self, PluginCommand};
 use wash::cli::secrets::{self, SecretsCliCommand};
 use wash::cli::style::WASH_CLI_STYLE;
 use wash::cli::ui::{self, UiCommand};
-use wash::cli::util::ensure_plugin_dir;
 
 #[derive(Clone)]
 struct HelpTopic {
@@ -491,6 +492,17 @@ async fn main() {
         }
     }
 
+    let old_config_dir = WASH_DIRECTORIES.home_dir().join(".wash");
+    if tokio::fs::try_exists(&old_config_dir)
+        .await
+        .unwrap_or(false)
+    {
+        eprintln!(
+            "Old configuration directory '{}' found, consider migrating to new configuration structure.",
+            old_config_dir.display(),
+        );
+    }
+
     let output_kind = cli.output;
 
     // Implements clap_markdown for markdown generation of command line documentation. Most straightforward way to invoke is probably `wash app get --help-markdown > help.md`
@@ -745,7 +757,7 @@ fn experimental_error_message(command: &str) -> anyhow::Result<CommandOutput> {
 async fn load_plugins() -> Option<(SubcommandRunner, PathBuf)> {
     // We need to use env vars here because the plugin loading needs to be initialized before
     // the CLI is parsed
-    let plugin_dir = match ensure_plugin_dir(std::env::var("WASH_PLUGIN_DIR").ok()).await {
+    let plugin_dir = match WASH_DIRECTORIES.create_plugins_dir() {
         Ok(dir) => dir,
         Err(e) => {
             tracing::error!(err = ?e, "Could not load wash plugin directory");
