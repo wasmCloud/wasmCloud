@@ -55,10 +55,10 @@ impl NatsPolicyManager {
         let (policy_changes_abort, policy_changes_abort_reg) = AbortHandle::new_pair();
 
         let decision_cache = Cache::builder()
-        .with_lazy_expiration(true)
-        .with_purge_cycles(1000)
-        .with_ttl(decision_cache_ttl.unwrap_or(Duration::from_secs(300)))
-        .build();
+            .with_lazy_expiration(true)
+            .with_purge_cycles(1000)
+            .with_ttl(decision_cache_ttl.unwrap_or(Duration::from_secs(300)))
+            .build();
 
         let manager = NatsPolicyManager {
             nats: nats.clone(),
@@ -138,7 +138,8 @@ impl NatsPolicyManager {
             .context("failed to deserialize policy response")?;
 
         self.decision_cache
-            .insert(cache_key.clone(), decision.clone()).await; // cache policy decision
+            .insert(cache_key.clone(), decision.clone())
+            .await; // cache policy decision
         self.request_to_key
             .write()
             .await
@@ -160,14 +161,16 @@ impl NatsPolicyManager {
         let request_to_key = self.request_to_key.read().await;
 
         if let Some(key) = request_to_key.get(&request_id) {
-            self.decision_cache.insert(
-                key.clone(),
-                Response {
-                    request_id: request_id.clone(),
-                    permitted,
-                    message,
-                },
-            ).await;
+            self.decision_cache
+                .insert(
+                    key.clone(),
+                    Response {
+                        request_id: request_id.clone(),
+                        permitted,
+                        message,
+                    },
+                )
+                .await;
         } else {
             warn!(
                 request_id,

@@ -581,7 +581,6 @@ async fn main() -> anyhow::Result<()> {
                 args.policy_timeout_ms,
                 args.policy_changes_topic.clone(),
                 args.policy_cache_ttl,
-
             )
             .await?
     } else {
