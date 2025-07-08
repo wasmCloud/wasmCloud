@@ -1,0 +1,50 @@
+name: example-docs
+
+on:
+  workflow_call:
+    inputs:
+      include:
+        description: Directory to scan for markdown files. Relative to the repository root.
+        required: false
+        type: string
+      base_directory:
+        description: Base directory which links must not reach out of. Relative to the repository root.
+        required: false
+        type: string
+      ignore_paths:
+        description: Comma-separated list of paths to ignore during the scan. Relative to the repository root.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-docs:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      
+      - id: scan-links
+        uses: ./.github/actions/scan-links
+        with:
+          include: ${{ inputs.include }}
+          base_directory: ${{ inputs.base_directory }}
+          ignore_paths: ${{ inputs.ignore_paths || '' }}
+
+      - name: Report Issues
+        if: ${{ steps.scan-links.outputs.issues != '[]' }}
+        run: |
+          echo "Found issues in scanned links:"
+          ISSUES='${{ steps.scan-links.outputs.issues }}'
+          OUTPUT=$(jq 'map("::error file=\(.file),line=\(.line),col=\(.column)::\(.issue)") | .[]' -r <<< "$ISSUES")
+          echo "$OUTPUT"
+          exit 1
