@@ -8,10 +8,9 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - .github/workflows/examples-providers.yml
+      - .github/workflows/example-providers.yml
       - crates/wash/**
       - examples/rust/providers/**
-      - examples/golang/providers/**
 
 permissions:
   contents: read
@@ -24,6 +23,14 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  check-docs:
+    name: Check docs
+    uses: ./.github/workflows/example-docs.yml
+    with:
+      base_directory: examples/rust
+      include: providers
+      ignore_paths: examples/rust/providers/custom-template
+
   # build/cache wash-cli so following steps can use the cached version
   prepare-wash-cache:
     runs-on: ubuntu-22.04
