@@ -14,4 +14,4 @@ crate-type = ["cdylib"]
 [dependencies]
 ferris-says = "0.3.1"
 humantime = "2.1"
-wit-bindgen = "0.32"
+wit-bindgen = "0.43"
