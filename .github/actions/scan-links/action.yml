@@ -1,0 +1,22 @@
+name: 'Scan Links'
+
+description: 'Scans markdown files for relative links extending outside the folder.'
+
+inputs:
+  include:
+    description: 'Directory to scan for markdown files. Relative to the repository root.'
+    required: false
+  base_directory:
+    description: 'Base directory which links must not reach out of. Relative to the repository root.'
+    required: false
+  ignore_paths:
+    description: 'Comma-separated list of paths to ignore during the scan. Relative to the repository root.'
+    required: false
+
+runs:
+  using: 'node20'
+  main: 'index.js'
+
+outputs:
+  issues:
+    description: 'JSON array of issues found during the scan. Each issue will be an object with the following properties: file, line, column, message.'

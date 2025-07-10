@@ -51,13 +51,13 @@ wash app get
 wash get inventory
 ```
 
-For provider configuration options, see the [blobstore-nats provider documentation](../../provider-blobstore-nats/README.md).
+For provider configuration options, see the [blobstore-nats provider documentation](https://github.com/wasmCloud/wasmCloud/tree/main/crates/provider-blobstore-nats#readme).
 
 ### With Filesystem Blobstore Provider
 
 The filesystem provider stores blobs in your local filesystem. To use it make sure it's added to the desired application manifest file. other than that, the steps are the same as the NATS provider.
 
-For provider configuration options, see the [blobstore-fs provider documentation](../../provider-blobstore-fs/README.md).
+For provider configuration options, see the [blobstore-fs provider documentation](https://github.com/wasmCloud/wasmCloud/tree/main/crates/provider-blobstore-nats#readme).
 
 #### Blobstore and Filesystem Storage
 
