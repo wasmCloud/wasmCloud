@@ -255,7 +255,7 @@ where
         let host_resources = Arc::from(host_resources);
 
         if !guest_resources.is_empty() {
-            warn!("exported component resources are not supported in wasmCloud runtime and will be ignored, use a provider instead to enable this functionality");
+            debug!("guest resources present, must be fulfilled by the linker");
         }
 
         linker_fn(&mut linker, &component)?;
@@ -411,7 +411,7 @@ where
         let host_resources = Arc::from(host_resources);
 
         if !guest_resources.is_empty() {
-            warn!("exported component resources are not supported in wasmCloud runtime and will be ignored, use a provider instead to enable this functionality");
+            debug!("guest resources present, must be fulfilled by the linker");
         }
 
         let instance_pre = linker
