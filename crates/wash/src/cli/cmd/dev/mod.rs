@@ -18,6 +18,7 @@ use crate::lib::parser::load_config;
 use tracing::trace;
 
 use wasmcloud_control_interface::Client;
+use crate::cli::ui::{self, UiCommand};
 
 use crate::cmd::up::{
     nats_client_from_wasmcloud_opts, remove_wadm_pidfile, NatsOpts, WadmOpts, WasmcloudOpts,
@@ -130,6 +131,10 @@ pub struct DevCommand {
     /// (useful for airgapped or disconnected environments)
     #[clap(long = "skip-fetch")]
     pub skip_wit_fetch: bool,
+
+    /// Serve the washboard UI alongside the application
+    #[clap(long = "dashboard", alias = "ui", env = "WASH_DEV_DASHBOARD", default_value = "false")]
+    pub dashboard: bool,
 }
 
 /// Handle `wash dev`
@@ -255,6 +260,7 @@ pub async fn handle_command(
         skip_fetch: cmd.skip_wit_fetch,
         output_kind,
     };
+    let mut ui_handle = None;
 
     // Wait for host to come up
     if let Err(_e) = is_host_up(
@@ -279,6 +285,7 @@ pub async fn handle_command(
             wasmcloud_child,
             wadm_child,
             nats_child,
+            ui_handle,
             cmd.leave_host_running,
         )
         .await
@@ -290,6 +297,19 @@ pub async fn handle_command(
         }
 
         bail!("failed to initialize dev session, host did not start.");
+    }
+
+    if cmd.dashboard {
+        let port = std::env::var("WASMCLOUD_WASH_UI_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or_else(|| crate::lib::common::DEFAULT_WASH_UI_PORT.parse().unwrap());
+        let ui_cmd = UiCommand { port, version: None };
+        ui_handle = Some(tokio::spawn(async move {
+            if let Err(e) = ui::handle_ui(ui_cmd, crate::lib::cli::OutputKind::Text).await {
+                eprintln!("{} Failed to start washboard: {e}", emoji::WARN);
+            }
+        }));
     }
 
     // Set up a oneshot channel to perform graceful shutdown, handle Ctrl + c w/ tokio
@@ -389,7 +409,7 @@ pub async fn handle_command(
                 pause_watch.store(true, Ordering::SeqCst);
                 eprintln!("\n{} Received Ctrl + c, stopping devloop...", emoji::STOP);
 
-                stop_dev_session(run_loop_state, &ctl_client, wasmcloud_child, wadm_child, nats_child, cmd.leave_host_running).await?;
+                stop_dev_session(run_loop_state, &ctl_client, wasmcloud_child, wadm_child, nats_child, ui_handle, cmd.leave_host_running).await?;
 
                 break Ok(CommandOutput::from_key_and_text(
                     "result",
@@ -409,6 +429,7 @@ async fn stop_dev_session(
     wasmcloud_child: Option<tokio::process::Child>,
     wadm_child: Option<tokio::process::Child>,
     nats_child: Option<tokio::process::Child>,
+    ui_handle: Option<tokio::task::JoinHandle<()>>,
     leave_host_running: bool,
 ) -> Result<()> {
     // Update the sessions file with the fact that this session stopped
@@ -498,6 +519,12 @@ async fn stop_dev_session(
             eprintln!("{} Stopping NATS...", emoji::HOURGLASS_DRAINING);
             nats.kill().await?;
         }
+    }
+
+    if let Some(handle) = ui_handle {
+        eprintln!("{} Stopping washboard...", emoji::HOURGLASS_DRAINING);
+        handle.abort();
+        let _ = handle.await;
     }
 
     Ok(())
