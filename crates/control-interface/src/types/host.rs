@@ -246,7 +246,7 @@ pub struct HostInventory {
 }
 
 impl HostInventory {
-    /// Get information about providers in the inventory
+    /// Get information about components in the inventory
     pub fn components(&self) -> &Vec<ComponentDescription> {
         self.components.as_ref()
     }
