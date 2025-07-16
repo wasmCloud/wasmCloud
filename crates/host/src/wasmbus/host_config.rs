@@ -85,6 +85,8 @@ pub struct PolicyService {
     pub policy_changes_topic: Option<String>,
     /// The timeout for policy requests
     pub policy_timeout_ms: Option<Duration>,
+    /// Policy Response Cache TTL in seconds
+    pub policy_cache_ttl: Option<Duration>,
 }
 
 impl Default for Host {
