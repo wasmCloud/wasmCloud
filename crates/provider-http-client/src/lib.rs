@@ -646,7 +646,9 @@ mod tests {
 
     use std::collections::HashMap;
 
-    use anyhow::ensure;
+    use anyhow::{ensure, Result};
+    use bytes::Bytes;
+    use http::Request;
     use tokio::net::TcpListener;
     use tokio::try_join;
     use tracing::info;
@@ -948,6 +950,21 @@ mod tests {
                 Ok(())
             }
         )?;
+    }
+
+    #[tokio::test]
+    async fn test_client() -> Result<()> {
+        let client = HttpClientProvider::new(&HashMap::new(), DEFAULT_IDLE_TIMEOUT)
+            .await
+            .unwrap();
+        let request = Request::builder()
+            .method("POST")
+            .uri("https://api.github.com/")
+            .body(HttpBody {
+                body: Box::pin(futures::stream::once(async { Bytes::new() })),
+                trailers: Box::pin(async { Some(vec![]) }),
+            })?;
+        let _ = client.handle(None, request, None).await??;
         Ok(())
     }
 }
