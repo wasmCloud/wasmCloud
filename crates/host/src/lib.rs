@@ -70,7 +70,7 @@ impl AsRef<str> for ResourceRef<'_> {
         match self {
             // Resource ref must have originated from a URL, which can only be constructed from a
             // valid string
-            ResourceRef::File(url, _) => &url,
+            ResourceRef::File(url, _) => url,
             ResourceRef::Oci(s) => s,
             ResourceRef::Builtin(s) => s,
         }
