@@ -86,7 +86,7 @@ impl<'a> TryFrom<&'a str> for ResourceRef<'a> {
                 match url.scheme() {
                     "file" => url
                         .to_file_path()
-                        .map(|path| Self::File(path))
+                        .map(Self::File)
                         .map_err(|()| anyhow!("failed to convert `{url}` to a file path")),
                     "oci" => {
                         // Note: oci is not a scheme, but using this as a prefix takes out the guesswork
