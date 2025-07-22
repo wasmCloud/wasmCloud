@@ -197,8 +197,11 @@ pub async fn wait_for_provider_start_event(
         match cloud_event.event_type.as_str() {
             "com.wasmcloud.lattice.provider_started" => {
                 let image_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
+                let stripped_provider_ref = provider_ref
+                    .strip_prefix("file://")
+                    .unwrap_or(&provider_ref);
 
-                if image_ref == provider_ref {
+                if image_ref == stripped_provider_ref {
                     let provider_id = get_string_data_from_json(&cloud_event.data, "provider_id")?;
 
                     return Ok(EventCheckOutcome::Success(ProviderStartedInfo {
