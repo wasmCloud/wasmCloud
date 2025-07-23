@@ -8535,7 +8535,7 @@ dependencies = [
  "which",
  "wit-bindgen-wrpc",
  "wit-component 0.224.1",
- "wit-parser 0.224.1",
+ "wit-parser 0.230.0",
  "wrpc-interface-http",
  "wrpc-transport",
  "wrpc-transport-nats",
