@@ -289,6 +289,7 @@ impl Client {
     /// * `allow_update` - Whether to perform allow updates to the component (triggering a separate update)
     ///
     #[instrument(level = "debug", skip_all)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn scale_component(
         &self,
         host_id: &str,
