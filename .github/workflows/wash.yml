@@ -67,10 +67,10 @@ jobs:
         with:
           shared-key: '${{ matrix.os }}-shared-cache'
       - name: Install nextest
-        uses: taiki-e/install-action@d188da0a65bc6c80011567688127bddc8be0ca24 # v2.56.21
+        uses: taiki-e/install-action@7fbb30f035445d55e5f819679e8e16009832db89 # v2.56.24
         with:
           tool: nextest,wit-bindgen-cli
-      - uses: taiki-e/install-action@d188da0a65bc6c80011567688127bddc8be0ca24 # v2.56.21
+      - uses: taiki-e/install-action@7fbb30f035445d55e5f819679e8e16009832db89 # v2.56.24
         with:
           tool: wasm-tools@1.225.0 # TODO: update once wit-bindgen-go is fixed
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
@@ -118,10 +118,10 @@ jobs:
         with:
           cli-args: '-f ./crates/wash/tools/docker-compose.yml up --detach'
       - name: Install nextest
-        uses: taiki-e/install-action@d188da0a65bc6c80011567688127bddc8be0ca24 # v2.56.21
+        uses: taiki-e/install-action@7fbb30f035445d55e5f819679e8e16009832db89 # v2.56.24
         with:
           tool: nextest,wit-bindgen-cli
-      - uses: taiki-e/install-action@d188da0a65bc6c80011567688127bddc8be0ca24 # v2.56.21
+      - uses: taiki-e/install-action@7fbb30f035445d55e5f819679e8e16009832db89 # v2.56.24
         with:
           tool: wasm-tools@1.225.0 # TODO: update once wit-bindgen-go is fixed
       - name: Run integration tests
