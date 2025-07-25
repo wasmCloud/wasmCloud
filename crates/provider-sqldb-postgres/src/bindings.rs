@@ -1125,7 +1125,7 @@ impl FromSql<'_> for PgValue {
             )),
 
             // All other types are unsupported
-            t => Err(format!("unsupported type [{}], consider using a cast like 'value'::string or 'value'::jsonb", t).into()),
+            t => Err(format!("unsupported type [{t}], consider using a cast like 'value'::string or 'value'::jsonb").into()),
         }
     }
 

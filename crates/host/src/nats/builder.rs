@@ -74,10 +74,10 @@ impl NatsHostBuilder {
         } else {
             async_nats::jetstream::new(ctl_nats.clone())
         };
-        let bucket = format!("LATTICEDATA_{}", lattice);
+        let bucket = format!("LATTICEDATA_{lattice}");
         let data_store = create_bucket(&ctl_jetstream, &bucket).await?;
 
-        let config_bucket = format!("CONFIGDATA_{}", lattice);
+        let config_bucket = format!("CONFIGDATA_{lattice}");
         let config_data = create_bucket(&ctl_jetstream, &config_bucket).await?;
 
         let supplemental_config = if config_service_enabled {

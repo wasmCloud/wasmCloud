@@ -851,7 +851,7 @@ mod tests {
         let creds = format!(
             r#"
 -----BEGIN NATS USER JWT-----
-{}
+{expected_jwt}
 ------END NATS USER JWT------
 
 ************************* IMPORTANT *************************
@@ -859,12 +859,11 @@ NKEY Seed printed below can be used to sign and prove identity.
 NKEYs are sensitive and should be treated as secrets.
 
 -----BEGIN USER NKEY SEED-----
-{}
+{expected_seed}
 ------END USER NKEY SEED------
 
 *************************************************************
-"#,
-            expected_jwt, expected_seed
+"#
         );
 
         let (jwt, kp) = parse_jwt_and_key_from_creds(&creds)

@@ -25,7 +25,7 @@ impl KvWatcherDemoGuest for KvWatcher {
         let req = outgoing_handler::OutgoingRequest::new(Fields::new());
         req.set_scheme(Some(&Scheme::Http)).unwrap();
         req.set_authority(Some("localhost:3001")).unwrap();
-        req.set_path_with_query(Some(format!("/alert?{}={}", key, val).as_ref()))
+        req.set_path_with_query(Some(format!("/alert?{key}={val}").as_ref()))
             .unwrap();
 
         match outgoing_handler::handle(req, None) {
@@ -45,7 +45,7 @@ impl KvWatcherDemoGuest for KvWatcher {
                         log(
                             Level::Error,
                             "kv-watch-export",
-                            format!("HTTP request failed with code {}", code).as_str(),
+                            format!("HTTP request failed with code {code}").as_str(),
                         );
                     }
                     _ => {
@@ -61,7 +61,7 @@ impl KvWatcherDemoGuest for KvWatcher {
                 log(
                     Level::Error,
                     "kv-watch-export",
-                    format!("Failed to send HTTP request: {:?}", e).as_str(),
+                    format!("Failed to send HTTP request: {e:?}").as_str(),
                 );
             }
         }
@@ -72,17 +72,13 @@ impl KvWatcherDemoGuest for KvWatcher {
         log(
             Level::Info,
             "kv-watch-export",
-            format!(
-                "the value of key : {} was deleted in {:?} bucket",
-                &key, &bucket
-            )
-            .as_str(),
+            format!("the value of key : {key} was deleted in {bucket:?} bucket",).as_str(),
         );
 
         let req = outgoing_handler::OutgoingRequest::new(Fields::new());
         req.set_scheme(Some(&Scheme::Http)).unwrap();
         req.set_authority(Some("localhost:3001")).unwrap();
-        req.set_path_with_query(Some(format!("/alert?{}=nil", key).as_ref()))
+        req.set_path_with_query(Some(format!("/alert?{key}=nil").as_ref()))
             .unwrap();
 
         match outgoing_handler::handle(req, None) {
@@ -102,7 +98,7 @@ impl KvWatcherDemoGuest for KvWatcher {
                         log(
                             Level::Error,
                             "kv-watch-export",
-                            format!("HTTP request failed with code {}", code).as_str(),
+                            format!("HTTP request failed with code {code}").as_str(),
                         );
                     }
                     _ => {
@@ -118,7 +114,7 @@ impl KvWatcherDemoGuest for KvWatcher {
                 log(
                     Level::Error,
                     "kv-watch-export",
-                    format!("Failed to send HTTP request: {:?}", e).as_str(),
+                    format!("Failed to send HTTP request: {e:?}").as_str(),
                 );
             }
         }

@@ -221,7 +221,7 @@ async fn workload_identity_component_interface() -> anyhow::Result<()> {
     register_spiffe_workload(
         host_spiffe_id,
         component_spiffe_id,
-        format!("wasmcloud:component:{}", COMPONENT_ID).as_str(),
+        format!("wasmcloud:component:{COMPONENT_ID}").as_str(),
         &spire_server_socket_path,
     )
     .await

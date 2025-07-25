@@ -118,7 +118,7 @@ impl OtelConfig {
         // Set sensible defaults if nothing is provided
         match self.protocol {
             OtelProtocol::Grpc => "http://127.0.0.1:4317".to_string(),
-            OtelProtocol::Http => format!("http://127.0.0.1:4318{}", signal),
+            OtelProtocol::Http => format!("http://127.0.0.1:4318{signal}"),
         }
     }
 

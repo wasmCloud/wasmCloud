@@ -84,7 +84,7 @@ struct HelpTopics(Vec<HelpTopic>);
 impl Display for HelpTopics {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         for topic in &self.0 {
-            writeln!(f, "{}", topic)?;
+            writeln!(f, "{topic}")?;
         }
         Ok(())
     }
@@ -696,7 +696,7 @@ async fn run_plugin(
     let dir = match ensure_plugin_scratch_dir_exists(plugin_dir, id).await {
         Ok(dir) => dir,
         Err(e) => {
-            eprintln!("Error creating plugin scratch directory: {}", e);
+            eprintln!("Error creating plugin scratch directory: {e}");
             std::process::exit(1);
         }
     };
