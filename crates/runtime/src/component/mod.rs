@@ -6,7 +6,6 @@ use core::time::Duration;
 
 use anyhow::Result;
 use anyhow::{ensure, Context as _};
-use async_trait::async_trait;
 use futures::{Stream, TryStreamExt as _};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -21,7 +20,7 @@ use wasi_preview1_component_adapter_provider::{
     WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME, WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
 };
 use wasmtime::component::{types, Linker, ResourceTable, ResourceTableError, ResourceType};
-use wasmtime::{InstanceAllocationStrategy, ResourceLimiterAsync};
+use wasmtime::InstanceAllocationStrategy;
 use wasmtime_wasi::{IoView, WasiCtx, WasiCtxBuilder, WasiView};
 use wasmtime_wasi_http::WasiHttpCtx;
 use wrpc_runtime_wasmtime::{
@@ -265,14 +264,12 @@ fn new_store<H: Handler>(
     engine: &wasmtime::Engine,
     handler: H,
     max_execution_time: Duration,
-    memory_limit: Option<usize>,
 ) -> wasmtime::Store<Ctx<H>> {
     let table = ResourceTable::new();
     let wasi = WasiCtxBuilder::new()
         .args(&["main.wasm"]) // TODO: Configure argv[0]
         .inherit_stderr()
         .build();
-    let store_limits = StoreLimitsAsync::new(memory_limit, None);
 
     let mut store = wasmtime::Store::new(
         engine,
@@ -284,23 +281,9 @@ fn new_store<H: Handler>(
             shared_resources: SharedResourceTable::default(),
             timeout: max_execution_time,
             parent_context: None,
-            store_limits,
         },
     );
     store.set_epoch_deadline(max_execution_time.as_secs());
-
-    // Set memory and table limits if provided
-    if memory_limit.is_some() {
-        store.limiter_async(|ctx| &mut ctx.store_limits);
-
-        if let Some(limit) = memory_limit {
-            debug!(
-                memory_limit_bytes = limit,
-                memory_limit_human = format!("{:.2} MB", limit as u64 / 1_048_576),
-                "Setting component memory limit"
-            );
-        }
-    }
     store
 }
 
@@ -773,19 +756,14 @@ where
                 (name, types::ComponentItem::ComponentFunc(ty)) => {
                     let engine = self.engine.clone();
                     let handler = handler.clone();
-                    let max_memory_limit = Some(self.max_memory_limit);
                     let pre = self.instance_pre.clone();
                     debug!(?name, "serving root function");
                     let func = srv
                         .serve_function(
                             move || {
                                 let span = info_span!("call_instance_function");
-                                let mut store = new_store(
-                                    &engine,
-                                    handler.clone(),
-                                    max_execution_time,
-                                    max_memory_limit,
-                                );
+                                let mut store =
+                                    new_store(&engine, handler.clone(), max_execution_time);
                                 store.data_mut().parent_context = Some(span.context());
                                 store
                             },
@@ -840,7 +818,6 @@ where
                                 let engine = self.engine.clone();
                                 let handler = handler.clone();
                                 let pre = self.instance_pre.clone();
-                                let max_memory_limit = Some(self.max_memory_limit);
                                 debug!(?instance_name, ?name, "serving instance function");
                                 let func = srv
                                     .serve_function(
@@ -850,7 +827,6 @@ where
                                                 &engine,
                                                 handler.clone(),
                                                 max_execution_time,
-                                                max_memory_limit,
                                             );
                                             store.data_mut().parent_context = Some(span.context());
                                             store
@@ -982,7 +958,6 @@ where
     shared_resources: SharedResourceTable,
     timeout: Duration,
     parent_context: Option<opentelemetry::Context>,
-    store_limits: StoreLimitsAsync,
 }
 
 impl<H: Handler> IoView for Ctx<H> {
@@ -1028,87 +1003,5 @@ impl<H: Handler> Ctx<H> {
         if let Some(context) = self.parent_context.as_ref() {
             Span::current().set_parent(context.clone());
         }
-    }
-}
-
-/// Async implementation of wasmtime's `StoreLimits`
-/// Used to limit the memory use and table size of each Instance
-#[derive(Default, Clone)]
-pub struct StoreLimitsAsync {
-    max_memory_size: Option<usize>,
-    max_table_elements: Option<usize>,
-    memory_consumed: u32,
-}
-
-#[async_trait]
-impl ResourceLimiterAsync for StoreLimitsAsync {
-    async fn memory_growing(
-        &mut self,
-        current: usize,
-        desired: usize,
-        _maximum: Option<usize>,
-    ) -> Result<bool> {
-        let can_grow = if let Some(limit) = self.max_memory_size {
-            desired <= limit
-        } else {
-            true
-        };
-
-        if can_grow {
-            // Calculate change and apply safely
-            let delta = if desired >= current {
-                desired - current
-            } else {
-                current - desired
-            };
-
-            match u32::try_from(delta) {
-                Ok(delta_u32) => {
-                    if desired >= current {
-                        self.memory_consumed = self.memory_consumed.saturating_add(delta_u32);
-                    } else {
-                        self.memory_consumed = self.memory_consumed.saturating_sub(delta_u32);
-                    }
-                }
-                Err(_) => {
-                    // Delta is too large to safely fit in u32, deny growth
-                    return Ok(false);
-                }
-            }
-        }
-
-        Ok(can_grow)
-    }
-
-    async fn table_growing(
-        &mut self,
-        _current: usize,
-        desired: usize,
-        _maximum: Option<usize>,
-    ) -> Result<bool> {
-        let can_grow = if let Some(limit) = self.max_table_elements {
-            desired <= limit
-        } else {
-            true
-        };
-        Ok(can_grow)
-    }
-}
-/// Async implementation of wasmtime's [`StoreLimits`](https://github.com/bytecodealliance/wasmtime/blob/main/crates/wasmtime/src/limits.rs)
-/// Used to limit the memory use and table size of each Instance
-impl StoreLimitsAsync {
-    #[must_use]
-    /// TODO
-    pub fn new(max_memory_size: Option<usize>, max_table_elements: Option<usize>) -> Self {
-        Self {
-            max_memory_size,
-            max_table_elements,
-            memory_consumed: 0,
-        }
-    }
-    #[must_use]
-    /// How much memory has been consumed in bytes
-    pub fn memory_consumed(&self) -> u32 {
-        self.memory_consumed
     }
 }

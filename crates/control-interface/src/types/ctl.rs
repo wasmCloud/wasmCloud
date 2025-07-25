@@ -100,7 +100,7 @@ pub struct ScaleComponentCommand {
     #[serde(default, alias = "count", rename = "count")]
     pub(crate) max_instances: u32,
     /// The Component Limits
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) component_limits: Option<HashMap<String, String>>,
     /// Host ID on which to scale this component
     #[serde(default)]
