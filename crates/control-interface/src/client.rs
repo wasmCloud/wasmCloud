@@ -296,7 +296,6 @@ impl Client {
         component_ref: &str,
         component_id: &str,
         max_instances: u32,
-        component_limits: Option<HashMap<String, String>>,
         annotations: Option<BTreeMap<String, String>>,
         config: Vec<String>,
     ) -> Result<CtlResponse<()>> {
@@ -309,7 +308,6 @@ impl Client {
         debug!("scale_component:request {}", &subject);
         let bytes = json_serialize(ScaleComponentCommand {
             max_instances,
-            component_limits,
             component_ref: IdentifierKind::is_component_ref(component_ref)?,
             component_id: IdentifierKind::is_component_id(component_id)?,
             host_id,
@@ -960,7 +958,6 @@ mod tests {
                 component_ref,
                 component_id,
                 1,
-                None,
                 None,
                 Vec::with_capacity(0),
             )

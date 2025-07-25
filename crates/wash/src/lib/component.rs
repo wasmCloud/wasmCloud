@@ -78,7 +78,6 @@ pub async fn scale_component(
             component_ref,
             component_id,
             max_instances,
-            None,
             annotations.map(BTreeMap::from_iter),
             config,
         )
