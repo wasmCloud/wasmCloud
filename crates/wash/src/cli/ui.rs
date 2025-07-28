@@ -13,6 +13,8 @@ use async_compression::tokio::bufread::GzipDecoder;
 use clap::Parser;
 use semver::Version;
 use std::{io::Cursor, path::PathBuf};
+use std::time::Duration;
+use tokio::time::sleep;
 use tokio_tar::Archive;
 use tracing::debug;
 use warp::Filter;
@@ -70,12 +72,62 @@ pub async fn handle_ui(cmd: UiCommand, _output_kind: OutputKind) -> Result<()> {
         .allow_methods(vec!["GET", "POST"])
         .allow_headers(vec!["Content-Type"]);
 
-    eprintln!("washboard-ui@{washboard_version} running on http://localhost:{washboard_port}");
-    eprintln!("Hit CTRL-C to stop");
+    eprintln!("washboard-ui@{washboard_version} starting on http://localhost:{washboard_port}...");
 
-    warp::serve(static_files.with(cors))
-        .run(([127, 0, 0, 1], washboard_port))
-        .await;
+    // Start the server in a background task
+    let server_handle = tokio::spawn(async move {
+        warp::serve(static_files.with(cors))
+            .run(([127, 0, 0, 1], washboard_port))
+            .await;
+    });
+
+    // Health check: verify the server is responding
+    let health_check_url = format!("http://localhost:{washboard_port}");
+    let client = reqwest::Client::new();
+    let mut attempts = 0;
+    const MAX_ATTEMPTS: u32 = 10;
+    const RETRY_DELAY: Duration = Duration::from_millis(500);
+
+    while attempts < MAX_ATTEMPTS {
+        sleep(RETRY_DELAY).await;
+
+        match client.get(&health_check_url).send().await {
+            // status code 200 check
+            Ok(response) if response.status().is_success() => {
+                eprintln!(
+                    "washboard-ui@{washboard_version} running on http://localhost:{washboard_port}"
+                );
+                eprintln!("Hit CTRL-C to stop");
+                break;
+            }
+            // Non-200 status codes
+            Ok(response) => {
+                eprintln!(
+                    "UI Server responded with status: {}, retrying...",
+                    response.status()
+                );
+                if attempts > MAX_ATTEMPTS {
+                    eprintln!(
+                        "UI server failed to respond with 200 status after {MAX_ATTEMPTS} attempts"
+                    );
+                    return Err(anyhow::anyhow!("UI server health check failed"));
+                }
+            }
+            Err(e) => {
+                if attempts > MAX_ATTEMPTS {
+                    eprintln!(
+                        "Failed to connect to washboard UI after {MAX_ATTEMPTS} attempts: {e}"
+                    );
+                    return Err(anyhow::anyhow!("UI server health check failed"));
+                }
+            }
+        }
+        attempts += 1;
+    }
+
+    server_handle
+        .await
+        .map_err(|e| anyhow::anyhow!("Server task failed: {e}"))?;
 
     Ok(())
 }
