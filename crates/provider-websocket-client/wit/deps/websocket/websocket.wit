@@ -93,7 +93,7 @@ interface client {
         keepalive-interval-ms: option<u32>,
     }
 
-    /// WebSocket connection resource
+    /// A WebSocket client connection resource
     resource connection {
         /// Send a message through the WebSocket connection
         /// Returns an error if sending fails
@@ -119,6 +119,6 @@ interface client {
     }
 
     /// Connect to a WebSocket server with the given configuration.
-    /// Returns a connection resource if successful, or an error if connection fails.
+    /// Returns a new connection resource or an error if connection fails.
     connect: func(config: client-config) -> result<connection, websocket-error>;
 } 

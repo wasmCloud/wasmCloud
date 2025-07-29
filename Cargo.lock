@@ -1160,6 +1160,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bit-vec"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7616,6 +7625,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-tungstenite"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c83b561d025642014097b66e6c1bb422783339e0909e4429cde4749d1990bc38"
+dependencies = [
+ "futures-util",
+ "log",
+ "rustls 0.22.4",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-rustls 0.25.0",
+ "tungstenite",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
 name = "tokio-util"
 version = "0.7.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7952,6 +7977,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "tungstenite"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ef1a641ea34f399a848dea702823bbecfb4c486f911735368f1f137cb8257e1"
+dependencies = [
+ "byteorder 1.5.0",
+ "bytes",
+ "data-encoding",
+ "http 1.3.1",
+ "httparse",
+ "log",
+ "rand 0.8.5",
+ "rustls 0.22.4",
+ "rustls-pki-types",
+ "sha1",
+ "thiserror 1.0.69",
+ "url",
+ "utf-8",
+]
+
+[[package]]
 name = "twox-hash"
 version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8091,6 +8137,12 @@ name = "urlencoding"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
+
+[[package]]
+name = "utf-8"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
 
 [[package]]
 name = "utf16_iter"
@@ -8952,6 +9004,7 @@ dependencies = [
  "wasmcloud-provider-messaging-nats",
  "wasmcloud-provider-sqldb-postgres",
  "wasmcloud-provider-wadm",
+ "wasmcloud-provider-websocket-client",
  "wasmcloud-test-util",
  "wasmcloud-tracing",
  "wrpc-interface-http",
@@ -9386,6 +9439,27 @@ dependencies = [
  "wadm-client",
  "wadm-types",
  "wascap",
+ "wasmcloud-provider-sdk",
+ "wit-bindgen-wrpc",
+]
+
+[[package]]
+name = "wasmcloud-provider-websocket-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "bytes",
+ "futures",
+ "http 1.3.1",
+ "serde",
+ "tempfile",
+ "test-log",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "url",
+ "uuid 1.17.0",
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc",
 ]

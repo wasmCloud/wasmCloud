@@ -35,6 +35,7 @@ provider-messaging-kafka = ["dep:wasmcloud-provider-messaging-kafka"]
 provider-messaging-nats = ["dep:wasmcloud-provider-messaging-nats"]
 provider-sqldb-postgres = ["dep:wasmcloud-provider-sqldb-postgres"]
 provider-wadm = ["dep:wasmcloud-provider-wadm"]
+provider-websocket-client = ["dep:wasmcloud-provider-websocket-client"]
 
 wasmcloud = [
   "dep:clap",
@@ -62,6 +63,7 @@ default = [
     "provider-messaging-nats",
     "provider-sqldb-postgres",
     "provider-wadm",
+    "provider-websocket-client",
     "wasmcloud",
 ]
 
@@ -119,6 +121,10 @@ name = "sqldb-postgres-provider"
 required-features = ["provider-sqldb-postgres"]
 
 [[bin]]
+name = "websocket-client-provider"
+required-features = ["provider-websocket-client"]
+
+[[bin]]
 name = "wasmcloud"
 required-features = ["wasmcloud"]
 
@@ -129,6 +135,7 @@ lto = true
 
 [dependencies]
 wasmcloud-provider-wadm = { workspace = true, optional = true }
+wasmcloud-provider-websocket-client = { workspace = true, optional = true }
 anyhow = { workspace = true }
 clap = { workspace = true, features = [
   "color",
@@ -393,6 +400,7 @@ wasmcloud-provider-messaging-nats = { version = "^0.28.0", path = "./crates/prov
 wasmcloud-provider-sdk = { version = "^0.16.0", path = "./crates/provider-sdk", default-features = false }
 wasmcloud-provider-sqldb-postgres = { version = "*", path = "./crates/provider-sqldb-postgres", default-features = false }
 wasmcloud-provider-wadm = { version = "*", path = "./crates/provider-wadm", default-features = false }
+wasmcloud-provider-websocket-client = { version = "*", path = "./crates/provider-websocket-client", default-features = false }
 wasmcloud-runtime = { version = "^0.11.0", path = "./crates/runtime", default-features = false }
 wasmcloud-secrets-client = { version = "^0.8.0", path = "./crates/secrets-client", default-features = false }
 wasmcloud-secrets-types = { version = "^0.7.0", path = "./crates/secrets-types", default-features = false }
