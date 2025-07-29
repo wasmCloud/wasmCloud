@@ -4,7 +4,7 @@
 /// channels over a single TCP connection. This interface allows components to
 /// connect to WebSocket servers and exchange messages in real-time.
 
-package wasmcloud:websocket@0.1.0-draft;
+package wasmcloud:websocket@0.1.1-draft;
 
 /// Common types used by the WebSocket client interface
 interface types {
@@ -120,5 +120,5 @@ interface client {
 
     /// Connect to a WebSocket server with the given configuration.
     /// Returns a new connection resource or an error if connection fails.
-    connect: func(config: client-config) -> result<resource connection, websocket-error>;
+    connect: func(config: client-config) -> result<connection, websocket-error>;
 } 
