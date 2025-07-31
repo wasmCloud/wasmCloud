@@ -528,7 +528,6 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio::spawn;
     use tokio::try_join;
-    use tracing::info;
 
     use super::*;
     use wrpc_interface_http::HttpBody;
@@ -645,22 +644,26 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "http")]
     /// Tests the connection pool eviction by verifying that idle connections are removed after the timeout period
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pool_evict() -> anyhow::Result<()> {
+        eprintln!("Starting test_pool_evict");
         const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let addr = listener.local_addr()?;
+        eprintln!("Test server bound to {addr}");
 
         try_join!(
             async {
+                eprintln!("Server task starting, will accept {N} connections");
                 for i in 0..N {
-                    info!(i, "accepting stream...");
+                    eprintln!("[{}/{}] Waiting to accept connection...", i + 1, N);
                     let (stream, _) = listener
                         .accept()
                         .await
                         .with_context(|| format!("failed to accept connection {i}"))?;
-                    info!(i, "serving connection...");
+                    eprintln!("[{}/{}] Connection accepted, serving...", i + 1, N);
                     hyper::server::conn::http1::Builder::new()
                         .serve_connection(
                             TokioIo::new(stream),
@@ -672,41 +675,60 @@ mod tests {
                         )
                         .await
                         .with_context(|| format!("failed to serve connection {i}"))?;
+                    eprintln!("[{}/{}] Connection served and closed", i + 1, N);
                 }
+                eprintln!("Server task completed all {N} connections");
                 anyhow::Ok(())
             },
             async {
+                eprintln!("Client task starting");
                 let pool = ConnPool::<HttpBody>::default();
                 let now = Instant::now();
 
-                // Add some connections to the pool
-                let mut http_conns = pool.http.write().await;
-                let (sender, _) =
-                    http1::handshake(TokioIo::new(TcpStream::connect(addr).await?)).await?;
+                eprintln!(" Creating {N} connections to server at {addr}");
+                // Add multiple connections to the pool
+                {
+                    let mut http_conns = pool.http.write().await;
+                    let mut connections = VecDeque::new();
 
-                http_conns.insert(
-                    addr.to_string().into(),
-                    std::sync::Mutex::new(VecDeque::from([PooledConn {
-                        sender,
-                        abort: spawn(async {}).abort_handle(),
-                        last_seen: now
-                            .checked_sub(Duration::from_secs(10))
-                            .expect("time subtraction should not overflow"),
-                    }])),
-                );
+                    for i in 0..N {
+                        eprintln!("[{}/{}] Establishing handshake...", i + 1, N);
+                        let (sender, _) =
+                            http1::handshake(TokioIo::new(TcpStream::connect(addr).await?)).await?;
+                        eprintln!("[{}/{}] Handshake completed", i + 1, N);
 
+                        connections.push_back(PooledConn {
+                            sender,
+                            abort: spawn(async {}).abort_handle(),
+                            last_seen: now
+                                .checked_sub(Duration::from_secs(10))
+                                .expect("time subtraction should not overflow"),
+                        });
+                    }
+
+                    http_conns.insert(addr.to_string().into(), std::sync::Mutex::new(connections));
+                    eprintln!("All {N} connections added to pool");
+                } // Drop the write lock here
+
+                eprintln!("Sleeping for a bit to let connections age...");
+                tokio::time::sleep(Duration::from_millis(20)).await;
+
+                eprintln!("Starting eviction process...");
                 // Evict connections
                 pool.evict(IDLE_TIMEOUT).await;
+                eprintln!("Eviction completed");
 
+                eprintln!("Verifying connections were evicted...");
                 // Verify connections were evicted
                 let http_conns = pool.http.read().await;
-                let test_conns = http_conns
+                // The authority should be completely removed when all connections are evicted
+                let result = http_conns
                     .get(addr.to_string().into_boxed_str().as_ref())
-                    .expect("connection should exist")
-                    .lock()
-                    .expect("lock should succeed");
-                assert_eq!(test_conns.len(), 0);
+                    .is_none();
+                eprintln!("Eviction verification result: authority removed = {result}");
+                assert!(result);
 
+                eprintln!("Client task completed successfully");
                 Ok(())
             }
         )?;
