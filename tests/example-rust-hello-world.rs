@@ -60,6 +60,8 @@ async fn example_rust_http_hello_world() -> anyhow::Result<()> {
     let host_key = host.host_key();
     let host_id = host_key.public_key();
 
+    let _ = tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
     try_join!(
         async {
             assert_config_put(
