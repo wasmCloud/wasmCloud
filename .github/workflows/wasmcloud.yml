@@ -315,20 +315,7 @@ jobs:
         id: workspace
         if: ${{ needs.meta.outputs.workspace_deps_modified == 'true' }}
         run: |
-          builds='[
-            {"name":"blobstore-azure","target":"x86_64-unknown-linux-musl"},
-            {"name":"blobstore-fs","target":"x86_64-unknown-linux-musl"},
-            {"name":"blobstore-nats","target":"x86_64-unknown-linux-musl"},
-            {"name":"blobstore-s3","target":"x86_64-unknown-linux-musl"},
-            {"name":"keyvalue-nats","target":"x86_64-unknown-linux-musl"},
-            {"name":"keyvalue-redis","target":"x86_64-unknown-linux-musl"},
-            {"name":"keyvalue-vault","target":"x86_64-unknown-linux-musl"},
-            {"name":"http-client","target":"x86_64-unknown-linux-musl"},
-            {"name":"http-server","target":"x86_64-unknown-linux-musl"},
-            {"name":"messaging-kafka","target":"x86_64-unknown-linux-musl"},
-            {"name":"messaging-nats","target":"x86_64-unknown-linux-musl"},
-            {"name":"sqldb-postgres","target":"x86_64-unknown-linux-musl"}
-          ]'
+          builds='[{"name":"blobstore-azure","target":"x86_64-unknown-linux-musl"},{"name":"blobstore-fs","target":"x86_64-unknown-linux-musl"},{"name":"blobstore-nats","target":"x86_64-unknown-linux-musl"},{"name":"blobstore-s3","target":"x86_64-unknown-linux-musl"},{"name":"keyvalue-nats","target":"x86_64-unknown-linux-musl"},{"name":"keyvalue-redis","target":"x86_64-unknown-linux-musl"},{"name":"keyvalue-vault","target":"x86_64-unknown-linux-musl"},{"name":"http-client","target":"x86_64-unknown-linux-musl"},{"name":"http-server","target":"x86_64-unknown-linux-musl"},{"name":"messaging-kafka","target":"x86_64-unknown-linux-musl"},{"name":"messaging-nats","target":"x86_64-unknown-linux-musl"},{"name":"sqldb-postgres","target":"x86_64-unknown-linux-musl"}]'
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
 
       # Individual provider builds - non-Linux targets only (Linux covered by workspace builds + cargo test)
@@ -336,144 +323,84 @@ jobs:
         id: blobstore-azure
         if: ${{ needs.meta.outputs.provider_blobstore_azure_modified == 'true' || startswith(github.ref, 'refs/tags/provider-blobstore-azure') }}
         run: |
-          builds='[
-            {"name":"blobstore-azure","target":"aarch64-unknown-linux-musl"},
-            {"name":"blobstore-azure","target":"aarch64-apple-darwin"},
-            {"name":"blobstore-azure","target":"x86_64-apple-darwin"},
-            {"name":"blobstore-azure","target":"x86_64-pc-windows-gnu"}
-          ]'
+          builds='[{"name":"blobstore-azure","target":"aarch64-unknown-linux-musl"},{"name":"blobstore-azure","target":"aarch64-apple-darwin"},{"name":"blobstore-azure","target":"x86_64-apple-darwin"},{"name":"blobstore-azure","target":"x86_64-pc-windows-gnu"}]'
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
 
       - name: Add blobstore-fs builds
         id: blobstore-fs
         if: ${{ needs.meta.outputs.provider_blobstore_fs_modified == 'true' || startswith(github.ref, 'refs/tags/provider-blobstore-fs') }}
         run: |
-          builds='[
-            {"name":"blobstore-fs","target":"aarch64-unknown-linux-musl"},
-            {"name":"blobstore-fs","target":"aarch64-apple-darwin"},
-            {"name":"blobstore-fs","target":"x86_64-apple-darwin"},
-            {"name":"blobstore-fs","target":"x86_64-pc-windows-gnu"}
-          ]'
+          builds='[{"name":"blobstore-fs","target":"aarch64-unknown-linux-musl"},{"name":"blobstore-fs","target":"aarch64-apple-darwin"},{"name":"blobstore-fs","target":"x86_64-apple-darwin"},{"name":"blobstore-fs","target":"x86_64-pc-windows-gnu"}]'
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
 
       - name: Add blobstore-nats builds
         id: blobstore-nats
         if: ${{ needs.meta.outputs.provider_blobstore_nats_modified == 'true' || startswith(github.ref, 'refs/tags/provider-blobstore-nats') }}
         run: |
-          builds='[
-            {"name":"blobstore-nats","target":"aarch64-unknown-linux-musl"},
-            {"name":"blobstore-nats","target":"aarch64-apple-darwin"},
-            {"name":"blobstore-nats","target":"x86_64-apple-darwin"},
-            {"name":"blobstore-nats","target":"x86_64-pc-windows-gnu"}
-          ]'
+          builds='[{"name":"blobstore-nats","target":"aarch64-unknown-linux-musl"},{"name":"blobstore-nats","target":"aarch64-apple-darwin"},{"name":"blobstore-nats","target":"x86_64-apple-darwin"},{"name":"blobstore-nats","target":"x86_64-pc-windows-gnu"}]'
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
 
       - name: Add blobstore-s3 builds
         id: blobstore-s3
         if: ${{ needs.meta.outputs.provider_blobstore_s3_modified == 'true' || startswith(github.ref, 'refs/tags/provider-blobstore-s3') }}
         run: |
-          builds='[
-            {"name":"blobstore-s3","target":"aarch64-unknown-linux-musl"},
-            {"name":"blobstore-s3","target":"aarch64-apple-darwin"},
-            {"name":"blobstore-s3","target":"x86_64-apple-darwin"},
-            {"name":"blobstore-s3","target":"x86_64-pc-windows-gnu"}
-          ]'
+          builds='[{"name":"blobstore-s3","target":"aarch64-unknown-linux-musl"},{"name":"blobstore-s3","target":"aarch64-apple-darwin"},{"name":"blobstore-s3","target":"x86_64-apple-darwin"},{"name":"blobstore-s3","target":"x86_64-pc-windows-gnu"}]'
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
 
       - name: Add keyvalue-nats builds
         id: keyvalue-nats
         if: ${{ needs.meta.outputs.provider_keyvalue_nats_modified == 'true' || startswith(github.ref, 'refs/tags/provider-keyvalue-nats') }}
         run: |
-          builds='[
-            {"name":"keyvalue-nats","target":"aarch64-unknown-linux-musl"},
-            {"name":"keyvalue-nats","target":"aarch64-apple-darwin"},
-            {"name":"keyvalue-nats","target":"x86_64-apple-darwin"},
-            {"name":"keyvalue-nats","target":"x86_64-pc-windows-gnu"}
-          ]'
+          builds='[{"name":"keyvalue-nats","target":"aarch64-unknown-linux-musl"},{"name":"keyvalue-nats","target":"aarch64-apple-darwin"},{"name":"keyvalue-nats","target":"x86_64-apple-darwin"},{"name":"keyvalue-nats","target":"x86_64-pc-windows-gnu"}]'
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
 
       - name: Add keyvalue-redis builds
         id: keyvalue-redis
         if: ${{ needs.meta.outputs.provider_keyvalue_redis_modified == 'true' || startswith(github.ref, 'refs/tags/provider-keyvalue-redis') }}
         run: |
-          builds='[
-            {"name":"keyvalue-redis","target":"aarch64-unknown-linux-musl"},
-            {"name":"keyvalue-redis","target":"aarch64-apple-darwin"},
-            {"name":"keyvalue-redis","target":"x86_64-apple-darwin"},
-            {"name":"keyvalue-redis","target":"x86_64-pc-windows-gnu"}
-          ]'
+          builds='[{"name":"keyvalue-redis","target":"aarch64-unknown-linux-musl"},{"name":"keyvalue-redis","target":"aarch64-apple-darwin"},{"name":"keyvalue-redis","target":"x86_64-apple-darwin"},{"name":"keyvalue-redis","target":"x86_64-pc-windows-gnu"}]'
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
 
       - name: Add keyvalue-vault builds
         id: keyvalue-vault
         if: ${{ needs.meta.outputs.provider_keyvalue_vault_modified == 'true' || startswith(github.ref, 'refs/tags/provider-keyvalue-vault') }}
         run: |
-          builds='[
-            {"name":"keyvalue-vault","target":"aarch64-unknown-linux-musl"},
-            {"name":"keyvalue-vault","target":"aarch64-apple-darwin"},
-            {"name":"keyvalue-vault","target":"x86_64-apple-darwin"},
-            {"name":"keyvalue-vault","target":"x86_64-pc-windows-gnu"}
-          ]'
+          builds='[{"name":"keyvalue-vault","target":"aarch64-unknown-linux-musl"},{"name":"keyvalue-vault","target":"aarch64-apple-darwin"},{"name":"keyvalue-vault","target":"x86_64-apple-darwin"},{"name":"keyvalue-vault","target":"x86_64-pc-windows-gnu"}]'
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
 
       - name: Add http-client builds
         id: http-client
         if: ${{ needs.meta.outputs.provider_http_client_modified == 'true' || startswith(github.ref, 'refs/tags/provider-http-client') }}
         run: |
-          builds='[
-            {"name":"http-client","target":"aarch64-unknown-linux-musl"},
-            {"name":"http-client","target":"aarch64-apple-darwin"},
-            {"name":"http-client","target":"x86_64-apple-darwin"},
-            {"name":"http-client","target":"x86_64-pc-windows-gnu"}
-          ]'
+          builds='[{"name":"http-client","target":"aarch64-unknown-linux-musl"},{"name":"http-client","target":"aarch64-apple-darwin"},{"name":"http-client","target":"x86_64-apple-darwin"},{"name":"http-client","target":"x86_64-pc-windows-gnu"}]'
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
 
       - name: Add http-server builds
         id: http-server
         if: ${{ needs.meta.outputs.provider_http_server_modified == 'true' || startswith(github.ref, 'refs/tags/provider-http-server') }}
         run: |
-          builds='[
-            {"name":"http-server","target":"aarch64-unknown-linux-musl"},
-            {"name":"http-server","target":"aarch64-apple-darwin"},
-            {"name":"http-server","target":"x86_64-apple-darwin"},
-            {"name":"http-server","target":"x86_64-pc-windows-gnu"}
-          ]'
+          builds='[{"name":"http-server","target":"aarch64-unknown-linux-musl"},{"name":"http-server","target":"aarch64-apple-darwin"},{"name":"http-server","target":"x86_64-apple-darwin"},{"name":"http-server","target":"x86_64-pc-windows-gnu"}]'
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
 
       - name: Add messaging-kafka builds
         id: messaging-kafka
         if: ${{ needs.meta.outputs.provider_messaging_kafka_modified == 'true' || startswith(github.ref, 'refs/tags/provider-messaging-kafka') }}
         run: |
-          builds='[
-            {"name":"messaging-kafka","target":"aarch64-unknown-linux-musl"},
-            {"name":"messaging-kafka","target":"aarch64-apple-darwin"},
-            {"name":"messaging-kafka","target":"x86_64-apple-darwin"},
-            {"name":"messaging-kafka","target":"x86_64-pc-windows-gnu"}
-          ]'
+          builds='[{"name":"messaging-kafka","target":"aarch64-unknown-linux-musl"},{"name":"messaging-kafka","target":"aarch64-apple-darwin"},{"name":"messaging-kafka","target":"x86_64-apple-darwin"},{"name":"messaging-kafka","target":"x86_64-pc-windows-gnu"}]'
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
 
       - name: Add messaging-nats builds
         id: messaging-nats
         if: ${{ needs.meta.outputs.provider_messaging_nats_modified == 'true' || startswith(github.ref, 'refs/tags/provider-messaging-nats') }}
         run: |
-          builds='[
-            {"name":"messaging-nats","target":"aarch64-unknown-linux-musl"},
-            {"name":"messaging-nats","target":"aarch64-apple-darwin"},
-            {"name":"messaging-nats","target":"x86_64-apple-darwin"},
-            {"name":"messaging-nats","target":"x86_64-pc-windows-gnu"}
-          ]'
+          builds='[{"name":"messaging-nats","target":"aarch64-unknown-linux-musl"},{"name":"messaging-nats","target":"aarch64-apple-darwin"},{"name":"messaging-nats","target":"x86_64-apple-darwin"},{"name":"messaging-nats","target":"x86_64-pc-windows-gnu"}]'
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
 
       - name: Add sqldb-postgres builds
         id: sqldb-postgres
         if: ${{ needs.meta.outputs.provider_sqldb_postgres_modified == 'true' || startswith(github.ref, 'refs/tags/provider-sqldb-postgres') }}
         run: |
-          builds='[
-            {"name":"sqldb-postgres","target":"aarch64-unknown-linux-musl"},
-            {"name":"sqldb-postgres","target":"aarch64-apple-darwin"},
-            {"name":"sqldb-postgres","target":"x86_64-apple-darwin"},
-            {"name":"sqldb-postgres","target":"x86_64-pc-windows-gnu"}
-          ]'
+          builds='[{"name":"sqldb-postgres","target":"aarch64-unknown-linux-musl"},{"name":"sqldb-postgres","target":"aarch64-apple-darwin"},{"name":"sqldb-postgres","target":"x86_64-apple-darwin"},{"name":"sqldb-postgres","target":"x86_64-pc-windows-gnu"}]'
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
 
       # Combine all build arrays (no deduplication needed since no overlap)
@@ -499,6 +426,7 @@ jobs:
           done
 
           if [[ -n "$all_builds" ]]; then
+            all_builds=$(echo "$all_builds" | tr -d '\n ')
             echo "builds=$all_builds" >> "$GITHUB_OUTPUT"
           else
             echo "builds=[]" >> "$GITHUB_OUTPUT"
