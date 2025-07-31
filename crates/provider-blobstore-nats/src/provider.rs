@@ -10,9 +10,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
-use core::future::Future;
-use core::pin::Pin;
-use futures::Stream;
 use tokio::fs;
 use tracing::{debug, error, info, instrument, warn};
 use wascap::prelude::KeyPair;
@@ -147,58 +144,6 @@ impl NatsBlobstoreProvider {
             // If the context is None, return an error indicating no consumer component in the request
             bail!("no consumer component found in the request")
         }
-    }
-
-    /// Helper function to list all objects in a NATS blobstore container.
-    /// This ensures consistent implementation across all functions that need to list objects.
-    /// Delegates to the core implementation in blobstore.rs.
-    #[instrument(level = "debug", skip_all)]
-    async fn list_container_objects(
-        &self,
-        context: Option<Context>,
-        name: String,
-        offset: Option<u64>,
-        limit: Option<u64>,
-    ) -> anyhow::Result<
-        Result<
-            (
-                Pin<Box<dyn Stream<Item = Vec<String>> + Send>>,
-                Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
-            ),
-            String,
-        >,
-    > {
-        bindings::exports::wrpc::blobstore::blobstore::Handler::list_container_objects(
-            self, context, name, offset, limit,
-        )
-        .await
-    }
-
-    /// Help function to delete an object from a NATS blobstore container.
-    /// This ensures consistent implementation across all functions that need to delete objects.
-    /// Delegates to the core implementation in blobstore.rs.
-    #[instrument(level = "debug", skip_all)]
-    async fn delete_object(
-        &self,
-        context: Option<Context>,
-        id: bindings::wrpc::blobstore::types::ObjectId,
-    ) -> anyhow::Result<Result<(), String>> {
-        bindings::exports::wrpc::blobstore::blobstore::Handler::delete_object(self, context, id)
-            .await
-    }
-
-    /// Help function to delete a collection of objects from a NATS blobstore container
-    #[instrument(level = "debug", skip_all)]
-    async fn delete_objects(
-        &self,
-        context: Option<Context>,
-        name: String,
-        objects: Vec<String>,
-    ) -> anyhow::Result<Result<(), String>> {
-        bindings::exports::wrpc::blobstore::blobstore::Handler::delete_objects(
-            self, context, name, objects,
-        )
-        .await
     }
 }
 
