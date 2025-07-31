@@ -124,6 +124,18 @@
         clippy.workspace = true;
 
         test.allTargets = true;
+        test.features = [
+          "provider-blobstore-fs"
+          "provider-blobstore-s3"
+          "provider-http-client"
+          "provider-http-server"
+          "provider-keyvalue-redis"
+          "provider-keyvalue-vault"
+          "provider-messaging-kafka"
+          "provider-messaging-nats"
+          "wasmcloud"
+        ];
+        test.noDefaultFeatures = true;
         test.excludes = [
           "secrets-nats-kv"
           "wash"
