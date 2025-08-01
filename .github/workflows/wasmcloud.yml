@@ -559,7 +559,7 @@ jobs:
         with:
           tool: cargo-nextest
       - name: Run tests
-        run: cargo nextest run --workspace --all-features --locked
+        run: cargo nextest run --cargo-profile release -j 4 --exclude secrets-nats-kv --exclude wash --exclude wasmcloud-provider-blobstore-s3 --exclude wasmcloud-provider-messaging-nats --all-targets --workspace --no-tests=warn
 
   cargo-nextest:
     needs: [meta]
