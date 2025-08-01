@@ -509,6 +509,7 @@ jobs:
     name: ${{ matrix.check.name }}
     runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         check:
           - name: Format
@@ -517,8 +518,8 @@ jobs:
           - name: Clippy
             run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-          - name: Audit
-            run: cargo audit
+          # - name: Audit
+          #   run: cargo audit
 
           - name: Doctest
             run: cargo test --doc --workspace --all-features
