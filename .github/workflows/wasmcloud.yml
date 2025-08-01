@@ -503,12 +503,69 @@ jobs:
           name: wasmcloud-x86_64-pc-windows-gnu
       - run: .\bin\wasmcloud.exe --version
 
+  cargo-cargo:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || needs.meta.outputs.providers_modified == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    name: ${{ matrix.check.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        check:
+          - name: Format
+            run: cargo fmt --all -- --check
+
+          - name: Clippy
+            run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+          - name: Audit
+            run: cargo audit
+
+          - name: Doctest
+            run: cargo test --doc --workspace --all-features
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # Rust Setup
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Install cargo audit
+        # if: ${{ matrix.check.name == 'Audit' }}
+        uses: taiki-e/install-action@bbdef1c33cb8ed1fd122d68d8374ac79998d6960 # v2.57.2
+        with:
+          tool: cargo-audit
+      - name: Run ${{ matrix.check.name }}
+        run: ${{ matrix.check.run }}
+
+  cargo-nextest-cargo:
+    needs: [meta]
+    if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || needs.meta.outputs.providers_modified == 'true' || startsWith(github.ref, 'refs/tags/') }}
+
+    name: cargo nextest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # Rust Setup
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@bbdef1c33cb8ed1fd122d68d8374ac79998d6960 # v2.57.2
+        with:
+          tool: cargo-nextest
+      - name: Run tests
+        run: cargo nextest run --workspace --all-features --locked
+
   cargo-nextest:
     needs: [meta]
     if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || needs.meta.outputs.providers_modified == 'true' || startsWith(github.ref, 'refs/tags/') }}
 
     name: cargo nextest
-    runs-on: ubuntu-latest-8-cores
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: ./.github/actions/install-nix
