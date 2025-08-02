@@ -563,8 +563,8 @@ mod tests {
         for i in 0..10 {
             let cache_clone = Arc::clone(&cache);
             let handle = tokio::spawn(async move {
-                let key = format!("key_{}", i);
-                let value = format!("value_{}", i);
+                let key = format!("key_{i}");
+                let value = format!("value_{i}");
 
                 cache_clone.insert(key.clone(), value.clone()).await;
                 let retrieved = cache_clone.get(&key).await;
@@ -580,8 +580,8 @@ mod tests {
 
         // Verify all entries are in the cache
         for i in 0..10 {
-            let key = format!("key_{}", i);
-            let expected_value = format!("value_{}", i);
+            let key = format!("key_{i}");
+            let expected_value = format!("value_{i}");
             assert_eq!(cache.get(&key).await, Some(expected_value));
         }
     }
