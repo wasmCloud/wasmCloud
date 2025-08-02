@@ -1280,6 +1280,8 @@ mod tests {
             "SUALIKDKMIUAKRT5536EXKC3CX73TJD3CFXZMJSHIKSP3LTYIIUQGCUVGA",
             "--rpc-timeout-ms",
             "500",
+            "--max-execution-time",
+            "500ms",
             "--rpc-tls",
             "--structured-log-level",
             "warn",
