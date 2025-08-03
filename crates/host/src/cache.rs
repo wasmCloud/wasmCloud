@@ -112,7 +112,7 @@ where
     V: std::fmt::Debug + Clone + Send + Sync + 'static,
 {
     internal: Arc<RwLock<CacheInternal<K, V>>>,
-    purge_cycles: Option<u32>,
+    purge_cycles: Arc<Option<u32>>,
     purge_cycle_count: AtomicU32,
 }
 
@@ -125,7 +125,7 @@ where
     pub fn new(ttl: Duration) -> Self {
         Self {
             internal: Arc::new(RwLock::new(CacheInternal::new(ttl))),
-            purge_cycles: None,
+            purge_cycles: Arc::new(None),
             purge_cycle_count: AtomicU32::new(0),
         }
     }
@@ -159,7 +159,7 @@ where
     }
 
     async fn check_purge(&self) {
-        if let Some(purge_cycles) = self.purge_cycles {
+        if let Some(purge_cycles) = *self.purge_cycles {
             self.purge_cycle_count.fetch_add(1, Ordering::Relaxed);
             if self.purge_cycle_count.load(Ordering::Relaxed) >= purge_cycles {
                 self.poll_purge_once().await;
@@ -192,7 +192,7 @@ where
     fn clone(&self) -> Self {
         Self {
             internal: Arc::clone(&self.internal),
-            purge_cycles: self.purge_cycles,
+            purge_cycles: Arc::clone(&self.purge_cycles),
             purge_cycle_count: AtomicU32::new(self.purge_cycle_count.load(Ordering::Relaxed)),
         }
     }
@@ -229,7 +229,7 @@ where
     fn default() -> Self {
         Self {
             ttl: Duration::from_secs(300), // 5 minutes default
-            purge_cycles: None,
+            purge_cycles: Some(1000),
             lazy: true,
             _phantom: PhantomData,
         }
@@ -259,12 +259,6 @@ where
         self
     }
 
-    /// Disable automatic purge cycles (default behavior)
-    pub fn without_purge_cycles(mut self) -> Self {
-        self.purge_cycles = None;
-        self
-    }
-
     /// Set whether to use lazy expiration (check expiration on access)
     /// If false, entries are only removed during purge cycles
     pub fn with_lazy_expiration(mut self, lazy: bool) -> Self {
@@ -279,7 +273,7 @@ where
 
         Cache {
             internal: Arc::new(RwLock::new(internal)),
-            purge_cycles: self.purge_cycles,
+            purge_cycles: Arc::new(self.purge_cycles),
             purge_cycle_count: AtomicU32::new(0),
         }
     }
@@ -387,7 +381,6 @@ mod tests {
     async fn test_expiration_without_purge_cycles() {
         let cache = Cache::<String, String>::builder()
             .with_ttl(Duration::from_millis(100))
-            .without_purge_cycles()
             .with_lazy_expiration(false)
             .build();
 
