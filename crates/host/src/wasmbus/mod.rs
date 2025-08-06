@@ -863,12 +863,7 @@ impl Host {
                         .image_ref(component.image_reference.to_string())
                         .annotations(component.annotations.clone().into_iter().collect())
                         .max_instances(component.max_instances.get().try_into().unwrap_or(u32::MAX))
-                        .limits(Some(
-                            component
-                                .limits
-                                .expect("component limits should be set")
-                                .to_string_map(),
-                        ))
+                        .limits(component.limits.map(|limits| limits.to_string_map()))
                         .revision(
                             component
                                 .claims()
@@ -1565,11 +1560,7 @@ impl Host {
                     Arc::clone(&new_component_ref),
                     Arc::clone(&component_id),
                     max,
-                    Some(
-                        existing_component
-                            .limits
-                            .expect("component limits should be set"),
-                    ),
+                    existing_component.limits,
                     new_component,
                     existing_component.handler.copy_for_new(),
                 )
