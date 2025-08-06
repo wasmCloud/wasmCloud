@@ -24,7 +24,7 @@ pub mod incoming_http_bindings {
         async: true,
         trappable_imports: true,
         with: {
-           "wasi:http/types": wasmtime_wasi_http::bindings::http::types,
+            "wasi:http/types": wasmtime_wasi_http::bindings::http::types,
         },
     });
 }
@@ -41,7 +41,18 @@ where
     use wrpc_interface_http::InvokeOutgoingHandler as _;
 
     let between_bytes_timeout = config.between_bytes_timeout;
-    debug!("invoking `wrpc:http/outgoing-handler.handle`");
+    debug!(
+        target: "runtime::http::outgoing",
+        method = %request.method(),
+        uri = %request.uri(),
+        headers = ?request.headers(),
+        connect_timeout = ?config.connect_timeout,
+        first_byte_timeout = ?config.first_byte_timeout,
+        between_bytes_timeout = ?config.between_bytes_timeout,
+        use_tls = ?config.use_tls,
+        "Invoking `wrpc:http/outgoing-handler.handle`"
+    );
+
     match handler
         .invoke_handle_wasmtime(
             Some(ReplacedInstanceTarget::HttpOutgoingHandler),
@@ -51,21 +62,34 @@ where
         .await?
     {
         (Ok(resp), errs, io) => {
-            debug!("`wrpc:http/outgoing-handler.handle` succeeded");
+            debug!(
+                target: "runtime::http::outgoing",
+                status = %resp.status(),
+                headers = ?resp.headers(),
+                "`wrpc:http/outgoing-handler.handle` succeeded"
+            );
             let worker = wasmtime_wasi::runtime::spawn(
                 async move {
                     // TODO: Do more than just log errors
                     join!(
                         errs.for_each(|err| async move {
-                            warn!(?err, "body processing error encountered");
+                            warn!(
+                                target: "runtime::http::outgoing",
+                                ?err,
+                                "Body processing error encountered"
+                            );
                         }),
                         async move {
                             if let Some(io) = io {
-                                debug!("performing async I/O");
+                                debug!(target: "runtime::http::outgoing", "Performing async I/O");
                                 if let Err(err) = io.await {
-                                    warn!(?err, "failed to complete async I/O");
+                                    warn!(
+                                        target: "runtime::http::outgoing",
+                                        ?err,
+                                        "Failed to complete async I/O"
+                                    );
                                 }
-                                debug!("async I/O completed");
+                                debug!(target: "runtime::http::outgoing", "Async I/O completed");
                             }
                         }
                     );
@@ -79,7 +103,8 @@ where
             }))
         }
         (Err(err), _, _) => {
-            debug!(
+            warn!(
+                target: "runtime::http::outgoing",
                 ?err,
                 "`wrpc:http/outgoing-handler.handle` returned an error code"
             );
@@ -105,12 +130,38 @@ where
     where
         Self: Sized,
     {
+        debug!(
+            target: "runtime::http::send_request",
+            method = %request.method(),
+            uri = %request.uri(),
+            headers = ?request.headers(),
+            connect_timeout = ?config.connect_timeout,
+            first_byte_timeout = ?config.first_byte_timeout,
+            between_bytes_timeout = ?config.between_bytes_timeout,
+            use_tls = ?config.use_tls,
+            "WasiHttpView::send_request called"
+        );
+
         self.attach_parent_context();
-        Ok(HostFutureIncomingResponse::pending(
-            wasmtime_wasi::runtime::spawn(
-                invoke_outgoing_handle(self.handler.clone(), request, config).in_current_span(),
-            ),
-        ))
+        debug!(
+            target: "runtime::http::send_request",
+            "Parent context attached, spawning request handler"
+        );
+
+        // Get the current tracing span
+        let current_span = Span::current();
+
+        // Spawn the request handler in the current tracing span
+        let future = wasmtime_wasi::runtime::spawn(
+            invoke_outgoing_handle(self.handler.clone(), request, config).in_current_span(),
+        );
+
+        debug!(
+            target: "runtime::http::send_request",
+            span_id = ?current_span.id(),
+            "Request handler spawned"
+        );
+        Ok(HostFutureIncomingResponse::pending(future))
     }
 }
 

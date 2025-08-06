@@ -52,12 +52,16 @@ use tokio::fs;
 use tracing::{debug, instrument, warn};
 use url::Url;
 use wascap::jwt;
-use wasmcloud_core::{OciFetcher, RegistryConfig};
+use wasmcloud_core::{OciFetcher, RegistryAuth, RegistryConfig, RegistryType};
 
+/// A reference to a resource, either a file, an OCI image, or a builtin provider
 #[derive(PartialEq)]
-enum ResourceRef<'a> {
+pub enum ResourceRef<'a> {
+    /// A file reference
     File(PathBuf),
+    /// An OCI reference
     Oci(&'a str),
+    /// A builtin provider reference
     Builtin(&'a str),
 }
 
@@ -134,11 +138,11 @@ impl ResourceRef<'_> {
 }
 
 /// Fetch an component from a reference.
-#[instrument(level = "debug", skip(allow_file_load, registry_config))]
+#[instrument(level = "debug", skip(default_config, registry_config))]
 pub async fn fetch_component(
     component_ref: &str,
     allow_file_load: bool,
-    additional_ca_paths: &Vec<PathBuf>,
+    default_config: &oci::Config,
     registry_config: &HashMap<String, RegistryConfig>,
 ) -> anyhow::Result<Vec<u8>> {
     match ResourceRef::try_from(component_ref)? {
@@ -155,8 +159,28 @@ pub async fn fetch_component(
             .authority()
             .and_then(|authority| registry_config.get(authority))
             .map(OciFetcher::from)
-            .unwrap_or_default()
-            .with_additional_ca_paths(additional_ca_paths)
+            .unwrap_or_else(|| {
+                OciFetcher::from(
+                    RegistryConfig::builder()
+                        .reg_type(RegistryType::Oci)
+                        .additional_ca_paths(default_config.additional_ca_paths.clone())
+                        .allow_latest(default_config.allow_latest)
+                        .allow_insecure(
+                            oci_ref
+                                .authority()
+                                .map(|authority| {
+                                    default_config
+                                        .allowed_insecure
+                                        .contains(&authority.to_string())
+                                })
+                                .unwrap_or(false),
+                        )
+                        .auth(RegistryAuth::Anonymous)
+                        .build()
+                        .unwrap_or_default(),
+                )
+            })
+            .with_additional_ca_paths(&default_config.additional_ca_paths)
             .fetch_component(component_ref)
             .await
             .with_context(|| {
@@ -168,11 +192,11 @@ pub async fn fetch_component(
 
 /// Fetch a provider from a reference.
 #[instrument(skip(registry_config, host_id), fields(provider_ref = %provider_ref.as_ref()))]
-pub async fn fetch_provider(
+pub(crate) async fn fetch_provider(
     provider_ref: &ResourceRef<'_>,
     host_id: impl AsRef<str>,
     allow_file_load: bool,
-    additional_ca_paths: &Vec<PathBuf>,
+    default_config: &oci::Config,
     registry_config: &HashMap<String, RegistryConfig>,
 ) -> anyhow::Result<(PathBuf, Option<jwt::Token<jwt::CapabilityProvider>>)> {
     match provider_ref {
@@ -194,8 +218,28 @@ pub async fn fetch_provider(
             .authority()
             .and_then(|authority| registry_config.get(authority))
             .map(OciFetcher::from)
-            .unwrap_or_default()
-            .with_additional_ca_paths(additional_ca_paths)
+            .unwrap_or_else(|| {
+                OciFetcher::from(
+                    RegistryConfig::builder()
+                        .reg_type(RegistryType::Oci)
+                        .additional_ca_paths(default_config.additional_ca_paths.clone())
+                        .allow_latest(default_config.allow_latest)
+                        .allow_insecure(
+                            oci_ref
+                                .authority()
+                                .map(|authority| {
+                                    default_config
+                                        .allowed_insecure
+                                        .contains(&authority.to_string())
+                                })
+                                .unwrap_or(false),
+                        )
+                        .auth(RegistryAuth::Anonymous)
+                        .build()
+                        .unwrap_or_default(),
+                )
+            })
+            .with_additional_ca_paths(&default_config.additional_ca_paths)
             .fetch_provider(provider_ref, host_id)
             .await
             .with_context(|| {

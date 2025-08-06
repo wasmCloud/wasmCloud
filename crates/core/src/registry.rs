@@ -120,7 +120,7 @@ impl RegistryConfigBuilder {
             } else {
                 self.auth.context("missing registry auth")?
             },
-            allow_latest: self.allow_insecure.unwrap_or_default(),
+            allow_latest: self.allow_latest.unwrap_or_default(),
             allow_insecure,
             additional_ca_paths: self.additional_ca_paths.unwrap_or_default(),
         })

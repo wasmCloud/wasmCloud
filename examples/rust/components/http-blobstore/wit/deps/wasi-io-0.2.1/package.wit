@@ -1,5 +1,11 @@
 package wasi:io@0.2.1;
 
+interface error {
+  resource error {
+    to-debug-string: func() -> string;
+  }
+}
+
 interface poll {
   resource pollable {
     ready: func() -> bool;
@@ -7,12 +13,6 @@ interface poll {
   }
 
   poll: func(in: list<borrow<pollable>>) -> list<u32>;
-}
-
-interface error {
-  resource error {
-    to-debug-string: func() -> string;
-  }
 }
 
 interface streams {

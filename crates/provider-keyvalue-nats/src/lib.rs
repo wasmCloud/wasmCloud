@@ -178,15 +178,13 @@ impl KvNatsProvider {
                 Some(kv_stores) => kv_stores,
                 None => {
                     return Err(keyvalue::store::Error::Other(format!(
-                        "consumer component not linked: {}",
-                        source_id
+                        "consumer component not linked: {source_id}"
                     )));
                 }
             };
             kv_stores.get(&bucket_id).cloned().ok_or_else(|| {
                 keyvalue::store::Error::Other(format!(
-                    "No NATS Kv store found for bucket id (link name): {}",
-                    bucket_id
+                    "No NATS Kv store found for bucket id (link name): {bucket_id}"
                 ))
             })
         } else {
@@ -255,7 +253,7 @@ impl Provider for KvNatsProvider {
                 }
             }
         };
-        println!("NATS Kv configuration: {:?}", nats_config);
+        println!("NATS Kv configuration: {nats_config:?}");
 
         let LinkConfig {
             source_id,

@@ -20,7 +20,8 @@ spec:
       properties:
         # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
         # image: file://./build/http_blobstore_s.wasm
-        image: ghcr.io/wasmcloud/components/http-blobstore-rust:0.2.0
+        image: ghcr.io/wasmcloud/http-blobstore-rust:0.3.0
+        id: http-blobstore
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
@@ -33,12 +34,7 @@ spec:
         # (i.e. reading/writing blobs)
         - type: link
           properties:
-            target:
-              name: blobstore-fs
-              config:
-                - name: root-directory
-                  properties:
-                    root: '/tmp'
+            target: blobstore-nats
             namespace: wasi
             package: blobstore
             interfaces: [blobstore]
@@ -79,14 +75,14 @@ spec:
                     address: 0.0.0.0:8000
 
     # Capability provider that exposes a blobstore with the filesystem
-    - name: blobstore-fs
+    - name: blobstore-nats
       type: capability
       properties:
         # To use a locally compiled provider, uncomment the line below
         # (and ensure that you've used `wash par crate` to create the par file below)
         #
-        # image: file://../../../../crates/provider-blobstore-fs/provider-blobstore-fs.par.gz
-        image: ghcr.io/wasmcloud/blobstore-fs:0.11.1
+        # image: file://../../../../src/bin/blobstore-nats-provider/build/blobstore-nats-provider.par.gz
+        image: ghcr.io/wasmcloud/blobstore-nats:0.1.0
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel

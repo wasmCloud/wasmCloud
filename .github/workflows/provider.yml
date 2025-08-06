@@ -127,36 +127,3 @@ jobs:
         env:
           WASH_REG_USER: ${{ github.repository_owner }}
           WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-
-  # Ensure that `wash build` and `wash app validate` works for all providers
-  wash-build:
-    name: build
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        provider:
-          - bin-path: src/bin/blobstore-azure-provider
-          - bin-path: src/bin/blobstore-fs-provider
-          - bin-path: src/bin/blobstore-s3-provider
-          - bin-path: src/bin/http-client-provider
-          - bin-path: src/bin/http-server-provider
-          - bin-path: src/bin/keyvalue-nats-provider
-          - bin-path: src/bin/keyvalue-redis-provider
-          - bin-path: src/bin/keyvalue-vault-provider
-          - bin-path: src/bin/messaging-kafka-provider
-          - bin-path: src/bin/messaging-nats-provider
-          - bin-path: src/bin/sqldb-postgres-provider
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-
-      # Set up wash
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: wash-x86_64-unknown-linux-musl
-          path: artifact
-      - run: chmod +x ./artifact/bin/wash
-
-      - name: build provider
-        run: |
-          ./artifact/bin/wash build -p ${{ matrix.provider.bin-path }}

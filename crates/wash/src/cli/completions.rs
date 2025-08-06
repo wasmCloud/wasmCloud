@@ -4,10 +4,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::lib::cli::CommandOutput;
-use crate::lib::config::cfg_dir;
+use crate::lib::config::WASH_DIRECTORIES;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use clap_complete::{generator::generate_to, shells::Shell};
+use etcetera::AppStrategy;
 
 const TOKEN_FILE: &str = ".completion_suggested";
 const COMPLETION_DOC_URL: &str =
@@ -51,15 +52,14 @@ pub enum ShellSelection {
 
 /// Displays a message one time after wash install
 pub fn first_run_suggestion() -> Result<Option<String>> {
-    let cfg_dir = cfg_dir()?;
-    let token = cfg_dir.join(TOKEN_FILE);
+    let token = WASH_DIRECTORIES.create_in_config_dir(TOKEN_FILE)?;
     if token.is_file() {
         return Ok(None);
     }
     let _ = std::fs::File::create(token).with_context(|| {
         format!(
             "can't create completion first-run token in {}",
-            cfg_dir.display()
+            WASH_DIRECTORIES.config_dir().display()
         )
     })?;
     Ok(Some(format!(

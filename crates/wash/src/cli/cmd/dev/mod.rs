@@ -17,6 +17,9 @@ use crate::lib::id::ServerId;
 use crate::lib::parser::load_config;
 use tracing::trace;
 
+use wasmcloud_control_interface::Client;
+use crate::cli::ui::{self, UiCommand};
+
 use crate::cmd::up::{
     nats_client_from_wasmcloud_opts, remove_wadm_pidfile, NatsOpts, WadmOpts, WasmcloudOpts,
 };
@@ -47,7 +50,7 @@ const DEFAULT_PROVIDER_STOP_TIMEOUT_MS: u64 = 3000;
 
 /// The path to the dev directory for wash
 async fn dev_dir() -> Result<PathBuf> {
-    let dir = crate::lib::config::dev_dir().context("failed to resolve config dir")?;
+    let dir = crate::lib::config::WASH_DIRECTORIES.dev_dir();
     if !tokio::fs::try_exists(&dir)
         .await
         .context("failed to check if dev dir exists")?
@@ -128,6 +131,10 @@ pub struct DevCommand {
     /// (useful for airgapped or disconnected environments)
     #[clap(long = "skip-fetch")]
     pub skip_wit_fetch: bool,
+
+    /// Serve the washboard UI alongside the application
+    #[clap(long = "dashboard", alias = "ui", env = "WASH_DEV_DASHBOARD", default_value = "false")]
+    pub dashboard: bool,
 }
 
 /// Handle `wash dev`
@@ -253,9 +260,17 @@ pub async fn handle_command(
         skip_fetch: cmd.skip_wit_fetch,
         output_kind,
     };
+    let mut ui_handle = None;
 
-    // See if the host is running by retrieving an inventory
-    if let Err(_e) = ctl_client.get_host_inventory(&host_id).await {
+    // Wait for host to come up
+    if let Err(_e) = is_host_up(
+        &host_id,
+        &ctl_client,
+        tokio::time::Duration::from_secs(1),
+        tokio::time::Duration::from_millis(100),
+    )
+    .await
+    {
         eprintln!(
             "{} Failed to retrieve inventory from host [{host_id}]... Exiting developer loop",
             emoji::ERROR
@@ -270,6 +285,7 @@ pub async fn handle_command(
             wasmcloud_child,
             wadm_child,
             nats_child,
+            ui_handle,
             cmd.leave_host_running,
         )
         .await
@@ -281,6 +297,19 @@ pub async fn handle_command(
         }
 
         bail!("failed to initialize dev session, host did not start.");
+    }
+
+    if cmd.dashboard {
+        let port = std::env::var("WASMCLOUD_WASH_UI_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or_else(|| crate::lib::common::DEFAULT_WASH_UI_PORT.parse().unwrap());
+        let ui_cmd = UiCommand { port, version: None };
+        ui_handle = Some(tokio::spawn(async move {
+            if let Err(e) = ui::handle_ui(ui_cmd, crate::lib::cli::OutputKind::Text).await {
+                eprintln!("{} Failed to start washboard: {e}", emoji::WARN);
+            }
+        }));
     }
 
     // Set up a oneshot channel to perform graceful shutdown, handle Ctrl + c w/ tokio
@@ -380,7 +409,7 @@ pub async fn handle_command(
                 pause_watch.store(true, Ordering::SeqCst);
                 eprintln!("\n{} Received Ctrl + c, stopping devloop...", emoji::STOP);
 
-                stop_dev_session(run_loop_state, &ctl_client, wasmcloud_child, wadm_child, nats_child, cmd.leave_host_running).await?;
+                stop_dev_session(run_loop_state, &ctl_client, wasmcloud_child, wadm_child, nats_child, ui_handle, cmd.leave_host_running).await?;
 
                 break Ok(CommandOutput::from_key_and_text(
                     "result",
@@ -400,6 +429,7 @@ async fn stop_dev_session(
     wasmcloud_child: Option<tokio::process::Child>,
     wadm_child: Option<tokio::process::Child>,
     nats_child: Option<tokio::process::Child>,
+    ui_handle: Option<tokio::task::JoinHandle<()>>,
     leave_host_running: bool,
 ) -> Result<()> {
     // Update the sessions file with the fact that this session stopped
@@ -491,5 +521,37 @@ async fn stop_dev_session(
         }
     }
 
+    if let Some(handle) = ui_handle {
+        eprintln!("{} Stopping washboard...", emoji::HOURGLASS_DRAINING);
+        handle.abort();
+        let _ = handle.await;
+    }
+
     Ok(())
+}
+
+/// Checks whether a wasmCloud host is up by trying to get its inventory. It will repeat after
+/// waiting for `backoff` duraction in case of error. It will fail after `timeout` duration if the
+/// inventory could still not be retrieved.
+pub async fn is_host_up(
+    host_id: &str,
+    ctl_client: &Client,
+    timeout: tokio::time::Duration,
+    backoff: tokio::time::Duration,
+) -> Result<()> {
+    async fn func(
+        host_id: &str,
+        ctl_client: &Client,
+        backoff: tokio::time::Duration,
+    ) -> Result<()> {
+        loop {
+            if (ctl_client.get_host_inventory(host_id).await).is_ok() {
+                break;
+            }
+            tokio::time::sleep(backoff).await;
+        }
+        Ok(())
+    }
+
+    tokio::time::timeout(timeout, func(host_id, ctl_client, backoff)).await?
 }

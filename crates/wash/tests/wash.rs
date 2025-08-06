@@ -78,9 +78,9 @@ fn integration_version_works() -> Result<()> {
         .context("failed to display wash version")
         .and_then(|output| output_to_string(output).context("failed to extract stdout"))?;
     assert!(stdout.contains(format!("wash          v{}", clap::crate_version!()).as_str()));
-    assert!(stdout.contains(format!("├ nats-server {}", NATS_SERVER_VERSION).as_str()));
-    assert!(stdout.contains(format!("├ wadm        {}", WADM_VERSION).as_str()));
-    assert!(stdout.contains(format!("└ wasmcloud   {}", WASMCLOUD_HOST_VERSION).as_str()));
+    assert!(stdout.contains(format!("├ nats-server {NATS_SERVER_VERSION}").as_str()));
+    assert!(stdout.contains(format!("├ wadm        {WADM_VERSION}").as_str()));
+    assert!(stdout.contains(format!("└ wasmcloud   {WASMCLOUD_HOST_VERSION}").as_str()));
     Ok(())
 }
 

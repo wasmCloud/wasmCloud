@@ -1227,7 +1227,7 @@ async fn parse_selectors_from_host_labels(host_labels: &BTreeMap<String, String>
                 // Remove the leading "wasmcloud"
                 .split_once(":")
                 // Map the remaining part of the label key together with the value `` to make it a selector
-                .map(|(_, selector)| format!("{}:{}", selector, value))
+                .map(|(_, selector)| format!("{selector}:{value}"))
                 // This should never get triggered, but just in case.
                 .unwrap_or("unknown".to_string());
 

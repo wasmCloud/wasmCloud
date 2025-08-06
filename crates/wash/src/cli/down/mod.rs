@@ -4,8 +4,8 @@ use std::process::{Output, Stdio};
 
 use crate::lib::cli::{stop::stop_hosts, CommandOutput, OutputKind};
 use crate::lib::config::{
-    create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_HOST,
-    DEFAULT_NATS_PORT, WADM_PID_FILE,
+    create_nats_client_from_opts, host_pid_file, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
+    WADM_PID_FILE, WASH_DIRECTORIES,
 };
 use crate::lib::id::ServerId;
 use crate::lib::start::{nats_pid_path, NATS_SERVER_BINARY};
@@ -99,7 +99,7 @@ pub async fn handle_command(
 }
 
 pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<CommandOutput> {
-    let install_dir = downloads_dir()?;
+    let install_dir = WASH_DIRECTORIES.downloads_dir();
     let sp = Spinner::new(&output_kind)?;
     sp.update_spinner_message(" Stopping wasmCloud ...".to_string());
 

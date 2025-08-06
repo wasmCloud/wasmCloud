@@ -26,7 +26,7 @@ impl NatsServer {
             ExecCommand::new(vec![
                 "/bin/sh",
                 "-c",
-                &format!("echo '{json}' > {}", NATS_CONFIG_PATH),
+                &format!("echo '{json}' > {NATS_CONFIG_PATH}"),
             ])
         } else {
             ExecCommand::new(vec!["/bin/true"])

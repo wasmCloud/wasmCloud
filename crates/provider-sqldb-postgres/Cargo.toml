@@ -26,6 +26,7 @@ postgres-types = { workspace = true, features = [ "with-cidr-0_2" ] }
 rustls = { workspace = true }
 webpki-roots = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tokio = { workspace = true }
 tokio-postgres = { workspace = true, features = [ "runtime", "with-serde_json-1", "with-chrono-0_4", "with-uuid-0_8", "with-geo-types-0_7", "array-impls", "with-bit-vec-0_6", "with-uuid-1" ]  }
 tokio-postgres-rustls = { workspace = true }

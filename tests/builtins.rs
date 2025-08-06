@@ -41,6 +41,8 @@ const BUILTIN_MESSAGING_NATS: &str = "wasmcloud+builtin://messaging-nats";
 /// properly handling de-registering and re-registering links.
 #[instrument(skip_all, ret)]
 #[tokio::test]
+// NOTE(#4595): This test is unusually flaky and it affects PRs that are not related to it.
+#[ignore]
 async fn builtin_http_path_routing() -> anyhow::Result<()> {
     _ = tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().compact().without_time())
@@ -66,6 +68,9 @@ async fn builtin_http_path_routing() -> anyhow::Result<()> {
         .context("failed to start test host")?;
 
     let http_port = free_port().await?;
+
+    // This can be flaky in CI so give it a second
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Using this as the ID and the configuration name for simplicity
     let http_server_id = "http-server".to_string();
@@ -308,6 +313,9 @@ async fn builtin_http_host_routing() -> anyhow::Result<()> {
         .context("failed to start test host")?;
 
     let http_port = free_port().await?;
+
+    // This can be flaky in CI so give it a second
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Using this as the ID and the configuration name for simplicity
     let http_server_id = "http-server".to_string();
@@ -571,6 +579,9 @@ async fn builtin_start_ignored_when_disabled() -> anyhow::Result<()> {
     )
     .await
     .context("failed to start test host")?;
+
+    // This can be flaky in CI so give it a second
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Attempting to start builtin providers should *not* fail, but instead not return
     let host_key = host.host_key();

@@ -19,6 +19,7 @@ runs:
             - '!brand/**'
             - '!examples/**'
             - '!**/*.md'
+            - '!**'  # Exclude everything else not already matched above
 
     - name: Set wash revision to build/cache
       id: base-ref

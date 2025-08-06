@@ -46,7 +46,7 @@ struct SecretsTopic(String);
 impl SecretsTopic {
     pub(crate) fn new(prefix: &str, backend: &str, api_version: Option<&str>) -> Self {
         let version = api_version.unwrap_or(DEFAULT_API_VERSION);
-        Self(format!("{}.{}.{}", prefix, version, backend))
+        Self(format!("{prefix}.{version}.{backend}"))
     }
 
     pub fn get(&self) -> String {

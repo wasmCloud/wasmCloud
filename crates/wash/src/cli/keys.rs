@@ -5,7 +5,7 @@ use clap::Subcommand;
 use nkeys::{KeyPair, KeyPairType};
 use serde_json::json;
 use crate::lib::cli::CommandOutput;
-use crate::lib::config::cfg_dir;
+use crate::lib::config::WASH_DIRECTORIES;
 use crate::lib::keys::{fs::KeyDir, KeyManager};
 
 const NKEYS_EXTENSION: &str = ".nk";
@@ -118,12 +118,7 @@ pub fn list(directory: Option<PathBuf>) -> Result<CommandOutput> {
 }
 
 fn determine_directory(directory: Option<PathBuf>) -> Result<PathBuf> {
-    if let Some(d) = directory {
-        Ok(d)
-    } else {
-        let d = cfg_dir()?.join("keys");
-        Ok(d)
-    }
+    directory.ok_or("no directory").or(WASH_DIRECTORIES.create_keys_dir())
 }
 
 #[cfg(test)]

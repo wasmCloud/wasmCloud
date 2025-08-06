@@ -1,0 +1,89 @@
+---
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: rust-http-blobstore
+  annotations:
+    version: v0.0.1
+    description: 'HTTP Blobstore demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/http-blobstore/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/http-blobstore/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/http-blobstore
+    wasmcloud.dev/categories: |
+      http,http-server,rust,blobstore,object-storage,example
+spec:
+  components:
+    # Component that serves the blobstore-over-HTTP abstraction
+    - name: http-blobstore
+      type: component
+      properties:
+        # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
+        image: file://./build/http_blobstore_s.wasm
+        id: http-blobstore
+      traits:
+        # Govern the spread/scheduling of the component
+        - type: spreadscaler
+          properties:
+            instances: 1
+        # Link to the blobstore provider which provides the underlying storage interface
+        #
+        # Establish a unidirectional link to the `blobstore-fs` (the filesystem-powered blobstore provider),
+        # so the `http-blobstore` component can make use of blobstore functionality provided by the filesystem
+        # (i.e. reading/writing blobs)
+        - type: link
+          properties:
+            target: blobstore-nats
+            namespace: wasi
+            package: blobstore
+            interfaces: [blobstore]
+
+    # Capability provider that serves HTTP requests
+    - name: httpserver
+      type: capability
+      properties:
+        # To use a locally compiled provider, uncomment the line below
+        # (and ensure that you've used `wash par crate` to create the par file below)
+        #
+        # image: file://../../../../crates/provider-http-server/provider-http-server.par.gz
+        image: ghcr.io/wasmcloud/http-server:0.27.0
+        ## To configure OTEL integration for this provider specifically, uncomment the lines below
+        # config:
+        #   - name: otel
+        #     properties:
+        #       otel_exporter_otlp_endpoint: "http://all-in-one:4318"
+        #       otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
+        #       otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
+        #       otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"
+      traits:
+        # Since this HTTP server capability provider calls the `http-blobstore` component, we establish
+        # a unidirectional link from this `httpserer` provider (the "source")
+        # to the `http-blobstore` component (the "target"), so the server can invoke
+        # the component to handle an incoming HTTP request.
+        - type: link
+          properties:
+            target: http-blobstore
+            namespace: wasi
+            package: http
+            interfaces: [incoming-handler]
+            source_config:
+              - name: default-http
+                properties:
+                  address: 127.0.0.1:8000
+
+    # Capability provider that exposes a blobstore with the filesystem
+    - name: blobstore-nats
+      type: capability
+      properties:
+        # To use a locally compiled provider, uncomment the line below
+        # (and ensure that you've used `wash par crate` to create the par file below)
+        #
+        image: file://../../../../src/bin/blobstore-nats-provider/build/blobstore-nats-provider.par.gz
+        ## To configure OTEL integration for this provider specifically, uncomment the lines below
+        # config:
+        #   - name: otel
+        #     properties:
+        #       otel_exporter_otlp_endpoint: "http://all-in-one:4318"
+        #       otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
+        #       otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
+        #       otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"

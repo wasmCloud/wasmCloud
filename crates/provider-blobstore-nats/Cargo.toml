@@ -1,0 +1,36 @@
+[package]
+name = "wasmcloud-provider-blobstore-nats"
+version = "0.1.0"
+description = """
+A capability provider that satisfies the 'wasi:blobstore' interface using NATS object store as a backend.
+"""
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+anyhow = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
+bytes = { workspace = true }
+futures = { workspace = true }
+rustls-pemfile = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true, features = ["fs"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+wascap = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wrpc-interface-blobstore = { workspace = true }
+
+[dev-dependencies]
+wasmcloud-test-util = { workspace = true, features = ["testcontainers"] }
+wrpc-transport-nats = { workspace = true }

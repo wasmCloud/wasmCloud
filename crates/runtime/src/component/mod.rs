@@ -4,11 +4,12 @@ use core::ops::{Bound, Deref};
 use core::pin::Pin;
 use core::time::Duration;
 
-use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
-
+use anyhow::Result;
 use anyhow::{ensure, Context as _};
 use futures::{Stream, TryStreamExt as _};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt as _};
 use tokio::sync::mpsc;
 use tracing::{debug, info_span, instrument, warn, Instrument as _, Span};
@@ -19,6 +20,7 @@ use wasi_preview1_component_adapter_provider::{
     WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME, WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
 };
 use wasmtime::component::{types, Linker, ResourceTable, ResourceTableError, ResourceType};
+use wasmtime::InstanceAllocationStrategy;
 use wasmtime_wasi::{IoView, WasiCtx, WasiCtxBuilder, WasiView};
 use wasmtime_wasi_http::WasiHttpCtx;
 use wrpc_runtime_wasmtime::{
@@ -150,6 +152,58 @@ pub struct ComponentConfig {
     pub require_signature: bool,
 }
 
+/// Component Environment Limits for more intricate resource control
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+pub struct Limits {
+    /// Maximum memory allocation in bytes. None defaults to host runtime limits
+    pub max_memory_limit: Option<usize>,
+    /// Maximum execution time in seconds. None defaults to host runtime limits.
+    pub max_execution_time: Option<u64>,
+}
+impl Limits {
+    /// Converts limits to a string-based key-value map for serialization.
+    ///
+    /// Only includes fields that have values (non-None). Used for converting
+    /// to external configuration formats.
+    ///
+    /// # Returns
+    /// `HashMap` containing string representations of set limits
+    #[must_use]
+    pub fn to_string_map(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+
+        if let Some(memory_limit) = self.max_memory_limit {
+            map.insert("max_memory_limit".to_string(), memory_limit.to_string());
+        }
+
+        if let Some(execution_time) = self.max_execution_time {
+            map.insert("max_execution_time".to_string(), execution_time.to_string());
+        }
+
+        map
+    }
+}
+
+/// Creates limits from a string-based key-value map.
+///
+/// Parses numeric values from string map, ignoring invalid entries.
+/// Missing or unparseable values default to None (no limit).
+///
+/// # Arguments
+/// * `map` - Optional `HashMap` containing string representations of limits
+///
+/// # Returns
+/// Optional Limits struct with parsed values, or None if input is None
+#[must_use]
+pub fn from_string_map<S: std::hash::BuildHasher>(
+    map: Option<&HashMap<String, String, S>>,
+) -> Option<Limits> {
+    map.map(|map| Limits {
+        max_memory_limit: map.get("max_memory_limit").and_then(|s| s.parse().ok()),
+
+        max_execution_time: map.get("max_execution_time").and_then(|s| s.parse().ok()),
+    })
+}
 /// Extracts and validates claims contained within a WebAssembly binary, if present
 ///
 /// # Arguments
@@ -190,6 +244,7 @@ where
     host_resources: Arc<HashMap<Box<str>, HashMap<Box<str>, (ResourceType, ResourceType)>>>,
     max_execution_time: Duration,
     experimental_features: Features,
+    max_memory_limit: usize,
 }
 
 impl<H> Debug for Component<H>
@@ -279,7 +334,20 @@ where
     ///
     /// If `wasm` represents a core Wasm module, then it will first be turned into a component.
     #[instrument(level = "trace", skip_all)]
-    pub fn new(rt: &Runtime, wasm: &[u8]) -> anyhow::Result<Self> {
+    pub fn new(rt: &Runtime, wasm: &[u8], limits: Option<Limits>) -> anyhow::Result<Self> {
+        Self::new_with_linker(rt, wasm, limits, |_| Ok(()))
+    }
+    /// Extracts [Claims](jwt::Claims) from WebAssembly component and compiles it using [Runtime].
+    /// The `linker_fn` is used to link additional interfaces to the component.
+    ///
+    /// If `wasm` represents a core Wasm module, then it will first be turned into a component.
+    #[instrument(level = "trace", skip_all)]
+    pub fn new_with_linker(
+        rt: &Runtime,
+        wasm: &[u8],
+        limits: Option<Limits>,
+        linker_fn: impl FnOnce(&mut Linker<Ctx<H>>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<Self> {
         if wasmparser::Parser::is_core_wasm(wasm) {
             let wasm = wit_component::ComponentEncoder::default()
                 .module(wasm)
@@ -291,9 +359,41 @@ where
                 .context("failed to add WASI preview1 adapter")?
                 .encode()
                 .context("failed to encode a component from module")?;
-            return Self::new(rt, &wasm);
+            return Self::new(rt, &wasm, limits);
         }
-        let engine = rt.engine.clone();
+        let engine: wasmtime::Engine = if let Some(limits) = limits {
+            if limits.max_memory_limit.is_none() {
+                rt.engine.clone()
+            } else {
+                //use engine_config and create separate engine per component and edit the PoolingAllocatorConfig
+                let mut component_pooling_config = rt.pooling_config.clone();
+                component_pooling_config.max_memory_size(
+                    limits
+                        .max_memory_limit
+                        .expect("max_memory_limit should be Some"),
+                );
+
+                let mut component_engine_config = rt.engine_config.clone();
+                component_engine_config.allocation_strategy(InstanceAllocationStrategy::Pooling(
+                    component_pooling_config,
+                ));
+
+                match wasmtime::Engine::new(&component_engine_config)
+                    .context("failed to construct engine")
+                {
+                    Ok(engine) => engine,
+                    Err(e) => {
+                        tracing::warn!(err = %e, "failed to construct engine with pooling allocator, falling back to dynamic allocator which may result in slower startup and execution of components.");
+                        component_engine_config
+                            .allocation_strategy(InstanceAllocationStrategy::OnDemand);
+                        wasmtime::Engine::new(&component_engine_config)
+                            .context("failed to construct engine")?
+                    }
+                }
+            }
+        } else {
+            rt.engine.clone()
+        };
         let claims_token = claims_token(wasm)?;
         let claims = claims_token.map(|c| c.claims);
         let component = wasmtime::component::Component::new(&engine, wasm)
@@ -305,6 +405,8 @@ where
             .context("failed to link core WASI interfaces")?;
         wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
             .context("failed to link `wasi:http`")?;
+
+        linker_fn(&mut linker)?;
 
         capability::blobstore::blobstore::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasi:blobstore/blobstore`")?;
@@ -514,6 +616,10 @@ where
             }
         }
         let instance_pre = linker.instantiate_pre(&component)?;
+        // use component specific memorylimit or runtime wide limit
+        let max_memory_limit = limits
+            .and_then(|l| l.max_memory_limit)
+            .unwrap_or(rt.max_linear_memory);
         Ok(Self {
             engine,
             claims,
@@ -521,6 +627,7 @@ where
             host_resources,
             max_execution_time: rt.max_execution_time,
             experimental_features: rt.experimental_features,
+            max_memory_limit,
         })
     }
 
@@ -543,7 +650,7 @@ where
         wasm.read_to_end(&mut buf)
             .await
             .context("failed to read Wasm")?;
-        Self::new(rt, &buf)
+        Self::new(rt, &buf, None)
     }
 
     /// Reads the WebAssembly binary synchronously and calls [Component::new].
@@ -555,7 +662,7 @@ where
     pub fn read_sync(rt: &Runtime, mut wasm: impl std::io::Read) -> anyhow::Result<Self> {
         let mut buf = Vec::new();
         wasm.read_to_end(&mut buf).context("failed to read Wasm")?;
-        Self::new(rt, &buf)
+        Self::new(rt, &buf, None)
     }
 
     /// [Claims](jwt::Claims) associated with this [Component].
@@ -577,6 +684,7 @@ where
             max_execution_time: self.max_execution_time,
             events,
             experimental_features: self.experimental_features,
+            max_memory_limit: self.max_memory_limit,
         }
     }
 
@@ -814,6 +922,7 @@ where
     max_execution_time: Duration,
     events: mpsc::Sender<WrpcServeEvent<C>>,
     experimental_features: Features,
+    max_memory_limit: usize,
 }
 
 impl<H, C> Clone for Instance<H, C>
@@ -828,13 +937,17 @@ where
             max_execution_time: self.max_execution_time,
             events: self.events.clone(),
             experimental_features: self.experimental_features,
+            max_memory_limit: self.max_memory_limit,
         }
     }
 }
 
 type TableResult<T> = Result<T, ResourceTableError>;
 
-pub(crate) struct Ctx<H>
+/// Wasmtime Context for a component instance, with access to
+/// WASI context, HTTP context, and WRPC Invocation context.
+/// This is a low-level API and has to be paired with `Component::new_with_linker`.
+pub struct Ctx<H>
 where
     H: Handler,
 {
