@@ -193,7 +193,7 @@ pub struct ConnectionOpts {
     /// JWT file for RPC authentication. Must be supplied with `rpc_seed`.
     #[clap(
         long = "nats-jwt",
-        alias = "rpc-jwt"
+        alias = "rpc-jwt",
         env = "WASMCLOUD_NATS_RPC_JWT",
         hide_env_values = true,
         requires = "rpc_seed"
