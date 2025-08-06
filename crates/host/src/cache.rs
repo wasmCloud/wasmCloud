@@ -112,8 +112,8 @@ where
     V: std::fmt::Debug + Clone + Send + Sync + 'static,
 {
     internal: Arc<RwLock<CacheInternal<K, V>>>,
-    purge_cycles: Arc<Option<u32>>,
-    purge_cycle_count: AtomicU32,
+    purge_cycles: Option<u32>,
+    purge_cycle_count: Arc<AtomicU32>,
 }
 
 impl<K, V> Cache<K, V>
@@ -125,8 +125,8 @@ where
     pub fn new(ttl: Duration) -> Self {
         Self {
             internal: Arc::new(RwLock::new(CacheInternal::new(ttl))),
-            purge_cycles: Arc::new(None),
-            purge_cycle_count: AtomicU32::new(0),
+            purge_cycles: None,
+            purge_cycle_count: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -159,7 +159,7 @@ where
     }
 
     async fn check_purge(&self) {
-        if let Some(purge_cycles) = *self.purge_cycles {
+        if let Some(purge_cycles) = self.purge_cycles {
             self.purge_cycle_count.fetch_add(1, Ordering::Relaxed);
             if self.purge_cycle_count.load(Ordering::Relaxed) >= purge_cycles {
                 self.poll_purge_once().await;
@@ -192,8 +192,8 @@ where
     fn clone(&self) -> Self {
         Self {
             internal: Arc::clone(&self.internal),
-            purge_cycles: Arc::clone(&self.purge_cycles),
-            purge_cycle_count: AtomicU32::new(self.purge_cycle_count.load(Ordering::Relaxed)),
+            purge_cycles: self.purge_cycles,
+            purge_cycle_count: self.purge_cycle_count.clone(),
         }
     }
 }
@@ -273,8 +273,8 @@ where
 
         Cache {
             internal: Arc::new(RwLock::new(internal)),
-            purge_cycles: Arc::new(self.purge_cycles),
-            purge_cycle_count: AtomicU32::new(0),
+            purge_cycles: self.purge_cycles,
+            purge_cycle_count: Arc::new(AtomicU32::new(0)),
         }
     }
 }
@@ -568,7 +568,7 @@ mod tests {
 
         // Wait for all tasks to complete
         for handle in handles {
-            handle.await.unwrap();
+            handle.await.expect("Task panicked during execution");
         }
 
         // Verify all entries are in the cache
