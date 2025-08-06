@@ -26,7 +26,6 @@ pub const WASMCLOUD_MAX_EXECUTION_TIME_MS: &str = "WASMCLOUD_MAX_EXECUTION_TIME_
 pub const DEFAULT_MAX_EXECUTION_TIME_MS: &str = "600000";
 
 // NATS RPC connection configuration
-#[deprecated( note = "Older version")]
 pub mod deprecated_rpc {
 pub const WASMCLOUD_RPC_HOST: &str = "WASMCLOUD_RPC_HOST";
 pub const WASMCLOUD_RPC_PORT: &str = "WASMCLOUD_RPC_PORT";
@@ -41,7 +40,6 @@ pub const WASMCLOUD_RPC_TLS_CA_FILE: &str = "WASMCLOUD_RPC_TLS_CA_FILE";
 }
 
 // NATS CTL connection configuration
-#[deprecated(note = "Older version")]
 pub mod deprecated_ctl {
 pub const WASMCLOUD_CTL_HOST: &str = "WASMCLOUD_CTL_HOST";
 pub const WASMCLOUD_CTL_PORT: &str = "WASMCLOUD_CTL_PORT";
