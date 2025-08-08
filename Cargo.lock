@@ -8443,7 +8443,7 @@ dependencies = [
 
 [[package]]
 name = "wash"
-version = "0.42.0"
+version = "1.0.0"
 dependencies = [
  "anstyle",
  "anyhow",
