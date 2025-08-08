@@ -7,10 +7,13 @@ use std::sync::Arc;
 
 #[cfg(feature = "otel")]
 use anyhow::Context as _;
+use opentelemetry::{global, KeyValue};
 #[cfg(feature = "otel")]
 use opentelemetry_otlp::WithExportConfig;
+use std::sync::Mutex;
 use tracing::{Event, Subscriber};
 use tracing_flame::FlameLayer;
+use tracing_subscriber::filter::FilterFn;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt::format::{DefaultFields, Format, Full, Json, JsonFields, Writer};
 use tracing_subscriber::fmt::time::SystemTime;
@@ -61,6 +64,22 @@ where
 pub struct FlushGuard {
     _stderr: tracing_appender::non_blocking::WorkerGuard,
     _flame: Option<tracing_flame::FlushGuard<BufWriter<File>>>,
+}
+
+pub struct ErrorCounter {
+    dropped_lines: usize,
+}
+
+impl ErrorCounter {
+    fn new() -> Self {
+        ErrorCounter { dropped_lines: 0 }
+    }
+    pub fn increment(&mut self) {
+        self.dropped_lines += 1;
+    }
+    pub fn get_count(&self) -> usize {
+        self.dropped_lines
+    }
 }
 
 /// Configures a global tracing subscriber, which includes:
@@ -166,26 +185,42 @@ pub fn configure_tracing(
     let stderr = std::io::stderr();
     let ansi = stderr.is_terminal();
     let (stderr, stderr_guard) = tracing_appender::non_blocking(stderr);
-    let fmt = tracing_subscriber::fmt::layer()
-        .with_writer(stderr)
-        .with_ansi(ansi);
+    // otel metric counter to count dropped lines
+    let meter = global::meter("wasmcloud log tracing");
+    let otel_counter = meter
+        .u64_counter("Wasmcloud u64_counter")
+        .with_description("Counting the number of dropped lines")
+        .build();
+
+    let mut error_counter = ErrorCounter::new();
+    let error_counter = std::sync::Arc::new(Mutex::new(ErrorCounter::new()));
+    let counter_clone = error_counter.clone();
 
     let dispatch = if use_structured_logging {
-        registry
-            .with(
-                fmt.event_format(JsonOrNot::Json(Format::default().json()))
-                    .fmt_fields(JsonFields::new())
-                    .with_filter(log_level_filter),
-            )
-            .into()
+        let error_counter = std::sync::Arc::new(Mutex::new(ErrorCounter::new()));
+        let counter_clone = error_counter.clone();
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .with_writer(stderr)
+            .with_ansi(ansi)
+            .with_filter(FilterFn::new(move |meta| {
+                let mut counter = counter_clone.lock().unwrap();
+                counter.increment();
+
+                if counter.get_count() == 1 {
+                    tracing::error!("Dropped {} lines due to full buffer", counter.get_count());
+                    otel_counter.add(1, &[]);
+                }
+                true
+            }));
+        registry.with(fmt_layer).into()
     } else {
-        registry
-            .with(
-                fmt.event_format(JsonOrNot::Not(Format::default()))
-                    .fmt_fields(DefaultFields::new())
-                    .with_filter(log_level_filter),
-            )
-            .into()
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .event_format(JsonOrNot::Not(Format::default()))
+            .fmt_fields(DefaultFields::new())
+            .with_writer(stderr)
+            .with_ansi(ansi)
+            .with_filter(log_level_filter);
+        registry.with(fmt_layer).into()
     };
 
     Ok((
