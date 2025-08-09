@@ -1,0 +1,5 @@
+package wasmcloud:providers;
+
+world provider-websocket-client {
+    export wasmcloud:websocket/client@0.1.0-draft;
+} 
