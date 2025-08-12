@@ -759,13 +759,12 @@ fn parse_duration_fallback_ms(arg: &str) -> anyhow::Result<Duration> {
 /// the argument provided by the user.
 /// This function should be removed once the older duration options are fully deprecated.
 fn get_preferred_arg(old: Duration, new: Duration, default: Duration) -> Duration {
-    let return_value = match (old, new) {
+    match (old, new) {
         (a, b) if a == b => a,
         (a, b) if a == default => b,
         (a, b) if b == default => a,
         _ => default,
-    };
-    return return_value;
+    }
 }
 
 /// Validates that a subject string (e.g. secrets-topic and policy-topic) adheres to the rules and conventions
