@@ -74,8 +74,8 @@ impl Default for ClientConfig {
         ClientConfig {
             lattice: default_lattice(),
             app_name: None,
-            ctl_host: String::new(),
-            ctl_port: 0,
+            ctl_host: default_ctl_host(),
+            ctl_port: default_ctl_port(),
             ctl_jwt: None,
             ctl_seed: None,
             ctl_credsfile: None,
