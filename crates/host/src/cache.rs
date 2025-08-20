@@ -470,7 +470,7 @@ mod tests {
             .with_purge_cycles(10)
             .build();
 
-        let debug_str = format!("{:?}", cache);
+        let debug_str = format!("{cache:?}");
         assert!(debug_str.contains("Cache"));
         assert!(debug_str.contains("purge_cycles"));
         assert!(debug_str.contains("purge_cycle_count"));
