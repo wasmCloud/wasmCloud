@@ -602,7 +602,7 @@ jobs:
             <meta http-equiv="refresh" content="0; URL=wasmcloud_host/index.html">
             <link rel="canonical" href="https://${{ github.repository_owner }}.github.io/wasmCloud/wasmcloud_host/index.html">
           EOF
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b
         with:
           path: doc
       - run: nix copy --to "file://${{ runner.temp }}/nix-store" .#checks.x86_64-linux.doc
