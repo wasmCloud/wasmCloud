@@ -15,6 +15,8 @@ const DEFAULT_REFRESH_TIME: Duration = Duration::from_secs(5);
 pub struct HostMetrics {
     /// Represents the time it took for each handle_rpc_message invocation in nanoseconds.
     pub handle_rpc_message_duration_ns: Histogram<u64>,
+    /// Represents the time it took for each invoked invocation in nanoseconds.
+    pub call_rpc_message_duration_ns: Histogram<u64>,
     /// The count of the number of times an component was invoked.
     pub component_invocations: Counter<u64>,
     /// The count of the number of times an component invocation resulted in an error.
@@ -81,6 +83,11 @@ impl HostMetrics {
         let wasmcloud_host_handle_rpc_message_duration_ns = meter
             .u64_histogram("wasmcloud_host.handle_rpc_message.duration")
             .with_description("Duration in nanoseconds each handle_rpc_message operation took")
+            .with_unit("nanoseconds")
+            .build();
+        let wasmcloud_host_call_rpc_message_duration_ns = meter
+            .u64_histogram("wasmcloud_host.call_rpc_message.duration")
+            .with_description("Duration in nanoseconds each call_rpc_message operation took")
             .with_unit("nanoseconds")
             .build();
 
@@ -173,6 +180,7 @@ impl HostMetrics {
 
         Ok(Self {
             handle_rpc_message_duration_ns: wasmcloud_host_handle_rpc_message_duration_ns,
+            call_rpc_message_duration_ns: wasmcloud_host_call_rpc_message_duration_ns,
             component_invocations: component_invocation_count,
             component_errors: component_error_count,
             component_active_instances,
@@ -201,7 +209,7 @@ impl HostMetrics {
         self.component_max_instances.record(max, attributes);
     }
 
-    /// Record the result of invoking a component, including the elapsed time, any attributes, and whether the invocation resulted in an error.
+    /// Record the result of an inbound component invocation, including the elapsed time, any attributes, and whether the invocation resulted in an error.
     pub(crate) fn record_component_invocation(
         &self,
         elapsed: u64,
@@ -211,6 +219,20 @@ impl HostMetrics {
         self.handle_rpc_message_duration_ns
             .record(elapsed, attributes);
         self.component_invocations.add(1, attributes);
+        if error {
+            self.component_errors.add(1, attributes);
+        }
+    }
+
+    /// Record the result of an outbound component invocation, including the elapsed time and any attributes.
+    pub(crate) fn record_call_rpc_message(
+        &self,
+        elapsed: u64,
+        attributes: &[KeyValue],
+        error: bool,
+    ) {
+        self.call_rpc_message_duration_ns
+            .record(elapsed, attributes);
         if error {
             self.component_errors.add(1, attributes);
         }
