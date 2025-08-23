@@ -2,6 +2,8 @@ use std::{
     fs::File,
     io::Read,
     path::{Path, PathBuf},
+    str::FromStr,
+    time::Duration,
 };
 
 use crate::lib::{
@@ -36,6 +38,23 @@ pub const fn default_timeout_ms() -> u64 {
     DEFAULT_NATS_TIMEOUT_MS
 }
 
+pub fn default_timeout() -> Duration {
+    Duration::from_millis(default_timeout_ms())
+}
+
+pub fn parse_duration_fallback_ms(dur: &str) -> anyhow::Result<Duration> {
+    if let Ok(duration) = humantime::Duration::from_str(dur) {
+        return Ok(duration.into());
+    }
+    if let Ok(millis) = dur.parse::<u64>() {
+        return Ok(std::time::Duration::from_millis(millis));
+    }
+
+    Err(anyhow::anyhow!(
+        "Invalid duration: '{}'. Expected duration: '5s', '1m', '100ms'",
+        dur
+    ))
+}
 /// Transform a json string (e.g. "{"hello": "world"}") into msgpack bytes
 pub fn json_str_to_msgpack_bytes(payload: &str) -> Result<Vec<u8>> {
     let json: serde_json::Value =
@@ -183,5 +202,37 @@ mod test {
         );
         let output = crate::lib::cli::input_vec_to_hashmap(vec![base64_option]).unwrap();
         assert_eq!(expected, output);
+    }
+
+    #[test]
+    fn test_parse_duration_fallback_ms() {
+        // Test humantime format
+        assert_eq!(
+            crate::util::parse_duration_fallback_ms("5s").unwrap(),
+            std::time::Duration::from_secs(5)
+        );
+        assert_eq!(
+            crate::util::parse_duration_fallback_ms("100ms").unwrap(),
+            std::time::Duration::from_millis(100)
+        );
+        assert_eq!(
+            crate::util::parse_duration_fallback_ms("2m").unwrap(),
+            std::time::Duration::from_secs(120)
+        );
+
+        // Test milliseconds fallback
+        assert_eq!(
+            crate::util::parse_duration_fallback_ms("1000").unwrap(),
+            std::time::Duration::from_millis(1000)
+        );
+        assert_eq!(
+            crate::util::parse_duration_fallback_ms("500").unwrap(),
+            std::time::Duration::from_millis(500)
+        );
+
+        // Test error cases
+        assert!(crate::util::parse_duration_fallback_ms("invalid").is_err());
+        assert!(crate::util::parse_duration_fallback_ms("").is_err());
+        assert!(crate::util::parse_duration_fallback_ms("abc123").is_err());
     }
 }
