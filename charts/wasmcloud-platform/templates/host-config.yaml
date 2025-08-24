@@ -60,7 +60,7 @@ spec:
   # Optional: Allow the host to pull artifacts from OCI registries insecurely.
   {{- with .allowedInsecure }}{{- if ne (len .) 0 }}
   allowedInsecure:
-    {{- range .allowedInsecure }}
+    {{- range . }}
     - {{ . }}
     {{- end }}
   {{- end }}{{- end }}
