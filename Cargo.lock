@@ -7648,6 +7648,7 @@ dependencies = [
  "futures-io",
  "futures-sink",
  "pin-project-lite",
+ "slab",
  "tokio",
 ]
 
@@ -9001,6 +9002,7 @@ dependencies = [
  "test-components",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -9135,6 +9137,7 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.2",
  "tokio-stream",
+ "tokio-util",
  "tracing",
  "tracing-opentelemetry",
  "ulid",
