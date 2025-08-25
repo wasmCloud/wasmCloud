@@ -55,7 +55,7 @@ jobs:
     strategy:
       fail-fast: false # Ensure we can run the full suite even if one OS fails
       matrix:
-        os: [ubuntu-latest-4-cores, windows-latest, macos-13]
+        os: [oracle-vm-4cpu-16gb-x86-64, windows-latest, macos-13]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
