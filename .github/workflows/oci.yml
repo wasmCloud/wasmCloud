@@ -35,7 +35,7 @@ jobs:
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
         with:
           path: ${{ runner.temp }}/nix-store-amd64
           name: nix-store-${{ inputs.bin }}-x86_64-unknown-linux-musl
@@ -43,7 +43,7 @@ jobs:
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store-amd64"
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
         with:
           path: ${{ runner.temp }}/nix-store-arm64
           name: nix-store-${{ inputs.bin }}-aarch64-unknown-linux-musl
@@ -51,7 +51,7 @@ jobs:
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store-arm64"
 
-      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
         id: cache
         with:
           path: ${{ runner.temp }}/nix-store-oci
@@ -78,7 +78,7 @@ jobs:
 
       - name: Login to GitHub Container Registry
         if: startswith(github.ref, format('refs/tags/{0}v', inputs.prefix)) || github.ref == 'refs/heads/main'
-        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772
+        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -87,7 +87,7 @@ jobs:
       - name: Login to DockerHub
         if: startswith(github.ref, format('refs/tags/{0}v', inputs.prefix)) || github.ref == 'refs/heads/main'
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
-        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772
+        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1
         with:
           username: ${{ secrets.DOCKERHUB_PUSH_USER }}
           password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}

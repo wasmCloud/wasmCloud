@@ -35,6 +35,10 @@ to help get your contribution accepted.
 In general, most repos in the wasmCloud project have linters and other coding standards to follow.
 Those standards should be followed when you contribute your code.
 
+## How to contribute a project
+
+If you're looking to a contribute a project to wasmCloud, please refer to the [wasmcloud/contrib](https://github.com/wasmCloud/contrib) repository. This repository is where community capability providers, reusable components and experiments can be contributed and maintained without being subject to the lifecycle of the main project. If your project requires (or strongly benefits from) its own repository in the wasmCloud organization, please file an issue in the [wasmcloud/contrib](https://github.com/wasmCloud/contrib/issues/new) repository and the maintainers can determine how to best accept your contribution.
+
 ## Pull Requests
 
 Like any good open source project, we use Pull Requests (PRs) to track code changes.
