@@ -119,6 +119,7 @@ impl NatsHostBuilder {
         policy_topic: Option<String>,
         policy_timeout: Option<Duration>,
         policy_changes_topic: Option<String>,
+        decision_cache_ttl: Option<Duration>,
     ) -> anyhow::Result<Self> {
         let policy_manager = NatsPolicyManager::new(
             self.ctl_nats.clone(),
@@ -130,6 +131,7 @@ impl NatsHostBuilder {
             policy_topic,
             policy_timeout,
             policy_changes_topic,
+            decision_cache_ttl,
         )
         .await?;
 
