@@ -53,9 +53,7 @@ This will create a folder called `build` which contains `sqldb_postgres_query_s.
 wash up
 ```
 
-> [!NOTE]
-> `wash up` will run as long as the host is running (you can cancel it with `Ctrl-C`)
-
+> [!NOTE] > `wash up` will run as long as the host is running (you can cancel it with `Ctrl-C`)
 
 ## Set up configuration for the provider
 
@@ -88,10 +86,10 @@ wash app deploy --replace wadm.yaml
 >
 > In this case, `wash app delete rust-sqldb-postgres` should work.
 
-To ensure that the application is deployed you can use `wadm app list`:
+To ensure that the application is deployed you can use `wash app list`:
 
 ```console
-wadm app list
+wash app list
 ```
 
 If you want to see everything running in the lattice at once:
