@@ -4,7 +4,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/wasmcloud/wasmcloud/examples/golang/providers/custom-template/component/gen/wasi/logging/logging"
+	"go.wasmcloud.dev/component/log/wasilog"
+
 	process "github.com/wasmcloud/wasmcloud/examples/golang/providers/custom-template/component/gen/wasmcloud/example/process-data"
 	system "github.com/wasmcloud/wasmcloud/examples/golang/providers/custom-template/component/gen/wasmcloud/example/system-info"
 )
@@ -14,9 +15,10 @@ func init() {
 }
 
 func Process(data process.Data) string {
-	logging.Log(logging.LevelInfo, "", fmt.Sprintf("Processing data: %v", data))
+	logger := wasilog.ContextLogger("handle")
+	logger.Info(fmt.Sprintf("Processing data: %v", data))
 	os := system.RequestInfo(system.KindOS)
-	arch := system.RequestInfo(system.KindOS)
+	arch := system.RequestInfo(system.KindARCH)
 	return fmt.Sprintf("Provider is running on %s-%s", os, arch)
 }
 
