@@ -1,7 +1,7 @@
 use core::future::Future;
 
 use anyhow::Context as _;
-use tracing::{info_span, instrument, Instrument as _};
+use tracing::{info_span, instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use wasmtime::Store;
 
@@ -82,7 +82,6 @@ where
                 reply_to: msg.reply_to,
             },
         )
-        .instrument(call_handle_message)
         .await
         .context("failed to call `wasmcloud:messaging/handler@0.2.0#handle-message`")
 }
