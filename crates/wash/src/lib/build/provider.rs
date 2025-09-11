@@ -197,6 +197,10 @@ fn build_rust_provider(
     }
     provider_path_buf.push(&bin_name);
 
+    if cfg!(windows) {
+        provider_path_buf.set_extension("exe");
+    }
+
     Ok((provider_path_buf, bin_name))
 }
 
