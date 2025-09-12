@@ -1085,33 +1085,45 @@ impl Host {
                                         InvocationContext {
                                             start_at,
                                             ref attributes,
-                                            ..
+                                            span,
                                         },
-                                    success,
+                                    status,
                                 }
                                 | WrpcServeEvent::MessagingHandlerHandleMessageReturned {
                                     context:
                                         InvocationContext {
                                             start_at,
                                             ref attributes,
-                                            ..
+                                            span,
                                         },
-                                    success,
+                                    status,
                                 }
                                 | WrpcServeEvent::DynamicExportReturned {
                                     context:
                                         InvocationContext {
                                             start_at,
                                             ref attributes,
-                                            ..
+                                            span,
                                         },
-                                    success,
-                                } => metrics_right.record_component_invocation(
-                                    u64::try_from(start_at.elapsed().as_nanos())
-                                        .unwrap_or_default(),
-                                    attributes,
-                                    !success,
-                                ),
+                                    status,
+                                } => {
+                                    let error = status.is_err();
+
+                                    if let Err(err) = status {
+                                        span.set_status(opentelemetry::trace::Status::Error {
+                                            description: err,
+                                        });
+                                    } else {
+                                        span.set_status(opentelemetry::trace::Status::Ok);
+                                    }
+
+                                    metrics_right.record_component_invocation(
+                                        u64::try_from(start_at.elapsed().as_nanos())
+                                            .unwrap_or_default(),
+                                        attributes,
+                                        error,
+                                    );
+                                }
                             }
                         }
                         debug!("serving event stream is done");

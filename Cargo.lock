@@ -9121,6 +9121,7 @@ dependencies = [
  "hyper-util",
  "names",
  "nkeys",
+ "opentelemetry",
  "opentelemetry-nats",
  "rustls 0.23.26",
  "rustls-pemfile 2.2.0",
