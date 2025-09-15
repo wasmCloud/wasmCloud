@@ -162,9 +162,8 @@ spec:
       {{- if .podTemplateAdditions }}
       {{- tpl (.podTemplateAdditions | toYaml) . | nindent 6 }}
       {{- else }}
-      spec:
-        nodeSelector:
-          kubernetes.io/os: "linux"
+      nodeSelector:
+        kubernetes.io/os: "linux"
       {{- end }}
   {{- end }}
 {{- end }}
