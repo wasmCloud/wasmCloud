@@ -160,7 +160,7 @@ spec:
     # Note that you *cannot* set the `containers` field here as it is managed by the controller.
     podTemplateAdditions:
       {{- if .podTemplateAdditions }}
-      {{- tpl (.podTemplateAdditions | toYaml) . | nindent 4 }}
+      {{- tpl (.podTemplateAdditions | toYaml) . | nindent 6 }}
       {{- else }}
       spec:
         nodeSelector:
