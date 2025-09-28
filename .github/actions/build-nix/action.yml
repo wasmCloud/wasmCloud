@@ -8,7 +8,7 @@ inputs:
 runs:
   using: composite
   steps:
-  - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
+  - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
     id: cache
     with:
       path: ${{ runner.temp }}/nix-store-${{ inputs.package }}
