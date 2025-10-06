@@ -1,6 +1,6 @@
 [package]
 name = "blobby"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["wasmCloud Team"]
 edition = "2021"
 
