@@ -29,8 +29,8 @@ use crate::{
 
 #[derive(Clone)]
 struct RouteData {
-    component_id: Arc<str>,
-    client: WrpcClient,
+    target_component: Arc<str>,
+    wrpc: WrpcClient,
 }
 
 /// This struct holds both the forward and reverse mappings for path-based routing
@@ -182,8 +182,8 @@ impl Provider for HttpServerProvider {
         if let Err(err) = path_router.paths.insert(
             path.as_ref(),
             RouteData {
-                component_id: target,
-                client: wrpc,
+                target_component: target,
+                wrpc,
             },
         ) {
             match err {
@@ -254,8 +254,8 @@ async fn handle_request(
     let path = req.uri().path();
 
     let Ok(RouteData {
-        component_id: target_component,
-        client: wrpc,
+        target_component: target_component,
+        wrpc: wrpc,
     }) = router.read().await.paths.at(path).map(|m| m.value.clone())
     else {
         Err((http::StatusCode::NOT_FOUND, "path not found"))?
