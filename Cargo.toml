@@ -141,6 +141,7 @@ clap = { workspace = true, features = [
   "usage",
 ], optional = true }
 clap-markdown = { workspace = true, optional = true }
+humantime = { workspace = true }
 nkeys = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
