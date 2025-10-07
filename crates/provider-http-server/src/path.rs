@@ -254,8 +254,8 @@ async fn handle_request(
     let path = req.uri().path();
 
     let Ok(RouteData {
-        target_component: target_component,
-        wrpc: wrpc,
+        target_component,
+        wrpc,
     }) = router.read().await.paths.at(path).map(|m| m.value.clone())
     else {
         Err((http::StatusCode::NOT_FOUND, "path not found"))?
