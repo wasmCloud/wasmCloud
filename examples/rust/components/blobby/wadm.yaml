@@ -24,7 +24,7 @@ spec:
       properties:
         # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
         # image: file://./build/blobby_s.wasm
-        image: ghcr.io/wasmcloud/components/blobby-rust:0.5.0
+        image: ghcr.io/wasmcloud/components/blobby-rust:0.5.1
       traits:
         - type: spreadscaler
           properties:
