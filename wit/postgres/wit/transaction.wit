@@ -1,0 +1,21 @@
+package wasmcloud:postgres@0.2.0-draft;
+
+interface transaction {
+  use types.{query-error, prepared-statement-exec-error, statement-prepare-error, result-row, pg-value};
+
+  /// Begin a transaction, returning a token that can be used to execute queries and prepared statements
+  resource transaction {
+    constructor();
+
+    /// Same as `query` in the `query` interface, but in the context of a transaction. No queries
+    /// get executed until the transaction is committed.
+    query: func(query: string, params: list<pg-value>) -> result<_, query-error>;
+
+    /// Same as `query-batch` in the `query-batch` interface, but in the context of a transaction.
+    /// No queries get executed until the transaction is committed.
+    query-batch: func(query: string) -> result<_, query-error>;
+
+    /// Commit the transaction, making all changes permanent or rolling back and returning an error
+    commit: static func(this: transaction) -> result<_, query-error>;
+  }
+}
