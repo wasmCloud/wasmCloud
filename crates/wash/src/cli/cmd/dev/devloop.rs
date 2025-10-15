@@ -1,15 +1,14 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
-use anyhow::{bail, ensure, Context as _, Result};
-use console::style;
-use tracing::{debug, warn};
 use crate::lib::app::AppManifest;
 use crate::lib::cli::stop::stop_provider;
 use crate::lib::component::{scale_component, ScaleComponentArgs};
+use anyhow::{bail, ensure, Context as _, Result};
+use console::style;
+use tracing::{debug, warn};
 use wasmcloud_control_interface::Client as CtlClient;
 
-use wadm_types::{ConfigProperty, Manifest, Properties, SecretProperty, SecretSourceProperty};
 use crate::lib::build::{build_project, SignConfig};
 use crate::lib::cli::{CommonPackageArgs, OutputKind};
 use crate::lib::generate::emoji;
@@ -17,6 +16,7 @@ use crate::lib::parser::{
     load_config, DevConfigSpec, DevManifestComponentTarget, DevSecretSpec, ProjectConfig,
     TypeConfig,
 };
+use wadm_types::{ConfigProperty, Manifest, Properties, SecretProperty, SecretSourceProperty};
 
 use crate::app::deploy_model_from_manifest;
 use crate::appearance::spinner::Spinner;
@@ -540,6 +540,7 @@ async fn scale_down_component(
                 config: vec![],
                 skip_wait: false,
                 timeout_ms: None,
+                allow_update: false,
             })
             .await
             .with_context(|| {

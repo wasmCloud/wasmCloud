@@ -24,6 +24,7 @@ pub struct ComponentScaledInfo {
 /// * `component_ref` - The reference of the component to scale
 /// * `max_instances` - The maximum number of instances to scale to
 /// * `annotations` - Optional annotations to apply to the component
+/// * `allow_update` - Whether to perform allow updates to the component (triggering a separate update)
 pub struct ScaleComponentArgs<'a> {
     /// The control interface client
     pub client: &'a CtlClient,
@@ -43,6 +44,8 @@ pub struct ScaleComponentArgs<'a> {
     pub skip_wait: bool,
     /// The timeout for waiting for the component to scale
     pub timeout_ms: Option<u64>,
+    /// Whether to perform allow updates to the component (triggering a separate update)
+    pub allow_update: bool,
 }
 
 /// Scale a Wasmcloud component on a given host
@@ -57,6 +60,7 @@ pub async fn scale_component(
         config,
         skip_wait,
         timeout_ms,
+        allow_update,
     }: ScaleComponentArgs<'_>,
 ) -> Result<ComponentScaledInfo> {
     // If timeout isn't supplied, override with a longer timeout for starting component
@@ -80,6 +84,7 @@ pub async fn scale_component(
             max_instances,
             annotations.map(BTreeMap::from_iter),
             config,
+            allow_update,
         )
         .await
         .map_err(boxed_err_to_anyhow)?;

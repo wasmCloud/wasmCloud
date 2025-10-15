@@ -360,6 +360,7 @@ mod test {
             "default-port",
             "--config",
             "lang",
+            "--allow-update",
         ])?;
 
         match scale_component_all.command {
@@ -373,6 +374,7 @@ mod test {
                 config,
                 skip_wait,
                 wait_timeout_ms,
+                allow_update,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
@@ -386,6 +388,7 @@ mod test {
                 assert_eq!(config, vec!["default-port", "lang"]);
                 assert!(!skip_wait);
                 assert_eq!(wait_timeout_ms, 5000);
+                assert_eq!(allow_update, true)
             }
             cmd => panic!("ctl scale component constructed incorrect command {cmd:?}"),
         }
