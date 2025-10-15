@@ -388,7 +388,7 @@ mod test {
                 assert_eq!(config, vec!["default-port", "lang"]);
                 assert!(!skip_wait);
                 assert_eq!(wait_timeout_ms, 5000);
-                assert_eq!(allow_update, true)
+                assert!(allow_update);
             }
             cmd => panic!("ctl scale component constructed incorrect command {cmd:?}"),
         }
