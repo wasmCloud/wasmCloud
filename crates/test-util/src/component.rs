@@ -56,6 +56,7 @@ pub async fn assert_start_component(
             count,
             None,
             config,
+            false,
         )
         .await
         .map_err(|e| anyhow!(e).context("failed to start component"))?;
@@ -116,6 +117,7 @@ pub async fn assert_scale_component(
             count,
             annotations,
             config,
+            false,
         )
         .await
         .map_err(|e| anyhow!(e).context("failed to start component"))?;
