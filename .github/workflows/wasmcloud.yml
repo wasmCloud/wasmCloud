@@ -817,7 +817,7 @@ jobs:
           VERSION=$(echo "${GITHUB_REF##*/}" | sed -e 's/wash-v//')
           echo "wash_version=$VERSION" >> $GITHUB_ENV
       - name: Release homebrew
-        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0
+        uses: peter-evans/repository-dispatch@5fc4efd1a4797ddb68ffd0714a238564e4cc0e6f
         if: startsWith(github.ref, 'refs/tags/wash-v')
         with:
           token: ${{ secrets.HOMEBREW_CHOCOLATEY_DISPATCH_TOKEN }}
@@ -826,7 +826,7 @@ jobs:
           client-payload: |
             {"tag_prefix": "wash", "tag_version": "${{ env.wash_version }}"}
       - name: Release chocolatey
-        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0
+        uses: peter-evans/repository-dispatch@5fc4efd1a4797ddb68ffd0714a238564e4cc0e6f
         if: startsWith(github.ref, 'refs/tags/wash-v')
         with:
           token: ${{ secrets.HOMEBREW_CHOCOLATEY_DISPATCH_TOKEN }}
