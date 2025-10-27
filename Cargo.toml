@@ -411,7 +411,7 @@ wit-bindgen-core = { version = "0.44.0", default-features = false }
 wit-bindgen-go = { version = "0.44.0", default-features = false }
 wit-bindgen-wrpc = { version = "0.9", default-features = false }
 wit-component = { version = "0.224.1", default-features = false }
-wit-parser = { version = "0.224.1", default-features = false }
+wit-parser = { version = "0.236.1", default-features = false }
 wrpc-interface-blobstore = { version = "0.21", default-features = false }
 wrpc-interface-http = { version = "0.32.1", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.28", default-features = false }
