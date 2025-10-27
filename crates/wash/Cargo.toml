@@ -35,6 +35,7 @@ plugin = ["wasmtime", "wasmtime-wasi", "wasmtime-wasi-http"]
 [dependencies]
 anstyle = { workspace = true }
 anyhow = { workspace = true, features = ["backtrace"] }
+astral-tokio-tar = { workspace = true }
 async-compression = { workspace = true, features = ["tokio", "gzip"] }
 async-nats = { workspace = true, optional = true }
 bytes = { workspace = true, features = ["serde"] }
@@ -99,7 +100,6 @@ thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-stream = { workspace = true }
-tokio-tar = { workspace = true }
 tokio-util = { workspace = true }
 toml = { workspace = true, features = ["parse"] }
 tracing = { workspace = true, features = ["log"] }
