@@ -10,7 +10,7 @@ spec:
     - name: test-component
       type: component
       properties:
-        image: ghcr.io/wasmcloud/components/echo-messaging-rust:0.1.0
+        image: ghcr.io/wasmcloud/components/echo-messaging-rust:0.2.0
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
