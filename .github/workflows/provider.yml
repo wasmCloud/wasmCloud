@@ -52,7 +52,7 @@ jobs:
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
         with:
           path: artifacts
           pattern: ${{ inputs.name }}-provider-*
@@ -63,7 +63,7 @@ jobs:
       - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-pc-windows-gnu/bin/${{ inputs.name }}-provider.exe"
       - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-unknown-linux-musl/bin/${{ inputs.name }}-provider"
 
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
         with:
           name: wash-x86_64-unknown-linux-musl
 
@@ -93,7 +93,7 @@ jobs:
           ./wash par insert --arch x86_64-windows --binary "./artifacts/${{ inputs.name }}-provider-x86_64-pc-windows-gnu/bin/${{ inputs.name }}-provider.exe" "${{ inputs.name }}.par.gz"
           ./wash par inspect "${{ inputs.name }}.par.gz"
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
         with:
           name: ${{ inputs.name }}.par.gz
           path: ${{ inputs.name }}.par.gz
