@@ -8,8 +8,6 @@ on:
         required: true
         default: 'main'
         type: string
-  schedule:
-    - cron: '0 0 * * SAT'
 
 permissions:
   contents: read
