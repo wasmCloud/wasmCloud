@@ -63,7 +63,7 @@ jobs:
           node-version: '18.x'
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - run: rustup show
-      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
+      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1
         with:
           shared-key: '${{ matrix.os }}-shared-cache'
       - name: Install nextest
@@ -103,7 +103,7 @@ jobs:
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
       - run: rustup show
-      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
+      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1
         with:
           shared-key: 'ubuntu-22.04-shared-cache'
       - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
@@ -164,7 +164,7 @@ jobs:
 
       # Set up Rust & trigger cargo toolchain
       - run: rustup show
-      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
+      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1
         with:
           shared-key: 'ubuntu-22.04-shared-cache'
 
