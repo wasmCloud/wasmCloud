@@ -9,7 +9,7 @@ The purpose of this example is to provide comprehensive comments on the usage of
 Prerequisites:
 
 1. [Go toolchain](https://go.dev/doc/install)
-1. [wit-bindgen-wrpc 0.7.0](https://github.com/bytecodealliance/wrpc), download the release binary
+1. [wit-bindgen-wrpc 0.15.0](https://github.com/bytecodealliance/wrpc), download the release binary
 1. [wash](https://wasmcloud.com/docs/installation)
 
 ```bash
@@ -36,20 +36,32 @@ Prerequisites:
 You can run this capability provider as a binary by passing a simple base64 encoded [HostData](https://pkg.go.dev/github.com/wasmCloud/provider-sdk-go#HostData) struct, in order to do basic testing. For example:
 
 ```bash
-nats-server -js &
-echo '{"lattice_rpc_url": "0.0.0.0:4222", "lattice_rpc_prefix": "default", "provider_key": "custom-template", "link_name": "default"}' | base64 | go run .
+nats-server -js
 ```
 
-And in another terminal, you can request the health of the provider using the NATS CLI
+Then from your project directory, run:
+
+```bash
+sh run.sh
+```
+
+In another terminal, test provider health with the NATS CLI...
 
 ```bash
 nats req "wasmbus.rpc.default.custom-template.health" '{}'
 ```
-
-Additionally, you can invoke the provider directly which will send test data to each linked component
+```
+18:06:30 Sending request on "wasmbus.rpc.default.custom-template.health"
+18:06:30 Received with rtt 438µs
+{"healthy":true,"message":"provider healthy"}
+```
+You can also invoke the provider with `wash call`, which in this case will report that we have no linked components:
 
 ```bash
 wash call custom-template wasmcloud:example/system-info.call
+```
+```
+Error invoking component: timed out invoking component, is component [custom-template] running in lattice [default]?
 ```
 
 ## Running as an application
