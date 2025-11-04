@@ -1,6 +1,6 @@
 # HTTP Hello World
 
-This is a simple Rust Wasm example that responds with a "Hello World" message for each request.
+This is a simple Rust Wasm example that extracts and returns the request path.
 
 ## Prerequisites
 
