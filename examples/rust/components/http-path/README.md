@@ -19,7 +19,7 @@ wash build
 You must have wasmtime >=25.0.0 for this to work. Make sure to follow the build step above first.
 
 ```bash
-wasmtime serve -Scommon ./build/http_hello_world_s.wasm
+wasmtime serve -Scommon ./build/http_path_s.wasm
 ```
 
 ## Running with wasmCloud
