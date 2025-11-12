@@ -1,0 +1,124 @@
+/// This WIT interface provides WebSocket client support for wasmCloud components
+///
+/// WebSocket is a communication protocol that provides full-duplex communication
+/// channels over a single TCP connection. This interface allows components to
+/// connect to WebSocket servers and exchange messages in real-time.
+
+package wasmcloud:websocket@0.1.1-draft;
+
+/// Common types used by the WebSocket client interface
+interface types {
+    /// An error type that encapsulates different WebSocket-related errors
+    variant websocket-error {
+        /// Connection failed due to network issues
+        connection-failed(string),
+        /// Invalid URL format
+        invalid-url(string),
+        /// Protocol error during WebSocket handshake or communication
+        protocol-error(string),
+        /// Connection was closed unexpectedly
+        connection-closed,
+        /// Authentication failed
+        authentication-failed(string),
+        /// Timeout occurred during operation
+        timeout,
+        /// Invalid message format or encoding
+        invalid-message(string),
+        /// Generic I/O error
+        io-error(string),
+    }
+
+    /// Represents the state of a WebSocket connection
+    enum connection-state {
+        /// Connection is being established
+        connecting,
+        /// Connection is open and ready for communication
+        open,
+        /// Connection is being closed
+        closing,
+        /// Connection is closed
+        closed,
+    }
+
+    /// Represents different types of WebSocket messages
+    variant message {
+        /// Text message (UTF-8 encoded)
+        text(string),
+        /// Binary message
+        binary(list<u8>),
+        /// Ping frame (for keep-alive)
+        ping(list<u8>),
+        /// Pong frame (response to ping)
+        pong(list<u8>),
+        /// Close frame with optional code and reason
+        close(close-info),
+    }
+
+    /// Information about connection close
+    record close-info {
+        /// Close code (RFC 6455)
+        code: u16,
+        /// Optional close reason
+        reason: option<string>,
+    }
+
+    /// WebSocket headers for handshake
+    record websocket-headers {
+        /// Header name
+        name: string,
+        /// Header value
+        value: string,
+    }
+}
+
+/// WebSocket client interface for connecting to WebSocket servers
+interface client {
+    use types.{websocket-error, connection-state, message, websocket-headers, close-info};
+
+    /// Configuration for WebSocket client connection
+    record client-config {
+        /// WebSocket URL (ws:// or wss://)
+        url: string,
+        /// Optional subprotocols to request
+        subprotocols: option<list<string>>,
+        /// Optional custom headers for the handshake
+        headers: option<list<websocket-headers>>,
+        /// Connection timeout in milliseconds
+        timeout-ms: option<u32>,
+        /// Maximum message size in bytes
+        max-message-size: option<u32>,
+        /// Enable automatic ping/pong keep-alive
+        enable-keepalive: option<bool>,
+        /// Keep-alive interval in milliseconds
+        keepalive-interval-ms: option<u32>,
+    }
+
+    /// WebSocket connection resource
+    resource connection {
+        /// Send a message through the WebSocket connection
+        /// Returns an error if sending fails
+        send: func(message: message) -> result<_, websocket-error>;
+
+        /// Receive a message from the WebSocket connection
+        /// Returns None if no message is available (non-blocking)
+        /// Returns an error if receiving fails
+        receive: func() -> result<option<message>, websocket-error>;
+
+        /// Close the WebSocket connection
+        /// Optionally provide a close code and reason
+        close: func(code: option<u16>, reason: option<string>) -> result<_, websocket-error>;
+
+        /// Get the current state of the connection
+        get-state: func() -> connection-state;
+
+        /// Get the URL of the connection
+        get-url: func() -> string;
+
+        /// Get the negotiated subprotocol (if any)
+        get-subprotocol: func() -> option<string>;
+    }
+
+    /// Connect to a WebSocket server with the given configuration.
+    /// Returns a connection resource if successful, or an error if connection fails.
+    connect: func(config: client-config) -> result<connection, websocket-error>;
+} 

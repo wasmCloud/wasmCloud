@@ -1,0 +1,34 @@
+[package]
+name = "wasmcloud-provider-websocket-client"
+version = "0.1.0"
+description = """
+WebSocket client for wasmCloud, using tokio-tungstenite. This package provides a capability provider that satisfies the 'wasmcloud:websocket/client' contract.
+"""
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+anyhow = { workspace = true }
+bincode = "1.3"
+bytes = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wit-bindgen-wrpc = { workspace = true }
+
+[dev-dependencies]
+test-log = { workspace = true, features = ["color", "log", "trace", "unstable"] }
+tempfile = { workspace = true } 
