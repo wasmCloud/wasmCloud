@@ -12,7 +12,7 @@ name = "blobby"
 
 [dependencies]
 http = "1.1.0"
-wasi = "0.13.2"
+wasi = { workspace = true, features = ["std"] }
 wit-bindgen = "0.32"
 
 [profile.release]

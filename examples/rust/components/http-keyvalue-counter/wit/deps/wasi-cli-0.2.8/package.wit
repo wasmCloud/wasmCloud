@@ -1,19 +1,19 @@
-package wasi:cli@0.2.2;
+package wasi:cli@0.2.8;
 
 interface stdout {
-  use wasi:io/streams@0.2.2.{output-stream};
+  use wasi:io/streams@0.2.8.{output-stream};
 
   get-stdout: func() -> output-stream;
 }
 
 interface stderr {
-  use wasi:io/streams@0.2.2.{output-stream};
+  use wasi:io/streams@0.2.8.{output-stream};
 
   get-stderr: func() -> output-stream;
 }
 
 interface stdin {
-  use wasi:io/streams@0.2.2.{input-stream};
+  use wasi:io/streams@0.2.8.{input-stream};
 
   get-stdin: func() -> input-stream;
 }

@@ -12,7 +12,7 @@ name = "blobby"
 
 [dependencies]
 http = "1.1.0"
-wasmcloud-component = "0.2.0"
+wasmcloud-component = { path = "../../../../crates/component" }
 
 [profile.release]
 # Optimize for small code size

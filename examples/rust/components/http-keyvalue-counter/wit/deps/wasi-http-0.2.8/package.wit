@@ -1,4 +1,4 @@
-package wasi:http@0.2.2;
+package wasi:http@0.2.8;
 
 /// This interface defines all of the types and methods for implementing
 /// HTTP Requests and Responses, both incoming and outgoing, as well as
@@ -6,13 +6,13 @@ package wasi:http@0.2.2;
 @since(version = 0.2.0)
 interface types {
   @since(version = 0.2.0)
-  use wasi:clocks/monotonic-clock@0.2.2.{duration};
+  use wasi:clocks/monotonic-clock@0.2.8.{duration};
   @since(version = 0.2.0)
-  use wasi:io/streams@0.2.2.{input-stream, output-stream};
+  use wasi:io/streams@0.2.8.{input-stream, output-stream};
   @since(version = 0.2.0)
-  use wasi:io/error@0.2.2.{error as io-error};
+  use wasi:io/error@0.2.8.{error as io-error};
   @since(version = 0.2.0)
-  use wasi:io/poll@0.2.2.{pollable};
+  use wasi:io/poll@0.2.8.{pollable};
 
   /// This type corresponds to HTTP standard Methods.
   @since(version = 0.2.0)
@@ -59,7 +59,7 @@ interface types {
   }
 
   /// These cases are inspired by the IANA HTTP Proxy Error Types:
-  /// https://www.iana.org/assignments/http-proxy-status/http-proxy-status.xhtml#table-http-proxy-error-types
+  ///   <https://www.iana.org/assignments/http-proxy-status/http-proxy-status.xhtml#table-http-proxy-error-types>
   @since(version = 0.2.0)
   variant error-code {
     DNS-timeout,
@@ -156,7 +156,7 @@ interface types {
   /// A `fields` may be mutable or immutable. A `fields` created using the
   /// constructor, `from-list`, or `clone` will be mutable, but a `fields`
   /// resource given by other means (including, but not limited to,
-  /// `incoming-request.headers`, `outgoing-request.headers`) might be be
+  /// `incoming-request.headers`, `outgoing-request.headers`) might be
   /// immutable. In an immutable fields, the `set`, `append`, and `delete`
   /// operations will fail with `header-error.immutable`.
   @since(version = 0.2.0)
@@ -389,6 +389,18 @@ interface types {
   /// other argument to `incoming-handler.handle`.
   @since(version = 0.2.0)
   resource response-outparam {
+    /// Send an HTTP 1xx response.
+    ///
+    /// Unlike `response-outparam.set`, this does not consume the
+    /// `response-outparam`, allowing the guest to send an arbitrary number of
+    /// informational responses before sending the final response using
+    /// `response-outparam.set`.
+    ///
+    /// This will return an `HTTP-protocol-error` if `status` is not in the
+    /// range [100-199], or an `internal-error` if the implementation does not
+    /// support informational responses.
+    @unstable(feature = informational-outbound-responses)
+    send-informational: func(status: u16, headers: headers) -> result<_, error-code>;
     /// Set the value of the `response-outparam` to either send a response,
     /// or indicate an error.
     ///
@@ -665,23 +677,23 @@ interface outgoing-handler {
 @since(version = 0.2.0)
 world imports {
   @since(version = 0.2.0)
-  import wasi:io/poll@0.2.2;
+  import wasi:io/poll@0.2.8;
   @since(version = 0.2.0)
-  import wasi:clocks/monotonic-clock@0.2.2;
+  import wasi:clocks/monotonic-clock@0.2.8;
   @since(version = 0.2.0)
-  import wasi:clocks/wall-clock@0.2.2;
+  import wasi:clocks/wall-clock@0.2.8;
   @since(version = 0.2.0)
-  import wasi:random/random@0.2.2;
+  import wasi:random/random@0.2.8;
   @since(version = 0.2.0)
-  import wasi:io/error@0.2.2;
+  import wasi:io/error@0.2.8;
   @since(version = 0.2.0)
-  import wasi:io/streams@0.2.2;
+  import wasi:io/streams@0.2.8;
   @since(version = 0.2.0)
-  import wasi:cli/stdout@0.2.2;
+  import wasi:cli/stdout@0.2.8;
   @since(version = 0.2.0)
-  import wasi:cli/stderr@0.2.2;
+  import wasi:cli/stderr@0.2.8;
   @since(version = 0.2.0)
-  import wasi:cli/stdin@0.2.2;
+  import wasi:cli/stdin@0.2.8;
   @since(version = 0.2.0)
   import types;
   @since(version = 0.2.0)
@@ -694,25 +706,25 @@ world imports {
 @since(version = 0.2.0)
 world proxy {
   @since(version = 0.2.0)
-  import wasi:io/poll@0.2.2;
+  import wasi:io/poll@0.2.8;
   @since(version = 0.2.0)
-  import wasi:clocks/monotonic-clock@0.2.2;
+  import wasi:clocks/monotonic-clock@0.2.8;
   @since(version = 0.2.0)
-  import wasi:io/error@0.2.2;
+  import wasi:clocks/wall-clock@0.2.8;
   @since(version = 0.2.0)
-  import wasi:io/streams@0.2.2;
+  import wasi:random/random@0.2.8;
+  @since(version = 0.2.0)
+  import wasi:io/error@0.2.8;
+  @since(version = 0.2.0)
+  import wasi:io/streams@0.2.8;
+  @since(version = 0.2.0)
+  import wasi:cli/stdout@0.2.8;
+  @since(version = 0.2.0)
+  import wasi:cli/stderr@0.2.8;
+  @since(version = 0.2.0)
+  import wasi:cli/stdin@0.2.8;
   @since(version = 0.2.0)
   import types;
-  @since(version = 0.2.0)
-  import wasi:clocks/wall-clock@0.2.2;
-  @since(version = 0.2.0)
-  import wasi:random/random@0.2.2;
-  @since(version = 0.2.0)
-  import wasi:cli/stdout@0.2.2;
-  @since(version = 0.2.0)
-  import wasi:cli/stderr@0.2.2;
-  @since(version = 0.2.0)
-  import wasi:cli/stdin@0.2.2;
   @since(version = 0.2.0)
   import outgoing-handler;
 

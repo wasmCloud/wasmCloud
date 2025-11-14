@@ -1,78 +1,97 @@
-use wasmcloud_component::http;
-use wasmcloud_component::http::ErrorCode;
-use wasmcloud_component::wasi::keyvalue::*;
-use wasmcloud_component::wasmcloud::bus::lattice;
+mod bindings {
+    use crate::Component;
+
+    wit_bindgen::generate!({ generate_all });
+
+    export!(Component);
+}
+
+use bindings::wasi::http::types::*;
+use bindings::wasi::keyvalue::atomics;
+use bindings::wasi::keyvalue::store;
 
 struct Component;
 
-http::export!(Component);
+impl bindings::exports::wasi::http::incoming_handler::Guest for Component {
+    fn handle(_request: IncomingRequest, response_out: ResponseOutparam) {
+        // Parse the request to get the path
+        let path = get_path_from_request(&_request).unwrap_or_else(|| "/default".to_string());
 
-impl http::Server for Component {
-    fn handle(
-        request: http::IncomingRequest,
-    ) -> http::Result<http::Response<impl http::OutgoingBody>> {
-        let (parts, _) = request.into_parts();
-        // Get the path of the incoming request
-        let Some(path_with_query) = parts.uri.path_and_query() else {
-            return http::Response::builder()
-                .status(400)
-                .body("Bad request, did not contain path and query".into())
-                .map_err(|e| {
-                    ErrorCode::InternalError(Some(format!("failed to build response {e:?}")))
-                });
+        // Use the path as the counter key (removing leading slash)
+        let key = path.trim_start_matches('/');
+        let key = if key.is_empty() { "default" } else { key };
+
+        // Open the default keyvalue store bucket
+        let bucket = match store::open("default") {
+            Ok(bucket) => bucket,
+            Err(e) => {
+                send_error_response(
+                    response_out,
+                    500,
+                    &format!("Failed to open bucket: {}", e),
+                );
+                return;
+            }
         };
 
-        // At first, we can assume the object name will be the path with query
-        // (ex. simple paths like '/some-key-here')
-        let object_name = path_with_query.path();
-
-        // Let's assume we want to connect to & invoke the default keyvalue provider
-        // that is linked with this component
-        let mut link_name = "default";
-
-        // If query parameters were supplied, then we need to recalculate the object_name
-        // and take special actions if some parameters (like `link_name`) are present (and ignore the rest)
-        if let Some(query) = path_with_query.query() {
-            let query_params = query
-                .split('&')
-                .filter_map(|v| v.split_once('='))
-                .collect::<Vec<(&str, &str)>>();
-
-            // If we detect a `link_name` query parameter, use it to change link name
-            // and target a different (ex. second) keyvalue provider that is also linked to this
-            // component
-            if let Some((_, configured_link_name)) = query_params
-                .iter()
-                .find(|(k, _v)| k.to_lowercase() == "link_name")
-            {
-                link_name = configured_link_name;
+        // Increment the counter
+        let count = match atomics::increment(&bucket, key, 1) {
+            Ok(count) => count,
+            Err(e) => {
+                send_error_response(
+                    response_out,
+                    500,
+                    &format!("Failed to increment counter: {}", e),
+                );
+                return;
             }
-        }
+        };
 
-        // Set the link name before performing keyvalue operations
-        //
-        // 99% of the time, this will be "default", but if the `link_name` parameter
-        // is supplied in the path (ex. '/test?link_name=some-kv'), we can invoke other
-        // keyvalue providers that are linked, by link name.
-        lattice::set_link_name(
-            link_name,
-            vec![
-                lattice::CallTargetInterface::new("wasi", "keyvalue", "store"),
-                lattice::CallTargetInterface::new("wasi", "keyvalue", "atomics"),
-            ],
-        )
-        .map_err(|e| ErrorCode::InternalError(Some(format!("failed to set link name {e:?}"))))?;
+        // Build and send response
+        let response = OutgoingResponse::new(Fields::new());
+        let response_body = response.body().expect("response body to exist");
+        let stream = response_body
+            .write()
+            .expect("failed to get output stream");
+        ResponseOutparam::set(response_out, Ok(response));
 
-        // Increment the counter in the keyvalue store
-        let bucket = store::open("default")
-            .map_err(|e| ErrorCode::InternalError(Some(format!("failed to open bucket {e:?}"))))?;
-        let count = atomics::increment(&bucket, object_name, 1).map_err(|e| {
-            ErrorCode::InternalError(Some(format!("failed to increment counter {e:?}")))
-        })?;
+        let body = format!("Counter {}: {}\n", key, count);
+        stream
+            .blocking_write_and_flush(body.as_bytes())
+            .expect("failed to write response");
 
-        // Build & send HTTP response
-        Ok(http::Response::new(format!(
-            "Counter {object_name}: {count}\n"
-        )))
+        drop(stream);
+        OutgoingBody::finish(response_body, None).expect("failed to finish response body");
     }
+}
+
+fn get_path_from_request(request: &IncomingRequest) -> Option<String> {
+    let headers = request.headers();
+    let entries = headers.entries();
+
+    for (name, value) in entries {
+        if name.to_lowercase() == ":path" {
+            return String::from_utf8(value).ok();
+        }
+    }
+
+    // Fallback: try to get path from authority header or use default
+    None
+}
+
+fn send_error_response(response_out: ResponseOutparam, status: u16, message: &str) {
+    let response = OutgoingResponse::new(Fields::new());
+    response.set_status_code(status).ok();
+    let response_body = response.body().expect("response body to exist");
+    let stream = response_body
+        .write()
+        .expect("failed to get output stream");
+    ResponseOutparam::set(response_out, Ok(response));
+
+    stream
+        .blocking_write_and_flush(message.as_bytes())
+        .ok();
+
+    drop(stream);
+    OutgoingBody::finish(response_body, None).ok();
 }

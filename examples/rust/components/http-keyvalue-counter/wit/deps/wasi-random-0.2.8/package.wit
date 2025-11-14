@@ -1,4 +1,4 @@
-package wasi:random@0.2.2;
+package wasi:random@0.2.8;
 
 interface random {
   get-random-bytes: func(len: u64) -> list<u8>;

@@ -243,7 +243,7 @@ azure_storage_blobs = { version = "0.21", default-features = false }
 base64 = { version = "0.22", default-features = false }
 bigdecimal = { version = "0.4", default-features = false }
 bit-vec = { version = "0.6", default-features = false }
-bytes = { version = "1", default-features = false }
+bytes = { version = "1.10", default-features = false }
 cap-std = { version = "3", default-features = false }
 cargo_metadata = { version = "0.19", default-features = false }
 cargo_toml = { version = "0.22", default-features = false }
@@ -267,6 +267,7 @@ exponential-backoff = { version = "2.1", default-features = false }
 file-guard = { version = "0.2.0", default-features = false }
 futures = { version = "0.3", default-features = false }
 geo-types = { version = "0.7", default-features = false }
+getrandom = { version = "0.3", default-features = false }
 handlebars = { version = "6.3", default-features = false }
 heck = { version = "0.5", default-features = false }
 hex = { version = "0.4", default-features = false }
@@ -276,7 +277,7 @@ http-body-util = { version = "0.1", default-features = false }
 humantime = { version = "2", default-features = false }
 hyper = { version = "1", default-features = false }
 hyper-rustls = { version = "0.27", default-features = false }
-hyper-util = { version = "0.1", default-features = false }
+hyper-util = { version = "=0.1.14", default-features = false }
 ignore = { version = "0.4", default-features = false }
 indicatif = { version = "0.17", default-features = false }
 kafka = { version = "0.10", default-features = false }
@@ -369,7 +370,7 @@ walkdir = { version = "2", default-features = false }
 warp = { version = "0.3", default-features = false }
 wascap = { version = "^0.16.0", path = "./crates/wascap", default-features = false }
 wash = { version = "0", path = "./crates/wash", default-features = false }
-wasi = { version = "0.13.3", default-features = false }
+wasi = { version = "0.14.7", default-features = false }
 wasm-pkg-client = { version = "0.10", default-features = false }
 wasm-pkg-core = { version = "0.10", default-features = false }
 wasi-preview1-component-adapter-provider = { version = "31", default-features = false }
@@ -406,8 +407,8 @@ wasmtime-wit-bindgen = { version = "31", default-features = false }
 wat = { version = "1", default-features = false }
 webpki-roots = { version = "1.0", default-features = false }
 which = { version = "7", default-features = false }
-wit-bindgen = { version = "0.44.0", default-features = false }
-wit-bindgen-core = { version = "0.44.0", default-features = false }
+wit-bindgen = { version = "0.47.0", default-features = false }
+wit-bindgen-core = { version = "0.47.0", default-features = false }
 wit-bindgen-go = { version = "0.44.0", default-features = false }
 wit-bindgen-wrpc = { version = "0.9", default-features = false }
 wit-component = { version = "0.224.1", default-features = false }
