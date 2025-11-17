@@ -3,6 +3,7 @@ use core::net::SocketAddr;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -80,7 +81,10 @@ struct Args {
     #[clap(long = "host-seed", env = "WASMCLOUD_HOST_SEED")]
     host_seed: Option<String>,
     /// Delay, in milliseconds, between requesting a provider shut down and forcibly terminating its process
-    #[clap(long = "provider-shutdown-delay-ms", alias = "provider-shutdown-delay", default_value = "300", env = "WASMCLOUD_PROV_SHUTDOWN_DELAY_MS", value_parser = parse_duration_millis)]
+    #[clap(long = "provider-shutdown-delay-ms", default_value = "300", env = "WASMCLOUD_PROV_SHUTDOWN_DELAY_MS", value_parser = parse_duration_millis, hide = true, conflicts_with = "provider_shutdown_delay")]
+    provider_shutdown_delay_ms: Duration,
+    /// Delay between requesting a provider shut down and forcibly terminating its process
+    #[clap(long = "provider-shutdown-delay", alias = "provider-shutdown-delay", default_value = "300ms", env = "WASMCLOUD_PROV_SHUTDOWN_DELAY", value_parser = parse_duration_fallback_ms)]
     provider_shutdown_delay: Duration,
     /// Determines whether OCI images tagged latest are allowed to be pulled from OCI registries and started
     #[clap(long = "allow-latest", env = "WASMCLOUD_OCI_ALLOW_LATEST")]
@@ -186,8 +190,11 @@ struct Args {
     #[clap(long = "rpc-creds", env = "WASMCLOUD_RPC_CREDS", hide = true, conflicts_with_all = ["rpc_jwt", "rpc_seed"])]
     rpc_creds: Option<PathBuf>,
     /// Timeout in milliseconds for all RPC calls
-    #[clap(long = "rpc-timeout-ms", default_value = "2000", env = "WASMCLOUD_RPC_TIMEOUT_MS", value_parser = parse_duration_millis, hide = true)]
+    #[clap(long = "rpc-timeout-ms", default_value = "2000", env = "WASMCLOUD_RPC_TIMEOUT_MS", value_parser = parse_duration_millis, hide = true, conflicts_with = "rpc_timeout")]
     rpc_timeout_ms: Duration,
+    /// Timeout for all RPC calls
+    #[clap(long = "rpc-timeout", default_value = "2000ms", env = "WASMCLOUD_RPC_TIMEOUT", value_parser = parse_duration_fallback_ms, hide = true)]
+    rpc_timeout: Duration,
     /// Optional flag to require host communication over TLS with a NATS server for RPC messages
     #[clap(long = "rpc-tls", env = "WASMCLOUD_RPC_TLS", hide = true)]
     rpc_tls: bool,
@@ -203,7 +210,10 @@ struct Args {
     )]
     policy_changes_topic: Option<String>,
     /// If provided, allows to set a custom Max Execution time for the Host in ms.
-    #[clap(long = "max-execution-time-ms", default_value = "600000", env = "WASMCLOUD_MAX_EXECUTION_TIME_MS", value_parser = parse_duration_millis)]
+    #[clap(long = "max-execution-time-ms", default_value = "600000", env = "WASMCLOUD_MAX_EXECUTION_TIME_MS", value_parser = parse_duration_millis, hide = true, conflicts_with = "max_execution_time")]
+    max_execution_time_ms: Duration,
+    /// If provided, allows to set a custom Max Execution time for the Host.
+    #[clap(long = "max-execution-time", default_value = "10m", env = "WASMCLOUD_MAX_EXECUTION_TIME", value_parser = parse_duration_fallback_ms)]
     max_execution_time: Duration,
     /// The maximum amount of memory bytes that a component can allocate (default 256 MiB)
     #[clap(long = "max-linear-memory-bytes", default_value_t = 256 * 1024 * 1024, env = "WASMCLOUD_MAX_LINEAR_MEMORY")]
@@ -230,11 +240,21 @@ struct Args {
     /// If provided, allows setting a custom timeout for requesting policy decisions. Defaults to one second. Requires `policy_topic` to be set.
     #[clap(
         long = "policy-timeout-ms",
-        env = "WASMCLOUD_POLICY_TIMEOUT",
+        env = "WASMCLOUD_POLICY_TIMEOUT_MS",
         requires = "policy_topic",
         value_parser = parse_duration_millis,
+        hide = true,
+        conflicts_with = "policy_timeout",
     )]
     policy_timeout_ms: Option<Duration>,
+    /// If provided, allows setting a custom timeout for requesting policy decisions. Defaults to one second. Requires `policy_topic` to be set.
+    #[clap(
+        long = "policy-timeout",
+        env = "WASMCLOUD_POLICY_TIMEOUT",
+        requires = "policy_topic",
+        value_parser = parse_duration_fallback_ms,
+    )]
+    policy_timeout: Option<Duration>,
 
     /// If provided, enables interfacing with a secrets backend for secret retrieval over the given topic prefix. Must not be empty.
     #[clap(long = "secrets-topic", env = "WASMCLOUD_SECRETS_TOPIC")]
@@ -357,7 +377,11 @@ struct Args {
     pub tls_ca_paths: Option<Vec<PathBuf>>,
 
     /// If provided, overrides the default heartbeat interval of every 30 seconds. Provided value is interpreted as seconds.
-    #[arg(long = "heartbeat-interval-seconds", env = "WASMCLOUD_HEARTBEAT_INTERVAL", value_parser = parse_duration_secs, hide = true)]
+    #[arg(long = "heartbeat-interval-seconds", env = "WASMCLOUD_HEARTBEAT_INTERVAL_SECONDS", value_parser = parse_duration_secs, hide = true, conflicts_with = "heartbeat_interval")]
+    heartbeat_interval_seconds: Option<Duration>,
+
+    /// If provided, overrides the default heartbeat interval of every 30 seconds. Provided value is interpreted as seconds.
+    #[arg(long = "heartbeat-interval", env = "WASMCLOUD_HEARTBEAT_INTERVAL", value_parser = parse_duration_fallback_secs, hide = true)]
     heartbeat_interval: Option<Duration>,
 
     /// Experimental features to enable in the host. This is a repeatable option.
@@ -598,10 +622,22 @@ async fn main() -> anyhow::Result<()> {
             config_service_enabled: args.config_service_enabled,
             js_domain: args.js_domain,
             labels,
-            provider_shutdown_delay: Some(args.provider_shutdown_delay),
+            // once previous option (provider_shutdown_delay_ms) is fully deprecated, uncomment below and remove `get_preffered_arg`
+            // provider_shutdown_delay: Some(args.provider_shutdown_delay),
+            provider_shutdown_delay: Some(get_preferred_arg(
+                args.provider_shutdown_delay_ms,
+                args.provider_shutdown_delay,
+                Duration::from_millis(300),
+            )),
             oci_opts,
             rpc_nats_url,
-            rpc_timeout: args.rpc_timeout_ms,
+            // once previous option (rpc_timeout) is fully deprecated, uncomment below and remove `get_preffered_arg`
+            // rpc_timeout: args.rpc_timeout,
+            rpc_timeout: get_preferred_arg(
+                args.rpc_timeout_ms,
+                args.rpc_timeout,
+                Duration::from_millis(2000),
+            ),
             rpc_jwt: rpc_jwt.or_else(|| nats_jwt.clone()),
             rpc_key: rpc_key.or_else(|| nats_key.clone()),
             rpc_tls: args.rpc_tls,
@@ -610,12 +646,25 @@ async fn main() -> anyhow::Result<()> {
             enable_structured_logging: args.enable_structured_logging,
             otel_config,
             version: env!("CARGO_PKG_VERSION").to_string(),
-            max_execution_time: args.max_execution_time,
+            // once previous option (max_execution_time_ms) is fully deprecated, uncomment below and remove `get_preffered_arg`
+            // max_execution_time: args.max_execution_time,
+            max_execution_time: get_preferred_arg(
+                args.max_execution_time_ms,
+                args.max_execution_time,
+                Duration::from_millis(600000),
+            ),
             max_linear_memory: args.max_linear_memory,
             max_component_size: args.max_component_size,
             max_components: args.max_components,
             max_core_instances_per_component: args.max_core_instances_per_component,
-            heartbeat_interval: args.heartbeat_interval,
+            // once previous option (heartbeat_interval_seconds) is fully deprecated, uncomment below and remove `get_preffered_arg`
+            // heartbeat_interval: args.heartbeat_interval,
+            heartbeat_interval: Some(get_preferred_arg(
+                args.heartbeat_interval_seconds
+                    .unwrap_or(Duration::from_secs(30)),
+                args.heartbeat_interval.unwrap_or(Duration::from_secs(30)),
+                Duration::from_secs(30),
+            )),
             experimental_features,
             http_admin: args.http_admin,
             enable_component_auction: args.enable_component_auction.unwrap_or(true),
@@ -668,6 +717,54 @@ fn parse_duration_millis(arg: &str) -> anyhow::Result<Duration> {
     arg.parse()
         .map(Duration::from_millis)
         .map_err(|e| anyhow::anyhow!(e))
+}
+
+#[derive(Debug)]
+enum TimeUnit {
+    Ms,
+    Sec,
+}
+
+fn parse_duration(arg: &str, unit: TimeUnit) -> anyhow::Result<Duration> {
+    if let Ok(duration) = humantime::Duration::from_str(arg) {
+        return Ok(duration.into());
+    }
+    match unit {
+        TimeUnit::Sec => {
+            if let Ok(secs) = arg.parse::<u64>() {
+                return Ok(std::time::Duration::from_secs(secs));
+            }
+        }
+        TimeUnit::Ms => {
+            if let Ok(millis) = arg.parse::<u64>() {
+                return Ok(std::time::Duration::from_millis(millis));
+            }
+        }
+    }
+    Err(
+        anyhow::anyhow!("Invalid duration: '{}', unit: '{:?}'. Expected duration: '5s', '1m', '100ms', or an integer with unit: Ms, Sec", arg, unit),
+    )
+}
+
+fn parse_duration_fallback_secs(arg: &str) -> anyhow::Result<Duration> {
+    parse_duration(arg, TimeUnit::Sec)
+}
+
+fn parse_duration_fallback_ms(arg: &str) -> anyhow::Result<Duration> {
+    parse_duration(arg, TimeUnit::Ms)
+}
+
+/// Temporary helper method to help with moving to using `humantime` compatible values for command line arguments
+/// that takes in the old CLI flag value, the new one, and the default, and returns the preferred argument, i.e.
+/// the argument provided by the user.
+/// This function should be removed once the older duration options are fully deprecated.
+fn get_preferred_arg(old: Duration, new: Duration, default: Duration) -> Duration {
+    match (old, new) {
+        (a, b) if a == b => a,
+        (a, b) if a == default => b,
+        (a, b) if b == default => a,
+        _ => default,
+    }
 }
 
 /// Validates that a subject string (e.g. secrets-topic and policy-topic) adheres to the rules and conventions
