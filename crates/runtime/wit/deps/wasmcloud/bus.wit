@@ -21,7 +21,7 @@ interface lattice {
 @since(version = 2.0.1)
 interface error {
     @since(version = 2.0.1)
-    use wasi:io/error@0.2.0.{error as io-error};
+    use wasi:io/error@0.2.6.{error as io-error};
     @since(version = 2.0.1)
     use wrpc:rpc/error@0.1.0.{error as rpc-error};
 

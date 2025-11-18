@@ -1,6 +1,7 @@
-blobstore = "https://github.com/WebAssembly/wasi-blobstore/archive/d9f62e679fd0e7a090f68449751d7532f11eca78.tar.gz"
+#blobstore = "https://github.com/WebAssembly/wasi-blobstore/archive/d9f62e679fd0e7a090f68449751d7532f11eca78.tar.gz" # this is manually edited in-tree
 config = "https://github.com/WebAssembly/wasi-config/archive/v0.2.0-draft.tar.gz"
-http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
+http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.6.tar.gz"
+io = "https://github.com/WebAssembly/wasi-io/archive/v0.2.6.tar.gz"
 identity = "../../../wit/identity/wit"
 keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/219ea3612a53f1bf5b2d137551b22d0268fd3c58.tar.gz"
 logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"

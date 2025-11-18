@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 use tokio::{join, spawn};
 use tracing::{debug, debug_span, info_span, instrument, trace, warn, Instrument as _, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-use wasmtime_wasi::IoView as _;
+use wasmtime::component::ResourceTable;
 use wasmtime_wasi_http::body::{HostIncomingBody, HyperOutgoingBody};
 use wasmtime_wasi_http::types::{
     HostFutureIncomingResponse, HostIncomingRequest, IncomingResponse, OutgoingRequestConfig,
@@ -21,8 +21,8 @@ use super::{new_store, Ctx, Handler, Instance, ReplacedInstanceTarget, WrpcServe
 pub mod incoming_http_bindings {
     wasmtime::component::bindgen!({
         world: "incoming-http",
-        async: true,
-        trappable_imports: true,
+        imports: { default: async | trappable | tracing },
+        exports: { default: async | trappable | tracing },
         with: {
             "wasi:http/types": wasmtime_wasi_http::bindings::http::types,
         },
@@ -119,6 +119,10 @@ where
 {
     fn ctx(&mut self) -> &mut WasiHttpCtx {
         &mut self.http
+    }
+
+    fn table(&mut self) -> &mut ResourceTable {
+        &mut self.table
     }
 
     #[instrument(level = "debug", skip_all)]

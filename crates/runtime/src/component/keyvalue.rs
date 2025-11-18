@@ -14,8 +14,8 @@ type Result<T, E = store::Error> = core::result::Result<T, E>;
 pub mod keyvalue_watcher_bindings {
     wasmtime::component::bindgen!({
         world: "watcher",
-        async: true,
-        trappable_imports: true,
+        imports: { default: async | trappable | tracing },
+        exports: { default: async | trappable | tracing },
         with: {
             "wasi:keyvalue/store" : crate::capability::keyvalue::store,
         }
