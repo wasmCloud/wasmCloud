@@ -8,9 +8,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Level {
     Error,
     Warn,
+    #[default]
     Info,
     Debug,
     Trace,
@@ -29,8 +31,3 @@ impl From<tracing::Level> for Level {
     }
 }
 
-impl Default for Level {
-    fn default() -> Self {
-        Self::Info
-    }
-}
