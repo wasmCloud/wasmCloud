@@ -26,11 +26,6 @@ pub struct Config {
     pub(crate) placeholders: Vec<TomlMap>,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
-pub struct ConfigValues {
-    pub(crate) values: TomlMap,
-}
-
 /// template parameters for a project
 #[derive(Default, Deserialize, Debug, Eq, PartialEq)]
 pub struct TemplateConfig {
@@ -68,9 +63,6 @@ pub struct RenameConfig {
     pub(crate) from: PathBuf,
     pub(crate) to: String,
 }
-
-#[derive(Deserialize, Debug, PartialEq)]
-pub struct TemplateSlotsTable(pub(crate) TomlMap);
 
 impl Config {
     pub(crate) fn from_path<P>(path: &P) -> Result<Self>
