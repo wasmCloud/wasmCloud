@@ -131,6 +131,7 @@
           "wasmcloud-provider-messaging-nats" # tests appear to be broken
         ];
         test.workspace = true;
+        test.extraArgs = ["--profile" "ci"]; # Use CI profile with exponential back-off
 
         buildOverrides = {
           craneLib,

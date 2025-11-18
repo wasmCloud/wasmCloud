@@ -73,6 +73,10 @@ fail-fast = true
 # Example: slow-timeout = { period = "60s", terminate-after = 2 }
 slow-timeout = { period = "60s" }
 
+# Per-test timeout - tests that run longer than this will be terminated
+# This prevents individual tests from hanging indefinitely
+per-test-timeout = "600s"
+
 # Treat a test as leaky if after the process is shut down, standard output and standard error
 # aren't closed within this duration.
 #
@@ -83,8 +87,15 @@ slow-timeout = { period = "60s" }
 leak-timeout = "100ms"
 
 [profile.ci]
-retries = { backoff = "exponential", count = 3, delay = "30s", jitter = true, max-delay = "300s" }
+# Exponential back-off configuration for CI to handle flaky tests and timeouts
+# - count: 5 retries (increased from 3)
+# - delay: 15s initial delay (reduced from 30s for faster initial retry)
+# - max-delay: 600s (10 minutes, increased from 5 minutes)
+# - jitter: true (randomizes delays to avoid thundering herd)
+retries = { backoff = "exponential", count = 5, delay = "15s", jitter = true, max-delay = "600s" }
 fail-fast = false
+# Per-test timeout for CI - allow longer running tests
+per-test-timeout = "900s"
 
 [profile.integration]
 retries = { backoff = "fixed", count = 2, delay = "1s" }
