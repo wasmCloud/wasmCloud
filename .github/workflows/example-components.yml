@@ -235,15 +235,35 @@ jobs:
           wash up -d
           sleep 4;
           wash app deploy ${{ matrix.project.test-deploy }};
+
+          # Exponential backoff retry logic
           TRIES=0
+          MAX_TRIES=10
+          DELAY=2
+          MAX_DELAY=60
+
           while [[ $(wash get inventory --output=json | jq '.inventories[0].components | length') -eq 0 ]] ; do
-            if [[ $TRIES -gt 10 ]]; then
-              echo "❌ failed to find component in inventory output after deploying example manifest";
+            if [[ $TRIES -ge $MAX_TRIES ]]; then
+              echo "❌ failed to find component in inventory output after $MAX_TRIES attempts";
               exit -1;
             fi
+
+            # Add jitter (0-25% random variance)
+            JITTER=$((RANDOM % (DELAY / 4 + 1)))
+            ACTUAL_DELAY=$((DELAY + JITTER))
+
+            echo "⏳ Attempt $((TRIES+1))/$MAX_TRIES: Component not found, waiting ${ACTUAL_DELAY}s before retry...";
+            sleep $ACTUAL_DELAY;
+
+            # Exponential backoff: double the delay for next iteration, capped at MAX_DELAY
+            DELAY=$((DELAY * 2))
+            if [[ $DELAY -gt $MAX_DELAY ]]; then
+              DELAY=$MAX_DELAY
+            fi
+
             TRIES=$((TRIES+1));
-            sleep 1;
           done;
+
           echo "✅ successfully started at least one component";
           wash app delete ${{ matrix.project.test-deploy }};
           wash down;
