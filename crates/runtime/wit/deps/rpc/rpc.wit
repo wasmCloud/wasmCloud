@@ -1,7 +1,7 @@
 package wrpc:rpc@0.1.0;
 
 interface error {
-    use wasi:io/error@0.2.0.{error as io-error};
+    use wasi:io/error@0.2.6.{error as io-error};
 
     /// A resource which represents some error information.
     ///
@@ -31,8 +31,8 @@ interface context {
 }
 
 interface transport {
-    use wasi:io/poll@0.2.0.{pollable};
-    use wasi:io/streams@0.2.0.{input-stream, output-stream};
+    use wasi:io/poll@0.2.6.{pollable};
+    use wasi:io/streams@0.2.6.{input-stream, output-stream};
 
     use error.{error};
 

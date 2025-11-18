@@ -44,15 +44,13 @@ mod wasmtime_bindings {
 
     wasmtime::component::bindgen!({
         world: "interfaces",
-        async: true,
-        tracing: true,
-        trappable_imports: true,
+        imports: { default: async | trappable | tracing },
         with: {
            "wasi:blobstore/container/container": blobstore::Container,
            "wasi:blobstore/container/stream-object-names": blobstore::StreamObjectNames,
            "wasi:blobstore/types/incoming-value": blobstore::IncomingValue,
            "wasi:blobstore/types/outgoing-value": blobstore::OutgoingValue,
-           "wasi:io": wasmtime_wasi::bindings::io,
+           "wasi:io": wasmtime_wasi::p2::bindings::io,
            "wasi:keyvalue/store/bucket": keyvalue::Bucket,
            "wasmcloud:bus/lattice/call-target-interface": lattice::CallTargetInterface,
            "wasmcloud:bus/error/error": crate::component::Error,
@@ -69,9 +67,7 @@ mod wasmtime_bindings {
 mod unversioned_logging_bindings {
     wasmtime::component::bindgen!({
         world: "unversioned-interfaces",
-        async: true,
-        tracing: true,
-        trappable_imports: true,
+        imports: { default: async | trappable | tracing },
     });
 }
 
@@ -80,9 +76,7 @@ mod config_legacy {
     wasmtime::component::bindgen!({
         path: "wit/config-legacy",
         world: "wasi:config/imports@0.2.0-draft",
-        async: true,
-        tracing: true,
-        trappable_imports: true,
+        imports: { default: async | trappable | tracing },
     });
 }
 

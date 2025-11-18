@@ -8,7 +8,8 @@ use super::{Ctx, Handler};
 pub mod unversioned_logging_bindings {
     wasmtime::component::bindgen!({
         world: "unversioned-logging",
-        async: true,
+        imports: { default: async | trappable | tracing },
+        exports: { default: async | trappable | tracing },
         with: {
            "wasi:logging/logging": crate::capability::unversioned_logging,
         },
@@ -18,7 +19,8 @@ pub mod unversioned_logging_bindings {
 pub mod logging_bindings {
     wasmtime::component::bindgen!({
         world: "logging",
-        async: true,
+        imports: { default: async | trappable | tracing },
+        exports: { default: async | trappable | tracing },
         with: {
            "wasi:logging/logging": crate::capability::logging,
         },

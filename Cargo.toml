@@ -399,10 +399,10 @@ wasmcloud-secrets-types = { version = "^0.7.0", path = "./crates/secrets-types",
 wasmcloud-test-util = { version = "^0.18.0", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "^0.15.0", path = "./crates/tracing", default-features = false }
 wasmparser = { version = "0.228", default-features = false }
-wasmtime = { version = "31", default-features = false }
-wasmtime-wasi = { version = "31", default-features = false }
-wasmtime-wasi-http = { version = "31", default-features = false }
-wasmtime-wit-bindgen = { version = "31", default-features = false }
+wasmtime = { version = "38.0.4", default-features = false }
+wasmtime-wasi = { version = "38.0.4", default-features = false }
+wasmtime-wasi-http = { version = "38.0.4", default-features = false }
+wasmtime-wit-bindgen = { version = "38.0.4", default-features = false }
 wat = { version = "1", default-features = false }
 webpki-roots = { version = "1.0", default-features = false }
 which = { version = "7", default-features = false }
@@ -413,8 +413,8 @@ wit-bindgen-wrpc = { version = "0.9", default-features = false }
 wit-component = { version = "0.224.1", default-features = false }
 wit-parser = { version = "0.224.1", default-features = false }
 wrpc-interface-blobstore = { version = "0.21", default-features = false }
-wrpc-interface-http = { version = "0.32.1", default-features = false }
-wrpc-runtime-wasmtime = { version = "0.28", default-features = false }
+wrpc-interface-http = { version = "0.34", default-features = false }
+wrpc-runtime-wasmtime = { version = "0.30", default-features = false }
 wrpc-transport = { version = "0.28", default-features = false }
 wrpc-transport-nats = { version = "0.28.1", default-features = false, features = [
   "async-nats-0_39",

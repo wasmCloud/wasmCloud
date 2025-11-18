@@ -16,7 +16,8 @@ use crate::component::{Ctx, Handler};
 pub mod bindings {
     wasmtime::component::bindgen!({
         world: "messaging-handler",
-        async: true,
+        imports: { default: async | trappable | tracing },
+        exports: { default: async | trappable | tracing },
         with: {
            "wasmcloud:messaging/types": crate::capability::messaging0_3_0::types,
         },
