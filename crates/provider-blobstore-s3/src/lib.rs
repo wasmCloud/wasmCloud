@@ -226,7 +226,7 @@ impl StorageClient {
         if let Some(max_attempts) = max_attempts {
             retry_config = retry_config.with_max_attempts(max_attempts);
         }
-        let mut loader = aws_config::defaults(aws_config::BehaviorVersion::v2025_01_17())
+        let mut loader = aws_config::defaults(aws_config::BehaviorVersion::v2025_08_07())
             .region(region)
             .credentials_provider(cred_provider)
             .retry_config(retry_config);
