@@ -1,4 +1,8 @@
-use std::{collections::HashSet, fs, path::PathBuf};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use claims::{assert_err, assert_ok};
 use semver::Version;
@@ -544,20 +548,20 @@ async fn separate_project_paths() {
     assert!(matches!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            build_artifact: Some(build_artifact),
-            destination: Some(destination),
+            build_artifact: Some(ref build_artifact),
+            destination: Some(ref destination),
             ..
-        }) if build_artifact == PathBuf::from("build/testcomponent_raw.wasm")
-        && destination == PathBuf::from("./build/testcomponent.wasm")
+        }) if build_artifact.as_path() == Path::new("build/testcomponent_raw.wasm")
+        && destination.as_path() == Path::new("./build/testcomponent.wasm")
     ));
 
     assert!(matches!(
         config.language,
         LanguageConfig::Rust(RustConfig {
-            cargo_path: Some(cargo_path),
-            target_path: Some(target_path),
+            cargo_path: Some(ref cargo_path),
+            target_path: Some(ref target_path),
             debug: false,
-        }) if cargo_path == PathBuf::from("../cargo")
-        && target_path == PathBuf::from("./target")
+        }) if cargo_path.as_path() == Path::new("../cargo")
+        && target_path.as_path() == Path::new("./target")
     ));
 }
