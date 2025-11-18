@@ -263,7 +263,7 @@ fn token_label(pk: &str) -> String {
     }
 }
 
-fn render_core<T>(claims: &Claims<T>, validation: TokenValidation) -> Table
+fn render_core<T>(claims: &Claims<T>, validation: TokenValidation) -> Table<'_>
 where
     T: serde::Serialize + DeserializeOwned + WascapEntity,
 {

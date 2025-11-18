@@ -243,7 +243,7 @@ fn build_go_provider(
             eprintln!("STDOUT:\n{stdout_output}\nSTDERR:\n{stderr_output}");
             bail!(
                 "Generating interfaces failed: {}",
-                result.status.to_string()
+                result.status
             )
         }
     }

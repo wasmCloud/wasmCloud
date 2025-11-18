@@ -33,7 +33,7 @@ pub struct UiCommand {
 pub async fn handle_command(command: UiCommand, output_kind: OutputKind) -> Result<CommandOutput> {
     handle_ui(command, output_kind)
         .await
-        .map(|()| (CommandOutput::default()))
+        .map(|()| CommandOutput::default())
 }
 
 async fn get_patch_version_or_default(version: Option<String>) -> Version {
