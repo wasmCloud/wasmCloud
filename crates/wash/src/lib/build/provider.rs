@@ -241,10 +241,7 @@ fn build_go_provider(
             let stdout_output = String::from_utf8_lossy(&result.stdout);
             let stderr_output = String::from_utf8_lossy(&result.stderr);
             eprintln!("STDOUT:\n{stdout_output}\nSTDERR:\n{stderr_output}");
-            bail!(
-                "Generating interfaces failed: {}",
-                result.status
-            )
+            bail!("Generating interfaces failed: {}", result.status)
         }
     }
 
