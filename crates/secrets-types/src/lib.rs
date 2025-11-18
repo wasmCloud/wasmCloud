@@ -58,13 +58,19 @@ impl Context {
     pub fn valid_claims(&self) -> Result<(), ContextValidationError> {
         let component_valid = Self::valid_component(&self.entity_jwt);
         let provider_valid = Self::valid_provider(&self.entity_jwt);
-        if component_valid.is_err() && provider_valid.is_err() {
+        // TODO: There's almost certainly a bug here, it was ported from original conditional commented-out below:
+        //if component_valid.is_err() && provider_valid.is_err() {
+        //    if let Err(e) = component_valid {
+        //        return Err(ContextValidationError::InvalidComponentJWT(e.to_string()));
+        //    } else {
+        //        return Err(ContextValidationError::InvalidProviderJWT(
+        //            provider_valid.unwrap_err().to_string(),
+        //        ));
+        //    }
+        //}
+        if provider_valid.is_err() {
             if let Err(e) = component_valid {
                 return Err(ContextValidationError::InvalidComponentJWT(e.to_string()));
-            } else {
-                return Err(ContextValidationError::InvalidProviderJWT(
-                    provider_valid.unwrap_err().to_string(),
-                ));
             }
         }
 
