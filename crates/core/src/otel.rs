@@ -159,10 +159,12 @@ impl OtelConfig {
 // are comfortable with the fact there are no providers being used that have
 // the case sensitive handling still in place.
 // #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum OtelProtocol {
     #[serde(alias = "grpc", alias = "Grpc")]
     Grpc,
     #[serde(alias = "http", alias = "Http")]
+    #[default]
     Http,
 }
 
@@ -187,11 +189,6 @@ impl std::fmt::Display for OtelSignal {
     }
 }
 
-impl Default for OtelProtocol {
-    fn default() -> Self {
-        Self::Http
-    }
-}
 
 impl FromStr for OtelProtocol {
     type Err = anyhow::Error;

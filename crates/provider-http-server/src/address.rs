@@ -110,7 +110,7 @@ impl Provider for HttpServerProvider {
             std::collections::hash_map::Entry::Occupied(v) => {
                 bail!(
                     "an address mapping for address [{}] the link [{}] already exists, overwriting links is not currently supported",
-                    v.get().ip().to_string(),
+                    v.get().ip(),
                     link_config.link_name,
                 )
             }
