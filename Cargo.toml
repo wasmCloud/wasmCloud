@@ -335,7 +335,7 @@ termsize = { version = "0.1", default-features = false }
 test-case = { version = "3", default-features = false }
 test-components = { version = "0", path = "./tests/components", default-features = false }
 test-log = { version = "0.2", default-features = false }
-testcontainers = { version = "0.23" }
+testcontainers = { version = "0.25" }
 thiserror = { version = "2", default-features = false }
 time = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false }
