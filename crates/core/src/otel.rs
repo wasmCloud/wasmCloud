@@ -189,7 +189,6 @@ impl std::fmt::Display for OtelSignal {
     }
 }
 
-
 impl FromStr for OtelProtocol {
     type Err = anyhow::Error;
 

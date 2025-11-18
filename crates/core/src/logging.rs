@@ -30,4 +30,3 @@ impl From<tracing::Level> for Level {
         }
     }
 }
-
