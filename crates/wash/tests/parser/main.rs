@@ -266,7 +266,7 @@ async fn random_file() {
     let err = assert_err!(result);
     assert_eq!(
         format!(
-            "invalid config file: {}",
+            r#"configuration file "{}" is not of a supported file format"#,
             get_full_path("./tests/parser/files/random.txt")
         ),
         err.to_string().as_str()
