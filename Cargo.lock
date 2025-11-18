@@ -6285,6 +6285,7 @@ version = "0.22.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf4ef73721ac7bcd79b2b315da7779d8fc09718c6b3d2d1b2d94850eb8c18432"
 dependencies = [
+ "log",
  "ring",
  "rustls-pki-types",
  "rustls-webpki 0.102.8",
@@ -10219,11 +10220,14 @@ dependencies = [
  "http-body 1.0.1",
  "http-body-util",
  "hyper 1.8.1",
+ "rustls 0.22.4",
  "tokio",
+ "tokio-rustls 0.25.0",
  "tracing",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-io",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
