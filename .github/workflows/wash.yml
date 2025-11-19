@@ -27,7 +27,7 @@ jobs:
     outputs:
       modified: ${{ steps.changes.outputs.changed }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         id: changes
         with:
@@ -61,7 +61,7 @@ jobs:
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903
         with:
           node-version: '18.x'
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       - run: rustup show
       - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1
         with:
@@ -98,7 +98,7 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       # Free disk space
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
@@ -152,7 +152,7 @@ jobs:
             lang: python
             lang-version: '3.10'
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
 
       # Set up language toolchain
       - name: Setup WebAssembly toolchains for language
