@@ -58,7 +58,7 @@ jobs:
         os: [ubuntu-latest-4-cores, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903
         with:
           node-version: '18.x'
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
