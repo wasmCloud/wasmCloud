@@ -661,56 +661,37 @@ where
                 Bound::Included("wasi:io/error@0.2"),
                 Bound::Excluded("wasi:io/error@0.3"),
             ))
-            .map(|(name, instance)| {
-                instance
-                    .get("error")
-                    .copied()
-                    .with_context(|| format!("{name} instance import missing `error` resource"))
-            })
-            .collect::<anyhow::Result<Box<[_]>>>()?;
+            .flat_map(|(_, instance)| instance.get("error"))
+            .copied()
+            .collect::<Box<[_]>>();
         let io_pollable_tys = host_resources
             .range::<str, _>((
                 Bound::Included("wasi:io/poll@0.2"),
                 Bound::Excluded("wasi:io/poll@0.3"),
             ))
-            .map(|(name, instance)| {
-                instance
-                    .get("pollable")
-                    .copied()
-                    .with_context(|| format!("{name} instance import missing `pollable` resource"))
-            })
-            .collect::<anyhow::Result<Box<[_]>>>()?;
+            .flat_map(|(_, instance)| instance.get("pollable"))
+            .copied()
+            .collect::<Box<[_]>>();
         let io_input_stream_tys = host_resources
             .range::<str, _>((
                 Bound::Included("wasi:io/streams@0.2"),
                 Bound::Excluded("wasi:io/streams@0.3"),
             ))
-            .map(|(name, instance)| {
-                instance.get("input-stream").copied().with_context(|| {
-                    format!("{name} instance import missing `input-stream` resource")
-                })
-            })
-            .collect::<anyhow::Result<Box<[_]>>>()?;
+            .flat_map(|(_, instance)| instance.get("input-stream"))
+            .copied()
+            .collect::<Box<[_]>>();
         let io_output_stream_tys = host_resources
             .range::<str, _>((
                 Bound::Included("wasi:io/streams@0.2"),
                 Bound::Excluded("wasi:io/streams@0.3"),
             ))
-            .map(|(name, instance)| {
-                instance.get("output-stream").copied().with_context(|| {
-                    format!("{name} instance import missing `output-stream` resource")
-                })
-            })
-            .collect::<anyhow::Result<Box<[_]>>>()?;
+            .flat_map(|(_, instance)| instance.get("output-stream"))
+            .copied()
+            .collect::<Box<[_]>>();
         let rpc_err_ty = host_resources
             .get("wrpc:rpc/error@0.1.0")
-            .map(|instance| {
-                instance
-                    .get("error")
-                    .copied()
-                    .context("`wrpc:rpc/error@0.1.0` instance import missing `error` resource")
-            })
-            .transpose()?;
+            .and_then(|instance| instance.get("error"))
+            .copied();
         // TODO: This should include `wasi:http` resources
         let host_resources = host_resources
             .into_iter()
