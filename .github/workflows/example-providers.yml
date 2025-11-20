@@ -77,7 +77,7 @@ jobs:
         uses: ./.github/actions/install-cached-wash-cli
 
       # Language specific setup
-      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+      - uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c
         if: ${{ matrix.project.lang == 'golang' }}
         with:
           go-version: ${{ matrix.project.lang_version }}
