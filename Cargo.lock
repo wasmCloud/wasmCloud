@@ -5661,7 +5661,7 @@ dependencies = [
 
 [[package]]
 name = "provider-archive"
-version = "0.16.0"
+version = "0.16.1"
 dependencies = [
  "astral-tokio-tar",
  "async-compression",
@@ -6612,7 +6612,7 @@ dependencies = [
 
 [[package]]
 name = "secrets-nats-kv"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9297,7 +9297,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-core"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9337,7 +9337,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-host"
-version = "0.26.0"
+version = "0.27.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9632,7 +9632,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sdk"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9712,7 +9712,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-runtime"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9748,7 +9748,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-secrets-client"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-nats",
  "nkeys",
@@ -9759,7 +9759,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-secrets-types"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9773,7 +9773,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-test-util"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9796,7 +9796,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-tracing"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "bytes",
