@@ -831,8 +831,13 @@ impl ControlInterfaceServer for Host {
             // Update component specification with the new link
             self.store_component_spec(&source_id, &component_spec)
                 .await?;
-            self.update_host_with_spec(&source_id, &component_spec)
-                .await?;
+            // NOTE: We rely on the NATS watcher to call update_host_with_spec asynchronously.
+            // Previously, we called it directly here, but this caused a race condition where
+            // self.links would be updated before the NATS watcher processed the change,
+            // preventing provider links from being sent on re-add scenarios.
+            // debug!(source_id, "calling update_host_with_spec directly from handle_link_put");
+            // self.update_host_with_spec(&source_id, &component_spec)
+            //     .await?;
 
             self.put_backwards_compat_provider_link(&request)
                 .await?;
