@@ -5,10 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.15.0 (2025-05-28)
+## 0.16.0 (2025-11-21)
 
 ### Chore
 
+ - <csr-id-69d94666354c32e63c276847dcfdf9c80dab9b66/> bumps for wasmcloud-test-util release
+   SAFETY BUMP: wasmcloud-host v0.26.0, wasmcloud-test-util v0.18.0
  - <csr-id-7df6305aac78635e26e478992509bb07915868d9/> bump versions
  - <csr-id-68c048f8ac90efe33805fe019cdd90d43bd9b538/> Bump patch versions of tracing and host
  - <csr-id-3078c88f0ebed96027e20997bccc1c125583fad4/> bump provider-archive v0.16.0, wasmcloud-core v0.17.0, wasmcloud-tracing v0.13.0, wasmcloud-provider-sdk v0.14.0, wasmcloud-provider-http-server v0.27.0, wasmcloud-provider-messaging-nats v0.26.0, wasmcloud-runtime v0.9.0, wasmcloud-secrets-types v0.6.0, wasmcloud-secrets-client v0.7.0, wasmcloud-host v0.25.0, wasmcloud-test-util v0.17.0, secrets-nats-kv v0.2.0, wash v0.41.0
@@ -188,8 +190,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 77 commits contributed to the release over the course of 638 calendar days.
- - 66 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 78 commits contributed to the release over the course of 816 calendar days.
+ - 67 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -199,6 +201,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Bumps for wasmcloud-test-util release ([`69d9466`](https://github.com/wasmCloud/wasmCloud/commit/69d94666354c32e63c276847dcfdf9c80dab9b66))
     - Bump versions ([`7df6305`](https://github.com/wasmCloud/wasmCloud/commit/7df6305aac78635e26e478992509bb07915868d9))
     - Track max component instances ([`f9c1131`](https://github.com/wasmCloud/wasmCloud/commit/f9c1131f7aa06542ab23059a2bbeda9fe6a7cc12))
     - Track active component instances ([`7e59529`](https://github.com/wasmCloud/wasmCloud/commit/7e59529c7942a5d4616323bbf35970f0c3d8bea1))
@@ -277,6 +280,215 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Construct a strongly typed HostData to send to providers ([`23f1759`](https://github.com/wasmCloud/wasmCloud/commit/23f1759e818117f007df8d9b1bdfdfa7710c98c5))
     - Support OTEL traces end-to-end ([`675d364`](https://github.com/wasmCloud/wasmCloud/commit/675d364d2f53f9dbf7ebb6c655d5fbbbba6c62b6))
 </details>
+
+## 0.15.0 (2025-05-28)
+
+<csr-id-7df6305aac78635e26e478992509bb07915868d9/>
+<csr-id-68c048f8ac90efe33805fe019cdd90d43bd9b538/>
+<csr-id-3078c88f0ebed96027e20997bccc1c125583fad4/>
+<csr-id-97c436019740568f22ad8e4ff633fcd3f70260dc/>
+<csr-id-e71198a83c32dcce51f2e7e7a3a8fb953899c82a/>
+<csr-id-eb52eca817fe24b33e7f1a65c1ba5c46c50bef4e/>
+<csr-id-c5ba85cfe6ad63227445b0a5e21d58a8f3e15e33/>
+<csr-id-44bf4c8793b3989aebbbc28c2f2ce3ebbd4d6a0a/>
+<csr-id-c262023ea20c256686d7f1bdd1d6b21b031b55a6/>
+<csr-id-44d35f268e1c55a1fbb91f2bc27b43a19c4581fe/>
+<csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/>
+<csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/>
+<csr-id-be57edb70fe783ca71c2eadc7f27d68e5712b3e7/>
+<csr-id-fd69df40f24ca565ace0f8c97a0c47a89db575a4/>
+<csr-id-53a312c3c35014e1b337a45a96373b81512bc113/>
+<csr-id-d65512b5e86eb4d13e64cffa220a5a842c7bb72b/>
+<csr-id-cdf389bdda44fbccfb0f513d84f3737722f0a1a7/>
+<csr-id-71f8bc0a19c26cb8d2d845c69a61e7f43c409d3d/>
+<csr-id-2b52f083fde88b98a20dd53ba24e4ae697fcef16/>
+<csr-id-fffc9bb8cf42e0f5f7f03971b46dd5cdbb6d2c31/>
+<csr-id-45eea2ae0f65a0f4f403bed14feefdd67f82d0f3/>
+<csr-id-cb0bcab822cb4290c673051ec1dd98d034a61546/>
+<csr-id-1a80eeaa1f1ba333891092f8a27e924511c0bd68/>
+<csr-id-ef45f597710929d41be989110fc3c51621c9ee62/>
+<csr-id-1ff476dcd61675a81d747091a1a94f1a4cd5fedb/>
+<csr-id-1af6e05f1a47be4e62a4c21d1704aff2e09bef89/>
+<csr-id-8403350432a2387d4a2bce9c096f002005ba54be/>
+<csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/>
+<csr-id-517c6add84b6ab6062b5a0bc2511e5585f9ad3db/>
+<csr-id-4e1d6da189ff49790d876cd244aed89114efba98/>
+<csr-id-3048567a115618599336d4c1255fc6324c04a203/>
+<csr-id-e1d7356bb0a07af9f4e6b1626f5df33709f3ed78/>
+<csr-id-23f1759e818117f007df8d9b1bdfdfa7710c98c5/>
+<csr-id-a8538fb7926b190a180bdd2b46ad00757d98759a/>
+<csr-id-5f7e0132362f7eda0710a1a69d5944140fd74b07/>
+<csr-id-c36dee94832d111c2a3ba5ff9f5e26baf2f3e4d9/>
+
+### Chore
+
+ - <csr-id-7df6305aac78635e26e478992509bb07915868d9/> bump versions
+ - <csr-id-68c048f8ac90efe33805fe019cdd90d43bd9b538/> Bump patch versions of tracing and host
+ - <csr-id-3078c88f0ebed96027e20997bccc1c125583fad4/> bump provider-archive v0.16.0, wasmcloud-core v0.17.0, wasmcloud-tracing v0.13.0, wasmcloud-provider-sdk v0.14.0, wasmcloud-provider-http-server v0.27.0, wasmcloud-provider-messaging-nats v0.26.0, wasmcloud-runtime v0.9.0, wasmcloud-secrets-types v0.6.0, wasmcloud-secrets-client v0.7.0, wasmcloud-host v0.25.0, wasmcloud-test-util v0.17.0, secrets-nats-kv v0.2.0, wash v0.41.0
+ - <csr-id-97c436019740568f22ad8e4ff633fcd3f70260dc/> upgrade opentelemetry libraries to 0.27
+ - <csr-id-e71198a83c32dcce51f2e7e7a3a8fb953899c82a/> address clippy warnings
+ - <csr-id-eb52eca817fe24b33e7f1a65c1ba5c46c50bef4e/> removed unused dependencies
+   A batch scanning all crates and remove unused dependencies by running 'cargo machete'.
+ - <csr-id-c5ba85cfe6ad63227445b0a5e21d58a8f3e15e33/> bump wascap v0.15.1, wasmcloud-core v0.13.0, wash-lib v0.29.0, wasmcloud-tracing v0.10.0, wasmcloud-provider-sdk v0.11.0, wash-cli v0.36.0, safety bump 7 crates
+   SAFETY BUMP: wash-lib v0.29.0, wasmcloud-tracing v0.10.0, wasmcloud-provider-sdk v0.11.0, wash-cli v0.36.0, wasmcloud-host v0.22.0, wasmcloud-runtime v0.6.0, wasmcloud-test-util v0.14.0
+ - <csr-id-44bf4c8793b3989aebbbc28c2f2ce3ebbd4d6a0a/> bump wasmcloud-core v0.12.0, wash-lib v0.28.0, wasmcloud-tracing v0.9.0, wasmcloud-provider-sdk v0.10.0, wash-cli v0.35.0, safety bump 7 crates
+   SAFETY BUMP: wash-lib v0.28.0, wasmcloud-tracing v0.9.0, wasmcloud-provider-sdk v0.10.0, wash-cli v0.35.0, wasmcloud-host v0.21.0, wasmcloud-runtime v0.5.0, wasmcloud-test-util v0.13.0
+ - <csr-id-c262023ea20c256686d7f1bdd1d6b21b031b55a6/> gate import behind feature
+ - <csr-id-44d35f268e1c55a1fbb91f2bc27b43a19c4581fe/> Bump opentelemetry-* crates and tracing-opentelemetry to latest version
+ - <csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/> generate changelogs after 1.0.1 release
+ - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
+ - <csr-id-be57edb70fe783ca71c2eadc7f27d68e5712b3e7/> bump to 0.3.0
+ - <csr-id-fd69df40f24ca565ace0f8c97a0c47a89db575a4/> Excises vestigal remains of wasmbus-rpc
+   There were some parts of the core crate that we no longer use,
+   especially now that we don't require claims signing anymore. This
+   removes them and bumps the core crate in preparation for 1.0
+ - <csr-id-53a312c3c35014e1b337a45a96373b81512bc113/> bump to 0.2.0
+ - <csr-id-d65512b5e86eb4d13e64cffa220a5a842c7bb72b/> Use traces instead of tracing user-facing language to align with OTEL signal names
+ - <csr-id-cdf389bdda44fbccfb0f513d84f3737722f0a1a7/> Update the default OTLP HTTP port to match the current spec
+ - <csr-id-71f8bc0a19c26cb8d2d845c69a61e7f43c409d3d/> Remove check for default OpenTelemetry traces path
+ - <csr-id-2b52f083fde88b98a20dd53ba24e4ae697fcef16/> Normalize service.names to use kebab-case
+ - <csr-id-fffc9bb8cf42e0f5f7f03971b46dd5cdbb6d2c31/> address clippy warnings
+ - <csr-id-45eea2ae0f65a0f4f403bed14feefdd67f82d0f3/> clean-up imports
+ - <csr-id-cb0bcab822cb4290c673051ec1dd98d034a61546/> add descriptions to crates
+ - <csr-id-1a80eeaa1f1ba333891092f8a27e924511c0bd68/> satisfy clippy linting
+
+### New Features
+
+<csr-id-17648fedc2a1907b2f0c6d053b9747e72999addb/>
+<csr-id-3602bdf5345ec9a75e88c7ce1ab4599585bcc2d3/>
+<csr-id-675d364d2f53f9dbf7ebb6c655d5fbbbba6c62b6/>
+
+ - <csr-id-f9c1131f7aa06542ab23059a2bbeda9fe6a7cc12/> track max component instances
+ - <csr-id-7e59529c7942a5d4616323bbf35970f0c3d8bea1/> track active component instances
+ - <csr-id-129fd42074ce46f260798840539a12c585fea893/> Adds support for resource attributes
+   We weren't properly discovering resource attributes from the environment.
+   This should fix the issue in both the host and provider. This also
+   changes our start provider process to proxy through all OTEL env vars to
+   the process
+ - <csr-id-b1e656f8380ded7d7461fa01e403c3f145f79b54/> More host metrics & attributes
+ - <csr-id-f051d9d3b8afb0ea1baafd87941babb29830fe4d/> Adds the ability to configure sampling and buffer size
+   This adds the ability for provider to configure some of the tunables for
+   tracing via config. The underlying SDK defaults (and hence, the host) use
+   the standard environment variables
+   
+   Please note that some of our traces are using a span that lives for the
+   lifetime of the application, so the sampling percentage may not work
+   until we fix that as well
+ - <csr-id-f0f3fd7011724137e5f8a4c47a8e4e97be0edbb2/> Updates tests and examples to support the new wkg deps
+   This updates all dependencies to have a wkg.lock but I didn't add to the
+   gitignore for convenience. The deps are still committed in tree for backwards
+   compatibility and they all use the new versioned logging. This looks
+   really chunky bust is mostly dep updates/deletes
+ - <csr-id-24e77b7f1f29580ca348a758302cdc6e75cc3afd/> Add support for supplying additional CA certificates to OCI and OpenTelemetry clients
+ - <csr-id-e28361935ad3b09d46658488e813c809522317bf/> add support for flame graphs
+ - <csr-id-1b076b3479874dbc2f7e575fcee65bab66bd056d/> use `tracing-appender`
+   Avoid locking whole process on each logging statement
+ - <csr-id-378b7c89c8b00a5dcee76c06bc8de615dc58f8aa/> Add support for configuring grpc protocol with opentelemetry
+ - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
+ - <csr-id-6fe14b89d4c26e5c01e54773268c6d0f04236e71/> Add flags for overriding the default OpenTelemetry endpoint
+ - <csr-id-868570be8d94a6d73608c7cde5d2422e15f9eb0c/> Switch to using --enable-observability and --enable-<signal> flags
+ - <csr-id-7d51408440509c687b01e00b77a3672a8e8c30c9/> add invocation and error counts for actor invocations
+   Add two new metrics for actors:
+   * the count of the number of invocations (`wasmcloud_host.actor.invocations`)
+* the count of errors (`wasmcloud_host.actor.invocation.errors`)
+* the lattice ID
+* the host ID
+* provider information if a provider invoked the actor: ** the contract ID
+   ** the provider ID
+   ** the name of the linkdef
+
+### Bug Fixes
+
+ - <csr-id-7413aeb39e7f3b2e7550cdefafe982d6ffbe2da6/> connect function trace to context
+ - <csr-id-3d2cce2e3dcbd23bb7d29c3a4c126650df889b0d/> enable core otel features
+ - <csr-id-8b66966e03e5d9c2fa64fb2480e9264f3f9e2f55/> include rustls-tls feature for reqwest
+ - <csr-id-a10e171e16e08f16e21ad07fff99343b10363fc9/> unused metrics functions
+ - <csr-id-f38f5510fc53ea83a94378851a02c3800444388f/> fix compilation issue in tracing
+ - <csr-id-8d345114fbd30a3f6784d2b22fa79f1c44f807c5/> split directives before trying to parse
+ - <csr-id-691c3719b8030e437f565156ad5b9cff12fd4cf3/> proxy RUST_LOG to providers
+ - <csr-id-46b441d1358fd0ee349bf1dfc87236c400cb4db1/> reduce verbosity of nats logs
+ - <csr-id-74142c4cff683565fb321b7b65fbb158b5a9c990/> attach traces on inbound and outbound messages
+   Parse headers from CTL interface and RPC messages, and publish tracing headers
+   on CTL and RPC responses
+ - <csr-id-45b0fb0960921a4eebd335977fd8bc747def97a4/> pub the context mod only with the otel feature enabled
+
+### Other
+
+ - <csr-id-ef45f597710929d41be989110fc3c51621c9ee62/> bump wascap v0.15.2, provider-archive v0.14.0, wasmcloud-core v0.15.0, wash-lib v0.31.0, wasmcloud-tracing v0.11.0, wasmcloud-provider-sdk v0.12.0, wasmcloud-secrets-types v0.5.0, wash-cli v0.37.0, safety bump 9 crates
+   SAFETY BUMP: wasmcloud-core v0.15.0, wash-lib v0.31.0, wasmcloud-tracing v0.11.0, wasmcloud-provider-sdk v0.12.0, wash-cli v0.37.0, wasmcloud-host v0.23.0, wasmcloud-runtime v0.7.0, wasmcloud-test-util v0.15.0, wasmcloud-secrets-client v0.6.0
+ - <csr-id-1ff476dcd61675a81d747091a1a94f1a4cd5fedb/> tracing v0.8.0, provider-sdk v0.9.0, wash-cli v0.33.0
+ - <csr-id-1af6e05f1a47be4e62a4c21d1704aff2e09bef89/> bump wasmcloud-core v0.10.0, safety bump 5 crates
+   SAFETY BUMP: wasmcloud-runtime v0.3.0, wasmcloud-tracing v0.8.0, wasmcloud-provider-sdk v0.9.0, wash-cli v0.33.0, wash-lib v0.26.0
+ - <csr-id-8403350432a2387d4a2bce9c096f002005ba54be/> bump wasmcloud-core v0.9.0, wash-lib v0.24.0, wasmcloud-tracing v0.7.0, wasmcloud-provider-sdk v0.8.0, wasmcloud-secrets-types v0.4.0, wash-cli v0.31.0, safety bump 5 crates
+   SAFETY BUMP: wash-lib v0.24.0, wasmcloud-tracing v0.7.0, wasmcloud-provider-sdk v0.8.0, wash-cli v0.31.0, wasmcloud-secrets-client v0.4.0
+ - <csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/> bump for test-util release
+   Bump wasmcloud-core v0.8.0, opentelemetry-nats v0.1.1, provider-archive v0.12.0, wasmcloud-runtime v0.3.0, wasmcloud-secrets-types v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, safety bump 8 crates
+   
+   SAFETY BUMP: wasmcloud-runtime v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, wasmcloud-provider-sdk v0.7.0, wash-cli v0.30.0, wash-lib v0.23.0
+
+### Refactor
+
+ - <csr-id-517c6add84b6ab6062b5a0bc2511e5585f9ad3db/> fix lint
+ - <csr-id-4e1d6da189ff49790d876cd244aed89114efba98/> remove extra trace_level field
+ - <csr-id-3048567a115618599336d4c1255fc6324c04a203/> simplify registry construction
+ - <csr-id-e1d7356bb0a07af9f4e6b1626f5df33709f3ed78/> replace lazy_static with once_cell
+ - <csr-id-23f1759e818117f007df8d9b1bdfdfa7710c98c5/> construct a strongly typed HostData to send to providers
+
+### Style
+
+ - <csr-id-a8538fb7926b190a180bdd2b46ad00757d98759a/> update imports
+
+### Chore (BREAKING)
+
+ - <csr-id-5f7e0132362f7eda0710a1a69d5944140fd74b07/> Updates dependencies
+   This does an update of pretty much all of the dependencies possible
+   in the main tree. Any code changes were refactors maintaining the same
+   behaviors, but using any updated APIs.
+   
+   This is noted as breaking because the updates to the crates bubble up
+   through the `core` crate, so it technically breaks that API since we
+   reexport. If we think that isn't worth it, I can revert that bit.
+
+### New Features (BREAKING)
+
+ - <csr-id-8ad2cde49cb52872af4c9753be7c422092ae56ee/> add trace_level option
+ - <csr-id-42d069eee87d1b5befff1a95b49973064f1a1d1b/> Updates topics to the new standard
+   This is a wide ranging PR that changes all the topics as described
+   in #1108. This also involved removing the start and stop actor
+   operations. While I was in different parts of the code I did some small
+   "campfire rule" cleanups mostly of clippy lints and removal of
+   clippy pedant mode.
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-ca8959ab707196cb061b7b732c4ed9e3a92e2c88/> return Dispatch from configure_tracing()
+   This commit returns Dispatch from `configure_tracing()` rather than
+   attempting to call `set_global_default()`[0].
+   
+   `set_global_default` cannot safely be called from libraries
+   that are used in processes that will be executing (the host and a
+   binar provider, in the wasmCloud case).
+   
+   Setting the default must be done from closer to the binar -- at the
+   very least not in a shared library that both the host and provider use.
+
+### Refactor (BREAKING)
+
+ - <csr-id-c36dee94832d111c2a3ba5ff9f5e26baf2f3e4d9/> Removes dependencies from host on provider libraries
+   Our current host had a circular dependency loop with itself because it
+   depended on the http and messaging providers. In order to break this, I
+   moved the common http and messaging types we use for builtins into
+   `wasmcloud-core` behind feature flags that aren't on by default. As such,
+   this is a breaking change as I moved stuff around, but mostly didn't
+   change any code.
+   
+   Please note that I only bumped version numbers on things we had released
+   already. Some of these crates had not yet been released and do not need
+   another bump
+
+<csr-unknown>
+This also adds a bunch of new attributes to the existing actor metrics so that they make sense in an environment with multiple hosts. Specifically this adds:For actor to actor calls, instead of having the provider metadata it instead has the public key of the invoking actor.An example of what this looks like as an exported Prometheus metric:wasmcloud_host_actor_invocations_total{actor_ref="wasmcloud.azurecr.io/echo:0.3.8", caller_provider_contract_id="wasmcloud:httpserver", caller_provider_id="VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M", caller_provider_link_name="default", host="ND7L3RZ6NLYJGN25E6DKYS665ITWXAPXZXGZXLCUQEDDU65RB5TVUHEN", job="wasmcloud-host", lattice="default", operation="HttpServer.HandleRequest"}
+Provider metrics will likely need to wait until the wRPC work is finished. Add initial support for metrics enable OTEL logs support OTEL traces end-to-end<csr-unknown/>
 
 ## 0.11.0 (2024-11-08)
 
@@ -424,8 +636,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    very least not in a shared library that both the host and provider use.
 
 <csr-unknown>
+<csr-unknown>
 This also adds a bunch of new attributes to the existing actor metrics so that they make sense in an environment with multiple hosts. Specifically this adds:For actor to actor calls, instead of having the provider metadata it instead has the public key of the invoking actor.An example of what this looks like as an exported Prometheus metric:wasmcloud_host_actor_invocations_total{actor_ref="wasmcloud.azurecr.io/echo:0.3.8", caller_provider_contract_id="wasmcloud:httpserver", caller_provider_id="VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M", caller_provider_link_name="default", host="ND7L3RZ6NLYJGN25E6DKYS665ITWXAPXZXGZXLCUQEDDU65RB5TVUHEN", job="wasmcloud-host", lattice="default", operation="HttpServer.HandleRequest"}
 Provider metrics will likely need to wait until the wRPC work is finished. Add initial support for metrics enable OTEL logs support OTEL traces end-to-end<csr-unknown/>
+<csr-unknown/>
 
 ## 0.10.0 (2024-10-23)
 
@@ -571,8 +785,10 @@ Provider metrics will likely need to wait until the wRPC work is finished. Add i
 
 <csr-unknown>
 <csr-unknown>
+<csr-unknown>
 This also adds a bunch of new attributes to the existing actor metrics so that they make sense in an environment with multiple hosts. Specifically this adds:For actor to actor calls, instead of having the provider metadata it instead has the public key of the invoking actor.An example of what this looks like as an exported Prometheus metric:wasmcloud_host_actor_invocations_total{actor_ref="wasmcloud.azurecr.io/echo:0.3.8", caller_provider_contract_id="wasmcloud:httpserver", caller_provider_id="VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M", caller_provider_link_name="default", host="ND7L3RZ6NLYJGN25E6DKYS665ITWXAPXZXGZXLCUQEDDU65RB5TVUHEN", job="wasmcloud-host", lattice="default", operation="HttpServer.HandleRequest"}
 Provider metrics will likely need to wait until the wRPC work is finished. Add initial support for metrics enable OTEL logs support OTEL traces end-to-end<csr-unknown/>
+<csr-unknown/>
 <csr-unknown/>
 
 ## 0.9.0 (2024-10-09)
@@ -712,8 +928,10 @@ Provider metrics will likely need to wait until the wRPC work is finished. Add i
 <csr-unknown>
 <csr-unknown>
 <csr-unknown>
+<csr-unknown>
 This also adds a bunch of new attributes to the existing actor metrics so that they make sense in an environment with multiple hosts. Specifically this adds:For actor to actor calls, instead of having the provider metadata it instead has the public key of the invoking actor.An example of what this looks like as an exported Prometheus metric:wasmcloud_host_actor_invocations_total{actor_ref="wasmcloud.azurecr.io/echo:0.3.8", caller_provider_contract_id="wasmcloud:httpserver", caller_provider_id="VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M", caller_provider_link_name="default", host="ND7L3RZ6NLYJGN25E6DKYS665ITWXAPXZXGZXLCUQEDDU65RB5TVUHEN", job="wasmcloud-host", lattice="default", operation="HttpServer.HandleRequest"}
 Provider metrics will likely need to wait until the wRPC work is finished. Add initial support for metrics enable OTEL logs support OTEL traces end-to-end<csr-unknown/>
+<csr-unknown/>
 <csr-unknown/>
 <csr-unknown/>
 
@@ -853,8 +1071,10 @@ Provider metrics will likely need to wait until the wRPC work is finished. Add i
 <csr-unknown>
 <csr-unknown>
 <csr-unknown>
+<csr-unknown>
 This also adds a bunch of new attributes to the existing actor metrics so that they make sense in an environment with multiple hosts. Specifically this adds:For actor to actor calls, instead of having the provider metadata it instead has the public key of the invoking actor.An example of what this looks like as an exported Prometheus metric:wasmcloud_host_actor_invocations_total{actor_ref="wasmcloud.azurecr.io/echo:0.3.8", caller_provider_contract_id="wasmcloud:httpserver", caller_provider_id="VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M", caller_provider_link_name="default", host="ND7L3RZ6NLYJGN25E6DKYS665ITWXAPXZXGZXLCUQEDDU65RB5TVUHEN", job="wasmcloud-host", lattice="default", operation="HttpServer.HandleRequest"}
 Provider metrics will likely need to wait until the wRPC work is finished. Add initial support for metrics enable OTEL logs support OTEL traces end-to-end<csr-unknown/>
+<csr-unknown/>
 <csr-unknown/>
 <csr-unknown/>
 <csr-unknown/>
@@ -988,8 +1208,10 @@ Provider metrics will likely need to wait until the wRPC work is finished. Add i
 <csr-unknown>
 <csr-unknown>
 <csr-unknown>
+<csr-unknown>
 This also adds a bunch of new attributes to the existing actor metrics so that they make sense in an environment with multiple hosts. Specifically this adds:For actor to actor calls, instead of having the provider metadata it instead has the public key of the invoking actor.An example of what this looks like as an exported Prometheus metric:wasmcloud_host_actor_invocations_total{actor_ref="wasmcloud.azurecr.io/echo:0.3.8", caller_provider_contract_id="wasmcloud:httpserver", caller_provider_id="VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M", caller_provider_link_name="default", host="ND7L3RZ6NLYJGN25E6DKYS665ITWXAPXZXGZXLCUQEDDU65RB5TVUHEN", job="wasmcloud-host", lattice="default", operation="HttpServer.HandleRequest"}
 Provider metrics will likely need to wait until the wRPC work is finished. Add initial support for metrics enable OTEL logs support OTEL traces end-to-end<csr-unknown/>
+<csr-unknown/>
 <csr-unknown/>
 <csr-unknown/>
 <csr-unknown/>
@@ -1116,8 +1338,10 @@ Provider metrics will likely need to wait until the wRPC work is finished. Add i
 <csr-unknown>
 <csr-unknown>
 <csr-unknown>
+<csr-unknown>
 This also adds a bunch of new attributes to the existing actor metrics so that they make sense in an environment with multiple hosts. Specifically this adds:For actor to actor calls, instead of having the provider metadata it instead has the public key of the invoking actor.An example of what this looks like as an exported Prometheus metric:wasmcloud_host_actor_invocations_total{actor_ref="wasmcloud.azurecr.io/echo:0.3.8", caller_provider_contract_id="wasmcloud:httpserver", caller_provider_id="VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M", caller_provider_link_name="default", host="ND7L3RZ6NLYJGN25E6DKYS665ITWXAPXZXGZXLCUQEDDU65RB5TVUHEN", job="wasmcloud-host", lattice="default", operation="HttpServer.HandleRequest"}
 Provider metrics will likely need to wait until the wRPC work is finished. Add initial support for metrics enable OTEL logs support OTEL traces end-to-end<csr-unknown/>
+<csr-unknown/>
 <csr-unknown/>
 <csr-unknown/>
 <csr-unknown/>

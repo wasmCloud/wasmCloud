@@ -5,9 +5,66 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.16.1 (2025-11-21)
+
+### Bug Fixes
+
+ - <csr-id-a0c85491995af8852f91d6ebf1856f84f16199b6/> Fix CVE-2025-62518 by migrating to astral-tokio-tar
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 1 commit contributed to the release over the course of 25 calendar days.
+ - 247 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Fix CVE-2025-62518 by migrating to astral-tokio-tar ([`a0c8549`](https://github.com/wasmCloud/wasmCloud/commit/a0c85491995af8852f91d6ebf1856f84f16199b6))
+</details>
+
 ## 0.16.0 (2025-03-19)
 
+### Chore
+
+ - <csr-id-3078c88f0ebed96027e20997bccc1c125583fad4/> bump provider-archive v0.16.0, wasmcloud-core v0.17.0, wasmcloud-tracing v0.13.0, wasmcloud-provider-sdk v0.14.0, wasmcloud-provider-http-server v0.27.0, wasmcloud-provider-messaging-nats v0.26.0, wasmcloud-runtime v0.9.0, wasmcloud-secrets-types v0.6.0, wasmcloud-secrets-client v0.7.0, wasmcloud-host v0.25.0, wasmcloud-test-util v0.17.0, secrets-nats-kv v0.2.0, wash v0.41.0
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 1 commit contributed to the release.
+ - 41 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Bump provider-archive v0.16.0, wasmcloud-core v0.17.0, wasmcloud-tracing v0.13.0, wasmcloud-provider-sdk v0.14.0, wasmcloud-provider-http-server v0.27.0, wasmcloud-provider-messaging-nats v0.26.0, wasmcloud-runtime v0.9.0, wasmcloud-secrets-types v0.6.0, wasmcloud-secrets-client v0.7.0, wasmcloud-host v0.25.0, wasmcloud-test-util v0.17.0, secrets-nats-kv v0.2.0, wash v0.41.0 ([`3078c88`](https://github.com/wasmCloud/wasmCloud/commit/3078c88f0ebed96027e20997bccc1c125583fad4))
+</details>
+
 ## 0.15.0 (2025-02-06)
+
+<csr-id-583957aed6918ad08b6d1c9b937e0811b05ee0a7/>
+<csr-id-98bf9ae36fc321fc7803a7485f32b833907f036e/>
+<csr-id-a9b02e5e203c1332ee785cbee8b998be9584c5b0/>
+<csr-id-ef45f597710929d41be989110fc3c51621c9ee62/>
+<csr-id-81766005150677e6d21c28eee27f2240b3da39fc/>
+<csr-id-c50884ac5e7ca8c58bb8a14ef499b0e4ee7d0530/>
+<csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/>
+<csr-id-63cb8c96b2a047a7e884aecef82bdffd5319f545/>
 
 ### Chore
 
