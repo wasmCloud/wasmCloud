@@ -92,7 +92,7 @@ jobs:
 
       - name: Install cargo zigbuild
         if: ${{ contains(matrix.config.buildCommand, 'zigbuild') }}
-        uses: taiki-e/install-action@62da238c048aa0f865cc5a322082957d34e7fc1a # v2.62.54
+        uses: taiki-e/install-action@132c875eef0d3e3be95c2d08d74e8559cbf74bdb # v2.62.55
         with:
           tool: cargo-zigbuild
 
