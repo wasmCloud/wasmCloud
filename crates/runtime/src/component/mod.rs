@@ -3,6 +3,7 @@ use core::future::Future;
 use core::ops::{Bound, Deref};
 use core::pin::Pin;
 use core::time::Duration;
+use std::borrow::Cow;
 
 use anyhow::Result;
 use anyhow::{ensure, Context as _};
@@ -394,21 +395,21 @@ pub enum WrpcServeEvent<C> {
         /// Invocation context
         context: C,
         /// Whether the invocation was successfully handled
-        success: bool,
+        status: Result<(), Cow<'static, str>>,
     },
     /// `wasmcloud:messaging/handler.handle-message` return event
     MessagingHandlerHandleMessageReturned {
         /// Invocation context
         context: C,
         /// Whether the invocation was successfully handled
-        success: bool,
+        status: Result<(), Cow<'static, str>>,
     },
     /// dynamic export return event
     DynamicExportReturned {
         /// Invocation context
         context: C,
         /// Whether the invocation was successfully handled
-        success: bool,
+        status: Result<(), Cow<'static, str>>,
     },
 }
 
@@ -956,10 +957,12 @@ where
                                 let res =
                                     res.instrument(info_span!("handle_instance_function")).await;
                                 let success = res.is_ok();
+                                let status =
+                                    res.as_ref().cloned().map_err(|err| err.to_string().into());
                                 if let Err(err) =
                                     events.try_send(WrpcServeEvent::DynamicExportReturned {
                                         context: cx,
-                                        success,
+                                        status,
                                     })
                                 {
                                     warn!(
@@ -1019,10 +1022,14 @@ where
                                         async move {
                                             let res = res.await;
                                             let success = res.is_ok();
+                                            let status = res
+                                                .as_ref()
+                                                .cloned()
+                                                .map_err(|err| err.to_string().into());
                                             if let Err(err) = events.try_send(
                                                 WrpcServeEvent::DynamicExportReturned {
                                                     context: cx,
-                                                    success,
+                                                    status,
                                                 },
                                             ) {
                                                 warn!(
