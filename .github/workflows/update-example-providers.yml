@@ -19,7 +19,7 @@ jobs:
           app-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
       - name: Checkout
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Self-hosted Renovate
         uses: renovatebot/github-action@c91a61c730fa166439cd3e2c300c041590002b1d # v44.0.3
         with:
