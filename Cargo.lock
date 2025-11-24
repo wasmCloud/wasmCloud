@@ -6625,11 +6625,11 @@ dependencies = [
  "rand 0.9.2",
  "serde",
  "serde_json",
+ "spiffe",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
  "tracing-subscriber",
- "wascap",
  "wasmcloud-secrets-client",
  "wasmcloud-secrets-types",
 ]
@@ -7470,7 +7470,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "url",
- "wascap",
  "wasi-preview1-component-adapter-provider",
  "wit-component 0.224.1",
 ]
@@ -8778,7 +8777,6 @@ dependencies = [
  "oci-wasm 0.3.0",
  "once_cell",
  "path-absolutize",
- "provider-archive",
  "rand 0.9.2",
  "regex",
  "reqwest",
@@ -8813,7 +8811,6 @@ dependencies = [
  "wadm-types",
  "walkdir",
  "warp",
- "wascap",
  "wasi-preview1-component-adapter-provider",
  "wasm-encoder 0.232.0",
  "wasm-pkg-client",
@@ -9218,7 +9215,6 @@ dependencies = [
  "nats-jwt-rs",
  "nkeys",
  "once_cell",
- "provider-archive",
  "rand 0.9.2",
  "redis",
  "regex",
@@ -9293,6 +9289,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-opentelemetry",
+ "wit-bindgen-wrpc 0.9.0",
 ]
 
 [[package]]
@@ -9313,7 +9310,6 @@ dependencies = [
  "oci-client 0.15.0",
  "oci-wasm 0.3.0",
  "once_cell",
- "provider-archive",
  "reqwest",
  "rustls 0.23.35",
  "rustls-native-certs 0.8.2",
@@ -9329,9 +9325,11 @@ dependencies = [
  "tracing",
  "unicase",
  "url",
+ "uuid 1.18.1",
  "wascap",
  "wasmtime-wasi-http",
  "webpki-roots 1.0.4",
+ "wit-bindgen-wrpc 0.9.0",
  "wrpc-interface-http",
 ]
 
@@ -9383,6 +9381,7 @@ dependencies = [
  "wasmcloud-tracing",
  "wasmtime-wasi-http",
  "webpki-roots 1.0.4",
+ "wit-bindgen-wrpc 0.9.0",
  "wrpc-interface-http",
  "wrpc-transport",
  "wrpc-transport-nats",
@@ -9405,6 +9404,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
+ "wit-bindgen-wrpc 0.9.0",
  "wrpc-interface-blobstore",
  "wrpc-transport-nats",
 ]
@@ -9423,6 +9423,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "wasmcloud-provider-sdk",
+ "wit-bindgen-wrpc 0.9.0",
  "wrpc-interface-blobstore",
 ]
 
@@ -9445,6 +9446,7 @@ dependencies = [
  "wascap",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
+ "wit-bindgen-wrpc 0.9.0",
  "wrpc-interface-blobstore",
  "wrpc-transport-nats",
 ]
@@ -9471,6 +9473,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
+ "wit-bindgen-wrpc 0.9.0",
  "wrpc-interface-blobstore",
 ]
 
@@ -9495,6 +9498,7 @@ dependencies = [
  "wasmcloud-core",
  "wasmcloud-provider-sdk",
  "webpki-roots 1.0.4",
+ "wit-bindgen-wrpc 0.9.0",
  "wrpc-interface-http",
 ]
 
@@ -9524,6 +9528,7 @@ dependencies = [
  "wasmcloud-core",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
+ "wit-bindgen-wrpc 0.9.0",
  "wrpc-interface-http",
 ]
 
@@ -9589,7 +9594,6 @@ dependencies = [
  "async-nats",
  "tokio",
  "tracing",
- "wascap",
  "wasmcloud-control-interface",
 ]
 
@@ -9647,12 +9651,14 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-futures",
  "tracing-opentelemetry",
  "tracing-subscriber",
  "wasmcloud-core",
  "wasmcloud-tracing",
+ "wit-bindgen-wrpc 0.9.0",
  "wrpc-transport",
  "wrpc-transport-nats",
 ]
@@ -9705,7 +9711,6 @@ dependencies = [
  "tracing-opentelemetry",
  "wadm-client",
  "wadm-types",
- "wascap",
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc 0.9.0",
 ]
@@ -9787,7 +9792,6 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
- "wascap",
  "wasmcloud-control-interface",
  "wasmcloud-core",
  "wasmcloud-host",

@@ -367,12 +367,6 @@ impl Context {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct ShutdownMessage {
-    /// The ID of the host that sent the message
-    pub host_id: String,
-}
-
 /// Handle shutdown for providers.
 /// Shutdown can be triggered via:
 /// - wRPC manageable::Handler::shutdown() method (signals quit channel)

@@ -627,7 +627,6 @@ async fn main() -> anyhow::Result<()> {
             http_admin: args.http_admin,
             enable_component_auction: args.enable_component_auction.unwrap_or(true),
             enable_provider_auction: args.enable_provider_auction.unwrap_or(true),
-            enable_deprecated_v1_providers: args.enable_deprecated_v1_providers.unwrap_or(false),
         })
         .await?;
     let (host, shutdown) = host_builder
