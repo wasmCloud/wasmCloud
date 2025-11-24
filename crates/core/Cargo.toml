@@ -17,7 +17,7 @@ default = [
     "rustls-native-certs",
     "tokio-rustls",
     "webpki-roots",
-    "http-client-common"
+    "http-client-common",
 ]
 hyper-rustls = ["dep:hyper-rustls", "dep:hyper-util"]
 tokio-rustls = ["dep:tokio-rustls"]
@@ -37,7 +37,7 @@ http-client-common = [
     "webpki-roots",
     "dep:http-body",
     "dep:http-body-util",
-    "dep:hyper"
+    "dep:hyper",
 ]
 
 [dependencies]
@@ -45,6 +45,7 @@ anyhow = { workspace = true, features = ["std"] }
 async-nats = { workspace = true, features = ["ring"] }
 base64 = { workspace = true, optional = true }
 bytes = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 futures = { workspace = true, features = ["async-await", "std"] }
 http = { workspace = true, optional = true }
 http-body = { workspace = true, optional = true }
@@ -58,7 +59,6 @@ hyper-util = { workspace = true, optional = true }
 oci-client = { workspace = true, features = ["rustls-tls"], optional = true }
 oci-wasm = { workspace = true, features = ["rustls-tls"], optional = true }
 once_cell = { workspace = true }
-provider-archive = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"], optional = true }
 rustls = { workspace = true, features = ["std"] }
 rustls-native-certs = { workspace = true, optional = true }
@@ -77,6 +77,7 @@ wascap = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
 webpki-roots = { workspace = true, optional = true }
 wrpc-interface-http = { workspace = true, features = ["http-body"] }
+wit-bindgen-wrpc = { workspace = true }
 
 [dev-dependencies]
 test-log = { workspace = true, features = [

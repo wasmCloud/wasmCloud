@@ -16,6 +16,47 @@ pub struct Provider {
     pub subject: KeyPair,
 }
 
+pub struct ProviderV2 {
+    pub binary_path: String,
+    pub subject: KeyPair,
+}
+
+impl ProviderV2 {
+    pub async fn new(_name: &str, bin: &str) -> anyhow::Result<Self> {
+        // Verify the binary exists
+        if !fs::try_exists(bin).await? {
+            return Err(anyhow!("Binary not found at path: {}", bin));
+        }
+
+        let subject = KeyPair::new_service();
+
+        Ok(Self {
+            binary_path: bin.to_string(),
+            subject,
+        })
+    }
+
+    #[must_use]
+    pub fn url(&self) -> Url {
+        let path = std::path::Path::new(&self.binary_path);
+        let absolute_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .expect("Failed to get current directory")
+                .join(path)
+                .canonicalize()
+                .expect("Failed to canonicalize path")
+        };
+        Url::from_file_path(&absolute_path).expect("failed to construct URL to binary")
+    }
+
+    #[must_use]
+    pub fn binary_path(&self) -> &str {
+        &self.binary_path
+    }
+}
+
 impl Provider {
     pub async fn new(name: &str, bin: &str) -> anyhow::Result<Self> {
         let mut par = ProviderArchive::new(name, "test", None, None);
@@ -159,6 +200,25 @@ pub async fn rust_messaging_nats() -> &'static Provider {
             )
             .await
             .expect("failed to build messaging-nats PAR")
+        })
+        .await
+}
+
+// V2 provider testing
+static RUST_CALCULATOR_EXAMPLE: OnceCell<ProviderV2> = OnceCell::const_new();
+pub async fn rust_calculator_example() -> &'static ProviderV2 {
+    RUST_CALCULATOR_EXAMPLE
+        .get_or_init(|| async {
+            let binary_path =
+                "examples/rust/providers/calculator/target/release/wasmcloud-example-calculator";
+
+            if !std::path::Path::new(binary_path).exists() {
+                panic!("Calculator provider not found at {}.", binary_path);
+            }
+
+            ProviderV2::new("wasmcloud-provider-calculator-example", binary_path)
+                .await
+                .expect("failed to create calculator-example provider reference")
         })
         .await
 }

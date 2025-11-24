@@ -1,0 +1,74 @@
+package wrpc:blobstore@0.2.0;
+
+interface types {
+  use wasi:blobstore/types@0.2.0-draft.{container-metadata as wasi-container-metadata, container-name as wasi-container-name, object-id as wasi-object-id, object-metadata as wasi-object-metadata, timestamp, object-size};
+
+  /// information about a container
+  record container-metadata {
+    /// date and time container was created
+    created-at: timestamp,
+  }
+
+  type container-name = wasi-container-name;
+
+  type object-id = wasi-object-id;
+
+  /// information about an object
+  record object-metadata {
+    /// date and time the object was created
+    created-at: timestamp,
+    /// size of the object, in bytes
+    size: object-size,
+  }
+}
+
+interface blobstore {
+  use types.{container-name, container-metadata, object-metadata, object-id};
+
+  clear-container: func(name: string) -> result<_, string>;
+
+  container-exists: func(name: string) -> result<bool, string>;
+
+  create-container: func(name: string) -> result<_, string>;
+
+  delete-container: func(name: string) -> result<_, string>;
+
+  get-container-info: func(name: string) -> result<container-metadata, string>;
+
+  list-container-objects: func(name: string, limit: option<u64>, offset: option<u64>) -> result<tuple<stream<string>, future<result<_, string>>>, string>;
+
+  copy-object: func(src: object-id, dest: object-id) -> result<_, string>;
+
+  delete-object: func(id: object-id) -> result<_, string>;
+
+  delete-objects: func(container: string, objects: list<string>) -> result<_, string>;
+
+  get-container-data: func(id: object-id, start: u64, end: u64) -> result<tuple<stream<u8>, future<result<_, string>>>, string>;
+
+  get-object-info: func(id: object-id) -> result<object-metadata, string>;
+
+  has-object: func(id: object-id) -> result<bool, string>;
+
+  move-object: func(src: object-id, dest: object-id) -> result<_, string>;
+
+  write-container-data: func(id: object-id, data: stream<u8>) -> result<future<result<_, string>>, string>;
+}
+
+world imports {
+  import wasi:io/error@0.2.1;
+  import wasi:io/poll@0.2.1;
+  import wasi:io/streams@0.2.1;
+  import wasi:blobstore/types@0.2.0-draft;
+  import types;
+  import blobstore;
+}
+world interfaces {
+  import wasi:io/error@0.2.1;
+  import wasi:io/poll@0.2.1;
+  import wasi:io/streams@0.2.1;
+  import wasi:blobstore/types@0.2.0-draft;
+  import types;
+  import blobstore;
+
+  export blobstore;
+}

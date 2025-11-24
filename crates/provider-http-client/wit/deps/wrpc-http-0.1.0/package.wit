@@ -1,0 +1,70 @@
+package wrpc:http@0.1.0;
+
+interface types {
+  use wasi:http/types@0.2.0.{error-code as wasi-error-code, method as wasi-method, request-options as wasi-request-options, scheme as wasi-scheme};
+  use wasi:clocks/monotonic-clock@0.2.0.{duration};
+
+  type error-code = wasi-error-code;
+
+  type method = wasi-method;
+
+  type scheme = wasi-scheme;
+
+  type fields = list<tuple<string, list<list<u8>>>>;
+
+  record request-options {
+    connect-timeout: option<duration>,
+    first-byte-timeout: option<duration>,
+    between-bytes-timeout: option<duration>,
+  }
+
+  record request {
+    body: stream<u8>,
+    trailers: future<option<fields>>,
+    method: method,
+    path-with-query: option<string>,
+    scheme: option<scheme>,
+    authority: option<string>,
+    headers: fields,
+  }
+
+  record response {
+    body: stream<u8>,
+    trailers: future<option<fields>>,
+    status: u16,
+    headers: fields,
+  }
+}
+
+interface incoming-handler {
+  use types.{request, response, error-code};
+
+  handle: func(request: request) -> result<response, error-code>;
+}
+
+interface outgoing-handler {
+  use types.{request, response, error-code, request-options};
+
+  handle: func(request: request, options: option<request-options>) -> result<response, error-code>;
+}
+
+/// The `wasi:http/proxy` world captures a widely-implementable intersection of
+/// hosts that includes HTTP forward and reverse proxies. Components targeting
+/// this world may concurrently stream in and out any number of incoming and
+/// outgoing HTTP requests.
+world proxy {
+  import wasi:random/random@0.2.0;
+  import wasi:io/error@0.2.0;
+  import wasi:io/poll@0.2.0;
+  import wasi:io/streams@0.2.0;
+  import wasi:cli/stdout@0.2.0;
+  import wasi:cli/stderr@0.2.0;
+  import wasi:cli/stdin@0.2.0;
+  import wasi:clocks/monotonic-clock@0.2.0;
+  import wasi:http/types@0.2.0;
+  import types;
+  import outgoing-handler;
+  import wasi:clocks/wall-clock@0.2.0;
+
+  export incoming-handler;
+}

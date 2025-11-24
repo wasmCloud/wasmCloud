@@ -40,6 +40,10 @@ pub mod wasmbus;
 /// experimental workload identity implementation
 pub mod workload_identity;
 
+pub(crate) mod bindings {
+    wit_bindgen_wrpc::generate!({ generate_all });
+}
+
 pub use oci::Config as OciConfig;
 pub use policy::{HostInfo as PolicyHostInfo, PolicyManager, Response as PolicyResponse};
 pub use wasmbus::{Host as WasmbusHost, HostConfig as WasmbusHostConfig};
@@ -191,10 +195,9 @@ pub async fn fetch_component(
 }
 
 /// Fetch a provider from a reference.
-#[instrument(skip(registry_config, host_id), fields(provider_ref = %provider_ref.as_ref()))]
+#[instrument(skip(registry_config), fields(provider_ref = %provider_ref.as_ref()))]
 pub(crate) async fn fetch_provider(
     provider_ref: &ResourceRef<'_>,
-    host_id: impl AsRef<str>,
     allow_file_load: bool,
     default_config: &oci::Config,
     registry_config: &HashMap<String, RegistryConfig>,
@@ -205,14 +208,23 @@ pub(crate) async fn fetch_provider(
                 allow_file_load,
                 "unable to start provider from file, file loading is disabled"
             );
-            wasmcloud_core::par::read(
-                provider_path,
-                host_id,
-                provider_ref,
-                wasmcloud_core::par::UseParFileCache::Ignore,
-            )
-            .await
-            .context("failed to read provider")
+
+            let source_path: &std::path::Path = provider_path.as_ref();
+
+            ensure!(
+                source_path.exists(),
+                "Provider binary not found at path: {}",
+                source_path.display()
+            );
+
+            ensure!(
+                source_path.is_file(),
+                "Provider path is not a file: {}",
+                source_path.display()
+            );
+
+            // todo (luk3ark) no JWT provided...
+            Ok((source_path.to_path_buf(), None))
         }
         oci_ref @ ResourceRef::Oci(provider_ref) => oci_ref
             .authority()
@@ -240,7 +252,7 @@ pub(crate) async fn fetch_provider(
                 )
             })
             .with_additional_ca_paths(&default_config.additional_ca_paths)
-            .fetch_provider(provider_ref, host_id)
+            .fetch_provider(provider_ref)
             .await
             .with_context(|| {
                 format!("failed to fetch provider under OCI reference `{provider_ref}`")

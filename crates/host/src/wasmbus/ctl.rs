@@ -7,24 +7,18 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context as _};
 use bytes::Bytes;
-use futures::join;
-use serde_json::json;
 use tokio::spawn;
 use tokio::time::Instant;
 use tracing::{debug, error, info, instrument, trace, warn};
 use wasmcloud_control_interface::{
-    ComponentAuctionAck, ComponentAuctionRequest, CtlResponse,
-    DeleteInterfaceLinkDefinitionRequest, HostInventory, HostLabel, HostLabelIdentifier, Link,
-    ProviderAuctionAck, ProviderAuctionRequest, RegistryCredential, ScaleComponentCommand,
-    StartProviderCommand, StopHostCommand, StopProviderCommand, UpdateComponentCommand,
+    ComponentAuctionAck, ComponentAuctionRequest, CtlResponse, DeleteInterfacesLinkRequest,
+    HostInventory, HostLabel, HostLabelIdentifier, InterfaceLink, ProviderAuctionAck,
+    ProviderAuctionRequest, RegistryCredential, ScaleComponentCommand, StartProviderCommand,
+    StopHostCommand, StopProviderCommand, UpdateComponentCommand,
 };
-use wasmcloud_core::shutdown_subject;
-use wasmcloud_tracing::context::TraceContextInjector;
 
 use crate::registry::RegistryCredentialExt;
-use crate::wasmbus::{
-    human_friendly_uptime, injector_to_headers, Annotations, Claims, Host, Provider, StoredClaims,
-};
+use crate::wasmbus::{human_friendly_uptime, Annotations, Host};
 use crate::ResourceRef;
 
 /// Implementation for the server-side handling of control interface requests.
@@ -117,13 +111,13 @@ pub trait ControlInterfaceServer: Send + Sync {
 
     /// Handle a request to put a link on a component. This method should return a response indicating success
     /// or failure.
-    async fn handle_link_put(&self, request: Link) -> anyhow::Result<CtlResponse<()>>;
+    async fn handle_link_put(&self, request: InterfaceLink) -> anyhow::Result<CtlResponse<()>>;
 
     /// Handle a request to delete a link from a component. This method should return a response indicating success
     /// or failure.
     async fn handle_link_del(
         &self,
-        request: DeleteInterfaceLinkDefinitionRequest,
+        request: DeleteInterfacesLinkRequest,
     ) -> anyhow::Result<CtlResponse<()>>;
 
     /// Handle a request to put registry credentials. This method should return a response indicating success
@@ -207,8 +201,8 @@ impl ControlInterfaceServer for Host {
         let constraints_satisfied = constraints
             .iter()
             .all(|(k, v)| host_labels.get(k).is_some_and(|hv| hv == v));
-        let providers = self.providers.read().await;
-        let provider_running = providers.contains_key(provider_id);
+        let extensions = self.extensions.read().await;
+        let provider_running = extensions.contains_key(provider_id);
         if constraints_satisfied && !provider_running {
             Ok(Some(CtlResponse::ok(
                 ProviderAuctionAck::builder()
@@ -342,6 +336,7 @@ impl ControlInterfaceServer for Host {
                 }
                 Err(e) => (None, None, Some(e)),
             };
+
             // Scale the component
             if let Err(e) = self
                 .handle_scale_component_task(
@@ -367,7 +362,7 @@ impl ControlInterfaceServer for Host {
                         crate::event::component_scale_failed(
                             claims_token.map(|c| c.claims).as_ref(),
                             &annotations,
-                            host_id,
+                            &host_id,
                             &component_ref,
                             &component_id,
                             max_instances,
@@ -471,78 +466,139 @@ impl ControlInterfaceServer for Host {
         request: StartProviderCommand,
     ) -> anyhow::Result<Option<CtlResponse<()>>> {
         if self
-            .providers
+            .extensions
             .read()
             .await
             .contains_key(request.provider_id())
         {
             return Ok(Some(CtlResponse::error(
-                "provider with that ID is already running",
+                "provider with that ID is already running with this host",
             )));
         }
 
-        // Avoid responding to start providers for builtin providers if they're not enabled
-        if let Ok(ResourceRef::Builtin(name)) = ResourceRef::try_from(request.provider_ref()) {
-            if !self.experimental_features.builtin_http_server && name == "http-server" {
-                debug!(
-                    provider_ref = request.provider_ref(),
-                    provider_id = request.provider_id(),
-                    "skipping start provider for disabled builtin http provider"
-                );
-                return Ok(None);
-            }
-            if !self.experimental_features.builtin_messaging_nats && name == "messaging-nats" {
-                debug!(
-                    provider_ref = request.provider_ref(),
-                    provider_id = request.provider_id(),
-                    "skipping start provider for disabled builtin messaging provider"
-                );
-                return Ok(None);
-            }
+        // Ensure all mandatory interfaces are implemented
+        if !request.satisfied_interfaces().validate() {
+            return Ok(Some(CtlResponse::error(
+                "provider does not implement all mandatory interfaces",
+            )));
         }
 
+        let host_id = request
+            .host_id()
+            .ok_or_else(|| anyhow::anyhow!("Host ID not provided for starting internal provider"))?
+            .to_string();
+
         // NOTE: We log at info since starting providers can take a while
-        info!(
-            provider_ref = request.provider_ref(),
-            provider_id = request.provider_id(),
-            "handling start provider"
-        );
 
-        let host_id = request.host_id().to_string();
-        spawn(async move {
-            let config = request.config();
-            let provider_id = request.provider_id();
-            let provider_ref = request.provider_ref();
-            let annotations = request.annotations();
+        if request.is_internal() {
+            let provider_ref = request
+                .provider_ref()
+                .ok_or_else(|| anyhow::anyhow!("provider reference is missing"))?
+                .to_string();
+            info!(
+                provider_ref = provider_ref,
+                provider_id = request.provider_id(),
+                "handling start provider"
+            );
 
-            if let Err(err) = Arc::clone(&self)
-                .handle_start_provider_task(
-                    config,
-                    provider_id,
-                    provider_ref,
-                    annotations.cloned().unwrap_or_default(),
-                    &host_id,
-                )
-                .await
-            {
-                error!(provider_ref, provider_id, ?err, "failed to start provider");
-                if let Err(err) = self
-                    .event_publisher
-                    .publish_event(
-                        "provider_start_failed",
-                        crate::event::provider_start_failed(
-                            provider_ref,
-                            provider_id,
-                            host_id,
-                            &err,
-                        ),
+            // Avoid responding to start providers for builtin providers if they're not enabled
+
+            if let Ok(ResourceRef::Builtin(name)) = ResourceRef::try_from(provider_ref.as_str()) {
+                if !self.experimental_features.builtin_http_server && name == "http-server" {
+                    debug!(
+                        provider_ref = provider_ref,
+                        provider_id = request.provider_id(),
+                        "skipping start provider for disabled builtin http provider"
+                    );
+                    return Ok(None);
+                }
+                if !self.experimental_features.builtin_messaging_nats && name == "messaging-nats" {
+                    debug!(
+                        provider_ref = request.provider_ref(),
+                        provider_id = request.provider_id(),
+                        "skipping start provider for disabled builtin messaging provider"
+                    );
+                    return Ok(None);
+                }
+            }
+
+            spawn(async move {
+                let config = request.config();
+                let provider_id = request.provider_id();
+                let satisfied_interfaces = request.satisfied_interfaces().clone();
+                let annotations = request.annotations();
+
+                if let Err(err) = Arc::clone(&self)
+                    .handle_start_provider_task(
+                        config,
+                        provider_id,
+                        Some(&provider_ref),
+                        satisfied_interfaces,
+                        annotations.cloned().unwrap_or_default(),
+                        &host_id,
                     )
                     .await
                 {
-                    error!(?err, "failed to publish provider_start_failed event");
+                    error!(provider_ref, provider_id, ?err, "failed to start provider");
+                    if let Err(err) = self
+                        .event_publisher
+                        .publish_event(
+                            "provider_start_failed",
+                            crate::event::provider_start_failed(
+                                provider_ref,
+                                provider_id,
+                                host_id,
+                                &err,
+                            ),
+                        )
+                        .await
+                    {
+                        error!(?err, "failed to publish provider_start_failed event");
+                    }
                 }
-            }
-        });
+            });
+        } else {
+            // Start external provider
+            info!(
+                provider_id = request.provider_id(),
+                "handling start external provider"
+            );
+
+            let provider_id = request.provider_id().to_string();
+            let config = request.config().clone();
+            let annotations = request.annotations().cloned().unwrap_or_default();
+            let satisfied_interfaces = request.satisfied_interfaces().clone();
+
+            spawn(async move {
+                if let Err(err) = Arc::clone(&self)
+                    .handle_start_provider_task(
+                        &config,
+                        &provider_id,
+                        None, // No provider_ref for external providers
+                        satisfied_interfaces,
+                        annotations,
+                        &host_id,
+                    )
+                    .await
+                {
+                    error!(
+                        provider_id = provider_id,
+                        ?err,
+                        "failed to start external provider"
+                    );
+                    if let Err(err) = self
+                        .event_publisher
+                        .publish_event(
+                            "provider_start_failed",
+                            crate::event::external_provider_link_failed(&provider_id, &err),
+                        )
+                        .await
+                    {
+                        error!(?err, "failed to publish provider_start_failed event");
+                    }
+                }
+            });
+        }
 
         Ok(Some(CtlResponse::<()>::success(
             "successfully started provider".into(),
@@ -559,42 +615,21 @@ impl ControlInterfaceServer for Host {
 
         debug!(provider_id, "handling stop provider");
 
-        let mut providers = self.providers.write().await;
-        let hash_map::Entry::Occupied(entry) = providers.entry(provider_id.into()) else {
+        let mut extensions = self.extensions.write().await;
+        let hash_map::Entry::Occupied(entry) = extensions.entry(provider_id.into()) else {
             warn!(
                 provider_id,
                 "received request to stop provider that is not running"
             );
             return Ok(CtlResponse::error("provider with that ID is not running"));
         };
-        let Provider {
-            ref annotations,
-            mut tasks,
-            shutdown,
-            ..
-        } = entry.remove();
 
-        // Set the shutdown flag to true to stop health checks and config updates. Also
-        // prevents restarting the provider but does not stop the provider process.
-        shutdown.store(true, Ordering::Relaxed);
+        let extension = entry.remove();
+        let annotations = extension.annotations.clone();
+        let mut tasks = extension.tasks;
 
-        // Send a request to the provider, requesting a graceful shutdown
-        let req = serde_json::to_vec(&json!({ "host_id": host_id }))
-            .context("failed to encode provider stop request")?;
-        let req = async_nats::Request::new()
-            .payload(req.into())
-            .timeout(self.host_config.provider_shutdown_delay)
-            .headers(injector_to_headers(
-                &TraceContextInjector::default_with_span(),
-            ));
-        if let Err(e) = self
-            .rpc_nats
-            .send_request(
-                shutdown_subject(&self.host_config.lattice, provider_id, "default"),
-                req,
-            )
-            .await
-        {
+        // Send a request to the provider, requesting a graceful shutdown via wRPC
+        if let Err(e) = self.provider_manager.shutdown_provider(provider_id).await {
             warn!(
                 ?e,
                 provider_id,
@@ -611,7 +646,7 @@ impl ControlInterfaceServer for Host {
         self.event_publisher
             .publish_event(
                 "provider_stopped",
-                crate::event::provider_stopped(annotations, host_id, provider_id, "stop"),
+                crate::event::provider_stopped(&annotations, host_id, provider_id, "stop"),
             )
             .await?;
         Ok(CtlResponse::<()>::success(
@@ -628,20 +663,9 @@ impl ControlInterfaceServer for Host {
 
     #[instrument(level = "trace", skip_all)]
     async fn handle_claims(&self) -> anyhow::Result<CtlResponse<Vec<HashMap<String, String>>>> {
-        trace!("handling claims");
-
-        let (component_claims, provider_claims) =
-            join!(self.component_claims.read(), self.provider_claims.read());
-        let component_claims = component_claims.values().cloned().map(Claims::Component);
-        let provider_claims = provider_claims.values().cloned().map(Claims::Provider);
-        let claims: Vec<StoredClaims> = component_claims
-            .chain(provider_claims)
-            .flat_map(TryFrom::try_from)
-            .collect();
-
-        Ok(CtlResponse::ok(
-            claims.into_iter().map(std::convert::Into::into).collect(),
-        ))
+        trace!("handling claims (deprecated in v2 - returning empty)");
+        // Claims are deprecated in v2 - we now use OCI digests for identity
+        Ok(CtlResponse::ok(Vec::new()))
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -650,7 +674,7 @@ impl ControlInterfaceServer for Host {
         trace!("handling links");
 
         let links = self.links.read().await;
-        let links: Vec<&Link> = links.values().flatten().collect();
+        let links: Vec<&InterfaceLink> = links.values().flatten().collect();
         let res =
             serde_json::to_vec(&CtlResponse::ok(links)).context("failed to serialize response")?;
         Ok(res)
@@ -757,7 +781,7 @@ impl ControlInterfaceServer for Host {
 
     /// Handle a new link by modifying the relevant source [crate::wasmbus::ComponentSpecification].
     #[instrument(level = "debug", skip_all)]
-    async fn handle_link_put(&self, request: Link) -> anyhow::Result<CtlResponse<()>> {
+    async fn handle_link_put(&self, request: InterfaceLink) -> anyhow::Result<CtlResponse<()>> {
         let link_set_result: anyhow::Result<()> = async {
             let source_id = request.source_id();
             let target = request.target();
@@ -780,7 +804,6 @@ impl ControlInterfaceServer for Host {
             self.validate_config(
                 request
                     .source_config()
-                    .clone()
                     .iter()
                     .chain(request.target_config())
             ).await?;
@@ -839,9 +862,6 @@ impl ControlInterfaceServer for Host {
             // self.update_host_with_spec(&source_id, &component_spec)
             //     .await?;
 
-            self.put_backwards_compat_provider_link(&request)
-                .await?;
-
             Ok(())
         }
         .await;
@@ -866,7 +886,7 @@ impl ControlInterfaceServer for Host {
     /// Remove an interface link on a source component for a specific package
     async fn handle_link_del(
         &self,
-        request: DeleteInterfaceLinkDefinitionRequest,
+        request: DeleteInterfacesLinkRequest,
     ) -> anyhow::Result<CtlResponse<()>> {
         let source_id = request.source_id();
         let wit_namespace = request.wit_namespace();

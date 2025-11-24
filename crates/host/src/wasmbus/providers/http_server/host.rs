@@ -9,21 +9,26 @@ use http::uri::Scheme;
 use http::Uri;
 use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt as _;
+use tokio::sync::{broadcast, RwLock};
+use tokio::task::JoinSet;
 use tokio::time::Instant;
-use tokio::{sync::RwLock, task::JoinSet};
 use tracing::{debug, error, info_span, instrument, trace_span, warn, Instrument as _, Span};
-use wasmcloud_provider_sdk::{LinkConfig, LinkDeleteInfo};
 use wasmcloud_tracing::KeyValue;
 use wasmtime_wasi_http::bindings::http::types::ErrorCode;
 use wrpc_interface_http::ServeIncomingHandlerWasmtime as _;
 
+use crate::bindings::exports::wrpc::extension;
+use crate::bindings::wrpc::extension::configurable::BaseConfig;
+use crate::bindings::wrpc::extension::types::{
+    BindRequest, BindResponse, HealthCheckResponse, InterfaceConfig,
+};
 use crate::wasmbus::{Component, InvocationContext};
 
 use super::listen;
 
 /// This struct holds both the forward and reverse mappings for host-based routing
 /// so that they can be modified by just acquiring a single lock in the [`HttpServerProvider`]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct Router {
     /// Lookup from a host to the component ID that is handling that host
     hosts: HashMap<Arc<str>, Arc<str>>,
@@ -33,31 +38,122 @@ pub(crate) struct Router {
     header: String,
 }
 
+#[derive(Clone)]
 pub(crate) struct Provider {
     /// Handle to the server task. The use of the [`JoinSet`] allows for the server to be
     /// gracefully shutdown when the provider is shutdown
     #[allow(unused)]
-    pub(crate) handle: JoinSet<()>,
+    pub(crate) handle: Arc<tokio::sync::Mutex<JoinSet<()>>>,
     /// Struct that holds the routing information based on host/component_id
     pub(crate) host_router: Arc<RwLock<Router>>,
+    /// Broadcast sender for shutdown signaling
+    pub(crate) quit_tx: broadcast::Sender<()>,
 }
 
-// Implementations of put and delete link are done in the `impl Provider` block to aid in testing
-impl wasmcloud_provider_sdk::Provider for Provider {
+impl extension::manageable::Handler<Option<wasmcloud_provider_sdk::Context>> for Provider {
+    async fn bind(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_pubkey: None,
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by signaling the provider to shut down
+    async fn shutdown(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+    ) -> anyhow::Result<Result<(), String>> {
+        // NOTE: The result is ignored because the channel will be closed if the last
+        // receiver is dropped, which is a valid way to shut down.
+        let _ = self.quit_tx.send(());
+        Ok(Ok(()))
+    }
+}
+
+impl extension::configurable::Handler<Option<wasmcloud_provider_sdk::Context>> for Provider {
     #[instrument(level = "debug", skip_all)]
-    async fn receive_link_config_as_source(&self, link: LinkConfig<'_>) -> Result<()> {
-        self.put_link(link.target_id, link.link_name, link.config)
-            .await
+    async fn update_base_config(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+        _config: BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> Result<()> {
-        self.delete_link(
-            info.get_source_id(),
-            info.get_target_id(),
-            info.get_link_name(),
-        )
-        .await
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+        _source_id: String,
+        _link_name: String,
+        _config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+        target_id: String,
+        link_name: String,
+        config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let config_map: HashMap<String, String> = config.config.into_iter().collect();
+
+        match self.put_link(&target_id, &link_name, &config_map).await {
+            Ok(()) => Ok(Ok(())),
+            Err(e) => {
+                let error_msg = format!(
+                    "Failed to configure HTTP server for target {} link {}: {}",
+                    target_id, link_name, e
+                );
+                Ok(Err(error_msg))
+            }
+        }
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+        target_id: String,
+        link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        match self.delete_link(&target_id, &link_name).await {
+            Ok(()) => Ok(Ok(())),
+            Err(e) => {
+                let error_msg = format!(
+                    "Failed to delete HTTP server target {} link {}: {}",
+                    target_id, link_name, e
+                );
+                Ok(Err(error_msg))
+            }
+        }
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+        _source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
     }
 }
 
@@ -72,64 +168,60 @@ impl Provider {
         let Some(host) = config.get("host") else {
             error!(
                 ?config,
-                ?target_id,
+                %target_id,
+                %link_name,
                 "host not found in link config, cannot register host"
             );
-            bail!("host not found in link config, cannot register host for component {target_id}");
+            bail!(
+                "host not found in link config for component {} link {}",
+                target_id,
+                link_name
+            );
         };
 
-        let target = Arc::from(target_id);
-        let name = Arc::from(link_name);
-        let key = (Arc::clone(&target), Arc::clone(&name));
+        let target_id_arc: Arc<str> = Arc::from(target_id);
+        let link_name_arc: Arc<str> = Arc::from(link_name);
+        let host_arc: Arc<str> = Arc::from(host.as_str());
+        let link_key = (target_id_arc.clone(), link_name_arc);
 
         let mut router = self.host_router.write().await;
-        if router.components.contains_key(&key) {
-            // Ensure the current host doesn't differ for the given component
-            if router
-                .components
-                .get(&key)
-                .map(|val| **val != *host)
-                .unwrap_or(false)
-            {
-                // When we can return errors from links, tell the host this was invalid
-                bail!("Component {target_id} already has a host registered with link name {name}");
+
+        // Check if this link already has a host registered
+        if let Some(existing_host) = router.components.get(&link_key) {
+            if existing_host.as_ref() != host {
+                bail!(
+                    "Component {} link {} already has a different host registered",
+                    target_id,
+                    link_name
+                );
             }
+            // Same host, no-op
+            return Ok(());
         }
-        if router.hosts.contains_key(host.as_str()) {
-            // Ensure the current component doesn't differ for the given host
-            if router
-                .hosts
-                .get(host.as_str())
-                .map(|val| *val != target)
-                .unwrap_or(false)
-            {
-                // When we can return errors from links, tell the host this was invalid
-                bail!("Host {host} already in use by a different component");
+
+        // Check if this host is already in use by a different component
+        if let Some(existing_component) = router.hosts.get(host.as_str()) {
+            if existing_component.as_ref() != target_id {
+                bail!("Host {} already in use by a different component", host);
             }
         }
 
-        let host = Arc::from(host.clone());
-        // Insert the host into the hosts map for future lookups
-        router.components.insert(key, Arc::clone(&host));
-        router.hosts.insert(host, target);
+        // Store the mappings: (component_id, link_name) -> host, host -> component_id
+        router.components.insert(link_key, host_arc.clone());
+        router.hosts.insert(host_arc, target_id_arc);
 
         Ok(())
     }
 
     #[instrument(level = "debug", skip(self))]
-    async fn delete_link(&self, source_id: &str, target_id: &str, link_name: &str) -> Result<()> {
-        debug!(
-            source = source_id,
-            target = target_id,
-            link = link_name,
-            "deleting http host link"
-        );
+    async fn delete_link(&self, target_id: &str, link_name: &str) -> Result<()> {
+        debug!(%target_id, %link_name, "deleting http host link");
 
+        let link_key = (Arc::from(target_id), Arc::from(link_name));
         let mut router = self.host_router.write().await;
-        let host = router
-            .components
-            .remove(&(Arc::from(target_id), Arc::from(link_name)));
-        if let Some(host) = host {
+
+        if let Some(host) = router.components.remove(&link_key) {
+            // Remove the reverse mapping
             router.hosts.remove(&host);
         }
 
@@ -144,6 +236,7 @@ impl Provider {
         lattice_id: Arc<str>,
         host_id: Arc<str>,
         host_header: Option<String>,
+        quit_tx: broadcast::Sender<()>,
     ) -> Result<Self> {
         let host_router = Arc::new(RwLock::new(Router {
             hosts: HashMap::new(),
@@ -268,8 +361,9 @@ impl Provider {
         .context("failed to listen on address for host based http server")?;
 
         Ok(Provider {
-            handle,
+            handle: Arc::new(tokio::sync::Mutex::new(handle)),
             host_router,
+            quit_tx,
         })
     }
 }
@@ -299,9 +393,11 @@ mod test {
     /// Ensure we can register and deregister a bunch of hosts properly
     #[tokio::test]
     async fn can_manage_hosts() -> anyhow::Result<()> {
+        let (quit_tx, _quit_rx) = tokio::sync::broadcast::channel(1);
         let provider = super::Provider {
-            handle: JoinSet::new(),
+            handle: Arc::new(tokio::sync::Mutex::new(JoinSet::new())),
             host_router: Arc::default(),
+            quit_tx,
         };
 
         // Put host registrations:

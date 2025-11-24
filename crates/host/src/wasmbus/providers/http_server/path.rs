@@ -3,25 +3,29 @@ use core::net::SocketAddr;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{bail, Context as _};
+use anyhow::{bail, Context as _, Ok};
 use http::header::HOST;
 use http::uri::Scheme;
 use http::Uri;
 use http_body_util::BodyExt as _;
+use tokio::sync::{broadcast, RwLock};
+use tokio::task::JoinSet;
 use tokio::time::Instant;
-use tokio::{sync::RwLock, task::JoinSet};
 use tracing::{debug, error, info_span, instrument, trace_span, warn, Instrument as _, Span};
-use wasmcloud_provider_sdk::{LinkConfig, LinkDeleteInfo};
 use wasmcloud_tracing::KeyValue;
 use wrpc_interface_http::ServeIncomingHandlerWasmtime as _;
 
+use crate::bindings::exports::wrpc::extension;
+use crate::bindings::wrpc::extension::types::{
+    BaseConfig, BindRequest, BindResponse, HealthCheckResponse, InterfaceConfig,
+};
 use crate::wasmbus::{Component, InvocationContext};
 
 use super::listen;
 
 /// This struct holds both the forward and reverse mappings for path-based routing
 /// so that they can be modified by just acquiring a single lock in the [`HttpServerProvider`]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct Router {
     /// Lookup from a path to the component ID that is handling that path
     pub(crate) paths: HashMap<Arc<str>, Arc<str>>,
@@ -29,31 +33,117 @@ pub(crate) struct Router {
     pub(crate) components: HashMap<(Arc<str>, Arc<str>), Arc<str>>,
 }
 
+#[derive(Clone)]
 pub(crate) struct Provider {
     /// Handle to the server task. The use of the [`JoinSet`] allows for the server to be
     /// gracefully shutdown when the provider is shutdown
     #[allow(unused)]
-    pub(crate) handle: JoinSet<()>,
+    pub(crate) handle: Arc<tokio::sync::Mutex<JoinSet<()>>>,
     /// Struct that holds the routing information based on path/component_id
     pub(crate) path_router: Arc<RwLock<Router>>,
+    /// Broadcast sender for shutdown signaling
+    pub(crate) quit_tx: broadcast::Sender<()>,
 }
 
-// Implementations of put and delete link are done in the `impl Provider` block to aid in testing
-impl wasmcloud_provider_sdk::Provider for Provider {
+impl extension::manageable::Handler<Option<wasmcloud_provider_sdk::Context>> for Provider {
+    async fn bind(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        anyhow::Ok(Result::<BindResponse, String>::Ok(BindResponse {
+            identity_token: None,
+            provider_pubkey: None,
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        anyhow::Ok(Result::<HealthCheckResponse, String>::Ok(
+            HealthCheckResponse {
+                healthy: true,
+                message: Some("OK".to_string()),
+            },
+        ))
+    }
+
+    /// Handle shutdown request by signaling the provider to shut down
+    async fn shutdown(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+    ) -> anyhow::Result<Result<(), String>> {
+        // NOTE: The result is ignored because the channel will be closed if the last
+        // receiver is dropped, which is a valid way to shut down.
+        let _ = self.quit_tx.send(());
+        anyhow::Ok(Result::<(), String>::Ok(()))
+    }
+}
+
+impl extension::configurable::Handler<Option<wasmcloud_provider_sdk::Context>> for Provider {
     #[instrument(level = "debug", skip_all)]
-    async fn receive_link_config_as_source(&self, link: LinkConfig<'_>) -> anyhow::Result<()> {
-        self.put_link(link.target_id, link.link_name, link.config)
-            .await
+    async fn update_base_config(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+        _config: BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        anyhow::Ok(Result::<(), String>::Ok(()))
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        self.delete_link(
-            info.get_source_id(),
-            info.get_target_id(),
-            info.get_link_name(),
-        )
-        .await
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+        _source_id: String,
+        _link_name: String,
+        _config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        anyhow::Ok(Result::<(), String>::Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+        target_id: String,
+        link_name: String,
+        config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let config_map: HashMap<String, String> = config.config.into_iter().collect();
+        match self.put_link(&target_id, &link_name, &config_map).await {
+            Result::Ok(()) => anyhow::Ok(Result::<(), String>::Ok(())),
+            Result::Err(e) => anyhow::Ok(Result::<(), String>::Err(format!(
+                "Failed to register path for target {} link {}: {}",
+                target_id, link_name, e
+            ))),
+        }
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+        target_id: String,
+        link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        match self.delete_link(&target_id, &link_name).await {
+            Result::Ok(()) => anyhow::Ok(Result::<(), String>::Ok(())),
+            Result::Err(e) => anyhow::Ok(Result::<(), String>::Err(format!(
+                "Failed to delete path for target {} link {}: {}",
+                target_id, link_name, e
+            ))),
+        }
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<wasmcloud_provider_sdk::Context>,
+        _source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        anyhow::Ok(Result::<(), String>::Ok(()))
     }
 }
 
@@ -61,58 +151,60 @@ impl Provider {
     #[instrument(level = "debug", skip(self))]
     async fn put_link(
         &self,
-        target_id: &str,
+        component_id: &str,
         link_name: &str,
         config: &HashMap<String, String>,
     ) -> anyhow::Result<()> {
         let Some(path) = config.get("path") else {
             error!(
                 ?config,
-                ?target_id,
+                %component_id,
+                %link_name,
                 "path not found in link config, cannot register path"
             );
-            bail!("path not found in link config, cannot register path for component {target_id}",);
+            bail!(
+                "path not found in link config for component {} link {}",
+                component_id,
+                link_name
+            );
         };
 
-        let target = Arc::from(target_id);
-        let name = Arc::from(link_name);
-        let key = (Arc::clone(&target), Arc::clone(&name));
+        let component_id_arc: Arc<str> = Arc::from(component_id);
+        let link_name_arc: Arc<str> = Arc::from(link_name);
+        let path_arc: Arc<str> = Arc::from(path.as_str());
+        let link_key = (component_id_arc.clone(), link_name_arc);
 
         let mut path_router = self.path_router.write().await;
-        if path_router.components.contains_key(&key) {
-            bail!("Component {target} already has a path registered with link name {name}");
-        }
-        if path_router.paths.contains_key(path.as_str()) {
-            bail!("Path {path} already in use by a different component");
+
+        // Check if this link already has a path registered
+        if path_router.components.contains_key(&link_key) {
+            bail!(
+                "Component {} link {} already has a path registered",
+                component_id,
+                link_name
+            );
         }
 
-        let path = Arc::from(path.clone());
-        // Insert the path into the paths map for future lookups
-        path_router.components.insert(key, Arc::clone(&path));
-        path_router.paths.insert(path, target);
+        // Check if this path is already in use by a different component
+        if path_router.paths.contains_key(&path_arc) {
+            bail!("Path {} already in use by a different component", path);
+        }
+
+        // Store the mappings: (component_id, link_name) -> path, path -> component_id
+        path_router.components.insert(link_key, path_arc.clone());
+        path_router.paths.insert(path_arc, component_id_arc);
 
         Ok(())
     }
 
     #[instrument(level = "debug", skip(self))]
-    async fn delete_link(
-        &self,
-        source_id: &str,
-        target_id: &str,
-        link_name: &str,
-    ) -> anyhow::Result<()> {
-        debug!(
-            source = source_id,
-            target = target_id,
-            link = link_name,
-            "deleting http path link"
-        );
+    async fn delete_link(&self, component_id: &str, link_name: &str) -> anyhow::Result<()> {
+        debug!(%component_id, %link_name, "deleting http path link");
 
+        let link_key = (Arc::from(component_id), Arc::from(link_name));
         let mut path_router = self.path_router.write().await;
-        let path = path_router
-            .components
-            .remove(&(Arc::from(target_id), Arc::from(link_name)));
-        if let Some(path) = path {
+        if let Some(path) = path_router.components.remove(&link_key) {
+            // Remove the reverse mapping
             path_router.paths.remove(&path);
         }
 
@@ -126,6 +218,7 @@ impl Provider {
         components: Arc<RwLock<HashMap<String, Arc<Component>>>>,
         lattice_id: Arc<str>,
         host_id: Arc<str>,
+        quit_tx: broadcast::Sender<()>,
     ) -> anyhow::Result<Self> {
         let path_router: Arc<RwLock<Router>> = Arc::default();
         let handle = listen(address, {
@@ -237,8 +330,9 @@ impl Provider {
         .context("failed to listen on address for path based http server")?;
 
         Ok(Provider {
-            handle,
+            handle: Arc::new(tokio::sync::Mutex::new(handle)),
             path_router,
+            quit_tx,
         })
     }
 }
@@ -253,9 +347,11 @@ mod test {
     /// Ensure we can register and deregister a bunch of paths properly
     #[tokio::test]
     async fn can_manage_paths() -> anyhow::Result<()> {
+        let (quit_tx, _quit_rx) = tokio::sync::broadcast::channel(1);
         let provider = super::Provider {
-            handle: JoinSet::new(),
+            handle: Arc::new(tokio::sync::Mutex::new(JoinSet::new())),
             path_router: Arc::default(),
+            quit_tx,
         };
 
         // Put path registrations:

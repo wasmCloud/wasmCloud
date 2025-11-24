@@ -53,6 +53,7 @@ async fn policy_always_deny() -> anyhow::Result<()> {
         }),
         None,
         None,
+        true,
     )
     .await
     .context("failed to start test host")?;

@@ -1,7 +1,13 @@
 package wasmcloud:provider-blobstore-nats;
 
 world interfaces {
+    import wrpc:blobstore/types@0.2.0;
     export wrpc:blobstore/blobstore@0.2.0;
+}
+
+world extensions {
+    export wrpc:extension/manageable@0.0.1;
+    export wrpc:extension/configurable@0.0.1;
 }
 
 world testing-client {

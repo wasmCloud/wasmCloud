@@ -1,0 +1,29 @@
+package wasmcloud:calculator;
+
+world native-provider-calculator {
+    export wrpc:extension/manageable@0.0.1;
+    export wrpc:extension/configurable@0.0.1;
+    export calculator;
+}
+
+interface types {
+    enum math-operator {
+        add,
+        subtract,
+        multiply,
+        divide,
+    }
+
+    /// A message sent to or received from a broker
+    record operation-request {
+        operator: math-operator,
+        num1: u64,
+        num2: u64,
+    }
+}
+
+interface calculator {
+    use types.{operation-request};
+
+    calculate: func(req: operation-request) -> result<u64, string>;
+}

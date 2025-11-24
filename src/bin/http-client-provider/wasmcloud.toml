@@ -9,3 +9,11 @@ target_dir = "../../../target"
 [provider]
 bin_name = "http-client-provider"
 vendor = "wasmCloud"
+
+[[registry.pull.sources]]
+target = "wrpc:http"
+source = "https://github.com/wrpc/http/archive/refs/tags/v0.1.0.tar.gz"
+
+[[registry.pull.sources]]
+target = "wrpc:extension"
+source = "file://../../../wit/extension/wit"

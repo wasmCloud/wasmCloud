@@ -2,39 +2,60 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::bindings::{
+    exports::wasmcloud::wadm::client::{self, ModelSummary, OamManifest, Status, VersionInfo},
+    wasmcloud::wadm::handler::{self, StatusUpdate},
+};
+use crate::ext_bindings::exports::wrpc::extension::{
+    configurable::{self, InterfaceConfig},
+    manageable,
+};
 use anyhow::{anyhow, bail, Context as _};
 use async_nats::HeaderMap;
 use futures::stream::{AbortHandle, Abortable};
 use futures::StreamExt;
 use opentelemetry_nats::NatsHeaderInjector;
-use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
+use tokio::sync::{broadcast, OwnedSemaphorePermit, RwLock, Semaphore};
 use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument as _;
 use wadm_client::{Client, ClientConnectOptions};
-use wadm_types::wasmcloud::wadm::handler::StatusUpdate;
 use wasmcloud_provider_sdk::{
-    core::HostData, get_connection, load_host_data, provider::WrpcClient, run_provider, Context,
-    LinkConfig, Provider,
+    get_connection, initialize_observability,
+    provider::WrpcClient,
+    run_provider, serve_provider_exports,
+    types::{BindRequest, BindResponse, HealthCheckResponse},
+    Context,
 };
-use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports, LinkDeleteInfo};
-
-use crate::exports::wasmcloud::wadm::client::{ModelSummary, OamManifest, Status, VersionInfo};
 
 mod config;
 
 use config::{extract_wadm_config, ClientConfig};
 
-wit_bindgen_wrpc::generate!({
-    additional_derives: [
-        serde::Serialize,
-        serde::Deserialize,
-    ],
-    with: {
-        "wasmcloud:wadm/types@0.2.0": wadm_types::wasmcloud::wadm::types,
-        "wasmcloud:wadm/handler@0.2.0": generate,
-        "wasmcloud:wadm/client@0.2.0": generate
-    }
-});
+mod bindings {
+    wit_bindgen_wrpc::generate!({
+        world: "interfaces",
+        additional_derives: [
+            serde::Serialize,
+            serde::Deserialize,
+        ],
+        with: {
+            "wasmcloud:wadm/types@0.2.0": wadm_types::wasmcloud::wadm::types,
+            "wasmcloud:wadm/handler@0.2.0": generate,
+            "wasmcloud:wadm/client@0.2.0": generate,
+        }
+    });
+}
+
+mod ext_bindings {
+    wit_bindgen_wrpc::generate!({
+        world: "extension",
+        with: {
+            "wrpc:extension/types@0.0.1": wasmcloud_provider_sdk::types,
+            "wrpc:extension/manageable@0.0.1": generate,
+            "wrpc:extension/configurable@0.0.1": generate
+        }
+    });
+}
 
 pub async fn run() -> anyhow::Result<()> {
     WadmProvider::run().await
@@ -53,21 +74,15 @@ impl Drop for WadmClientBundle {
     }
 }
 
+/// Key for identifying a specific link (component_id, link_name)
+type LinkKey = (String, String);
+
 #[derive(Clone)]
 pub struct WadmProvider {
-    default_config: ClientConfig,
-    handler_components: Arc<RwLock<HashMap<String, WadmClientBundle>>>,
-    consumer_components: Arc<RwLock<HashMap<String, WadmClientBundle>>>,
-}
-
-impl Default for WadmProvider {
-    fn default() -> Self {
-        WadmProvider {
-            handler_components: Arc::new(RwLock::new(HashMap::new())),
-            consumer_components: Arc::new(RwLock::new(HashMap::new())),
-            default_config: Default::default(),
-        }
-    }
+    default_config: Arc<RwLock<ClientConfig>>,
+    handler_components: Arc<RwLock<HashMap<LinkKey, WadmClientBundle>>>,
+    consumer_components: Arc<RwLock<HashMap<LinkKey, WadmClientBundle>>>,
+    quit_tx: Arc<broadcast::Sender<()>>,
 }
 
 impl WadmProvider {
@@ -76,37 +91,30 @@ impl WadmProvider {
     }
 
     pub async fn run() -> anyhow::Result<()> {
-        initialize_observability!(
-            WadmProvider::name(),
-            std::env::var_os("PROVIDER_SQLDB_POSTGRES_FLAMEGRAPH_PATH")
-        );
-
-        let host_data = load_host_data().context("failed to load host data")?;
-        let provider = Self::from_host_data(host_data);
-        let shutdown = run_provider(provider.clone(), WadmProvider::name())
+        let (shutdown, quit_tx) = run_provider(WadmProvider::name(), None)
             .await
             .context("failed to run provider")?;
+        let provider = WadmProvider {
+            default_config: Arc::default(),
+            handler_components: Arc::default(),
+            consumer_components: Arc::default(),
+            quit_tx: Arc::new(quit_tx),
+        };
         let connection = get_connection();
-        let wrpc = connection
-            .get_wrpc_client(connection.provider_key())
-            .await?;
-        serve_provider_exports(&wrpc, provider, shutdown, serve)
+        let (main_client, ext_client) = connection
+            .get_wrpc_clients_for_serving()
             .await
-            .context("failed to serve provider exports")
-    }
-
-    /// Build a [`WadmProvider`] from [`HostData`]
-    pub fn from_host_data(host_data: &HostData) -> WadmProvider {
-        let config = ClientConfig::try_from(host_data.config.clone());
-        if let Ok(config) = config {
-            WadmProvider {
-                default_config: config,
-                ..Default::default()
-            }
-        } else {
-            warn!("Failed to build connection configuration, falling back to default");
-            WadmProvider::default()
-        }
+            .context("failed to create wRPC clients")?;
+        serve_provider_exports(
+            &main_client,
+            &ext_client,
+            provider,
+            shutdown,
+            bindings::serve,
+            ext_bindings::serve,
+        )
+        .await
+        .context("failed to serve provider exports")
     }
 
     /// Attempt to connect to nats url and create a wadm client
@@ -227,23 +235,25 @@ impl WadmProvider {
 
     /// Helper function to get the NATS client from the context
     async fn get_client(&self, ctx: Option<Context>) -> anyhow::Result<Client> {
-        if let Some(ref source_id) = ctx
+        let ctx = ctx
             .as_ref()
-            .and_then(|Context { component, .. }| component.clone())
-        {
-            let components = self.consumer_components.read().await;
-            let wadm_bundle = match components.get(source_id) {
-                Some(wadm_bundle) => wadm_bundle,
-                None => {
-                    error!("component not linked: {source_id}");
-                    bail!("component not linked: {source_id}")
-                }
-            };
-            Ok(wadm_bundle.client.clone())
-        } else {
-            error!("no component in request");
-            bail!("no component in request")
-        }
+            .ok_or_else(|| anyhow!("no context in request"))?;
+        let source_id = ctx
+            .component
+            .as_ref()
+            .ok_or_else(|| anyhow!("no component in request"))?;
+        let link_name = ctx.link_name().to_string();
+        let link_key = (source_id.clone(), link_name.clone());
+
+        let components = self.consumer_components.read().await;
+        let wadm_bundle = match components.get(&link_key) {
+            Some(wadm_bundle) => wadm_bundle,
+            None => {
+                error!("component not linked: {source_id} with link_name: {link_name}");
+                bail!("component not linked: {source_id} with link_name: {link_name}")
+            }
+        };
+        Ok(wadm_bundle.client.clone())
     }
 }
 
@@ -267,7 +277,7 @@ async fn dispatch_status_update(
 
     let cx: HeaderMap = NatsHeaderInjector::default_with_span().into();
 
-    if let Err(e) = wasmcloud::wadm::handler::handle_status_update(wrpc, Some(cx), &update).await {
+    if let Err(e) = handler::handle_status_update(wrpc, Some(cx), &update).await {
         error!(
             error = %e,
             "Unable to send message"
@@ -275,76 +285,143 @@ async fn dispatch_status_update(
     }
 }
 
-impl Provider for WadmProvider {
-    #[instrument(level = "debug", skip_all, fields(source_id))]
-    async fn receive_link_config_as_target(
+impl manageable::Handler<Option<Context>> for WadmProvider {
+    async fn bind(
         &self,
-        link_config @ LinkConfig { source_id, .. }: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        let config = extract_wadm_config(&link_config, false)
-            .ok_or_else(|| anyhow!("Failed to extract WADM configuration"))?;
-
-        let merged_config = self.default_config.merge(&config);
-
-        let mut update_map = self.consumer_components.write().await;
-        let bundle = self
-            .connect(merged_config, source_id, false)
-            .await
-            .context("Failed to connect to NATS")?;
-
-        update_map.insert(source_id.into(), bundle);
-        Ok(())
+        _cx: Option<Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_xkey: Some(get_connection().provider_xkey.public_key().into()),
+        }))
     }
 
-    #[instrument(level = "debug", skip_all, fields(target_id))]
-    async fn receive_link_config_as_source(
+    async fn health_request(
         &self,
-        link_config @ LinkConfig { target_id, .. }: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        let config = extract_wadm_config(&link_config, true)
-            .ok_or_else(|| anyhow!("Failed to extract WADM configuration"))?;
-
-        let merged_config = self.default_config.merge(&config);
-
-        let mut update_map = self.handler_components.write().await;
-        let bundle = self
-            .connect(merged_config, target_id, true)
-            .await
-            .context("Failed to connect to NATS")?;
-
-        update_map.insert(target_id.into(), bundle);
-        Ok(())
-    }
-
-    #[instrument(level = "info", skip_all, fields(target_id = info.get_target_id()))]
-    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let component_id = info.get_target_id();
-        self.handler_components.write().await.remove(component_id);
-        Ok(())
-    }
-
-    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
-    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let component_id = info.get_source_id();
-        self.consumer_components.write().await.remove(component_id);
-        Ok(())
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
     }
 
     /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) -> anyhow::Result<()> {
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
         let mut handlers = self.handler_components.write().await;
         handlers.clear();
 
         let mut consumers = self.consumer_components.write().await;
         consumers.clear();
 
-        // dropping all connections should send unsubscribes and close the connections, so no need
-        // to handle that here
-        Ok(())
+        let _ = self.quit_tx.send(());
+        Ok(Ok(()))
     }
 }
 
-impl exports::wasmcloud::wadm::client::Handler<Option<Context>> for WadmProvider {
+impl configurable::Handler<Option<Context>> for WadmProvider {
+    #[instrument(level = "debug", skip_all)]
+    async fn update_base_config(
+        &self,
+        _cx: Option<Context>,
+        config: wasmcloud_provider_sdk::types::BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let flamegraph_path = config
+            .config
+            .iter()
+            .find(|(k, _)| k == "FLAMEGRAPH_PATH")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("PROVIDER_WADM_FLAMEGRAPH_PATH").ok());
+        initialize_observability!(Self::name(), flamegraph_path, config.config);
+
+        let config_map: HashMap<String, String> = config.config.into_iter().collect();
+        let config = ClientConfig::try_from(config_map);
+        if let Ok(config) = config {
+            *self.default_config.write().await = config;
+        }
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(source_id, link_name))]
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        link_name: String,
+        link_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let config = extract_wadm_config(&link_config, false)
+            .ok_or_else(|| anyhow!("Failed to extract WADM configuration"))?;
+
+        // Merge link-specific config with default config
+        let default_config = self.default_config.read().await;
+        let merged_config = default_config.merge(&config);
+
+        let mut update_map = self.consumer_components.write().await;
+        let bundle = self
+            .connect(merged_config, &source_id, false)
+            .await
+            .context("Failed to connect to NATS")?;
+
+        let link_key = (source_id, link_name);
+        update_map.insert(link_key, bundle);
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(target_id, link_name))]
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        target_id: String,
+        link_name: String,
+        config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let config = extract_wadm_config(&config, true)
+            .ok_or_else(|| anyhow!("Failed to extract WADM configuration"))?;
+
+        // Merge link-specific config with default config
+        let default_config = self.default_config.read().await;
+        let merged_config = default_config.merge(&config);
+
+        let mut update_map = self.handler_components.write().await;
+        let bundle = self
+            .connect(merged_config, &target_id, true)
+            .await
+            .context("Failed to connect to NATS")?;
+
+        let link_key = (target_id, link_name);
+        update_map.insert(link_key, bundle);
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(target_id, link_name))]
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        target_id: String,
+        link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        let link_key = (target_id, link_name);
+        self.handler_components.write().await.remove(&link_key);
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "info", skip_all, fields(source_id, link_name))]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        let link_key = (source_id, link_name);
+        self.consumer_components.write().await.remove(&link_key);
+        Ok(Ok(()))
+    }
+}
+
+impl client::Handler<Option<Context>> for WadmProvider {
     #[instrument(level = "debug", skip(self, ctx), fields(model_name = %model_name))]
     async fn deploy_model(
         &self,

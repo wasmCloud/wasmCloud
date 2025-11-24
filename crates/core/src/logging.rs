@@ -4,6 +4,8 @@
 //!
 //! [wasi-logging]: <https://github.com/WebAssembly/wasi-logging>
 
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -17,6 +19,22 @@ pub enum Level {
     Debug,
     Trace,
     Critical,
+}
+
+impl FromStr for Level {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "error" => Ok(Self::Error),
+            "warn" => Ok(Self::Warn),
+            "info" => Ok(Self::Info),
+            "debug" => Ok(Self::Debug),
+            "trace" => Ok(Self::Trace),
+            "critical" => Ok(Self::Critical),
+            _ => Err(format!("unknown log level: {s}")),
+        }
+    }
 }
 
 impl From<tracing::Level> for Level {

@@ -8,6 +8,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+
+
 [dependencies]
 async-nats = { workspace = true }
 anyhow = { workspace = true }

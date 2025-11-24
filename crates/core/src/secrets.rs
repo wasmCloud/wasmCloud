@@ -2,6 +2,8 @@ use std::fmt::{Debug, Formatter, Result};
 
 use serde::{Deserialize, Serialize};
 
+use crate::bindings;
+
 #[derive(Deserialize, Serialize, Clone)]
 // This tagging allows deserializers to know whether the secret is a string or bytes.
 // This is especially necessary for languages where strings and bytes are treated very similarly.
@@ -41,6 +43,62 @@ impl Debug for SecretValue {
         match self {
             SecretValue::String(_) => write!(f, "string(redacted)"),
             SecretValue::Bytes(_) => write!(f, "bytes(redacted)"),
+        }
+    }
+}
+
+impl From<bindings::wrpc::extension::types::SecretValue> for SecretValue {
+    fn from(value: bindings::wrpc::extension::types::SecretValue) -> Self {
+        match value {
+            bindings::wrpc::extension::types::SecretValue::String(s) => SecretValue::String(s),
+            bindings::wrpc::extension::types::SecretValue::Bytes(b) => SecretValue::Bytes(b.into()),
+        }
+    }
+}
+
+impl From<SecretValue> for bindings::wrpc::extension::types::SecretValue {
+    fn from(value: SecretValue) -> Self {
+        match value {
+            SecretValue::String(s) => bindings::wrpc::extension::types::SecretValue::String(s),
+            SecretValue::Bytes(b) => bindings::wrpc::extension::types::SecretValue::Bytes(b.into()),
+        }
+    }
+}
+
+impl From<&bindings::wrpc::extension::types::SecretValue> for SecretValue {
+    fn from(value: &bindings::wrpc::extension::types::SecretValue) -> Self {
+        match value {
+            bindings::wrpc::extension::types::SecretValue::String(s) => {
+                SecretValue::String(s.clone())
+            }
+            bindings::wrpc::extension::types::SecretValue::Bytes(b) => {
+                SecretValue::Bytes(b.to_vec())
+            }
+        }
+    }
+}
+
+impl From<&SecretValue> for bindings::wrpc::extension::types::SecretValue {
+    fn from(value: &SecretValue) -> Self {
+        match value {
+            SecretValue::String(s) => {
+                bindings::wrpc::extension::types::SecretValue::String(s.clone())
+            }
+            SecretValue::Bytes(b) => {
+                bindings::wrpc::extension::types::SecretValue::Bytes(b.clone().into())
+            }
+        }
+    }
+}
+
+/// Convert wasmcloud_core::secrets::SecretValue to the host bindings SecretValue type
+pub fn convert_secret_value(
+    value: SecretValue,
+) -> crate::bindings::wrpc::extension::types::SecretValue {
+    match value {
+        SecretValue::String(s) => crate::bindings::wrpc::extension::types::SecretValue::String(s),
+        SecretValue::Bytes(b) => {
+            crate::bindings::wrpc::extension::types::SecretValue::Bytes(b.into())
         }
     }
 }

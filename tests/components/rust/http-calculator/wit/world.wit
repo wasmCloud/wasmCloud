@@ -1,0 +1,6 @@
+package wasmcloud:calculator-component;
+
+world calculator {
+   export wasi:http/incoming-handler@0.2.2;
+   import wasmcloud:calculator/calculator;
+}

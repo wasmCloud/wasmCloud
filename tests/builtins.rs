@@ -576,6 +576,7 @@ async fn builtin_start_ignored_when_disabled() -> anyhow::Result<()> {
         None,
         // Explicitly disable experimental features
         Some(Features::default()),
+        true,
     )
     .await
     .context("failed to start test host")?;

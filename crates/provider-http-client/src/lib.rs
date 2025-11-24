@@ -1,9 +1,6 @@
 use core::convert::Infallible;
-use core::pin::pin;
-use core::time::Duration;
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use core::time::Duration;
 
 use anyhow::Context as _;
 use bytes::Bytes;
@@ -11,19 +8,29 @@ use futures::StreamExt as _;
 use http::uri::Scheme;
 use http_body::Frame;
 use http_body_util::{BodyExt as _, StreamBody};
+use std::sync::Arc;
+use tokio::spawn;
+use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tokio::time::sleep;
-use tokio::{select, spawn};
+use tracing::instrument;
 use tracing::{debug, error, info, trace, warn, Instrument as _};
+use wasmcloud_provider_sdk::serve_provider_exports;
+use wrpc_interface_http::ServeHttp;
 
+use crate::bindings::ext::exports::wrpc::extension::{
+    configurable::{self, InterfaceConfig},
+    manageable,
+};
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::{
-    get_connection, initialize_observability, load_host_data, propagate_trace_for_ctx,
-    run_provider, Context, Provider,
+    get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
+    types::{BindRequest, BindResponse, HealthCheckResponse},
+    Context,
 };
 use wrpc_interface_http::{
     bindings::wrpc::http::types::{ErrorCode, RequestOptions},
-    split_outgoing_http_body, try_fields_to_header_map, ServeHttp, ServeOutgoingHandlerHttp,
+    split_outgoing_http_body, try_fields_to_header_map, ServeOutgoingHandlerHttp,
 };
 
 // Import shared connection pooling infrastructure from the internal provider
@@ -32,81 +39,129 @@ use wasmcloud_core::http_client::{
     DEFAULT_IDLE_TIMEOUT, DEFAULT_USER_AGENT, LOAD_NATIVE_CERTS, LOAD_WEBPKI_CERTS, SSL_CERTS_FILE,
 };
 
+mod bindings {
+    pub mod ext {
+        wit_bindgen_wrpc::generate!({
+            world: "extension",
+            with: {
+                "wrpc:extension/types@0.0.1": wasmcloud_provider_sdk::types,
+                "wrpc:extension/manageable@0.0.1": generate,
+                "wrpc:extension/configurable@0.0.1": generate,
+            }
+        });
+    }
+}
+
 /// HTTP client capability provider implementation struct
 #[derive(Clone)]
 pub struct HttpClientProvider {
     /// TLS connector for establishing secure HTTPS connections
-    tls: tokio_rustls::TlsConnector,
+    tls: Arc<RwLock<tokio_rustls::TlsConnector>>,
     /// Connection pools for HTTP and HTTPS connections
     conns: ConnPool<wrpc_interface_http::HttpBody>,
     /// Background tasks for connection management
     #[allow(unused)]
-    tasks: Arc<JoinSet<()>>,
+    tasks: Arc<RwLock<JoinSet<()>>>,
+    /// Shutdown signal sender
+    quit_tx: Arc<tokio::sync::broadcast::Sender<()>>,
 }
 
-pub async fn run() -> anyhow::Result<()> {
-    info!("Starting HTTP client provider");
-    initialize_observability!(
-        "http-client-provider",
-        std::env::var_os("PROVIDER_HTTP_CLIENT_FLAMEGRAPH_PATH")
-    );
-
-    let host_data = load_host_data()?;
-    let provider = HttpClientProvider::new(&host_data.config, DEFAULT_IDLE_TIMEOUT).await?;
-
-    debug!("Initializing provider runtime");
-    let shutdown = run_provider(provider.clone(), "http-client-provider")
-        .await
-        .context("failed to run provider")?;
-
-    let connection = get_connection();
-    let wrpc = connection
-        .get_wrpc_client(connection.provider_key())
-        .await?;
-
-    debug!("Setting up wrpc interface");
-    let [(_, _, mut invocations)] =
-        wrpc_interface_http::bindings::exports::wrpc::http::outgoing_handler::serve_interface(
-            &wrpc,
-            ServeHttp(provider),
-        )
-        .await
-        .context("failed to serve exports")?;
-
-    info!("HTTP client provider ready to handle requests");
-    let mut shutdown = pin!(shutdown);
-    let mut tasks = JoinSet::new();
-
-    loop {
-        select! {
-            Some(res) = invocations.next() => {
-                match res {
-                    Ok(fut) => {
-                        tasks.spawn(async move {
-                            if let Err(err) = fut.await {
-                                warn!(?err, "failed to serve invocation");
-                            }
-                        });
-                    },
-                    Err(err) => {
-                        warn!(?err, "failed to accept invocation");
-                    }
-                }
-            },
-            () = &mut shutdown => {
-                info!("Received shutdown signal");
-                return Ok(())
-            }
+impl HttpClientProvider {
+    pub fn new(quit_tx: tokio::sync::broadcast::Sender<()>) -> Self {
+        Self {
+            tls: Arc::new(RwLock::new(tls::DEFAULT_RUSTLS_CONNECTOR.clone())),
+            conns: ConnPool::default(),
+            tasks: Arc::new(RwLock::new(JoinSet::new())),
+            quit_tx: Arc::new(quit_tx),
         }
     }
 }
 
-impl HttpClientProvider {
-    pub async fn new(
-        config: &HashMap<String, String>,
-        idle_timeout: Duration,
-    ) -> anyhow::Result<Self> {
-        debug!("Creating new HTTP client provider");
+pub async fn run() -> anyhow::Result<()> {
+    info!("Starting HTTP client provider");
+
+    debug!("Initializing provider runtime");
+    let (shutdown, quit_tx) = run_provider("http-client-provider", None)
+        .await
+        .context("failed to run provider")?;
+
+    let provider = ServeHttp(HttpClientProvider::new(quit_tx));
+
+    let connection = get_connection();
+    let (main_client, ext_client) = connection.get_wrpc_clients_for_serving().await?;
+
+    debug!("Setting up wrpc interface");
+    serve_provider_exports(
+        &main_client,
+        &ext_client,
+        provider,
+        shutdown,
+        |client, p| async move {
+            wrpc_interface_http::bindings::exports::wrpc::http::outgoing_handler::serve_interface(
+                client, p,
+            )
+            .await
+            .map(|arr| arr.into_iter().collect())
+        },
+        bindings::ext::serve,
+    )
+    .await
+    .context("failed to serve provider exports")
+}
+
+impl manageable::Handler<Option<Context>> for ServeHttp<HttpClientProvider> {
+    async fn bind(
+        &self,
+        _cx: Option<Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_xkey: Some(get_connection().provider_xkey.public_key().into()),
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by closing all connections
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
+        // Abort background tasks
+        self.0.tasks.write().await.abort_all();
+        // Clear connection pools
+        self.0.conns.http.write().await.clear();
+        self.0.conns.https.write().await.clear();
+        // Signal shutdown
+        let _ = self.0.quit_tx.send(());
+        Ok(Ok(()))
+    }
+}
+
+impl configurable::Handler<Option<Context>> for ServeHttp<HttpClientProvider> {
+    #[instrument(level = "debug", skip_all)]
+    async fn update_base_config(
+        &self,
+        _cx: Option<Context>,
+        config: wasmcloud_provider_sdk::types::BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let flamegraph_path = config
+            .config
+            .iter()
+            .find(|(k, _)| k == "FLAMEGRAPH_PATH")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("PROVIDER_HTTP_CLIENT_FLAMEGRAPH_PATH").ok());
+        initialize_observability!("http-client-provider", flamegraph_path, config.config);
+
+        let config: std::collections::HashMap<String, String> = config.config.into_iter().collect();
+
+        debug!("Configuring HTTP client provider");
 
         // Initialize TLS configuration
         let tls = if config.is_empty() {
@@ -139,9 +194,20 @@ impl HttpClientProvider {
 
             // Load root certificates from a file
             if let Some(file_path) = config.get(SSL_CERTS_FILE) {
-                let f = std::fs::File::open(file_path)?;
+                let f = match std::fs::File::open(file_path) {
+                    Result::Ok(f) => f,
+                    Result::Err(e) => {
+                        return Ok(Err(format!("failed to open SSL certs file: {e}")));
+                    }
+                };
                 let mut reader = std::io::BufReader::new(f);
-                let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
+                let certs = match rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()
+                {
+                    Result::Ok(certs) => certs,
+                    Result::Err(e) => {
+                        return Ok(Err(format!("failed to parse SSL certs: {e}")));
+                    }
+                };
                 let (added, ignored) = ca.add_parsable_certificates(certs);
                 debug!(
                     added,
@@ -155,16 +221,22 @@ impl HttpClientProvider {
             ))
         };
 
-        // Initialize connection pool and eviction task
-        let conns = ConnPool::default();
-        let mut tasks = JoinSet::new();
+        // Update TLS connector
+        *self.0.tls.write().await = tls;
 
+        // Start connection eviction task
+        let idle_timeout = DEFAULT_IDLE_TIMEOUT;
         debug!(
             "Starting connection eviction task with timeout: {:?}",
             idle_timeout
         );
+
+        let mut tasks = self.0.tasks.write().await;
+        // Abort any existing tasks before starting new one
+        tasks.abort_all();
+
         tasks.spawn({
-            let conns = conns.clone();
+            let conns = self.0.conns.clone();
             async move {
                 loop {
                     sleep(idle_timeout).await;
@@ -174,12 +246,51 @@ impl HttpClientProvider {
             }
         });
 
-        debug!("HTTP client provider initialization complete");
-        Ok(Self {
-            tls,
-            conns,
-            tasks: Arc::new(tasks),
-        })
+        debug!("HTTP client provider configuration complete");
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(source_id))]
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        _source_id: String,
+        _link_name: String,
+        _link_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+        _config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "info", skip_all, fields(source_id))]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        _source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
     }
 }
 
@@ -267,9 +378,10 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
             loop {
                 let mut sender = if use_tls {
                     debug!(%authority, "Establishing HTTPS connection");
+                    let tls = self.tls.read().await;
                     tokio::time::timeout(
                         connect_timeout,
-                        self.conns.connect_https(&self.tls, &authority),
+                        self.conns.connect_https(&tls, &authority),
                     )
                     .await
                 } else {
@@ -361,7 +473,41 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
     }
 }
 
-impl Provider for HttpClientProvider {}
+// impl wrpc_interface_http::bindings::exports::wrpc::http::outgoing_handler::Handler<Option<Context>>
+//     for HttpClientProvider
+// {
+//     async fn handle(
+//         &self,
+//         cx: Option<Context>,
+//         request: wrpc_interface_http::bindings::wrpc::http::types::Request,
+//         options: Option<wrpc_interface_http::bindings::wrpc::http::types::RequestOptions>,
+//     ) -> anyhow::Result<
+//         Result<
+//             wrpc_interface_http::bindings::wrpc::http::types::Response,
+//             wrpc_interface_http::bindings::wasi::http::types::ErrorCode,
+//         >,
+//     > {
+//         use anyhow::Context as _;
+//         use futures::StreamExt as _;
+
+//         let request = request
+//             .try_into()
+//             .context("failed to convert incoming `wrpc:http/types.request` to `http` request")?;
+//         match ServeOutgoingHandlerHttp::handle(self, cx, request, options).await? {
+//             Ok(response) => {
+//                 let (response, errs) = wrpc_interface_http::try_http_to_response(response)
+//                     .context(
+//                         "failed to convert outgoing `http` response to `wrpc:http/types.response`",
+//                     )?;
+//                 tokio::spawn(errs.for_each_concurrent(None, |err| async move {
+//                     tracing::error!(?err, "response body processing error encountered");
+//                 }));
+//                 Ok(Ok(response))
+//             }
+//             Err(code) => Ok(Err(code)),
+//         }
+//     }
+// }
 
 #[cfg(test)]
 mod tests {

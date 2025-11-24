@@ -2,7 +2,7 @@ use std::env::temp_dir;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::{bail, Context as _};
+use anyhow::{bail, ensure, Context as _};
 use oci_client::client::ClientProtocol;
 use oci_client::client::ImageData;
 use oci_client::Reference;
@@ -12,8 +12,8 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use wascap::jwt;
 
+use crate::tls;
 use crate::RegistryConfig;
-use crate::{tls, UseParFileCache};
 
 const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wasmcloud.provider.archive.layer.v1+par";
 const WASM_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm";
@@ -246,7 +246,6 @@ impl OciFetcher {
     pub async fn fetch_provider(
         &self,
         oci_ref: impl AsRef<str>,
-        host_id: impl AsRef<str>,
     ) -> anyhow::Result<(PathBuf, Option<jwt::Token<jwt::CapabilityProvider>>)> {
         let (path, cache) = self
             .fetch_path(
@@ -257,13 +256,16 @@ impl OciFetcher {
             )
             .await
             .context("failed to fetch OCI path")?;
-        let should_cache = match cache {
-            CacheResult::Miss => UseParFileCache::Ignore,
-            CacheResult::Hit => UseParFileCache::Use,
-        };
-        crate::par::read(&path, host_id, oci_ref, should_cache)
-            .await
-            .with_context(|| format!("failed to read `{}`", path.display()))
+
+        // Handle V2 Binary
+        ensure!(
+            path.exists(),
+            "Fetched provider not found at path: {}",
+            path.display()
+        );
+
+        // todo (luk3ark) - no jwt provided...
+        Ok((path, None))
     }
 
     /// Used to set additional CA paths that will be used as part of fetching components and providers

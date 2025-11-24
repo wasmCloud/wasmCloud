@@ -7,6 +7,10 @@ use std::collections::{hash_map, HashMap};
 use std::string::ToString;
 use std::sync::Arc;
 
+use crate::bindings::ext::exports::wrpc::extension::{
+    configurable::{self, InterfaceConfig},
+    manageable,
+};
 use anyhow::{anyhow, bail, Context as _};
 use base64::Engine as _;
 use bytes::Bytes;
@@ -15,19 +19,32 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
 use vaultrs::client::{Client as _, VaultClient, VaultClientSettings};
 use wasmcloud_provider_sdk::{
-    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
-    LinkDeleteInfo, Provider,
+    get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
+    serve_provider_exports,
+    types::{BindRequest, BindResponse, HealthCheckResponse},
+    Context,
 };
-use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 
 use crate::config::Config;
 
 mod bindings {
     wit_bindgen_wrpc::generate!({
+        world: "interfaces",
         with: {
             "wrpc:keyvalue/store@0.2.0-draft": generate,
         }
     });
+
+    pub mod ext {
+        wit_bindgen_wrpc::generate!({
+            world: "extension",
+            with: {
+                "wrpc:extension/types@0.0.1": wasmcloud_provider_sdk::types,
+                "wrpc:extension/manageable@0.0.1": generate,
+                "wrpc:extension/configurable@0.0.1": generate
+            }
+        });
+    }
 }
 use bindings::exports::wrpc::keyvalue;
 
@@ -173,10 +190,155 @@ async fn renew_self(
 }
 
 /// Redis KV provider implementation which utilizes [Hashicorp Vault](https://developer.hashicorp.com/vault/docs)
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct KvVaultProvider {
     // store vault connection per component
     components: Arc<RwLock<HashMap<String, Arc<Client>>>>,
+    quit_tx: Arc<tokio::sync::broadcast::Sender<()>>,
+}
+
+impl KvVaultProvider {
+    fn new(quit_tx: tokio::sync::broadcast::Sender<()>) -> Self {
+        Self {
+            components: Arc::default(),
+            quit_tx: Arc::new(quit_tx),
+        }
+    }
+}
+
+impl manageable::Handler<Option<Context>> for KvVaultProvider {
+    async fn bind(
+        &self,
+        _cx: Option<Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_xkey: Some(get_connection().provider_xkey.public_key().into()),
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by closing all connections
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
+        let mut aw = self.components.write().await;
+        // Empty the component link data and stop all servers
+        for (_, client) in aw.drain() {
+            drop(client);
+        }
+        // Signal the provider to shut down
+        let _ = self.quit_tx.send(());
+        Ok(Ok(()))
+    }
+}
+
+impl configurable::Handler<Option<Context>> for KvVaultProvider {
+    #[instrument(level = "debug", skip_all)]
+    async fn update_base_config(
+        &self,
+        _cx: Option<Context>,
+        config: wasmcloud_provider_sdk::types::BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let flamegraph_path = config
+            .config
+            .iter()
+            .find(|(k, _)| k == "FLAMEGRAPH_PATH")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("PROVIDER_KEYVALUE_VAULT_FLAMEGRAPH_PATH").ok());
+        initialize_observability!(Self::name(), flamegraph_path, config.config);
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(source_id))]
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        link_name: String,
+        link_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        debug!(
+           %source_id,
+           %link_name,
+            "adding link for component",
+        );
+
+        let config = match Config::from_link_config(&link_config) {
+            Ok(config) => config,
+            Err(e) => {
+                error!(
+                    %source_id,
+                    %link_name,
+                    "failed to parse config: {e}",
+                );
+                bail!(anyhow!(e).context("failed to parse config"))
+            }
+        };
+
+        let client = match Client::new(config.clone()) {
+            Ok(client) => client,
+            Err(e) => {
+                error!(
+                    %source_id,
+                    %link_name,
+                    "failed to create new client config: {e}",
+                );
+                return Err(anyhow!(e).context("failed to create new client config"));
+            }
+        };
+        client.set_renewal().await;
+
+        let mut update_map = self.components.write().await;
+        update_map.insert(source_id.to_string(), Arc::new(client));
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+        _config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "info", skip_all, fields(source_id))]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        let mut aw = self.components.write().await;
+        if let Some(client) = aw.remove(&source_id) {
+            debug!(source_id, "deleting link for component");
+            drop(client);
+        }
+        Ok(Ok(()))
+    }
 }
 
 impl KvVaultProvider {
@@ -185,24 +347,22 @@ impl KvVaultProvider {
     }
 
     pub async fn run() -> anyhow::Result<()> {
-        let host_data = load_host_data().context("failed to load host data")?;
-        let flamegraph_path = host_data
-            .config
-            .get("FLAMEGRAPH_PATH")
-            .map(String::from)
-            .or_else(|| std::env::var("PROVIDER_KEYVALUE_VAULT_FLAMEGRAPH_PATH").ok());
-        initialize_observability!(Self::name(), flamegraph_path);
-        let provider = Self::default();
-        let shutdown = run_provider(provider.clone(), KvVaultProvider::name())
+        let (shutdown, quit_tx) = run_provider(KvVaultProvider::name(), None)
             .await
             .context("failed to run provider")?;
+        let provider = Self::new(quit_tx);
         let connection = get_connection();
-        let wrpc = connection
-            .get_wrpc_client(connection.provider_key())
-            .await?;
-        serve_provider_exports(&wrpc, provider, shutdown, bindings::serve)
-            .await
-            .context("failed to serve provider exports")
+        let (main_client, ext_client) = connection.get_wrpc_clients_for_serving().await?;
+        serve_provider_exports(
+            &main_client,
+            &ext_client,
+            provider,
+            shutdown,
+            bindings::serve,
+            bindings::ext::serve,
+        )
+        .await
+        .context("failed to serve provider exports")
     }
 
     /// Retrieve a client for a given context (determined by `source_id`)
@@ -392,81 +552,5 @@ impl keyvalue::store::Handler<Option<Context>> for KvVaultProvider {
         Ok(self
             .list_keys(context, bucket, cursor.unwrap_or_default())
             .await)
-    }
-}
-
-/// Handle provider control commands, the minimum required of any provider on
-/// a wasmcloud lattice
-impl Provider for KvVaultProvider {
-    /// Provider should perform any operations needed for a new link,
-    /// including setting up per-component resources, and checking authorization.
-    /// If the link is allowed, return true, otherwise return false to deny the link.
-    #[instrument(level = "debug", skip_all, fields(source_id))]
-    async fn receive_link_config_as_target(
-        &self,
-        link_config: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        let LinkConfig {
-            source_id,
-            link_name,
-            ..
-        } = link_config;
-        debug!(
-           %source_id,
-           %link_name,
-            "adding link for component",
-        );
-
-        let config = match Config::from_link_config(&link_config) {
-            Ok(config) => config,
-            Err(e) => {
-                error!(
-                    %source_id,
-                    %link_name,
-                    "failed to parse config: {e}",
-                );
-                bail!(anyhow!(e).context("failed to parse config"))
-            }
-        };
-
-        let client = match Client::new(config.clone()) {
-            Ok(client) => client,
-            Err(e) => {
-                error!(
-                    %source_id,
-                    %link_name,
-                    "failed to create new client config: {e}",
-                );
-                return Err(anyhow!(e).context("failed to create new client config"));
-            }
-        };
-        client.set_renewal().await;
-
-        let mut update_map = self.components.write().await;
-        update_map.insert(source_id.to_string(), Arc::new(client));
-
-        Ok(())
-    }
-
-    /// Handle notification that a link is dropped - close the connection
-    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
-    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let component_id = info.get_source_id();
-        let mut aw = self.components.write().await;
-        if let Some(client) = aw.remove(component_id) {
-            debug!(component_id, "deleting link for component");
-            drop(client);
-        }
-        Ok(())
-    }
-
-    /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        let mut aw = self.components.write().await;
-        // Empty the component link data and stop all servers
-        for (_, client) in aw.drain() {
-            drop(client);
-        }
-        Ok(())
     }
 }

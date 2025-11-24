@@ -9,13 +9,19 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::bindings::ext::exports::wrpc::extension::{
+    configurable::{self, InterfaceConfig},
+    manageable,
+};
 use anyhow::{anyhow, bail, Context as _};
 use tokio::fs;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument};
 use wascap::prelude::KeyPair;
 use wasmcloud_provider_sdk::{
-    get_connection, initialize_observability, load_host_data, run_provider, serve_provider_exports,
-    Context, HostData, LinkConfig, LinkDeleteInfo, Provider, ProviderConfigUpdate,
+    core::secrets::SecretValue,
+    get_connection, initialize_observability, run_provider, serve_provider_exports,
+    types::{BindRequest, BindResponse, HealthCheckResponse},
+    Context,
 };
 
 use crate::config::{NatsConnectionConfig, DEFAULT_NATS_URI};
@@ -25,43 +31,28 @@ use wrpc_interface_blobstore::bindings;
 
 /// Implement the [`NatsBlobstoreProvider`] and [`Provider`] traits
 impl NatsBlobstoreProvider {
+    pub fn name() -> &'static str {
+        "nats-bucket-provider"
+    }
+
     pub async fn run() -> anyhow::Result<()> {
-        let host_data = load_host_data().context("failed to load host data")?;
-        let provider = Self::from_host_data(host_data);
-        let shutdown = run_provider(provider.clone(), "nats-bucket-provider")
+        let (shutdown, quit_tx) = run_provider(Self::name(), None)
             .await
             .context("failed to run provider")?;
+        let provider = NatsBlobstoreProvider::new(quit_tx);
         let connection = get_connection();
-        let flamegraph_path = host_data
-            .config
-            .get("FLAMEGRAPH_PATH")
-            .map(String::from)
-            .or_else(|| std::env::var("PROVIDER_BLOBSTORE_NATS_FLAMEGRAPH_PATH").ok());
-        initialize_observability!("blobstore-nats-provider", flamegraph_path);
+        let (main_client, ext_client) = connection.get_wrpc_clients_for_serving().await?;
+
         serve_provider_exports(
-            &connection
-                .get_wrpc_client(connection.provider_key())
-                .await?,
+            &main_client,
+            &ext_client,
             provider,
             shutdown,
             bindings::serve,
+            crate::bindings::ext::serve,
         )
         .await
         .context("failed to serve provider exports")
-    }
-
-    /// Build a [`NatsBlobstoreProvider`] from [`HostData`]
-    pub fn from_host_data(host_data: &HostData) -> NatsBlobstoreProvider {
-        let config = NatsConnectionConfig::from_link_config(&host_data.config, &host_data.secrets);
-        if let Ok(default_config) = config {
-            NatsBlobstoreProvider {
-                default_config,
-                ..Default::default()
-            }
-        } else {
-            warn!("failed to build NATS connection configuration, falling back to default");
-            NatsBlobstoreProvider::default()
-        }
     }
 
     /// Attempt to connect to NATS url (with JWT credentials, if provided)
@@ -147,29 +138,147 @@ impl NatsBlobstoreProvider {
     }
 }
 
-/// Handle provider control commands
-impl Provider for NatsBlobstoreProvider {
-    /// Provider should perform any operations needed for a new link,
-    /// including setting up per-component resources, and checking authorization.
-    /// If the link is allowed, return true, otherwise return false to deny the link.
-    #[instrument(level = "debug", skip_all, fields(source_id))]
-    async fn receive_link_config_as_target(
+impl manageable::Handler<Option<Context>> for NatsBlobstoreProvider {
+    async fn bind(
         &self,
-        link_config: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        let LinkConfig {
-            source_id,
-            link_name,
-            ..
-        } = link_config;
+        _cx: Option<Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_xkey: Some(get_connection().provider_xkey.public_key().into()),
+        }))
+    }
 
+    async fn health_request(
+        &self,
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by closing all connections
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
+        // clear the consumer components
+        let mut consumers = self.consumer_components.write().await;
+        consumers.clear();
+        // Signal shutdown
+        let _ = self.quit_tx.send(());
+        Ok(Ok(()))
+    }
+}
+
+/// Helper function for adding the TLS CA to the NATS connection options
+fn add_tls_ca(
+    tls_ca: &str,
+    opts: async_nats::ConnectOptions,
+) -> anyhow::Result<async_nats::ConnectOptions> {
+    let ca = rustls_pemfile::read_one(&mut tls_ca.as_bytes()).context("failed to read CA")?;
+    let mut roots = async_nats::rustls::RootCertStore::empty();
+    if let Some(rustls_pemfile::Item::X509Certificate(ca)) = ca {
+        roots.add_parsable_certificates([ca]);
+    } else {
+        bail!("tls ca: invalid certificate type, must be a DER encoded PEM file")
+    };
+    let tls_client = async_nats::rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(opts.tls_client_config(tls_client).require_tls(true))
+}
+
+impl configurable::Handler<Option<Context>> for NatsBlobstoreProvider {
+    #[instrument(level = "debug", skip_all)]
+    async fn update_base_config(
+        &self,
+        _cx: Option<Context>,
+        incoming_config: wasmcloud_provider_sdk::types::BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let flamegraph_path = incoming_config
+            .config
+            .iter()
+            .find(|(k, _)| k == "FLAMEGRAPH_PATH")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("PROVIDER_BLOBSTORE_NATS_FLAMEGRAPH_PATH").ok());
+        initialize_observability!(Self::name(), flamegraph_path, incoming_config.config);
+
+        let config_map: HashMap<String, String> = incoming_config.config.into_iter().collect();
+        let secrets_map: HashMap<String, SecretValue> = incoming_config
+            .secrets
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect();
+
+        debug!("Received config update: {:?}", config_map);
+
+        // Create a new config from the update values
+        let new_config = match NatsConnectionConfig::from_link_config(&config_map, &secrets_map) {
+            Result::Ok(config) => config,
+            Result::Err(e) => {
+                error!("Failed to parse configuration update: {}", e);
+                return Ok(Err(format!("failed to parse configuration: {e}")));
+            }
+        };
+
+        // Update default config
+        *self.default_config.write().await = new_config.clone();
+
+        // Create new NATS connection with updated config
+        let new_jetstream = match self.connect(new_config.clone()).await {
+            Result::Ok(js) => js,
+            Result::Err(e) => {
+                error!("Failed to connect with new configuration: {}", e);
+                return Ok(Err(format!(
+                    "failed to connect with new configuration: {e}"
+                )));
+            }
+        };
+
+        // Update all existing connections with the new configuration
+        let mut components = self.consumer_components.write().await;
+        for stores in components.values_mut() {
+            for store in stores.values_mut() {
+                // Use existing NatsConnectionConfig merge functionality
+                let merged_config = NatsConnectionConfig {
+                    storage_config: Some(store.storage_config.clone()),
+                    ..Default::default()
+                }
+                .merge(&new_config);
+
+                store.storage_config = merged_config.storage_config.unwrap_or_default();
+                store.jetstream = new_jetstream.clone();
+            }
+        }
+
+        info!("Successfully updated all NATS connections with new configuration");
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(source_id))]
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        link_name: String,
+        link_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
         let config = if link_config.config.is_empty() {
-            self.default_config.clone()
+            self.default_config.read().await.clone()
         } else {
             // create a config from the supplied values and merge that with the existing default
             // NATS connection configuration
-            match NatsConnectionConfig::from_link_config(link_config.config, link_config.secrets) {
-                Ok(ncc) => self.default_config.merge(&ncc),
+            let config_map: HashMap<String, String> = link_config.config.into_iter().collect();
+            let secrets_map: HashMap<String, SecretValue> = link_config
+                .secrets
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect();
+            match NatsConnectionConfig::from_link_config(&config_map, &secrets_map) {
+                Ok(ncc) => self.default_config.read().await.merge(&ncc),
                 Err(e) => {
                     error!("failed to build NATS connection configuration: {:?}", e);
                     return Err(anyhow!(e).context("failed to build NATS connection configuration"));
@@ -211,19 +320,41 @@ impl Provider for NatsBlobstoreProvider {
             );
         }
 
-        Ok(())
+        Ok(Ok(()))
     }
 
-    /// Provider should perform any operations needed for a link deletion, including cleaning up
-    /// per-component resources.
-    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id(), link_name = info.get_link_name()))]
-    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let source_id = info.get_source_id();
-        let link_name = info.get_link_name();
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+        _config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "info", skip_all, fields(source_id))]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
         let mut links = self.consumer_components.write().await;
 
-        if let Some(nats_stores) = links.get_mut(source_id) {
-            if nats_stores.remove(link_name).is_some() {
+        if let Some(nats_stores) = links.get_mut(&source_id) {
+            if nats_stores.remove(&link_name).is_some() {
                 debug!(
                     source_id,
                     link_name, "removed NATS JetStream connection for link name"
@@ -232,7 +363,7 @@ impl Provider for NatsBlobstoreProvider {
 
             // If the inner hashmap is empty, remove the source_id from the outer hashmap
             if nats_stores.is_empty() {
-                links.remove(source_id);
+                links.remove(&source_id);
                 debug!(
                     source_id,
                     "removed source_id from consumer components as it has no more link names"
@@ -243,81 +374,8 @@ impl Provider for NatsBlobstoreProvider {
         }
 
         debug!(source_id, "finished processing link deletion");
-
-        Ok(())
+        Ok(Ok(()))
     }
-
-    /// Provider should perform any operations needed for configuration updates, including cleaning up
-    /// invalidated link resources.
-    #[instrument(level = "debug", skip_all, fields(link_name))]
-    async fn on_config_update(&self, update: impl ProviderConfigUpdate) -> anyhow::Result<()> {
-        let values = update.get_values();
-        debug!("Received config update: {:?}", values);
-
-        // Create a new config from the update values
-        let new_config = match NatsConnectionConfig::from_link_config(values, &HashMap::new()) {
-            Ok(config) => config,
-            Err(e) => {
-                error!("Failed to parse configuration update: {}", e);
-                return Ok(());
-            }
-        };
-
-        // Create new NATS connection with updated config
-        let new_jetstream = match self.connect(new_config.clone()).await {
-            Ok(js) => js,
-            Err(e) => {
-                error!("Failed to connect with new configuration: {}", e);
-                return Ok(());
-            }
-        };
-
-        // Update all existing connections with the new configuration
-        let mut components = self.consumer_components.write().await;
-        for stores in components.values_mut() {
-            for store in stores.values_mut() {
-                // Use existing NatsConnectionConfig merge functionality
-                let merged_config = NatsConnectionConfig {
-                    storage_config: Some(store.storage_config.clone()),
-                    ..Default::default()
-                }
-                .merge(&new_config);
-
-                store.storage_config = merged_config.storage_config.unwrap_or_default();
-                store.jetstream = new_jetstream.clone();
-            }
-        }
-
-        info!("Successfully updated all NATS connections with new configuration");
-        Ok(())
-    }
-
-    /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        // clear the consumer components
-        let mut consumers = self.consumer_components.write().await;
-        consumers.clear();
-
-        Ok(())
-    }
-}
-
-/// Helper function for adding the TLS CA to the NATS connection options
-fn add_tls_ca(
-    tls_ca: &str,
-    opts: async_nats::ConnectOptions,
-) -> anyhow::Result<async_nats::ConnectOptions> {
-    let ca = rustls_pemfile::read_one(&mut tls_ca.as_bytes()).context("failed to read CA")?;
-    let mut roots = async_nats::rustls::RootCertStore::empty();
-    if let Some(rustls_pemfile::Item::X509Certificate(ca)) = ca {
-        roots.add_parsable_certificates([ca]);
-    } else {
-        bail!("tls ca: invalid certificate type, must be a DER encoded PEM file")
-    };
-    let tls_client = async_nats::rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    Ok(opts.tls_client_config(tls_client).require_tls(true))
 }
 
 // Performing various provider configuration tests

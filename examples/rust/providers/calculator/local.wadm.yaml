@@ -1,0 +1,47 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: custom-template-provider
+  annotations:
+    version: v0.0.1
+    description: 'An application with a provider and component built for extending wasmCloud with custom capabilities'
+spec:
+  components:
+    - name: test-component
+      type: component
+      properties:
+        image: ghcr.io/wasmcloud/components/echo-messaging-rust:0.1.0
+      traits:
+        # Govern the spread/scheduling of the component
+        - type: spreadscaler
+          properties:
+            instances: 1
+        # Establish a unidirectional link to the messaging capability provider (powered by NATS),
+        # so the `echo` component can make use of messaging interface functionality
+        # (i.e. making interacting with the messaging system, in this case NATS)
+        - type: link
+          properties:
+            target:
+              name: custom-template
+            namespace: wasmcloud
+            package: messaging
+            interfaces: [consumer]
+
+    - name: custom-template
+      type: capability
+      properties:
+        image: file://./build/wasmcloud-example-messaging-nats.par.gz
+        id: custom-template
+        config:
+          - name: provider-config
+            properties:
+              foo: bar
+      traits:
+        # Link the provider to the component on wasmcloud:example/process-data
+        - type: link
+          properties:
+            target:
+              name: test-component
+            namespace: wasmcloud
+            package: example
+            interfaces: [process-data]

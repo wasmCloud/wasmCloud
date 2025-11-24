@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{anyhow, ensure, Context as _};
+use anyhow::{anyhow, Context as _};
 use async_nats::jetstream::kv::{Entry as KvEntry, Operation, Store};
 use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _};
@@ -12,14 +12,7 @@ use tokio::{
 };
 use tracing::{debug, error, instrument, warn};
 
-use crate::{
-    config::ConfigManager,
-    store::StoreManager,
-    wasmbus::{
-        claims::{Claims, StoredClaims},
-        ComponentSpecification,
-    },
-};
+use crate::{config::ConfigManager, store::StoreManager, wasmbus::ComponentSpecification};
 
 #[async_trait::async_trait]
 impl StoreManager for Store {
@@ -142,11 +135,15 @@ impl crate::wasmbus::Host {
                 debug!("ignoring deprecated LINKDEF delete operation");
                 Ok(())
             }
-            (Operation::Put, Some(("CLAIMS", pubkey))) => {
-                self.process_claims_put(pubkey, value).await
+            (Operation::Put, Some(("CLAIMS", _pubkey))) => {
+                // Claims are deprecated - JWT claims are no longer used
+                debug!("ignoring deprecated CLAIMS put operation");
+                Ok(())
             }
-            (Operation::Delete, Some(("CLAIMS", pubkey))) => {
-                self.process_claims_delete(pubkey, value).await
+            (Operation::Delete, Some(("CLAIMS", _pubkey))) => {
+                // Claims are deprecated - JWT claims are no longer used
+                debug!("ignoring deprecated CLAIMS delete operation");
+                Ok(())
             }
             (operation, Some(("REFMAP", id))) => {
                 // TODO: process REFMAP entries
@@ -188,53 +185,6 @@ impl crate::wasmbus::Host {
     ) -> anyhow::Result<()> {
         debug!(id = id.as_ref(), "process component delete");
         self.delete_component_spec(id).await
-    }
-
-    #[instrument(level = "debug", skip_all)]
-    /// Process claims being put into the JetStream data store.
-    ///
-    /// Notably this updates the host map but does not call [Self::store_claims], which
-    /// would cause an infinite loop.
-    pub(crate) async fn process_claims_put(
-        &self,
-        pubkey: impl AsRef<str>,
-        value: impl AsRef<[u8]>,
-    ) -> anyhow::Result<()> {
-        let pubkey = pubkey.as_ref();
-
-        debug!(pubkey, "process claim entry put");
-
-        let stored_claims: StoredClaims =
-            serde_json::from_slice(value.as_ref()).context("failed to decode stored claims")?;
-        let claims = Claims::from(stored_claims);
-
-        ensure!(claims.subject() == pubkey, "subject mismatch");
-        match claims {
-            Claims::Component(claims) => self.store_component_claims(claims).await,
-            Claims::Provider(claims) => self.store_provider_claims(claims).await,
-        }
-    }
-
-    #[instrument(level = "debug", skip_all)]
-    pub(crate) async fn process_claims_delete(
-        &self,
-        pubkey: impl AsRef<str>,
-        value: impl AsRef<[u8]>,
-    ) -> anyhow::Result<()> {
-        let pubkey = pubkey.as_ref();
-
-        debug!(pubkey, "process claim entry deletion");
-
-        let stored_claims: StoredClaims =
-            serde_json::from_slice(value.as_ref()).context("failed to decode stored claims")?;
-        let claims = Claims::from(stored_claims);
-
-        ensure!(claims.subject() == pubkey, "subject mismatch");
-
-        match claims {
-            Claims::Component(_) => self.delete_component_claims(pubkey).await,
-            Claims::Provider(_) => self.delete_provider_claims(pubkey).await,
-        }
     }
 }
 

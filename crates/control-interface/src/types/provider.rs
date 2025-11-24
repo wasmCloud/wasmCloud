@@ -6,6 +6,39 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
+/// Satisfied interfaces for a provider V2 e.g linkable, configurable, etc
+#[derive(Default, Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub struct SatisfiedProviderInterfaces {
+    /// True if a provider supports configuration interaction
+    is_configurable: bool,
+    /// True if a provider can be managed and interacted with by the host
+    /// This is a mandatory interface for all providers
+    is_manageable: bool,
+}
+
+impl SatisfiedProviderInterfaces {
+    pub fn new(is_configurable: bool, is_manageable: bool) -> Self {
+        Self {
+            is_configurable,
+            is_manageable,
+        }
+    }
+
+    pub fn is_configurable(&self) -> bool {
+        self.is_configurable
+    }
+
+    pub fn is_manageable(&self) -> bool {
+        self.is_manageable
+    }
+
+    /// Validates that a minimum set of madatory interfaces are satisfied for an extension
+    /// to be compatible with the host
+    pub fn validate(&self) -> bool {
+        self.is_manageable()
+    }
+}
+
 /// A summary description of a capability provider within a host inventory
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
@@ -13,6 +46,10 @@ pub struct ProviderDescription {
     /// Provider's unique identifier
     #[serde(default)]
     pub(crate) id: String,
+    /// Whether the provider is internal or external
+    /// Internal providers are processes spawned by the host runtime itself
+    #[serde(default)]
+    pub(crate) external: bool,
     /// Image reference for this provider, if applicable
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) image_ref: Option<String>,
@@ -32,6 +69,11 @@ impl ProviderDescription {
     /// Get the ID of the provider
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Get whether the provider is internal or external
+    pub fn external(&self) -> bool {
+        self.external
     }
 
     /// Get the image reference of the provider
@@ -65,6 +107,7 @@ impl ProviderDescription {
 #[non_exhaustive]
 pub struct ProviderDescriptionBuilder {
     id: Option<String>,
+    external: Option<bool>,
     image_ref: Option<String>,
     name: Option<String>,
     revision: Option<i32>,
@@ -76,6 +119,13 @@ impl ProviderDescriptionBuilder {
     #[must_use]
     pub fn id(mut self, v: &str) -> Self {
         self.id = Some(v.into());
+        self
+    }
+
+    /// Whether the provider is external or not
+    #[must_use]
+    pub fn external(mut self, v: bool) -> Self {
+        self.external = Some(v);
         self
     }
 
@@ -112,6 +162,9 @@ impl ProviderDescriptionBuilder {
     pub fn build(self) -> Result<ProviderDescription> {
         Ok(ProviderDescription {
             id: self.id.ok_or_else(|| "id is required".to_string())?,
+            external: self
+                .external
+                .ok_or_else(|| "external is required".to_string())?,
             image_ref: self.image_ref,
             name: self.name,
             revision: self.revision.unwrap_or_default(),
@@ -131,6 +184,7 @@ mod tests {
         assert_eq!(
             ProviderDescription {
                 id: "id".into(),
+                external: false,
                 image_ref: Some("ref".into()),
                 name: Some("name".into()),
                 annotations: Some(BTreeMap::from([("a".into(), "b".into())])),
@@ -140,6 +194,7 @@ mod tests {
                 .id("id")
                 .image_ref("ref")
                 .name("name")
+                .external(false)
                 .annotations(BTreeMap::from([("a".into(), "b".into())]))
                 .revision(0)
                 .build()

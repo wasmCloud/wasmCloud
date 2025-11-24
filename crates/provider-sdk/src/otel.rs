@@ -25,7 +25,7 @@ macro_rules! propagate_trace_for_ctx {
     }};
 }
 
-/// Initialize observability for a given provider with host-supplied data, via [`tracing`].
+/// Initialize observability for a given provider with config supplied via wRPC, via [`tracing`].
 ///
 /// This functionality exists as a macro due to the requirement that `tracing` be initialized
 /// from *binary* code, rather than library code.
@@ -39,23 +39,24 @@ macro_rules! propagate_trace_for_ctx {
 /// # Arguments
 /// * `provider_name` - An expression that evaluates to a `&str` which is the name of your provider
 /// * `maybe_flamegraphs_path` - An expression that evaluates to a `Option<impl AsRef<Path>>` for flamegraph path
+/// * `config` - A reference to a config map (e.g., `&[(String, String)]` or similar iterable)
 #[macro_export]
 macro_rules! initialize_observability {
-    ($provider_name:expr, $maybe_flamegraphs_path:expr) => {
+    ($provider_name:expr, $maybe_flamegraphs_path:expr, $config:expr) => {
         let __observability_guard = {
             use $crate::anyhow::Context as _;
             use $crate::tracing_subscriber::util::SubscriberInitExt as _;
-            let $crate::HostData {
-                config,
+
+            let $crate::ExtensionData {
                 otel_config,
                 structured_logging,
                 log_level,
                 ..
-            } = $crate::provider::load_host_data().context("failed to load host data")?;
+            } = $crate::provider::load_ext_data().context("failed to load host data")?;
 
             // Update OTEL configuration with overrides if provided via config to the provider
             let mut otel_config = otel_config.clone();
-            for (k, v) in config.iter() {
+            for (k, v) in $config.iter() {
                 match k.to_uppercase().as_str() {
                     "OTEL_EXPORTER_OTLP_ENDPOINT" => {
                         otel_config.observability_endpoint = Some(v.clone())

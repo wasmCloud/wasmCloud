@@ -14,7 +14,6 @@ repository.workspace = true
 features = ["otel"]
 
 [features]
-default = []
 otel = ["opentelemetry", "tracing-opentelemetry"]
 
 [dependencies]
@@ -31,6 +30,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["std"] }
 tracing-futures = { workspace = true, features = ["default"] }
@@ -43,6 +43,7 @@ wasmcloud-core = { workspace = true, features = [
     "webpki-roots",
 ] }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
+wit-bindgen-wrpc = { workspace = true }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
 

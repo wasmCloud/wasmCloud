@@ -15,8 +15,10 @@ use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{error, instrument};
 use wasmcloud_provider_sdk::{
-    get_connection, initialize_observability, load_host_data, propagate_trace_for_ctx,
-    run_provider, serve_provider_exports, Context, HostData, LinkConfig, LinkDeleteInfo, Provider,
+    get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
+    serve_provider_exports,
+    types::{BindRequest, BindResponse, HealthCheckResponse},
+    Context,
 };
 use wrpc_interface_blobstore::bindings::{
     exports::wrpc::blobstore::blobstore::Handler,
@@ -28,37 +30,132 @@ use config::StorageConfig;
 
 mod config;
 
+mod bindings {
+    wit_bindgen_wrpc::generate!({
+        world: "interfaces",
+        with: {
+            "wrpc:blobstore/blobstore@0.2.0": generate,
+            "wrpc:blobstore/types@0.2.0": wrpc_interface_blobstore::bindings::wrpc::blobstore::types,
+            "wasi:blobstore/types@0.2.0-draft": generate,
+            "wasi:io/error@0.2.1": generate,
+            "wasi:io/poll@0.2.1": generate,
+            "wasi:io/streams@0.2.1": generate
+        }
+    });
+
+    pub mod ext {
+        wit_bindgen_wrpc::generate!({
+            world: "extensions",
+            with: {
+                "wrpc:extension/types@0.0.1": wasmcloud_provider_sdk::types,
+                "wrpc:extension/manageable@0.0.1": generate,
+                "wrpc:extension/configurable@0.0.1": generate,
+            }
+        });
+    }
+}
+
+use bindings::ext::exports::wrpc::extension::{
+    configurable::{self, InterfaceConfig},
+    manageable,
+};
+
 /// Blobstore Azblob provider
 ///
 /// This struct will be the target of generated implementations (via wit-provider-bindgen)
 /// for the blobstore provider WIT contract
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct BlobstoreAzblobProvider {
     /// Per-config storage for Azure connection clients
     config: Arc<RwLock<HashMap<String, BlobServiceClient>>>,
+    /// Shutdown signal sender
+    quit_tx: Arc<tokio::sync::broadcast::Sender<()>>,
+}
+
+impl BlobstoreAzblobProvider {
+    pub fn new(quit_tx: tokio::sync::broadcast::Sender<()>) -> Self {
+        Self {
+            config: Arc::default(),
+            quit_tx: Arc::new(quit_tx),
+        }
+    }
+
+    pub fn name() -> &'static str {
+        "blobstore-azure-provider"
+    }
 }
 
 pub async fn run() -> anyhow::Result<()> {
     BlobstoreAzblobProvider::run().await
 }
 
-/// Handle provider control commands
-/// put_link (new component link command), del_link (remove link command), and shutdown
-impl Provider for BlobstoreAzblobProvider {
-    #[instrument(level = "info", skip_all)]
-    async fn receive_link_config_as_target(
+impl manageable::Handler<Option<Context>> for BlobstoreAzblobProvider {
+    async fn bind(
         &self,
-        link_config: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        let config = match StorageConfig::from_link_config(&link_config) {
+        _cx: Option<Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_xkey: Some(get_connection().provider_xkey.public_key().into()),
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by closing all connections
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
+        self.config.write().await.drain();
+        // Signal shutdown
+        let _ = self.quit_tx.send(());
+        Ok(Ok(()))
+    }
+}
+
+impl configurable::Handler<Option<Context>> for BlobstoreAzblobProvider {
+    #[instrument(level = "debug", skip_all)]
+    async fn update_base_config(
+        &self,
+        _cx: Option<Context>,
+        config: wasmcloud_provider_sdk::types::BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let flamegraph_path = config
+            .config
+            .iter()
+            .find(|(k, _)| k == "FLAMEGRAPH_PATH")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("PROVIDER_BLOBSTORE_AZURE_FLAMEGRAPH_PATH").ok());
+        initialize_observability!(Self::name(), flamegraph_path, config.config);
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(source_id))]
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        _link_name: String,
+        link_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let config_map: HashMap<String, String> = link_config.config.into_iter().collect();
+        let config = match StorageConfig::from_config_map(&config_map) {
             Ok(v) => v,
             Err(e) => {
-                error!(error = %e, source_id = %link_config.source_id, "failed to read storage config");
+                error!(error = %e, %source_id, "failed to read storage config");
                 return Err(e);
             }
         };
 
-        let builder = match &link_config.config.get("CLOUD_LOCATION") {
+        let builder = match config_map.get("CLOUD_LOCATION") {
             Some(custom_location) => ClientBuilder::with_location(
                 CloudLocation::Custom {
                     account: config.storage_account.clone(),
@@ -71,44 +168,61 @@ impl Provider for BlobstoreAzblobProvider {
         let client = builder.blob_service_client();
 
         let mut update_map = self.config.write().await;
-        update_map.insert(link_config.source_id.to_string(), client);
-
-        Ok(())
+        update_map.insert(source_id, client);
+        Ok(Ok(()))
     }
 
-    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
-    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let component_id = info.get_source_id();
-        self.config.write().await.remove(component_id);
-        Ok(())
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+        _config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
     }
 
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        self.config.write().await.drain();
-        Ok(())
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "info", skip_all, fields(source_id))]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        self.config.write().await.remove(&source_id);
+        Ok(Ok(()))
     }
 }
 
 impl BlobstoreAzblobProvider {
     pub async fn run() -> anyhow::Result<()> {
-        let HostData { config, .. } = load_host_data().context("failed to load host data")?;
-        let flamegraph_path = config
-            .get("FLAMEGRAPH_PATH")
-            .map(String::from)
-            .or_else(|| std::env::var("PROVIDER_BLOBSTORE_AZURE_FLAMEGRAPH_PATH").ok());
-        initialize_observability!("blobstore-azure-provider", flamegraph_path);
-
-        let provider = Self::default();
-        let shutdown = run_provider(provider.clone(), "blobstore-azure-provider")
+        let (shutdown, quit_tx) = run_provider(Self::name(), None)
             .await
             .context("failed to run provider")?;
+        let provider = Self::new(quit_tx);
         let connection = get_connection();
-        let wrpc = connection
-            .get_wrpc_client(connection.provider_key())
-            .await?;
-        serve_provider_exports(&wrpc, provider, shutdown, serve)
-            .await
-            .context("failed to serve provider exports")
+        let (main_client, ext_client) = connection.get_wrpc_clients_for_serving().await?;
+        serve_provider_exports(
+            &main_client,
+            &ext_client,
+            provider,
+            shutdown,
+            serve,
+            bindings::ext::serve,
+        )
+        .await
+        .context("failed to serve provider exports")
     }
 
     async fn get_config(&self, context: Option<&Context>) -> anyhow::Result<BlobServiceClient> {

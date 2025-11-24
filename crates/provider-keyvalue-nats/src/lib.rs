@@ -17,23 +17,45 @@ use tokio::fs;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument, warn};
 use wascap::prelude::KeyPair;
-use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::{
-    get_connection, initialize_observability, load_host_data, propagate_trace_for_ctx,
-    run_provider, serve_provider_exports, Context, LinkConfig, LinkDeleteInfo, Provider,
+    get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
+    serve_provider_exports,
+    types::{BindRequest, BindResponse, HealthCheckResponse},
+    Context,
 };
+
+use crate::bindings::ext::exports::wrpc::extension::{
+    configurable::{self, InterfaceConfig},
+    manageable,
+};
+
+struct LinkConfig<'a> {
+    config: &'a HashMap<String, String>,
+}
 
 mod config;
 use config::NatsConnectionConfig;
 
 mod bindings {
     wit_bindgen_wrpc::generate!({
+        world: "interfaces",
         with: {
             "wrpc:keyvalue/atomics@0.2.0-draft": generate,
             "wrpc:keyvalue/batch@0.2.0-draft": generate,
             "wrpc:keyvalue/store@0.2.0-draft": generate,
         }
     });
+
+    pub mod ext {
+        wit_bindgen_wrpc::generate!({
+            world: "extension",
+            with: {
+                "wrpc:extension/types@0.0.1": wasmcloud_provider_sdk::types,
+                "wrpc:extension/manageable@0.0.1": generate,
+                "wrpc:extension/configurable@0.0.1": generate
+            }
+        });
+    }
 }
 use bindings::exports::wrpc::keyvalue;
 
@@ -50,47 +72,45 @@ const EXPONENTIAL_BACKOFF_BASE_INTERVAL: u64 = 5; // milliseconds
 type NatsKvStores = HashMap<String, async_nats::jetstream::kv::Store>;
 
 /// NATS implementation for wasi:keyvalue (via wrpc:keyvalue)
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct KvNatsProvider {
     consumer_components: Arc<RwLock<HashMap<String, NatsKvStores>>>,
-    default_config: NatsConnectionConfig,
+    default_config: Arc<RwLock<NatsConnectionConfig>>,
+    quit_tx: Arc<tokio::sync::broadcast::Sender<()>>,
+}
+
+impl KvNatsProvider {
+    fn new(quit_tx: tokio::sync::broadcast::Sender<()>) -> Self {
+        Self {
+            consumer_components: Arc::default(),
+            default_config: Arc::default(),
+            quit_tx: Arc::new(quit_tx),
+        }
+    }
+
+    fn name() -> &'static str {
+        "keyvalue-nats-provider"
+    }
 }
 /// Implement the [`KvNatsProvider`] and [`Provider`] traits
 impl KvNatsProvider {
     pub async fn run() -> anyhow::Result<()> {
-        let host_data = load_host_data().context("failed to load host data")?;
-        let flamegraph_path = host_data
-            .config
-            .get("FLAMEGRAPH_PATH")
-            .map(String::from)
-            .or_else(|| std::env::var("PROVIDER_KEYVALUE_NATS_FLAMEGRAPH_PATH").ok());
-        initialize_observability!("keyvalue-nats-provider", flamegraph_path);
-        let provider = Self::from_host_data(host_data);
-        let shutdown = run_provider(provider.clone(), "keyvalue-nats-provider")
+        let (shutdown, quit_tx) = run_provider(Self::name(), None)
             .await
             .context("failed to run provider")?;
+        let provider = Self::new(quit_tx);
         let connection = get_connection();
-        let wrpc = connection
-            .get_wrpc_client(connection.provider_key())
-            .await?;
-        serve_provider_exports(&wrpc, provider, shutdown, bindings::serve)
-            .await
-            .context("failed to serve provider exports")
-    }
-
-    /// Build a [`KvNatsProvider`] from [`HostData`]
-    pub fn from_host_data(host_data: &HostData) -> KvNatsProvider {
-        let config =
-            NatsConnectionConfig::from_config_and_secrets(&host_data.config, &host_data.secrets);
-        if let Ok(config) = config {
-            KvNatsProvider {
-                default_config: config,
-                ..Default::default()
-            }
-        } else {
-            warn!("Failed to build NATS connection configuration, falling back to default");
-            KvNatsProvider::default()
-        }
+        let (main_client, ext_client) = connection.get_wrpc_clients_for_serving().await?;
+        serve_provider_exports(
+            &main_client,
+            &ext_client,
+            provider,
+            shutdown,
+            bindings::serve,
+            bindings::ext::serve,
+        )
+        .await
+        .context("failed to serve provider exports")
     }
 
     /// Attempt to connect to NATS url (with JWT credentials, if provided)
@@ -227,41 +247,107 @@ impl KvNatsProvider {
     }
 }
 
-/// Handle provider control commands
-impl Provider for KvNatsProvider {
-    /// Provider should perform any operations needed for a new link,
-    /// including setting up per-component resources, and checking authorization.
-    /// If the link is allowed, return true, otherwise return false to deny the link.
-    #[instrument(level = "debug", skip_all, fields(source_id))]
-    async fn receive_link_config_as_target(
+impl manageable::Handler<Option<Context>> for KvNatsProvider {
+    async fn bind(
         &self,
-        link_config: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        let nats_config = if link_config.config.is_empty() {
-            self.default_config.clone()
+        _cx: Option<Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_xkey: Some(get_connection().provider_xkey.public_key().into()),
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by closing all connections
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
+        // clear the consumer components
+        let mut consumers = self.consumer_components.write().await;
+        consumers.clear();
+        // Signal the provider to shut down
+        let _ = self.quit_tx.send(());
+        Ok(Ok(()))
+    }
+}
+
+impl configurable::Handler<Option<Context>> for KvNatsProvider {
+    #[instrument(level = "debug", skip_all)]
+    async fn update_base_config(
+        &self,
+        _cx: Option<Context>,
+        config: wasmcloud_provider_sdk::types::BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let flamegraph_path = config
+            .config
+            .iter()
+            .find(|(k, _)| k == "FLAMEGRAPH_PATH")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("PROVIDER_KEYVALUE_NATS_FLAMEGRAPH_PATH").ok());
+        initialize_observability!(Self::name(), flamegraph_path, config.config);
+
+        let config_map: HashMap<String, String> = config.config.into_iter().collect();
+        let secrets_map: HashMap<String, wasmcloud_provider_sdk::core::secrets::SecretValue> =
+            config
+                .secrets
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect();
+        let nats_config = NatsConnectionConfig::from_config_and_secrets(&config_map, &secrets_map);
+        if let Ok(nats_config) = nats_config {
+            *self.default_config.write().await = nats_config;
+        } else {
+            warn!("Failed to build NATS connection configuration");
+        }
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(source_id))]
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        link_name: String,
+        interface_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let config_map: HashMap<String, String> = interface_config.config.iter().cloned().collect();
+        let link_cfg = LinkConfig {
+            config: &config_map,
+        };
+        let nats_config = if interface_config.config.is_empty() {
+            self.default_config.read().await.clone()
         } else {
             // create a config from the supplied values and merge that with the existing default
             // NATS connection configuration
-            match NatsConnectionConfig::from_config_and_secrets(
-                link_config.config,
-                link_config.secrets,
-            ) {
-                Ok(ncc) => self.default_config.merge(&ncc),
+            let secrets_map: HashMap<String, wasmcloud_provider_sdk::core::secrets::SecretValue> =
+                interface_config
+                    .secrets
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(k, v)| (k, v.into()))
+                    .collect();
+            match NatsConnectionConfig::from_config_and_secrets(&config_map, &secrets_map) {
+                Ok(ncc) => self.default_config.read().await.merge(&ncc),
                 Err(e) => {
                     error!("Failed to build NATS connection configuration: {e:?}");
                     return Err(anyhow!(e).context("failed to build NATS connection configuration"));
                 }
             }
         };
-        println!("NATS Kv configuration: {nats_config:?}");
+        debug!("NATS Kv configuration: {nats_config:?}");
 
-        let LinkConfig {
-            source_id,
-            link_name,
-            ..
-        }: LinkConfig<'_> = link_config;
-
-        let kv_store = match self.connect(nats_config, &link_config).await {
+        let kv_store = match self.connect(nats_config, &link_cfg).await {
             Ok(b) => b,
             Err(e) => {
                 error!("Failed to connect to NATS: {e:?}");
@@ -282,34 +368,46 @@ impl Provider for KvNatsProvider {
             );
         }
 
-        Ok(())
+        Ok(Ok(()))
     }
 
-    /// Provider should perform any operations needed for a link deletion, including cleaning up
-    /// per-component resources.
-    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
-    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let component_id = info.get_source_id();
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+        _interface_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "info", skip_all, fields(source_id))]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
         let mut links = self.consumer_components.write().await;
-        if let Some(kv_store) = links.remove(component_id) {
+        if let Some(kv_store) = links.remove(&source_id) {
             debug!(
-                component_id,
+                source_id,
                 "dropping NATS Kv store [{kv_store:?}] for (consumer) component...",
             );
         }
 
-        debug!(component_id, "finished processing link deletion");
+        debug!(source_id, "finished processing link deletion");
 
-        Ok(())
-    }
-
-    /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        // clear the consumer components
-        let mut consumers = self.consumer_components.write().await;
-        consumers.clear();
-
-        Ok(())
+        Ok(Ok(()))
     }
 }
 

@@ -30,7 +30,7 @@ use core::time::Duration;
 
 use std::net::{SocketAddr, TcpListener};
 
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{anyhow, Context as _};
 use axum::extract;
 use bytes::Bytes;
 use futures::Stream;
@@ -41,55 +41,90 @@ use tower_http::cors::{self, CorsLayer};
 use tracing::{debug, info, trace};
 use wasmcloud_core::http::{load_settings, ServiceSettings};
 use wasmcloud_provider_sdk::provider::WrpcClient;
-use wasmcloud_provider_sdk::{initialize_observability, load_host_data, run_provider};
 use wrpc_interface_http::InvokeIncomingHandler as _;
 
 mod address;
 mod host;
 mod path;
 
+mod bindings {
+    wit_bindgen_wrpc::generate!({
+        world: "extension",
+        with: {
+             "wrpc:extension/types@0.0.1": wasmcloud_provider_sdk::types,
+             "wrpc:extension/manageable@0.0.1": generate,
+             "wrpc:extension/configurable@0.0.1": generate
+        }
+    });
+}
+
+pub use address::HttpServerProvider as AddressHttpServerProvider;
+pub use host::HttpServerProvider as HostHttpServerProvider;
+pub use path::HttpServerProvider as PathHttpServerProvider;
+
+/// Run the HTTP server provider in address mode (default)
 pub async fn run() -> anyhow::Result<()> {
-    initialize_observability!(
-        "http-server-provider",
-        std::env::var_os("PROVIDER_HTTP_SERVER_FLAMEGRAPH_PATH")
-    );
+    run_address().await
+}
 
-    let host_data = load_host_data().context("failed to load host data")?;
-    match host_data.config.get("routing_mode").map(String::as_str) {
-        // Run provider in address mode by default
-        Some("address") | None => run_provider(
-            address::HttpServerProvider::new(host_data).context(
-                "failed to create address-mode HTTP server provider from hostdata configuration",
-            )?,
-            "http-server-provider",
-        )
-        .await?
-        .await,
-        // Run provider in path mode
-        Some("path") => {
-            run_provider(
-                path::HttpServerProvider::new(host_data).await.context(
-                    "failed to create path-mode HTTP server provider from hostdata configuration",
-                )?,
-                "http-server-provider",
-            )
-            .await?
-            .await;
-        }
-        Some("host") => {
-            run_provider(
-                host::HttpServerProvider::new(host_data).await.context(
-                    "failed to create host-mode HTTP server provider from hostdata configuration",
-                )?,
-                "http-server-provider",
-            )
-            .await?
-            .await;
-        }
-        Some(other) => bail!("unknown routing_mode: {other}"),
-    };
+/// Run the HTTP server provider in address mode
+pub async fn run_address() -> anyhow::Result<()> {
+    use wasmcloud_provider_sdk::{get_connection, run_provider};
 
-    Ok(())
+    let (shutdown, quit_tx) = run_provider("http-server-provider", None)
+        .await
+        .context("failed to run provider")?;
+    let provider = address::HttpServerProvider::new(quit_tx);
+    let connection = get_connection();
+    let (_main_client, ext_client) = connection.get_wrpc_clients_for_serving().await?;
+    wasmcloud_provider_sdk::serve_provider_extension(
+        &ext_client,
+        provider,
+        shutdown,
+        bindings::serve,
+    )
+    .await
+    .context("failed to serve provider extension")
+}
+
+/// Run the HTTP server provider in host mode
+pub async fn run_host() -> anyhow::Result<()> {
+    use wasmcloud_provider_sdk::{get_connection, run_provider};
+
+    let (shutdown, quit_tx) = run_provider("http-server-provider", None)
+        .await
+        .context("failed to run provider")?;
+    let provider = host::HttpServerProvider::new(quit_tx);
+    let connection = get_connection();
+    let (_main_client, ext_client) = connection.get_wrpc_clients_for_serving().await?;
+    wasmcloud_provider_sdk::serve_provider_extension(
+        &ext_client,
+        provider,
+        shutdown,
+        bindings::serve,
+    )
+    .await
+    .context("failed to serve provider extension")
+}
+
+/// Run the HTTP server provider in path mode
+pub async fn run_path() -> anyhow::Result<()> {
+    use wasmcloud_provider_sdk::{get_connection, run_provider};
+
+    let (shutdown, quit_tx) = run_provider("http-server-provider", None)
+        .await
+        .context("failed to run provider")?;
+    let provider = path::HttpServerProvider::new(quit_tx);
+    let connection = get_connection();
+    let (_main_client, ext_client) = connection.get_wrpc_clients_for_serving().await?;
+    wasmcloud_provider_sdk::serve_provider_extension(
+        &ext_client,
+        provider,
+        shutdown,
+        bindings::serve,
+    )
+    .await
+    .context("failed to serve provider extension")
 }
 
 /// Build a request to send to the component from the incoming request

@@ -7,7 +7,9 @@ use std::collections::HashMap;
 use secrecy::zeroize::{Zeroize, ZeroizeOnDrop};
 use serde::{Deserialize, Serialize};
 
-use crate::{ComponentId, LatticeTarget, WitInterface, WitNamespace, WitPackage};
+use crate::{
+    secrets::SecretValue, ComponentId, LatticeTarget, WitInterface, WitNamespace, WitPackage,
+};
 
 /// Name of a link on the wasmCloud lattice
 pub type LinkName = String;
@@ -38,21 +40,42 @@ pub struct InterfaceLinkDefinition {
     #[serde(default)]
     pub target_config: HashMap<String, String>,
     /// The secrets to give to the source of this link
-    /// Should decrypt as a [`HashMap<String, SecretValue>`]
     #[serde(default)]
-    pub source_secrets: Option<Vec<u8>>,
+    pub source_secrets: Option<HashMap<String, SecretValue>>,
     /// The secrets to give to the target of this link
-    /// Should decrypt as a [`HashMap<String, SecretValue>`]
     #[serde(default)]
-    pub target_secrets: Option<Vec<u8>>,
+    pub target_secrets: Option<HashMap<String, SecretValue>>,
 }
 
 // Trait implementations that ensure we zeroize secrets when they are dropped
 impl ZeroizeOnDrop for InterfaceLinkDefinition {}
 impl Zeroize for InterfaceLinkDefinition {
     fn zeroize(&mut self) {
-        self.source_secrets.zeroize();
-        self.target_secrets.zeroize();
+        if let Some(ref mut secrets) = self.source_secrets {
+            for (_, secret_value) in secrets.iter_mut() {
+                secret_value.zeroize();
+            }
+            secrets.clear();
+        }
+        if let Some(ref mut secrets) = self.target_secrets {
+            for (_, secret_value) in secrets.iter_mut() {
+                secret_value.zeroize();
+            }
+            secrets.clear();
+        }
+    }
+}
+
+impl Zeroize for SecretValue {
+    fn zeroize(&mut self) {
+        match self {
+            SecretValue::String(ref mut s) => {
+                s.zeroize();
+            }
+            SecretValue::Bytes(ref mut bytes) => {
+                bytes.zeroize();
+            }
+        }
     }
 }
 

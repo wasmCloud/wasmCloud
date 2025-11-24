@@ -9,7 +9,7 @@ use std::env;
 use anyhow::{Context, Result};
 use tracing::warn;
 use url::Url;
-use wasmcloud_provider_sdk::{core::secrets::SecretValue, LinkConfig};
+use wasmcloud_provider_sdk::{core::secrets::SecretValue, types::InterfaceConfig};
 
 use crate::TOKEN_REFRESH_INTERVAL;
 
@@ -49,17 +49,20 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Initialize from a [`LinkConfig`]
-    pub fn from_link_config(link_config: &LinkConfig) -> Result<Config> {
-        let mut map = HashMap::clone(link_config.config);
+    /// Initialize from a [`InterfaceConfig`]
+    pub fn from_link_config(link_config: &InterfaceConfig) -> Result<Config> {
+        let mut map: HashMap<String, String> = link_config.config.iter().cloned().collect();
 
         // Attempt to retrieve the vault token from secrets
         if let Some(token) = env::var("VAULT_TOKEN").ok().or_else(|| {
             link_config
                 .secrets
-                .get("token")
-                .and_then(SecretValue::as_string)
-                .map(String::from)
+                .as_ref()
+                .and_then(|secrets| secrets.iter().find(|(k, _)| k == "token"))
+                .and_then(|(_, v)| {
+                    let secret: SecretValue = v.into();
+                    secret.as_string().map(String::from)
+                })
         }) {
             map.insert("VAULT_TOKEN".into(), token);
         } else {

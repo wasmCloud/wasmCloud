@@ -383,11 +383,12 @@ impl ProviderAuctionRequestBuilder {
     }
 }
 
-/// A request to remove a link definition and detach the relevant component
-/// from the given provider
+/// A request to remove a set of interfaces linked between two components.
+/// This will also force deletion of import interface configuration on the source component
+/// and export interface configuration on the target component.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
-pub struct DeleteInterfaceLinkDefinitionRequest {
+pub struct DeleteInterfacesLinkRequest {
     /// The source component's identifier.
     pub(crate) source_id: String,
 
@@ -402,20 +403,7 @@ pub struct DeleteInterfaceLinkDefinitionRequest {
     pub(crate) wit_package: String,
 }
 
-impl DeleteInterfaceLinkDefinitionRequest {
-    pub fn from_source_and_link_metadata(
-        source_id: &str,
-        name: &str,
-        wit_ns: &str,
-        wit_pkg: &str,
-    ) -> Self {
-        Self {
-            source_id: source_id.into(),
-            name: name.into(),
-            wit_namespace: wit_ns.into(),
-            wit_package: wit_pkg.into(),
-        }
-    }
+impl DeleteInterfacesLinkRequest {
     /// Get the source (component/provider) ID for delete request
     #[must_use]
     pub fn source_id(&self) -> &str {
@@ -441,20 +429,21 @@ impl DeleteInterfaceLinkDefinitionRequest {
     }
 
     #[must_use]
-    pub fn builder() -> DeleteInterfaceLinkDefinitionRequestBuilder {
-        DeleteInterfaceLinkDefinitionRequestBuilder::default()
+    pub fn builder() -> DeleteInterfacesLinkRequestBuilder {
+        DeleteInterfacesLinkRequestBuilder::default()
     }
 }
 
 #[derive(Default, Clone, PartialEq, Eq)]
-pub struct DeleteInterfaceLinkDefinitionRequestBuilder {
+pub struct DeleteInterfacesLinkRequestBuilder {
     source_id: Option<String>,
     name: Option<String>,
     wit_namespace: Option<String>,
     wit_package: Option<String>,
+    wit_interfaces: Option<Vec<String>>,
 }
 
-impl DeleteInterfaceLinkDefinitionRequestBuilder {
+impl DeleteInterfacesLinkRequestBuilder {
     pub fn source_id(mut self, v: String) -> Self {
         self.source_id = Some(v);
         self
@@ -475,8 +464,8 @@ impl DeleteInterfaceLinkDefinitionRequestBuilder {
         self
     }
 
-    pub fn build(self) -> Result<DeleteInterfaceLinkDefinitionRequest> {
-        Ok(DeleteInterfaceLinkDefinitionRequest {
+    pub fn build(self) -> Result<DeleteInterfacesLinkRequest> {
+        Ok(DeleteInterfacesLinkRequest {
             source_id: self
                 .source_id
                 .ok_or_else(|| "source_id is required".to_string())?,

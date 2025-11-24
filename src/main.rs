@@ -394,6 +394,13 @@ struct Args {
     )]
     /// Determines whether capability provider auctions should be enabled (defaults to true)
     enable_provider_auction: Option<bool>,
+
+    #[clap(
+        long = "enable-deprecated-v1-providers",
+        env = "WASMCLOUD_DEPRECATED_V1_PROVIDERS_ENABLED"
+    )]
+    /// Determines whether v1 capability providers should be enabled (defaults to false)
+    enable_deprecated_v1_providers: Option<bool>,
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);

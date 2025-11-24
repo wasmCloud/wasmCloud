@@ -1,5 +1,5 @@
 use tracing::warn;
-use wasmcloud_provider_sdk::{core::secrets::SecretValue, LinkConfig};
+use wasmcloud_provider_sdk::{core::secrets::SecretValue, types::InterfaceConfig};
 
 const POSTGRES_DEFAULT_PORT: u16 = 5432;
 
@@ -46,11 +46,23 @@ impl From<ConnectionCreateOptions> for deadpool_postgres::Config {
 /// the parsed [`ConnectionCreateOptions`] would contain "localhost" as the host.
 pub(crate) fn extract_prefixed_conn_config(
     prefix: &str,
-    link_config: &LinkConfig,
+    link_config: &InterfaceConfig,
 ) -> Option<ConnectionCreateOptions> {
-    let LinkConfig {
-        config, secrets, ..
-    } = link_config;
+    // Convert config Vec to HashMap for easier access
+    let config: std::collections::HashMap<String, String> =
+        link_config.config.iter().cloned().collect();
+    let secrets = &link_config.secrets;
+
+    // Helper to get secret value by key
+    let get_secret = |k: &str| -> Option<String> {
+        secrets
+            .as_ref()
+            .and_then(|s| s.iter().find(|(key, _)| key == k))
+            .and_then(|(_, v)| {
+                let secret: SecretValue = v.into();
+                secret.as_string().map(String::from)
+            })
+    };
 
     let keys = [
         format!("{prefix}HOST"),
@@ -61,11 +73,11 @@ pub(crate) fn extract_prefixed_conn_config(
         format!("{prefix}TLS_REQUIRED"),
         format!("{prefix}POOL_SIZE"),
     ];
-    match keys
+    match &keys
         .iter()
         .map(|k| {
             // Prefer fetching from secrets, but fall back to config if not found
-            match (secrets.get(k).and_then(SecretValue::as_string), config.get(k)) {
+            match (get_secret(k), config.get(k)) {
                 (Some(s), Some(_)) => {
                     warn!("secret value [{k}] was found in secrets, but also exists in config. The value in secrets will be used.");
                     Some(s)
@@ -74,19 +86,19 @@ pub(crate) fn extract_prefixed_conn_config(
                 // Offer a warning for the password, but other values are fine to be in config
                 (None, Some(c)) if k == &format!("{prefix}PASSWORD") => {
                     warn!("secret value [{k}] was not found in secrets, but exists in config. Prefer using secrets for sensitive values.");
-                    Some(c.as_str())
+                    Some(c.clone())
                 }
                 (None, Some(c)) => {
-                    Some(c.as_str())
+                    Some(c.clone())
                 }
                 (_, None) => None,
             }
         })
-        .collect::<Vec<Option<&str>>>()[..]
+        .collect::<Vec<Option<String>>>()[..]
     {
         [Some(host), Some(port), Some(username), Some(password), Some(database), tls_required, pool_size] =>
         {
-            let pool_size = pool_size.and_then(|pool_size| {
+            let pool_size = pool_size.as_ref().and_then(|pool_size| {
                 pool_size.parse::<usize>().ok().or_else(|| {
                     warn!("invalid pool size value [{pool_size}], using default");
                     None
@@ -101,7 +113,7 @@ pub(crate) fn extract_prefixed_conn_config(
                 }),
                 username: username.to_string(),
                 password: password.to_string(),
-                tls_required: tls_required.is_some_and(|tls_required| {
+                tls_required: tls_required.as_ref().is_some_and(|tls_required| {
                     matches!(tls_required.to_lowercase().as_str(), "true" | "yes")
                 }),
                 database: database.to_string(),

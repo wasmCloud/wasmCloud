@@ -31,6 +31,7 @@ clap = { workspace = true, features = [
     "env",
 ] }
 exponential-backoff = { workspace = true }
+spiffe = { workspace = true }
 futures = { workspace = true }
 nkeys = { workspace = true, features = ["xkeys"] }
 serde = { workspace = true, features = ["derive"] }
@@ -39,7 +40,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
-wascap = { workspace = true }
 wasmcloud-secrets-types = { workspace = true }
 
 [dev-dependencies]

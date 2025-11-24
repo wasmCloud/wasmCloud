@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde_json::json;
 use wascap::jwt;
-use wasmcloud_control_interface::Link;
+use wasmcloud_control_interface::InterfaceLink;
 
 /// A trait for publishing wasmbus events. This can be implemented by any transport or bus
 /// implementation that can send the serialized event to the appropriate destination.
@@ -151,7 +151,7 @@ pub fn component_scale_failed(
 ///
 /// # Returns
 /// JSON object containing complete link definition details
-pub fn linkdef_set(link: &Link) -> serde_json::Value {
+pub fn linkdef_set(link: &InterfaceLink) -> serde_json::Value {
     json!({
         "source_id": link.source_id(),
         "target": link.target(),
@@ -172,7 +172,7 @@ pub fn linkdef_set(link: &Link) -> serde_json::Value {
 ///
 /// # Returns
 /// JSON object containing link definition details and error information
-pub fn linkdef_set_failed(link: &Link, error: &anyhow::Error) -> serde_json::Value {
+pub fn linkdef_set_failed(link: &InterfaceLink, error: &anyhow::Error) -> serde_json::Value {
     json!({
         "source_id": link.source_id(),
         "target": link.target(),
@@ -303,6 +303,44 @@ pub fn provider_start_failed(
         "provider_ref": provider_ref.as_ref(),
         "provider_id": provider_id.as_ref(),
         "host_id": host_id.as_ref(),
+        "error": format!("{error:#}"),
+        // TODO(#1548): remove this field when we don't depend on it
+        "link_name": "default",
+    })
+}
+
+/// Generates an event payload for when an external provider is successfully linked/connected
+///
+/// # Arguments
+/// * `annotations` - Key-value pairs of metadata annotations for the external provider
+/// * `provider_id` - Unique identifier for the external provider
+///
+/// # Returns
+/// JSON object containing external provider connection details and metadata
+pub fn external_provider_linked(
+    annotations: &BTreeMap<String, String>,
+    provider_id: impl AsRef<str>,
+) -> serde_json::Value {
+    json!({
+        "provider_id": provider_id.as_ref(),
+        "annotations": annotations,
+    })
+}
+
+/// Generates an event payload for when an external provider fails to link/connect
+///
+/// # Arguments
+/// * `provider_id` - Unique identifier for the external provider
+/// * `error` - The error that caused the link failure
+///
+/// # Returns
+/// JSON object containing external provider connection failure details
+pub fn external_provider_link_failed(
+    provider_id: impl AsRef<str>,
+    error: &anyhow::Error,
+) -> serde_json::Value {
+    json!({
+        "provider_id": provider_id.as_ref(),
         "error": format!("{error:#}"),
         // TODO(#1548): remove this field when we don't depend on it
         "link_name": "default",

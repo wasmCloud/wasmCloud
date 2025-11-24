@@ -3,3 +3,8 @@ package wasmcloud:provider-blobstore-s3;
 world interfaces {
     export wrpc:blobstore/blobstore@0.2.0;
 }
+
+world extension {
+    export wrpc:extension/manageable@0.0.1;
+    export wrpc:extension/configurable@0.0.1;
+}

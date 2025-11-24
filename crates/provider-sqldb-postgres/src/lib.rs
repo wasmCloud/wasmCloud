@@ -10,6 +10,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::bindings::ext::exports::wrpc::extension::{
+    configurable::{self, InterfaceConfig},
+    manageable,
+};
 use anyhow::{Context as _, Result};
 use deadpool_postgres::Pool;
 use futures::TryStreamExt as _;
@@ -18,12 +22,13 @@ use tokio::sync::RwLock;
 use tokio_postgres::types::Type as PgType;
 use tracing::{error, instrument, warn};
 use ulid::Ulid;
-
 use wasmcloud_provider_sdk::{
-    get_connection, propagate_trace_for_ctx, run_provider, LinkConfig, LinkDeleteInfo, Provider,
+    core::secrets::SecretValue,
+    get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
+    serve_provider_exports,
+    types::{BindRequest, BindResponse, HealthCheckResponse},
+    Context,
 };
-use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
-
 mod bindings;
 use bindings::{
     into_result_row, PgValue, PreparedStatementExecError, PreparedStatementToken, QueryError,
@@ -32,8 +37,6 @@ use bindings::{
 
 mod config;
 use config::{extract_prefixed_conn_config, ConnectionCreateOptions};
-
-use wasmcloud_provider_sdk::Context;
 
 /// Whether to share connections by URL
 ///
@@ -70,7 +73,7 @@ enum PostgresConnection {
     Shared(String),
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct PostgresProvider {
     /// Database connections indexed by source ID name
     connections: Arc<RwLock<HashMap<SourceId, PostgresConnection>>>,
@@ -78,6 +81,19 @@ pub struct PostgresProvider {
     shared_connections: Arc<RwLock<HashMap<SharedConnectionKey, Pool>>>,
     /// Lookup of prepared statements to the statement and the source ID that prepared them
     prepared_statements: Arc<RwLock<HashMap<PreparedStatementToken, PreparedStatementInfo>>>,
+    /// Channel to signal provider shutdown
+    quit_tx: tokio::sync::broadcast::Sender<()>,
+}
+
+impl PostgresProvider {
+    fn new(quit_tx: tokio::sync::broadcast::Sender<()>) -> Self {
+        Self {
+            connections: Arc::default(),
+            shared_connections: Arc::default(),
+            prepared_statements: Arc::default(),
+            quit_tx,
+        }
+    }
 }
 
 impl PostgresProvider {
@@ -120,21 +136,22 @@ impl PostgresProvider {
 
     /// Run [`PostgresProvider`] as a wasmCloud provider
     pub async fn run() -> anyhow::Result<()> {
-        initialize_observability!(
-            PostgresProvider::name(),
-            std::env::var_os("PROVIDER_SQLDB_POSTGRES_FLAMEGRAPH_PATH")
-        );
-        let provider = PostgresProvider::default();
-        let shutdown = run_provider(provider.clone(), PostgresProvider::name())
+        let (shutdown, quit_tx) = run_provider(PostgresProvider::name(), None)
             .await
             .context("failed to run provider")?;
+        let provider = PostgresProvider::new(quit_tx);
         let connection = get_connection();
-        let wrpc = connection
-            .get_wrpc_client(connection.provider_key())
-            .await?;
-        serve_provider_exports(&wrpc, provider, shutdown, bindings::serve)
-            .await
-            .context("failed to serve provider exports")
+        let (main_client, ext_client) = connection.get_wrpc_clients_for_serving().await?;
+        serve_provider_exports(
+            &main_client,
+            &ext_client,
+            provider,
+            shutdown,
+            bindings::serve,
+            bindings::ext::serve,
+        )
+        .await
+        .context("failed to serve provider exports")
     }
 
     /// Create and store a connection pool, if not already present
@@ -326,69 +343,142 @@ impl PostgresProvider {
     }
 }
 
-impl Provider for PostgresProvider {
-    /// Handle being linked to a source (likely a component) as a target
-    ///
-    /// Components are expected to provide references to named configuration via link definitions
-    /// which contain keys named `POSTGRES_*` detailing configuration for connecting to Postgres.
-    #[instrument(level = "debug", skip_all, fields(source_id))]
-    async fn receive_link_config_as_target(
+impl manageable::Handler<Option<Context>> for PostgresProvider {
+    async fn bind(
         &self,
-        link_config @ LinkConfig { source_id, .. }: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
+        _cx: Option<Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_xkey: Some(get_connection().provider_xkey.public_key().into()),
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by closing all connections and signaling shutdown
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
+        let mut prepared_statements = self.prepared_statements.write().await;
+        prepared_statements.drain();
+        let mut connections = self.connections.write().await;
+        connections.drain();
+        // Signal the provider to shut down
+        let _ = self.quit_tx.send(());
+        Ok(Ok(()))
+    }
+}
+
+impl configurable::Handler<Option<Context>> for PostgresProvider {
+    #[instrument(level = "debug", skip_all)]
+    async fn update_base_config(
+        &self,
+        _cx: Option<Context>,
+        config: wasmcloud_provider_sdk::types::BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let flamegraph_path = config
+            .config
+            .iter()
+            .find(|(k, _)| k == "FLAMEGRAPH_PATH")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("PROVIDER_SQLDB_POSTGRES_FLAMEGRAPH_PATH").ok());
+        initialize_observability!(Self::name(), flamegraph_path, config.config);
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(source_id))]
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        _link_name: String,
+        link_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
         // Attempt to parse a configuration from the map with the prefix POSTGRES_
         let Some(db_cfg) = extract_prefixed_conn_config("POSTGRES_", &link_config) else {
             // If we failed to find a config on the link, then we
             warn!(source_id, "no link-level DB configuration");
-            return Ok(());
+            return Ok(Ok(()));
         };
 
+        // Convert config Vec to HashMap for easier access
+        let config: HashMap<String, String> = link_config.config.iter().cloned().collect();
+
         // Check if connection sharing is enabled
-        let share_connections = if let Some(value) =
-            link_config.config.get(CONFIG_SHARE_CONNECTIONS_BY_URL_KEY)
+        let share_connections = if let Some(value) = config.get(CONFIG_SHARE_CONNECTIONS_BY_URL_KEY)
         {
             matches!(value.to_lowercase().as_str(), "true" | "yes")
-        } else if let Some(secret) = link_config.secrets.get(CONFIG_SHARE_CONNECTIONS_BY_URL_KEY) {
-            if let Some(value) = secret.as_string() {
-                matches!(value.to_lowercase().as_str(), "true" | "yes")
-            } else {
-                false
-            }
+        } else if let Some(secret) = link_config
+            .secrets
+            .as_ref()
+            .and_then(|s| {
+                s.iter()
+                    .find(|(k, _)| k == CONFIG_SHARE_CONNECTIONS_BY_URL_KEY)
+            })
+            .and_then(|(_, v)| {
+                let secret: SecretValue = v.into();
+                secret.as_string().map(String::from)
+            })
+        {
+            matches!(secret.to_lowercase().as_str(), "true" | "yes")
         } else {
             false
         };
 
         // Create a pool if one isn't already present for this particular source
-        if let Err(error) = self.ensure_pool(source_id, db_cfg, share_connections).await {
+        if let Err(error) = self
+            .ensure_pool(&source_id, db_cfg, share_connections)
+            .await
+        {
             error!(?error, source_id, "failed to create connection");
         };
 
-        Ok(())
+        Ok(Ok(()))
     }
 
-    /// Handle notification that a link is dropped
-    ///
-    /// Generally we can release the resources (connections) associated with the source
-    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
-    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let source_id = info.get_source_id();
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+        _config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "info", skip_all, fields(source_id))]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
         let mut prepared_statements = self.prepared_statements.write().await;
-        prepared_statements.retain(|_stmt_token, (_query, _statement, src_id)| src_id != source_id);
+        prepared_statements
+            .retain(|_stmt_token, (_query, _statement, src_id)| *src_id != source_id);
         drop(prepared_statements);
         let mut connections = self.connections.write().await;
-        connections.remove(source_id);
+        connections.remove(&source_id);
         drop(connections);
-        Ok(())
-    }
-
-    /// Handle shutdown request by closing all connections
-    #[instrument(level = "debug", skip_all)]
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        let mut prepared_statements = self.prepared_statements.write().await;
-        prepared_statements.drain();
-        let mut connections = self.connections.write().await;
-        connections.drain();
-        Ok(())
+        Ok(Ok(()))
     }
 }
 

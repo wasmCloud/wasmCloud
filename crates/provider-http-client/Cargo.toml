@@ -11,6 +11,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+
+
 [badges.maintenance]
 status = "actively-developed"
 
@@ -31,6 +33,7 @@ tracing = { workspace = true }
 wasmcloud-core = { workspace = true, features = ["http-client-common"] }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 webpki-roots = { workspace = true }
+wit-bindgen-wrpc = { workspace = true }
 wrpc-interface-http = { workspace = true, features = ["http-body"] }
 
 [dev-dependencies]
