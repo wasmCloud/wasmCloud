@@ -287,6 +287,7 @@ dependencies = [
  "compression-codecs",
  "compression-core",
  "futures-core",
+ "futures-io",
  "pin-project-lite",
  "tokio",
 ]
@@ -465,6 +466,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.110",
+]
+
+[[package]]
+name = "async_zip"
+version = "0.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d8c50d65ce1b0e0cb65a785ff615f78860d7754290647d3b983208daa4f85e6"
+dependencies = [
+ "async-compression",
+ "crc32fast",
+ "futures-lite 2.6.1",
+ "pin-project",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -8746,6 +8762,7 @@ dependencies = [
  "astral-tokio-tar",
  "async-compression",
  "async-nats",
+ "async_zip",
  "bytes",
  "cargo_metadata",
  "cargo_toml",
