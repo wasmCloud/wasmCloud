@@ -38,4 +38,4 @@ serde = { version = "1", default-features = false }
 serde_json = { version = "1", default-features = false }
 testcontainers-modules = { version = "0.9.0", default-features = false }
 tokio = { version = "1", default-features = false }
-wit-bindgen = { version = "0.32", default-features = false }
+wit-bindgen = { version = "0.48", default-features = false }

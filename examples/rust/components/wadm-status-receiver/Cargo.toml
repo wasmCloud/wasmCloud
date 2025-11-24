@@ -12,4 +12,4 @@ An example component that is triggered upon a status update of an application in
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.43"
+wit-bindgen = "0.48"

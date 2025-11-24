@@ -229,7 +229,7 @@ async fn build_rust_component(
         })?;
 
     if !result.success() {
-        bail!("Compiling component failed: {}", result.to_string())
+        bail!("Compiling component failed: {}", result)
     }
 
     // Determine the wasm binary name
@@ -366,7 +366,7 @@ async fn build_tinygo_component(
         })?;
 
     if !result.success() {
-        bail!("Compiling component failed: {}", result.to_string())
+        bail!("Compiling component failed: {}", result)
     }
 
     if !wasm_file_path.exists() {
@@ -411,7 +411,7 @@ async fn build_custom_component(
         eprintln!("STDOUT:\n{stdout_output}\nSTDERR:\n{stderr_output}");
         bail!(
             "failed to build component with custom command: {}",
-            output.status.to_string()
+            output.status
         );
     }
 
@@ -469,7 +469,7 @@ async fn generate_tinygo_bindgen(project_dir: impl AsRef<Path>) -> Result<()> {
         let stdout_output = String::from_utf8_lossy(&result.stdout);
         let stderr_output = String::from_utf8_lossy(&result.stderr);
         eprintln!("STDOUT:\n{stdout_output}\nSTDERR:\n{stderr_output}");
-        bail!("go generate failed: {}", result.status.to_string())
+        bail!("go generate failed: {}", result.status)
     }
 
     Ok(())

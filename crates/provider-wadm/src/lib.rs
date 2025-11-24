@@ -137,7 +137,7 @@ impl WadmProvider {
             ca_path,
         };
 
-        let client = Client::new(&cfg.lattice, Some(&cfg.lattice), client_opts).await?;
+        let client = Client::new(&cfg.lattice, None, client_opts).await?;
 
         let mut sub_handles = Vec::new();
         if make_status_sub {
@@ -487,10 +487,9 @@ impl client::Handler<Option<Context>> for WadmProvider {
     ) -> anyhow::Result<Result<(String, String), String>> {
         let client = self.get_client(ctx).await?;
 
-        let manifest_bytes =
-            serde_json::to_vec(&manifest).context("Failed to serialize OAM manifest")?;
+        let manifest = wadm_types::Manifest::from(manifest);
 
-        match client.put_manifest(manifest_bytes).await {
+        match client.put_manifest(manifest).await {
             Ok(response) => Ok(Ok(response)),
             Err(err) => {
                 error!("Failed to store manifest: {err}");

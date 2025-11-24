@@ -234,6 +234,7 @@ pub async fn handle_stop_component(cmd: StopComponentCommand) -> Result<CommandO
         config: vec![],
         skip_wait: cmd.skip_wait,
         timeout_ms: Some(timeout_ms),
+        allow_update: false,
     })
     .await?;
 
@@ -378,7 +379,7 @@ pub async fn stop_hosts(
             .map(|h| h.id().to_string())
             .collect::<Vec<_>>();
         bail!(
-            "More than one host is running, please specify a host ID or use --all\nRunning hosts: {running_hosts:?}", 
+            "More than one host is running, please specify a host ID or use --all\nRunning hosts: {running_hosts:?}",
         )
     }
 }

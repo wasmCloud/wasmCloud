@@ -136,9 +136,9 @@ impl<H: Handler> error::HostError for Ctx<H> {
 
     async fn from_io_error(
         &mut self,
-        error: Resource<wasmtime_wasi::bindings::io::error::Error>,
+        error: Resource<wasmtime_wasi::p2::bindings::io::error::Error>,
     ) -> wasmtime::Result<
-        Result<Resource<Error>, Resource<wasmtime_wasi::bindings::io::error::Error>>,
+        Result<Resource<Error>, Resource<wasmtime_wasi::p2::bindings::io::error::Error>>,
     > {
         let error = self
             .table

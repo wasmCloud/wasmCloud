@@ -15,8 +15,8 @@ use tokio::{join, select, try_join};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, instrument};
 use wasmtime::component::Resource;
+use wasmtime_wasi::p2::{DynInputStream, DynOutputStream, Pollable, StreamError, StreamResult};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
-use wasmtime_wasi::{DynInputStream, DynOutputStream, Pollable, StreamError, StreamResult};
 use wrpc_interface_blobstore::bindings;
 
 use crate::capability::blobstore::blobstore::ContainerName;
@@ -608,7 +608,7 @@ enum OutputStream {
     Error(mpsc::error::SendError<()>),
 }
 
-impl wasmtime_wasi::OutputStream for OutputStream {
+impl wasmtime_wasi::p2::OutputStream for OutputStream {
     fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
         match mem::take(self) {
             OutputStream::Corrupted => Err(StreamError::Trap(anyhow!(
@@ -744,7 +744,7 @@ struct InputStream {
     closed: bool,
 }
 
-impl wasmtime_wasi::InputStream for InputStream {
+impl wasmtime_wasi::p2::InputStream for InputStream {
     fn read(&mut self, size: usize) -> StreamResult<Bytes> {
         if let Some(err) = self.error.take() {
             return Err(err);

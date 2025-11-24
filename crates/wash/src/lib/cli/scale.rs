@@ -59,6 +59,10 @@ pub struct ScaleComponentCommand {
     /// Timeout for waiting for scale to occur (normally on an auction response), defaults to 2000 milliseconds
     #[clap(long = "wait-timeout-ms", default_value_t = default_component_operation_timeout_ms())]
     pub wait_timeout_ms: u64,
+
+    /// Whether to perform allow updates to the component (triggering a separate update)
+    #[clap(long = "allow-update", default_value_t = false)]
+    pub allow_update: bool,
 }
 
 pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<CommandOutput> {
@@ -79,6 +83,7 @@ pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<Comman
         annotations: Some(annotations),
         config: cmd.config,
         skip_wait: cmd.skip_wait,
+        allow_update: cmd.allow_update,
         timeout_ms: None,
     })
     .await?;

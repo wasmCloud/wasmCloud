@@ -1,7 +1,7 @@
 mod bindings {
     wasmtime::component::bindgen!({
         world: "subcommands",
-        async: true,
+        exports: { default: async },
     });
 }
 
@@ -11,7 +11,7 @@ use bindings::Subcommands;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Ok};
+use anyhow::Context as _;
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
@@ -49,9 +49,15 @@ impl SubcommandRunner {
     /// Creates a new subcommand runner with no plugins loaded.
     pub fn new() -> anyhow::Result<Self> {
         let mut config = Config::new();
+
         // Attempt to use caching, but only warn if it fails
-        if let Err(e) = config.cache_config_load_default() {
-            tracing::warn!(err = ?e, "Failed to load wasm cache");
+        match wasmtime::Cache::new(wasmtime::CacheConfig::default()) {
+            Ok(cache) => {
+                config.cache(Some(cache));
+            }
+            Err(err) => {
+                tracing::warn!(?err, "Failed to load wasm cache");
+            }
         }
         config.wasm_component_model(true);
         config.async_support(true);
@@ -109,7 +115,7 @@ impl SubcommandRunner {
 
         let component = Component::from_file(&self.engine, &path)?;
         let mut linker = Linker::new(&self.engine);
-        wasmtime_wasi::add_to_linker_async(&mut linker)
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)
             .context("failed to link core WASI interfaces")?;
         wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
             .context("failed to link `wasi:http`")?;

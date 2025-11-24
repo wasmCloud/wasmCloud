@@ -74,6 +74,10 @@ pub struct StartComponentCommand {
     /// List of named configuration to apply to the component, may be empty
     #[clap(long = "config")]
     pub config: Vec<String>,
+
+    /// Whether to perform allow updates to the component (triggering a separate update)
+    #[clap(long = "allow-update")]
+    pub allow_update: bool,
 }
 
 /// Utility function for resolving component and provider references
@@ -170,6 +174,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
         timeout_ms: Some(timeout_ms),
         annotations: None,
         config: cmd.config,
+        allow_update: cmd.allow_update,
     })
     .await?;
 

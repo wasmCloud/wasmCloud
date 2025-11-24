@@ -8,7 +8,7 @@ inputs:
 runs:
   using: composite
   steps:
-  - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+  - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
     id: cache
     with:
       path: ${{ runner.temp }}/nix-store-${{ inputs.package }}
@@ -25,13 +25,13 @@ runs:
     shell: bash
   - run: nix run --fallback -L --inputs-from . 'nixpkgs-unstable#coreutils' -- --coreutils-prog=cp -RLv ./result '${{ inputs.package }}'
     shell: bash
-  - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+  - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
     with:
       name: ${{ inputs.package }}
       path: ${{ inputs.package }}
   - run: nix copy --to "file://${{ runner.temp }}/nix-store-${{ inputs.package }}" '.#${{ inputs.package }}'
     shell: bash
-  - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+  - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
     with:
       name: nix-store-${{ inputs.package }}
       path: ${{ runner.temp }}/nix-store-${{ inputs.package }}

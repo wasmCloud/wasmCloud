@@ -19,13 +19,15 @@ use wascap::wasm::extract_claims;
 use wasi_preview1_component_adapter_provider::{
     WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME, WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
 };
-use wasmtime::component::{types, Linker, ResourceTable, ResourceTableError, ResourceType};
+use wasmtime::component::{
+    types, HasSelf, Linker, ResourceTable, ResourceTableError, ResourceType,
+};
 use wasmtime::InstanceAllocationStrategy;
-use wasmtime_wasi::{IoView, WasiCtx, WasiCtxBuilder, WasiView};
+use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wasmtime_wasi_http::WasiHttpCtx;
 use wrpc_runtime_wasmtime::{
     collect_component_resource_exports, collect_component_resource_imports, link_item, rpc,
-    RemoteResource, ServeExt as _, SharedResourceTable, WrpcView,
+    RemoteResource, ServeExt as _, SharedResourceTable, WrpcCtxView, WrpcView,
 };
 
 use crate::capability::{self, wrpc};
@@ -368,12 +370,15 @@ fn new_store<H: Handler>(
     let mut store = wasmtime::Store::new(
         engine,
         Ctx {
-            handler,
+            handler: handler.clone(),
             wasi,
             http: WasiHttpCtx::new(),
             table,
-            shared_resources: SharedResourceTable::default(),
-            timeout: max_execution_time,
+            wrpc: WrpcCtx {
+                handler,
+                shared_resources: SharedResourceTable::default(),
+                timeout: max_execution_time,
+            },
             parent_context: None,
         },
     );
@@ -495,58 +500,79 @@ where
     #[instrument(level = "trace", skip_all)]
     pub fn new(rt: &Runtime, wasm: &[u8], limits: Option<Limits>) -> anyhow::Result<Self> {
         Self::new_with_linker(rt, wasm, limits, |linker| {
-            wasmtime_wasi::add_to_linker_async(linker)
+            wasmtime_wasi::p2::add_to_linker_async(linker)
                 .context("failed to link core WASI interfaces")?;
             wasmtime_wasi_http::add_only_http_to_linker_async(linker)
                 .context("failed to link `wasi:http`")?;
 
-            capability::blobstore::blobstore::add_to_linker(linker, |ctx| ctx)
-                .context("failed to link `wasi:blobstore/blobstore`")?;
-            capability::blobstore::container::add_to_linker(linker, |ctx| ctx)
-                .context("failed to link `wasi:blobstore/container`")?;
-            capability::blobstore::types::add_to_linker(linker, |ctx| ctx)
+            capability::blobstore::blobstore::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| {
+                ctx
+            })
+            .context("failed to link `wasi:blobstore/blobstore`")?;
+            capability::blobstore::container::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| {
+                ctx
+            })
+            .context("failed to link `wasi:blobstore/container`")?;
+            capability::blobstore::types::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| ctx)
                 .context("failed to link `wasi:blobstore/types`")?;
-            capability::config::runtime::add_to_linker(linker, |ctx| ctx)
+            capability::config::runtime::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| ctx)
                 .context("failed to link `wasi:config/runtime`")?;
-            capability::config::store::add_to_linker(linker, |ctx| ctx)
+            capability::config::store::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| ctx)
                 .context("failed to link `wasi:config/store`")?;
-            capability::keyvalue::atomics::add_to_linker(linker, |ctx| ctx)
+            capability::keyvalue::atomics::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| ctx)
                 .context("failed to link `wasi:keyvalue/atomics`")?;
-            capability::keyvalue::store::add_to_linker(linker, |ctx| ctx)
+            capability::keyvalue::store::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| ctx)
                 .context("failed to link `wasi:keyvalue/store`")?;
-            capability::keyvalue::batch::add_to_linker(linker, |ctx| ctx)
+            capability::keyvalue::batch::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| ctx)
                 .context("failed to link `wasi:keyvalue/batch`")?;
-            capability::logging::logging::add_to_linker(linker, |ctx| ctx)
+            capability::logging::logging::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| ctx)
                 .context("failed to link `wasi:logging/logging`")?;
-            capability::unversioned_logging::logging::add_to_linker(linker, |ctx| ctx)
-                .context("failed to link unversioned `wasi:logging/logging`")?;
+            capability::unversioned_logging::logging::add_to_linker::<_, HasSelf<Ctx<H>>>(
+                linker,
+                |ctx| ctx,
+            )
+            .context("failed to link unversioned `wasi:logging/logging`")?;
 
-            capability::bus1_0_0::lattice::add_to_linker(linker, |ctx| ctx)
+            capability::bus1_0_0::lattice::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| ctx)
                 .context("failed to link `wasmcloud:bus/lattice@1.0.0`")?;
-            capability::bus2_0_1::lattice::add_to_linker(linker, |ctx| ctx)
+            capability::bus2_0_1::lattice::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| ctx)
                 .context("failed to link `wasmcloud:bus/lattice@2.0.1`")?;
-            capability::bus2_0_1::error::add_to_linker(linker, |ctx| ctx)
+            capability::bus2_0_1::error::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| ctx)
                 .context("failed to link `wasmcloud:bus/error@2.0.1`")?;
-            capability::messaging0_2_0::types::add_to_linker(linker, |ctx| ctx)
-                .context("failed to link `wasmcloud:messaging/types@0.2.0`")?;
-            capability::messaging0_2_0::consumer::add_to_linker(linker, |ctx| ctx)
-                .context("failed to link `wasmcloud:messaging/consumer@0.2.0`")?;
-            capability::secrets::reveal::add_to_linker(linker, |ctx| ctx)
+            capability::messaging0_2_0::types::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| {
+                ctx
+            })
+            .context("failed to link `wasmcloud:messaging/types@0.2.0`")?;
+            capability::messaging0_2_0::consumer::add_to_linker::<_, HasSelf<Ctx<H>>>(
+                linker,
+                |ctx| ctx,
+            )
+            .context("failed to link `wasmcloud:messaging/consumer@0.2.0`")?;
+            capability::secrets::reveal::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| ctx)
                 .context("failed to link `wasmcloud:secrets/reveal`")?;
-            capability::secrets::store::add_to_linker(linker, |ctx| ctx)
+            capability::secrets::store::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| ctx)
                 .context("failed to link `wasmcloud:secrets/store`")?;
             // Only link wasmcloud:messaging@v3 if the feature is enabled
             if rt.experimental_features.wasmcloud_messaging_v3 {
-                capability::messaging0_3_0::types::add_to_linker(linker, |ctx| ctx)
-                    .context("failed to link `wasmcloud:messaging/types@0.3.0`")?;
-                capability::messaging0_3_0::producer::add_to_linker(linker, |ctx| ctx)
-                    .context("failed to link `wasmcloud:messaging/producer@0.3.0`")?;
-                capability::messaging0_3_0::request_reply::add_to_linker(linker, |ctx| ctx)
-                    .context("failed to link `wasmcloud:messaging/request-reply@0.3.0`")?;
+                capability::messaging0_3_0::types::add_to_linker::<_, HasSelf<Ctx<H>>>(
+                    linker,
+                    |ctx| ctx,
+                )
+                .context("failed to link `wasmcloud:messaging/types@0.3.0`")?;
+                capability::messaging0_3_0::producer::add_to_linker::<_, HasSelf<Ctx<H>>>(
+                    linker,
+                    |ctx| ctx,
+                )
+                .context("failed to link `wasmcloud:messaging/producer@0.3.0`")?;
+                capability::messaging0_3_0::request_reply::add_to_linker::<_, HasSelf<Ctx<H>>>(
+                    linker,
+                    |ctx| ctx,
+                )
+                .context("failed to link `wasmcloud:messaging/request-reply@0.3.0`")?;
             }
             // Only link wasmcloud:identity if the workload identity feature is enabled
             if rt.experimental_features.workload_identity_interface {
-                capability::identity::store::add_to_linker(linker, |ctx| ctx)
+                capability::identity::store::add_to_linker::<_, HasSelf<Ctx<H>>>(linker, |ctx| ctx)
                     .context("failed to link `wasmcloud:identity/store`")?;
             }
 
@@ -635,56 +661,37 @@ where
                 Bound::Included("wasi:io/error@0.2"),
                 Bound::Excluded("wasi:io/error@0.3"),
             ))
-            .map(|(name, instance)| {
-                instance
-                    .get("error")
-                    .copied()
-                    .with_context(|| format!("{name} instance import missing `error` resource"))
-            })
-            .collect::<anyhow::Result<Box<[_]>>>()?;
+            .flat_map(|(_, instance)| instance.get("error"))
+            .copied()
+            .collect::<Box<[_]>>();
         let io_pollable_tys = host_resources
             .range::<str, _>((
                 Bound::Included("wasi:io/poll@0.2"),
                 Bound::Excluded("wasi:io/poll@0.3"),
             ))
-            .map(|(name, instance)| {
-                instance
-                    .get("pollable")
-                    .copied()
-                    .with_context(|| format!("{name} instance import missing `pollable` resource"))
-            })
-            .collect::<anyhow::Result<Box<[_]>>>()?;
+            .flat_map(|(_, instance)| instance.get("pollable"))
+            .copied()
+            .collect::<Box<[_]>>();
         let io_input_stream_tys = host_resources
             .range::<str, _>((
                 Bound::Included("wasi:io/streams@0.2"),
                 Bound::Excluded("wasi:io/streams@0.3"),
             ))
-            .map(|(name, instance)| {
-                instance.get("input-stream").copied().with_context(|| {
-                    format!("{name} instance import missing `input-stream` resource")
-                })
-            })
-            .collect::<anyhow::Result<Box<[_]>>>()?;
+            .flat_map(|(_, instance)| instance.get("input-stream"))
+            .copied()
+            .collect::<Box<[_]>>();
         let io_output_stream_tys = host_resources
             .range::<str, _>((
                 Bound::Included("wasi:io/streams@0.2"),
                 Bound::Excluded("wasi:io/streams@0.3"),
             ))
-            .map(|(name, instance)| {
-                instance.get("output-stream").copied().with_context(|| {
-                    format!("{name} instance import missing `output-stream` resource")
-                })
-            })
-            .collect::<anyhow::Result<Box<[_]>>>()?;
+            .flat_map(|(_, instance)| instance.get("output-stream"))
+            .copied()
+            .collect::<Box<[_]>>();
         let rpc_err_ty = host_resources
             .get("wrpc:rpc/error@0.1.0")
-            .map(|instance| {
-                instance
-                    .get("error")
-                    .copied()
-                    .context("`wrpc:rpc/error@0.1.0` instance import missing `error` resource")
-            })
-            .transpose()?;
+            .and_then(|instance| instance.get("error"))
+            .copied();
         // TODO: This should include `wasi:http` resources
         let host_resources = host_resources
             .into_iter()
@@ -694,20 +701,20 @@ where
                     .map(|(name, ty)| {
                         let host_ty = match ty {
                             ty if Some(ty) == rpc_err_ty => ResourceType::host::<rpc::Error>(),
-                            ty if io_err_tys.contains(&ty) => {
-                                ResourceType::host::<wasmtime_wasi::bindings::io::error::Error>()
-                            }
+                            ty if io_err_tys.contains(&ty) => ResourceType::host::<
+                                wasmtime_wasi::p2::bindings::io::error::Error,
+                            >(),
                             ty if io_input_stream_tys.contains(&ty) => ResourceType::host::<
-                                wasmtime_wasi::bindings::io::streams::InputStream,
+                                wasmtime_wasi::p2::bindings::io::streams::InputStream,
                             >(
                             ),
                             ty if io_output_stream_tys.contains(&ty) => ResourceType::host::<
-                                wasmtime_wasi::bindings::io::streams::OutputStream,
+                                wasmtime_wasi::p2::bindings::io::streams::OutputStream,
                             >(
                             ),
-                            ty if io_pollable_tys.contains(&ty) => {
-                                ResourceType::host::<wasmtime_wasi::bindings::io::poll::Pollable>()
-                            }
+                            ty if io_pollable_tys.contains(&ty) => ResourceType::host::<
+                                wasmtime_wasi::p2::bindings::io::poll::Pollable,
+                            >(),
                             _ => ResourceType::host::<RemoteResource>(),
                         };
                         (name, (ty, host_ty))
@@ -744,8 +751,11 @@ where
                     | "terminal-output" | "terminal-stderr" | "terminal-stdin" | "terminal-stdout",
                     Some(version),
                 )) if is_0_2(version, 0) => {}
-                Some(("wasi:clocks", "monotonic-clock" | "wall-clock", Some(version)))
-                    if is_0_2(version, 0) => {}
+                Some((
+                    "wasi:clocks",
+                    "monotonic-clock" | "wall-clock" | "timezone",
+                    Some(version),
+                )) if is_0_2(version, 0) => {}
                 Some(("wasi:clocks", "timezone", Some(version))) if is_0_2(version, 1) => {}
                 Some(("wasi:filesystem", "preopens" | "types", Some(version)))
                     if is_0_2(version, 0) => {}
@@ -1107,7 +1117,7 @@ where
 type TableResult<T> = Result<T, ResourceTableError>;
 
 /// The minimal implementation of a context that is required to run a component instance.
-pub trait BaseCtx: Debug {
+pub trait BaseCtx: Debug + 'static {
     /// The timeout to use for the duration of the component's invocation
     fn timeout(&self) -> Option<Duration> {
         None
@@ -1129,27 +1139,41 @@ where
     handler: H,
     wasi: WasiCtx,
     http: WasiHttpCtx,
+    wrpc: WrpcCtx<H>,
     table: ResourceTable,
-    shared_resources: SharedResourceTable,
-    timeout: Duration,
     parent_context: Option<opentelemetry::Context>,
 }
 
-impl<H: MinimalHandler> IoView for Ctx<H> {
-    fn table(&mut self) -> &mut ResourceTable {
-        &mut self.table
-    }
+struct WrpcCtx<H>
+where
+    H: MinimalHandler,
+{
+    handler: H,
+    shared_resources: SharedResourceTable,
+    timeout: Duration,
 }
 
 impl<H: MinimalHandler> WasiView for Ctx<H> {
-    fn ctx(&mut self) -> &mut WasiCtx {
-        &mut self.wasi
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
     }
 }
 
 impl<H: Handler> WrpcView for Ctx<H> {
     type Invoke = H;
 
+    fn wrpc(&mut self) -> WrpcCtxView<'_, Self::Invoke> {
+        WrpcCtxView {
+            ctx: &mut self.wrpc,
+            table: &mut self.table,
+        }
+    }
+}
+
+impl<H: Handler> wrpc_runtime_wasmtime::WrpcCtx<H> for WrpcCtx<H> {
     fn context(&self) -> H::Context {
         None
     }

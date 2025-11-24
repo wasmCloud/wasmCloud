@@ -297,6 +297,7 @@ impl Client {
         max_instances: u32,
         annotations: Option<BTreeMap<String, String>>,
         config: Vec<String>,
+        allow_update: bool,
     ) -> Result<CtlResponse<()>> {
         let host_id = IdentifierKind::is_host_id(host_id)?;
         let subject = broker::v1::commands::scale_component(
@@ -312,6 +313,7 @@ impl Client {
             host_id,
             annotations,
             config,
+            allow_update,
             ..Default::default()
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
@@ -1000,6 +1002,7 @@ mod tests {
                 1,
                 None,
                 Vec::with_capacity(0),
+                false,
             )
             .await
             .expect("should be able to scale component");

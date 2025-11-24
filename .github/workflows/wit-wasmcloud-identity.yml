@@ -15,7 +15,7 @@ jobs:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
           sparse-checkout: |
             wit
@@ -41,7 +41,7 @@ jobs:
         run: |
           tar -cvzf ${{ steps.ctx.outputs.tarball }} -C wit identity/wit
       - name: Release
-        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
+        uses: softprops/action-gh-release@5be0e66d93ac7ed76da52eca8bb058f665c3a5fe # v2.4.2
         with:
           files: ${{ steps.ctx.outputs.tarball }}
           make_latest: 'false'

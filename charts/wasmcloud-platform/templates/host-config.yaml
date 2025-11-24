@@ -60,7 +60,7 @@ spec:
   # Optional: Allow the host to pull artifacts from OCI registries insecurely.
   {{- with .allowedInsecure }}{{- if ne (len .) 0 }}
   allowedInsecure:
-    {{- range .allowedInsecure }}
+    {{- range . }}
     - {{ . }}
     {{- end }}
   {{- end }}{{- end }}
@@ -135,7 +135,7 @@ spec:
   {{- with .schedulingOptions }}
   schedulingOptions:
     # Optional: Enable the following to run the wasmCloud hosts as a DaemonSet. Defaults to "false".
-    daemonset: {{ if and (eq .hostReplicas 1) (eq .daemonset true) }}true{{ else }}false{{ end }}
+    daemonset: {{ if eq (.daemonset | toString) "true" }}true{{ else }}false{{ end }}
     # Optional: Set the resource requirements for the nats and wasmCloud host containers.
     # See https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/ for valid values
     {{- with .resources }}
@@ -160,11 +160,10 @@ spec:
     # Note that you *cannot* set the `containers` field here as it is managed by the controller.
     podTemplateAdditions:
       {{- if .podTemplateAdditions }}
-      {{- tpl (.podTemplateAdditions | toYaml) . | nindent 4 }}
+      {{- tpl (.podTemplateAdditions | toYaml) . | nindent 6 }}
       {{- else }}
-      spec:
-        nodeSelector:
-          kubernetes.io/os: "linux"
+      nodeSelector:
+        kubernetes.io/os: "linux"
       {{- end }}
   {{- end }}
 {{- end }}

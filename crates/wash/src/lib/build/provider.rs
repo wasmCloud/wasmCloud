@@ -197,6 +197,10 @@ fn build_rust_provider(
     }
     provider_path_buf.push(&bin_name);
 
+    if cfg!(windows) {
+        provider_path_buf.set_extension("exe");
+    }
+
     Ok((provider_path_buf, bin_name))
 }
 
@@ -237,10 +241,7 @@ fn build_go_provider(
             let stdout_output = String::from_utf8_lossy(&result.stdout);
             let stderr_output = String::from_utf8_lossy(&result.stderr);
             eprintln!("STDOUT:\n{stdout_output}\nSTDERR:\n{stderr_output}");
-            bail!(
-                "Generating interfaces failed: {}",
-                result.status.to_string()
-            )
+            bail!("Generating interfaces failed: {}", result.status)
         }
     }
 

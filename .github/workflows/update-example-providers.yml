@@ -14,14 +14,14 @@ jobs:
     if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
     steps:
       - id: app-token
-        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
+        uses: actions/create-github-app-token@67018539274d69449ef7c02e8e71183d1719ab42 # v2.1.4
         with:
           app-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
       - name: Self-hosted Renovate
-        uses: renovatebot/github-action@85b17ebd5abf43d1c34c01bd4c8dbb8d45bbc2c7 # v43.0.7
+        uses: renovatebot/github-action@c91a61c730fa166439cd3e2c300c041590002b1d # v44.0.3
         with:
           configurationFile: .github/renovate.json
           token: ${{ steps.app-token.outputs.token }}

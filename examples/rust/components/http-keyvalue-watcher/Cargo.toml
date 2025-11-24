@@ -10,4 +10,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wasmcloud-component = { path = "../../../../crates/component" }
-wit-bindgen = { version = "0.32" }
+wit-bindgen = { version = "0.48" }
