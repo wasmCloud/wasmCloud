@@ -399,7 +399,9 @@ fn nats_url(os: &str, arch: &str, version: &str) -> String {
         "x86_64" => "amd64",
         _ => arch,
     };
-    format!("{NATS_GITHUB_RELEASE_URL}/{version}/nats-server-{version}-{os}-{arch}.tar.gz")
+    // Since NATS v2.11.0, Windows releases are only available as .zip archives
+    let ext = if os == "windows" { "zip" } else { "tar.gz" };
+    format!("{NATS_GITHUB_RELEASE_URL}/{version}/nats-server-{version}-{os}-{arch}.{ext}")
 }
 
 #[cfg(test)]
@@ -407,7 +409,43 @@ mod test {
     use anyhow::Result;
     use tokio::io::AsyncReadExt;
 
+    use super::nats_url;
     use crate::lib::start::NatsConfig;
+
+    #[test]
+    fn nats_url_uses_zip_for_windows() {
+        // Windows should use .zip since NATS v2.11.0
+        let url = nats_url("windows", "x86_64", "v2.11.3");
+        assert!(url.ends_with(".zip"), "Windows URL should end with .zip");
+        assert_eq!(
+            url,
+            "https://github.com/nats-io/nats-server/releases/download/v2.11.3/nats-server-v2.11.3-windows-amd64.zip"
+        );
+    }
+
+    #[test]
+    fn nats_url_uses_tar_gz_for_non_windows() {
+        // Linux and macOS should use .tar.gz
+        let linux_url = nats_url("linux", "x86_64", "v2.11.3");
+        assert!(
+            linux_url.ends_with(".tar.gz"),
+            "Linux URL should end with .tar.gz"
+        );
+        assert_eq!(
+            linux_url,
+            "https://github.com/nats-io/nats-server/releases/download/v2.11.3/nats-server-v2.11.3-linux-amd64.tar.gz"
+        );
+
+        let darwin_url = nats_url("macos", "aarch64", "v2.11.3");
+        assert!(
+            darwin_url.ends_with(".tar.gz"),
+            "macOS URL should end with .tar.gz"
+        );
+        assert_eq!(
+            darwin_url,
+            "https://github.com/nats-io/nats-server/releases/download/v2.11.3/nats-server-v2.11.3-darwin-arm64.tar.gz"
+        );
+    }
 
     #[tokio::test]
     async fn can_write_properly_formed_credsfile() -> Result<()> {

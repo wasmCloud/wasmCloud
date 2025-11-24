@@ -37,6 +37,7 @@ anstyle = { workspace = true }
 anyhow = { workspace = true, features = ["backtrace"] }
 astral-tokio-tar = { workspace = true }
 async-compression = { workspace = true, features = ["tokio", "gzip"] }
+async_zip = { workspace = true, features = ["tokio", "deflate"] }
 async-nats = { workspace = true, optional = true }
 bytes = { workspace = true, features = ["serde"] }
 cargo_metadata = { workspace = true }
@@ -100,7 +101,7 @@ thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-stream = { workspace = true }
-tokio-util = { workspace = true }
+tokio-util = { workspace = true, features = ["compat"] }
 toml = { workspace = true, features = ["parse"] }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = [

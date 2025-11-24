@@ -1,7 +1,8 @@
-//! Reusable code for downloading tarballs from GitHub releases
+//! Reusable code for downloading tarballs and zip archives from GitHub releases
 
 use anyhow::{anyhow, bail, Result};
 use async_compression::tokio::bufread::GzipDecoder;
+use async_zip::tokio::read::seek::ZipFileReader;
 #[cfg(target_family = "unix")]
 use std::os::unix::prelude::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -9,6 +10,7 @@ use std::{ffi::OsStr, io::Cursor};
 use tokio::fs::{create_dir_all, metadata, File};
 use tokio_stream::StreamExt;
 use tokio_tar::Archive;
+use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use wasmcloud_core::tls::NativeRootsExt;
 
 pub const DOWNLOAD_CLIENT_USER_AGENT: &str =
@@ -23,13 +25,14 @@ pub const GITHUB_WASHBOARD_TAG_PREFIX: &str = "washboard-ui@";
 mod api;
 pub use api::*;
 
-/// Reusable function to download a release tarball from GitHub and extract an embedded binary to a specified directory
+/// Reusable function to download a release archive from GitHub and extract an embedded binary to a specified directory.
+/// Supports both `.tar.gz` and `.zip` archives (detected by URL extension).
 ///
 /// # Arguments
 ///
-/// * `url` - URL of the GitHub release artifact tarball (Usually in the form of <https://github.com>/<owner>/<repo>/releases/download/<tag>/<artifact>.tar.gz)
+/// * `url` - URL of the GitHub release artifact (Usually in the form of <https://github.com>/<owner>/<repo>/releases/download/<tag>/<artifact>.tar.gz or .zip)
 /// * `dir` - Directory on disk to install the binary into. This will be created if it doesn't exist
-/// * `bin_name` - Name of the binary inside of the tarball, e.g. `nats-server` or `wadm`
+/// * `bin_name` - Name of the binary inside of the archive, e.g. `nats-server` or `wadm`
 /// # Examples
 ///
 /// ```rust,ignore
@@ -46,12 +49,31 @@ where
     P: AsRef<Path>,
 {
     let bin_path = dir.as_ref().join(bin_name);
-    // Download release tarball
+    // Download release archive
     let body = match get_download_client()?.get(url).send().await {
         Ok(resp) => resp.bytes().await?,
-        Err(e) => bail!("Failed to request release tarball: {:?}", e),
+        Err(e) => bail!("Failed to request release archive: {:?}", e),
     };
-    let cursor = Cursor::new(body);
+
+    // Detect archive type by URL extension
+    if url.to_lowercase().ends_with(".zip") {
+        extract_binary_from_zip(&body, &dir, bin_name, &bin_path).await
+    } else {
+        extract_binary_from_tarball(&body, &dir, bin_name, &bin_path).await
+    }
+}
+
+/// Extract a binary from a gzipped tarball
+async fn extract_binary_from_tarball<P>(
+    data: &[u8],
+    dir: P,
+    bin_name: &str,
+    bin_path: &Path,
+) -> Result<PathBuf>
+where
+    P: AsRef<Path>,
+{
+    let cursor = Cursor::new(data);
     let mut bin_tarball = Archive::new(Box::new(GzipDecoder::new(cursor)));
 
     // Look for binary within tarball and only extract that
@@ -67,7 +89,7 @@ where
                 Some(name) if name == OsStr::new(bin_name) => {
                     // Ensure target directory exists
                     create_dir_all(&dir).await?;
-                    let mut bin_file = File::create(&bin_path).await?;
+                    let mut bin_file = File::create(bin_path).await?;
                     // Make binary executable
                     #[cfg(target_family = "unix")]
                     {
@@ -78,7 +100,7 @@ where
                     }
 
                     tokio::io::copy(&mut entry, &mut bin_file).await?;
-                    return Ok(bin_path);
+                    return Ok(bin_path.to_path_buf());
                 }
                 // Ignore all other files in the tarball
                 _ => (),
@@ -87,6 +109,55 @@ where
     }
 
     bail!("{bin_name} binary could not be installed, please see logs")
+}
+
+/// Extract a binary from a zip archive
+async fn extract_binary_from_zip<P>(
+    data: &[u8],
+    dir: P,
+    bin_name: &str,
+    bin_path: &Path,
+) -> Result<PathBuf>
+where
+    P: AsRef<Path>,
+{
+    // async_zip uses futures traits, so we wrap tokio's Cursor with compat()
+    let cursor = Cursor::new(data);
+    let reader = tokio::io::BufReader::new(cursor).compat();
+    let mut zip = ZipFileReader::new(reader).await?;
+
+    // Look for binary within zip and only extract that
+    let entries = zip.file().entries();
+    for (index, entry) in entries.iter().enumerate() {
+        let filename = entry.filename().as_str()?;
+        let entry_path = Path::new(filename);
+        if let Some(name) = entry_path.file_name() {
+            if name == OsStr::new(bin_name) {
+                // Ensure target directory exists
+                create_dir_all(&dir).await?;
+
+                // Get reader for the zip entry and convert from futures AsyncRead to tokio AsyncRead
+                let mut reader = zip.reader_with_entry(index).await?.compat();
+
+                // Write to file
+                let mut bin_file = File::create(bin_path).await?;
+                // Make binary executable
+                #[cfg(target_family = "unix")]
+                {
+                    let mut permissions = bin_file.metadata().await?.permissions();
+                    // Read/write/execute for owner and read/execute for others
+                    permissions.set_mode(0o755);
+                    bin_file.set_permissions(permissions).await?;
+                }
+
+                // Stream the contents directly to the file without loading into memory
+                tokio::io::copy(&mut reader, &mut bin_file).await?;
+                return Ok(bin_path.to_path_buf());
+            }
+        }
+    }
+
+    bail!("{bin_name} binary could not be installed from zip archive, please see logs")
 }
 
 /// Helper function to determine if the provided binary is present in a directory
