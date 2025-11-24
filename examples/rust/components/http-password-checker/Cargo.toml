@@ -15,4 +15,4 @@ passwords = { version = "3.1.16", default-features = false }
 serde = { version = "1.0.214", default-features = false, features = ["derive", "alloc"] }
 serde_json = { version = "1.0.132", default-features = false, features = [ "std" ] }
 wasmcloud-component = "0.2.0"
-wit-bindgen = { version = "0.34" }
+wit-bindgen = { version = "0.48" }
