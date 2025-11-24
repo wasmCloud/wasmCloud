@@ -70,6 +70,7 @@ wasmcloud-secrets-types = { workspace = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
 wasmtime-wasi-http = { workspace = true }
 webpki-roots = { workspace = true }
+wit-bindgen-wrpc = { workspace = true }
 wrpc-transport = { workspace = true }
 wrpc-interface-http = { workspace = true }
 wrpc-transport-nats = { workspace = true }
@@ -82,4 +83,9 @@ spire-api = { workspace = true }
 ignored = ["cloudevents-sdk"]
 
 [dev-dependencies]
-test-log = { workspace = true, features = ["color", "log", "trace", "unstable"] }
+test-log = { workspace = true, features = [
+    "color",
+    "log",
+    "trace",
+    "unstable",
+] }

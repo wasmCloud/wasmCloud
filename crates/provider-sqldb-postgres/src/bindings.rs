@@ -24,12 +24,24 @@ use uuid::Uuid;
 
 // Bindgen happens here
 wit_bindgen_wrpc::generate!({
+  world: "provider-sqldb-postgres",
   with: {
       "wasmcloud:postgres/types@0.1.1-draft": generate,
       "wasmcloud:postgres/query@0.1.1-draft": generate,
       "wasmcloud:postgres/prepared@0.1.1-draft": generate,
   },
 });
+
+pub mod ext {
+    wit_bindgen_wrpc::generate!({
+        world: "extension",
+        with: {
+            "wrpc:extension/types@0.0.1": wasmcloud_provider_sdk::types,
+            "wrpc:extension/manageable@0.0.1": generate,
+            "wrpc:extension/configurable@0.0.1": generate
+        },
+    });
+}
 
 // Start bindgen-generated type imports
 pub(crate) use exports::wasmcloud::postgres::prepared;

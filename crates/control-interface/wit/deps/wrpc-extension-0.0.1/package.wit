@@ -1,0 +1,144 @@
+package wrpc:extension@0.0.1;
+
+interface types {
+  /// Configuration data provided to a component as key-value pairs.
+  /// This represents the base configuration that affects the component's overall behavior.
+  type config = list<tuple<string, string>>;
+
+  /// A secret value that can be either a string or binary data.
+  variant secret-value {
+    %string(string),
+    bytes(list<u8>),
+  }
+
+  /// Collection of secrets provided to a component as key-value pairs.
+  type secrets = list<tuple<string, secret-value>>;
+
+  /// Metadata describing a set of WIT interfaces for configuration purposes.
+  /// This allows components to understand which interfaces the configuration applies to.
+  record wit-metadata {
+    /// WIT namespace (e.g., "wasi" in "wasi:keyvalue/store")
+    namespace: string,
+    /// WIT package name (e.g., "keyvalue" in "wasi:keyvalue/store")
+    %package: string,
+    /// List of interface names within the package (e.g., ["store", "atomic"])
+    interfaces: list<string>,
+  }
+
+  /// Configuration applied to a specific set of interface imports or exports.
+  ///
+  /// This allows components to have different configuration contexts when:
+  /// - Calling imported interfaces (contextual execution based on the target)
+  /// - Serving exported interfaces (contextual execution based on the caller)
+  record interface-config {
+    /// Base configuration key-value pairs for this interface set
+    config: config,
+    /// Optional secrets for this interface set
+    secrets: option<secrets>,
+    /// Metadata identifying which interfaces this configuration applies to
+    metadata: wit-metadata,
+  }
+
+  /// Response from a component health check indicating operational status.
+  record health-check-response {
+    /// Whether the component is currently healthy and operational
+    healthy: bool,
+    /// Optional human-readable message providing additional health details
+    message: option<string>,
+  }
+
+  /// Request to establish a binding/connection with an extension or component.
+  record bind-request {
+    /// JWT-SVID token for workload identity authentication
+    identity-token: option<string>,
+  }
+
+  /// Response from a bind request containing the responder's identity.
+  record bind-response {
+    /// JWT-SVID token of the responding component for mutual authentication
+    identity-token: option<string>,
+  }
+}
+
+/// Allows components to receive and manage configuration updates.
+///
+/// This interface enables dynamic reconfiguration of components without restart,
+/// supporting both base configuration and interface-specific configuration.
+interface configurable {
+  use types.{config, interface-config};
+
+  /// Updates the component's base configuration.
+  ///
+  /// This affects the component's overall behavior and can be called multiple times
+  /// as configuration changes. The component should apply the new configuration
+  /// and update its behavior accordingly.
+  ///
+  /// # Arguments
+  /// * `config` - New base configuration key-value pairs
+  update-base-config: func(config: config) -> result<_, string>;
+
+  /// Updates configuration for a set of exported interfaces.
+  ///
+  /// This allows components to use different configuration contexts when **serving**
+  /// requests from different external components. For example, a database provider
+  /// might apply different access controls based on **which component is calling**.
+  ///
+  /// # Arguments
+  /// * `source-id` - The component to be called
+  /// * `link-name` - The name of the link to be updated
+  /// * `config` - Interface-specific configuration including secrets and metadata
+  update-interface-export-config: func(source-id: string, link-name: string, config: interface-config) -> result<_, string>;
+
+  /// Updates configuration for a set of imported interfaces.
+  ///
+  /// This allows components to use different configuration contexts when **calling**
+  /// different external components through the same interface. For example, a web
+  /// server might use different request headers when **calling different components**.
+  ///
+  /// # Arguments
+  /// * `sourceid` - Unique identifier for this configuration context
+  /// *
+  /// * `config` - Interface-specific configuration including secrets and metadata
+  update-interface-import-config: func(target-id: string, link-name: string, config: interface-config) -> result<_, string>;
+
+  /// Removes configuration for a set of imported interfaces.
+  ///
+  /// Called when a link is deleted or when interface configuration is no longer needed.
+  /// The component should clean up any resources associated with this configuration.
+  ///
+  /// # Arguments
+  /// * `target-id` - The component being called
+  /// * `link-name` - The name of the link to be removed
+  delete-interface-import-config: func(target-id: string, link-name: string) -> result<_, string>;
+
+  /// Removes configuration for a set of exported interfaces.
+  ///
+  /// Called when a link is deleted or when interface configuration is no longer needed.
+  /// The component should clean up any resources associated with this configuration.
+  ///
+  /// # Arguments
+  /// * `source-id` - The component to be called
+  /// * `link-name` - The name of the link to be removed
+  delete-interface-export-config: func(source-id: string, link-name: string) -> result<_, string>;
+}
+
+/// Provides component lifecycle management and health monitoring capabilities.
+///
+/// This interface allows external systems to establish connections with components
+/// and monitor their operational health over time.
+interface manageable {
+  use types.{health-check-response, bind-request, bind-response};
+
+  /// Establishes a binding/connection with this component.
+  bind: func(request: bind-request) -> result<bind-response, string>;
+
+  /// Checks the operational health and status of this component.
+  ///
+  /// Should return quickly and indicate whether the component is functioning properly.
+  /// This is typically called periodically by management systems to monitor component health.
+  health-request: func() -> result<health-check-response, string>;
+
+  /// Allows a service to be shutdown via other services or external systems
+  shutdown: func() -> result<_, string>;
+}
+

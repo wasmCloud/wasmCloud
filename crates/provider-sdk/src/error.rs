@@ -1,6 +1,5 @@
 //! Error types for interacting with a provider
 
-pub type InvocationResult<T> = Result<T, InvocationError>;
 pub type ProviderInitResult<T> = Result<T, ProviderInitError>;
 
 /// All errors that that can be returned by a provider when it is being initialized,

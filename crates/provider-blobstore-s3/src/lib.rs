@@ -15,6 +15,10 @@ use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 
+use crate::bindings::ext::exports::wrpc::extension::{
+    configurable::{self, InterfaceConfig},
+    manageable,
+};
 use anyhow::{anyhow, bail, Context as _, Result};
 use aws_config::default_provider::credentials::DefaultCredentialsChain;
 use aws_config::default_provider::region::DefaultRegionChain;
@@ -44,7 +48,9 @@ use wasmcloud_provider_sdk::core::secrets::SecretValue;
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::{
     get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
-    serve_provider_exports, Context, LinkConfig, LinkDeleteInfo, Provider,
+    serve_provider_exports,
+    types::{BindRequest, BindResponse, HealthCheckResponse},
+    Context,
 };
 use wrpc_interface_blobstore::bindings::{
     exports::wrpc::blobstore::blobstore::Handler,
@@ -54,6 +60,31 @@ use wrpc_interface_blobstore::bindings::{
 
 const ALIAS_PREFIX: &str = "alias_";
 const DEFAULT_STS_SESSION: &str = "blobstore_s3_provider";
+
+mod bindings {
+    wit_bindgen_wrpc::generate!({
+        world: "interfaces",
+        with: {
+            "wrpc:blobstore/blobstore@0.2.0": generate,
+            "wrpc:blobstore/types@0.2.0": wrpc_interface_blobstore::bindings::wrpc::blobstore::types,
+            "wasi:blobstore/types@0.2.0-draft": generate,
+            "wasi:io/error@0.2.1": generate,
+            "wasi:io/poll@0.2.1": generate,
+            "wasi:io/streams@0.2.1": generate
+        }
+    });
+
+    pub mod ext {
+        wit_bindgen_wrpc::generate!({
+            world: "extension",
+            with: {
+                "wrpc:extension/types@0.0.1": wasmcloud_provider_sdk::types,
+                "wrpc:extension/manageable@0.0.1": generate,
+                "wrpc:extension/configurable@0.0.1": generate,
+            }
+        });
+    }
+}
 
 /// Configuration for connecting to S3-compatible storage
 ///
@@ -99,17 +130,21 @@ pub struct StsAssumeRoleConfig {
 
 impl StorageConfig {
     /// initialize from linkdef values
-    pub async fn from_link_config(
-        LinkConfig {
-            config, secrets, ..
-        }: &LinkConfig<'_>,
-    ) -> Result<StorageConfig> {
+    pub async fn from_link_config(link_config: InterfaceConfig) -> Result<StorageConfig> {
+        let config: HashMap<String, String> = link_config.config.into_iter().collect();
+        let secrets: HashMap<String, SecretValue> = link_config
+            .secrets
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect();
+
         let mut storage_config = if let Some(config_b64) = secrets
             .get("config_b64")
             .and_then(SecretValue::as_string)
             .or_else(|| config.get("config_b64").map(String::as_str))
         {
-            if secrets.get("config_b64").is_none() {
+            if !secrets.contains_key("config_b64") {
                 warn!("secret value [config_b64] was not found, but present in configuration. Please prefer using secrets for sensitive values.");
             }
             let bytes = base64::engine::general_purpose::STANDARD
@@ -121,7 +156,7 @@ impl StorageConfig {
             .and_then(SecretValue::as_string)
             .or_else(|| config.get("config_json").map(String::as_str))
         {
-            if secrets.get("config_json").is_none() {
+            if !secrets.contains_key("config_json") {
                 warn!("secret value [config_json] was not found, but was present in configuration. Please prefer using secrets for sensitive values.");
             }
             serde_json::from_str::<StorageConfig>(encoded).context("corrupt config_json")?
@@ -545,10 +580,21 @@ impl StorageClient {
 ///
 /// This struct will be the target of generated implementations (via wit-provider-bindgen)
 /// for the blobstore provider WIT contract
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct BlobstoreS3Provider {
     /// Per-component storage for NATS connection clients
     actors: Arc<RwLock<HashMap<String, StorageClient>>>,
+    /// Shutdown signal sender
+    quit_tx: Arc<tokio::sync::broadcast::Sender<()>>,
+}
+
+impl BlobstoreS3Provider {
+    pub fn new(quit_tx: tokio::sync::broadcast::Sender<()>) -> Self {
+        Self {
+            actors: Arc::default(),
+            quit_tx: Arc::new(quit_tx),
+        }
+    }
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -556,23 +602,28 @@ pub async fn run() -> anyhow::Result<()> {
 }
 
 impl BlobstoreS3Provider {
-    pub async fn run() -> anyhow::Result<()> {
-        initialize_observability!(
-            "blobstore-s3-provider",
-            std::env::var_os("PROVIDER_BLOBSTORE_S3_FLAMEGRAPH_PATH")
-        );
+    /// Create a new instance of the Blobstore S3 provider
+    pub fn name() -> &'static str {
+        "blobstore-s3-provider"
+    }
 
-        let provider = Self::default();
-        let shutdown = run_provider(provider.clone(), "blobstore-s3-provider")
+    pub async fn run() -> anyhow::Result<()> {
+        let (shutdown, quit_tx) = run_provider(Self::name(), None)
             .await
             .context("failed to run provider")?;
+        let provider = Self::new(quit_tx);
         let connection = get_connection();
-        let wrpc = connection
-            .get_wrpc_client(connection.provider_key())
-            .await?;
-        serve_provider_exports(&wrpc, provider, shutdown, serve)
-            .await
-            .context("failed to serve provider exports")
+        let (main_client, ext_client) = connection.get_wrpc_clients_for_serving().await?;
+        serve_provider_exports(
+            &main_client,
+            &ext_client,
+            provider,
+            shutdown,
+            serve,
+            bindings::ext::serve,
+        )
+        .await
+        .context("failed to serve provider exports")
     }
 
     /// Retrieve the per-component [`StorageClient`] for a given link context
@@ -588,6 +639,39 @@ impl BlobstoreS3Provider {
             // TODO: Support a default here
             bail!("failed to lookup invocation source ID")
         }
+    }
+}
+
+impl manageable::Handler<Option<Context>> for BlobstoreS3Provider {
+    async fn bind(
+        &self,
+        _cx: Option<Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_xkey: Some(get_connection().provider_xkey.public_key().into()),
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by closing all connections
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
+        let mut aw = self.actors.write().await;
+        // empty the component link data and stop all servers
+        aw.drain();
+        // Signal shutdown
+        let _ = self.quit_tx.send(());
+        Ok(Ok(()))
     }
 }
 
@@ -903,48 +987,82 @@ impl Handler<Option<Context>> for BlobstoreS3Provider {
     }
 }
 
-/// Handle provider control commands
-/// `put_link` (new component link command), `del_link` (remove link command), and shutdown
-impl Provider for BlobstoreS3Provider {
-    /// Provider should perform any operations needed for a new link,
-    /// including setting up per-component resources, and checking authorization.
-    /// If the link is allowed, return true, otherwise return false to deny the link.
-    async fn receive_link_config_as_target(
+impl configurable::Handler<Option<Context>> for BlobstoreS3Provider {
+    #[instrument(level = "debug", skip_all)]
+    async fn update_base_config(
         &self,
-        link_config: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
+        _cx: Option<Context>,
+        config: wasmcloud_provider_sdk::types::BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let flamegraph_path = config
+            .config
+            .iter()
+            .find(|(k, _)| k == "FLAMEGRAPH_PATH")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("PROVIDER_BLOBSTORE_S3_FLAMEGRAPH_PATH").ok());
+        initialize_observability!(Self::name(), flamegraph_path, config.config);
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(source_id))]
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        _link_name: String,
+        link_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let config_map: HashMap<String, String> = link_config.config.clone().into_iter().collect();
+
         // Build storage config
-        let config = match StorageConfig::from_link_config(&link_config).await {
-            Ok(v) => v,
-            Err(e) => {
-                error!(error = %e, %link_config.source_id, "failed to build storage config");
-                return Err(anyhow!(e).context("failed to build source config"));
+        let storage_config = match StorageConfig::from_link_config(link_config).await {
+            Result::Ok(v) => v,
+            Result::Err(e) => {
+                error!(error = %e, %source_id, "failed to build storage config");
+                return Ok(Err(format!("failed to build source config: {e}")));
             }
         };
 
-        let link = StorageClient::new(config, link_config.config).await;
+        let link = StorageClient::new(storage_config, &config_map).await;
 
         let mut update_map = self.actors.write().await;
-        update_map.insert(link_config.source_id.to_string(), link);
+        update_map.insert(source_id.to_string(), link);
 
-        Ok(())
+        Ok(Ok(()))
     }
 
-    /// Handle notification that a link is dropped: close the connection
-    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
-    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let component_id = info.get_source_id();
-        let mut aw = self.actors.write().await;
-        aw.remove(component_id);
-        Ok(())
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+        _config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
     }
 
-    /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) -> anyhow::Result<()> {
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "info", skip_all, fields(source_id))]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
         let mut aw = self.actors.write().await;
-        // empty the component link data and stop all servers
-        aw.drain();
-        Ok(())
+        aw.remove(&source_id);
+        Ok(Ok(()))
     }
 }
 

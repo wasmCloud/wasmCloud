@@ -76,7 +76,6 @@ once_cell = { workspace = true }
 path-absolutize = { workspace = true, features = [
     "once_cell_cache",
 ], optional = true }
-provider-archive = { workspace = true }
 rand = { workspace = true, features = ["thread_rng"] }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
@@ -115,7 +114,6 @@ wadm-client = { workspace = true }
 wadm-types = { workspace = true, optional = true }
 walkdir = { workspace = true }
 warp = { workspace = true }
-wascap = { workspace = true }
 wasi-preview1-component-adapter-provider = { workspace = true }
 wasm-encoder = { workspace = true }
 wasm-pkg-client = { workspace = true }

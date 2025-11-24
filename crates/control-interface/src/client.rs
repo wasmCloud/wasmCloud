@@ -17,14 +17,13 @@ use crate::types::ctl::{
     UpdateComponentCommand,
 };
 use crate::types::host::{Host, HostInventory, HostLabel};
-use crate::types::link::Link;
 use crate::types::registry::RegistryCredential;
 use crate::types::rpc::{
-    ComponentAuctionAck, ComponentAuctionRequest, DeleteInterfaceLinkDefinitionRequest,
-    ProviderAuctionAck, ProviderAuctionRequest,
+    ComponentAuctionAck, ComponentAuctionRequest, ProviderAuctionAck, ProviderAuctionRequest,
 };
 use crate::{
-    broker, json_deserialize, json_serialize, otel, HostLabelIdentifier, IdentifierKind, Result,
+    broker, json_deserialize, json_serialize, otel, DeleteInterfacesLinkRequestBuilder,
+    HostLabelIdentifier, IdentifierKind, InterfaceLink, Result, SatisfiedProviderInterfaces,
 };
 
 /// A client builder that can be used to fluently provide configuration settings used to construct
@@ -363,11 +362,11 @@ impl Client {
     ///
     /// Returns an error if it was unable to put the link
     #[instrument(level = "debug", skip_all)]
-    pub async fn put_link(&self, link: Link) -> Result<CtlResponse<()>> {
+    pub async fn put_link(&self, link: InterfaceLink) -> Result<CtlResponse<()>> {
         // Validate link parameters
-        IdentifierKind::is_component_id(&link.source_id)?;
-        IdentifierKind::is_component_id(&link.target)?;
-        IdentifierKind::is_link_name(&link.name)?;
+        IdentifierKind::is_component_id(link.source_id())?;
+        IdentifierKind::is_component_id(link.target())?;
+        IdentifierKind::is_link_name(link.name())?;
 
         let subject = broker::v1::put_link(&self.topic_prefix, &self.lattice);
         debug!("put_link:request {}", &subject);
@@ -395,12 +394,13 @@ impl Client {
         wit_package: &str,
     ) -> Result<CtlResponse<()>> {
         let subject = broker::v1::delete_link(&self.topic_prefix, &self.lattice);
-        let ld = DeleteInterfaceLinkDefinitionRequest::from_source_and_link_metadata(
-            &IdentifierKind::is_component_id(source_id)?,
-            &IdentifierKind::is_link_name(link_name)?,
-            wit_namespace,
-            wit_package,
-        );
+        let ld = DeleteInterfacesLinkRequestBuilder::default()
+            .source_id(IdentifierKind::is_component_id(source_id)?)
+            .name(IdentifierKind::is_link_name(link_name)?)
+            .wit_namespace(wit_namespace.to_string())
+            .wit_package(wit_package.to_string())
+            .build()?;
+
         let bytes = crate::json_serialize(&ld)?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
@@ -414,7 +414,7 @@ impl Client {
     /// it will query the bucket for the list of links.
     ///
     #[instrument(level = "debug", skip_all)]
-    pub async fn get_links(&self) -> Result<CtlResponse<Vec<Link>>> {
+    pub async fn get_links(&self) -> Result<CtlResponse<Vec<InterfaceLink>>> {
         let subject = broker::v1::queries::link_definitions(&self.topic_prefix, &self.lattice);
         debug!("get_links:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
@@ -624,17 +624,13 @@ impl Client {
         }
     }
 
-    /// Command a host to start a provider with a given OCI reference.
+    /// Command a host to start an internal provider with a given OCI reference.
     ///
-    /// The specified link name will be used (or "default" if none is specified).
-    ///
-    /// The target wasmCloud host will acknowledge the receipt of this command _before_ downloading the provider's bytes from the
+    /// The target wasmCloud host will acknowledge the receipt of this command *before* downloading the provider's bytes from the
     /// OCI registry, indicating either a validation failure or success.
     ///
     /// Clients that need deterministic guarantees that the provider has completed its startup process, should
     /// monitor the control event stream for the appropriate event.
-    ///
-    /// The `provider_configuration` parameter is a list of named configs to use for this provider, and configurations are not required.
     ///
     /// # Arguments
     ///
@@ -645,28 +641,72 @@ impl Client {
     /// * `provider_configuration` - Configuration relevant to the provider (if any)
     ///
     #[instrument(level = "debug", skip_all)]
-    pub async fn start_provider(
+    pub async fn start_internal_provider(
         &self,
         host_id: &str,
         provider_ref: &str,
         provider_id: &str,
+        satisfied_interfaces: SatisfiedProviderInterfaces,
         annotations: Option<BTreeMap<String, String>>,
         provider_configuration: Vec<String>,
     ) -> Result<CtlResponse<()>> {
         let host_id = IdentifierKind::is_host_id(host_id)?;
-        let subject = broker::v1::commands::start_provider(
-            &self.topic_prefix,
-            &self.lattice,
-            host_id.as_str(),
-        );
-        debug!("start_provider:request {}", &subject);
-        let mut cmd = StartProviderCommand::builder()
+        let subject =
+            broker::v1::commands::start_provider(&self.topic_prefix, &self.lattice, &host_id);
+        debug!("start_internal_provider:request {}", &subject);
+
+        let mut cmd = StartProviderCommand::internal_builder()
             .host_id(&host_id)
             .provider_ref(&IdentifierKind::is_provider_ref(provider_ref)?)
-            .provider_id(&IdentifierKind::is_component_id(provider_id)?);
+            .provider_id(&IdentifierKind::is_component_id(provider_id)?)
+            .satisfied_interfaces(satisfied_interfaces);
+
         if let Some(annotations) = annotations {
             cmd = cmd.annotations(annotations);
         }
+
+        let cmd = cmd.config(provider_configuration).build()?;
+        let bytes = json_serialize(cmd)?;
+
+        match self.request_timeout(subject, bytes, self.timeout).await {
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
+            Err(e) => Err(format!("Did not receive start provider acknowledgement: {e}").into()),
+        }
+    }
+
+    /// Command a host to start an external provider.
+    ///
+    /// External providers are not managed by the host but are part of the NATS architecture.
+    /// The host will acknowledge receipt of this command.
+    ///
+    /// # Arguments
+    ///
+    /// * `host_id` - ID of the host that will register the external provider
+    /// * `provider_id` - ID of the provider to start
+    /// * `annotations` - Annotations to place on the started provider
+    /// * `provider_configuration` - Configuration relevant to the provider (if any)
+    ///
+    #[instrument(level = "debug", skip_all)]
+    pub async fn start_external_provider(
+        &self,
+        host_id: &str,
+        provider_id: &str,
+        satisfied_interfaces: SatisfiedProviderInterfaces,
+        annotations: Option<BTreeMap<String, String>>,
+        provider_configuration: Vec<String>,
+    ) -> Result<CtlResponse<()>> {
+        let subject =
+            broker::v1::commands::start_provider(&self.topic_prefix, &self.lattice, host_id);
+        debug!("start_external_provider:request {}", &subject);
+
+        let mut cmd = StartProviderCommand::external_builder()
+            .provider_id(&IdentifierKind::is_component_id(provider_id)?)
+            .satisfied_interfaces(satisfied_interfaces);
+
+        if let Some(annotations) = annotations {
+            cmd = cmd.annotations(annotations);
+        }
+
         let cmd = cmd.config(provider_configuration).build()?;
         let bytes = json_serialize(cmd)?;
 

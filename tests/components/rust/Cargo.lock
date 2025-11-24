@@ -180,6 +180,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-calculator"
+version = "0.1.0"
+dependencies = [
+ "wasmcloud-component",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "icu_collections"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -9,7 +9,7 @@ use futures::stream::{StreamExt, TryStreamExt};
 use secrecy::SecretBox;
 use tokio::sync::RwLock;
 use tracing::instrument;
-use wasmcloud_runtime::capability::secrets::store::SecretValue;
+use wasmcloud_core::secrets::SecretValue;
 use wasmcloud_secrets_client::Client as WasmcloudSecretsClient;
 use wasmcloud_secrets_types::{Secret as WasmcloudSecret, SecretConfig};
 
@@ -92,9 +92,8 @@ impl SecretsManager for NatsSecretsManager {
     ///
     /// # Arguments
     /// * `secret_names` - A list of secret names to fetch from the secret store
-    /// * `entity_jwt` - The JWT of the entity requesting the secrets. Must be provided unless this [SecretsManager] is not
-    ///  configured with a secret store topic.
-    /// * `host_jwt` - The JWT of the host requesting the secrets
+    /// * `entity_id` - The identifier of the entity requesting the secrets (e.g., OCI digest)
+    /// * `host_id` - The identifier of the host requesting the secrets
     /// * `application` - The name of the application the entity is a part of, if any
     ///
     /// # Returns
@@ -106,7 +105,7 @@ impl SecretsManager for NatsSecretsManager {
         entity_jwt: Option<&String>,
         host_jwt: &str,
         application: Option<&String>,
-    ) -> anyhow::Result<HashMap<String, SecretBox<SecretValue>>> {
+    ) -> anyhow::Result<HashMap<String, SecretBox<wasmcloud_core::secrets::SecretValue>>> {
         // If we're not fetching any secrets, return empty map successfully
         if secret_names.is_empty() {
             return Ok(HashMap::with_capacity(0));

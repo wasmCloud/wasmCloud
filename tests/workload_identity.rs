@@ -248,6 +248,7 @@ async fn workload_identity_component_interface() -> anyhow::Result<()> {
                 .enable_builtin_http_server()
                 .enable_workload_identity_interface(),
         ),
+        true,
     )
     .await
     .context("failed to start test host")?;

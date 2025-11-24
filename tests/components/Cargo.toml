@@ -27,6 +27,5 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
 ] }
 url = { workspace = true, features = ["serde"] }
-wascap = { workspace = true }
 wasi-preview1-component-adapter-provider = { workspace = true }
 wit-component = { workspace = true }

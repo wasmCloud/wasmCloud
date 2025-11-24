@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::Result;
+use crate::{Result, SatisfiedProviderInterfaces};
 
 /// A control interface response that wraps a response payload, a success flag, and a message
 /// with additional context if necessary.
@@ -258,15 +258,46 @@ impl ScaleComponentCommandBuilder {
 
 /// A command sent to a host requesting a capability provider be started with the
 /// given link name and optional configuration.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum StartProviderCommand {
+    Internal(InternalProviderStartCommand),
+    External(ExternalProviderStartCommand),
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
-pub struct StartProviderCommand {
+pub struct InternalProviderStartCommand {
     /// Unique identifier of the provider to start.
     provider_id: String,
     /// The image reference of the provider to be started
     #[serde(default)]
     provider_ref: String,
     /// The host ID on which to start the provider
+    #[serde(default)]
+    host_id: String,
+    /// Provider satisfied interfaces for the runtime to interfact with
+    satisfied_interfaces: SatisfiedProviderInterfaces,
+    /// A list of named configs to use for this provider. It is not required to specify a config.
+    /// Configs are merged together before being given to the provider, with values from the right-most
+    /// config in the list taking precedence. For example, given ordered configs foo {a: 1, b: 2},
+    /// bar {b: 3, c: 4}, and baz {c: 5, d: 6}, the resulting config will be: {a: 1, b: 3, c: 5, d:
+    /// 6}
+    #[serde(default)]
+    config: Vec<String>,
+    /// Optional set of annotations used to describe the nature of this provider start command. For
+    /// example, autonomous agents may wish to "tag" start requests as part of a given deployment
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    annotations: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct ExternalProviderStartCommand {
+    /// Unique identifier of the provider to start.
+    provider_id: String,
+    /// Provider satisfied interfaces for the runtime to interfact with
+    satisfied_interfaces: SatisfiedProviderInterfaces,
+    /// The host ID on which to bind the provider to
     #[serde(default)]
     host_id: String,
     /// A list of named configs to use for this provider. It is not required to specify a config.
@@ -285,56 +316,85 @@ pub struct StartProviderCommand {
 impl StartProviderCommand {
     #[must_use]
     pub fn provider_id(&self) -> &str {
-        &self.provider_id
+        match self {
+            StartProviderCommand::Internal(cmd) => &cmd.provider_id,
+            StartProviderCommand::External(cmd) => &cmd.provider_id,
+        }
     }
 
     #[must_use]
-    pub fn provider_ref(&self) -> &str {
-        &self.provider_ref
+    pub fn satisfied_interfaces(&self) -> &SatisfiedProviderInterfaces {
+        match self {
+            StartProviderCommand::Internal(cmd) => &cmd.satisfied_interfaces,
+            StartProviderCommand::External(cmd) => &cmd.satisfied_interfaces,
+        }
     }
 
     #[must_use]
-    pub fn host_id(&self) -> &str {
-        &self.host_id
+    pub fn provider_ref(&self) -> Option<&str> {
+        match self {
+            StartProviderCommand::Internal(cmd) => Some(&cmd.provider_ref),
+            StartProviderCommand::External(_) => None, // External providers don't have refs
+        }
+    }
+
+    #[must_use]
+    pub fn host_id(&self) -> Option<&str> {
+        match self {
+            StartProviderCommand::Internal(cmd) => Some(&cmd.host_id),
+            StartProviderCommand::External(cmd) => Some(&cmd.host_id),
+        }
     }
 
     #[must_use]
     pub fn config(&self) -> &Vec<String> {
-        &self.config
+        match self {
+            StartProviderCommand::Internal(cmd) => &cmd.config,
+            StartProviderCommand::External(cmd) => &cmd.config,
+        }
     }
 
     #[must_use]
     pub fn annotations(&self) -> Option<&BTreeMap<String, String>> {
-        self.annotations.as_ref()
+        match self {
+            StartProviderCommand::Internal(cmd) => cmd.annotations.as_ref(),
+            StartProviderCommand::External(cmd) => cmd.annotations.as_ref(),
+        }
+    }
+
+    /// Check if this is an internal provider command
+    #[must_use]
+    pub fn is_internal(&self) -> bool {
+        matches!(self, StartProviderCommand::Internal(_))
     }
 
     #[must_use]
-    pub fn builder() -> StartProviderCommandBuilder {
-        StartProviderCommandBuilder::default()
+    pub fn internal_builder() -> InternalProviderStartCommandBuilder {
+        InternalProviderStartCommandBuilder::default()
+    }
+
+    #[must_use]
+    pub fn external_builder() -> ExternalProviderStartCommandBuilder {
+        ExternalProviderStartCommandBuilder::default()
     }
 }
 
-/// A builder that produces [`StartProviderCommand`]s
+/// Builder for internal provider start commands
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
-pub struct StartProviderCommandBuilder {
-    host_id: Option<String>,
+pub struct InternalProviderStartCommandBuilder {
     provider_id: Option<String>,
     provider_ref: Option<String>,
-    annotations: Option<BTreeMap<String, String>>,
+    host_id: Option<String>,
+    satisfied_interfaces: Option<SatisfiedProviderInterfaces>,
     config: Option<Vec<String>>,
+    annotations: Option<BTreeMap<String, String>>,
 }
 
-impl StartProviderCommandBuilder {
+impl InternalProviderStartCommandBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    #[must_use]
-    pub fn provider_ref(mut self, v: &str) -> Self {
-        self.provider_ref = Some(v.into());
-        self
     }
 
     #[must_use]
@@ -344,8 +404,14 @@ impl StartProviderCommandBuilder {
     }
 
     #[must_use]
-    pub fn annotations(mut self, v: impl Into<BTreeMap<String, String>>) -> Self {
-        self.annotations = Some(v.into());
+    pub fn satisfied_interfaces(mut self, v: SatisfiedProviderInterfaces) -> Self {
+        self.satisfied_interfaces = Some(v);
+        self
+    }
+
+    #[must_use]
+    pub fn provider_ref(mut self, v: &str) -> Self {
+        self.provider_ref = Some(v.into());
         self
     }
 
@@ -361,20 +427,99 @@ impl StartProviderCommandBuilder {
         self
     }
 
+    #[must_use]
+    pub fn annotations(mut self, v: impl Into<BTreeMap<String, String>>) -> Self {
+        self.annotations = Some(v.into());
+        self
+    }
+
     pub fn build(self) -> Result<StartProviderCommand> {
-        Ok(StartProviderCommand {
-            provider_ref: self
-                .provider_ref
-                .ok_or_else(|| "provider ref is required for starting providers".to_string())?,
-            provider_id: self
-                .provider_id
-                .ok_or_else(|| "provider id is required for starting providers".to_string())?,
-            annotations: self.annotations,
-            host_id: self
-                .host_id
-                .ok_or_else(|| "host id is required for starting providers".to_string())?,
-            config: self.config.unwrap_or_default(),
-        })
+        Ok(StartProviderCommand::Internal(
+            InternalProviderStartCommand {
+                provider_id: self
+                    .provider_id
+                    .ok_or_else(|| "provider_id is required for internal providers".to_string())?,
+                provider_ref: self
+                    .provider_ref
+                    .ok_or_else(|| "provider_ref is required for internal providers".to_string())?,
+                host_id: self
+                    .host_id
+                    .ok_or_else(|| "host_id is required for internal providers".to_string())?,
+                satisfied_interfaces: self.satisfied_interfaces.ok_or_else(|| {
+                    "satisfied_interfaces is required for internal providers".to_string()
+                })?,
+                config: self.config.unwrap_or_default(),
+                annotations: self.annotations,
+            },
+        ))
+    }
+}
+
+//todo (luk3ark) - probably consolidate back into a single provider start command now
+// everything is improved and consolidated
+/// Builder for external provider start commands
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct ExternalProviderStartCommandBuilder {
+    provider_id: Option<String>,
+    config: Option<Vec<String>>,
+    annotations: Option<BTreeMap<String, String>>,
+    satisfied_interfaces: Option<SatisfiedProviderInterfaces>,
+    host_id: Option<String>,
+}
+
+impl ExternalProviderStartCommandBuilder {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn satisfied_interfaces(mut self, v: SatisfiedProviderInterfaces) -> Self {
+        self.satisfied_interfaces = Some(v);
+        self
+    }
+
+    #[must_use]
+    pub fn provider_id(mut self, v: &str) -> Self {
+        self.provider_id = Some(v.into());
+        self
+    }
+
+    #[must_use]
+    pub fn host_id(mut self, v: &str) -> Self {
+        self.host_id = Some(v.into());
+        self
+    }
+
+    #[must_use]
+    pub fn config(mut self, v: Vec<String>) -> Self {
+        self.config = Some(v);
+        self
+    }
+
+    #[must_use]
+    pub fn annotations(mut self, v: impl Into<BTreeMap<String, String>>) -> Self {
+        self.annotations = Some(v.into());
+        self
+    }
+
+    pub fn build(self) -> Result<StartProviderCommand> {
+        Ok(StartProviderCommand::External(
+            ExternalProviderStartCommand {
+                provider_id: self
+                    .provider_id
+                    .ok_or_else(|| "provider_id is required for external providers".to_string())?,
+                satisfied_interfaces: self.satisfied_interfaces.ok_or_else(|| {
+                    "satisfied_interfaces is required for external providers".to_string()
+                })?,
+                config: self.config.unwrap_or_default(),
+                annotations: self.annotations,
+                host_id: self.host_id.ok_or_else(|| {
+                    "host id is required for external providers to connect to".to_string()
+                })?,
+            },
+        ))
     }
 }
 

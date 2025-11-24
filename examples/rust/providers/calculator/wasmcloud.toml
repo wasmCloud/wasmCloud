@@ -1,0 +1,10 @@
+name = "Wrpc Native"
+language = "rust"
+type = "provider"
+
+[provider]
+vendor = "Example Vendor"
+
+[[registry.pull.sources]]
+target = "wrpc:extension"
+source = "file://../../../../wit/extension/wit/extension.wit"

@@ -6,3 +6,8 @@ world interfaces {
     export wrpc:keyvalue/store@0.2.0-draft;
     export wrpc:keyvalue/batch@0.2.0-draft;
 }
+
+world extension {
+    export wrpc:extension/manageable@0.0.1;
+    export wrpc:extension/configurable@0.0.1;
+}

@@ -5,6 +5,7 @@ members = [
     "pinger-config-component",
     "ponger-config-component",
     "workload-identity-component",
+    "http-calculator",
 ]
 resolver = "2"
 

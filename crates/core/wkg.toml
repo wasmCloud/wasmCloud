@@ -1,0 +1,2 @@
+[overrides]
+"wrpc:extension" = { path = "../../wit/extension/wit/" }

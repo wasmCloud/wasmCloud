@@ -9,3 +9,11 @@ target_path = "../../../target"
 [provider]
 bin_name = "blobstore-nats-provider"
 vendor = "wasmCloud"
+
+[[registry.pull.sources]]
+target = "wrpc:blobstore"
+source = "https://github.com/wrpc/blobstore/archive/refs/tags/v0.2.0.tar.gz"
+
+[[registry.pull.sources]]
+target = "wrpc:extension"
+source = "file://../../../wit/extension/wit"

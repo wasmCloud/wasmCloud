@@ -1,0 +1,339 @@
+package wasmcloud:postgres@0.1.1-draft;
+
+/// Types used by components and providers of a SQLDB Postgres interface
+interface types {
+  /// Errors that occur while executing queries
+  variant query-error {
+    /// Unknown/invalid query parameters
+    invalid-params(string),
+    /// Invalid/malformed query
+    invalid-query(string),
+    /// A completely unexpected error, specific to executing queries
+    unexpected(string),
+  }
+
+  /// Errors that occur while preparing a statement
+  variant statement-prepare-error {
+    /// A completely unexpected error
+    unexpected(string),
+  }
+
+  /// Errors that occur during prepared statement execution
+  variant prepared-statement-exec-error {
+    /// Unknown/invalid prepared statement token
+    unknown-prepared-query,
+    /// An otherwise known query execution error
+    query-error(query-error),
+    /// A completely unexpected error, specific to prepared statements
+    unexpected(string),
+  }
+
+  /// This type of floating point is necessary as rust does not allow Eq/PartialEq/Hash on real `f64`
+  /// Instead we use a sign + mantissa + exponent
+  ///
+  /// see: https://docs.rs/num/latest/num/trait.Float.html#tymethod.integer_decode
+  type hashable-f64 = tuple<u64, s16, s8>;
+
+  type hashable-f32 = hashable-f64;
+
+  type point = tuple<hashable-f64, hashable-f64>;
+
+  type lower-left-point = point;
+
+  type upper-right-point = point;
+
+  type start-point = point;
+
+  type end-point = point;
+
+  type center-point = point;
+
+  type radius = hashable-f64;
+
+  type ipv4-addr = string;
+
+  type ipv6-addr = string;
+
+  type subnet = string;
+
+  type xmin = s64;
+
+  type xmax = s64;
+
+  type xip-list = list<s64>;
+
+  type logfile-num = u32;
+
+  type logfile-byte-offset = u32;
+
+  type column-name = string;
+
+  /// Arbitrary precision numeric type
+  type numeric = string;
+
+  /// Chosen weight of a Lexeme
+  enum lexeme-weight {
+    A,
+    B,
+    C,
+    D,
+  }
+
+  /// Represents an arbitrary precision numeric type
+  record lexeme {
+    /// Position (1->16383)
+    position: option<u16>,
+    /// Weight of the lexeme (in a relevant ts-vector)
+    weight: option<lexeme-weight>,
+    /// Data
+    data: string,
+  }
+
+  /// Offsets are expressed in seconds of timezone difference in either from the
+  /// eastern hemisphere or western hemisphere.
+  ///
+  /// ex. "America/New York", which is UTC-4 can be expressed as western-hemisphere-secs(4 * 3600)
+  variant offset {
+    eastern-hemisphere-secs(s32),
+    western-hemisphere-secs(s32),
+  }
+
+  /// Dates are represented similarly to tokio-postgres implementation
+  /// see: https://docs.rs/postgres-types/0.2.6/postgres_types/enum.Date.html#variant.Value
+  variant date {
+    positive-infinity,
+    negative-infinity,
+    ymd(tuple<s32, u32, u32>),
+  }
+
+  record interval {
+    start: date,
+    start-inclusive: bool,
+    end: date,
+    end-inclusive: bool,
+  }
+
+  record time {
+    hour: u32,
+    min: u32,
+    sec: u32,
+    micro: u32,
+  }
+
+  record time-tz {
+    timesonze: string,
+    time: time,
+  }
+
+  record timestamp {
+    date: date,
+    time: time,
+  }
+
+  record timestamp-tz {
+    timestamp: timestamp,
+    offset: offset,
+  }
+
+  record mac-address-eui48 {
+    bytes: tuple<u8, u8, u8, u8, u8, u8>,
+  }
+
+  record mac-address-eui64 {
+    bytes: tuple<u8, u8, u8, u8, u8, u8, u8, u8>,
+  }
+
+  /// Postgres data values, usable as parameters or via queries
+  /// see: https://www.postgresql.org/docs/current/datatype.html
+  ///
+  /// This datatype is primarily intended to be used with the `raw` encoding scheme.
+  ///
+  /// NOTE: all numeric values are little-endian unless otherwise specified
+  variant pg-value {
+    null,
+    /// Numeric
+    big-int(s64),
+    int8(s64),
+    int8-array(list<s64>),
+    big-serial(s64),
+    serial8(s64),
+    %bool(bool),
+    boolean(bool),
+    bool-array(list<bool>),
+    double(hashable-f64),
+    float8(hashable-f64),
+    float8-array(list<hashable-f64>),
+    real(hashable-f32),
+    float4(hashable-f32),
+    float4-array(list<hashable-f32>),
+    integer(s32),
+    int(s32),
+    int4(s32),
+    int4-array(list<s32>),
+    numeric(numeric),
+    decimal(numeric),
+    numeric-array(list<numeric>),
+    serial(u32),
+    serial4(u32),
+    small-int(s16),
+    int2(s16),
+    int2-array(list<s16>),
+    int2-vector(list<s16>),
+    int2-vector-array(list<list<s16>>),
+    small-serial(s16),
+    serial2(s16),
+    /// note: matches tokio-postgres
+    /// Bytes
+    ///
+    /// For bit & bit-varying, see the encoding scheme used by bit-vec:
+    /// https://contain-rs.github.io/bit-vec/bit_vec/struct.BitVec.html#method.to_bytes
+    bit(tuple<u32, list<u8>>),
+    bit-array(list<tuple<u32, list<u8>>>),
+    bit-varying(tuple<option<u32>, list<u8>>),
+    varbit(tuple<option<u32>, list<u8>>),
+    varbit-array(list<tuple<option<u32>, list<u8>>>),
+    bytea(list<u8>),
+    bytea-array(list<list<u8>>),
+    /// Characters
+    /// TODO: specify text encoding, to negotiate possible component/DB mismatch?
+    %char(tuple<u32, list<u8>>),
+    char-array(list<tuple<u32, list<u8>>>),
+    varchar(tuple<option<u32>, list<u8>>),
+    varchar-array(list<tuple<option<u32>, list<u8>>>),
+    /// Networking
+    cidr(string),
+    cidr-array(list<string>),
+    inet(string),
+    inet-array(list<string>),
+    macaddr(mac-address-eui48),
+    /// EUI-48
+    macaddr-array(list<mac-address-eui48>),
+    /// EUI-48
+    macaddr8(mac-address-eui64),
+    /// EUI-64 (deprecated)
+    macaddr8-array(list<mac-address-eui64>),
+    /// EUI-64 (deprecated)
+    /// Geo
+    box(tuple<lower-left-point, upper-right-point>),
+    box-array(list<tuple<lower-left-point, upper-right-point>>),
+    circle(tuple<center-point, radius>),
+    circle-array(list<tuple<center-point, radius>>),
+    line(tuple<start-point, end-point>),
+    line-array(list<tuple<start-point, end-point>>),
+    lseg(tuple<start-point, end-point>),
+    lseg-array(list<tuple<start-point, end-point>>),
+    path(list<point>),
+    path-array(list<list<point>>),
+    point(point),
+    point-array(list<point>),
+    polygon(list<point>),
+    polygon-array(list<list<point>>),
+    /// Date-time
+    date(date),
+    date-array(list<date>),
+    interval(interval),
+    interval-array(list<interval>),
+    time(time),
+    time-array(list<time>),
+    time-tz(time-tz),
+    time-tz-array(list<time-tz>),
+    timestamp(timestamp),
+    timestamp-array(list<timestamp>),
+    timestamp-tz(timestamp-tz),
+    timestamp-tz-array(list<timestamp-tz>),
+    /// JSON
+    json(string),
+    json-array(list<string>),
+    jsonb(string),
+    jsonb-array(list<string>),
+    /// Money (use is discouraged)
+    ///
+    /// fractional precision is determined by the database's `lc_monetary` setting.
+    ///
+    /// NOTE: if you are storing currency amounts, consider
+    /// using integer (whole number) counts of smallest indivisible pieces of currency
+    /// (ex. cent amounts to represent United States Dollars; 100 cents = 1 USD)
+    money(numeric),
+    money-array(list<numeric>),
+    /// Postgres-internal
+    pg-lsn(u64),
+    pg-lsn-array(list<u64>),
+    /// see: https://www.postgresql.org/docs/current/functions-info.html#FUNCTIONS-PG-SNAPSHOT-PARTS
+    pg-snapshot(tuple<xmin, xmax, xip-list>),
+    txid-snapshot(s64),
+    /// Text
+    name(string),
+    name-array(list<string>),
+    text(string),
+    text-array(list<string>),
+    xml(string),
+    xml-array(list<string>),
+    /// Full Text Search
+    ts-query(string),
+    ts-vector(list<lexeme>),
+    /// UUIDs
+    uuid(string),
+    uuid-array(list<string>),
+    /// Containers
+    hstore(list<tuple<string, option<string>>>),
+  }
+
+  record result-row-entry {
+    /// Name of the result column
+    column-name: string,
+    /// Value of the result column
+    value: pg-value,
+  }
+
+  type result-row = list<result-row-entry>;
+}
+
+/// Interface for querying a Postgres database
+interface query {
+  use types.{pg-value, result-row, query-error};
+
+  /// Query a Postgres database, leaving connection/session management
+  /// to the callee/implementer of this interface (normally a provider configured with connection credentials)
+  ///
+  /// Queries *must* be parameterized, with named arguments in the form of `$<integer>`, for example:
+  ///
+  /// ```
+  /// SELECT email,username FROM users WHERE uuid=$1;
+  /// ```
+  query: func(query: string, params: list<pg-value>) -> result<list<result-row>, query-error>;
+
+  /// Perform a batch query (which could contain multiple statements) against a Postgres database,
+  /// leaving connection/session management to the callee/implementer of this interface
+  /// (normally a provider configured with connection credentials)
+  ///
+  /// No user-provided or untrusted data should be used with this query -- parameters are not allowed
+  ///
+  /// This query *can* be used to execute multi-statement queries (common in migrations).
+  query-batch: func(query: string) -> result<_, query-error>;
+}
+
+/// Interface for querying a Postgres database with prepared statements
+interface prepared {
+  use types.{pg-value, result-row, statement-prepare-error, prepared-statement-exec-error};
+
+  /// A token that represents a previously created prepared statement,
+  ///
+  /// This token can be expected to be somewhat opaque to users.
+  type prepared-statement-token = string;
+
+  /// Prepare a statement, given a connection token (which can represent a connection *or* session),
+  /// to a Postgres database.
+  ///
+  /// Queries *must* be parameterized, with named arguments in the form of `$<integer>`, for example:
+  ///
+  /// ```
+  /// SELECT email,username FROM users WHERE uuid=$1;
+  /// ```
+  ///
+  /// NOTE: To see how to obtain a `connection-token`, see `connection.wit`.
+  prepare: func(statement: string) -> result<prepared-statement-token, statement-prepare-error>;
+
+  /// Execute a prepared statement, returning the number of rows affected
+  exec: func(stmt-token: prepared-statement-token, params: list<pg-value>) -> result<u64, prepared-statement-exec-error>;
+}
+

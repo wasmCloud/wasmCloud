@@ -17,7 +17,6 @@ use spire_api::{
 use tokio::sync::RwLock;
 use tracing::{error, instrument, warn};
 use wasmcloud_runtime::capability::logging::logging;
-use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_runtime::capability::{
     self, identity, messaging0_2_0, messaging0_3_0, secrets, CallTargetInterface,
 };
@@ -43,14 +42,14 @@ const WASMCLOUD_SELECTOR_COMPONENT: &str = "component";
 #[derive(Clone, Debug)]
 pub struct Handler {
     pub nats: Arc<async_nats::Client>,
-    // ConfigBundle is perfectly safe to pass around, but in order to update it on the fly, we need
+    // in order to update ConfigBundle on the fly, we need
     // to have it behind a lock since it can be cloned and because the `Actor` struct this gets
     // placed into is also inside of an Arc
     pub config_data: Arc<RwLock<ConfigBundle>>,
     /// Secrets are cached per-[`Handler`] so they can be used at runtime without consulting the secrets
     /// backend for each request. The [`SecretValue`] is wrapped in the [`Secret`] type from the `secrecy`
     /// crate to ensure that it is not accidentally logged or exposed in error messages.
-    pub secrets: Arc<RwLock<HashMap<String, SecretBox<SecretValue>>>>,
+    pub secrets: Arc<RwLock<HashMap<String, SecretBox<wasmcloud_core::secrets::SecretValue>>>>,
     /// The lattice this handler will use for RPC
     pub lattice: Arc<str>,
     /// The identifier of the component that this handler is associated with
@@ -63,11 +62,12 @@ pub struct Handler {
     ///
     /// While a target may often be a component ID, it is not guaranteed to be one, and could be
     /// some other identifier of where to send invocations, representing one or more lattice entities.
-    ///
     /// Lattice entities could be:
     /// - A (single) Component ID
     /// - A routing group
     /// - Some other opaque string
+    ///
+    /// The ConfigId represents the unique configuration context for this specific link.
     #[allow(clippy::type_complexity)]
     pub instance_links: Arc<RwLock<HashMap<Box<str>, HashMap<Box<str>, Box<str>>>>>,
     /// Link name -> messaging client
@@ -241,6 +241,7 @@ impl wrpc_transport::Invoke for Handler {
         let mut headers = injector_to_headers(&TraceContextInjector::default_with_span());
         headers.insert("source-id", &*self.component_id);
         headers.insert("link-name", link_name);
+
         let nats = wrpc_transport_nats::Client::new(
             Arc::clone(&self.nats),
             format!("{}.{id}", &self.lattice),
@@ -384,7 +385,13 @@ impl Secrets for Handler {
             bail!(ERROR_MSG)
         };
         use secrecy::ExposeSecret;
-        Ok(secret_val.expose_secret().clone())
+        let core_secret = secret_val.expose_secret().clone();
+        Ok(match core_secret {
+            wasmcloud_core::secrets::SecretValue::String(s) => {
+                secrets::store::SecretValue::String(s)
+            }
+            wasmcloud_core::secrets::SecretValue::Bytes(b) => secrets::store::SecretValue::Bytes(b),
+        })
     }
 }
 
@@ -465,10 +472,6 @@ impl Messaging0_2 for Handler {
                         Ok(()) => return Ok(Ok(())),
                         Err(err) => return Ok(Err(err.to_string())),
                     }
-                }
-                match nats.publish(subject, body.into()).await {
-                    Ok(()) => return Ok(Ok(())),
-                    Err(err) => return Ok(Err(err.to_string())),
                 }
             }
         }

@@ -55,6 +55,14 @@ mod aliases {
 #[allow(deprecated)]
 pub use aliases::*;
 
+pub mod bindings {
+    wit_bindgen_wrpc::generate!({
+        additional_derives: [serde::Serialize, serde::Deserialize, PartialEq, Eq],
+        generate_all,
+        generate_unused_types: true
+    });
+}
+
 /// Generic result
 type Result<T> = ::core::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

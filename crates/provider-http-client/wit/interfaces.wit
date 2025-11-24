@@ -1,0 +1,6 @@
+package wasmcloud:provider-http-client;
+
+world extension {
+    export wrpc:extension/manageable@0.0.1;
+    export wrpc:extension/configurable@0.0.1;
+}

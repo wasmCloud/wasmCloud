@@ -3,6 +3,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::bindings::ext::exports::wrpc::extension::{
+    configurable::{self, InterfaceConfig},
+    manageable,
+};
 use anyhow::{bail, Context as _, Result};
 use bytes::Bytes;
 use kafka::producer::{Producer, Record};
@@ -13,10 +17,12 @@ use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, instrument, warn};
+use wasmcloud_provider_sdk::core::secrets::SecretValue;
 use wasmcloud_provider_sdk::{
-    get_connection, run_provider, Context, LinkConfig, LinkDeleteInfo, Provider,
+    get_connection, initialize_observability, run_provider, serve_provider_exports,
+    types::{BindRequest, BindResponse, HealthCheckResponse},
+    Context,
 };
-use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 use wasmcloud_tracing::context::TraceContextInjector;
 
 mod client;
@@ -24,12 +30,24 @@ use client::{AsyncKafkaClient, AsyncKafkaConsumer};
 
 mod bindings {
     wit_bindgen_wrpc::generate!({
+        world: "interfaces",
         with: {
             "wasmcloud:messaging/consumer@0.2.0": generate,
             "wasmcloud:messaging/handler@0.2.0": generate,
             "wasmcloud:messaging/types@0.2.0": generate,
         },
     });
+
+    pub mod ext {
+        wit_bindgen_wrpc::generate!({
+            world: "extension",
+            with: {
+                "wrpc:extension/types@0.0.1": wasmcloud_provider_sdk::types,
+                "wrpc:extension/manageable@0.0.1": generate,
+                "wrpc:extension/configurable@0.0.1": generate
+            },
+        });
+    }
 }
 use bindings::wasmcloud::messaging::types::BrokerMessage;
 
@@ -78,12 +96,22 @@ struct KafkaConnection {
     consumer_group: Option<String>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct KafkaMessagingProvider {
     // Map of Component ID to the JoinHandle where messages are consumed.
     //
     // When a link is put we spawn a tokio::task to handle messages, and on delete the task is closed
     connections: Arc<RwLock<HashMap<String, KafkaConnection>>>,
+    quit_tx: Arc<tokio::sync::broadcast::Sender<()>>,
+}
+
+impl KafkaMessagingProvider {
+    fn new(quit_tx: tokio::sync::broadcast::Sender<()>) -> Self {
+        Self {
+            connections: Arc::default(),
+            quit_tx: Arc::new(quit_tx),
+        }
+    }
 }
 
 impl KafkaMessagingProvider {
@@ -92,55 +120,58 @@ impl KafkaMessagingProvider {
     }
 
     pub async fn run() -> anyhow::Result<()> {
-        initialize_observability!(
-            KafkaMessagingProvider::name(),
-            std::env::var_os("PROVIDER_MESSAGING_KAFKA_FLAMEGRAPH_PATH")
-        );
-
-        let provider = Self::default();
-        let shutdown = run_provider(provider.clone(), KafkaMessagingProvider::name())
+        let (shutdown, quit_tx) = run_provider(KafkaMessagingProvider::name(), None)
             .await
             .context("failed to run provider")?;
+        let provider = Self::new(quit_tx);
         let connection = get_connection();
-        let wrpc = connection
-            .get_wrpc_client(connection.provider_key())
-            .await?;
-        serve_provider_exports(&wrpc, provider, shutdown, bindings::serve)
-            .await
-            .context("failed to serve provider exports")
+        let (main_client, ext_client) = connection.get_wrpc_clients_for_serving().await?;
+        serve_provider_exports(
+            &main_client,
+            &ext_client,
+            provider,
+            shutdown,
+            bindings::serve,
+            bindings::ext::serve,
+        )
+        .await
+        .context("failed to serve provider exports")
     }
 }
 
 /// Extract hostnames (separated by commas, found under key [`KAFKA_HOSTS_CONFIG_KEY`]) from config hashmap
 ///
 /// If no hostnames are found [`DEFAULT_HOST`] is split (by ',') and returned.
-fn extract_hosts_from_link_config(link_config: &LinkConfig) -> Vec<String> {
+fn extract_hosts_from_link_config(link_config: &InterfaceConfig) -> Vec<String> {
     // Collect comma separated hosts into a Vec<String>
     //
     // This value could come from either secrets or regular config (for backwards compat)
     // but we want to make sure we warn if it is pulled from config.
     let maybe_hosts = link_config
         .secrets
-        .iter()
-        .find_map(|(k, v)| {
-            match (k, v.as_string()) {
-                (k, Some(v)) if *k == KAFKA_HOSTS_CONFIG_KEY  => Some(String::from(v)),
-                _ => None,
-            }
-        })
-    .or_else(|| {
-        warn!("secret value [{KAFKA_HOSTS_CONFIG_KEY}] was not found in secrets. Prefer storing sensitive values in secrets");
-        link_config
-            .config
-            .iter()
-            .find_map(|(k, v)| {
-                if *k == KAFKA_HOSTS_CONFIG_KEY {
-                    Some(v.to_string())
-                } else {
-                    None
+        .as_ref()
+        .and_then(|secrets| {
+            secrets.iter().find_map(|(k, v)| {
+                let secret: SecretValue = v.into();
+                match (k.as_str(), secret.as_string()) {
+                    (k, Some(v)) if k == KAFKA_HOSTS_CONFIG_KEY => Some(String::from(v)),
+                    _ => None,
                 }
             })
-    });
+        })
+        .or_else(|| {
+            warn!("secret value [{KAFKA_HOSTS_CONFIG_KEY}] was not found in secrets. Prefer storing sensitive values in secrets");
+            link_config
+                .config
+                .iter()
+                .find_map(|(k, v)| {
+                    if k == KAFKA_HOSTS_CONFIG_KEY {
+                        Some(v.to_string())
+                    } else {
+                        None
+                    }
+                })
+        });
 
     maybe_hosts
         .unwrap_or_else(|| DEFAULT_HOST.to_string())
@@ -167,20 +198,91 @@ fn extract_topic_from_config(config: &HashMap<String, String>) -> &str {
         .trim()
 }
 
-impl Provider for KafkaMessagingProvider {
-    /// Called when this provider is linked to, when the provider is the *target* of the link.
-    #[instrument(skip_all, fields(source_id))]
-    async fn receive_link_config_as_target(&self, link_config: LinkConfig<'_>) -> Result<()> {
-        let LinkConfig {
-            link_name,
-            source_id,
-            config,
-            ..
-        } = link_config;
+impl manageable::Handler<Option<Context>> for KafkaMessagingProvider {
+    async fn bind(
+        &self,
+        _cx: Option<Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_xkey: Some(get_connection().provider_xkey.public_key().into()),
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by closing all connections
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
+        let mut connections = self.connections.write().await;
+        for (
+            _source_id,
+            KafkaConnection {
+                consumer,
+                consumer_stop_tx,
+                ..
+            },
+        ) in connections.drain()
+        {
+            consumer_stop_tx
+                .send(())
+                .map_err(|_| anyhow::anyhow!("failed to send consumer stop"))?;
+            if let Err(err) =
+                tokio::try_join!(consumer).context("consumer task did not exit cleanly")
+            {
+                error!(?err, "failed to stop consumer task cleanly");
+            };
+        }
+        // Signal the provider to shut down
+        let _ = self.quit_tx.send(());
+        Ok(Ok(()))
+    }
+}
+
+impl configurable::Handler<Option<Context>> for KafkaMessagingProvider {
+    #[instrument(level = "debug", skip_all)]
+    async fn update_base_config(
+        &self,
+        _cx: Option<Context>,
+        config: wasmcloud_provider_sdk::types::BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let flamegraph_path = config
+            .config
+            .iter()
+            .find(|(k, _)| k == "FLAMEGRAPH_PATH")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("PROVIDER_MESSAGING_KAFKA_FLAMEGRAPH_PATH").ok());
+        initialize_observability!(
+            KafkaMessagingProvider::name(),
+            flamegraph_path,
+            config.config
+        );
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(source_id))]
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        link_name: String,
+        link_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
         debug!(link_name, source_id, "receiving link as target");
+        // Convert config Vec to HashMap for easier access
+        let config: HashMap<String, String> = link_config.config.iter().cloned().collect();
         // Collect various values from config (if present)
         let hosts = extract_hosts_from_link_config(&link_config);
-        let topic = extract_topic_from_config(config);
+        let topic = extract_topic_from_config(&config);
         let consumer_group = config
             .get(KAFKA_CONSUMER_GROUP_CONFIG_KEY)
             .map(String::to_string);
@@ -243,7 +345,7 @@ impl Provider for KafkaMessagingProvider {
         })?;
 
         // Store reusable information for use when processing new messages
-        let component_id: Arc<str> = source_id.into();
+        let component_id: Arc<str> = source_id.clone().into();
         let subject: Arc<str> = topic.into();
 
         // Allow triggering listeners to stop
@@ -324,15 +426,36 @@ impl Provider for KafkaMessagingProvider {
                 consumer_group,
             },
         );
-
-        Ok(())
+        Ok(Ok(()))
     }
 
-    /// Handle notification that a link is dropped: close the connection
-    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
-    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> Result<()> {
-        let component_id = info.get_source_id();
-        debug!(component_id, "deleting link for component");
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+        _config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "info", skip_all, fields(source_id))]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        debug!(source_id, "deleting link for component");
 
         // Find the connection and remove it from the HashMap
         let mut connections = self.connections.write().await;
@@ -340,10 +463,10 @@ impl Provider for KafkaMessagingProvider {
             consumer,
             consumer_stop_tx,
             ..
-        }) = connections.remove(component_id)
+        }) = connections.remove(&source_id)
         else {
             debug!("Linkdef deleted for non-existent consumer, ignoring");
-            return Ok(());
+            return Ok(Ok(()));
         };
 
         // Signal the consumer to stop, then wait for it to close out
@@ -354,31 +477,7 @@ impl Provider for KafkaMessagingProvider {
             .await
             .context("consumer task did not exit cleanly")?;
 
-        Ok(())
-    }
-
-    /// Handle shutdown request with any cleanup necessary
-    async fn shutdown(&self) -> Result<()> {
-        let mut connections = self.connections.write().await;
-        for (
-            _source_id,
-            KafkaConnection {
-                consumer,
-                consumer_stop_tx,
-                ..
-            },
-        ) in connections.drain()
-        {
-            consumer_stop_tx
-                .send(())
-                .map_err(|_| anyhow::anyhow!("failed to send consumer stop"))?;
-            if let Err(err) =
-                tokio::try_join!(consumer).context("consumer task did not exit cleanly")
-            {
-                error!(?err, "failed to stop consumer task cleanly");
-            };
-        }
-        Ok(())
+        Ok(Ok(()))
     }
 }
 

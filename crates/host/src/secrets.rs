@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 
 use secrecy::SecretBox;
-use wasmcloud_runtime::capability::secrets::store::SecretValue;
+use wasmcloud_core::secrets::SecretValue;
 
 /// A trait for fetching secrets from a secret store. This is used by the host to fetch secrets
 /// from a configured secret store.

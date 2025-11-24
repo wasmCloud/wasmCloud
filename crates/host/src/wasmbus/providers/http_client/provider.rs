@@ -5,12 +5,19 @@ use futures::StreamExt as _;
 use http::uri::Scheme;
 use http_body::Frame;
 use http_body_util::{BodyExt as _, StreamBody};
+use std::io::BufReader;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::spawn;
+use tokio::sync::RwLock;
 use tokio::task::JoinSet;
+use tracing::instrument;
 use tracing::{debug, error, info, trace, warn, Instrument as _};
 use wasmcloud_provider_sdk::Context;
 
+use crate::bindings::exports::wrpc::extension;
+use crate::bindings::wrpc::extension::manageable;
+use crate::bindings::wrpc::extension::types::{BaseConfig, InterfaceConfig};
 use wrpc_interface_http::{
     bindings::wrpc::http::types::{ErrorCode, RequestOptions},
     split_outgoing_http_body, try_fields_to_header_map, ServeOutgoingHandlerHttp,
@@ -19,7 +26,7 @@ use wrpc_interface_http::{
 // Import shared connection pooling infrastructure
 use wasmcloud_core::http_client::{
     hyper_request_error, Cacheable, ConnPool, DEFAULT_CONNECT_TIMEOUT, DEFAULT_FIRST_BYTE_TIMEOUT,
-    DEFAULT_USER_AGENT,
+    DEFAULT_USER_AGENT, LOAD_NATIVE_CERTS, LOAD_WEBPKI_CERTS, SSL_CERTS_FILE,
 };
 
 /// Internal HTTP client provider implementation that handles outgoing HTTP requests
@@ -30,13 +37,19 @@ use wasmcloud_core::http_client::{
 /// to components without requiring an external provider.
 #[derive(Clone)]
 pub struct HttpClientProvider {
-    /// TLS connector for establishing secure HTTPS connections
-    tls: tokio_rustls::TlsConnector,
+    /// TLS connector for establishing secure HTTPS connections.
+    /// Wrapped in RwLock to allow configuration via update_base_config after startup.
+    tls: Arc<RwLock<tokio_rustls::TlsConnector>>,
     /// Connection pools for HTTP and HTTPS connections
     conns: ConnPool<wrpc_interface_http::HttpBody>,
     /// Background tasks for connection management
     #[allow(unused)]
     tasks: Arc<JoinSet<()>>,
+    /// Channel to signal provider shutdown
+    quit_tx: tokio::sync::broadcast::Sender<()>,
+    /// Whether the provider has been configured via update_base_config.
+    /// Requests will be rejected until this is true.
+    configured: Arc<AtomicBool>,
 }
 
 impl HttpClientProvider {
@@ -44,15 +57,17 @@ impl HttpClientProvider {
     ///
     /// # Arguments
     ///
-    /// * `tls` - TLS connector for HTTPS connections
     /// * `idle_timeout` - Duration after which idle connections are closed
+    /// * `quit_tx` - broadcast channel sender for shutdown
     ///
     /// # Returns
     ///
-    /// A new HTTP client provider or an error if initialization fails
+    /// A new HTTP client provider or an error if initialization fails.
+    /// The provider starts with default TLS and must receive update_base_config
+    /// before it will accept requests.
     pub(crate) async fn new(
-        tls: tokio_rustls::TlsConnector,
         idle_timeout: Duration,
+        quit_tx: tokio::sync::broadcast::Sender<()>,
     ) -> anyhow::Result<Self> {
         debug!(
             target: "http_client::handle",
@@ -79,9 +94,13 @@ impl HttpClientProvider {
         });
 
         let provider = Self {
-            tls,
+            tls: Arc::new(RwLock::new(
+                wasmcloud_provider_sdk::core::tls::DEFAULT_RUSTLS_CONNECTOR.clone(),
+            )),
             conns,
             tasks: Arc::new(tasks),
+            quit_tx,
+            configured: Arc::new(AtomicBool::new(false)),
         };
 
         debug!(
@@ -92,27 +111,165 @@ impl HttpClientProvider {
     }
 }
 
-// Leverages the default implementation of the `wasmcloud_provider_sdk::Provider` trait.
-/// This trait is required by the wasmCloud runtime to interact with the provider.
-impl wasmcloud_provider_sdk::Provider for HttpClientProvider {
-    /// Provider should perform any operations needed for a new link,
-    /// including setting up per-component resources, and checking authorization.
-    /// If the link is allowed, return true, otherwise return false to deny the link.
-    async fn receive_link_config_as_target(
+impl extension::manageable::Handler<Option<Context>> for HttpClientProvider {
+    async fn bind(
         &self,
-        link_config: wasmcloud_provider_sdk::LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
+        _cx: Option<Context>,
+        _req: manageable::BindRequest,
+    ) -> anyhow::Result<Result<manageable::BindResponse, String>> {
+        Ok(Ok(manageable::BindResponse {
+            identity_token: None,
+            provider_pubkey: None,
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<manageable::HealthCheckResponse, String>> {
+        Ok(Ok(manageable::HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by signaling the provider to shut down
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
+        // NOTE: The result is ignored because the channel will be closed if the last
+        // receiver is dropped, which is a valid way to shut down.
+        let _ = self.quit_tx.send(());
+        Ok(Ok(()))
+    }
+}
+
+impl extension::configurable::Handler<Option<Context>> for HttpClientProvider {
+    #[instrument(level = "debug", skip_all)]
+    async fn update_base_config(
+        &self,
+        _cx: Option<Context>,
+        config: BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let config_map: std::collections::HashMap<String, String> =
+            config.config.into_iter().collect();
+
+        // Initialize TLS connector based on configuration
+        let tls = if config_map.is_empty() {
+            debug!("Using default TLS connector");
+            wasmcloud_provider_sdk::core::tls::DEFAULT_RUSTLS_CONNECTOR.clone()
+        } else {
+            debug!("Configuring custom TLS connector");
+            let mut ca = rustls::RootCertStore::empty();
+
+            if config_map
+                .get(LOAD_NATIVE_CERTS)
+                .map(|v| v.eq_ignore_ascii_case("true"))
+                .unwrap_or(true)
+            {
+                let (added, ignored) = ca.add_parsable_certificates(
+                    wasmcloud_provider_sdk::core::tls::NATIVE_ROOTS
+                        .iter()
+                        .cloned(),
+                );
+                debug!(added, ignored, "loaded native root certificate store");
+            }
+
+            if config_map
+                .get(LOAD_WEBPKI_CERTS)
+                .map(|v| v.eq_ignore_ascii_case("true"))
+                .unwrap_or(true)
+            {
+                ca.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+                debug!("loaded webpki root certificate store");
+            }
+
+            if let Some(file_path) = config_map.get(SSL_CERTS_FILE) {
+                let f = match std::fs::File::open(file_path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        return Ok(Err(format!("failed to open SSL certs file: {e}")));
+                    }
+                };
+                let mut reader = BufReader::new(f);
+                let certs = match rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(certs) => certs,
+                    Err(e) => {
+                        return Ok(Err(format!("failed to parse SSL certs file: {e}")));
+                    }
+                };
+                let (added, ignored) = ca.add_parsable_certificates(certs);
+                debug!(
+                    added,
+                    ignored, "added additional root certificates from file"
+                );
+            }
+
+            tokio_rustls::TlsConnector::from(Arc::new(
+                rustls::ClientConfig::builder()
+                    .with_root_certificates(ca)
+                    .with_no_client_auth(),
+            ))
+        };
+
+        // Update the TLS connector
+        *self.tls.write().await = tls;
+
+        // Mark as configured so requests can be served
+        self.configured.store(true, Ordering::Release);
+        info!("HTTP client provider configured and ready to serve requests");
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        link_name: String,
+        config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
         debug!(
             target: "http_client::handle",
-            target_id = %link_config.target_id,
-            source_id = %link_config.source_id,
-            link_name = %link_config.link_name,
-            wit_namespace = %link_config.wit_metadata.0,
-            wit_package = %link_config.wit_metadata.1,
-            interfaces = ?link_config.wit_metadata.2,
+            source_id = %source_id,
+            link_name = %link_name,
+            wit_namespace = %config.metadata.namespace,
+            wit_package = %config.metadata.package,
+            interfaces = ?config.metadata.interfaces,
             "Received link config as target"
         );
-        Ok(())
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+        _config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        _source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
     }
 }
 
@@ -144,6 +301,13 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
             ErrorCode,
         >,
     > {
+        // Reject requests until the provider has been configured
+        if !self.configured.load(Ordering::Acquire) {
+            return Ok(Err(ErrorCode::InternalError(Some(
+                "HTTP client provider not yet configured".to_string(),
+            ))));
+        }
+
         // Extract tracing context if available
         if let Some(ctx) = &cx {
             if let Some(traceparent) = ctx.tracing.get("traceparent") {
@@ -201,6 +365,9 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
 
             debug!(%authority, use_tls, "Using authority with TLS setting");
 
+            // Clone TLS connector for use in this request
+            let tls = self.tls.read().await.clone();
+
             // Remove scheme and authority from request URI
             *request.uri_mut() = http::Uri::builder()
                 .path_and_query(
@@ -226,7 +393,7 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
                     debug!(%authority, "Establishing HTTPS connection");
                     tokio::time::timeout(
                         connect_timeout,
-                        self.conns.connect_https(&self.tls, &authority),
+                        self.conns.connect_https(&tls, &authority),
                     )
                     .await
                 } else {

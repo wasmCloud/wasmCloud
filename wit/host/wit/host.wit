@@ -1,0 +1,36 @@
+package wasmcloud:host@0.0.1;
+
+/// Central host which allows other components to request binding to it.
+/// This is similar to wrpc:extension/manageable.bind but allows for the component to initiate the request.
+interface host {
+    use wrpc:extension/types@0.0.1.{health-check-response};
+    use types.{bind-request, bind-response};
+
+    /// Establishes a binding/connection with this component.
+    bind: func(request: bind-request) -> result<bind-response, string>;
+
+    /// Checks the operational health and status of .
+    ///
+    /// Should return quickly and indicate whether the component is functioning properly.
+    /// This is typically called periodically by management systems to monitor component health.
+    health-request: func() -> result<health-check-response, string>;
+
+    /// Allows a service to be shutdown via other services or external systems
+    shutdown: func() -> result<_, string>;
+}
+
+interface types {
+    /// Request to establish a binding/connection from a component to a host.
+    record bind-request {
+        /// JWT-SVID token for workload identity authentication
+        identity-token: option<string>,
+        /// X25519 public key (32 bytes) for encrypting secrets sent to this component
+        component-pubkey: option<list<u8>>,
+    }
+
+    /// Response from a bind request containing the responder's identity and encryption key.
+    record bind-response {
+        /// JWT-SVID token of the responding component for mutual authentication
+        identity-token: option<string>,
+    }
+}

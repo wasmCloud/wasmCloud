@@ -2,12 +2,8 @@
 //!
 //! [wit]: <https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md>
 
-use std::collections::HashMap;
-
 use anyhow::{bail, Context as _, Result};
 use semver::Version;
-use serde::ser::SerializeMap;
-use serde::{Deserialize, Serialize, Serializer};
 
 use crate::{WitFunction, WitInterface, WitNamespace, WitPackage};
 
@@ -16,30 +12,6 @@ use crate::{WitFunction, WitInterface, WitNamespace, WitPackage};
 /// This representation is required because WIT does not natively
 /// have support for a map type, so we must use a list of tuples
 pub type WitMap<T> = Vec<(String, T)>;
-
-pub(crate) fn serialize_wit_map<S: Serializer, T>(
-    map: &WitMap<T>,
-    serializer: S,
-) -> std::result::Result<S::Ok, S::Error>
-where
-    T: Serialize,
-{
-    let mut seq = serializer.serialize_map(Some(map.len()))?;
-    for (key, val) in map {
-        seq.serialize_entry(key, val)?;
-    }
-    seq.end()
-}
-
-pub(crate) fn deserialize_wit_map<'de, D: serde::Deserializer<'de>, T>(
-    deserializer: D,
-) -> std::result::Result<WitMap<T>, D::Error>
-where
-    T: Deserialize<'de>,
-{
-    let values = HashMap::<String, T>::deserialize(deserializer)?;
-    Ok(values.into_iter().collect())
-}
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 /// Call target identifier, which is equivalent to a WIT specification, which

@@ -9,6 +9,7 @@ use tokio::time::interval;
 use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 use tracing::warn;
+use wasmcloud_control_interface::SatisfiedProviderInterfaces;
 use wasmcloud_core::health_subject;
 
 /// Helper method for deserializing content, so that we can easily switch out implementations
@@ -67,7 +68,14 @@ pub async fn assert_start_provider(
     let lattice = client.lattice();
     let rpc_client = client.nats_client();
     let resp = client
-        .start_provider(host_id, provider_ref, provider_id, None, config)
+        .start_internal_provider(
+            host_id,
+            provider_ref,
+            provider_id,
+            SatisfiedProviderInterfaces::new(true, true),
+            None,
+            config,
+        )
         .await
         .map_err(|e| anyhow!(e).context("failed to start provider"))?;
     ensure!(resp.succeeded());
@@ -114,7 +122,14 @@ pub async fn assert_start_provider_timeout(
     }: StartProviderArgs<'_>,
 ) -> Result<()> {
     if let Err(e) = client
-        .start_provider(host_id, provider_ref, provider_id, None, config)
+        .start_internal_provider(
+            host_id,
+            provider_ref,
+            provider_id,
+            SatisfiedProviderInterfaces::new(true, true),
+            None,
+            config,
+        )
         .await
     {
         ensure!(e.to_string().contains("timed out"));

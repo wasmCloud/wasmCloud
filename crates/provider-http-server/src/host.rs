@@ -10,7 +10,10 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{bail, Context as _};
+use crate::bindings::exports::wrpc::extension::{
+    configurable::{self, InterfaceConfig},
+    manageable,
+};
 use axum::extract;
 use axum::handler::Handler;
 use axum_server::tls_rustls::RustlsConfig;
@@ -19,7 +22,11 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument};
 use wasmcloud_provider_sdk::provider::WrpcClient;
-use wasmcloud_provider_sdk::{get_connection, HostData, LinkConfig, LinkDeleteInfo, Provider};
+use wasmcloud_provider_sdk::Context;
+use wasmcloud_provider_sdk::{
+    get_connection,
+    types::{BindRequest, BindResponse, HealthCheckResponse},
+};
 
 use crate::{
     build_request, get_cors_layer, get_tcp_listener, invoke_component, load_settings,
@@ -38,68 +45,93 @@ struct Router {
     header: String,
 }
 
-/// `wrpc:http/incoming-handler` provider implementation with host-based routing
-#[derive(Clone)]
-pub struct HttpServerProvider {
-    /// Struct that holds the routing information based on host/component_id
-    router: Arc<RwLock<Router>>,
-    /// [`Handle`] to the server task
+/// Holds the server handle and task for graceful shutdown
+struct ServerState {
+    /// [`Handle`] to the server task for graceful shutdown
     handle: Handle,
     /// Task handle for the server task
-    task: Arc<JoinHandle<()>>,
+    task: JoinHandle<()>,
 }
 
-impl Drop for HttpServerProvider {
-    fn drop(&mut self) {
+impl ServerState {
+    /// Shutdown the server gracefully
+    fn shutdown(&self) {
         self.handle.shutdown();
         self.task.abort();
     }
 }
 
+/// `wrpc:http/incoming-handler` provider implementation with host-based routing
+#[derive(Clone)]
+pub struct HttpServerProvider {
+    /// Struct that holds the routing information based on host/component_id
+    router: Arc<RwLock<Router>>,
+    /// Server state (handle + task), None if server not yet started
+    server_state: Arc<RwLock<Option<ServerState>>>,
+    /// Channel to signal provider shutdown
+    quit_tx: Arc<tokio::sync::broadcast::Sender<()>>,
+}
+
 impl HttpServerProvider {
-    pub(crate) async fn new(host_data: &HostData) -> anyhow::Result<Self> {
-        let default_address = host_data
-            .config
-            .get("default_address")
-            .map(|s| SocketAddr::from_str(s))
-            .transpose()
-            .context("failed to parse default_address")?;
+    pub fn new(quit_tx: tokio::sync::broadcast::Sender<()>) -> Self {
+        Self {
+            router: Arc::default(),
+            server_state: Arc::default(),
+            quit_tx: Arc::new(quit_tx),
+        }
+    }
+}
 
-        let header = host_data
-            .config
-            .get("header")
-            .map(String::as_str)
-            .unwrap_or("host")
-            .to_lowercase();
+impl HttpServerProvider {
+    /// Start or restart the HTTP server with new settings
+    async fn start_server(
+        &self,
+        settings: Arc<ServiceSettings>,
+        header: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        // Shutdown previous server if running
+        {
+            let mut server_state = self.server_state.write().await;
+            if let Some(state) = server_state.take() {
+                info!("Shutting down previous HTTP server");
+                state.shutdown();
+            }
+        }
 
-        let settings = load_settings(default_address, &host_data.config)
-            .context("failed to load settings in host mode")?;
-        let settings = Arc::new(settings);
-
-        let router = Arc::new(RwLock::new(Router {
-            header: header.to_string(),
-            ..Default::default()
-        }));
+        // Update the header in the router
+        {
+            let mut router = self.router.write().await;
+            router.header = header;
+        }
 
         let addr = settings.address;
         info!(
             %addr,
             "httpserver starting listener in host-based mode",
         );
-        let cors = get_cors_layer(&settings)?;
-        let listener = get_tcp_listener(&settings)?;
+
+        let cors = match get_cors_layer(&settings) {
+            Result::Ok(cors) => cors,
+            Result::Err(e) => return Ok(Err(format!("failed to configure CORS: {e}"))),
+        };
+        let listener = match get_tcp_listener(&settings) {
+            Result::Ok(listener) => listener,
+            Result::Err(e) => return Ok(Err(format!("failed to bind TCP listener: {e}"))),
+        };
         let service = handle_request.layer(cors);
 
         let handle = axum_server::Handle::new();
         let task_handle = handle.clone();
-        let task_router = Arc::clone(&router);
+        let task_router = Arc::clone(&self.router);
+
         let task = if let (Some(crt), Some(key)) =
             (&settings.tls_cert_file, &settings.tls_priv_key_file)
         {
             debug!(?addr, "bind HTTPS listener");
-            let tls = RustlsConfig::from_pem_file(crt, key)
-                .await
-                .context("failed to construct TLS config")?;
+            let tls = match RustlsConfig::from_pem_file(crt, key).await {
+                Result::Ok(tls) => tls,
+                Result::Err(e) => return Ok(Err(format!("failed to construct TLS config: {e}"))),
+            };
 
             tokio::spawn(async move {
                 if let Err(e) = axum_server::from_tcp_rustls(listener, tls)
@@ -140,88 +172,182 @@ impl HttpServerProvider {
             })
         };
 
-        Ok(Self {
-            router,
-            handle,
-            task: Arc::new(task),
-        })
+        // Store the new server state
+        {
+            let mut server_state = self.server_state.write().await;
+            *server_state = Some(ServerState { handle, task });
+        }
+
+        Ok(Ok(()))
     }
 }
 
-impl Provider for HttpServerProvider {
-    /// This is called when the HTTP server provider is linked to a component
-    ///
-    /// This HTTP server mode will register the host in the link for routing to the target
-    /// component when a request is received on the listen address.
-    async fn receive_link_config_as_source(
+impl configurable::Handler<Option<Context>> for HttpServerProvider {
+    #[instrument(level = "debug", skip_all)]
+    async fn update_base_config(
         &self,
-        link_config: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        let Some(host) = link_config.config.get("host") else {
-            error!(?link_config.config, ?link_config.target_id, "host not found in link config, cannot register host");
-            bail!(
-                "host not found in link config, cannot register host for component {}",
-                link_config.target_id
-            );
+        _cx: Option<Context>,
+        config: wasmcloud_provider_sdk::types::BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let config: HashMap<String, String> = config.config.into_iter().collect();
+
+        let default_address = match config
+            .get("default_address")
+            .map(|s| SocketAddr::from_str(s))
+            .transpose()
+        {
+            Result::Ok(addr) => addr,
+            Result::Err(e) => return Ok(Err(format!("failed to parse default_address: {e}"))),
         };
 
-        let target = Arc::from(link_config.target_id);
-        let name = Arc::from(link_config.link_name);
+        let header = config
+            .get("header")
+            .map(String::as_str)
+            .unwrap_or("host")
+            .to_lowercase();
+
+        let settings = match load_settings(default_address, &config) {
+            Result::Ok(settings) => Arc::new(settings),
+            Result::Err(e) => return Ok(Err(format!("failed to load settings in host mode: {e}"))),
+        };
+
+        self.start_server(settings, header).await
+    }
+
+    #[instrument(level = "debug", skip_all, fields(source_id))]
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        _source_id: String,
+        _link_name: String,
+        _link_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        target_id: String,
+        link_name: String,
+        interface_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let config: HashMap<String, String> = interface_config.config.into_iter().collect();
+
+        let Some(host) = config.get("host") else {
+            error!(
+                ?config,
+                ?target_id,
+                "host not found in link config, cannot register host"
+            );
+            return Ok(Err(format!(
+                "host not found in link config, cannot register host for component {}",
+                target_id
+            )));
+        };
+
+        let target = Arc::from(target_id.as_str());
+        let name = Arc::from(link_name.as_str());
 
         let key = (Arc::clone(&target), Arc::clone(&name));
 
         let mut router = self.router.write().await;
         if router.components.contains_key(&key) {
-            // When we can return errors from links, tell the host this was invalid
-            bail!("Component {target} already has a host registered with link name {name}");
+            return Ok(Err(format!(
+                "Component {target} already has a host registered with link name {name}"
+            )));
         }
         if router.hosts.contains_key(host.as_str()) {
-            // When we can return errors from links, tell the host this was invalid
-            bail!("Host {host} already in use by a different component");
+            return Ok(Err(format!(
+                "Host {host} already in use by a different component"
+            )));
         }
 
-        let wrpc = get_connection()
-            .get_wrpc_client(link_config.target_id)
-            .await
-            .context("failed to construct wRPC client")?;
+        let wrpc = match get_connection().get_wrpc_client(&target).await {
+            Result::Ok(wrpc) => wrpc,
+            Result::Err(e) => {
+                return Ok(Err(format!("failed to construct wRPC client: {e}")));
+            }
+        };
 
         let host = Arc::from(host.clone());
         // Insert the host into the hosts map for future lookups
         router.components.insert(key, Arc::clone(&host));
         router.hosts.insert(host, (target, wrpc));
-
-        Ok(())
+        Ok(Ok(()))
     }
 
-    /// Remove the host for a particular component/link_name pair
-    #[instrument(level = "debug", skip_all, fields(target_id = info.get_target_id()))]
-    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn delete_interface_import_config(
+        &self,
+        cx: Option<Context>,
+        target_id: String,
+        link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        let Some(cx) = cx else {
+            return Ok(Err("missing context".to_string()));
+        };
         debug!(
-            source = info.get_source_id(),
-            target = info.get_target_id(),
-            link = info.get_link_name(),
+            source = cx.component,
+            target = target_id,
+            link = link_name,
             "deleting http host link"
         );
-        let component_id = info.get_target_id();
-        let link_name = info.get_link_name();
 
         let mut router = self.router.write().await;
         let host = router
             .components
-            .remove(&(Arc::from(component_id), Arc::from(link_name)));
+            .remove(&(Arc::from(target_id), Arc::from(link_name)));
         if let Some(host) = host {
             router.hosts.remove(&host);
         }
-
-        Ok(())
+        Ok(Ok(()))
     }
 
-    /// Handle shutdown request by shutting down the http server task
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        self.handle.shutdown();
-        self.task.abort();
+    #[instrument(level = "info", skip_all, fields(source_id))]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        _source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+}
 
-        Ok(())
+impl manageable::Handler<Option<Context>> for HttpServerProvider {
+    async fn bind(
+        &self,
+        _cx: Option<Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_xkey: Some(get_connection().provider_xkey.public_key().into()),
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by closing all connections
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
+        let mut server_state = self.server_state.write().await;
+        if let Some(state) = server_state.take() {
+            state.shutdown();
+        }
+
+        // Signal the provider to shut down
+        let _ = self.quit_tx.send(());
+        Ok(Ok(()))
     }
 }
 

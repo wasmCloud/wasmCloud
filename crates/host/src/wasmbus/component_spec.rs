@@ -3,8 +3,8 @@
 
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
-use tracing::{error, instrument, warn};
-use wasmcloud_control_interface::Link;
+use tracing::{debug, error, instrument, warn};
+use wasmcloud_control_interface::InterfaceLink;
 
 use crate::wasmbus::component_import_links;
 
@@ -15,10 +15,11 @@ use crate::wasmbus::component_import_links;
 /// host runtime to route messages to the correct component.
 pub struct ComponentSpecification {
     /// The URL of the component, file, OCI, or otherwise
-    pub(crate) url: String,
+    /// None if this component specification is for an external extension
+    pub(crate) url: Option<String>,
     /// All outbound links from this component to other components, used for routing when calling a component `import`
     #[serde(default)]
-    pub(crate) links: Vec<Link>,
+    pub(crate) links: Vec<InterfaceLink>,
     ////
     // Possible additions in the future, left in as comments to facilitate discussion
     ////
@@ -34,7 +35,15 @@ impl ComponentSpecification {
     /// Create a new empty component specification with the given ID and URL
     pub fn new(url: impl AsRef<str>) -> Self {
         Self {
-            url: url.as_ref().to_string(),
+            url: Some(url.as_ref().to_string()),
+            links: Vec::new(),
+        }
+    }
+
+    /// Create a new empty component specification with no URL, for components started external to the host.
+    pub fn new_external() -> Self {
+        Self {
+            url: None,
             links: Vec::new(),
         }
     }
@@ -100,11 +109,11 @@ impl super::Host {
     #[instrument(level = "debug", skip_all)]
     /// Update the component specification in the host map. This will also update the links in the
     /// component handler if the component is already running. This will also send the new links to
-    /// any providers that are the source or target of the link.
+    /// any extensions that are the source or target of the link.
     ///
     /// You must not be holding the following locks when calling this function:
     /// - `self.links`
-    /// - `self.providers`
+    /// - `self.extensions`
     /// - `self.components`
     pub(crate) async fn update_host_with_spec(
         &self,
@@ -112,7 +121,7 @@ impl super::Host {
         spec: &ComponentSpecification,
     ) -> anyhow::Result<()> {
         // Compute all new links that do not exist in the host map, which we'll use to
-        // publish to any running providers that are the source or target of the link.
+        // publish to any running extensions that are the source or target of the link.
         // Computing this ahead of time is a tradeoff to hold only one lock at the cost of
         // allocating an extra Vec. This may be a good place to optimize allocations.
         let new_links = {
@@ -140,19 +149,32 @@ impl super::Host {
 
         {
             // Acquire lock once in this block to avoid continually trying to acquire it.
-            let providers = self.providers.read().await;
-            // For every new link, if a provider is running on this host as the source or target,
-            // send the link to the provider for handling based on the xkey public key.
+            let extensions = self.extensions.read().await;
+
+            // For every new link, if a extension is running on this host as the source or target,
+            // send the link to the extension for handling based on the xkey public key.
             for link in new_links {
-                if let Some(provider) = providers.get(link.source_id()) {
-                    if let Err(e) = self.put_provider_link(provider, link).await {
-                        error!(?e, "failed to put provider link");
+                if let Some(extension) = extensions.get(link.source_id()) {
+                    // Ensure the extension implements the configurable interface
+                    if !extension.satisfied_interfaces().is_configurable() {
+                        debug!("Extension does not implement the configurable interface");
+                        continue;
+                    }
+                    if let Err(e) = self.put_provider_link(extension, link).await {
+                        error!(?e, "failed to put extension link");
                     }
                 }
-                if let Some(provider) = providers.get(link.target()) {
-                    if let Err(e) = self.put_provider_link(provider, link).await {
-                        error!(?e, "failed to put provider link");
+                if let Some(extension) = extensions.get(link.target()) {
+                    // Ensure the extension implements the configurable interface
+                    if !extension.satisfied_interfaces().is_configurable() {
+                        debug!("Extension does not implement the configurable interface");
+                        continue;
                     }
+                    if let Err(e) = self.put_provider_link(extension, link).await {
+                        error!(?e, "failed to put extension link");
+                    }
+                } else {
+                    error!("extension not found for source id {}", link.source_id());
                 }
             }
         }
@@ -160,6 +182,7 @@ impl super::Host {
         // If the component is already running, update the links
         if let Some(component) = self.components.write().await.get(id.as_ref()) {
             *component.handler.instance_links.write().await = component_import_links(&spec.links);
+
             // NOTE(brooksmtownsend): We can consider updating the component if the image URL changes
         };
 

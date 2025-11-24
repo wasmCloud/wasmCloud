@@ -18,14 +18,8 @@ pub mod oci;
 #[cfg(feature = "oci")]
 pub use oci::*;
 
-pub mod par;
-pub use par::*;
-
 pub mod registry;
 pub use registry::*;
-
-pub mod rpc;
-pub use rpc::*;
 
 pub mod secrets;
 
@@ -75,8 +69,9 @@ pub type WitFunction = String;
 /// new interface links in order to configure one or both source/target
 pub type KnownConfigName = String;
 
-/// Trait describing types/entities that can be health-checked
-pub trait HealthCheck {
-    // This might not work with codegen and we'll have to impl
-    fn health_request(&self) -> HealthCheckResponse;
+pub mod bindings {
+    wit_bindgen_wrpc::generate!({
+        additional_derives: [serde::Serialize, serde::Deserialize],
+        generate_all,
+        generate_unused_types: true });
 }

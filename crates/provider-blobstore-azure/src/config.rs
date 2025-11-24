@@ -4,13 +4,13 @@
 //! and EC2 IAM authorizations.
 //!
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use serde::Deserialize;
 use tracing::warn;
 
 use azure_storage::StorageCredentials;
-use wasmcloud_provider_sdk::core::secrets::SecretValue;
-use wasmcloud_provider_sdk::LinkConfig;
 
 /// Configuration for connecting to Azblob.
 #[derive(Clone, Default, Deserialize)]
@@ -23,23 +23,14 @@ pub struct StorageConfig {
 }
 
 impl StorageConfig {
-    /// Build a [`StorageConfig`] from a link configuration
-    pub fn from_link_config(
-        LinkConfig {
-            config, secrets, ..
-        }: &LinkConfig,
-    ) -> Result<StorageConfig> {
+    /// Build a [`StorageConfig`] from a config map
+    pub fn from_config_map(config: &HashMap<String, String>) -> Result<StorageConfig> {
         // To support old workflows, accept but warn when getting the storage access key
         // is not in secrets
-        if secrets.get("storage_access_key").is_none() {
-            warn!("secret [storage_access_key] was not found, checking for [STORAGE_ACCESS_KEY] in configuration. Please prefer using secrets for sensitive values.");
-        }
+        warn!("secret [storage_access_key] was not found, checking for [STORAGE_ACCESS_KEY] in configuration. Please prefer using secrets for sensitive values.");
         match (
             config.get("STORAGE_ACCOUNT"),
-            secrets
-                .get("storage_access_key")
-                .and_then(SecretValue::as_string)
-                .or_else(|| config.get("STORAGE_ACCESS_KEY").map(String::as_str)),
+            config.get("STORAGE_ACCESS_KEY"),
         ) {
             (Some(account), Some(access_key)) => Ok(StorageConfig {
                 storage_account: account.to_string(),

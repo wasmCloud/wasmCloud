@@ -229,7 +229,13 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
                 let mut reader = tokio_util::io::StreamReader::new(data);
 
                 // Get timeout from config, defaulting to 30 seconds if not set
-                let timeout = Duration::from_secs(self.default_config.max_write_wait.unwrap_or(30));
+                let timeout = Duration::from_secs(
+                    self.default_config
+                        .read()
+                        .await
+                        .max_write_wait
+                        .unwrap_or(30),
+                );
 
                 tokio::time::timeout(timeout, container.put(metadata, &mut reader))
                     .await

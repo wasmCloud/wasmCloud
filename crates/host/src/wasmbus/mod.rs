@@ -16,12 +16,11 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Context as _};
 use bytes::{BufMut, Bytes, BytesMut};
-use claims::{Claims, StoredClaims};
+use claims::Claims;
 use futures::stream::{AbortHandle, Abortable};
 use futures::{join, stream, Stream, StreamExt, TryStreamExt};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use nkeys::{KeyPair, KeyPairType, XKey};
-use providers::Provider;
 use secrecy::SecretBox;
 use serde_json::json;
 use sysinfo::System;
@@ -37,27 +36,29 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use wascap::jwt;
 use wasmcloud_control_interface::{
     ComponentAuctionAck, ComponentAuctionRequest, ComponentDescription, CtlResponse,
-    DeleteInterfaceLinkDefinitionRequest, HostInventory, HostLabel, HostLabelIdentifier, Link,
+    DeleteInterfacesLinkRequest, HostInventory, HostLabel, HostLabelIdentifier, InterfaceLink,
     ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription, RegistryCredential,
-    ScaleComponentCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
-    UpdateComponentCommand,
+    SatisfiedProviderInterfaces, ScaleComponentCommand, StartProviderCommand, StopHostCommand,
+    StopProviderCommand, UpdateComponentCommand,
 };
 use wasmcloud_core::ComponentId;
-use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_runtime::component::{from_string_map, Limits, WrpcServeEvent};
 use wasmcloud_runtime::Runtime;
 use wasmcloud_secrets_types::SECRET_PREFIX;
 use wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_tracing::{global, InstrumentationScope, KeyValue};
 
+use crate::bindings::wrpc::extension::configurable::InterfaceConfig;
+use crate::bindings::wrpc::extension::types::WitMetadata;
 use crate::event::{DefaultEventPublisher, EventPublisher};
 use crate::metrics::HostMetrics;
 use crate::nats::connect_nats;
-use crate::nats::provider::NatsProviderManager;
+use crate::nats::provider::WrpcProviderManager;
 use crate::policy::DefaultPolicyManager;
 use crate::secrets::{DefaultSecretsManager, SecretsManager};
 use crate::store::{DefaultStore, StoreManager};
 use crate::wasmbus::ctl::ControlInterfaceServer;
+use crate::wasmbus::providers::Extension;
 use crate::workload_identity::WorkloadIdentityConfig;
 use crate::{fetch_component, PolicyManager, PolicyResponse, RegistryConfig, ResourceRef};
 
@@ -328,18 +329,19 @@ pub struct Host {
     /// A map of claims associated with components, keyed by their component IDs.
     component_claims: Arc<RwLock<HashMap<ComponentId, jwt::Claims<jwt::Component>>>>,
 
-    /// A map of component IDs to their associated links.
-    links: RwLock<HashMap<String, Vec<Link>>>,
+    /// A map of component IDs to their interface links for imports and exports.
+    links: RwLock<HashMap<String, Vec<InterfaceLink>>>,
 
     /// A map of messaging links for NATS clients, organized by component and link names.
     messaging_links:
         Arc<RwLock<HashMap<Arc<str>, Arc<RwLock<HashMap<Box<str>, async_nats::Client>>>>>>,
 
-    /// A map of providers managed by the host, keyed by their identifiers.
-    providers: RwLock<HashMap<String, Provider>>,
+    /// A map of extensions managed by the host, keyed by their identifiers.
+    /// Both internal and external extensions are supported.
+    extensions: RwLock<HashMap<String, Extension>>,
 
     /// A map of claims associated with capability providers, keyed by their identifiers.
-    provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
+    extension_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
 
     /// The runtime environment used by the host for executing tasks.
     runtime: Runtime,
@@ -365,7 +367,7 @@ pub struct Host {
     /// The secrets manager used for managing and retrieving secrets.
     secrets_manager: Arc<dyn SecretsManager>,
 
-    /// The configuration manager for managing component, provider, link, and secret configurations.
+    /// The configuration manager for managing component, extension, link, and secret configurations.
     config_store: Arc<dyn StoreManager>,
 
     /// The data store for managing links, claims, and component specifications.
@@ -664,9 +666,16 @@ impl HostBuilder {
         let (heartbeat_abort, heartbeat_abort_reg) = AbortHandle::new_pair();
         let start_at = Instant::now();
 
+        // Use v1 extension manager if v1 providers set to be enabled
+        let provider_manager: Arc<dyn ProviderManager> = Arc::new(WrpcProviderManager::new(
+            Arc::clone(&rpc_nats),
+            self.config.lattice.to_string(),
+            self.config.host_key.public_key(),
+        ));
+
         let host = Host {
             components: Arc::new(RwLock::new(HashMap::new())),
-            providers: RwLock::new(HashMap::new()),
+            extensions: RwLock::new(HashMap::new()),
             friendly_name,
             heartbeat: heartbeat_abort.clone(),
             host_key: self.config.host_key.clone(),
@@ -680,7 +689,7 @@ impl HostBuilder {
             stop_tx,
             links: RwLock::new(HashMap::new()),
             component_claims: Arc::new(RwLock::new(HashMap::new())),
-            provider_claims: Arc::new(RwLock::new(HashMap::new())),
+            extension_claims: Arc::new(RwLock::new(HashMap::new())),
             metrics: Arc::new(metrics),
             max_execution_time: self.config.max_execution_time,
             messaging_links: Arc::default(),
@@ -710,10 +719,7 @@ impl HostBuilder {
             // TODO(#4407): This trait abstraction isn't actually abstracted since all capability
             // providers are NATS based. As we revise communication with providers, we can update
             // this to be a trait object from the builder instead.
-            provider_manager: Arc::new(NatsProviderManager::new(
-                rpc_nats,
-                self.config.lattice.to_string(),
-            )),
+            provider_manager,
             host_config: self.config,
         };
 
@@ -851,6 +857,14 @@ impl Host {
         &self.host_config.lattice
     }
 
+    /// When invoking components directly from the host instead of a component,
+    /// this fulfills the source id for wrpc requests
+    /// This helps distinguishing between wrpc calls that come from the managing runtime itself
+    /// and other logical components in the lattice
+    pub fn host_source_id() -> &'static str {
+        "wasmcloud-host"
+    }
+
     #[instrument(level = "debug", skip_all)]
     async fn inventory(&self) -> HostInventory {
         trace!("generating host inventory");
@@ -858,28 +872,14 @@ impl Host {
             let components = self.components.read().await;
             stream::iter(components.iter())
                 .filter_map(|(id, component)| async move {
-                    let mut description = ComponentDescription::builder()
+                    let description = ComponentDescription::builder()
                         .id(id.into())
                         .image_ref(component.image_reference.to_string())
-                        .annotations(component.annotations.clone().into_iter().collect())
+                        .annotations(component.annotations.clone())
                         .max_instances(component.max_instances.get().try_into().unwrap_or(u32::MAX))
                         .limits(component.limits.map(|limits| limits.to_string_map()))
-                        .revision(
-                            component
-                                .claims()
-                                .and_then(|claims| claims.metadata.as_ref())
-                                .and_then(|jwt::Component { rev, .. }| *rev)
-                                .unwrap_or_default(),
-                        );
-                    // Add name if present
-                    if let Some(name) = component
-                        .claims()
-                        .and_then(|claims| claims.metadata.as_ref())
-                        .and_then(|metadata| metadata.name.as_ref())
-                        .cloned()
-                    {
-                        description = description.name(name);
-                    };
+                        // note (luk3ark): do we even need revisions anymore? If so, where does it come from if not claims?
+                        .revision(0);
 
                     Some(
                         description
@@ -891,55 +891,32 @@ impl Host {
                 .await
         };
 
-        let providers: Vec<_> = self
-            .providers
+        let extensions: Vec<_> = self
+            .extensions
             .read()
             .await
             .iter()
-            .map(
-                |(
-                    provider_id,
-                    Provider {
-                        annotations,
-                        claims_token,
-                        image_ref,
-                        ..
-                    },
-                )| {
-                    let mut provider_description = ProviderDescription::builder()
-                        .id(provider_id)
-                        .image_ref(image_ref);
-                    if let Some(name) = claims_token
-                        .as_ref()
-                        .and_then(|claims| claims.claims.metadata.as_ref())
-                        .and_then(|metadata| metadata.name.as_ref())
-                    {
-                        provider_description = provider_description.name(name);
-                    }
-                    provider_description
-                        .annotations(
-                            annotations
-                                .clone()
-                                .into_iter()
-                                .collect::<BTreeMap<String, String>>(),
-                        )
-                        .revision(
-                            claims_token
-                                .as_ref()
-                                .and_then(|claims| claims.claims.metadata.as_ref())
-                                .and_then(|jwt::CapabilityProvider { rev, .. }| *rev)
-                                .unwrap_or_default(),
-                        )
-                        .build()
-                        .expect("failed to build provider description")
-                },
-            )
+            .map(|(provider_id, extension)| {
+                let mut builder = ProviderDescription::builder()
+                    .id(provider_id)
+                    .external(!extension.is_managed)
+                    .annotations(extension.annotations.clone());
+
+                // Only set image_ref if it exists (host-managed extensions have this)
+                if let Some(ref image_ref) = extension.image_ref {
+                    builder = builder.image_ref(image_ref);
+                }
+
+                builder
+                    .build()
+                    .expect("failed to build extension description")
+            })
             .collect();
 
         let uptime = self.start_at.elapsed();
         HostInventory::builder()
             .components(components)
-            .providers(providers)
+            .providers(extensions)
             .friendly_name(self.friendly_name.clone())
             .labels(self.labels.read().await.clone())
             .uptime_human(human_friendly_uptime(uptime))
@@ -1139,7 +1116,7 @@ impl Host {
         limits: Option<Limits>,
         annotations: &Annotations,
         config: ConfigBundle,
-        secrets: HashMap<String, SecretBox<SecretValue>>,
+        secrets: HashMap<String, SecretBox<wasmcloud_core::secrets::SecretValue>>,
     ) -> anyhow::Result<&'a mut Arc<Component>> {
         debug!(?component_ref, ?max_instances, "starting new component");
 
@@ -1243,7 +1220,7 @@ impl Host {
         payload: impl AsRef<[u8]>,
     ) -> anyhow::Result<Option<CtlResponse<ProviderAuctionAck>>> {
         let request = serde_json::from_slice::<ProviderAuctionRequest>(payload.as_ref())
-            .context("failed to deserialize provider auction command")?;
+            .context("failed to deserialize extension auction command")?;
         <Self as ControlInterfaceServer>::handle_auction_provider(self, request).await
     }
 
@@ -1612,175 +1589,245 @@ impl Host {
         Ok(())
     }
 
+    /// Only internal providers are started using this function, external providers are spawned by other means outside
+    /// the scope of the host.
     #[instrument(level = "debug", skip_all)]
     pub(crate) async fn handle_start_provider(
         self: Arc<Self>,
         payload: impl AsRef<[u8]>,
     ) -> anyhow::Result<Option<CtlResponse<()>>> {
         let cmd = serde_json::from_slice::<StartProviderCommand>(payload.as_ref())
-            .context("failed to deserialize provider start command")?;
+            .context("failed to deserialize extension start command")?;
         <Self as ControlInterfaceServer>::handle_start_provider(self, cmd).await
     }
 
+    /// Handles starting provider processes for managed and external providers.
     #[instrument(level = "debug", skip_all)]
     async fn handle_start_provider_task(
         self: Arc<Self>,
         config_names: &[String],
         provider_id: &str,
-        provider_ref: &str,
+        provider_ref: Option<&str>,
+        satisfied_interfaces: SatisfiedProviderInterfaces,
         annotations: BTreeMap<String, String>,
         host_id: &str,
     ) -> anyhow::Result<()> {
-        trace!(provider_ref, provider_id, "start provider task");
+        trace!(provider_ref, provider_id, "start extension task");
 
-        let registry_config = self.registry_config.read().await;
-        let provider_ref =
-            ResourceRef::try_from(provider_ref).context("failed to parse provider reference")?;
-        let (path, claims_token) = match &provider_ref {
-            ResourceRef::Builtin(..) => (None, None),
-            _ => {
-                let (path, claims_token) = crate::fetch_provider(
-                    &provider_ref,
-                    host_id,
-                    self.host_config.allow_file_load,
-                    &self.host_config.oci_opts,
-                    &registry_config,
-                )
-                .await
-                .context("failed to fetch provider")?;
-                (Some(path), claims_token)
-            }
-        };
-        let claims = claims_token.as_ref().map(|t| t.claims.clone());
-
-        if let Some(claims) = claims.clone() {
-            self.store_claims(Claims::Provider(claims))
-                .await
-                .context("failed to store claims")?;
-        }
-
-        let annotations: Annotations = annotations.into_iter().collect();
-
-        let PolicyResponse {
-            permitted,
-            request_id,
-            message,
-        } = self
-            .policy_manager
-            .evaluate_start_provider(
-                provider_id,
-                provider_ref.as_ref(),
-                &annotations,
-                claims.as_ref(),
-            )
-            .await?;
-        ensure!(
-            permitted,
-            "policy denied request to start provider `{request_id}`: `{message:?}`",
-        );
-
-        let component_specification = self
-            .get_component_spec(provider_id)
-            .await?
-            .unwrap_or_else(|| ComponentSpecification::new(provider_ref.as_ref()));
-
-        self.store_component_spec(&provider_id, &component_specification)
-            .await?;
-        self.update_host_with_spec(&provider_id, &component_specification)
-            .await?;
-
-        let mut providers = self.providers.write().await;
-        if let hash_map::Entry::Vacant(entry) = providers.entry(provider_id.into()) {
-            let provider_xkey = XKey::new();
-            // We only need to store the public key of the provider xkey, as the private key is only needed by the provider
-            let xkey = XKey::from_public_key(&provider_xkey.public_key())
-                .context("failed to create XKey from provider public key xkey")?;
-            // Generate the HostData and ConfigBundle for the provider
-            let (host_data, config_bundle) = self
-                .prepare_provider_config(
-                    config_names,
-                    claims_token.as_ref(),
-                    provider_id,
-                    &provider_xkey,
-                    &annotations,
-                )
-                .await?;
-            let config_bundle = Arc::new(RwLock::new(config_bundle));
-            // Used by provider child tasks (health check, config watch, process restarter) to
-            // know when to shutdown.
-            let shutdown = Arc::new(AtomicBool::new(false));
-            let tasks = match (path, &provider_ref) {
-                (Some(path), ..) => {
-                    Arc::clone(&self)
-                        .start_binary_provider(
-                            path,
-                            host_data,
-                            Arc::clone(&config_bundle),
-                            provider_xkey,
-                            provider_id,
-                            // Arguments to allow regenerating configuration later
-                            config_names.to_vec(),
-                            claims_token.clone(),
-                            annotations.clone(),
-                            shutdown.clone(),
-                        )
-                        .await?
-                }
-                (None, ResourceRef::Builtin(name)) => match *name {
-                    "http-client" if self.experimental_features.builtin_http_client => {
-                        self.start_http_client_provider(host_data, provider_xkey, provider_id)
-                            .await?
-                    }
-                    "http-client" => {
-                        bail!("feature `builtin-http-client` is not enabled, denying start")
-                    }
-                    "http-server" if self.experimental_features.builtin_http_server => {
-                        self.start_http_server_provider(host_data, provider_xkey, provider_id)
-                            .await?
-                    }
-                    "http-server" => {
-                        bail!("feature `builtin-http-server` is not enabled, denying start")
-                    }
-                    "messaging-nats" if self.experimental_features.builtin_messaging_nats => {
-                        self.start_messaging_nats_provider(host_data, provider_xkey, provider_id)
-                            .await?
-                    }
-                    "messaging-nats" => {
-                        bail!("feature `builtin-messaging-nats` is not enabled, denying start")
-                    }
-                    _ => bail!("unknown builtin name: {name}"),
-                },
-                _ => bail!("invalid provider reference"),
-            };
-
-            info!(
-                provider_ref = provider_ref.as_ref(),
-                provider_id, "provider started"
-            );
-            self.event_publisher
-                .publish_event(
-                    "provider_started",
-                    crate::event::provider_started(
-                        claims.as_ref(),
-                        &annotations,
-                        host_id,
+        // Managed if a provider reference is provided to start up
+        if let Some(provider_ref) = provider_ref {
+            let registry_config = self.registry_config.read().await;
+            let provider_ref = ResourceRef::try_from(provider_ref)
+                .context("failed to parse extension reference")?;
+            let (path, claims_token) = match &provider_ref {
+                ResourceRef::Builtin(..) => (None, None),
+                _ => {
+                    let (path, claims_token) = crate::fetch_provider(
                         &provider_ref,
-                        provider_id,
-                    ),
+                        self.host_config.allow_file_load,
+                        &self.host_config.oci_opts,
+                        &registry_config,
+                    )
+                    .await
+                    .context("failed to fetch extension")?;
+                    (Some(path), claims_token)
+                }
+            };
+            let claims = claims_token.as_ref().map(|t| t.claims.clone());
+
+            let annotations: Annotations = annotations.into_iter().collect();
+
+            let PolicyResponse {
+                permitted,
+                request_id,
+                message,
+            } = self
+                .policy_manager
+                .evaluate_start_provider(
+                    provider_id,
+                    provider_ref.as_ref(),
+                    &annotations,
+                    claims.as_ref(),
                 )
                 .await?;
+            ensure!(
+                permitted,
+                "policy denied request to start extension `{request_id}`: `{message:?}`",
+            );
 
-            // Add the provider
-            entry.insert(Provider {
-                tasks,
-                annotations,
-                claims_token,
-                image_ref: provider_ref.as_ref().to_string(),
-                xkey,
-                shutdown,
-            });
+            let component_specification = self
+                .get_component_spec(provider_id)
+                .await?
+                .unwrap_or_else(|| ComponentSpecification::new(provider_ref.as_ref()));
+
+            self.store_component_spec(&provider_id, &component_specification)
+                .await?;
+            self.update_host_with_spec(&provider_id, &component_specification)
+                .await?;
+
+            let mut extensions = self.extensions.write().await;
+            if let hash_map::Entry::Vacant(entry) = extensions.entry(provider_id.into()) {
+                // Used by extension child tasks (health check, config watch, process restarter) to
+                // know when to shutdown.
+                let shutdown = Arc::new(AtomicBool::new(false));
+
+                // Insert the extension first before setting up actual provider
+                entry.insert(Extension {
+                    satisfied_interfaces,
+                    image_ref: Some(provider_ref.as_ref().to_string()),
+                    annotations: annotations.clone(),
+                    is_managed: true,
+                    xkey_public: None,     // Will be populated during bind
+                    tasks: JoinSet::new(), // Will be replaced after provider starts
+                    claims_token: claims_token.clone(),
+                });
+
+                // Drop the write lock before the async provider startup to avoid holding
+                // it across await points. The startup functions will re-acquire locks as needed.
+                drop(extensions);
+
+                // Prepare the initial data needed to start the process
+                let ext_data = self.prepare_extension_data(provider_id).await?;
+
+                // In the new flow, configuration happens after the provider starts and becomes healthy.
+                // We only need to pass the information required to start and later configure the provider.
+                let tasks = match (path, &provider_ref) {
+                    (Some(path), ..) => {
+                        Arc::clone(&self)
+                            .start_managed_provider(
+                                path,
+                                claims_token.clone(),
+                                ext_data,
+                                provider_id,
+                                config_names.to_vec(),
+                                annotations.clone(),
+                                shutdown.clone(),
+                            )
+                            .await?
+                    }
+                    (None, ResourceRef::Builtin(name)) => match *name {
+                        "http-client" if self.experimental_features.builtin_http_client => {
+                            Arc::clone(&self)
+                                .start_http_client_provider(
+                                    provider_id,
+                                    config_names.to_vec(),
+                                    annotations.clone(),
+                                )
+                                .await?
+                        }
+                        "http-client" => {
+                            bail!("feature `builtin-http-client` is not enabled, denying start")
+                        }
+                        "http-server" if self.experimental_features.builtin_http_server => {
+                            Arc::clone(&self)
+                                .start_http_server_provider(
+                                    provider_id,
+                                    config_names.to_vec(),
+                                    annotations.clone(),
+                                )
+                                .await?
+                        }
+                        "http-server" => {
+                            bail!("feature `builtin-http-server` is not enabled, denying start")
+                        }
+                        "messaging-nats" if self.experimental_features.builtin_messaging_nats => {
+                            Arc::clone(&self)
+                                .start_messaging_nats_provider(
+                                    provider_id,
+                                    config_names.to_vec(),
+                                    annotations.clone(),
+                                )
+                                .await?
+                        }
+                        "messaging-nats" => {
+                            bail!("feature `builtin-messaging-nats` is not enabled, denying start")
+                        }
+                        _ => bail!("unknown builtin name: {name}"),
+                    },
+                    _ => bail!("invalid extension reference"),
+                };
+
+                // Update the extension with the actual running tasks
+                {
+                    let mut extensions = self.extensions.write().await;
+                    if let Some(ext) = extensions.get_mut(provider_id) {
+                        ext.tasks = tasks;
+                    }
+                }
+
+                info!(
+                    provider_ref = provider_ref.as_ref(),
+                    provider_id, "provider started"
+                );
+                self.event_publisher
+                    .publish_event(
+                        "provider_started",
+                        crate::event::provider_started(
+                            claims.as_ref(),
+                            &annotations,
+                            host_id,
+                            &provider_ref,
+                            provider_id,
+                        ),
+                    )
+                    .await?;
+            } else {
+                bail!("extension is already running with that ID")
+            }
         } else {
-            bail!("provider is already running with that ID")
+            // Extension is not managed and is external (already running somewhere else)
+            let annotations: Annotations = annotations.into_iter().collect();
+
+            let mut extensions = self.extensions.write().await;
+            if let hash_map::Entry::Vacant(entry) = extensions.entry(provider_id.into()) {
+                // Insert the extension first - bind_provider needs it to store the XKey
+                entry.insert(Extension {
+                    satisfied_interfaces,
+                    image_ref: None, // External providers don't have an image ref
+                    annotations: annotations.clone(),
+                    is_managed: false,
+                    xkey_public: None,
+                    tasks: JoinSet::new(),
+                    claims_token: None,
+                });
+
+                // Drop the write lock before async operations
+                drop(extensions);
+
+                // External providers use the same configuration flow, just without process management
+                let tasks = Arc::clone(&self)
+                    .start_external_provider(
+                        None, // No claims for external providers
+                        provider_id,
+                        config_names.to_vec(),
+                        annotations.clone(),
+                    )
+                    .await?;
+
+                // Update the extension with the actual running tasks
+                {
+                    let mut extensions = self.extensions.write().await;
+                    if let Some(ext) = extensions.get_mut(provider_id) {
+                        ext.tasks = tasks;
+                    }
+                }
+
+                info!(provider_id, "external provider registered");
+                self.event_publisher
+                    .publish_event(
+                        "provider_started",
+                        crate::event::provider_started(
+                            None, // No claims for external providers
+                            &annotations,
+                            host_id,
+                            "", // No image ref for external providers
+                            provider_id,
+                        ),
+                    )
+                    .await?;
+            } else {
+                bail!("extension is already running with that ID")
+            }
         }
 
         Ok(())
@@ -1792,7 +1839,7 @@ impl Host {
         payload: impl AsRef<[u8]>,
     ) -> anyhow::Result<CtlResponse<()>> {
         let cmd = serde_json::from_slice::<StopProviderCommand>(payload.as_ref())
-            .context("failed to deserialize provider stop command")?;
+            .context("failed to deserialize extension stop command")?;
         <Self as ControlInterfaceServer>::handle_stop_provider(self, cmd).await
     }
 
@@ -1848,7 +1895,7 @@ impl Host {
         &self,
         payload: impl AsRef<[u8]>,
     ) -> anyhow::Result<CtlResponse<()>> {
-        let link: Link = serde_json::from_slice(payload.as_ref())
+        let link: InterfaceLink = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize wrpc link definition")?;
         <Self as ControlInterfaceServer>::handle_link_put(self, link).await
     }
@@ -1859,7 +1906,7 @@ impl Host {
         &self,
         payload: impl AsRef<[u8]>,
     ) -> anyhow::Result<CtlResponse<()>> {
-        let req = serde_json::from_slice::<DeleteInterfaceLinkDefinitionRequest>(payload.as_ref())
+        let req = serde_json::from_slice::<DeleteInterfacesLinkRequest>(payload.as_ref())
             .context("failed to deserialize wrpc link definition")?;
         <Self as ControlInterfaceServer>::handle_link_del(self, req).await
     }
@@ -1902,106 +1949,185 @@ impl Host {
         <Self as ControlInterfaceServer>::handle_ping_hosts(self).await
     }
 
-    // NOTE(brooksmtownsend): This is only necessary when running capability providers that were
-    // build for wasmCloud versions before 1.2. This is a backwards-compatible
-    // provider link definition put that is published to the provider's id, which is what
-    // providers built for wasmCloud 1.0 expected.
-    //
-    // Thankfully, in a lattice where there are no "older" providers running, these publishes
-    // will return immediately as there will be no subscribers on those topics.
-    async fn put_backwards_compat_provider_link(&self, link: &Link) -> anyhow::Result<()> {
-        // Only attempt to publish the backwards-compatible provider link definition if the link
-        // does not contain any secret values.
-        let source_config_contains_secret = link
-            .source_config()
-            .iter()
-            .any(|c| c.starts_with(SECRET_PREFIX));
-        let target_config_contains_secret = link
-            .target_config()
-            .iter()
-            .any(|c| c.starts_with(SECRET_PREFIX));
-        if source_config_contains_secret || target_config_contains_secret {
-            debug!("link contains secrets and is not backwards compatible, skipping");
-            return Ok(());
-        }
-        let provider_link = self
-            .resolve_link_config(link.clone(), None, None, &XKey::new())
-            .await
-            .context("failed to resolve link config")?;
-
-        if let Err(e) = self
-            .provider_manager
-            .put_link(&provider_link, link.source_id())
-            .await
-        {
-            warn!(
-                ?e,
-                "failed to publish backwards-compatible provider link to source"
-            );
-        }
-
-        if let Err(e) = self
-            .provider_manager
-            .put_link(&provider_link, link.target())
-            .await
-        {
-            warn!(
-                ?e,
-                "failed to publish backwards-compatible provider link to target"
-            );
-        }
-
-        Ok(())
-    }
-
-    /// Publishes a link to a provider running on this host to handle.
+    /// Publishes a link to a extension running on this host to handle.
     #[instrument(level = "debug", skip_all)]
-    async fn put_provider_link(&self, provider: &Provider, link: &Link) -> anyhow::Result<()> {
+    async fn put_provider_link(
+        &self,
+        extension: &Extension,
+        link: &InterfaceLink,
+    ) -> anyhow::Result<()> {
+        let extension_xkey = extension
+            .xkey_public
+            .as_ref()
+            .context("extension xkey not available - provider may not have completed bind")?;
+
         let provider_link = self
             .resolve_link_config(
                 link.clone(),
-                provider.claims_token.as_ref().map(|t| &t.jwt),
-                provider.annotations.get("wasmcloud.dev/appspec"),
-                &provider.xkey,
+                extension.claims_token.as_ref().map(|t| &t.jwt),
+                extension.annotations.get("wasmcloud.dev/appspec"),
+                &extension_xkey,
             )
             .await
             .context("failed to resolve link config and secrets")?;
 
-        self.provider_manager
-            .put_link(&provider_link, &provider.xkey.public_key())
-            .await
-            .context("failed to publish provider link definition put")
+        // Only need to broadcast new link config to providers that have configuration on itself
+        // This is because the purpose of links is to provide contextual execution on different connections
+        let put_link_for_source = !link.source_config().is_empty();
+        let put_link_for_target = !link.target_config().is_empty();
+
+        // Put the export configuration onto the exported interfaces of the source extension
+        if put_link_for_source {
+            let interface_config = InterfaceConfig {
+                config: provider_link
+                    .source_config
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+                secrets: provider_link.source_secrets.as_ref().map(|hm| {
+                    hm.iter()
+                        .map(|(key, value)| {
+                            let wit_secret = match value {
+                                wasmcloud_core::secrets::SecretValue::String(s) => {
+                                    crate::bindings::wrpc::extension::types::SecretValue::String(
+                                        s.clone(),
+                                    )
+                                }
+                                wasmcloud_core::secrets::SecretValue::Bytes(bytes) => {
+                                    crate::bindings::wrpc::extension::types::SecretValue::Bytes(
+                                        bytes.clone().into(),
+                                    )
+                                }
+                            };
+                            (key.clone(), wit_secret)
+                        })
+                        .collect()
+                }),
+                metadata: WitMetadata {
+                    namespace: provider_link.wit_namespace.clone(),
+                    package: provider_link.wit_package.clone(),
+                    interfaces: provider_link.interfaces.clone(),
+                },
+            };
+            self.provider_manager
+                .put_interface_export_config(
+                    link.source_id(), // provider_id: which extension to notify
+                    link.target(),    // source_id: the target component (the "other" side)
+                    link.name(),      // link_name
+                    &interface_config,
+                )
+                .await
+                .context("failed to publish extension link definition put")?;
+        };
+
+        // Put the import configuration onto the imported interfaces of the target extension
+        if put_link_for_target {
+            let interface_config = InterfaceConfig {
+                config: provider_link
+                    .target_config
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+                secrets: provider_link.target_secrets.as_ref().map(|hm| {
+                    hm.iter()
+                        .map(|(key, value)| {
+                            let wit_secret = match value {
+                                wasmcloud_core::secrets::SecretValue::String(s) => {
+                                    crate::bindings::wrpc::extension::types::SecretValue::String(
+                                        s.clone(),
+                                    )
+                                }
+                                wasmcloud_core::secrets::SecretValue::Bytes(bytes) => {
+                                    crate::bindings::wrpc::extension::types::SecretValue::Bytes(
+                                        bytes.clone().into(),
+                                    )
+                                }
+                            };
+                            (key.clone(), wit_secret)
+                        })
+                        .collect()
+                }),
+                metadata: WitMetadata {
+                    namespace: provider_link.wit_namespace.clone(),
+                    package: provider_link.wit_package.clone(),
+                    interfaces: provider_link.interfaces.clone(),
+                },
+            };
+            self.provider_manager
+                .put_interface_import_config(
+                    link.target(),    // provider_id: which extension to notify
+                    link.source_id(), // target_id: the source component (the "other" side)
+                    link.name(),      // link_name
+                    &interface_config,
+                )
+                .await
+                .context("failed to publish extension link definition put")?;
+        };
+
+        Ok(())
     }
 
-    /// Publishes a delete link to the lattice for all instances of a provider to handle
-    /// Right now this is publishing _both_ to the source and the target in order to
-    /// ensure that the provider is aware of the link delete. This would cause problems if a provider
-    /// is linked to a provider (which it should never be.)
+    /// Publishes a delete link to the lattice for all instances of a extension to handle
+    /// Right now this is publishing *both* to the source and the target in order to
+    /// ensure that the extension is aware of the link delete. This would cause problems if a extension
+    /// is linked to a extension (which it should never be.)
     #[instrument(level = "debug", skip(self))]
-    async fn del_provider_link(&self, link: &Link) -> anyhow::Result<()> {
-        // The provider expects the [`wasmcloud_core::InterfaceLinkDefinition`]
-        let link = wasmcloud_core::InterfaceLinkDefinition {
-            source_id: link.source_id().to_string(),
-            target: link.target().to_string(),
-            wit_namespace: link.wit_namespace().to_string(),
-            wit_package: link.wit_package().to_string(),
-            name: link.name().to_string(),
-            interfaces: link.interfaces().clone(),
-            // Configuration isn't needed for deletion
-            ..Default::default()
-        };
-        let source_id = &link.source_id;
-        let target = &link.target;
+    async fn del_provider_link(&self, link: &InterfaceLink) -> anyhow::Result<()> {
+        // Links are only relevant to the host itself for facilitating the runtime.
+        // Providers only need to be notified of the deletion if there is some configuration
+        // they use to create contextual execution
+        // Only need to broadcast deletions to providers that have configuration on itself
+        let del_link_for_source = !link.source_config().is_empty();
+        let del_link_for_target = !link.target_config().is_empty();
 
-        let (source_result, target_result) = futures::future::join(
-            self.provider_manager.delete_link(&link, source_id),
-            self.provider_manager.delete_link(&link, target),
-        )
-        .await;
+        if !del_link_for_source && !del_link_for_target {
+            debug!("No config links to delete for providers");
+            return Ok(());
+        }
 
-        source_result
-            .and(target_result)
-            .context("failed to publish provider link definition delete")
+        {
+            let extensions = self.extensions.read().await;
+
+            if del_link_for_source {
+                if let Some(extension) = extensions.get(link.source_id()) {
+                    if extension.satisfied_interfaces().is_configurable() {
+                        if let Err(e) = self
+                            .provider_manager
+                            .delete_interface_export_config(
+                                link.source_id(), // provider_id: which extension to notify
+                                link.target(), // source_id: the source component in this export config
+                                link.name(),
+                            )
+                            .await
+                        {
+                            warn!(error = %e, "Failed to delete interface export config for source");
+                        }
+                    } else {
+                        debug!("Provider does not implement the configurable interface");
+                    }
+                }
+            }
+
+            if del_link_for_target {
+                if let Some(extension) = extensions.get(link.target()) {
+                    if extension.satisfied_interfaces().is_configurable() {
+                        if let Err(e) = self
+                            .provider_manager
+                            .delete_interface_import_config(
+                                link.target(),    // provider_id: which extension to notify
+                                link.source_id(), // target_id: the target component in this import config
+                                link.name(),
+                            )
+                            .await
+                        {
+                            warn!(error = %e, "Failed to delete interface import config for target");
+                        }
+                    }
+                }
+            };
+        }
+
+        Ok(())
     }
 
     async fn fetch_config_and_secrets(
@@ -2009,7 +2135,10 @@ impl Host {
         config_names: &[String],
         entity_jwt: Option<&String>,
         application: Option<&String>,
-    ) -> anyhow::Result<(ConfigBundle, HashMap<String, SecretBox<SecretValue>>)> {
+    ) -> anyhow::Result<(
+        ConfigBundle,
+        HashMap<String, SecretBox<wasmcloud_core::secrets::SecretValue>>,
+    )> {
         let (secret_names, config_names) = config_names
             .iter()
             .map(|s| s.to_string())
@@ -2077,16 +2206,16 @@ impl Host {
     /// by fetching the source and target configurations and secrets, and encrypting the secrets.
     async fn resolve_link_config(
         &self,
-        link: Link,
+        link: InterfaceLink,
         provider_jwt: Option<&String>,
         application: Option<&String>,
         provider_xkey: &XKey,
     ) -> anyhow::Result<wasmcloud_core::InterfaceLinkDefinition> {
         let (source_bundle, raw_source_secrets) = self
-            .fetch_config_and_secrets(link.source_config().as_slice(), provider_jwt, application)
+            .fetch_config_and_secrets(link.source_config(), provider_jwt, application)
             .await?;
         let (target_bundle, raw_target_secrets) = self
-            .fetch_config_and_secrets(link.target_config().as_slice(), provider_jwt, application)
+            .fetch_config_and_secrets(link.target_config(), provider_jwt, application)
             .await?;
 
         let source_config = source_bundle.get_config().await;
@@ -2098,11 +2227,11 @@ impl Host {
             raw_source_secrets
                 .iter()
                 .map(|(k, v)| match v.expose_secret() {
-                    SecretValue::String(s) => (
+                    wasmcloud_core::secrets::SecretValue::String(s) => (
                         k.clone(),
                         wasmcloud_core::secrets::SecretValue::String(s.to_owned()),
                     ),
-                    SecretValue::Bytes(b) => (
+                    wasmcloud_core::secrets::SecretValue::Bytes(b) => (
                         k.clone(),
                         wasmcloud_core::secrets::SecretValue::Bytes(b.to_owned()),
                     ),
@@ -2112,36 +2241,77 @@ impl Host {
             raw_target_secrets
                 .iter()
                 .map(|(k, v)| match v.expose_secret() {
-                    SecretValue::String(s) => (
+                    wasmcloud_core::secrets::SecretValue::String(s) => (
                         k.clone(),
                         wasmcloud_core::secrets::SecretValue::String(s.to_owned()),
                     ),
-                    SecretValue::Bytes(b) => (
+                    wasmcloud_core::secrets::SecretValue::Bytes(b) => (
                         k.clone(),
                         wasmcloud_core::secrets::SecretValue::Bytes(b.to_owned()),
                     ),
                 })
                 .collect();
-        // Serializing & sealing an empty map results in a non-empty Vec, which is difficult to tell the
-        // difference between an empty map and an encrypted empty map. To avoid this, we explicitly handle
-        // the case where the map is empty.
+
+        // Encrypt secrets for transport.
+        // - String secrets: encrypt bytes, then base64 encode to preserve as String variant
+        // - Bytes secrets: encrypt bytes directly
+        use base64::Engine as _;
         let source_secrets = if source_secrets_map.is_empty() {
             None
         } else {
-            Some(
-                serde_json::to_vec(&source_secrets_map)
-                    .map(|secrets| self.secrets_xkey.seal(&secrets, provider_xkey))
-                    .context("failed to serialize and encrypt source secrets")??,
-            )
+            let mut encrypted_secrets = HashMap::new();
+            for (key, secret_value) in source_secrets_map {
+                let encrypted_value = match secret_value {
+                    wasmcloud_core::secrets::SecretValue::String(s) => {
+                        let encrypted_bytes = self
+                            .secrets_xkey
+                            .seal(s.as_bytes(), provider_xkey)
+                            .context("failed to encrypt secret string")?;
+                        // Base64 encode so encrypted bytes can be stored as valid UTF-8 string
+                        let encoded =
+                            base64::engine::general_purpose::STANDARD.encode(&encrypted_bytes);
+                        wasmcloud_core::secrets::SecretValue::String(encoded)
+                    }
+                    wasmcloud_core::secrets::SecretValue::Bytes(bytes) => {
+                        let encrypted_bytes = self
+                            .secrets_xkey
+                            .seal(&bytes, provider_xkey)
+                            .context("failed to encrypt secret bytes")?;
+                        wasmcloud_core::secrets::SecretValue::Bytes(encrypted_bytes)
+                    }
+                };
+                encrypted_secrets.insert(key, encrypted_value);
+            }
+            Some(encrypted_secrets)
         };
+
         let target_secrets = if target_secrets_map.is_empty() {
             None
         } else {
-            Some(
-                serde_json::to_vec(&target_secrets_map)
-                    .map(|secrets| self.secrets_xkey.seal(&secrets, provider_xkey))
-                    .context("failed to serialize and encrypt target secrets")??,
-            )
+            let mut encrypted_secrets = HashMap::new();
+            for (key, secret_value) in target_secrets_map {
+                let encrypted_value = match secret_value {
+                    wasmcloud_core::secrets::SecretValue::String(s) => {
+                        let encrypted_bytes = self
+                            .secrets_xkey
+                            .seal(s.as_bytes(), provider_xkey)
+                            .context("failed to encrypt secret string")?;
+                        // Base64 encode so encrypted bytes can be stored as valid UTF-8 string
+                        let encoded =
+                            base64::engine::general_purpose::STANDARD.encode(&encrypted_bytes);
+                        wasmcloud_core::secrets::SecretValue::String(encoded)
+                    }
+                    wasmcloud_core::secrets::SecretValue::Bytes(bytes) => {
+                        let encrypted_bytes = self
+                            .secrets_xkey
+                            .seal(&bytes, provider_xkey)
+                            .context("failed to encrypt secret bytes")?;
+                        wasmcloud_core::secrets::SecretValue::Bytes(encrypted_bytes)
+                    }
+                };
+                encrypted_secrets.insert(key, encrypted_value);
+            }
+            Some(encrypted_secrets)
         };
 
         Ok(wasmcloud_core::InterfaceLinkDefinition {
@@ -2167,7 +2337,9 @@ impl Host {
 ///
 /// # Returns
 /// - A `HashMap` in the form of `link_name` -> `instance` -> target
-fn component_import_links(links: &[Link]) -> HashMap<Box<str>, HashMap<Box<str>, Box<str>>> {
+fn component_import_links(
+    links: &[InterfaceLink],
+) -> HashMap<Box<str>, HashMap<Box<str>, Box<str>>> {
     let mut m = HashMap::new();
     for link in links {
         let instances: &mut HashMap<Box<str>, Box<str>> = m
@@ -2187,6 +2359,31 @@ fn component_import_links(links: &[Link]) -> HashMap<Box<str>, HashMap<Box<str>,
     }
     m
 }
+
+// todo(luk3ark) - delete
+/// Helper function to extract config IDs for import contexts from links
+///
+/// # Arguments
+/// - links: A Vec of [`InterfaceLink`]s representing outbound links from this component
+///
+/// # Returns
+/// - A `HashMap` mapping (target_id, link_name) -> config_id for import contexts
+// fn component_import_config_ids(links: &[InterfaceLink]) -> HashMap<(Box<str>, Box<str>), Arc<str>> {
+//     let mut m = HashMap::new();
+//     for link in links {
+//         // When this component calls the target, the target uses import config
+//         // The target's import config has config_id generated with (source_id, link_name, true)
+//         let config_id = generate_unique_config_id(link.source_id(), link.name(), true);
+//         m.insert(
+//             (
+//                 link.target().to_string().into_boxed_str(),
+//                 link.name().to_string().into_boxed_str(),
+//             ),
+//             Arc::from(config_id),
+//         );
+//     }
+//     m
+// }
 
 fn human_friendly_uptime(uptime: Duration) -> String {
     // strip sub-seconds, then convert to human-friendly format

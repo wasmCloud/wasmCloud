@@ -99,7 +99,7 @@ pub async fn start_spire_server(temp_dir: &Path) -> Result<(BackgroundServer, Ur
         ]),
     )
     .await
-    .context("failed to start SPIRE Server")?;
+    .context("failed to sta SPIRE Server")?;
 
     let socket_path = server_socket_path.display().to_string();
     timeout(Duration::from_secs(5), async move {

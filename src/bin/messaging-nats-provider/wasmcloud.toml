@@ -11,3 +11,11 @@ target_dir = "../../../"
 bin_name = "messaging-nats-provider"
 vendor = "wasmCloud"
 wit_world = "interfaces"
+
+[[registry.pull.sources]]
+target = "wasmcloud:messaging"
+source = "file://../../../wit/messaging/wit"
+
+[[registry.pull.sources]]
+target = "wrpc:extension"
+source = "file://../../../wit/extension/wit"

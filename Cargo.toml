@@ -131,14 +131,14 @@ lto = true
 wasmcloud-provider-wadm = { workspace = true, optional = true }
 anyhow = { workspace = true }
 clap = { workspace = true, features = [
-  "color",
-  "derive",
-  "env",
-  "error-context",
-  "help",
-  "std",
-  "suggestions",
-  "usage",
+    "color",
+    "derive",
+    "env",
+    "error-context",
+    "help",
+    "std",
+    "suggestions",
+    "usage",
 ], optional = true }
 clap-markdown = { workspace = true, optional = true }
 nkeys = { workspace = true, optional = true }
@@ -176,12 +176,11 @@ hyper-util = { workspace = true, features = ["server-auto", "tokio"] }
 nats-jwt-rs = { workspace = true }
 nkeys = { workspace = true }
 once_cell = { workspace = true }
-provider-archive = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true, features = [
-  "aio",
-  "connection-manager",
-  "tokio-comp",
+    "aio",
+    "connection-manager",
+    "tokio-comp",
 ] }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
@@ -196,11 +195,11 @@ test-components = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tokio-stream = { workspace = true }
 tracing-subscriber = { workspace = true, features = [
-  "ansi",
-  "env-filter",
-  "fmt",
-  "json",
-  "std",
+    "ansi",
+    "env-filter",
+    "fmt",
+    "json",
+    "std",
 ] }
 url = { workspace = true }
 uuid = { workspace = true }
@@ -208,8 +207,8 @@ vaultrs = { workspace = true, features = ["rustls"] }
 wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true, features = [
-  "reqwest",
-  "rustls-native-certs",
+    "reqwest",
+    "rustls-native-certs",
 ] }
 wasmcloud-test-util = { workspace = true, features = ["testcontainers"] }
 wrpc-interface-http = { workspace = true, features = ["hyper"] }
@@ -300,7 +299,6 @@ path-clean = { version = "1", default-features = false }
 pg_bigdecimal = { version = "0.1", default-features = false }
 pin-project-lite = { version = "0.2", default-features = false }
 postgres-types = { version = "0.2", default-features = false }
-provider-archive = { version = "^0.16.0", path = "./crates/provider-archive", default-features = false }
 quote = { version = "1", default-features = false }
 rand = { version = "0.9", default-features = false }
 redis = { version = "0.29", default-features = false }
@@ -385,6 +383,7 @@ wasmcloud-provider-blobstore-nats = { version = "*", path = "./crates/provider-b
 wasmcloud-provider-blobstore-s3 = { version = "*", path = "./crates/provider-blobstore-s3", default-features = false }
 wasmcloud-provider-http-client = { version = "*", path = "./crates/provider-http-client", default-features = false }
 wasmcloud-provider-http-server = { version = "^0.28.0", path = "./crates/provider-http-server", default-features = false }
+wasmcloud-provider-http-server-v2 = { version = "*", path = "./crates/provider-http-server-v2", default-features = false }
 wasmcloud-provider-keyvalue-nats = { version = "*", path = "./crates/provider-keyvalue-nats", default-features = false }
 wasmcloud-provider-keyvalue-redis = { version = "*", path = "./crates/provider-keyvalue-redis", default-features = false }
 wasmcloud-provider-keyvalue-vault = { version = "*", path = "./crates/provider-keyvalue-vault", default-features = false }
@@ -417,7 +416,7 @@ wrpc-interface-http = { version = "0.32.1", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.28", default-features = false }
 wrpc-transport = { version = "0.28", default-features = false }
 wrpc-transport-nats = { version = "0.28.1", default-features = false, features = [
-  "async-nats-0_39",
+    "async-nats-0_39",
 ] }
 
 [package.metadata.cargo-machete]

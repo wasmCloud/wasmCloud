@@ -2,4 +2,6 @@ package wasmcloud:provider-lattice-controller;
 
 world provider {
     export wasmcloud:lattice-control/lattice-controller;
+    export wrpc:extension/manageable@0.0.1;
+    export wrpc:extension/configurable@0.0.1;
 }

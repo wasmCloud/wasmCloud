@@ -1,0 +1,29 @@
+[package]
+name = "wasmcloud-example-calculator"
+version = "0.1.0"
+edition = "2021"
+description = """
+A capability provider that is a wrpc native calculator
+"""
+
+[workspace]
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+anyhow = "1"
+async-nats = "0.39"
+bytes = "1"
+futures = "0.3"
+wrpc-transport-nats = { version = "0.29.0", default-features = false, features = [
+    "async-nats-0_39",
+] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7.16"
+tracing = "0.1"
+wasmcloud-provider-sdk = { path = "../../../../crates/provider-sdk", features = [
+    "v2",
+] }
+wit-bindgen-wrpc = "0.9.0"

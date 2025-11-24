@@ -1,0 +1,10 @@
+package wasmcloud:host@0.0.1;
+
+world imports {
+   import wrpc:extension/configurable@0.0.1;
+   import wrpc:extension/manageable@0.0.1;
+
+   // export for builtin providers
+   export wrpc:extension/configurable@0.0.1;
+   export wrpc:extension/manageable@0.0.1;
+}

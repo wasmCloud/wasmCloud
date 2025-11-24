@@ -3,7 +3,11 @@ use core::time::Duration;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, ensure, Context as _};
+use crate::bindings::ext::exports::wrpc::extension::{
+    configurable::{self, InterfaceConfig},
+    manageable,
+};
+use anyhow::{bail, ensure, Context as _};
 use async_nats::subject::ToSubject;
 use bytes::Bytes;
 use futures::StreamExt as _;
@@ -11,28 +15,42 @@ use opentelemetry_nats::{attach_span_context, NatsHeaderInjector};
 use tokio::fs;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, instrument, warn};
+use tracing::{debug, error, instrument};
 use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
 use wasmcloud_core::messaging::ConnectionConfig;
-use wasmcloud_provider_sdk::core::HostData;
+
 use wasmcloud_provider_sdk::provider::WrpcClient;
 use wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_provider_sdk::{
-    get_connection, initialize_observability, load_host_data, propagate_trace_for_ctx,
-    run_provider, serve_provider_exports, Context, LinkConfig, LinkDeleteInfo, Provider,
+    get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
+    serve_provider_exports,
+    types::{BindRequest, BindResponse, HealthCheckResponse},
+    Context,
 };
 
 mod connection;
 
 mod bindings {
     wit_bindgen_wrpc::generate!({
+        world: "interfaces",
         with: {
             "wasmcloud:messaging/consumer@0.2.0": generate,
             "wasmcloud:messaging/handler@0.2.0": generate,
             "wasmcloud:messaging/types@0.2.0": generate,
         },
     });
+
+    pub mod ext {
+        wit_bindgen_wrpc::generate!({
+            world: "extension",
+            with: {
+                "wrpc:extension/types@0.0.1": wasmcloud_provider_sdk::types,
+                "wrpc:extension/manageable@0.0.1": generate,
+                "wrpc:extension/configurable@0.0.1": generate
+            },
+        });
+    }
 }
 use bindings::wasmcloud::messaging::types::BrokerMessage;
 
@@ -60,46 +78,47 @@ impl Drop for NatsClientBundle {
 }
 
 /// Nats implementation for wasmcloud:messaging
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct NatsMessagingProvider {
     handler_components: Arc<RwLock<HashMap<String, NatsClientBundle>>>,
     consumer_components: Arc<RwLock<HashMap<String, NatsClientBundle>>>,
-    default_config: ConnectionConfig,
+    default_config: Arc<RwLock<ConnectionConfig>>,
+    quit_tx: Arc<tokio::sync::broadcast::Sender<()>>,
 }
 
 impl NatsMessagingProvider {
-    pub async fn run() -> anyhow::Result<()> {
-        initialize_observability!(
-            "nats-messaging-provider",
-            std::env::var_os("PROVIDER_NATS_MESSAGING_FLAMEGRAPH_PATH")
-        );
+    fn new(quit_tx: tokio::sync::broadcast::Sender<()>) -> Self {
+        Self {
+            handler_components: Arc::default(),
+            consumer_components: Arc::default(),
+            default_config: Arc::default(),
+            quit_tx: Arc::new(quit_tx),
+        }
+    }
+}
 
-        let host_data = load_host_data().context("failed to load host data")?;
-        let provider = Self::from_host_data(host_data);
-        let shutdown = run_provider(provider.clone(), "messaging-nats-provider")
-            .await
-            .context("failed to run provider")?;
-        let connection = get_connection();
-        let wrpc = connection
-            .get_wrpc_client(connection.provider_key())
-            .await?;
-        serve_provider_exports(&wrpc, provider, shutdown, bindings::serve)
-            .await
-            .context("failed to serve provider exports")
+impl NatsMessagingProvider {
+    pub fn name() -> &'static str {
+        "messaging-nats-provider"
     }
 
-    /// Build a [`NatsMessagingProvider`] from [`HostData`]
-    pub fn from_host_data(host_data: &HostData) -> NatsMessagingProvider {
-        let config = ConnectionConfig::from_map(&host_data.config);
-        if let Ok(config) = config {
-            NatsMessagingProvider {
-                default_config: config,
-                ..Default::default()
-            }
-        } else {
-            warn!("Failed to build connection configuration, falling back to default");
-            NatsMessagingProvider::default()
-        }
+    pub async fn run() -> anyhow::Result<()> {
+        let (shutdown, quit_tx) = run_provider(Self::name(), None)
+            .await
+            .context("failed to run provider")?;
+        let provider = NatsMessagingProvider::new(quit_tx);
+        let connection = get_connection();
+        let (main_client, ext_client) = connection.get_wrpc_clients_for_serving().await?;
+        serve_provider_exports(
+            &main_client,
+            &ext_client,
+            provider,
+            shutdown,
+            bindings::serve,
+            bindings::ext::serve,
+        )
+        .await
+        .context("failed to serve provider exports")
     }
 
     /// Attempt to connect to nats url (with jwt credentials, if provided)
@@ -253,115 +272,153 @@ async fn dispatch_msg(wrpc: &WrpcClient, component_id: &str, nats_msg: async_nat
     }
 }
 
-/// Handle provider control commands
-/// `put_link` (new component link command), `del_link` (remove link command), and shutdown
-impl Provider for NatsMessagingProvider {
-    /// Provider should perform any operations needed for a new link,
-    /// including setting up per-component resources, and checking authorization.
-    /// If the link is allowed, return true, otherwise return false to deny the link.
-    #[instrument(level = "debug", skip_all, fields(source_id))]
-    async fn receive_link_config_as_target(
+impl manageable::Handler<Option<Context>> for NatsMessagingProvider {
+    async fn bind(
         &self,
-        link_config: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        let LinkConfig { source_id, .. } = link_config;
+        _cx: Option<Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_xkey: Some(get_connection().provider_xkey.public_key().into()),
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by closing all connections
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
+        // clear the handler components
+        let mut handlers = self.handler_components.write().await;
+        handlers.clear();
+
+        // clear the consumer components
+        let mut consumers = self.consumer_components.write().await;
+        consumers.clear();
+
+        // dropping all connections should send unsubscribes and close the connections, so no need
+        // to handle that here
+
+        // Signal the provider to shut down
+        let _ = self.quit_tx.send(());
+        Ok(Ok(()))
+    }
+}
+
+impl configurable::Handler<Option<Context>> for NatsMessagingProvider {
+    #[instrument(level = "debug", skip_all)]
+    async fn update_base_config(
+        &self,
+        _cx: Option<Context>,
+        config: wasmcloud_provider_sdk::types::BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let flamegraph_path = config
+            .config
+            .iter()
+            .find(|(k, _)| k == "FLAMEGRAPH_PATH")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("PROVIDER_NATS_MESSAGING_FLAMEGRAPH_PATH").ok());
+        initialize_observability!(Self::name(), flamegraph_path, config.config);
+
+        let config_map: HashMap<String, String> = config.config.into_iter().collect();
+        let config = ConnectionConfig::from_map(&config_map);
+        if let Result::Ok(config) = config {
+            *self.default_config.write().await = config;
+        }
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(source_id))]
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        _link_name: String,
+        link_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
         let config = if link_config.config.is_empty() {
-            self.default_config.clone()
+            self.default_config.read().await.clone()
         } else {
             // create a config from the supplied values and merge that with the existing default
-            match connection::from_link_config(&link_config) {
-                Ok(cc) => self.default_config.merge(&ConnectionConfig {
+            match connection::from_link_config(link_config) {
+                Result::Ok(cc) => self.default_config.read().await.merge(&ConnectionConfig {
                     subscriptions: Box::default(),
                     ..cc
                 }),
-                Err(e) => {
+                Result::Err(e) => {
                     error!("Failed to build connection configuration: {e:?}");
-                    return Err(anyhow!(e).context("failed to build connection config"));
+                    return Ok(Err(format!("failed to build connection config: {e}")));
                 }
             }
         };
 
         let mut update_map = self.consumer_components.write().await;
-        let bundle = match self.connect(config, source_id).await {
-            Ok(b) => b,
-            Err(e) => {
+        let bundle = match self.connect(config, &source_id).await {
+            Result::Ok(b) => b,
+            Result::Err(e) => {
                 error!("Failed to connect to NATS: {e:?}");
-                bail!(anyhow!(e).context("failed to connect to NATS"))
+                return Ok(Err(format!("failed to connect to NATS: {e}")));
             }
         };
         update_map.insert(source_id.into(), bundle);
 
-        Ok(())
+        Ok(Ok(()))
     }
 
-    #[instrument(level = "debug", skip_all, fields(target_id))]
-    async fn receive_link_config_as_source(
+    async fn update_interface_import_config(
         &self,
-        link_config: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        let target_id = link_config.target_id;
+        _cx: Option<Context>,
+        target_id: String,
+        _link_name: String,
+        link_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
         let config = if link_config.config.is_empty() {
-            self.default_config.clone()
+            self.default_config.read().await.clone()
         } else {
             // create a config from the supplied values and merge that with the existing default
-            match connection::from_link_config(&link_config) {
-                Ok(cc) => self.default_config.merge(&cc),
-                Err(e) => {
+            match connection::from_link_config(link_config) {
+                Result::Ok(cc) => self.default_config.read().await.merge(&cc),
+                Result::Err(e) => {
                     error!("Failed to build connection configuration: {e:?}");
-                    return Err(anyhow!(e).context("failed to build connection config"));
+                    return Ok(Err(format!("failed to build connection config: {e}")));
                 }
             }
         };
 
         let mut update_map = self.handler_components.write().await;
-        let bundle = match self.connect(config, target_id).await {
-            Ok(b) => b,
-            Err(e) => {
+        let bundle = match self.connect(config, &target_id).await {
+            Result::Ok(b) => b,
+            Result::Err(e) => {
                 error!("Failed to connect to NATS: {e:?}");
-                bail!(anyhow!(e).context("failed to connect to NATS"))
+                return Ok(Err(format!("failed to connect to NATS: {e}")));
             }
         };
         update_map.insert(target_id.into(), bundle);
-
-        Ok(())
+        Ok(Ok(()))
     }
 
-    /// Handle notification that a link is dropped: close the connection
-    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
-    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let component_id = info.get_source_id();
-        let mut links = self.consumer_components.write().await;
-        if let Some(bundle) = links.remove(component_id) {
-            let client = &bundle.client;
-            debug!(
-                component_id,
-                "dropping NATS client [{}] for (consumer) component",
-                format!(
-                    "{}:{}",
-                    client.server_info().server_id,
-                    client.server_info().client_id
-                ),
-            );
-        }
-
-        debug!(
-            component_id,
-            "finished processing (consumer) link deletion for component",
-        );
-
-        Ok(())
-    }
-
-    #[instrument(level = "info", skip_all, fields(target_id = info.get_target_id()))]
-    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        // If we were the source, then the component we're invoking is the target
-        let component_id = info.get_target_id();
+    #[instrument(level = "info", skip_all, fields(target_id))]
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        target_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
         let mut links = self.handler_components.write().await;
-        if let Some(bundle) = links.remove(component_id) {
+        if let Some(bundle) = links.remove(&target_id) {
             // Note: subscriptions will be closed via Drop on the NatsClientBundle
             let client = &bundle.client;
             debug!(
-                component_id,
+                target_id,
                 "dropping NATS client [{}] and associated subscriptions [{}] for (handler) component",
                 format!(
                     "{}:{}",
@@ -373,26 +430,40 @@ impl Provider for NatsMessagingProvider {
         }
 
         debug!(
-            component_id,
+            target_id,
             "finished processing (handler) link deletion for component",
         );
 
-        Ok(())
+        Ok(Ok(()))
     }
 
-    /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        // clear the handler components
-        let mut handlers = self.handler_components.write().await;
-        handlers.clear();
+    #[instrument(level = "info", skip_all, fields(source_id))]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        let mut links = self.consumer_components.write().await;
+        if let Some(bundle) = links.remove(&source_id) {
+            let client = &bundle.client;
+            debug!(
+                source_id,
+                "dropping NATS client [{}] for (consumer) component",
+                format!(
+                    "{}:{}",
+                    client.server_info().server_id,
+                    client.server_info().client_id
+                ),
+            );
+        }
 
-        // clear the consumer components
-        let mut consumers = self.consumer_components.write().await;
-        consumers.clear();
+        debug!(
+            source_id,
+            "finished processing (consumer) link deletion for component",
+        );
 
-        // dropping all connections should send unsubscribes and close the connections, so no need
-        // to handle that here
-        Ok(())
+        Ok(Ok(()))
     }
 }
 

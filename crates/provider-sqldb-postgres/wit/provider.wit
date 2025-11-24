@@ -4,3 +4,8 @@ world provider-sqldb-postgres {
     export wasmcloud:postgres/query@0.1.1-draft;
     export wasmcloud:postgres/prepared@0.1.1-draft;
 }
+
+world extension {
+    export wrpc:extension/manageable@0.0.1;
+    export wrpc:extension/configurable@0.0.1;
+}

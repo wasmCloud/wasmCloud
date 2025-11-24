@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::warn;
-use wasmcloud_provider_sdk::{core::secrets::SecretValue, LinkConfig};
+use wasmcloud_provider_sdk::{core::secrets::SecretValue, types::InterfaceConfig};
 
 const DEFAULT_CTL_HOST: &str = "0.0.0.0";
 const DEFAULT_CTL_PORT: u16 = 4222;
@@ -169,12 +169,12 @@ impl ClientConfig {
 }
 
 pub(crate) fn extract_wadm_config(
-    link_config: &LinkConfig,
+    link_config: &InterfaceConfig,
     is_subscription: bool,
 ) -> Option<ClientConfig> {
-    let LinkConfig {
-        config, secrets, ..
-    } = link_config;
+    // Convert config Vec to HashMap for easier access
+    let config: HashMap<String, String> = link_config.config.iter().cloned().collect();
+    let secrets = &link_config.secrets;
     let mut client_config = ClientConfig::default();
 
     // For subscriptions we need app_name
@@ -202,10 +202,14 @@ pub(crate) fn extract_wadm_config(
 
     // Handle seed (prefer secrets)
     if let Some(seed_secret) = secrets
-        .get(CONFIG_CTL_SEED)
-        .and_then(SecretValue::as_string)
+        .as_ref()
+        .and_then(|s| s.iter().find(|(k, _)| k == CONFIG_CTL_SEED))
+        .and_then(|(_, v)| {
+            let secret: SecretValue = v.into();
+            secret.as_string().map(String::from)
+        })
     {
-        client_config.ctl_seed = Some(seed_secret.to_string());
+        client_config.ctl_seed = Some(seed_secret);
     } else if let Some(seed_val) = config.get(CONFIG_CTL_SEED) {
         warn!("Seed found in config instead of secrets - consider moving to secrets");
         client_config.ctl_seed = Some(seed_val.clone());

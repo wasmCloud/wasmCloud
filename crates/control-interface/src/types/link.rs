@@ -1,33 +1,26 @@
 //! Data types and structure used when managing links on a wasmCloud lattice
 
+use crate::bindings::wrpc::extension::types::WitMetadata;
 use serde::{Deserialize, Serialize};
 
-/// A link definition between a source and target component (component or provider) on a given
-/// interface.
+pub type ComponentId = String;
+
+/// A link definition representing how this component connects to another component through WIT interfaces.
 ///
-/// An [`Link`] connects one component's import to another
-/// component's export, specifying the configuration each component needs in order to execute
-/// the request, and represents an operator's intent to allow the source to invoke the target.
-///
-/// This link definition is *distinct* from the one in `wasmcloud_core`, in that it is
-/// represents a link at the point in time *before* it's configuration is fully resolved
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize, Hash)]
-#[non_exhaustive]
-pub struct Link {
-    /// Source identifier for the link
-    pub(crate) source_id: String,
-    /// Target for the link, which can be a unique identifier or (future) a routing group
-    pub(crate) target: String,
+/// This represents an operator's intent to allow interface communication between components,
+/// with all necessary configuration resolved at the component level for the exporter component.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InterfaceLink {
+    /// The source component that exports the interfaces
+    pub(crate) source_id: ComponentId,
+    /// The target component that imports the interfaces
+    pub(crate) target: ComponentId,
     /// Name of the link. Not providing this is equivalent to specifying "default"
     #[serde(default = "default_link_name")]
     pub(crate) name: String,
-    /// WIT namespace of the link operation, e.g. `wasi` in `wasi:keyvalue/readwrite.get`
-    pub(crate) wit_namespace: String,
-    /// WIT package of the link operation, e.g. `keyvalue` in `wasi:keyvalue/readwrite.get`
-    pub(crate) wit_package: String,
-    /// WIT Interfaces to be used for the link, e.g. `readwrite`, `atomic`, etc.
-    pub(crate) interfaces: Vec<String>,
-    /// List of named configurations to provide to the source upon request
+    /// Metadata about the WIT interfaces being linked across
+    pub(crate) wit_metadata: WitMetadata,
+    /// Interface configuration applied to either the source or target component, depending on the direction.
     #[serde(default)]
     pub(crate) source_config: Vec<String>,
     /// List of named configurations to provide to the target upon request
@@ -35,7 +28,7 @@ pub struct Link {
     pub(crate) target_config: Vec<String>,
 }
 
-impl Link {
+impl InterfaceLink {
     #[must_use]
     pub fn source_id(&self) -> &str {
         &self.source_id
@@ -53,26 +46,26 @@ impl Link {
 
     #[must_use]
     pub fn wit_namespace(&self) -> &str {
-        &self.wit_namespace
+        &self.wit_metadata.namespace
     }
 
     #[must_use]
     pub fn wit_package(&self) -> &str {
-        &self.wit_package
+        &self.wit_metadata.package
     }
 
     #[must_use]
     pub fn interfaces(&self) -> &Vec<String> {
-        &self.interfaces
+        &self.wit_metadata.interfaces
     }
 
     #[must_use]
-    pub fn source_config(&self) -> &Vec<String> {
+    pub fn source_config(&self) -> &[String] {
         &self.source_config
     }
 
     #[must_use]
-    pub fn target_config(&self) -> &Vec<String> {
+    pub fn target_config(&self) -> &[String] {
         &self.target_config
     }
 
@@ -145,8 +138,8 @@ impl LinkBuilder {
         self
     }
 
-    pub fn build(self) -> crate::Result<Link> {
-        Ok(Link {
+    pub fn build(self) -> crate::Result<InterfaceLink> {
+        Ok(InterfaceLink {
             source_id: self
                 .source_id
                 .ok_or_else(|| "source id is required for creating links".to_string())?,
@@ -156,13 +149,15 @@ impl LinkBuilder {
             name: self
                 .name
                 .ok_or_else(|| "name is required for creating links".to_string())?,
-            wit_namespace: self
-                .wit_namespace
-                .ok_or_else(|| "WIT namespace is required for creating links".to_string())?,
-            wit_package: self
-                .wit_package
-                .ok_or_else(|| "WIT package is required for creating links".to_string())?,
-            interfaces: self.interfaces.unwrap_or_default(),
+            wit_metadata: WitMetadata {
+                namespace: self
+                    .wit_namespace
+                    .ok_or_else(|| "WIT namespace is required for creating links".to_string())?,
+                package: self
+                    .wit_package
+                    .ok_or_else(|| "WIT package is required for creating links".to_string())?,
+                interfaces: self.interfaces.unwrap_or_default(),
+            },
             source_config: self.source_config.unwrap_or_default(),
             target_config: self.target_config.unwrap_or_default(),
         })

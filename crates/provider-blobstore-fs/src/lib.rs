@@ -24,12 +24,44 @@ use tokio_util::io::{ReaderStream, StreamReader};
 use tracing::{debug, error, info, instrument, trace};
 use wasmcloud_provider_sdk::{
     get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
-    serve_provider_exports, Context, LinkConfig, LinkDeleteInfo, Provider,
+    serve_provider_exports,
+    types::{BindRequest, BindResponse, HealthCheckResponse},
+    Context,
 };
 use wrpc_interface_blobstore::bindings::{
     exports::wrpc::blobstore::blobstore::Handler,
     serve,
     wrpc::blobstore::types::{ContainerMetadata, ObjectId, ObjectMetadata},
+};
+
+mod bindings {
+    wit_bindgen_wrpc::generate!({
+        world: "interfaces",
+        with: {
+            "wrpc:blobstore/blobstore@0.2.0": generate,
+            "wrpc:blobstore/types@0.2.0": wrpc_interface_blobstore::bindings::wrpc::blobstore::types,
+            "wasi:blobstore/types@0.2.0-draft": generate,
+            "wasi:io/error@0.2.1": generate,
+            "wasi:io/poll@0.2.1": generate,
+            "wasi:io/streams@0.2.1": generate
+        }
+    });
+
+    pub mod ext {
+        wit_bindgen_wrpc::generate!({
+            world: "extensions",
+            with: {
+                "wrpc:extension/types@0.0.1": wasmcloud_provider_sdk::types,
+                "wrpc:extension/manageable@0.0.1": generate,
+                "wrpc:extension/configurable@0.0.1": generate,
+            }
+        });
+    }
+}
+
+use bindings::ext::exports::wrpc::extension::{
+    configurable::{self, InterfaceConfig},
+    manageable,
 };
 
 #[derive(Default, Debug, Clone)]
@@ -38,9 +70,24 @@ struct FsProviderConfig {
 }
 
 /// fs capability provider implementation
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct FsProvider {
     config: Arc<RwLock<HashMap<String, FsProviderConfig>>>,
+    /// Shutdown signal sender
+    quit_tx: Arc<tokio::sync::broadcast::Sender<()>>,
+}
+
+impl FsProvider {
+    pub fn new(quit_tx: tokio::sync::broadcast::Sender<()>) -> Self {
+        Self {
+            config: Arc::default(),
+            quit_tx: Arc::new(quit_tx),
+        }
+    }
+
+    pub fn name() -> &'static str {
+        "blobstore-fs-provider"
+    }
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -49,22 +96,22 @@ pub async fn run() -> anyhow::Result<()> {
 
 impl FsProvider {
     pub async fn run() -> anyhow::Result<()> {
-        initialize_observability!(
-            "blobstore-fs-provider",
-            std::env::var_os("PROVIDER_BLOBSTORE_FS_FLAMEGRAPH_PATH")
-        );
-
-        let provider = Self::default();
-        let shutdown = run_provider(provider.clone(), "blobstore-fs-provider")
+        let (shutdown, quit_tx) = run_provider(Self::name(), None)
             .await
             .context("failed to run provider")?;
+        let provider = Self::new(quit_tx);
         let connection = get_connection();
-        let wrpc = connection
-            .get_wrpc_client(connection.provider_key())
-            .await?;
-        serve_provider_exports(&wrpc, provider, shutdown, serve)
-            .await
-            .context("failed to serve provider exports")
+        let (main_client, ext_client) = connection.get_wrpc_clients_for_serving().await?;
+        serve_provider_exports(
+            &main_client,
+            &ext_client,
+            provider,
+            shutdown,
+            serve,
+            bindings::ext::serve,
+        )
+        .await
+        .context("failed to serve provider exports")
     }
 }
 
@@ -135,6 +182,147 @@ impl FsProvider {
             .await
             .context("failed to get container")?;
         resolve_subpath(&container, object).context("failed to resolve subpath")
+    }
+}
+
+impl manageable::Handler<Option<Context>> for FsProvider {
+    async fn bind(
+        &self,
+        _cx: Option<Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_xkey: Some(get_connection().provider_xkey.public_key().into()),
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by closing all connections
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
+        // Signal shutdown
+        let _ = self.quit_tx.send(());
+        self.config.write().await.drain();
+        Ok(Ok(()))
+    }
+}
+
+impl configurable::Handler<Option<Context>> for FsProvider {
+    #[instrument(level = "debug", skip_all)]
+    async fn update_base_config(
+        &self,
+        _cx: Option<Context>,
+        config: wasmcloud_provider_sdk::types::BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let flamegraph_path = config
+            .config
+            .iter()
+            .find(|(k, _)| k == "FLAMEGRAPH_PATH")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("PROVIDER_BLOBSTORE_FS_FLAMEGRAPH_PATH").ok());
+        initialize_observability!(Self::name(), flamegraph_path, config.config);
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(source_id))]
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        _link_name: String,
+        config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        for (k, v) in &config.config {
+            info!("link definition configuration [{k}] set to [{v}]");
+        }
+
+        // Determine the root path value
+        let root_val: PathBuf = match config
+            .config
+            .iter()
+            .find(|(key, _)| key.to_uppercase() == "ROOT")
+        {
+            None => {
+                // If no root is specified, use the tempdir and create a specific directory for this component
+                let root = std::env::temp_dir();
+                // Resolve the subpath from the root to the component ID, carefully
+                match resolve_subpath(&root, &source_id) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        error!("Failed to resolve subpath to component directory: {e}");
+                        return Err(
+                            anyhow!(e).context("failed to resolve subpath to component dir")
+                        );
+                    }
+                }
+            }
+            // If a root is manually specified, use that path exactly
+            Some((_, value)) => value.into(),
+        };
+
+        // Ensure the root path exists
+        if let Err(e) = create_dir_all(&root_val).await {
+            error!("Could not create component directory: {:?}", e);
+            return Err(anyhow!(e).context("failed to create component directory"));
+        }
+
+        // Build configuration for FS Provider to use later
+        let fs_config = FsProviderConfig {
+            root: Arc::new(root_val.clean()),
+        };
+
+        info!("Saved FsProviderConfig: {:#?}", fs_config);
+        info!(
+            "File System Blob Store Container Root: '{:?}'",
+            &fs_config.root
+        );
+
+        // Save the configuration for the component
+        self.config.write().await.insert(source_id, fs_config);
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+        _config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        _target_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "info", skip_all, fields(source_id))]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        self.config.write().await.remove(&source_id);
+        Ok(Ok(()))
     }
 }
 
@@ -581,77 +769,6 @@ impl Handler<Option<Context>> for FsProvider {
         }
         .await
         .map_err(|err| format!("{err:#}")))
-    }
-}
-
-impl Provider for FsProvider {
-    /// The fs provider has one configuration parameter, the root of the file system
-    async fn receive_link_config_as_target(
-        &self,
-        LinkConfig {
-            source_id, config, ..
-        }: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        for (k, v) in config {
-            info!("link definition configuration [{k}] set to [{v}]");
-        }
-
-        // Determine the root path value
-        let root_val: PathBuf = match config.iter().find(|(key, _)| key.to_uppercase() == "ROOT") {
-            None => {
-                // If no root is specified, use the tempdir and create a specific directory for this component
-                let root = std::env::temp_dir();
-                // Resolve the subpath from the root to the component ID, carefully
-                match resolve_subpath(&root, source_id) {
-                    Ok(path) => path,
-                    Err(e) => {
-                        error!("Failed to resolve subpath to component directory: {e}");
-                        return Err(
-                            anyhow!(e).context("failed to resolve subpath to component dir")
-                        );
-                    }
-                }
-            }
-            // If a root is manually specified, use that path exactly
-            Some((_, value)) => value.into(),
-        };
-
-        // Ensure the root path exists
-        if let Err(e) = create_dir_all(&root_val).await {
-            error!("Could not create component directory: {:?}", e);
-            return Err(anyhow!(e).context("failed to create component directory"));
-        }
-
-        // Build configuration for FS Provider to use later
-        let config = FsProviderConfig {
-            root: Arc::new(root_val.clean()),
-        };
-
-        info!("Saved FsProviderConfig: {:#?}", config);
-        info!(
-            "File System Blob Store Container Root: '{:?}'",
-            &config.root
-        );
-
-        // Save the configuration for the component
-        self.config
-            .write()
-            .await
-            .insert(source_id.into(), config.clone());
-
-        Ok(())
-    }
-
-    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
-    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let component_id = info.get_source_id();
-        self.config.write().await.remove(component_id);
-        Ok(())
-    }
-
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        self.config.write().await.drain();
-        Ok(())
     }
 }
 

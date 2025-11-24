@@ -13,6 +13,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::bindings::ext::exports::wrpc::extension::{
+    configurable::{self, InterfaceConfig},
+    manageable,
+};
 use anyhow::{bail, Context as _};
 use bytes::Bytes;
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
@@ -23,15 +27,17 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
 use unicase::UniCase;
 use wasmcloud_provider_sdk::core::secrets::SecretValue;
-use wasmcloud_provider_sdk::provider::WrpcClient;
 use wasmcloud_provider_sdk::{
-    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, HostData,
-    LinkConfig, LinkDeleteInfo, Provider,
+    get_connection, initialize_observability, propagate_trace_for_ctx,
+    provider::WrpcClient,
+    run_provider, serve_provider_exports,
+    types::{BindRequest, BindResponse, HealthCheckResponse},
+    Context,
 };
-use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 
 mod bindings {
     wit_bindgen_wrpc::generate!({
+        world: "interfaces",
         with: {
             "wrpc:keyvalue/atomics@0.2.0-draft": generate,
             "wrpc:keyvalue/batch@0.2.0-draft": generate,
@@ -39,6 +45,17 @@ mod bindings {
             "wrpc:keyvalue/watcher@0.2.0-draft": generate,
         }
     });
+
+    pub mod ext {
+        wit_bindgen_wrpc::generate!({
+            world: "extension",
+            with: {
+                "wrpc:extension/types@0.0.1": wasmcloud_provider_sdk::types,
+                "wrpc:extension/manageable@0.0.1": generate,
+                "wrpc:extension/configurable@0.0.1": generate
+            }
+        });
+    }
 }
 use bindings::exports::wrpc::keyvalue;
 use wit_bindgen_wrpc::futures::StreamExt;
@@ -147,7 +164,7 @@ pub struct KvRedisProvider {
     shared_connections: Arc<RwLock<HashMap<SharedConnectionKey, ConnectionManager>>>,
 
     /// Default connection, which may be uninitialized
-    default_connection: Option<Arc<RwLock<DefaultConnection>>>,
+    default_connection: Arc<RwLock<Option<DefaultConnection>>>,
     /// Stores information about watched keys for keyspace notifications
     /// The outer HashMap uses the key as its key, and the HashSet contains
     /// WatchedKeyInfo structs for each watcher of that key, allowing multiple
@@ -155,6 +172,21 @@ pub struct KvRedisProvider {
     watched_keys: Arc<RwLock<HashMap<String, HashSet<WatchedKeyInfo>>>>,
     /// Stores background tasks that handle keyspace notifications for each link
     watch_tasks: Arc<RwLock<WatchTaskMap>>,
+    /// Channel to signal provider shutdown
+    quit_tx: Arc<tokio::sync::broadcast::Sender<()>>,
+}
+
+impl KvRedisProvider {
+    fn new(quit_tx: tokio::sync::broadcast::Sender<()>) -> Self {
+        Self {
+            sources: Arc::default(),
+            shared_connections: Arc::default(),
+            default_connection: Arc::default(),
+            watched_keys: Arc::default(),
+            watch_tasks: Arc::default(),
+            quit_tx: Arc::new(quit_tx),
+        }
+    }
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -167,94 +199,48 @@ impl KvRedisProvider {
     }
 
     pub async fn run() -> anyhow::Result<()> {
-        let host_data = load_host_data().context("failed to load host data")?;
-        let flamegraph_path = host_data
-            .config
-            .get("FLAMEGRAPH_PATH")
-            .map(String::from)
-            .or_else(|| std::env::var("PROVIDER_KEYVALUE_REDIS_FLAMEGRAPH_PATH").ok());
-        initialize_observability!(Self::name(), flamegraph_path);
-        let provider = KvRedisProvider::from_host_data(host_data);
-        let shutdown = run_provider(provider.clone(), KvRedisProvider::name())
+        let (shutdown, quit_tx) = run_provider(KvRedisProvider::name(), None)
             .await
             .context("failed to run provider")?;
+        let provider = KvRedisProvider::new(quit_tx);
         let connection = get_connection();
-        let wrpc = connection
-            .get_wrpc_client(connection.provider_key())
-            .await?;
-        serve_provider_exports(&wrpc, provider, shutdown, bindings::serve)
-            .await
-            .context("failed to serve provider exports")
-    }
-
-    #[must_use]
-    pub fn from_config(config: HashMap<String, String>) -> Self {
-        let default_connection_disabled = config
-            .keys()
-            .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY));
-
-        KvRedisProvider {
-            sources: Arc::default(),
-            default_connection: if default_connection_disabled {
-                None
-            } else {
-                Some(Arc::new(RwLock::new(DefaultConnection::ClientConfig {
-                    config,
-                    secrets: None,
-                })))
-            },
-            shared_connections: Arc::new(RwLock::new(HashMap::new())),
-            watched_keys: Arc::new(RwLock::new(HashMap::new())),
-            watch_tasks: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
-    #[must_use]
-    pub fn from_host_data(host_data: &HostData) -> Self {
-        let default_connection_disabled = host_data
-            .config
-            .keys()
-            .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY));
-
-        KvRedisProvider {
-            sources: Arc::default(),
-            default_connection: if default_connection_disabled {
-                None
-            } else {
-                Some(Arc::new(RwLock::new(DefaultConnection::ClientConfig {
-                    config: host_data.config.clone(),
-                    secrets: Some(host_data.secrets.clone()),
-                })))
-            },
-            shared_connections: Arc::new(RwLock::new(HashMap::new())),
-            watched_keys: Arc::new(RwLock::new(HashMap::new())),
-            watch_tasks: Arc::new(RwLock::new(HashMap::new())),
-        }
+        let (main_client, ext_client) = connection.get_wrpc_clients_for_serving().await?;
+        serve_provider_exports(
+            &main_client,
+            &ext_client,
+            provider,
+            shutdown,
+            bindings::serve,
+            bindings::ext::serve,
+        )
+        .await
+        .context("failed to serve provider exports")
     }
 
     #[instrument(level = "trace", skip_all)]
     async fn get_default_connection(&self) -> anyhow::Result<ConnectionManager> {
-        let Some(ref default_connection) = self.default_connection else {
-            bail!("default connection is disabled via config, please provide valid configuration");
-        };
-
         // NOTE: The read lock is only held for the duration of the `if let` block so we can acquire
         // the write lock to update the default connection if needed.
-        if let DefaultConnection::Conn(conn) = &*default_connection.read().await {
+        if let Some(DefaultConnection::Conn(conn)) = &*self.default_connection.read().await {
             return Ok(conn.clone());
         }
 
         // Build the default connection
-        let mut default_conn = default_connection.write().await;
+        let mut default_conn = self.default_connection.write().await;
         match &mut *default_conn {
-            DefaultConnection::Conn(conn) => Ok(conn.clone()),
-            DefaultConnection::ClientConfig { config, secrets } => {
+            None => {
+                bail!(
+                    "default connection is disabled via config, please provide valid configuration"
+                );
+            }
+            Some(DefaultConnection::Conn(conn)) => Ok(conn.clone()),
+            Some(DefaultConnection::ClientConfig { config, secrets }) => {
                 let conn = redis::Client::open(retrieve_default_url(config, secrets))
                     .context("failed to construct default Redis client")?
                     .get_connection_manager()
                     .await
                     .context("failed to construct Redis connection manager")?;
-                *default_conn = DefaultConnection::Conn(conn.clone());
+                *default_conn = Some(DefaultConnection::Conn(conn.clone()));
                 Ok(conn)
             }
         }
@@ -354,6 +340,446 @@ async fn invoke_on_delete(wrpc: &WrpcClient, bucket: &str, key: &str) {
         }
     }
     debug!("key deleted");
+}
+
+impl manageable::Handler<Option<Context>> for KvRedisProvider {
+    async fn bind(
+        &self,
+        _cx: Option<Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_xkey: Some(get_connection().provider_xkey.public_key().into()),
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by closing all connections
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
+        info!("shutting down");
+        let mut aw = self.sources.write().await;
+        // empty the component link data and stop all servers
+        for (_, conn) in aw.drain() {
+            drop(conn);
+        }
+        // Signal the provider to shut down
+        let _ = self.quit_tx.send(());
+        Ok(Ok(()))
+    }
+}
+
+impl configurable::Handler<Option<Context>> for KvRedisProvider {
+    #[instrument(level = "debug", skip_all)]
+    async fn update_base_config(
+        &self,
+        _cx: Option<Context>,
+        config: wasmcloud_provider_sdk::types::BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let flamegraph_path = config
+            .config
+            .iter()
+            .find(|(k, _)| k == "FLAMEGRAPH_PATH")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("PROVIDER_KEYVALUE_REDIS_FLAMEGRAPH_PATH").ok());
+        initialize_observability!(Self::name(), flamegraph_path, config.config);
+
+        let config: HashMap<String, String> = config.config.into_iter().collect();
+
+        let default_connection_disabled = config
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY));
+
+        if default_connection_disabled {
+            *self.default_connection.write().await = None;
+        } else {
+            *self.default_connection.write().await = Some(DefaultConnection::ClientConfig {
+                config,
+                secrets: None,
+            });
+        };
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "debug", skip_all, fields(source_id))]
+    async fn update_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        link_name: String,
+        interface_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let config: HashMap<String, String> = interface_config.config.into_iter().collect();
+        let secrets: HashMap<String, SecretValue> = interface_config
+            .secrets
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect();
+
+        let url = secrets
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+            .and_then(|url_key| config.get(url_key))
+            .or_else(|| {
+                warn!("redis connection URLs can be sensitive. Please consider using secrets to pass this value");
+                config
+                    .keys()
+                    .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+                    .and_then(|url_key| config.get(url_key))
+            });
+
+        let default_connection_disabled = secrets
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY))
+            || config
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY));
+
+        let share_connections_by_url = secrets
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case(CONFIG_SHARE_CONNECTIONS_BY_URL_KEY))
+            || config
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case(CONFIG_SHARE_CONNECTIONS_BY_URL_KEY));
+
+        let key = (source_id.to_string(), link_name.to_string());
+
+        // If the shared connection is already present with the given URL (hashed)
+        // make the association and exit early.
+        {
+            if let (Some(url), true) = (url, share_connections_by_url) {
+                let shared_connections = self.shared_connections.read().await;
+                let shared_key = format!("{:X}", Sha256::digest(url));
+                if shared_connections.contains_key(&shared_key) {
+                    // SAFETY: shared_connections should always be locked first
+                    let mut sources = self.sources.write().await;
+                    sources.insert(key, RedisConnection::Shared(shared_key));
+                    return Ok(Ok(()));
+                }
+            }
+        }
+
+        // Create initial configuration for the connection that is intended to fail fast
+        let cfg = build_connection_mgr_config(&config);
+        let conn = if let Some(url) = url {
+            match redis::Client::open(url.to_string()) {
+                Ok(client) => match ConnectionManager::new_with_config(client, cfg).await {
+                    Ok(conn) => {
+                        info!(url, "established link");
+                        conn
+                    }
+                    Err(err) => {
+                        warn!(
+                            url,
+                            ?err,
+                        "Could not create Redis connection manager for source [{source_id}], keyvalue operations will fail",
+                    );
+                        bail!("failed to create redis connection manager");
+                    }
+                },
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "Could not create Redis client for source [{source_id}], keyvalue operations will fail",
+                    );
+                    bail!("failed to create redis client");
+                }
+            }
+        } else {
+            // Disallow default connections if disabled via link config
+            if default_connection_disabled {
+                error!(
+                    component = source_id,
+                    "using the default connection is disabled via link configuration"
+                );
+                bail!(
+                    "using the default connection is disabled via link configuration for component [{source_id}]"
+                );
+            }
+
+            self.get_default_connection().await.map_err(|err| {
+                error!(error = ?err, "failed to get default connection for link");
+                err
+            })?
+        };
+
+        match (url, share_connections_by_url) {
+            // If there was a URL (non-default connection) and connections should be shared by URL,
+            // update both shared connections and sources
+            (Some(url), true) => {
+                let shared_key = format!("{:X}", Sha256::digest(url));
+
+                // SAFETY: shared_connections should always be locked first
+                let mut shared_connections = self.shared_connections.write().await;
+                shared_connections.insert(shared_key.clone(), conn);
+                drop(shared_connections);
+
+                let mut sources = self.sources.write().await;
+                sources.insert(key, RedisConnection::Shared(shared_key));
+                drop(sources);
+            }
+            // In the case of a default connection in use (implicitly shared) or if share connections is turned off,
+            // save the direct connection.
+            _ => {
+                let mut sources = self.sources.write().await;
+                sources.insert(key, RedisConnection::Direct(conn));
+                drop(sources);
+            }
+        }
+
+        Ok(Ok(()))
+    }
+
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        target_id: String,
+        link_name: String,
+        interface_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let config: HashMap<String, String> = interface_config.config.into_iter().collect();
+        let secrets: HashMap<String, SecretValue> = interface_config
+            .secrets
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect();
+        let interfaces = interface_config.metadata.interfaces;
+
+        let url = secrets
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+            .and_then(|url_key| config.get(url_key))
+            .or_else(|| {
+                warn!("Redis connection URLs can be sensitive. Consider using secrets to pass this value.");
+                config.keys()
+                    .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+                    .and_then(|url_key| config.get(url_key))
+            })
+            .map_or(DEFAULT_CONNECT_URL, |v| v);
+
+        let client = match redis::Client::open(url.to_string()) {
+            Ok(client) => {
+                info!(url, "Established link at receive_link_config_as_source");
+                client
+            }
+            Err(err) => {
+                warn!(target_id = %target_id, err = ?err, "Failed to create Redis client");
+                bail!("Failed to create Redis client");
+            }
+        };
+        let mut conn = client.get_connection_manager().await.map_err(|e| {
+            error!(err = ?e, "Failed to get async connection");
+            anyhow::anyhow!("Failed to get async connection: {}", e)
+        })?;
+
+        let component_id: Arc<str> = target_id.clone().into();
+        let wrpc = get_connection()
+            .get_wrpc_client(&component_id)
+            .await
+            .context("failed to construct wRPC client")?;
+        if interfaces.contains(&"watcher".to_string()) {
+            let config_response: Vec<String> = redis::cmd("CONFIG")
+                .arg("GET")
+                .arg("notify-keyspace-events")
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| {
+                    error!(err = %e, "Failed to get keyspace notifications config");
+                    anyhow::anyhow!("Failed to get keyspace notifications config: {}", e)
+                })?;
+
+            let current_config = config_response.get(1).ok_or_else(|| {
+                error!("Unexpected response format from Redis CONFIG GET");
+                anyhow::anyhow!("Unexpected response format from Redis CONFIG GET")
+            })?;
+
+            if !current_config.contains('K')
+                || !current_config.contains('$')
+                || !current_config.contains('g')
+            {
+                error!(
+                    current_config = %current_config,
+                    "Redis keyspace-notifications not properly configured"
+                );
+                return Err(anyhow::anyhow!(
+                    "Redis keyspace-notifications not properly configured! \
+                        Expected 'K$g' in settings, but got '{}'. \
+                        Please run: CONFIG SET notify-keyspace-events K$g",
+                    current_config
+                ));
+            }
+
+            let wrpc = Arc::new(wrpc);
+            let wrpc_for_task = wrpc.clone();
+
+            let config_watch_entries = parse_watch_config(&config, &target_id);
+
+            // Update watched keys
+            let mut watched_keys = self.watched_keys.write().await;
+            for (key, key_info_set) in config_watch_entries {
+                watched_keys
+                    .entry(key)
+                    .or_insert_with(HashSet::new)
+                    .extend(key_info_set);
+            }
+
+            let client_clone = client.clone();
+            let self_clone = self.clone();
+            let mut conn_clone = conn.clone();
+            let task = tokio::spawn(async move {
+                let mut pubsub = match client_clone.get_async_pubsub().await {
+                    Ok(pubsub) => pubsub,
+                    Err(e) => {
+                        error!(err = %e, "Failed to get pubsub connection");
+                        return;
+                    }
+                };
+                let watched_keys = self_clone.watched_keys.read().await;
+                for key in watched_keys.keys() {
+                    let channel = format!("__keyspace@0__:{key}");
+                    let _ = pubsub
+                        .psubscribe(&channel)
+                        .await
+                        .context("Failed to subscribe to SET/DEL events for key");
+                }
+                let stream = pubsub.on_message();
+                tokio::pin!(stream);
+                while let Some(msg) = stream.next().await {
+                    let channel: String = msg.get_channel_name().to_string();
+                    let event: String = match msg.get_payload() {
+                        Ok(event) => event,
+                        Err(e) => {
+                            error!(err = %e, "Failed to get payload");
+                            continue;
+                        }
+                    };
+                    // The Channel is in the format __keyspace@0__:key
+                    // While the payload is the event (ie set | del)
+                    let mkey = match channel.split(':').next_back() {
+                        Some(key) => key,
+                        None => {
+                            error!(channel = %channel, "Malformed Redis channel name: expected '__keyspace@0__:key' format");
+                            continue;
+                        }
+                    };
+                    // Check if the key is being watched by any component
+                    let watched_keys = self_clone.watched_keys.read().await;
+                    if let Some(key_info_set) = watched_keys.get(mkey) {
+                        if event == "set" || event == "SET" {
+                            // Perform a GET operation to retrieve the current value of the key since redis doesn't have a
+                            // native way to get the value of the key from the notification
+                            let value: wit_bindgen_wrpc::bytes::Bytes = match redis::cmd("GET")
+                                .arg(mkey)
+                                .query_async::<Option<Vec<u8>>>(&mut conn_clone)
+                                .await
+                            {
+                                Ok(Some(v)) => v.into(),
+                                Ok(None) => {
+                                    debug!(key = %mkey, "Key not found or was deleted");
+                                    continue;
+                                }
+                                Err(e) => {
+                                    error!(key = %mkey, err = %e, "Failed to get value for key");
+                                    continue;
+                                }
+                            };
+                            for key_info in key_info_set {
+                                if key_info.event_type == WatchEventType::Set {
+                                    invoke_on_set(&wrpc_for_task, "0", mkey, &value).await;
+                                }
+                            }
+                        } else if event == "del" || event == "DEL" {
+                            for key_info in key_info_set {
+                                if key_info.event_type == WatchEventType::Delete {
+                                    invoke_on_delete(&wrpc_for_task, "0", mkey).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            let mut tasks = self.watch_tasks.write().await;
+            tasks.insert(
+                LinkId {
+                    target_id: target_id.to_string(),
+                    link_name: link_name.to_string(),
+                },
+                task,
+            );
+        }
+
+        let mut sources = self.sources.write().await;
+        sources.insert(
+            (target_id.to_string(), link_name.to_string()),
+            RedisConnection::Direct(conn),
+        );
+
+        Ok(Ok(()))
+    }
+
+    async fn delete_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        target_id: String,
+        link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        let mut sources = self.sources.write().await;
+        sources.remove(&(target_id.to_string(), link_name.to_string()));
+
+        let mut watch_tasks = self.watch_tasks.write().await;
+
+        // If there's a watch task for this link, abort it and remove from map
+        if let Some(task) = watch_tasks.remove(&LinkId {
+            target_id: target_id.to_string(),
+            link_name: link_name.to_string(),
+        }) {
+            task.abort();
+            let _ = task.await;
+        }
+
+        // Clean up watched keys for this target
+        let mut watched_keys = self.watched_keys.write().await;
+        for key_watchers in watched_keys.values_mut() {
+            key_watchers.retain(|key_info| key_info.target != target_id);
+        }
+
+        // Remove any empty watch sets
+        watched_keys.retain(|_, watchers| !watchers.is_empty());
+
+        debug!(
+            target_id,
+            link_name, "cleaned up redis connection and watch tasks for link"
+        );
+        Ok(Ok(()))
+    }
+
+    #[instrument(level = "info", skip_all, fields(source_id))]
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        let mut aw = self.sources.write().await;
+        // NOTE: ideally we should *not* get rid of all links for a given source here,
+        // but delete_link actually does not tell us enough about the link to know whether
+        // we're dealing with one link or the other.
+        aw.retain(|(src_id, _link_name), _| *src_id != source_id);
+        debug!(source_id, "closing all redis connections for component");
+        Ok(Ok(()))
+    }
 }
 
 impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
@@ -507,379 +933,6 @@ impl keyvalue::batch::Handler<Option<Context>> for KvRedisProvider {
     ) -> anyhow::Result<Result<()>> {
         check_bucket_name(&bucket);
         Ok(self.exec_cmd(ctx, &mut Cmd::del(keys)).await)
-    }
-}
-
-/// Handle provider control commands
-impl Provider for KvRedisProvider {
-    /// Provider should perform any operations needed for a new link,
-    /// including setting up per-component resources, and checking authorization.
-    /// If the link is allowed, return true, otherwise return false to deny the link.
-    #[instrument(level = "debug", skip(self, config))]
-    async fn receive_link_config_as_target(
-        &self,
-        LinkConfig {
-            source_id,
-            config,
-            secrets,
-            link_name,
-            ..
-        }: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        let url = secrets
-            .keys()
-            .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
-            .and_then(|url_key| config.get(url_key))
-            .or_else(|| {
-                warn!("redis connection URLs can be sensitive. Please consider using secrets to pass this value");
-                config
-                    .keys()
-                    .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
-                    .and_then(|url_key| config.get(url_key))
-            });
-
-        let default_connection_disabled = secrets
-            .keys()
-            .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY))
-            || config
-                .keys()
-                .any(|k| k.eq_ignore_ascii_case(CONFIG_DISABLE_DEFAULT_CONNECTION_KEY));
-
-        let share_connections_by_url = secrets
-            .keys()
-            .any(|k| k.eq_ignore_ascii_case(CONFIG_SHARE_CONNECTIONS_BY_URL_KEY))
-            || config
-                .keys()
-                .any(|k| k.eq_ignore_ascii_case(CONFIG_SHARE_CONNECTIONS_BY_URL_KEY));
-
-        let key = (source_id.to_string(), link_name.to_string());
-
-        // If the shared connection is already present with the given URL (hashed)
-        // make the association and exit early.
-        {
-            if let (Some(url), true) = (url, share_connections_by_url) {
-                let shared_connections = self.shared_connections.read().await;
-                let shared_key = format!("{:X}", Sha256::digest(url));
-                if shared_connections.contains_key(&shared_key) {
-                    // SAFETY: shared_connections should always be locked first
-                    let mut sources = self.sources.write().await;
-                    sources.insert(key, RedisConnection::Shared(shared_key));
-                    return Ok(());
-                }
-            }
-        }
-
-        // Create initial configuration for the connection that is intended to fail fast
-        let cfg = build_connection_mgr_config(config);
-        let conn = if let Some(url) = url {
-            match redis::Client::open(url.to_string()) {
-                Ok(client) => match ConnectionManager::new_with_config(client, cfg).await {
-                    Ok(conn) => {
-                        info!(url, "established link");
-                        conn
-                    }
-                    Err(err) => {
-                        warn!(
-                            url,
-                            ?err,
-                        "Could not create Redis connection manager for source [{source_id}], keyvalue operations will fail",
-                    );
-                        bail!("failed to create redis connection manager");
-                    }
-                },
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "Could not create Redis client for source [{source_id}], keyvalue operations will fail",
-                    );
-                    bail!("failed to create redis client");
-                }
-            }
-        } else {
-            // Disallow default connections if disabled via link config
-            if default_connection_disabled {
-                error!(
-                    component = source_id,
-                    "using the default connection is disabled via link configuration"
-                );
-                bail!(
-                    "using the default connection is disabled via link configuration for component [{source_id}]"
-                );
-            }
-
-            self.get_default_connection().await.map_err(|err| {
-                error!(error = ?err, "failed to get default connection for link");
-                err
-            })?
-        };
-
-        match (url, share_connections_by_url) {
-            // If there was a URL (non-default connection) and connections should be shared by URL,
-            // update both shared connections and sources
-            (Some(url), true) => {
-                let shared_key = format!("{:X}", Sha256::digest(url));
-
-                // SAFETY: shared_connections should always be locked first
-                let mut shared_connections = self.shared_connections.write().await;
-                shared_connections.insert(shared_key.clone(), conn);
-                drop(shared_connections);
-
-                let mut sources = self.sources.write().await;
-                sources.insert(key, RedisConnection::Shared(shared_key));
-                drop(sources);
-            }
-            // In the case of a default connection in use (implicitly shared) or if share connections is turned off,
-            // save the direct connection.
-            _ => {
-                let mut sources = self.sources.write().await;
-                sources.insert(key, RedisConnection::Direct(conn));
-                drop(sources);
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn receive_link_config_as_source(
-        &self,
-        LinkConfig {
-            target_id,
-            config,
-            secrets,
-            link_name,
-            wit_metadata: (_, _, interfaces),
-            ..
-        }: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        let url = secrets
-            .keys()
-            .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
-            .and_then(|url_key| config.get(url_key))
-            .or_else(|| {
-                warn!("Redis connection URLs can be sensitive. Consider using secrets to pass this value.");
-                config.keys()
-                    .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
-                    .and_then(|url_key| config.get(url_key))
-            })
-            .map_or(DEFAULT_CONNECT_URL, |v| v);
-
-        let client = match redis::Client::open(url.to_string()) {
-            Ok(client) => {
-                info!(url, "Established link at receive_link_config_as_source");
-                client
-            }
-            Err(err) => {
-                warn!(target_id = %target_id, err = ?err, "Failed to create Redis client");
-                bail!("Failed to create Redis client");
-            }
-        };
-        let mut conn = client.get_connection_manager().await.map_err(|e| {
-            error!(err = ?e, "Failed to get async connection");
-            anyhow::anyhow!("Failed to get async connection: {}", e)
-        })?;
-
-        let component_id: Arc<str> = target_id.into();
-        let wrpc = get_connection()
-            .get_wrpc_client(&component_id)
-            .await
-            .context("failed to construct wRPC client")?;
-        if interfaces.contains(&"watcher".to_string()) {
-            let config_response: Vec<String> = redis::cmd("CONFIG")
-                .arg("GET")
-                .arg("notify-keyspace-events")
-                .query_async(&mut conn)
-                .await
-                .map_err(|e| {
-                    error!(err = %e, "Failed to get keyspace notifications config");
-                    anyhow::anyhow!("Failed to get keyspace notifications config: {}", e)
-                })?;
-
-            let current_config = config_response.get(1).ok_or_else(|| {
-                error!("Unexpected response format from Redis CONFIG GET");
-                anyhow::anyhow!("Unexpected response format from Redis CONFIG GET")
-            })?;
-
-            if !current_config.contains('K')
-                || !current_config.contains('$')
-                || !current_config.contains('g')
-            {
-                error!(
-                    current_config = %current_config,
-                    "Redis keyspace-notifications not properly configured"
-                );
-                return Err(anyhow::anyhow!(
-                    "Redis keyspace-notifications not properly configured! \
-                        Expected 'K$g' in settings, but got '{}'. \
-                        Please run: CONFIG SET notify-keyspace-events K$g",
-                    current_config
-                ));
-            }
-
-            let wrpc = Arc::new(wrpc);
-            let wrpc_for_task = wrpc.clone();
-
-            let config_watch_entries = parse_watch_config(config, target_id);
-
-            // Update watched keys
-            let mut watched_keys = self.watched_keys.write().await;
-            for (key, key_info_set) in config_watch_entries {
-                watched_keys
-                    .entry(key)
-                    .or_insert_with(HashSet::new)
-                    .extend(key_info_set);
-            }
-
-            let client_clone = client.clone();
-            let self_clone = self.clone();
-            let mut conn_clone = conn.clone();
-            let task = tokio::spawn(async move {
-                let mut pubsub = match client_clone.get_async_pubsub().await {
-                    Ok(pubsub) => pubsub,
-                    Err(e) => {
-                        error!(err = %e, "Failed to get pubsub connection");
-                        return;
-                    }
-                };
-                let watched_keys = self_clone.watched_keys.read().await;
-                for key in watched_keys.keys() {
-                    let channel = format!("__keyspace@0__:{key}");
-                    let _ = pubsub
-                        .psubscribe(&channel)
-                        .await
-                        .context("Failed to subscribe to SET/DEL events for key");
-                }
-                let stream = pubsub.on_message();
-                tokio::pin!(stream);
-                while let Some(msg) = stream.next().await {
-                    let channel: String = msg.get_channel_name().to_string();
-                    let event: String = match msg.get_payload() {
-                        Ok(event) => event,
-                        Err(e) => {
-                            error!(err = %e, "Failed to get payload");
-                            continue;
-                        }
-                    };
-                    // The Channel is in the format __keyspace@0__:key
-                    // While the payload is the event (ie set | del)
-                    let mkey = match channel.split(':').next_back() {
-                        Some(key) => key,
-                        None => {
-                            error!(channel = %channel, "Malformed Redis channel name: expected '__keyspace@0__:key' format");
-                            continue;
-                        }
-                    };
-                    // Check if the key is being watched by any component
-                    let watched_keys = self_clone.watched_keys.read().await;
-                    if let Some(key_info_set) = watched_keys.get(mkey) {
-                        if event == "set" || event == "SET" {
-                            // Perform a GET operation to retrieve the current value of the key since redis doesn't have a
-                            // native way to get the value of the key from the notification
-                            let value: wit_bindgen_wrpc::bytes::Bytes = match redis::cmd("GET")
-                                .arg(mkey)
-                                .query_async::<Option<Vec<u8>>>(&mut conn_clone)
-                                .await
-                            {
-                                Ok(Some(v)) => v.into(),
-                                Ok(None) => {
-                                    debug!(key = %mkey, "Key not found or was deleted");
-                                    continue;
-                                }
-                                Err(e) => {
-                                    error!(key = %mkey, err = %e, "Failed to get value for key");
-                                    continue;
-                                }
-                            };
-                            for key_info in key_info_set {
-                                if key_info.event_type == WatchEventType::Set {
-                                    invoke_on_set(&wrpc_for_task, "0", mkey, &value).await;
-                                }
-                            }
-                        } else if event == "del" || event == "DEL" {
-                            for key_info in key_info_set {
-                                if key_info.event_type == WatchEventType::Delete {
-                                    invoke_on_delete(&wrpc_for_task, "0", mkey).await;
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-            let mut tasks = self.watch_tasks.write().await;
-            tasks.insert(
-                LinkId {
-                    target_id: target_id.to_string(),
-                    link_name: link_name.to_string(),
-                },
-                task,
-            );
-        }
-
-        let mut sources = self.sources.write().await;
-        sources.insert(
-            (target_id.to_string(), link_name.to_string()),
-            RedisConnection::Direct(conn),
-        );
-
-        Ok(())
-    }
-
-    /// Handle notification that a link is dropped - close the connection
-    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
-    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let component_id = info.get_source_id();
-        let mut aw = self.sources.write().await;
-        // NOTE: ideally we should *not* get rid of all links for a given source here,
-        // but delete_link actually does not tell us enough about the link to know whether
-        // we're dealing with one link or the other.
-        aw.retain(|(src_id, _link_name), _| src_id != component_id);
-        debug!(component_id, "closing all redis connections for component");
-        Ok(())
-    }
-
-    #[instrument(level = "info", skip_all, fields(target_id = info.get_target_id()))]
-    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let component_id = info.get_target_id();
-        let link_name = info.get_link_name();
-
-        let mut sources = self.sources.write().await;
-        sources.remove(&(component_id.to_string(), link_name.to_string()));
-
-        let mut watch_tasks = self.watch_tasks.write().await;
-
-        // If there's a watch task for this link, abort it and remove from map
-        if let Some(task) = watch_tasks.remove(&LinkId {
-            target_id: component_id.to_string(),
-            link_name: link_name.to_string(),
-        }) {
-            task.abort();
-            let _ = task.await;
-        }
-
-        // Clean up watched keys for this target
-        let mut watched_keys = self.watched_keys.write().await;
-        for key_watchers in watched_keys.values_mut() {
-            key_watchers.retain(|key_info| key_info.target != component_id);
-        }
-
-        // Remove any empty watch sets
-        watched_keys.retain(|_, watchers| !watchers.is_empty());
-
-        debug!(
-            component_id,
-            link_name, "cleaned up redis connection and watch tasks for link"
-        );
-        Ok(())
-    }
-
-    /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        info!("shutting down");
-        let mut aw = self.sources.write().await;
-        // empty the component link data and stop all servers
-        for (_, conn) in aw.drain() {
-            drop(conn);
-        }
-        Ok(())
     }
 }
 

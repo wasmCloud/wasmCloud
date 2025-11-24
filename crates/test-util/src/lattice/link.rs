@@ -1,7 +1,7 @@
 //! Utilities for managing lattice links
 
 use anyhow::{anyhow, Result};
-use wasmcloud_control_interface::{CtlResponse, Link};
+use wasmcloud_control_interface::{CtlResponse, InterfaceLink};
 use wasmcloud_core::KnownConfigName;
 
 #[allow(clippy::too_many_arguments)]
@@ -24,7 +24,7 @@ pub async fn assert_advertise_link(
     let wit_package = wit_package.as_ref();
     client
         .put_link(
-            Link::builder()
+            InterfaceLink::builder()
                 .source_id(source_id)
                 .target(target)
                 .name(link_name)

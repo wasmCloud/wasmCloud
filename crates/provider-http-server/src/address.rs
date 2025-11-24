@@ -9,16 +9,26 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::{bail, Context as _};
+use crate::bindings::exports::wrpc::extension::{
+    configurable::{self, InterfaceConfig},
+    manageable,
+};
+use anyhow::Context as _;
 use axum::extract;
 use axum::handler::Handler;
 use axum_server::tls_rustls::RustlsConfig;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument};
-use wasmcloud_core::http::{default_listen_address, load_settings, ServiceSettings};
-use wasmcloud_provider_sdk::core::LinkName;
-use wasmcloud_provider_sdk::provider::WrpcClient;
-use wasmcloud_provider_sdk::{get_connection, HostData, LinkConfig, LinkDeleteInfo, Provider};
+use wasmcloud_core::{
+    http::{default_listen_address, load_settings, ServiceSettings},
+    LinkName,
+};
+use wasmcloud_provider_sdk::{
+    get_connection,
+    provider::WrpcClient,
+    types::{BindRequest, BindResponse, HealthCheckResponse},
+    Context,
+};
 
 use crate::{build_request, get_cors_layer, get_tcp_listener, invoke_component};
 
@@ -32,7 +42,7 @@ type HandlerLookup =
 /// `wrpc:http/incoming-handler` provider implementation in address mode
 #[derive(Clone)]
 pub struct HttpServerProvider {
-    default_address: SocketAddr,
+    default_address: Arc<RwLock<SocketAddr>>,
 
     /// Lookup of components that handle requests {addr -> (server, (component id, link name))}
     handlers_by_socket: Arc<RwLock<HandlerLookup>>,
@@ -41,78 +51,96 @@ pub struct HttpServerProvider {
     ///
     /// This structure is generally used as a look up into `handlers_by_socket`
     sockets_by_link_name: Arc<RwLock<HashMap<LinkName, SocketAddr>>>,
+
+    /// Channel to signal provider shutdown
+    quit_tx: Arc<tokio::sync::broadcast::Sender<()>>,
 }
 
-impl Default for HttpServerProvider {
-    fn default() -> Self {
+impl HttpServerProvider {
+    pub fn new(quit_tx: tokio::sync::broadcast::Sender<()>) -> Self {
         Self {
-            default_address: default_listen_address(),
+            default_address: Arc::new(RwLock::new(default_listen_address())),
             handlers_by_socket: Arc::default(),
             sockets_by_link_name: Arc::default(),
+            quit_tx: Arc::new(quit_tx),
         }
     }
 }
 
-impl HttpServerProvider {
-    /// Create a new instance of the HTTP server provider
-    pub fn new(host_data: &HostData) -> anyhow::Result<Self> {
-        let default_address = host_data
-            .config
+impl configurable::Handler<Option<Context>> for HttpServerProvider {
+    async fn update_base_config(
+        &self,
+        _cx: Option<Context>,
+        config: wasmcloud_provider_sdk::types::BaseConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let config: HashMap<String, String> = config.config.into_iter().collect();
+
+        let default_address = config
             .get("default_address")
             .map(|s| SocketAddr::from_str(s))
             .transpose()
             .context("failed to parse default_address")?
             .unwrap_or_else(default_listen_address);
 
-        Ok(Self {
-            default_address,
-            handlers_by_socket: Arc::default(),
-            sockets_by_link_name: Arc::default(),
-        })
+        *self.default_address.write().await = default_address;
+        Ok(Ok(()))
     }
-}
 
-impl Provider for HttpServerProvider {
-    /// This is called when the HTTP server provider is linked to a component
-    ///
-    /// This HTTP server mode will listen on a new address for each component that it links to.
-    async fn receive_link_config_as_source(
+    async fn update_interface_export_config(
         &self,
-        link_config: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        let settings = match load_settings(Some(self.default_address), link_config.config)
-            .context("httpserver failed to load settings for component")
-        {
-            Ok(settings) => settings,
-            Err(e) => {
+        _cx: Option<Context>,
+        _source_id: String,
+        _link_name: String,
+        _link_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+
+    async fn update_interface_import_config(
+        &self,
+        _cx: Option<Context>,
+        target_id: String,
+        link_name: String,
+        interface_config: InterfaceConfig,
+    ) -> anyhow::Result<Result<(), String>> {
+        let config: HashMap<String, String> = interface_config.config.into_iter().collect();
+
+        let settings = match load_settings(Some(*self.default_address.read().await), &config) {
+            Result::Ok(settings) => settings,
+            Result::Err(e) => {
                 error!(
-                    config = ?link_config.config,
-                    "httpserver failed to load settings for component: {}", e.to_string()
+                    ?config,
+                    "httpserver failed to load settings for component: {}",
+                    e.to_string()
                 );
-                bail!(e);
+                return Ok(Err(format!(
+                    "httpserver failed to load settings for component: {e}"
+                )));
             }
         };
 
-        let wrpc = get_connection()
-            .get_wrpc_client(link_config.target_id)
-            .await
-            .context("failed to construct wRPC client")?;
+        let wrpc = match get_connection().get_wrpc_client(&target_id).await {
+            Result::Ok(wrpc) => wrpc,
+            Result::Err(e) => {
+                return Ok(Err(format!("failed to construct wRPC client: {e}")));
+            }
+        };
         let component_meta = (
-            Arc::from(link_config.target_id),
-            Arc::from(link_config.link_name),
+            Arc::from(target_id.clone()),
+            Arc::from(link_name.clone()),
             wrpc,
         );
         let mut sockets_by_link_name = self.sockets_by_link_name.write().await;
         let mut handlers_by_socket = self.handlers_by_socket.write().await;
 
-        match sockets_by_link_name.entry(link_config.link_name.to_string()) {
+        match sockets_by_link_name.entry(link_name.to_string()) {
             // If a mapping already exists, and the stored address is different, disallow overwriting
             std::collections::hash_map::Entry::Occupied(v) => {
-                bail!(
+                return Ok(Err(format!(
                     "an address mapping for address [{}] the link [{}] already exists, overwriting links is not currently supported",
-                    v.get().ip().to_string(),
-                    link_config.link_name,
-                )
+                    v.get().ip(),
+                    link_name,
+                )));
             }
             // If a mapping does exist, we can create a new mapping for the address
             std::collections::hash_map::Entry::Vacant(v) => {
@@ -132,39 +160,50 @@ impl Provider for HttpServerProvider {
                 // Start a server instance that calls the given component
                 let http_server = match HttpServerCore::new(
                     Arc::new(settings),
-                    link_config.target_id,
+                    &target_id,
                     self.handlers_by_socket.clone(),
                 )
                 .await
                 {
-                    Ok(s) => s,
-                    Err(e) => {
+                    Result::Ok(s) => s,
+                    Result::Err(e) => {
                         error!("failed to start listener for component: {e:?}");
-                        bail!(e);
+                        return Ok(Err(format!("failed to start listener for component: {e}")));
                     }
                 };
                 v.insert((Arc::new(http_server), vec![component_meta]));
             }
         }
 
-        Ok(())
+        Ok(Ok(()))
     }
 
-    /// Handle notification that a link is dropped - stop the http listener
-    #[instrument(level = "info", skip_all, fields(target_id = info.get_target_id()))]
-    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let component_id = info.get_target_id();
-        let link_name = info.get_link_name();
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn delete_interface_import_config(
+        &self,
+        cx: Option<Context>,
+        target_id: String,
+        link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        let Some(cx) = cx else {
+            return Ok(Err("missing context".to_string()));
+        };
+        debug!(
+            source = cx.component,
+            target = target_id,
+            link = link_name,
+            "deleting http host link"
+        );
 
         // Retrieve the thing by link name
         let mut sockets_by_link_name = self.sockets_by_link_name.write().await;
-        if let Some(addr) = sockets_by_link_name.get(link_name) {
+        if let Some(addr) = sockets_by_link_name.get(&link_name) {
             let mut handlers_by_socket = self.handlers_by_socket.write().await;
             if let Some((server, component_metas)) = handlers_by_socket.get_mut(addr) {
                 // If the component id & link name pair is present, remove it
                 if let Some(idx) = component_metas
                     .iter()
-                    .position(|(c, l, ..)| c.as_ref() == component_id && l.as_ref() == link_name)
+                    .position(|(c, l, ..)| c.as_ref() == target_id && l.as_ref() == link_name)
                 {
                     component_metas.remove(idx);
                 }
@@ -177,20 +216,55 @@ impl Provider for HttpServerProvider {
                     );
                     server.handle.shutdown();
                     handlers_by_socket.remove(addr);
-                    sockets_by_link_name.remove(link_name);
+                    sockets_by_link_name.remove(&link_name);
                 }
             }
         }
 
-        Ok(())
+        Ok(Ok(()))
     }
 
-    /// Handle shutdown request by shutting down all the http server threads
-    async fn shutdown(&self) -> anyhow::Result<()> {
+    async fn delete_interface_export_config(
+        &self,
+        _cx: Option<Context>,
+        _source_id: String,
+        _link_name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(Ok(()))
+    }
+}
+
+impl manageable::Handler<Option<Context>> for HttpServerProvider {
+    async fn bind(
+        &self,
+        _cx: Option<Context>,
+        _req: BindRequest,
+    ) -> anyhow::Result<Result<BindResponse, String>> {
+        Ok(Ok(BindResponse {
+            identity_token: None,
+            provider_xkey: Some(get_connection().provider_xkey.public_key().into()),
+        }))
+    }
+
+    async fn health_request(
+        &self,
+        _cx: Option<Context>,
+    ) -> anyhow::Result<Result<HealthCheckResponse, String>> {
+        Ok(Ok(HealthCheckResponse {
+            healthy: true,
+            message: Some("OK".to_string()),
+        }))
+    }
+
+    /// Handle shutdown request by closing all connections
+    async fn shutdown(&self, _cx: Option<Context>) -> anyhow::Result<Result<(), String>> {
         // Empty the component link data and stop all servers
         self.sockets_by_link_name.write().await.clear();
         self.handlers_by_socket.write().await.clear();
-        Ok(())
+
+        // Signal the provider to shut down
+        let _ = self.quit_tx.send(());
+        Ok(Ok(()))
     }
 }
 

@@ -4,3 +4,8 @@ world interfaces {
     import wasmcloud:wadm/handler@0.2.0;
     export wasmcloud:wadm/client@0.2.0;
 }
+
+world extension {
+    export wrpc:extension/manageable@0.0.1;
+    export wrpc:extension/configurable@0.0.1;
+}

@@ -13,6 +13,8 @@ pub const RUST_HTTP_KEYVALUE_COUNTER_PREVIEW2_SIGNED: &str = concat!(
     "/rust-http-keyvalue-counter-preview2.signed.wasm"
 );
 
+pub const RUST_HTTP_CALCULATOR: &str = concat!(env!("OUT_DIR"), "/rust-http-calculator.wasm");
+
 pub const RUST_HTTP_HELLO_WORLD: &str = concat!(env!("OUT_DIR"), "/rust-http-hello-world.wasm");
 pub const RUST_HTTP_HELLO_WORLD_PREVIEW2: &str =
     concat!(env!("OUT_DIR"), "/rust-http-hello-world-preview2.wasm");

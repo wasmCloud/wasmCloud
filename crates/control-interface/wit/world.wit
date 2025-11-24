@@ -1,0 +1,5 @@
+package wasmcloud:core@0.1.0;
+
+world imports {
+    import wrpc:extension/types@0.0.1;
+}
