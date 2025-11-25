@@ -5,6 +5,251 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.44.0 (2025-11-25)
+
+### Chore
+
+ - <csr-id-9cde6eb583c5aba6c6d584f944a700243393cbd1/> bump to 0.43.0
+ - <csr-id-b86d99b63c859d9333ca68694d5e6d81193168fc/> bump wit-bindgen
+ - <csr-id-d59a43ee1166476aba4479aafbc690a8d7c3ca0f/> clippy lints
+ - <csr-id-bf6b86f63e7259d4f3cc696144c216ed01c28d19/> cargo fmt all
+ - <csr-id-9b0c46e1eae85eb9edfc0ee113cea01494dcab59/> fix clippy warnings
+ - <csr-id-7a5cd312f1325903e358214efe37b0a794fae446/> fix clippy warnings
+ - <csr-id-9258e4485e0329599fd34ccb20f7976ccfd5ad70/> fix wash
+ - <csr-id-b48002dfbdf5fee466d81292c14600cae93a2608/> appease clippy deprecated warnings
+ - <csr-id-56f75648de9029fc9aa038177a93793b14e8ee26/> update tempdir usage
+ - <csr-id-afa23223e473d832240924d15f1fd8cf51172c25/> bump wash v0.42.0
+ - <csr-id-c199174d2d4e0ea9e05ec56573e881b6b9922824/> bump wash v0.42.0
+ - <csr-id-31c93117b34bb964ad4e6196bc2b577b71cc7f7c/> release v0.42.0
+ - <csr-id-b23ea0bcd310d234ecf3dce0ad2bc1287dde2652/> update default host version to 1.8.0
+ - <csr-id-52b618bfe7ca6c80f1a35bb5ea4c0292d3da62c4/> bump tempfile from 3.19.1 to 3.20.0
+   Bumps [tempfile](https://github.com/Stebalien/tempfile) from 3.19.1 to 3.20.0.
+   - [Changelog](https://github.com/Stebalien/tempfile/blob/master/CHANGELOG.md)
+   - [Commits](https://github.com/Stebalien/tempfile/compare/v3.19.1...v3.20.0)
+   
+   ---
+   updated-dependencies:
+   - dependency-name: tempfile
+     dependency-version: 3.20.0
+     dependency-type: direct:production
+     update-type: version-update:semver-minor
+   ...
+ - <csr-id-2959c391b28b0cb4efa64d2b2438345df852d005/> Bump nats-server version to 2.11.3
+ - <csr-id-84678bdd8abf1da843fdb1af4c8b20e6aa82aefe/> Address cargo clippy feedback
+ - <csr-id-571e3685effd3558c9c1000c7ed0f9a5fee2e840/> adjust URL formatting in help
+ - <csr-id-e34846b7d2ee6bf51e40510db5ab951bd5858f18/> fix tests for patch vs minor
+ - <csr-id-56ac4cc8415fd895dc791cee6a6323981e7eca68/> update `wash` to new wasmtime
+
+### New Features
+
+ - <csr-id-90efe31c19efbf24b56c7a70b6bd703333c3f353/> bump to v0.43.0 and update embedded wasmcloud to v1.9.0
+   This release bumps wash to v0.43.0 and updates the embedded wasmcloud
+   version from v1.8.0 to v1.9.0.
+   
+   🤖 Generated with [Claude Code](https://claude.ai/code)
+ - <csr-id-7b5dce9396249d6ef803eaa7f7b5fd1f8d6ec01d/> Add check in wash ui to confirm server responds with a 200
+ - <csr-id-971f90b07f1ddac263bffd28f2613c18e504aad6/> Add per component memory limits
+ - <csr-id-e9c832946ff7cc279247c217a19ecefed739dbe0/> restore Changelog.md
+ - <csr-id-6fc5ce2b0ec57944dab2340d88a584541befcfaa/> Integration test
+ - <csr-id-bdbe2c3345867c9005640642acbc14555256a413/> add dashboard option for dev
+ - <csr-id-4726c7bddf37d0221ebdab9484e0adfcf63cfd62/> add information message if ~/.wash exists
+ - <csr-id-37944cba1066e802e3cb51c864d8d7eca6800f5f/> remove the usage of macros in config
+ - <csr-id-f7e5966405a95faf3efda1de535b49919fe113c4/> standardize functions for directory management
+   The AppStrategy can now be used in a relatively standard way.
+ - <csr-id-abd14a293c8fbd59ae35fefa276b42ca05006de7/> start restructuring .wash directory to xdg/windows standards
+   Update of most directories to match structure provided in related story.
+   Refactoring for better configuration management for these directories
+   still missing.
+ - <csr-id-4a79563749bf6154b042e7041f8ffa25381f023e/> add information when new version is available
+   Print a small information to stderr when a new version of wash is
+   available as a GitHub release.
+ - <csr-id-bf2d6e6033ca2fe631c0eab57d50c480787b693b/> Add names to nats connections
+ - <csr-id-71269a1218d65dc4c65de8925626f2d06c3a646c/> allow setting link_config via wash dev overrides
+   This commit enables setting link config (ex. for the HTTP server)
+   component when setting overrides for generated components.
+   
+   Component in this sense means a WADM component -- an element used in a
+   WADM manifest (either a provider or wasm component or whatever else).
+   
+   Up until now `config` has been settable, but this aligns with the
+   generated "component"'s *direct* configuration, not configuration used
+   for the link.
+   
+   This code enables setting `link_config` on an override, which modifies
+   the generated link (and related config properties).
+ - <csr-id-cd5c01bffa2f5f3ad73b3ab4629d7e06df47daee/> add wadm_component_name alias for manifest targeting
+ - <csr-id-0a5d216b6a264bf4c4a9c56b304511561c3fd25a/> check for semver compatible versions of tools
+
+### Bug Fixes
+
+ - <csr-id-505a01d652df64d69dc046e825c2cf378719bc45/> depend on host 1.9.1
+ - <csr-id-2484651f16d51eda9c42acd7fbe266ccf00e8889/> nats archive as zip
+ - <csr-id-a0c85491995af8852f91d6ebf1856f84f16199b6/> Fix CVE-2025-62518 by migrating to astral-tokio-tar
+ - <csr-id-d28d546618c724c39e05cb98faed8161a68c8f41/> clippy
+ - <csr-id-210cf02d80116e7907f3866a8cb50ab1349a3aeb/> missing allow_update argument
+ - <csr-id-6ca4fbfe4595f25ff44886897ea5d5a5ac69ac2d/> build provider for Windows
+ - <csr-id-39f179549ca5c36d949703bf00e80ece5ffcafa7/> strip file prefix wait_for_provider_start_event
+ - <csr-id-ff29b7a8d162624b3849324bd4fa678d093ab74d/> WASH_UI_PORT fix
+ - <csr-id-2b048fb2587c53782fc13e5f8d08e692fe66f971/> implement "smarter" wash host up validation with backoff
+   In some cases it might make sense to check whether the wash host is up.
+   This commit implements a small function that can perform this check.
+ - <csr-id-c5b5fe43ed7bee13e4745c8c66044a84c25cc055/> pass host key seed to infer host id rather than read from log
+ - <csr-id-309f316da909779dc5191ce10011f3b547fe724f/> add wasm-tools to nix devShell
+   Various elements require wasm-tools to be installed in the devshell. For
+   instance, the wash test
+   lib::build::component::tests::golang_generate_bindgen_component_multi_world
+   requires it.
+ - <csr-id-78866d7260b22e99ee51f8222f50c65c53fc07a6/> windows build suffix
+   This commit fixes the windows build suffix that has been used for
+   wash, as we moved from publishing a -pc-windows-msvc version to pc-windows-gnu
+ - <csr-id-0fac633e67de6616dcb32d2f922e01cbfaf64ce5/> use context during wash call
+   This commit allows wash call to use established context (e.g. set up
+   with `wash ctx`) when performing component calls.
+ - <csr-id-dc38808574a3e6055440a8b4befec40b8ed40451/> remove retry on initial connect
+ - <csr-id-960bbfe094ea4edb120349e0cc48b70c8ebe3821/> insert config on target for receiving deps
+ - <csr-id-1d6b5fa70a5f45bf494dbaec8e12fb070328333c/> remove azurecr.io publishing and references
+ - <csr-id-f9da8c0e86e769f03b2de2830d7abd6336e84b4a/> use only some wadm manifest options for wash dev
+ - <csr-id-ff365ed7f6120ed00617d2f71bea3079fb08db64/> convert automatic links to linked text
+ - <csr-id-0bab7e09a95a1f75a6ad82c0fb8a502c048f555a/> use of plugins with no arguments
+   This commit fixes a bug with wash where a no-argument plugin
+   command (e.g. `wash hello`) was being interpreted as a wash
+   command (but with no actual internal wash command matching), and
+   printing help.
+ - <csr-id-575636a1f874af341774298272e04011fb4a44dd/> disallow setting hostcore label
+
+### Other
+
+ - <csr-id-fd2b59f9ebb24cf3068a5f5897ba16d0689a4e84/> update dependencies
+   • Updated input 'nixify':
+       'github:rvolosatovs/nixify/a4f73e104d2652be5014b22578a78562d664cbe4?narHash=sha256-G0MDm0p46SKBY0HA1L4kLD6zjvubJ20BaAMtgeCOa%2BQ%3D' (2025-06-19)
+     → 'github:rvolosatovs/nixify/ff8c6fb0b714a67cc926f588d7361cda4256de1d?narHash=sha256-gk68gRVLxA1sCNiKKpJpUkE6Xqn0hWYccAJ6ExHl2QA%3D' (2025-07-16)
+   • Updated input 'nixify/advisory-db':
+       'github:rustsec/advisory-db/7573f55ba337263f61167dbb0ea926cdc7c8eb5d?narHash=sha256-il%2BCAqChFIB82xP6bO43dWlUVs%2BNlG7a4g8liIP5HcI%3D' (2025-06-17)
+     → 'github:rustsec/advisory-db/c67f7726a9188b40c37534589293fec688892e42?narHash=sha256-89kooFbF4ij1QSHAiyfD694U3BnsRsTI8xefsDxjMBU%3D' (2025-07-14)
+   • Updated input 'nixify/crane':
+       'github:ipetkov/crane/e37c943371b73ed87faf33f7583860f81f1d5a48?narHash=sha256-tL42YoNg9y30u7zAqtoGDNdTyXTi8EALDeCB13FtbQA%3D' (2025-06-18)
+     → 'github:ipetkov/crane/471f8cd756349f4e86784ea10fdc9ccb91711fca?narHash=sha256-T1XWEFfw%2BiNrvlRczZS4BkaZJ5W3Z2Xp%2B31P2IShJj8%3D' (2025-07-16)
+   • Updated input 'nixify/fenix':
+       'github:nix-community/fenix/770345287ea0845c38d15bd750226a96250a30f0?narHash=sha256-M5y3WuvyFwr6Xw3d2xnmBCpTaz/87GR8mib%2BnLLDGIQ%3D' (2025-06-18)
+     → 'github:nix-community/fenix/d17ca03c15660ecb8e5a01ca34e441f594feec62?narHash=sha256-pPqES/udciKmKo422mfwRQ3YzjUCVyCTOsgZYA1xh%2Bg%3D' (2025-07-15)
+   • Updated input 'nixify/fenix/rust-analyzer-src':
+       'github:rust-lang/rust-analyzer/5d93e31067f2344e1401ffe5323796122403e10e?narHash=sha256-N4Sfk43%2BlsOcjWQE8SsuML0WovWRT53vPbO8PebAJXg%3D' (2025-06-17)
+     → 'github:rust-lang/rust-analyzer/e10d64eb402a25a32d9f1ef60cacc89d82a01b85?narHash=sha256-V2nHrCJ0/Pv30j8NWJ4GfDlaNzfkOdYI0jS69GdVpq8%3D' (2025-07-14)
+   • Updated input 'nixify/nixpkgs-darwin':
+       'github:nixos/nixpkgs/8f49bca3dc47f48ef46511613450364fd82b0b36?narHash=sha256-v2Ai/K9AS0aEw6%2BPCu4WrU1f9I98hWdxG9EnjRw5uXM%3D' (2025-06-17)
+     → 'github:nixos/nixpkgs/1156bb3c3d94de7c6a7dc798b42c98bb975f3a75?narHash=sha256-RaaMPRtewLITsV0JMIgoTSkSR%2BWuu/a/I/Za0hiCes8%3D' (2025-07-14)
+   • Updated input 'nixify/nixpkgs-nixos':
+       'github:nixos/nixpkgs/36ab78dab7da2e4e27911007033713bab534187b?narHash=sha256-urV51uWH7fVnhIvsZIELIYalMYsyr2FCalvlRTzqWRw%3D' (2025-06-17)
+     → 'github:nixos/nixpkgs/dfcd5b901dbab46c9c6e80b265648481aafb01f8?narHash=sha256-Kt1UIPi7kZqkSc5HVj6UY5YLHHEzPBkgpNUByuyxtlw%3D' (2025-07-13)
+   • Updated input 'nixify/rust-overlay':
+       'github:oxalica/rust-overlay/f9b2b2b1327ff6beab4662b8ea41689e0a57b8d4?narHash=sha256-1kniuhH70q4TAC/xIvjFYH46aHiLrbIlcr6fdrRwO1A%3D' (2025-06-18)
+     → 'github:oxalica/rust-overlay/9127ca1f5a785b23a2fc1c74551a27d3e8b9a28b?narHash=sha256-0vUE42ji4mcCvQO8CI0Oy8LmC6u2G4qpYldZbZ26MLc%3D' (2025-07-15)
+   • Updated input 'nixlib':
+       'github:nix-community/nixpkgs.lib/14a40a1d7fb9afa4739275ac642ed7301a9ba1ab?narHash=sha256-urW/Ylk9FIfvXfliA1ywh75yszAbiTEVgpPeinFyVZo%3D' (2025-06-29)
+     → 'github:nix-community/nixpkgs.lib/9100109c11b6b5482ea949c980b86e24740dca08?narHash=sha256-jj/HBJFSapTk4LfeJgNLk2wEE2BO6dgBYVRbXMNOCeM%3D' (2025-07-20)
+   • Updated input 'nixpkgs-unstable':
+       'github:NixOS/nixpkgs/b95255df2360a45ddbb03817a68869d5cb01bf96?narHash=sha256-IJWIzZSkBsDzS7iS/iwSwur%2BxFkWqeLYC4kdf8ObtOM%3D' (2025-06-30)
+     → 'github:NixOS/nixpkgs/83e677f31c84212343f4cc553bab85c2efcad60a?narHash=sha256-XSQy6wRKHhRe//iVY5lS/ZpI/Jn6crWI8fQzl647wCg%3D' (2025-07-22)
+
+### Refactor
+
+ - <csr-id-daebc638d2fd9ebbced745aa730b453eaa14b4b0/> remove duplicate constant for wadm.pid filename
+ - <csr-id-c32373af45f4e50b6a742db476c52168065d9a9a/> move wash version checks into more meaningful function
+
+### Style
+
+ - <csr-id-80f93f85bdf6358f8c59e620022610ee280723ae/> format files
+ - <csr-id-38ff545146c094324b2a7a182cad521e5edd5af3/> fix clippy suggestion from CI
+
+### Test
+
+ - <csr-id-bf41068efc8192c2f13b19032f5a600e9ed88161/> update the error message
+ - <csr-id-fcd44a38b8fd4c8bf018eb4ca45bd79adcf4b1ff/> add a small unit test that validates directory configurations
+ - <csr-id-fc40ecf35443662b3f6627e8059ba7855ec364cd/> fix integration test that checked download in wrong location
+ - <csr-id-fec5e21037b75eb27b55db323dc7d3d3ff3f6b68/> ensure link_config overrides work
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 64 commits contributed to the release over the course of 238 calendar days.
+ - 248 days passed between releases.
+ - 63 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Depend on host 1.9.1 ([`505a01d`](https://github.com/wasmCloud/wasmCloud/commit/505a01d652df64d69dc046e825c2cf378719bc45))
+    - Bump to 0.43.0 ([`9cde6eb`](https://github.com/wasmCloud/wasmCloud/commit/9cde6eb583c5aba6c6d584f944a700243393cbd1))
+    - Nats archive as zip ([`2484651`](https://github.com/wasmCloud/wasmCloud/commit/2484651f16d51eda9c42acd7fbe266ccf00e8889))
+    - Bump wit-bindgen ([`b86d99b`](https://github.com/wasmCloud/wasmCloud/commit/b86d99b63c859d9333ca68694d5e6d81193168fc))
+    - Clippy lints ([`d59a43e`](https://github.com/wasmCloud/wasmCloud/commit/d59a43ee1166476aba4479aafbc690a8d7c3ca0f))
+    - Cargo fmt all ([`bf6b86f`](https://github.com/wasmCloud/wasmCloud/commit/bf6b86f63e7259d4f3cc696144c216ed01c28d19))
+    - Fix clippy warnings ([`9b0c46e`](https://github.com/wasmCloud/wasmCloud/commit/9b0c46e1eae85eb9edfc0ee113cea01494dcab59))
+    - Fix clippy warnings ([`7a5cd31`](https://github.com/wasmCloud/wasmCloud/commit/7a5cd312f1325903e358214efe37b0a794fae446))
+    - Update the error message ([`bf41068`](https://github.com/wasmCloud/wasmCloud/commit/bf41068efc8192c2f13b19032f5a600e9ed88161))
+    - Fix wash ([`9258e44`](https://github.com/wasmCloud/wasmCloud/commit/9258e4485e0329599fd34ccb20f7976ccfd5ad70))
+    - Fix CVE-2025-62518 by migrating to astral-tokio-tar ([`a0c8549`](https://github.com/wasmCloud/wasmCloud/commit/a0c85491995af8852f91d6ebf1856f84f16199b6))
+    - Clippy ([`d28d546`](https://github.com/wasmCloud/wasmCloud/commit/d28d546618c724c39e05cb98faed8161a68c8f41))
+    - Missing allow_update argument ([`210cf02`](https://github.com/wasmCloud/wasmCloud/commit/210cf02d80116e7907f3866a8cb50ab1349a3aeb))
+    - Build provider for Windows ([`6ca4fbf`](https://github.com/wasmCloud/wasmCloud/commit/6ca4fbfe4595f25ff44886897ea5d5a5ac69ac2d))
+    - Bump to v0.43.0 and update embedded wasmcloud to v1.9.0 ([`90efe31`](https://github.com/wasmCloud/wasmCloud/commit/90efe31c19efbf24b56c7a70b6bd703333c3f353))
+    - Add check in wash ui to confirm server responds with a 200 ([`7b5dce9`](https://github.com/wasmCloud/wasmCloud/commit/7b5dce9396249d6ef803eaa7f7b5fd1f8d6ec01d))
+    - Strip file prefix wait_for_provider_start_event ([`39f1795`](https://github.com/wasmCloud/wasmCloud/commit/39f179549ca5c36d949703bf00e80ece5ffcafa7))
+    - Appease clippy deprecated warnings ([`b48002d`](https://github.com/wasmCloud/wasmCloud/commit/b48002dfbdf5fee466d81292c14600cae93a2608))
+    - Update tempdir usage ([`56f7564`](https://github.com/wasmCloud/wasmCloud/commit/56f75648de9029fc9aa038177a93793b14e8ee26))
+    - Chore(*) : Remove added argument from scale_component and Remove Implementation of StoreLimitsAsync ([`649f4de`](https://github.com/wasmCloud/wasmCloud/commit/649f4de1a5f9038a7a780b834bf54de87e1efc74))
+    - Add per component memory limits ([`971f90b`](https://github.com/wasmCloud/wasmCloud/commit/971f90b07f1ddac263bffd28f2613c18e504aad6))
+    - Update dependencies ([`fd2b59f`](https://github.com/wasmCloud/wasmCloud/commit/fd2b59f9ebb24cf3068a5f5897ba16d0689a4e84))
+    - Restore Changelog.md ([`e9c8329`](https://github.com/wasmCloud/wasmCloud/commit/e9c832946ff7cc279247c217a19ecefed739dbe0))
+    - WASH_UI_PORT fix ([`ff29b7a`](https://github.com/wasmCloud/wasmCloud/commit/ff29b7a8d162624b3849324bd4fa678d093ab74d))
+    - Integration test ([`6fc5ce2`](https://github.com/wasmCloud/wasmCloud/commit/6fc5ce2b0ec57944dab2340d88a584541befcfaa))
+    - Add dashboard option for dev ([`bdbe2c3`](https://github.com/wasmCloud/wasmCloud/commit/bdbe2c3345867c9005640642acbc14555256a413))
+    - Add information message if ~/.wash exists ([`4726c7b`](https://github.com/wasmCloud/wasmCloud/commit/4726c7bddf37d0221ebdab9484e0adfcf63cfd62))
+    - Add a small unit test that validates directory configurations ([`fcd44a3`](https://github.com/wasmCloud/wasmCloud/commit/fcd44a38b8fd4c8bf018eb4ca45bd79adcf4b1ff))
+    - Remove the usage of macros in config ([`37944cb`](https://github.com/wasmCloud/wasmCloud/commit/37944cba1066e802e3cb51c864d8d7eca6800f5f))
+    - Fix integration test that checked download in wrong location ([`fc40ecf`](https://github.com/wasmCloud/wasmCloud/commit/fc40ecf35443662b3f6627e8059ba7855ec364cd))
+    - Format files ([`80f93f8`](https://github.com/wasmCloud/wasmCloud/commit/80f93f85bdf6358f8c59e620022610ee280723ae))
+    - Standardize functions for directory management ([`f7e5966`](https://github.com/wasmCloud/wasmCloud/commit/f7e5966405a95faf3efda1de535b49919fe113c4))
+    - Start restructuring .wash directory to xdg/windows standards ([`abd14a2`](https://github.com/wasmCloud/wasmCloud/commit/abd14a293c8fbd59ae35fefa276b42ca05006de7))
+    - Fix clippy suggestion from CI ([`38ff545`](https://github.com/wasmCloud/wasmCloud/commit/38ff545146c094324b2a7a182cad521e5edd5af3))
+    - Implement "smarter" wash host up validation with backoff ([`2b048fb`](https://github.com/wasmCloud/wasmCloud/commit/2b048fb2587c53782fc13e5f8d08e692fe66f971))
+    - Pass host key seed to infer host id rather than read from log ([`c5b5fe4`](https://github.com/wasmCloud/wasmCloud/commit/c5b5fe43ed7bee13e4745c8c66044a84c25cc055))
+    - Add wasm-tools to nix devShell ([`309f316`](https://github.com/wasmCloud/wasmCloud/commit/309f316da909779dc5191ce10011f3b547fe724f))
+    - Remove duplicate constant for wadm.pid filename ([`daebc63`](https://github.com/wasmCloud/wasmCloud/commit/daebc638d2fd9ebbced745aa730b453eaa14b4b0))
+    - Windows build suffix ([`78866d7`](https://github.com/wasmCloud/wasmCloud/commit/78866d7260b22e99ee51f8222f50c65c53fc07a6))
+    - Bump wash v0.42.0 ([`afa2322`](https://github.com/wasmCloud/wasmCloud/commit/afa23223e473d832240924d15f1fd8cf51172c25))
+    - Bump wash v0.42.0 ([`c199174`](https://github.com/wasmCloud/wasmCloud/commit/c199174d2d4e0ea9e05ec56573e881b6b9922824))
+    - Use context during wash call ([`0fac633`](https://github.com/wasmCloud/wasmCloud/commit/0fac633e67de6616dcb32d2f922e01cbfaf64ce5))
+    - Release v0.42.0 ([`31c9311`](https://github.com/wasmCloud/wasmCloud/commit/31c93117b34bb964ad4e6196bc2b577b71cc7f7c))
+    - Update default host version to 1.8.0 ([`b23ea0b`](https://github.com/wasmCloud/wasmCloud/commit/b23ea0bcd310d234ecf3dce0ad2bc1287dde2652))
+    - Bump tempfile from 3.19.1 to 3.20.0 ([`52b618b`](https://github.com/wasmCloud/wasmCloud/commit/52b618bfe7ca6c80f1a35bb5ea4c0292d3da62c4))
+    - Move wash version checks into more meaningful function ([`c32373a`](https://github.com/wasmCloud/wasmCloud/commit/c32373af45f4e50b6a742db476c52168065d9a9a))
+    - Add information when new version is available ([`4a79563`](https://github.com/wasmCloud/wasmCloud/commit/4a79563749bf6154b042e7041f8ffa25381f023e))
+    - Bump nats-server version to 2.11.3 ([`2959c39`](https://github.com/wasmCloud/wasmCloud/commit/2959c391b28b0cb4efa64d2b2438345df852d005))
+    - Address cargo clippy feedback ([`84678bd`](https://github.com/wasmCloud/wasmCloud/commit/84678bdd8abf1da843fdb1af4c8b20e6aa82aefe))
+    - Remove retry on initial connect ([`dc38808`](https://github.com/wasmCloud/wasmCloud/commit/dc38808574a3e6055440a8b4befec40b8ed40451))
+    - Add names to nats connections ([`bf2d6e6`](https://github.com/wasmCloud/wasmCloud/commit/bf2d6e6033ca2fe631c0eab57d50c480787b693b))
+    - Insert config on target for receiving deps ([`960bbfe`](https://github.com/wasmCloud/wasmCloud/commit/960bbfe094ea4edb120349e0cc48b70c8ebe3821))
+    - Ensure link_config overrides work ([`fec5e21`](https://github.com/wasmCloud/wasmCloud/commit/fec5e21037b75eb27b55db323dc7d3d3ff3f6b68))
+    - Allow setting link_config via wash dev overrides ([`71269a1`](https://github.com/wasmCloud/wasmCloud/commit/71269a1218d65dc4c65de8925626f2d06c3a646c))
+    - Remove azurecr.io publishing and references ([`1d6b5fa`](https://github.com/wasmCloud/wasmCloud/commit/1d6b5fa70a5f45bf494dbaec8e12fb070328333c))
+    - Add wadm_component_name alias for manifest targeting ([`cd5c01b`](https://github.com/wasmCloud/wasmCloud/commit/cd5c01bffa2f5f3ad73b3ab4629d7e06df47daee))
+    - Use only some wadm manifest options for wash dev ([`f9da8c0`](https://github.com/wasmCloud/wasmCloud/commit/f9da8c0e86e769f03b2de2830d7abd6336e84b4a))
+    - Convert automatic links to linked text ([`ff365ed`](https://github.com/wasmCloud/wasmCloud/commit/ff365ed7f6120ed00617d2f71bea3079fb08db64))
+    - Adjust URL formatting in help ([`571e368`](https://github.com/wasmCloud/wasmCloud/commit/571e3685effd3558c9c1000c7ed0f9a5fee2e840))
+    - Fix tests for patch vs minor ([`e34846b`](https://github.com/wasmCloud/wasmCloud/commit/e34846b7d2ee6bf51e40510db5ab951bd5858f18))
+    - Check for semver compatible versions of tools ([`0a5d216`](https://github.com/wasmCloud/wasmCloud/commit/0a5d216b6a264bf4c4a9c56b304511561c3fd25a))
+    - Use of plugins with no arguments ([`0bab7e0`](https://github.com/wasmCloud/wasmCloud/commit/0bab7e09a95a1f75a6ad82c0fb8a502c048f555a))
+    - Disallow setting hostcore label ([`575636a`](https://github.com/wasmCloud/wasmCloud/commit/575636a1f874af341774298272e04011fb4a44dd))
+    - Update `wash` to new wasmtime ([`56ac4cc`](https://github.com/wasmCloud/wasmCloud/commit/56ac4cc8415fd895dc791cee6a6323981e7eca68))
+</details>
+
 ## v0.42.0 (2025-05-29)
 
 <csr-id-b23ea0bcd310d234ecf3dce0ad2bc1287dde2652/>
@@ -17,6 +262,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-c32373af45f4e50b6a742db476c52168065d9a9a/>
 <csr-id-fec5e21037b75eb27b55db323dc7d3d3ff3f6b68/>
 <csr-id-31c93117b34bb964ad4e6196bc2b577b71cc7f7c/>
+<csr-id-c199174d2d4e0ea9e05ec56573e881b6b9922824/>
 
 ### Chore
 
@@ -93,48 +339,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Test
 
  - <csr-id-fec5e21037b75eb27b55db323dc7d3d3ff3f6b68/> ensure link_config overrides work
-
-### Commit Statistics
-
-<csr-read-only-do-not-edit/>
-
- - 24 commits contributed to the release over the course of 58 calendar days.
- - 68 days passed between releases.
- - 24 commits were understood as [conventional](https://www.conventionalcommits.org).
- - 0 issues like '(#ID)' were seen in commit messages
-
-### Commit Details
-
-<csr-read-only-do-not-edit/>
-
-<details><summary>view details</summary>
-
- * **Uncategorized**
-    - Bump wash v0.42.0 ([`c199174`](https://github.com/wasmCloud/wasmCloud/commit/c199174d2d4e0ea9e05ec56573e881b6b9922824))
-    - Use context during wash call ([`0fac633`](https://github.com/wasmCloud/wasmCloud/commit/0fac633e67de6616dcb32d2f922e01cbfaf64ce5))
-    - Release v0.42.0 ([`31c9311`](https://github.com/wasmCloud/wasmCloud/commit/31c93117b34bb964ad4e6196bc2b577b71cc7f7c))
-    - Update default host version to 1.8.0 ([`b23ea0b`](https://github.com/wasmCloud/wasmCloud/commit/b23ea0bcd310d234ecf3dce0ad2bc1287dde2652))
-    - Bump tempfile from 3.19.1 to 3.20.0 ([`52b618b`](https://github.com/wasmCloud/wasmCloud/commit/52b618bfe7ca6c80f1a35bb5ea4c0292d3da62c4))
-    - Move wash version checks into more meaningful function ([`c32373a`](https://github.com/wasmCloud/wasmCloud/commit/c32373af45f4e50b6a742db476c52168065d9a9a))
-    - Add information when new version is available ([`4a79563`](https://github.com/wasmCloud/wasmCloud/commit/4a79563749bf6154b042e7041f8ffa25381f023e))
-    - Bump nats-server version to 2.11.3 ([`2959c39`](https://github.com/wasmCloud/wasmCloud/commit/2959c391b28b0cb4efa64d2b2438345df852d005))
-    - Address cargo clippy feedback ([`84678bd`](https://github.com/wasmCloud/wasmCloud/commit/84678bdd8abf1da843fdb1af4c8b20e6aa82aefe))
-    - Remove retry on initial connect ([`dc38808`](https://github.com/wasmCloud/wasmCloud/commit/dc38808574a3e6055440a8b4befec40b8ed40451))
-    - Add names to nats connections ([`bf2d6e6`](https://github.com/wasmCloud/wasmCloud/commit/bf2d6e6033ca2fe631c0eab57d50c480787b693b))
-    - Insert config on target for receiving deps ([`960bbfe`](https://github.com/wasmCloud/wasmCloud/commit/960bbfe094ea4edb120349e0cc48b70c8ebe3821))
-    - Ensure link_config overrides work ([`fec5e21`](https://github.com/wasmCloud/wasmCloud/commit/fec5e21037b75eb27b55db323dc7d3d3ff3f6b68))
-    - Allow setting link_config via wash dev overrides ([`71269a1`](https://github.com/wasmCloud/wasmCloud/commit/71269a1218d65dc4c65de8925626f2d06c3a646c))
-    - Remove azurecr.io publishing and references ([`1d6b5fa`](https://github.com/wasmCloud/wasmCloud/commit/1d6b5fa70a5f45bf494dbaec8e12fb070328333c))
-    - Add wadm_component_name alias for manifest targeting ([`cd5c01b`](https://github.com/wasmCloud/wasmCloud/commit/cd5c01bffa2f5f3ad73b3ab4629d7e06df47daee))
-    - Use only some wadm manifest options for wash dev ([`f9da8c0`](https://github.com/wasmCloud/wasmCloud/commit/f9da8c0e86e769f03b2de2830d7abd6336e84b4a))
-    - Convert automatic links to linked text ([`ff365ed`](https://github.com/wasmCloud/wasmCloud/commit/ff365ed7f6120ed00617d2f71bea3079fb08db64))
-    - Adjust URL formatting in help ([`571e368`](https://github.com/wasmCloud/wasmCloud/commit/571e3685effd3558c9c1000c7ed0f9a5fee2e840))
-    - Fix tests for patch vs minor ([`e34846b`](https://github.com/wasmCloud/wasmCloud/commit/e34846b7d2ee6bf51e40510db5ab951bd5858f18))
-    - Check for semver compatible versions of tools ([`0a5d216`](https://github.com/wasmCloud/wasmCloud/commit/0a5d216b6a264bf4c4a9c56b304511561c3fd25a))
-    - Use of plugins with no arguments ([`0bab7e0`](https://github.com/wasmCloud/wasmCloud/commit/0bab7e09a95a1f75a6ad82c0fb8a502c048f555a))
-    - Disallow setting hostcore label ([`575636a`](https://github.com/wasmCloud/wasmCloud/commit/575636a1f874af341774298272e04011fb4a44dd))
-    - Update `wash` to new wasmtime ([`56ac4cc`](https://github.com/wasmCloud/wasmCloud/commit/56ac4cc8415fd895dc791cee6a6323981e7eca68))
-</details>
 
 ## v0.41.0 (2025-03-21)
 
