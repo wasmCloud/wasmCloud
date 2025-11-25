@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-control-interface"
-version = "2.4.0"
+version = "3.0.0"
 homepage = "https://wasmcloud.com"
 description = "A client library for communicating with hosts on a wasmCloud lattice"
 documentation = "https://docs.rs/wasmcloud-control-interface"
