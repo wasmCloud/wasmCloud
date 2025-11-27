@@ -1149,11 +1149,14 @@ impl Host {
                 .context("failed to store claims")?;
         }
 
-        let component_spec = self
-            .get_component_spec(&component_id)
-            .await?
-            .unwrap_or_else(|| ComponentSpecification::new(&component_ref));
-        self.store_component_spec(&component_id, &component_spec)
+        let (component_spec, revision) = {
+            let (spec_opt, rev) = self.get_component_spec(&component_id).await?;
+            (
+                spec_opt.unwrap_or_else(|| ComponentSpecification::new(&component_ref)),
+                rev,
+            )
+        };
+        self.store_component_spec(&component_id, &component_spec, revision)
             .await?;
 
         // Map the imports to pull out the result types of the functions for lookup when invoking them
@@ -1679,12 +1682,15 @@ impl Host {
             "policy denied request to start provider `{request_id}`: `{message:?}`",
         );
 
-        let component_specification = self
-            .get_component_spec(provider_id)
-            .await?
-            .unwrap_or_else(|| ComponentSpecification::new(provider_ref.as_ref()));
+        let (component_specification, revision) = {
+            let (spec_opt, rev) = self.get_component_spec(provider_id).await?;
+            (
+                spec_opt.unwrap_or_else(|| ComponentSpecification::new(provider_ref.as_ref())),
+                rev,
+            )
+        };
 
-        self.store_component_spec(&provider_id, &component_specification)
+        self.store_component_spec(&provider_id, &component_specification, revision)
             .await?;
         self.update_host_with_spec(&provider_id, &component_specification)
             .await?;
