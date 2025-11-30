@@ -18,10 +18,6 @@ Name: Jordan Rash
 GitHub: @jordan-rash  
 Organization: Synadia
 
-Name: Taylor Thomas  
-GitHub: @thomastaylor312  
-Organization: Self
-
 Name: Brooks Townsend  
 GitHub: @brooksmtownsend  
 Organization: Cosmonic
@@ -245,3 +241,7 @@ GitHub: @connorsmith256
 
 Name: Kaushik Shanadi  
 GitHub: @ks2211  
+
+Name: Taylor Thomas  
+GitHub: @thomastaylor312  
+
