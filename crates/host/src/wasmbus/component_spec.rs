@@ -43,23 +43,25 @@ impl ComponentSpecification {
 impl super::Host {
     /// Retrieve a component specification based on the provided ID. The outer Result is for errors
     /// accessing the store, and the inner option indicates if the spec exists.
+    /// Returns (spec, revision) where revision is 0 if the spec doesn't exist.
     #[instrument(level = "debug", skip_all)]
     pub(crate) async fn get_component_spec(
         &self,
         id: &str,
-    ) -> anyhow::Result<Option<ComponentSpecification>> {
+    ) -> anyhow::Result<(Option<ComponentSpecification>, u64)> {
         let key = format!("COMPONENT_{id}");
-        let spec = self
-            .data_store
-            .get(&key)
-            .await
-            .context("failed to get component spec")?
-            .map(|spec_bytes| serde_json::from_slice(&spec_bytes))
-            .transpose()
-            .context(format!(
-                "failed to deserialize stored component specification for {id}"
-            ))?;
-        Ok(spec)
+
+        // Use entry() to get both value and revision
+        match self.data_store.entry(&key).await {
+            Ok(Some(entry)) => {
+                let spec = serde_json::from_slice::<ComponentSpecification>(&entry.value).context(
+                    format!("failed to deserialize stored component specification for {id}"),
+                )?;
+                Ok((Some(spec), entry.revision))
+            }
+            Ok(None) => Ok((None, 0)),
+            Err(e) => Err(anyhow::anyhow!("failed to get component spec: {}", e)),
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -67,16 +69,27 @@ impl super::Host {
         &self,
         id: impl AsRef<str>,
         spec: &ComponentSpecification,
+        expected_revision: u64,
     ) -> anyhow::Result<()> {
         let id = id.as_ref();
         let key = format!("COMPONENT_{id}");
         let bytes = serde_json::to_vec(spec)
             .context("failed to serialize component spec")?
             .into();
-        self.data_store
-            .put(&key, bytes)
-            .await
-            .context("failed to put component spec")?;
+
+        if expected_revision == 0 {
+            // New entry, use put
+            self.data_store
+                .put(&key, bytes)
+                .await
+                .context("failed to put component spec")?;
+        } else {
+            // Existing entry, use update with revision
+            self.data_store
+                .update(&key, bytes, expected_revision)
+                .await
+                .context("failed to update component spec (revision mismatch)")?;
+        }
         Ok(())
     }
 
