@@ -215,10 +215,10 @@ impl HostBuilder {
 pub struct HostInventory {
     /// Components running on this host.
     #[serde(alias = "actors")]
-    pub(crate) components: Vec<ComponentDescription>,
+    pub components: Vec<ComponentDescription>,
 
     /// Providers running on this host
-    pub(crate) providers: Vec<ProviderDescription>,
+    pub providers: Vec<ProviderDescription>,
 
     /// The host's unique ID
     #[serde(default)]
