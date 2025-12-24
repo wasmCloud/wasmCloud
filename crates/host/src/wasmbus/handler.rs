@@ -27,7 +27,10 @@ use wasmcloud_runtime::component::{
     MessagingHostMessage0_3, ReplacedInstanceTarget, Secrets,
 };
 use wasmcloud_tracing::context::TraceContextInjector;
+use wasmcloud_tracing::KeyValue;
 use wrpc_transport::InvokeExt as _;
+
+use crate::metrics::HostMetrics;
 
 use super::config::ConfigBundle;
 use super::{injector_to_headers, Features};
@@ -78,6 +81,8 @@ pub struct Handler {
     pub experimental_features: Features,
     /// Labels associated with the wasmCloud Host the component is running on
     pub host_labels: Arc<RwLock<BTreeMap<String, String>>>,
+    /// The host metrics object used to record metrics
+    pub host_metrics: Arc<HostMetrics>,
 }
 
 impl Handler {
@@ -96,6 +101,7 @@ impl Handler {
             invocation_timeout: self.invocation_timeout,
             experimental_features: self.experimental_features,
             host_labels: self.host_labels.clone(),
+            host_metrics: self.host_metrics.clone(),
         }
     }
 }
@@ -192,6 +198,7 @@ impl wrpc_transport::Invoke for Handler {
     where
         P: AsRef<[Option<usize>]> + Send + Sync,
     {
+        let start_time = std::time::Instant::now();
         let links = self.instance_links.read().await;
         let targets = self.targets.read().await;
 
@@ -253,6 +260,18 @@ impl wrpc_transport::Invoke for Handler {
             .invoke(Some(headers), instance, func, params, paths)
             .await
             .map_err(Error::Handler)?;
+
+        self.host_metrics.record_call_rpc_message(
+            start_time.elapsed().as_nanos() as u64,
+            &[
+                KeyValue::new("component.ref", Arc::clone(&self.component_id)),
+                KeyValue::new("component.id", Arc::clone(&self.component_id)),
+                KeyValue::new("lattice", Arc::clone(&self.lattice)),
+                KeyValue::new("host", Arc::clone(&self.lattice)),
+                KeyValue::new("import.operation", format!("{instance}.{func}")),
+            ],
+            false,
+        );
         Ok((tx, rx))
     }
 }
