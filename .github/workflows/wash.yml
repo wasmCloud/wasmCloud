@@ -27,7 +27,7 @@ jobs:
     outputs:
       modified: ${{ steps.changes.outputs.changed }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
       - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         id: changes
         with:
@@ -58,19 +58,19 @@ jobs:
         os: [ubuntu-latest-4-cores, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f
         with:
           node-version: '18.x'
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
       - run: rustup show
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5
         with:
           shared-key: '${{ matrix.os }}-shared-cache'
       - name: Install nextest
-        uses: taiki-e/install-action@132c875eef0d3e3be95c2d08d74e8559cbf74bdb # v2.62.55
+        uses: taiki-e/install-action@a983ca795126a4be4e8a44879ac5c4c3ef66cae1 # v2.65.11
         with:
           tool: nextest,wit-bindgen-cli
-      - uses: taiki-e/install-action@132c875eef0d3e3be95c2d08d74e8559cbf74bdb # v2.62.55
+      - uses: taiki-e/install-action@a983ca795126a4be4e8a44879ac5c4c3ef66cae1 # v2.65.11
         with:
           tool: wasm-tools@1.225.0 # TODO: update once wit-bindgen-go is fixed
       - uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c
@@ -98,12 +98,12 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
       # Free disk space
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
       - run: rustup show
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5
         with:
           shared-key: 'ubuntu-22.04-shared-cache'
       - uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c
@@ -118,10 +118,10 @@ jobs:
         with:
           cli-args: '-f ./crates/wash/tools/docker-compose.yml up --detach'
       - name: Install nextest
-        uses: taiki-e/install-action@132c875eef0d3e3be95c2d08d74e8559cbf74bdb # v2.62.55
+        uses: taiki-e/install-action@a983ca795126a4be4e8a44879ac5c4c3ef66cae1 # v2.65.11
         with:
           tool: nextest,wit-bindgen-cli
-      - uses: taiki-e/install-action@132c875eef0d3e3be95c2d08d74e8559cbf74bdb # v2.62.55
+      - uses: taiki-e/install-action@a983ca795126a4be4e8a44879ac5c4c3ef66cae1 # v2.65.11
         with:
           tool: wasm-tools@1.225.0 # TODO: update once wit-bindgen-go is fixed
       - name: Run integration tests
@@ -152,7 +152,7 @@ jobs:
             lang: python
             lang-version: '3.10'
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
 
       # Set up language toolchain
       - name: Setup WebAssembly toolchains for language
@@ -164,7 +164,7 @@ jobs:
 
       # Set up Rust & trigger cargo toolchain
       - run: rustup show
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5
         with:
           shared-key: 'ubuntu-22.04-shared-cache'
 
