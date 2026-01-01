@@ -229,41 +229,41 @@ anyhow = { version = "1", default-features = false }
 assert-json-diff = { version = "2", default-features = false }
 astral-tokio-tar = { version = "0.5.6", default-features = false }
 async-compression = { version = "0.4", default-features = false }
-async-nats = { version = "0.39", default-features = false }
+async-nats = { version = "0.45", default-features = false }
 async_zip = { version = "0.0.18", default-features = false }
 async-trait = { version = "0.1", default-features = false }
 aws-config = { version = "1.6", default-features = false }
-aws-sdk-s3 = { version = "=1.68", default-features = false }                                                # more recent versions depend on `cbindgen`, using MPL-2.0, not permitted by CNCF
+aws-sdk-s3 = { version = "=1.102", default-features = false }                                                # more recent versions depend on `cbindgen`, using MPL-2.0, not permitted by CNCF
 aws-smithy-runtime = { version = "1.8", default-features = false }
 axum = { version = "0.8", default-features = false }
-axum-extra = { version = "0.10", default-features = false }
-axum-server = { version = "0.7", default-features = false }
+axum-extra = { version = "0.12", default-features = false }
+axum-server = { version = "0.8", default-features = false }
 azure_core = { version = "0.22", default-features = false }
 azure_storage = { version = "0.21", default-features = false }
 azure_storage_blobs = { version = "0.21", default-features = false }
 base64 = { version = "0.22", default-features = false }
 bigdecimal = { version = "0.4", default-features = false }
-bit-vec = { version = "0.6", default-features = false }
+bit-vec = { version = "0.8", default-features = false }
 bytes = { version = "1", default-features = false }
 cap-std = { version = "3", default-features = false }
-cargo_metadata = { version = "0.19", default-features = false }
+cargo_metadata = { version = "0.23", default-features = false }
 cargo_toml = { version = "0.22", default-features = false }
 chrono = { version = "0.4", default-features = false }
-cidr = { version = "0.2", default-features = false }
+cidr = { version = "0.3", default-features = false }
 claims = { version = "0.8", default-features = false }
 clap = { version = "4", default-features = false }
 clap_complete = { version = "4", default-features = false }
 clap-markdown = { version = "0.1.5", default-features = false }
-cloudevents-sdk = { version = "0.8", default-features = false }
+cloudevents-sdk = { version = "0.9", default-features = false }
 command-group = { version = "5", default-features = false }
 config = { version = "0.15", default-features = false }
-console = { version = "0.15", default-features = false }
-crossterm = { version = "0.28.1", default-features = false }
+console = { version = "0.16", default-features = false }
+crossterm = { version = "0.29.0", default-features = false }
 data-encoding = { version = "2", default-features = false }
 deadpool-postgres = { version = "0.14", default-features = false }
-dialoguer = { version = "0.11", default-features = false }
+dialoguer = { version = "0.12", default-features = false }
 docker_credential = { version = "1.3.2", default-features = false }
-etcetera = { version = "0.10", default-features = false }
+etcetera = { version = "0.11", default-features = false }
 exponential-backoff = { version = "2.1", default-features = false }
 file-guard = { version = "0.2.0", default-features = false }
 futures = { version = "0.3", default-features = false }
@@ -279,24 +279,24 @@ hyper = { version = "1", default-features = false }
 hyper-rustls = { version = "0.27", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 ignore = { version = "0.4", default-features = false }
-indicatif = { version = "0.17", default-features = false }
+indicatif = { version = "0.18", default-features = false }
 kafka = { version = "0.10", default-features = false }
 names = { version = "0.14", default-features = false }
 nats-jwt-rs = { version = "0.1", default-features = false }
-nix = { version = "0.29", default-features = false }
+nix = { version = "0.30", default-features = false }
 nkeys = { version = "0.4", default-features = false }
 normpath = { version = "1", default-features = false }
 notify = { version = "8", default-features = false }
-nuid = { version = "0.5", default-features = false }
+nuid = { version = "0.6", default-features = false }
 num = { version = "0.4", default-features = false }
 oci-client = { version = "0.15", default-features = false }
 oci-wasm = { version = "0.3", default-features = false }
 once_cell = { version = "1", default-features = false }
-opentelemetry = { version = "0.28", default-features = false }
-opentelemetry-appender-tracing = { version = "0.28", default-features = false }
+opentelemetry = { version = "0.31", default-features = false }
+opentelemetry-appender-tracing = { version = "0.31", default-features = false }
 opentelemetry-nats = { version = "^0.2.1", path = "./crates/opentelemetry-nats", default-features = false }
-opentelemetry-otlp = { version = "0.28", default-features = false }
-opentelemetry_sdk = { version = "0.28", default-features = false }
+opentelemetry-otlp = { version = "0.31", default-features = false }
+opentelemetry_sdk = { version = "0.31", default-features = false }
 path-absolutize = { version = "3", default-features = false }
 path-clean = { version = "1", default-features = false }
 pg_bigdecimal = { version = "0.1", default-features = false }
@@ -305,17 +305,17 @@ postgres-types = { version = "0.2", default-features = false }
 provider-archive = { version = "^0.16.1", path = "./crates/provider-archive", default-features = false }
 quote = { version = "1", default-features = false }
 rand = { version = "0.9", default-features = false }
-redis = { version = "0.29", default-features = false }
+redis = { version = "1.0", default-features = false }
 regex = { version = "1", default-features = false }
 reqwest = { version = "0.12", default-features = false }
 ring = { version = "0.17", default-features = false }
 rmp-serde = { version = "1", default-features = false }
 rmpv = { version = "1", default-features = false }
-rustls = { version = "0.23.26", default-features = false }
+rustls = { version = "0.23.35", default-features = false }
 rustls-native-certs = { version = "0.8", default-features = false }
 rustls-pemfile = { version = "2", default-features = false }
 rustversion = { version = "1.0", default-features = false }
-sanitize-filename = { version = "0.4", default-features = false }
+sanitize-filename = { version = "0.5", default-features = false }
 secrecy = { version = "0.10", default-features = false }
 secrets-nats-kv = { version = "^0.3.0", path = "crates/secrets-nats-kv", default-features = false }
 semver = { version = "1", default-features = false }
@@ -326,17 +326,17 @@ serde_with = { version = "3", default-features = false }
 serde_yaml = { version = "0.9", default-features = false }
 serial_test = { version = "3", default-features = false }
 sha2 = { version = "0.10", default-features = false }
-spiffe = { version = "0.6", default-features = false }
-spire-api = { version = "0.3", default-features = false }
-sysinfo = { version = "0.33", default-features = false }
+spiffe = { version = "0.9", default-features = false }
+spire-api = { version = "0.5", default-features = false }
+sysinfo = { version = "0.37", default-features = false }
 tempfile = { version = "3", default-features = false }
-term-table = { version = "=1.3.2", default-features = false }
+term-table = { version = "=1.4.0", default-features = false }
 termcolor = { version = "1", default-features = false }
 termsize = { version = "0.1", default-features = false }
 test-case = { version = "3", default-features = false }
 test-components = { version = "0", path = "./tests/components", default-features = false }
 test-log = { version = "0.2", default-features = false }
-testcontainers = { version = "0.25" }
+testcontainers = { version = "0.26" }
 thiserror = { version = "2", default-features = false }
 time = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false }
@@ -345,13 +345,13 @@ tokio-postgres-rustls = { version = "0.13", default-features = false }
 tokio-rustls = { version = "0.26", default-features = false }
 tokio-stream = { version = "0.1", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
-toml = { version = "0.8", default-features = false }
+toml = { version = "0.9", default-features = false }
 tower-http = { version = "0.6", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-appender = { version = "0.2", default-features = false }
 tracing-flame = { version = "0.2", default-features = false }
 tracing-futures = { version = "0.2", default-features = false }
-tracing-opentelemetry = { version = "0.29", default-features = false }
+tracing-opentelemetry = { version = "0.32", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
 ulid = { version = "1", default-features = false }
 unicase = { version = "2.8.1", default-features = false }
@@ -367,14 +367,14 @@ wadm = { version = "0.21", default-features = false }
 wadm-client = { version = "0.10", default-features = false }
 wadm-types = { version = "0.8.3", default-features = false }
 walkdir = { version = "2", default-features = false }
-warp = { version = "0.3", default-features = false }
+warp = { version = "0.4", default-features = false }
 wascap = { version = "^0.16.0", path = "./crates/wascap", default-features = false }
 wash = { version = "0", path = "./crates/wash", default-features = false }
-wasi = { version = "0.13.3", default-features = false }
-wasm-pkg-client = { version = "0.10", default-features = false }
-wasm-pkg-core = { version = "0.10", default-features = false }
-wasi-preview1-component-adapter-provider = { version = "38", default-features = false }
-wasm-encoder = { version = "0.232", default-features = false }
+wasi = { version = "0.14.7", default-features = false }
+wasm-pkg-client = { version = "0.13", default-features = false }
+wasm-pkg-core = { version = "0.13", default-features = false }
+wasi-preview1-component-adapter-provider = { version = "40", default-features = false }
+wasm-encoder = { version = "0.241", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-component = { version = "0", path = "crates/component", default-features = false }
 wasmcloud-control-interface = { version = "^3.0.0", path = "./crates/control-interface", default-features = false }
@@ -399,14 +399,14 @@ wasmcloud-secrets-client = { version = "^0.9.0", path = "./crates/secrets-client
 wasmcloud-secrets-types = { version = "^0.8.0", path = "./crates/secrets-types", default-features = false }
 wasmcloud-test-util = { version = "^0.19.0", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "^0.16.0", path = "./crates/tracing", default-features = false }
-wasmparser = { version = "0.228", default-features = false }
-wasmtime = { version = "38.0.4", default-features = false }
-wasmtime-wasi = { version = "38.0.4", default-features = false }
-wasmtime-wasi-http = { version = "38.0.4", default-features = false }
+wasmparser = { version = "0.241", default-features = false }
+wasmtime = { version = "40.0.0", default-features = false }
+wasmtime-wasi = { version = "40.0.0", default-features = false }
+wasmtime-wasi-http = { version = "40.0.0", default-features = false }
 wasmtime-wit-bindgen = { version = "38.0.4", default-features = false }
 wat = { version = "1", default-features = false }
 webpki-roots = { version = "1.0", default-features = false }
-which = { version = "7", default-features = false }
+which = { version = "8", default-features = false }
 wit-bindgen = { version = "0.51.0", default-features = false }
 wit-bindgen-core = { version = "0.51.0", default-features = false }
 wit-bindgen-go = { version = "0.51.0", default-features = false }
@@ -417,7 +417,7 @@ wrpc-interface-blobstore = { version = "0.21", default-features = false }
 wrpc-interface-http = { version = "0.34", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.30", default-features = false }
 wrpc-transport = { version = "0.28", default-features = false }
-wrpc-transport-nats = { version = "0.28.1", default-features = false, features = [
+wrpc-transport-nats = { version = "0.29.0", default-features = false, features = [
   "async-nats-0_39",
 ] }
 
