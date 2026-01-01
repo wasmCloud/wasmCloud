@@ -16,12 +16,12 @@ jobs:
   benchmark:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || 'main' }}
 
       - name: Set up Python
-        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
         with:
           python-version: '3.11' # OCI cli needs distutils
 
@@ -33,7 +33,7 @@ jobs:
         run: |
           echo "${HOME}/bin" >> $GITHUB_PATH
 
-      - uses: taiki-e/install-action@132c875eef0d3e3be95c2d08d74e8559cbf74bdb # v2.62.55
+      - uses: taiki-e/install-action@a983ca795126a4be4e8a44879ac5c4c3ef66cae1 # v2.65.11
         with:
           tool: wash
 
