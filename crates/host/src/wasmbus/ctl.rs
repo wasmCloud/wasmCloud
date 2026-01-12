@@ -785,52 +785,65 @@ impl ControlInterfaceServer for Host {
                     .chain(request.target_config())
             ).await?;
 
-            let mut component_spec = self
-                .get_component_spec(source_id)
-                .await?
-                .unwrap_or_default();
+            // Retry loop for optimistic locking to handle concurrent link additions.
+            // When multiple requests try to add links to the same component concurrently,
+            // they may read the same revision, modify it, and try to write back. Only one
+            // will succeed; others will get a revision mismatch and retry with the latest state.
+            const MAX_RETRIES: usize = 10;
+            for attempt in 0..MAX_RETRIES {
+                let (mut component_spec, revision) = {
+                    let (spec_opt, rev) = self.get_component_spec(source_id).await?;
+                    (spec_opt.unwrap_or_default(), rev)
+                };
 
-            // If the link is defined from this source on the same interface and link name, but to a different target,
-            // we need to reject this link and suggest deleting the existing link or using a different link name.
-            if let Some(existing_conflict_link) = component_spec.links.iter().find(|link| {
-                link.source_id() == source_id
-                    && link.wit_namespace() == wit_namespace
-                    && link.wit_package() == wit_package
-                    && link.name() == name
-                    // Check if interfaces have no intersection
-                    && link.interfaces().iter().any(|i| interfaces.contains(i))
-                    && link.target() != target
-            }) {
-                error!(
-                    source_id,
-                    desired_target = target,
-                    existing_target = existing_conflict_link.target(),
-                    ns_and_package,
-                    name,
-                    "link already exists with different target, consider deleting the existing link or using a different link name"
-                );
-                bail!("link already exists with different target, consider deleting the existing link or using a different link name");
-            }
-
-            // If we can find an existing link with the same source, target, namespace, package, and name, update it.
-            // Otherwise, add the new link to the component specification.
-            if let Some(existing_link_index) = component_spec.links.iter().position(|link| {
-                link.source_id() == source_id
-                    && link.target() == target
-                    && link.wit_namespace() == wit_namespace
-                    && link.wit_package() == wit_package
-                    && link.name() == name
-            }) {
-                if let Some(existing_link) = component_spec.links.get_mut(existing_link_index) {
-                    *existing_link = request.clone();
+                // If the link is defined from this source on the same interface and link name, but to a different target,
+                // we need to reject this link and suggest deleting the existing link or using a different link name.
+                if let Some(existing_conflict_link) = component_spec.links.iter().find(|link| {
+                    link.source_id() == source_id
+                        && link.wit_namespace() == wit_namespace
+                        && link.wit_package() == wit_package
+                        && link.name() == name
+                        // Check if interfaces have no intersection
+                        && link.interfaces().iter().any(|i| interfaces.contains(i))
+                        && link.target() != target
+                }) {
+                    error!(
+                        source_id,
+                        desired_target = target,
+                        existing_target = existing_conflict_link.target(),
+                        ns_and_package,
+                        name,
+                        "link already exists with different target, consider deleting the existing link or using a different link name"
+                    );
+                    bail!("link already exists with different target, consider deleting the existing link or using a different link name");
                 }
-            } else {
-                component_spec.links.push(request.clone());
-            };
 
-            // Update component specification with the new link
-            self.store_component_spec(&source_id, &component_spec)
-                .await?;
+                // If we can find an existing link with the same source, target, namespace, package, and name, update it.
+                // Otherwise, add the new link to the component specification.
+                if let Some(existing_link_index) = component_spec.links.iter().position(|link| {
+                    link.source_id() == source_id
+                        && link.target() == target
+                        && link.wit_namespace() == wit_namespace
+                        && link.wit_package() == wit_package
+                        && link.name() == name
+                }) {
+                    if let Some(existing_link) = component_spec.links.get_mut(existing_link_index) {
+                        *existing_link = request.clone();
+                    }
+                } else {
+                    component_spec.links.push(request.clone());
+                };
+
+                // Try to update component specification with optimistic locking
+                match self.store_component_spec(&source_id, &component_spec, revision).await {
+                    Ok(_) => break, // Success!
+                    Err(e) if attempt < MAX_RETRIES - 1 && e.to_string().contains("revision mismatch") => {
+                        // Retry on revision mismatch
+                        continue;
+                    }
+                    Err(e) => return Err(e), // Other error or max retries reached
+                }
+            }
             // NOTE: We rely on the NATS watcher to call update_host_with_spec asynchronously.
             // Previously, we called it directly here, but this caused a race condition where
             // self.links would be updated before the NATS watcher processed the change,
@@ -880,38 +893,65 @@ impl ControlInterfaceServer for Host {
             ns_and_package, link_name, "handling del wrpc link definition"
         );
 
-        let Some(mut component_spec) = self.get_component_spec(source_id).await? else {
-            // If the component spec doesn't exist, the link is deleted
-            return Ok(CtlResponse::<()>::success(
-                "successfully deleted link (spec doesn't exist)".into(),
-            ));
-        };
+        // Retry loop for optimistic locking to handle concurrent link deletions.
+        // Similar to link additions, concurrent deletions may conflict when updating
+        // the component spec, requiring retries with the latest revision.
+        const MAX_RETRIES: usize = 10;
+        let mut deleted_link: Option<Link> = None;
 
-        // If we can find an existing link with the same source, namespace, package, and name, remove it
-        // and update the component specification.
-        let deleted_link = if let Some(existing_link_index) =
-            component_spec.links.iter().position(|link| {
+        for attempt in 0..MAX_RETRIES {
+            let (spec_opt, revision) = self.get_component_spec(source_id).await?;
+
+            let Some(mut component_spec) = spec_opt else {
+                // If the component spec doesn't exist, the link is deleted
+                return Ok(CtlResponse::<()>::success(
+                    "successfully deleted link (spec doesn't exist)".into(),
+                ));
+            };
+
+            // If we can find an existing link with the same source, namespace, package, and name, remove it
+            // and update the component specification.
+            if let Some(existing_link_index) = component_spec.links.iter().position(|link| {
                 link.source_id() == source_id
                     && link.wit_namespace() == wit_namespace
                     && link.wit_package() == wit_package
                     && link.name() == link_name
             }) {
-            // Sanity safety check since `swap_remove` will panic if the index is out of bounds
-            if existing_link_index < component_spec.links.len() {
-                Some(component_spec.links.swap_remove(existing_link_index))
-            } else {
-                None
+                // Sanity safety check since `swap_remove` will panic if the index is out of bounds
+                if existing_link_index < component_spec.links.len() {
+                    deleted_link = Some(component_spec.links.swap_remove(existing_link_index));
+                }
             }
-        } else {
-            None
-        };
+
+            if deleted_link.is_some() {
+                // Try to update component specification with optimistic locking
+                match self
+                    .store_component_spec(&source_id, &component_spec, revision)
+                    .await
+                {
+                    Ok(_) => break, // Success!
+                    Err(e)
+                        if attempt < MAX_RETRIES - 1
+                            && e.to_string().contains("revision mismatch") =>
+                    {
+                        // Retry on revision mismatch
+                        deleted_link = None; // Reset for retry
+                        continue;
+                    }
+                    Err(e) => return Err(e), // Other error or max retries reached
+                }
+            } else {
+                // Link not found, nothing to delete
+                break;
+            }
+        }
 
         if let Some(link) = deleted_link.as_ref() {
-            // Update component specification with the deleted link
-            self.store_component_spec(&source_id, &component_spec)
-                .await?;
-            self.update_host_with_spec(&source_id, &component_spec)
-                .await?;
+            // Get the updated spec after deletion to update the host
+            let (updated_spec, _) = self.get_component_spec(source_id).await?;
+            if let Some(spec) = updated_spec {
+                self.update_host_with_spec(&source_id, &spec).await?;
+            }
 
             // Send the link to providers for deletion
             self.del_provider_link(link).await?;

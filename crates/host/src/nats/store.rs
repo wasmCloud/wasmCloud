@@ -44,6 +44,36 @@ impl StoreManager for Store {
             .await
             .map_err(|err| anyhow::anyhow!("Failed to delete config: {}", err))
     }
+
+    #[instrument(level = "debug", skip(self))]
+    async fn entry(&self, key: &str) -> anyhow::Result<Option<crate::store::StoreEntry>> {
+        match self.entry(key).await {
+            Ok(Some(kv_entry)) => Ok(Some(crate::store::StoreEntry {
+                value: kv_entry.value,
+                revision: kv_entry.revision,
+            })),
+            Ok(None) => Ok(None),
+            Err(err) => Err(anyhow::anyhow!("Failed to get entry: {}", err)),
+        }
+    }
+
+    #[instrument(level = "debug", skip(self, value))]
+    async fn update(&self, key: &str, value: Bytes, expected_revision: u64) -> anyhow::Result<()> {
+        self.update(key, value, expected_revision)
+            .await
+            .map(|_| ())
+            .map_err(|err| {
+                // Check if this is a wrong last sequence error (revision mismatch)
+                let err_str = err.to_string();
+                if err_str.contains("wrong last sequence")
+                    || err_str.contains("Wrong last sequence")
+                {
+                    anyhow::anyhow!("revision mismatch: {}", err)
+                } else {
+                    anyhow::anyhow!("Failed to update config: {}", err)
+                }
+            })
+    }
 }
 
 #[async_trait::async_trait]
