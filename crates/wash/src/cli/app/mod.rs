@@ -9,6 +9,7 @@ use crate::lib::config::WashConnectionOptions;
 use anyhow::{bail, Context};
 use async_nats::RequestErrorKind;
 use clap::{Args, Subcommand};
+use clap_complete::engine::ArgValueCompleter;
 use serde_json::json;
 use wadm_client::Result;
 use wadm_types::api::ModelSummary;
@@ -21,6 +22,7 @@ use crossterm::{
 };
 use std::io::Write;
 
+mod autocompletion;
 mod output;
 
 #[derive(Debug, Clone, Subcommand)]
@@ -66,12 +68,30 @@ pub struct ListCommand {
 
 #[derive(Args, Debug, Clone)]
 pub struct UndeployCommand {
-    /// Name of the application to undeploy
-    #[clap(name = "name", required_unless_present("all"))]
+    /// Name or path to the manifest of the application to undeploy.
+    ///
+    /// Supports dynamic autocompletion only for declared, deployed apps.
+    #[clap(
+        name = "name",
+        required_unless_present_any(["all", "file"]),
+        conflicts_with("file"),
+        add = ArgValueCompleter::new(autocompletion::deployed_app_name_completer)
+    )]
     app_name: Option<String>,
 
+    /// Path to the manifest of the application to undeploy
+    #[clap(
+        name = "file",
+        short,
+        long,
+        required_unless_present_any(["all", "name"]),
+        conflicts_with("name"),
+        add = ArgValueCompleter::new(autocompletion::path_completer)
+    )]
+    file: Option<String>,
+
     #[clap(flatten)]
-    opts: CliConnectionOpts,
+    pub(crate) opts: CliConnectionOpts,
 
     /// Whether to undeploy all the available apps
     #[clap(long = "all", default_value = "false")]
@@ -80,34 +100,68 @@ pub struct UndeployCommand {
 
 #[derive(Args, Debug, Clone)]
 pub struct DeployCommand {
-    /// Name of the application to deploy, if it was already `put`, or a path to a file containing the application manifest
-    #[clap(name = "application")]
-    app_name: Option<String>,
+    /// Name of the application to deploy, if it was already `put`, or a path to a file containing the application manifest.
+    ///
+    /// Supports dynamic autocompletion only for declared, undeployed apps.
+    #[clap(
+        name = "application",
+        conflicts_with("file"),
+        add = ArgValueCompleter::new(autocompletion::undeployed_app_name_completer)
+    )]
+    pub(crate)app_name: Option<String>,
 
     /// Version of the application to deploy, defaults to the latest created version
-    #[clap(name = "version")]
+    #[clap(name = "version", add = ArgValueCompleter::new(autocompletion::version_completer))]
     version: Option<String>,
+
+    /// Path to the manifest of the application to deploy
+    #[clap(
+        name = "file",
+        short,
+        long,
+        conflicts_with("application"),
+        add = ArgValueCompleter::new(autocompletion::path_completer)
+    )]
+    file: Option<String>,
 
     /// Whether or not wash should attempt to replace the resources by performing an optimistic delete shortly before applying resources.
     #[clap(long = "replace")]
     replace: bool,
 
     #[clap(flatten)]
-    opts: CliConnectionOpts,
+    pub(crate) opts: CliConnectionOpts,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct DeleteCommand {
-    /// Name of the application to delete, or a path to a Wadm Application Manifest
-    #[clap(name = "name", required_unless_present("all_undeployed"))]
-    app_name: Option<String>,
+    /// Name of the application to delete, or a path to a Wadm Application Manifest.
+    ///
+    /// Supports dynamic autocompletion only for declared apps.
+    #[clap(
+        name = "name",
+        required_unless_present_any(["all_undeployed", "file"]),
+        conflicts_with("file"),
+        add = ArgValueCompleter::new(autocompletion::app_name_completer)
+    )]
+    pub(crate) app_name: Option<String>,
 
     /// Version of the application to delete. If not supplied, all versions are deleted
-    #[clap(name = "version")]
+    #[clap(name = "version", add = ArgValueCompleter::new(autocompletion::version_completer))]
     version: Option<String>,
 
+    /// Path to the manifest of the application to deploy
+    #[clap(
+        name = "file",
+        short,
+        long,
+        required_unless_present_any(["all_undeployed", "name"]),
+        conflicts_with("name"),
+        add = ArgValueCompleter::new(autocompletion::path_completer)
+    )]
+    file: Option<String>,
+
     #[clap(flatten)]
-    opts: CliConnectionOpts,
+    pub(crate) opts: CliConnectionOpts,
 
     /// Whether to delete all undeployed apps
     #[clap(long = "all-undeployed", default_value = "false")]
@@ -117,10 +171,11 @@ pub struct DeleteCommand {
 #[derive(Args, Debug, Clone)]
 pub struct PutCommand {
     /// The source of the application manifest, either a file path, remote file http url, or stdin. If no source is provided (or arg marches '-'), stdin is used.
+    #[clap(name = "source", add = ArgValueCompleter::new(autocompletion::path_completer))]
     source: Option<String>,
 
     #[clap(flatten)]
-    opts: CliConnectionOpts,
+    pub(crate) opts: CliConnectionOpts,
 }
 
 /// Command to get the application manifest(s)
@@ -129,11 +184,11 @@ pub struct GetCommand {
     /// The name of the application to retrieve.
     ///
     /// If left empty retrieves all the applications, same as `wash app list`
-    #[clap(name = "name")]
-    app_name: Option<String>,
+    #[clap(name = "name", add = ArgValueCompleter::new(autocompletion::app_name_completer))]
+    pub(crate) app_name: Option<String>,
 
     /// The version of the application to retrieve. If left empty, retrieves the latest version
-    #[clap(name = "version")]
+    #[clap(name = "version", add = ArgValueCompleter::new(autocompletion::version_completer))]
     version: Option<String>,
 
     /// Enables real-time updates.
@@ -143,33 +198,33 @@ pub struct GetCommand {
     pub watch: Option<std::time::Duration>,
 
     #[clap(flatten)]
-    opts: CliConnectionOpts,
+    pub(crate) opts: CliConnectionOpts,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct StatusCommand {
     /// The name of the application
-    #[clap(name = "name")]
+    #[clap(name = "name", add = ArgValueCompleter::new(autocompletion::app_name_completer))]
     app_name: String,
 
     #[clap(flatten)]
-    opts: CliConnectionOpts,
+    pub(crate) opts: CliConnectionOpts,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct HistoryCommand {
     /// The name of the application
-    #[clap(name = "name")]
+    #[clap(name = "name", add = ArgValueCompleter::new(autocompletion::app_name_completer))]
     app_name: String,
 
     #[clap(flatten)]
-    opts: CliConnectionOpts,
+    pub(crate) opts: CliConnectionOpts,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct ValidateCommand {
     /// Path to the application manifest to validate
-    #[clap(name = "application")]
+    #[clap(name = "application", add = ArgValueCompleter::new(autocompletion::path_completer))]
     application: PathBuf,
     /// Whether to check image references in the manifest
     #[clap(long)]
@@ -280,6 +335,19 @@ async fn undeploy_model(cmd: UndeployCommand) -> Result<CommandOutput> {
             vec![model_name]
         }
         // If no model name was specified, use command-specified filters to determine which models to act on
+        None if cmd.file.is_some() => {
+            let path = cmd.file.unwrap();
+            let manifest = load_app_manifest(path.parse()?)
+                .await
+                .with_context(|| format!("failed to load app manifest at [{path}]"))?;
+
+            let model_name = manifest
+                .name()
+                .map(ToString::to_string)
+                .context("failed to find name of manifest")?;
+
+            vec![model_name]
+        }
         None if cmd.all => crate::lib::app::get_models(&client, lattice.clone())
             .await?
             .into_iter()
@@ -322,6 +390,7 @@ async fn deploy_model(cmd: DeployCommand) -> Result<CommandOutput> {
     let app_manifest = match cmd.app_name {
         Some(source) if source == "-" => load_app_manifest("-".parse()?).await?,
         Some(source) => load_app_manifest(source.parse()?).await?,
+        None if cmd.file.is_some() => load_app_manifest(cmd.file.unwrap().parse()?).await?,
         None => {
             return Err(wadm_client::error::ClientError::ManifestLoad(
                 anyhow::anyhow!(
@@ -502,6 +571,20 @@ async fn delete_application_version(cmd: DeleteCommand) -> Result<CommandOutput>
             vec![(model_name, version)]
         }
         // If no model name was specified, use command-specified filters to determine which models to act on
+        None if cmd.file.is_some() => {
+            let path = cmd.file.unwrap();
+            let manifest = load_app_manifest(path.parse()?)
+                .await
+                .with_context(|| format!("failed to load app manifest at [{path}]"))?;
+
+            let app_name = manifest
+                .name()
+                .map(ToString::to_string)
+                .context("failed to find name of manifest")?;
+            let version = manifest.version().map(ToString::to_string);
+
+            vec![(app_name, version)]
+        }
         None if cmd.all_undeployed => crate::lib::app::get_models(&client, lattice.clone())
             .await?
             .into_iter()

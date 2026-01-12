@@ -2,6 +2,7 @@ pub mod app;
 pub mod appearance;
 pub mod build;
 pub mod call;
+pub mod cli;
 pub mod cmd;
 pub mod common;
 pub mod completions;

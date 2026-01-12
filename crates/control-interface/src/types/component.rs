@@ -12,7 +12,7 @@ use crate::Result;
 pub struct ComponentDescription {
     /// The unique component identifier for this component
     #[serde(default)]
-    pub(crate) id: String,
+    pub id: String,
 
     /// Image reference for this component
     #[serde(default)]

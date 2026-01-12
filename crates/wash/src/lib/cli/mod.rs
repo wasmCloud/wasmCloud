@@ -36,6 +36,7 @@ use crate::lib::{
     },
 };
 
+pub mod autocompletion;
 pub mod capture;
 pub mod claims;
 pub mod dev;

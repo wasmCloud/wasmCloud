@@ -5,11 +5,15 @@ use futures::StreamExt;
 use super::{validate_component_id, CliConnectionOpts, CommandOutput};
 use crate::lib::{config::WashConnectionOptions, spier::Spier};
 
+use clap_complete::engine::ArgValueCompleter;
+
+use super::autocompletion;
+
 #[derive(Debug, Parser, Clone)]
 pub struct SpyCommand {
     /// Component ID to spy on, component or capability provider. This is the unique identifier supplied
     /// to the component at startup.
-    #[clap(name = "component_id", value_parser = validate_component_id)]
+    #[clap(name = "component_id", value_parser = validate_component_id, add = ArgValueCompleter::new(autocompletion::component_id_completer))]
     pub component_id: String,
 
     #[clap(flatten)]
