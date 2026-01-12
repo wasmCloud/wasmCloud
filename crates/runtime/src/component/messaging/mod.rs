@@ -42,11 +42,20 @@ where
         };
 
         let success = res.is_ok();
+        let status = res
+            .as_ref()
+            .map_err(|err| err.to_string().into())
+            .and_then(|inner| {
+                inner
+                    .as_ref()
+                    .cloned()
+                    .map_err(|code| code.to_string().into())
+            });
         if let Err(err) =
             self.events
                 .try_send(WrpcServeEvent::MessagingHandlerHandleMessageReturned {
                     context: cx,
-                    success,
+                    status,
                 })
         {
             warn!(
