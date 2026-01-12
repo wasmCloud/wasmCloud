@@ -33,7 +33,7 @@ pub use wasmcloud_tracing;
 ///
 /// # Errors
 ///
-/// Returns `Err` if the operation is not of the form "<package>:<ns>/<interface>.<function>"
+/// Returns `Err` if the operation is not of the form `<package>:<ns>/<interface>.<function>`
 ///
 /// # Example
 ///

@@ -1,4 +1,4 @@
-/// Instrument a given [`provider_sdk::Context`], injecting current `tracing`-generated metadata
+/// Instrument a given `Context`, injecting current `tracing`-generated metadata
 /// if one isn't present.
 ///
 /// This functionality is exposed as a macro since the context for trace injection
@@ -30,7 +30,7 @@ macro_rules! propagate_trace_for_ctx {
 /// This functionality exists as a macro due to the requirement that `tracing` be initialized
 /// from *binary* code, rather than library code.
 ///
-/// This macro loads host data and uses the provider-sdk to build a [`tracing_core::Dispatch`] and
+/// This macro loads host data and uses the provider-sdk to build a `tracing::Dispatch` and
 /// relevant guards/internal structures to configure it with information relevant to the host
 ///
 /// This macro introduces the following variables into scope:

@@ -2,11 +2,13 @@ use std::env;
 use std::fs::File;
 use std::io::{BufWriter, IsTerminal};
 use std::path::Path;
-#[cfg(feature = "otel")]
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[cfg(feature = "otel")]
 use anyhow::Context as _;
+#[cfg(feature = "otel")]
+use opentelemetry::global;
 #[cfg(feature = "otel")]
 use opentelemetry_otlp::WithExportConfig;
 use tracing::{Event, Subscriber};
@@ -57,6 +59,54 @@ where
     }
 }
 
+struct ReportingFormatEvent<F> {
+    inner: F,
+    error_counter: tracing_appender::non_blocking::ErrorCounter,
+    reported: Arc<AtomicBool>,
+    last_dropped_count: Arc<AtomicUsize>,
+    #[cfg(feature = "otel")]
+    otel_counter: Option<opentelemetry::metrics::Counter<u64>>,
+}
+
+impl<F, S, N> FormatEvent<S, N> for ReportingFormatEvent<F>
+where
+    F: FormatEvent<S, N>,
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+    N: for<'writer> FormatFields<'writer> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> std::fmt::Result {
+        let dropped = self.error_counter.dropped_lines();
+        if dropped > 0 {
+            // Track the delta of new drops since last check
+            let last_count = self.last_dropped_count.swap(dropped, Ordering::SeqCst);
+            let _new_drops = dropped.saturating_sub(last_count);
+
+            // Update OTEL counter with new drops
+            #[cfg(feature = "otel")]
+            if _new_drops > 0 {
+                if let Some(ref counter) = self.otel_counter {
+                    counter.add(_new_drops as u64, &[]);
+                }
+            }
+
+            // Log error only on first occurrence
+            if self
+                .reported
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                tracing::error!("Dropped {} lines due to full buffer", dropped);
+            }
+        }
+        self.inner.format_event(ctx, writer, event)
+    }
+}
+
 /// This guard prevents early `drop()`ing of the tracing related internal data structures
 pub struct FlushGuard {
     _stderr: tracing_appender::non_blocking::WorkerGuard,
@@ -87,20 +137,35 @@ pub fn configure_tracing(
     let stderr = std::io::stderr();
     let ansi = stderr.is_terminal();
     let (stderr, stderr_guard) = tracing_appender::non_blocking(stderr);
+    let stderr_error_counter = stderr.error_counter();
+    // Ensure we only report once on the first drop
+    let stderr_reported = Arc::new(AtomicBool::new(false));
+    // Track last dropped count for computing deltas
+    let stderr_last_dropped = Arc::new(AtomicUsize::new(0));
     let fmt = tracing_subscriber::fmt::layer()
         .with_writer(stderr)
         .with_ansi(ansi);
 
     let dispatch = if use_structured_logging {
         reg.with(
-            fmt.event_format(JsonOrNot::Json(Format::default().json()))
-                .fmt_fields(JsonFields::new()),
+            fmt.event_format(ReportingFormatEvent {
+                inner: JsonOrNot::Json(Format::default().json()),
+                error_counter: stderr_error_counter.clone(),
+                reported: Arc::clone(&stderr_reported),
+                last_dropped_count: Arc::clone(&stderr_last_dropped),
+            })
+            .fmt_fields(JsonFields::new()),
         )
         .into()
     } else {
         reg.with(
-            fmt.event_format(JsonOrNot::Not(Format::default()))
-                .fmt_fields(DefaultFields::new()),
+            fmt.event_format(ReportingFormatEvent {
+                inner: JsonOrNot::Not(Format::default()),
+                error_counter: stderr_error_counter.clone(),
+                reported: Arc::clone(&stderr_reported),
+                last_dropped_count: Arc::clone(&stderr_last_dropped),
+            })
+            .fmt_fields(DefaultFields::new()),
         )
         .into()
     };
@@ -166,6 +231,25 @@ pub fn configure_tracing(
     let stderr = std::io::stderr();
     let ansi = stderr.is_terminal();
     let (stderr, stderr_guard) = tracing_appender::non_blocking(stderr);
+    // otel metric counter to count dropped lines
+    let otel_counter = if otel_config.metrics_enabled() {
+        let meter = global::meter("wasmcloud log tracing");
+        Some(
+            meter
+                .u64_counter("wasmcloud.dropped_log_lines")
+                .with_description("Counting the number of dropped log lines by tracing_appender")
+                .build(),
+        )
+    } else {
+        None
+    };
+
+    let stderr_error_counter = stderr.error_counter();
+    // Ensure we only report once on the first drop
+    let stderr_reported = Arc::new(AtomicBool::new(false));
+    // Track last dropped count for computing deltas
+    let stderr_last_dropped = Arc::new(AtomicUsize::new(0));
+
     let fmt = tracing_subscriber::fmt::layer()
         .with_writer(stderr)
         .with_ansi(ansi);
@@ -173,17 +257,29 @@ pub fn configure_tracing(
     let dispatch = if use_structured_logging {
         registry
             .with(
-                fmt.event_format(JsonOrNot::Json(Format::default().json()))
-                    .fmt_fields(JsonFields::new())
-                    .with_filter(log_level_filter),
+                fmt.event_format(ReportingFormatEvent {
+                    inner: JsonOrNot::Json(Format::default().json()),
+                    error_counter: stderr_error_counter.clone(),
+                    reported: Arc::clone(&stderr_reported),
+                    last_dropped_count: Arc::clone(&stderr_last_dropped),
+                    otel_counter: otel_counter.clone(),
+                })
+                .fmt_fields(JsonFields::new())
+                .with_filter(log_level_filter),
             )
             .into()
     } else {
         registry
             .with(
-                fmt.event_format(JsonOrNot::Not(Format::default()))
-                    .fmt_fields(DefaultFields::new())
-                    .with_filter(log_level_filter),
+                fmt.event_format(ReportingFormatEvent {
+                    inner: JsonOrNot::Not(Format::default()),
+                    error_counter: stderr_error_counter.clone(),
+                    reported: Arc::clone(&stderr_reported),
+                    last_dropped_count: Arc::clone(&stderr_last_dropped),
+                    otel_counter: otel_counter.clone(),
+                })
+                .fmt_fields(DefaultFields::new())
+                .with_filter(log_level_filter),
             )
             .into()
     };

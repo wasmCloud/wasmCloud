@@ -156,8 +156,7 @@ impl ProviderArchive {
     /// those claims will be compared and verified against hashes computed at load time. This
     /// prevents the contents of the archive from being modified without the embedded claims being
     /// re-signed. This will load all binaries into memory in the returned `ProviderArchive`. Use
-    /// [`load`] or [`try_load_target_from_file`]  methods if you only want to load a single binary
-    /// into memory.
+    /// `try_load_target_from_file` method if you only want to load a single binary into memory.
     pub async fn try_load_file(path: impl AsRef<Path>) -> Result<ProviderArchive> {
         let mut file = File::open(&path).await.map_err(|e| {
             std::io::Error::new(
@@ -178,8 +177,8 @@ impl ProviderArchive {
     /// prevents the contents of the archive from being modified without the embedded claims being
     /// re-signed. This will only read a single binary into memory.
     ///
-    /// It is recommended to use this method or the [`load`] method when consuming a provider
-    /// archive. Otherwise all binaries will be loaded into memory
+    /// It is recommended to use this method when consuming a provider archive.
+    /// Otherwise all binaries will be loaded into memory
     pub async fn try_load_target_from_file(
         path: impl AsRef<Path>,
         target: &str,
