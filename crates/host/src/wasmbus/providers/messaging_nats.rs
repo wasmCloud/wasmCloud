@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
 use async_nats::jetstream;
+use async_nats::ToServerAddrs;
 use futures::StreamExt;
 use nkeys::{KeyPair, XKey};
 use tokio::fs;
@@ -71,6 +72,17 @@ impl Provider {
 
         // Use the first visible cluster_uri
         let url = config.cluster_uris.first().context("invalid address")?;
+
+        // If clear text credentials are explicitly embedded in the url by the user, use it
+        if let Ok(mut addrs) = url.to_server_addrs() {
+            if let Some(addr) = addrs.next() {
+                if addr.has_user_pass() {
+                    if let (Some(user), Some(pass)) = (addr.username(), addr.password()) {
+                        opts = opts.user_and_password(user.to_string(), pass.to_string());
+                    }
+                }
+            }
+        }
 
         // Override inbox prefix if specified
         if let Some(ref prefix) = config.custom_inbox_prefix {

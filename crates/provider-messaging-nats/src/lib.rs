@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context as _};
 use async_nats::subject::ToSubject;
+use async_nats::ToServerAddrs;
 use bytes::Bytes;
 use futures::StreamExt as _;
 use opentelemetry_nats::{attach_span_context, NatsHeaderInjector};
@@ -135,6 +136,17 @@ impl NatsMessagingProvider {
 
         // Use the first visible cluster_uri
         let url = cfg.cluster_uris.first().unwrap();
+
+        // If clear text credentials are explicitly embedded in the url by the user, use it
+        if let Ok(mut addrs) = url.to_server_addrs() {
+            if let Some(addr) = addrs.next() {
+                if addr.has_user_pass() {
+                    if let (Some(user), Some(pass)) = (addr.username(), addr.password()) {
+                        opts = opts.user_and_password(user.to_string(), pass.to_string());
+                    }
+                }
+            }
+        }
 
         // Override inbox prefix if specified
         if let Some(prefix) = cfg.custom_inbox_prefix {
