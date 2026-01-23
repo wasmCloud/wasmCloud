@@ -475,7 +475,7 @@ pub async fn create_nats_client_from_opts(
     tls_first: bool,
 ) -> Result<Client> {
     let nats_url = format!("{host}:{port}");
-    use async_nats::ConnectOptions;
+    use async_nats::{ConnectOptions, ToServerAddrs};
 
     let nc = if let Some(jwt_file) = jwt {
         let jwt_contents = extract_arg_value(&jwt_file)
@@ -544,6 +544,17 @@ pub async fn create_nats_client_from_opts(
             })?
     } else {
         let mut opts = ConnectOptions::new();
+
+        // If clear text credentials are explicitly embedded in the url by the user, use it
+        if let Ok(mut addrs) = nats_url.to_server_addrs() {
+            if let Some(addr) = addrs.next() {
+                if addr.has_user_pass() {
+                    if let (Some(user), Some(pass)) = (addr.username(), addr.password()) {
+                        opts = opts.user_and_password(user.to_string(), pass.to_string());
+                    }
+                }
+            }
+        }
 
         if let Some(ca_file) = tls_ca_file {
             opts = opts.add_root_certificates(ca_file).require_tls(true);

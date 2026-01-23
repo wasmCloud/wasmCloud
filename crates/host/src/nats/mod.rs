@@ -69,7 +69,21 @@ pub async fn connect_nats(
         (jwt, key, Some(wid_cfg)) => {
             setup_workload_identity_nats_connect_options(jwt, key, wid_cfg).await?
         }
-        _ => async_nats::ConnectOptions::new().name("wasmbus"),
+        _ => {
+            let mut opts = async_nats::ConnectOptions::new().name("wasmbus");
+
+            // If clear text credentials are explicitly embedded in the url by the user, use it
+            if let Ok(mut addrs) = addr.to_server_addrs() {
+                if let Some(addr) = addrs.next() {
+                    if addr.has_user_pass() {
+                        if let (Some(user), Some(pass)) = (addr.username(), addr.password()) {
+                            opts = opts.user_and_password(user.to_string(), pass.to_string());
+                        }
+                    }
+                }
+            }
+            opts
+        }
     };
     let opts = if let Some(timeout) = request_timeout {
         opts.request_timeout(Some(timeout))
