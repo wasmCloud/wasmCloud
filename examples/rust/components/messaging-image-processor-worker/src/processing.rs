@@ -103,7 +103,7 @@ impl ImageProcessingRequest {
         };
 
         // Attempt to lease the task
-        let lease_id = match tasks::lease_task(&task_id, &WORKER_ID.into()) {
+        let lease_id = match tasks::lease_task(&task_id, &String::from(WORKER_ID)) {
             Ok(lid) => lid,
             Err(e) => {
                 log(
