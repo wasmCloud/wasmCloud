@@ -115,7 +115,7 @@ async fn new_releases_after(
     let main_releases = releases
         .into_iter()
         .filter(|release| {
-            release.satisfies_constraint(&format!("{op}{after_version}, >{after_version}"))
+            release.satisfies_constraint(&format!("{op}{v}, >{v}", v = after_version))
         })
         .collect::<Vec<GitHubRelease>>();
     Ok(main_releases)

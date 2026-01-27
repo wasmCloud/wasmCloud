@@ -39,7 +39,10 @@ async fn start_alert_server() -> anyhow::Result<impl std::future::Future<Output 
                 let received_alerts = received_alerts_clone.clone();
                 async move {
                     for (key, value) in query.0 {
-                        received_alerts.lock().await.push(format!("{key}={value}"));
+                        received_alerts
+                            .lock()
+                            .await
+                            .push(format!("{}={}", key, value));
                     }
                     "OK"
                 }

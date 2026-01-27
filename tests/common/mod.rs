@@ -49,7 +49,7 @@ impl BackgroundServer {
         let mut child = cmd
             .kill_on_drop(true)
             .spawn()
-            .context("failed to spawn child")?;
+            .with_context(|| format!("failed to spawn child [{cmd:#?}]"))?;
         let (stop_tx, stop_rx) = oneshot::channel();
         let handle = tokio::spawn(async move {
             tokio::select!(

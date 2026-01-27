@@ -63,7 +63,7 @@ async fn integration_test_kvstore_basic() -> anyhow::Result<()> {
     let resp = client
         .request(format!("{base_sub}.server_xkey"), "".into())
         .await?;
-    println!("{resp:?}");
+    println!("{:?}", resp);
     let payload = resp.payload;
     let s = std::str::from_utf8(&payload).unwrap();
     let key = XKey::from_public_key(s).unwrap();
@@ -132,7 +132,7 @@ async fn integration_test_kvstore_put_secret() -> anyhow::Result<()> {
             payload.into(),
         )
         .await?;
-    println!("{response:?}");
+    println!("{:?}", response);
     assert_eq!(response.payload.to_vec(), b"ok");
 
     let host_key = KeyPair::new_server();
@@ -241,7 +241,7 @@ async fn integration_test_kvstore_version() -> anyhow::Result<()> {
             payload.into(),
         )
         .await?;
-    println!("{response:?}");
+    println!("{:?}", response);
     assert_eq!(response.payload.to_vec(), b"ok");
 
     let host_key = KeyPair::new_server();
@@ -290,7 +290,7 @@ fn setup_api(client: Client, enc_seed: String, server_seed: String) -> (Api, Str
         .take(10)
         .map(char::from)
         .collect::<String>();
-    let name = format!("{NAME_BASE}-{suffix}");
+    let name = format!("{}-{}", NAME_BASE, suffix);
 
     (
         Api::new(
