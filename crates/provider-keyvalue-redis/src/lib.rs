@@ -742,7 +742,7 @@ impl Provider for KvRedisProvider {
                 };
                 let watched_keys = self_clone.watched_keys.read().await;
                 for key in watched_keys.keys() {
-                    let channel = format!("__keyspace@0__:{key}");
+                    let channel = format!("__keyspace@0__:{}", key);
                     let _ = pubsub
                         .psubscribe(&channel)
                         .await

@@ -1,48 +1,39 @@
-#![doc = include_str!("../README.md")]
+//! wasmCloud host library
+
 #![warn(missing_docs)]
 #![forbid(clippy::unwrap_used)]
 
-/// [crate::config::ConfigManager] trait for managing a config store which can be watched to receive
-/// updates to the config. This is a supertrait of [crate::store::StoreManager] and is implemented
-/// by [crate::store::DefaultStore].
-pub mod config;
-
-/// [crate::event::EventPublisher] trait for receiving and publishing events from the host
-pub mod event;
-
-/// NATS implementations of [crate::policy::PolicyManager], [crate::secrets::SecretsManager], and
-/// [crate::store::StoreManager] traits for the wasmCloud host.
-pub mod nats;
-
-/// Implementation of OpenTelemetry metrics for wasmCloud, primarily using [wasmcloud_tracing]
-pub mod metrics;
-
-/// Configuration for OCI artifact fetching [crate::oci::Config]
-pub mod oci;
-
-/// [crate::policy::PolicyManager] trait for layering additional security policies on top of the
-/// wasmCloud host
-pub mod policy;
-
-/// [crate::registry::RegistryCredentialExt] extension trait for converting registry credentials
-/// into [wasmcloud_core::RegistryConfig]
-pub mod registry;
-
-/// [crate::secrets::SecretsManager] trait for fetching secrets from a secret store
-pub mod secrets;
-
-/// [crate::store::StoreManager] trait for fetching configuration and data from a backing store
-pub mod store;
-
-/// [crate::wasmbus::Host] implementation
+/// wasmbus host
 pub mod wasmbus;
 
-/// experimental workload identity implementation
+/// OCI artifact fetching
+pub mod oci;
+
+/// wasmCloud policy service
+pub mod policy;
+
+/// Common registry types
+pub mod registry;
+
+/// Secret management
+pub mod secrets;
+
+/// wasmCloud host metrics
+pub(crate) mod metrics;
+
+/// experimental workload identity
 pub mod workload_identity;
 
+pub use metrics::HostMetrics;
 pub use oci::Config as OciConfig;
-pub use policy::{HostInfo as PolicyHostInfo, PolicyManager, Response as PolicyResponse};
+pub use policy::{
+    HostInfo as PolicyHostInfo, Manager as PolicyManager, Response as PolicyResponse,
+};
+pub use secrets::Manager as SecretsManager;
 pub use wasmbus::{Host as WasmbusHost, HostConfig as WasmbusHostConfig};
+pub use wasmcloud_core::{OciFetcher, RegistryAuth, RegistryConfig, RegistryType};
+
+pub use url;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -52,7 +43,6 @@ use tokio::fs;
 use tracing::{debug, instrument, warn};
 use url::Url;
 use wascap::jwt;
-use wasmcloud_core::{OciFetcher, RegistryAuth, RegistryConfig, RegistryType};
 
 /// A reference to a resource, either a file, an OCI image, or a builtin provider
 #[derive(PartialEq)]

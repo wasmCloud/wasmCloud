@@ -1365,7 +1365,7 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
         match stderr1_reader.read_line(&mut line).await {
             Ok(0) => break,
             Ok(_) => {
-                write!(&mut stderr, "{line}")?;
+                write!(&mut stderr, "{}", line)?;
                 stderr1_out.push_str(&line);
                 if line.contains(stderr1_pattern) {
                     break;
@@ -1426,7 +1426,7 @@ async fn integration_dev_hello_component_piped_stdout() -> Result<()> {
 
         match stderr1_reader.read_line(&mut line).await {
             Ok(0) => break,
-            Ok(_) => write!(&mut stderr, "{line}")?,
+            Ok(_) => write!(&mut stderr, "{}", line)?,
             Err(_) => break,
         }
     }

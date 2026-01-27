@@ -811,11 +811,11 @@ where
         self
     }
 
-    /// Reads the WebAssembly binary asynchronously and calls [Component::new].
+    /// Reads the WebAssembly binary asynchronously and calls [`Component::new`].
     ///
     /// # Errors
     ///
-    /// Fails if either reading `wasm` fails or [Self::new] fails
+    /// Fails if either reading `wasm` fails or [`Self::new`] fails
     #[instrument(level = "trace", skip_all)]
     pub async fn read(rt: &Runtime, mut wasm: impl AsyncRead + Unpin) -> anyhow::Result<Self> {
         let mut buf = Vec::new();
@@ -825,11 +825,11 @@ where
         Self::new(rt, &buf, None)
     }
 
-    /// Reads the WebAssembly binary synchronously and calls [Component::new].
+    /// Reads the WebAssembly binary synchronously and calls [`Component::new`].
     ///
     /// # Errors
     ///
-    /// Fails if either reading `wasm` fails or [Self::new] fails
+    /// Fails if either reading `wasm` fails or [`Self::new`] fails
     #[instrument(level = "trace", skip_all)]
     pub fn read_sync(rt: &Runtime, mut wasm: impl std::io::Read) -> anyhow::Result<Self> {
         let mut buf = Vec::new();
@@ -862,7 +862,7 @@ where
 
     /// Serve all exports of this [Component] using supplied [`wrpc_transport::Serve`]
     ///
-    /// The returned [Vec] contains an [InvocationStream] per each function exported by the component.
+    /// The returned [Vec] contains an [`InvocationStream`] per each function exported by the component.
     /// A [`WrpcServeEvent`] containing the incoming [`wrpc_transport::Serve::Context`] will be sent
     /// on completion of each invocation.
     /// The supplied [`Handler`] will be used to satisfy imports.

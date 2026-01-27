@@ -27,6 +27,10 @@ use common::providers;
 const LATTICE: &str = "default";
 const COMPONENT_ID: &str = "http_hello_world";
 
+// NOTE: if running into issues with open files on your system,
+// consider increasing the soft (and possibly hard) open file limits.
+const HTTP_REQUEST_LOAD: usize = 1000;
+
 #[tokio::test]
 async fn example_rust_http_hello_world() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -128,7 +132,7 @@ async fn example_rust_http_hello_world() -> anyhow::Result<()> {
 
     let url = format!("http://localhost:{http_port}/");
     let mut requests = JoinSet::new();
-    for i in 0..1000 {
+    for i in 0..HTTP_REQUEST_LOAD {
         let req = http_client.get(&url).send();
         requests.spawn(async move {
             info!(i, "sending HTTP request");
@@ -141,7 +145,7 @@ async fn example_rust_http_hello_world() -> anyhow::Result<()> {
                 .context("failed to get response text")
         });
     }
-    for i in 0..1000 {
+    for i in 0..HTTP_REQUEST_LOAD {
         info!(i, "awaiting HTTP request");
         let res = tokio::time::timeout(Duration::from_secs(10), requests.join_next())
             .await

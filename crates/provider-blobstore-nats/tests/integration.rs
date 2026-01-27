@@ -45,7 +45,7 @@ impl TestEnv {
             .get_host_port_ipv4(4222)
             .await
             .context("should get host port")?;
-        let nats_address = format!("0.0.0.0:{port}");
+        let nats_address = format!("0.0.0.0:{}", port);
 
         // Longer initial wait for server stability
         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -74,7 +74,7 @@ impl TestEnv {
                 target_config: HashMap::from([
                     (
                         "CONFIG_NATS_URI".to_string(),
-                        format!("nats://{nats_address}"),
+                        format!("nats://{}", nats_address),
                     ),
                     ("CONFIG_NATS_MAX_WRITE_WAIT".to_string(), "30".to_string()),
                 ]),
@@ -94,7 +94,7 @@ impl TestEnv {
     }
 
     pub fn nats_endpoint(address: &str) -> String {
-        format!("nats://{address}")
+        format!("nats://{}", address)
     }
 
     async fn nats_client(&self) -> Result<async_nats::Client> {
@@ -256,7 +256,7 @@ async fn test_create_container() -> Result<()> {
     })?;
     match res {
         Ok(()) => (), // creation succeeded
-        Err(e) => panic!("Failed to create container: {e}"),
+        Err(e) => panic!("Failed to create container: {}", e),
     }
 
     // Ensure the container does exist after we attempted to create it
@@ -532,7 +532,7 @@ async fn test_write_container_data() -> Result<()> {
     // Write the blob
     let (res, io) = blobstore::write_container_data(&wrpc, env.wrpc_context(), &test_object, input)
         .await
-        .inspect_err(|e| println!("write operation failed: {e}"))?;
+        .inspect_err(|e| println!("write operation failed: {}", e))?;
     assert!(res.is_ok());
 
     // Wait for IO completion with timeout
@@ -576,7 +576,7 @@ async fn test_list_container_objects() -> Result<()> {
     let test_blob_name = "test.blob";
     let test_blob_body = test_suite_name;
     let mut test_blob_names = (1..=3)
-        .map(|blob_id| format!("{test_blob_name}-{blob_id:0>3}"))
+        .map(|blob_id| format!("{test_blob_name}-{:0>3}", blob_id))
         .collect::<Vec<_>>();
 
     let env = TestEnv::new(lattice_name, test_suite_name)
@@ -734,7 +734,7 @@ async fn test_clear_container() -> Result<()> {
     })?;
     match res {
         Ok(()) => println!("Clear operation succeeded"),
-        Err(e) => panic!("Failed to clear container: {e}"),
+        Err(e) => panic!("Failed to clear container: {}", e),
     }
 
     // Add a longer delay to allow clearing to complete
@@ -812,7 +812,7 @@ async fn test_delete_container() -> Result<()> {
     })?;
     match res {
         Ok(()) => (), // deletion succeeded
-        Err(e) => panic!("Failed to delete container: {e}"),
+        Err(e) => panic!("Failed to delete container: {}", e),
     }
 
     // Ensure that the container does not exist after we attempted to delete it
@@ -897,7 +897,7 @@ async fn test_has_object() -> Result<()> {
     })?;
     match res_has_object {
         Ok(exists) => assert!(exists),
-        Err(e) => panic!("Failed to check object existence: {e}"),
+        Err(e) => panic!("Failed to check object existence: {}", e),
     }
 
     // Shutdown
@@ -987,7 +987,7 @@ async fn test_get_object_info() -> Result<()> {
             assert_eq!(meta.size, nats_object_meta.size);
             assert_eq!(meta.created_at, nats_object_meta.created_at);
         }
-        Err(e) => panic!("Failed to get object info: {e}"),
+        Err(e) => panic!("Failed to get object info: {}", e),
     }
 
     // Shutdown
@@ -1066,7 +1066,7 @@ async fn test_copy_object_within_container() -> Result<()> {
     })?;
     match res {
         Ok(()) => (), // copy succeeded
-        Err(e) => panic!("Failed to copy object: {e}"),
+        Err(e) => panic!("Failed to copy object: {}", e),
     }
 
     // Ensure the destination blob exists and has the content of the source blob
@@ -1605,7 +1605,7 @@ async fn test_delete_object() -> Result<()> {
     // Verify blob exists before deletion
     match nats_container.get(test_blob_name).await {
         Ok(_) => println!("Blob exists before deletion"),
-        Err(e) => println!("Error checking blob before deletion: {e}"),
+        Err(e) => println!("Error checking blob before deletion: {}", e),
     }
 
     let test_object = ObjectId {
@@ -1626,7 +1626,7 @@ async fn test_delete_object() -> Result<()> {
     })?;
     match res {
         Ok(()) => println!("Delete operation succeeded"),
-        Err(e) => panic!("Failed to delete object: {e}"),
+        Err(e) => panic!("Failed to delete object: {}", e),
     }
 
     // Add a longer delay to allow deletion to complete
@@ -1671,7 +1671,7 @@ async fn test_delete_objects() -> Result<()> {
     let lattice_name = "default";
     let test_blob_body = test_suite_name;
     let test_blob_names = (1..=3)
-        .map(|blob_id| format!("test.blob-{blob_id:0>3}"))
+        .map(|blob_id| format!("test.blob-{:0>3}", blob_id))
         .collect::<Vec<_>>();
 
     let env = TestEnv::new(lattice_name, test_suite_name)

@@ -94,7 +94,7 @@ impl TestEnv {
 
     // Uses the emulator path with custom port: https://github.com/Azure/azure-sdk-for-rust/blob/v2024-04-24/sdk/storage/src/cloud_location.rs#L46-L48
     pub fn azurite_endpoint(address: &str) -> String {
-        format!("http://{address}/devstoreaccount1")
+        format!("http://{}/devstoreaccount1", address)
     }
 
     pub fn azurite_blob_client(&self) -> azure_storage_blobs::prelude::BlobServiceClient {
@@ -111,7 +111,7 @@ impl TestEnv {
     }
 
     pub fn nats_endpoint(address: &str) -> String {
-        format!("nats://{address}")
+        format!("nats://{}", address)
     }
 
     async fn nats_client(&self) -> Result<async_nats::Client> {
@@ -461,7 +461,7 @@ async fn test_list_container_objects() -> Result<()> {
     let test_blob_name = "test.blob";
     let test_blob_body = test_suite_name;
     let mut test_blob_names = (1..=3)
-        .map(|blob_id| format!("{test_blob_name}.{blob_id:0>3}"))
+        .map(|blob_id| format!("{test_blob_name}.{:0>3}", blob_id))
         .collect::<Vec<_>>();
 
     let env = TestEnv::new(lattice_name, test_suite_name)
@@ -780,7 +780,7 @@ async fn test_delete_objects() -> Result<()> {
     let test_blob_name = "test.blob";
     let test_blob_body = test_suite_name;
     let test_blob_names = (1..=3)
-        .map(|blob_id| format!("{test_blob_name}-{blob_id:0>3}"))
+        .map(|blob_id| format!("{test_blob_name}-{:0>3}", blob_id))
         .collect::<Vec<_>>();
 
     let env = TestEnv::new(lattice_name, test_suite_name)

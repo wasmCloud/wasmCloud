@@ -106,7 +106,7 @@ async fn test_http_proxy_without_auth() {
     }
 
     // GET|http://httpbin.org/get|200|wash-lib/0.21.1|-
-    let http_log_entry = format!("GET|{http_endpoint}|200|{DOWNLOAD_CLIENT_USER_AGENT}|-");
+    let http_log_entry = format!("GET|{http_endpoint}|200|{}|-", DOWNLOAD_CLIENT_USER_AGENT);
     assert!(
         stderr.contains(&http_log_entry),
         "Didn't find connection log entry, logs:\n {}",
@@ -173,8 +173,10 @@ async fn test_http_proxy_with_basic_auth() {
     }
 
     // GET|http://httpbin.org/get|200|wash-lib/0.21.1|wasmcloud
-    let http_log_entry =
-        format!("GET|{http_endpoint}|200|{DOWNLOAD_CLIENT_USER_AGENT}|{proxy_username}");
+    let http_log_entry = format!(
+        "GET|{http_endpoint}|200|{}|{proxy_username}",
+        DOWNLOAD_CLIENT_USER_AGENT
+    );
     assert!(
         stderr.contains(&http_log_entry),
         "Didn't find connection log entry, logs:\n {}",

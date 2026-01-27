@@ -1315,7 +1315,7 @@ async fn kill_processes_by_name(process_name: &str) -> Result<()> {
             nix::sys::signal::Signal::SIGKILL,
         ) {
             // Ignore errors here - process might have already terminated
-            eprintln!("Note: Failed to send SIGKILL to process {pid}: {e}");
+            eprintln!("Note: Failed to send SIGKILL to process {}: {}", pid, e);
         }
     }
 
@@ -1338,7 +1338,8 @@ async fn kill_processes_by_name(process_name: &str) -> Result<()> {
     })
     .await
     .context(format!(
-        "Timed out waiting for {process_name} processes to terminate"
+        "Timed out waiting for {} processes to terminate",
+        process_name
     ))?;
 
     Ok(())

@@ -18,12 +18,12 @@ use wasmcloud_control_interface::{
     ProviderAuctionAck, ProviderAuctionRequest, RegistryCredential, ScaleComponentCommand,
     StartProviderCommand, StopHostCommand, StopProviderCommand, UpdateComponentCommand,
 };
-use wasmcloud_core::shutdown_subject;
 use wasmcloud_tracing::context::TraceContextInjector;
 
 use crate::registry::RegistryCredentialExt;
 use crate::wasmbus::{
-    human_friendly_uptime, injector_to_headers, Annotations, Claims, Host, Provider, StoredClaims,
+    event, human_friendly_uptime, injector_to_headers, Annotations, Claims, Host, Provider,
+    StoredClaims,
 };
 use crate::ResourceRef;
 
@@ -32,8 +32,7 @@ use crate::ResourceRef;
 /// This trait is not a part of the `wasmcloud_control_interface` crate yet to allow
 /// for the initial implementation to be done in the `wasmcloud_host` (pre 1.0) crate. This
 /// will likely move to that crate in the future.
-#[async_trait::async_trait]
-pub trait ControlInterfaceServer: Send + Sync {
+pub(crate) trait ControlInterfaceServer {
     /// Handle an auction request for a component. This method should return `Ok(None)` if the host
     /// does not want to respond to the auction request.
     async fn handle_auction_component(
@@ -148,7 +147,6 @@ pub trait ControlInterfaceServer: Send + Sync {
     ) -> anyhow::Result<CtlResponse<wasmcloud_control_interface::Host>>;
 }
 
-#[async_trait::async_trait]
 impl ControlInterfaceServer for Host {
     #[instrument(level = "debug", skip_all)]
     async fn handle_auction_component(
@@ -231,11 +229,14 @@ impl ControlInterfaceServer for Host {
         info!(?timeout, "handling stop host");
 
         self.ready.store(false, Ordering::Relaxed);
+
         self.heartbeat.abort();
+        self.data_watch.abort();
+        self.queue.abort();
+        self.policy_manager.policy_changes.abort();
         let deadline =
             timeout.and_then(|timeout| Instant::now().checked_add(Duration::from_millis(timeout)));
         self.stop_tx.send_replace(deadline);
-
         Ok(CtlResponse::<()>::success(
             "successfully handled stop host".into(),
         ))
@@ -321,10 +322,9 @@ impl ControlInterfaceServer for Host {
                 Ok((wasm, Ok(claims_token))) => (Some(wasm), claims_token, None),
                 Ok((_, Err(e))) => {
                     if let Err(e) = self
-                        .event_publisher
                         .publish_event(
                             "component_scale_failed",
-                            crate::event::component_scale_failed(
+                            event::component_scale_failed(
                                 None,
                                 &annotations,
                                 host_id,
@@ -361,10 +361,9 @@ impl ControlInterfaceServer for Host {
             {
                 error!(%component_ref, %component_id, err = ?e, "failed to scale component");
                 if let Err(e) = self
-                    .event_publisher
                     .publish_event(
                         "component_scale_failed",
-                        crate::event::component_scale_failed(
+                        event::component_scale_failed(
                             claims_token.map(|c| c.claims).as_ref(),
                             &annotations,
                             host_id,
@@ -527,15 +526,9 @@ impl ControlInterfaceServer for Host {
             {
                 error!(provider_ref, provider_id, ?err, "failed to start provider");
                 if let Err(err) = self
-                    .event_publisher
                     .publish_event(
                         "provider_start_failed",
-                        crate::event::provider_start_failed(
-                            provider_ref,
-                            provider_id,
-                            host_id,
-                            &err,
-                        ),
+                        event::provider_start_failed(provider_ref, provider_id, host_id, &err),
                     )
                     .await
                 {
@@ -590,7 +583,10 @@ impl ControlInterfaceServer for Host {
         if let Err(e) = self
             .rpc_nats
             .send_request(
-                shutdown_subject(&self.host_config.lattice, provider_id, "default"),
+                format!(
+                    "wasmbus.rpc.{}.{provider_id}.default.shutdown",
+                    self.host_config.lattice
+                ),
                 req,
             )
             .await
@@ -608,12 +604,11 @@ impl ControlInterfaceServer for Host {
         tasks.abort_all();
 
         info!(provider_id, "provider stopped");
-        self.event_publisher
-            .publish_event(
-                "provider_stopped",
-                crate::event::provider_stopped(annotations, host_id, provider_id, "stop"),
-            )
-            .await?;
+        self.publish_event(
+            "provider_stopped",
+            event::provider_stopped(annotations, host_id, provider_id, "stop"),
+        )
+        .await?;
         Ok(CtlResponse::<()>::success(
             "successfully stopped provider".into(),
         ))
@@ -659,7 +654,7 @@ impl ControlInterfaceServer for Host {
     #[instrument(level = "trace", skip(self))]
     async fn handle_config_get(&self, config_name: &str) -> anyhow::Result<Vec<u8>> {
         trace!(%config_name, "handling get config");
-        if let Some(config_bytes) = self.config_store.get(config_name).await? {
+        if let Some(config_bytes) = self.config_data.get(config_name).await? {
             let config_map: HashMap<String, String> = serde_json::from_slice(&config_bytes)
                 .context("config data should be a map of string -> string")?;
             serde_json::to_vec(&CtlResponse::ok(config_map)).map_err(anyhow::Error::from)
@@ -675,13 +670,12 @@ impl ControlInterfaceServer for Host {
     async fn handle_config_delete(&self, config_name: &str) -> anyhow::Result<CtlResponse<()>> {
         debug!("handle config entry deletion");
 
-        self.config_store
-            .del(config_name)
+        self.config_data
+            .purge(config_name)
             .await
             .context("Unable to delete config data")?;
 
-        self.event_publisher
-            .publish_event("config_deleted", crate::event::config_deleted(config_name))
+        self.publish_event("config_deleted", event::config_deleted(config_name))
             .await?;
 
         Ok(CtlResponse::<()>::success(
@@ -713,13 +707,12 @@ impl ControlInterfaceServer for Host {
             }
         }
 
-        self.event_publisher
-            .publish_event(
-                "labels_changed",
-                crate::event::labels_changed(host_id, HashMap::from_iter(labels.clone())),
-            )
-            .await
-            .context("failed to publish labels_changed event")?;
+        self.publish_event(
+            "labels_changed",
+            event::labels_changed(host_id, HashMap::from_iter(labels.clone())),
+        )
+        .await
+        .context("failed to publish labels_changed event")?;
 
         Ok(CtlResponse::<()>::success("successfully put label".into()))
     }
@@ -742,20 +735,21 @@ impl ControlInterfaceServer for Host {
         };
 
         info!(key, "removed label");
-        self.event_publisher
-            .publish_event(
-                "labels_changed",
-                crate::event::labels_changed(host_id, HashMap::from_iter(labels.clone())),
-            )
-            .await
-            .context("failed to publish labels_changed event")?;
+        self.publish_event(
+            "labels_changed",
+            event::labels_changed(host_id, HashMap::from_iter(labels.clone())),
+        )
+        .await
+        .context("failed to publish labels_changed event")?;
 
         Ok(CtlResponse::<()>::success(
             "successfully deleted label".into(),
         ))
     }
 
-    /// Handle a new link by modifying the relevant source [crate::wasmbus::ComponentSpecification].
+    /// Handle a new link by modifying the relevant source [ComponentSpecification]. Once
+    /// the change is written to the LATTICEDATA store, each host in the lattice (including this one)
+    /// will handle the new specification and update their own internal link maps via [process_component_spec_put].
     #[instrument(level = "debug", skip_all)]
     async fn handle_link_put(&self, request: Link) -> anyhow::Result<CtlResponse<()>> {
         let link_set_result: anyhow::Result<()> = async {
@@ -831,13 +825,6 @@ impl ControlInterfaceServer for Host {
             // Update component specification with the new link
             self.store_component_spec(&source_id, &component_spec)
                 .await?;
-            // NOTE: We rely on the NATS watcher to call update_host_with_spec asynchronously.
-            // Previously, we called it directly here, but this caused a race condition where
-            // self.links would be updated before the NATS watcher processed the change,
-            // preventing provider links from being sent on re-add scenarios.
-            // debug!(source_id, "calling update_host_with_spec directly from handle_link_put");
-            // self.update_host_with_spec(&source_id, &component_spec)
-            //     .await?;
 
             self.put_backwards_compat_provider_link(&request)
                 .await?;
@@ -847,16 +834,14 @@ impl ControlInterfaceServer for Host {
         .await;
 
         if let Err(e) = link_set_result {
-            self.event_publisher
-                .publish_event(
-                    "linkdef_set_failed",
-                    crate::event::linkdef_set_failed(&request, &e),
-                )
-                .await?;
+            self.publish_event(
+                "linkdef_set_failed",
+                event::linkdef_set_failed(&request, &e),
+            )
+            .await?;
             Ok(CtlResponse::error(e.to_string().as_ref()))
         } else {
-            self.event_publisher
-                .publish_event("linkdef_set", crate::event::linkdef_set(&request))
+            self.publish_event("linkdef_set", event::linkdef_set(&request))
                 .await?;
             Ok(CtlResponse::<()>::success("successfully set link".into()))
         }
@@ -910,8 +895,6 @@ impl ControlInterfaceServer for Host {
             // Update component specification with the deleted link
             self.store_component_spec(&source_id, &component_spec)
                 .await?;
-            self.update_host_with_spec(&source_id, &component_spec)
-                .await?;
 
             // Send the link to providers for deletion
             self.del_provider_link(link).await?;
@@ -921,19 +904,18 @@ impl ControlInterfaceServer for Host {
         let deleted_link_target = deleted_link
             .as_ref()
             .map(|link| String::from(link.target()));
-        self.event_publisher
-            .publish_event(
-                "linkdef_deleted",
-                crate::event::linkdef_deleted(
-                    source_id,
-                    deleted_link_target.as_ref(),
-                    link_name,
-                    wit_namespace,
-                    wit_package,
-                    deleted_link.as_ref().map(|link| link.interfaces()),
-                ),
-            )
-            .await?;
+        self.publish_event(
+            "linkdef_deleted",
+            event::linkdef_deleted(
+                source_id,
+                deleted_link_target.as_ref(),
+                link_name,
+                wit_namespace,
+                wit_package,
+                deleted_link.as_ref().map(|link| link.interfaces()),
+            ),
+        )
+        .await?;
 
         Ok(CtlResponse::<()>::success(
             "successfully deleted link".into(),
@@ -979,14 +961,13 @@ impl ControlInterfaceServer for Host {
         // Validate that the data is of the proper type by deserialing it
         serde_json::from_slice::<HashMap<String, String>>(&data)
             .context("config data should be a map of string -> string")?;
-        self.config_store
+        self.config_data
             .put(config_name, data)
             .await
             .context("unable to store config data")?;
         // We don't write it into the cached data and instead let the caching thread handle it as we
         // won't need it immediately.
-        self.event_publisher
-            .publish_event("config_set", crate::event::config_set(config_name))
+        self.publish_event("config_set", event::config_set(config_name))
             .await?;
 
         Ok(CtlResponse::<()>::success("successfully put config".into()))
@@ -1006,7 +987,7 @@ impl ControlInterfaceServer for Host {
             .uptime_seconds(uptime.as_secs())
             .uptime_human(human_friendly_uptime(uptime))
             .version(self.host_config.version.clone())
-            .ctl_host(self.host_config.rpc_nats_url.to_string())
+            .ctl_host(self.host_config.ctl_nats_url.to_string())
             .rpc_host(self.host_config.rpc_nats_url.to_string())
             .lattice(self.host_config.lattice.to_string());
 
