@@ -23,12 +23,13 @@ permissions:
 
 jobs:
   package:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
       - name: Extract tag context
         id: ctx
         run: |
@@ -52,25 +53,58 @@ jobs:
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
           pattern: ${{ inputs.name }}-provider-*
 
-      - run: chmod +x "./artifacts/${{ inputs.name }}-provider-aarch64-apple-darwin/bin/${{ inputs.name }}-provider"
-      - run: chmod +x "./artifacts/${{ inputs.name }}-provider-aarch64-unknown-linux-musl/bin/${{ inputs.name }}-provider"
-      - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-apple-darwin/bin/${{ inputs.name }}-provider"
-      - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-pc-windows-gnu/bin/${{ inputs.name }}-provider.exe"
-      - run: chmod +x "./artifacts/${{ inputs.name }}-provider-x86_64-unknown-linux-musl/bin/${{ inputs.name }}-provider"
+      - name: Prepare provider binaries
+        run: |
+          ls -la artifacts/
 
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+          # Map new artifact names to expected paths
+          mkdir -p provider-bins
+
+          # Linux amd64
+          if [[ -d "artifacts/${{ inputs.name }}-provider-linux-amd64" ]]; then
+            cp "artifacts/${{ inputs.name }}-provider-linux-amd64/bin/${{ inputs.name }}-provider" provider-bins/linux-amd64
+            chmod +x provider-bins/linux-amd64
+          fi
+
+          # Linux aarch64
+          if [[ -d "artifacts/${{ inputs.name }}-provider-linux-aarch64" ]]; then
+            cp "artifacts/${{ inputs.name }}-provider-linux-aarch64/bin/${{ inputs.name }}-provider" provider-bins/linux-aarch64
+            chmod +x provider-bins/linux-aarch64
+          fi
+
+          # macOS amd64
+          if [[ -d "artifacts/${{ inputs.name }}-provider-macos-amd64" ]]; then
+            cp "artifacts/${{ inputs.name }}-provider-macos-amd64/bin/${{ inputs.name }}-provider" provider-bins/macos-amd64
+            chmod +x provider-bins/macos-amd64
+          fi
+
+          # macOS aarch64
+          if [[ -d "artifacts/${{ inputs.name }}-provider-macos-aarch64" ]]; then
+            cp "artifacts/${{ inputs.name }}-provider-macos-aarch64/bin/${{ inputs.name }}-provider" provider-bins/macos-aarch64
+            chmod +x provider-bins/macos-aarch64
+          fi
+
+          # Windows amd64
+          if [[ -d "artifacts/${{ inputs.name }}-provider-windows-amd64" ]]; then
+            cp "artifacts/${{ inputs.name }}-provider-windows-amd64/bin/${{ inputs.name }}-provider.exe" provider-bins/windows-amd64.exe
+          fi
+
+          ls -la provider-bins/
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: wash-x86_64-unknown-linux-musl
+          name: wash-linux-amd64
 
       - run: mv ./bin/wash wash
       - run: chmod +x wash
 
-      - run: |
+      - name: Create provider archive
+        run: |
           if [ "${{ secrets.issuer }}" != '' ]; then
             export WASH_ISSUER_KEY="${{ secrets.issuer }}"
           fi
@@ -81,19 +115,19 @@ jobs:
             export WIT_DIR="crates/provider-${{ inputs.name }}/wit"
           fi
           ./wash par create \
-                --binary "./artifacts/${{ inputs.name }}-provider-x86_64-unknown-linux-musl/bin/${{ inputs.name }}-provider" \
+                --binary "provider-bins/linux-amd64" \
                 --compress \
                 --destination "${{ inputs.name }}.par.gz" \
                 --name "${{ inputs.name }}-provider" \
                 --vendor wasmcloud \
                 --version ${{ steps.ctx.outputs.version }}
-          ./wash par insert --arch aarch64-linux  --binary "./artifacts/${{ inputs.name }}-provider-aarch64-unknown-linux-musl/bin/${{ inputs.name }}-provider" "${{ inputs.name }}.par.gz"
-          ./wash par insert --arch aarch64-macos  --binary "./artifacts/${{ inputs.name }}-provider-aarch64-apple-darwin/bin/${{ inputs.name }}-provider" "${{ inputs.name }}.par.gz"
-          ./wash par insert --arch x86_64-macos   --binary "./artifacts/${{ inputs.name }}-provider-x86_64-apple-darwin/bin/${{ inputs.name }}-provider" "${{ inputs.name }}.par.gz"
-          ./wash par insert --arch x86_64-windows --binary "./artifacts/${{ inputs.name }}-provider-x86_64-pc-windows-gnu/bin/${{ inputs.name }}-provider.exe" "${{ inputs.name }}.par.gz"
+          ./wash par insert --arch aarch64-linux  --binary "provider-bins/linux-aarch64" "${{ inputs.name }}.par.gz"
+          ./wash par insert --arch aarch64-macos  --binary "provider-bins/macos-aarch64" "${{ inputs.name }}.par.gz"
+          ./wash par insert --arch x86_64-macos   --binary "provider-bins/macos-amd64" "${{ inputs.name }}.par.gz"
+          ./wash par insert --arch x86_64-windows --binary "provider-bins/windows-amd64.exe" "${{ inputs.name }}.par.gz"
           ./wash par inspect "${{ inputs.name }}.par.gz"
 
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ inputs.name }}.par.gz
           path: ${{ inputs.name }}.par.gz

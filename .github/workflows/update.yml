@@ -1,4 +1,4 @@
-name: nix-flake-update
+name: nix-update
 
 on:
   schedule:
@@ -8,12 +8,16 @@ on:
 permissions:
   contents: read
 
+# This workflow updates Nix dependencies and OCI image bases.
+# While Nix is no longer used in CI for building, we keep these updates
+# for developers who use Nix for local development.
+
 jobs:
   nix-flake-update:
     if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: rvolosatovs/nix-flake-update-action@7249aa67d87e2a195c376fe34c230af0862a9900
+      - uses: rvolosatovs/nix-flake-update-action@7249aa67d87e2a195c376fe34c230af0862a9900 # v1
         with:
           app-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
@@ -25,17 +29,17 @@ jobs:
 
   oci-base-update:
     if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - id: app-token
-        uses: actions/create-github-app-token@67018539274d69449ef7c02e8e71183d1719ab42 # v2.1.4
+        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
         with:
           app-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+      - uses: DeterminateSystems/nix-installer-action@e50d5f73bfe71c2dd0aa4244571c1403a356cf96 # v17
 
       - name: Update OCI image bases
         id: update
@@ -48,7 +52,7 @@ jobs:
             echo "updated=true" >> $GITHUB_OUTPUT
           fi
 
-      - uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
+      - uses: peter-evans/create-pull-request@5e914681df9dc83aa4e4905692ca88beb2f9e91f # v7.0.5
         if: ${{ steps.update.outputs.updated == 'true' }}
         with:
           assignees: rvolosatovs
@@ -57,7 +61,7 @@ jobs:
           body: |
             ## Description
 
-            Automated OCI image base update
+            Automated OCI image base update for local Nix development
           branch: build/update-oci-bases
           commit-message: 'build(nix): update OCI image bases'
           delete-branch: true

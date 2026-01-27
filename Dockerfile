@@ -10,8 +10,14 @@ ARG BIN=$BIN_ARM64
 
 FROM base-$TARGETARCH
 
-# Copy application binary from disk
-COPY ${BIN} /usr/local/bin/wasmcloud
+ARG BIN_NAME=wasmcloud
 
-# Run the application
-ENTRYPOINT ["/usr/local/bin/wasmcloud"]
+# Copy application binary from disk
+COPY ${BIN} /usr/local/bin/${BIN_NAME}
+
+# Create a fixed symlink so ENTRYPOINT can use exec form without variable expansion.
+# Docker's exec form [".."] doesn't expand variables, so we use a consistent path.
+# Note: argv[0] will be "/usr/local/bin/app" instead of the actual binary name.
+RUN ln -sf /usr/local/bin/${BIN_NAME} /usr/local/bin/app
+
+ENTRYPOINT ["/usr/local/bin/app"]

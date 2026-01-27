@@ -1,0 +1,257 @@
+name: build-bin
+
+on:
+  workflow_call:
+    inputs:
+      bin:
+        description: Binary name (e.g., wasmcloud, wash)
+        required: true
+        type: string
+      crate:
+        description: Crate name if different from bin (e.g., wasmcloud for provider binaries)
+        required: false
+        type: string
+        default: ''
+      features:
+        description: Cargo features to enable (comma-separated)
+        required: false
+        type: string
+        default: ''
+      build-windows:
+        description: Whether to build Windows binaries
+        required: false
+        type: boolean
+        default: true
+      build-windows-msvc:
+        description: Build Windows MSVC target instead of GNU
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      version:
+        description: The version being built
+        value: ${{ jobs.build.outputs.version }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: ${{ matrix.config.target }}
+    runs-on: ${{ matrix.config.os }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            suffix: linux-amd64
+            use-zigbuild: true
+
+          - os: ubuntu-24.04
+            target: aarch64-unknown-linux-musl
+            suffix: linux-aarch64
+            use-zigbuild: true
+
+          - os: macos-15
+            target: x86_64-apple-darwin
+            suffix: macos-amd64
+            use-zigbuild: false
+
+          - os: macos-15
+            target: aarch64-apple-darwin
+            suffix: macos-aarch64
+            use-zigbuild: false
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            # Extract version from tag, handling various tag formats
+            version="${GITHUB_REF#refs/tags/}"
+            # Remove common prefixes like wash-v, v, etc.
+            version="${version#*-v}"
+            version="${version#v}"
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=canary" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Zig
+        if: ${{ matrix.config.use-zigbuild }}
+        uses: mlugg/setup-zig@7bbbb4f4e81dfca9cf188ea8e0f2dfa87e05c2e1 # v2.0.1
+        with:
+          version: 0.14.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.config.target }}
+
+      - name: Install cargo-zigbuild
+        if: ${{ matrix.config.use-zigbuild }}
+        uses: taiki-e/install-action@5c3e7b4b33e3543e3ffe25d6a6db08a90b06b0af # v2.52.7
+        with:
+          tool: cargo-zigbuild
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          shared-key: ${{ matrix.config.target }}-shared-cache
+
+      - name: Build binary
+        run: |
+          crate="${{ inputs.crate }}"
+          if [[ -z "${crate}" ]]; then
+            crate="${{ inputs.bin }}"
+          fi
+
+          features="${{ inputs.features }}"
+          features_arg=""
+          if [[ -n "${features}" ]]; then
+            features_arg="--features ${features}"
+          fi
+
+          if [[ "${{ matrix.config.use-zigbuild }}" == "true" ]]; then
+            cargo zigbuild --release -p "${crate}" --bin "${{ inputs.bin }}" --target ${{ matrix.config.target }} ${features_arg}
+          else
+            cargo build --release -p "${crate}" --bin "${{ inputs.bin }}" --target ${{ matrix.config.target }} ${features_arg}
+          fi
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p artifact/bin
+          cp "target/${{ matrix.config.target }}/release/${{ inputs.bin }}" artifact/bin/
+          chmod +x artifact/bin/${{ inputs.bin }}
+
+      - name: Test binary
+        if: ${{ matrix.config.target == 'x86_64-unknown-linux-musl' || matrix.config.target == 'aarch64-apple-darwin' }}
+        run: ./artifact/bin/${{ inputs.bin }} --version
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ inputs.bin }}-${{ matrix.config.suffix }}
+          if-no-files-found: error
+          path: artifact
+
+  build-windows:
+    name: ${{ inputs.build-windows-msvc && 'x86_64-pc-windows-msvc' || 'x86_64-pc-windows-gnu' }}
+    if: ${{ inputs.build-windows }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # master
+        with:
+          toolchain: stable
+          targets: ${{ inputs.build-windows-msvc && 'x86_64-pc-windows-msvc' || 'x86_64-pc-windows-gnu' }}
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          shared-key: windows-shared-cache
+
+      - name: Build binary
+        shell: bash
+        run: |
+          crate="${{ inputs.crate }}"
+          if [[ -z "${crate}" ]]; then
+            crate="${{ inputs.bin }}"
+          fi
+
+          features="${{ inputs.features }}"
+          features_arg=""
+          if [[ -n "${features}" ]]; then
+            features_arg="--features ${features}"
+          fi
+
+          target="${{ inputs.build-windows-msvc && 'x86_64-pc-windows-msvc' || 'x86_64-pc-windows-gnu' }}"
+          cargo build --release -p "${crate}" --bin "${{ inputs.bin }}" --target "${target}" ${features_arg}
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          mkdir -p artifact/bin
+          target="${{ inputs.build-windows-msvc && 'x86_64-pc-windows-msvc' || 'x86_64-pc-windows-gnu' }}"
+          cp "target/${target}/release/${{ inputs.bin }}.exe" artifact/bin/
+
+      - name: Test binary
+        run: .\artifact\bin\${{ inputs.bin }}.exe --version
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ inputs.bin }}-windows-amd64
+          if-no-files-found: error
+          path: artifact
+
+  build-universal-darwin:
+    name: universal-darwin
+    needs: build
+    runs-on: macos-15
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ inputs.bin }}-macos-aarch64
+          path: aarch64
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ inputs.bin }}-macos-amd64
+          path: x86_64
+
+      - name: Create universal binary
+        run: |
+          mkdir -p artifact/bin
+          lipo -create ./aarch64/bin/${{ inputs.bin }} ./x86_64/bin/${{ inputs.bin }} -output ./artifact/bin/${{ inputs.bin }}
+          chmod +x ./artifact/bin/${{ inputs.bin }}
+
+      - name: Test universal binary
+        run: ./artifact/bin/${{ inputs.bin }} --version
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ inputs.bin }}-macos-universal
+          if-no-files-found: error
+          path: artifact
+
+  test-linux-aarch64:
+    name: test-linux-aarch64
+    needs: build
+    # Requires GitHub Actions ARM runner (available for public repos and enterprise)
+    runs-on: ubuntu-24.04-arm
+    continue-on-error: true
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ inputs.bin }}-linux-aarch64
+      - run: chmod +x ./bin/${{ inputs.bin }}
+      - run: ./bin/${{ inputs.bin }} --version
+
+  test-macos-x86_64:
+    name: test-macos-x86_64
+    needs: build-universal-darwin
+    runs-on: macos-13
+    strategy:
+      matrix:
+        artifact:
+          - macos-amd64
+          - macos-universal
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ inputs.bin }}-${{ matrix.artifact }}
+      - run: chmod +x ./bin/${{ inputs.bin }}
+      - run: ./bin/${{ inputs.bin }} --version
+      - name: Verify codesign (informational)
+        run: codesign --verify ./bin/${{ inputs.bin }} || echo "Binary is not codesigned (expected for CI builds)"

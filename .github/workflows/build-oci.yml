@@ -1,0 +1,183 @@
+name: build-oci
+
+on:
+  workflow_call:
+    inputs:
+      bin:
+        description: Binary name (e.g., wasmcloud, wash, secrets-nats-kv)
+        required: true
+        type: string
+      tag-prefix:
+        description: Tag prefix for version extraction (e.g., "wash-" for wash-v1.0.0 tags)
+        required: false
+        type: string
+        default: ''
+      artifact-prefix:
+        description: Artifact name prefix (defaults to bin name)
+        required: false
+        type: string
+        default: ''
+      dockerfile:
+        description: Path to Dockerfile (defaults to ./Dockerfile)
+        required: false
+        type: string
+        default: './Dockerfile'
+    secrets:
+      DOCKERHUB_PUSH_USER:
+        description: Username for DockerHub
+        required: false
+      DOCKERHUB_PUSH_PASSWORD:
+        description: Password for DockerHub
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    name: Build and push OCI images
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Extract context
+        id: ctx
+        run: |
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+          # Determine version from tag or use canary
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            tag_name="${GITHUB_REF#refs/tags/}"
+            # Remove prefix and v
+            version="${tag_name#${{ inputs.tag-prefix }}v}"
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+
+            # Check if pre-release
+            if [[ "${version}" == *"-"* ]]; then
+              echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "version=canary" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Determine artifact prefix
+        id: artifact
+        run: |
+          prefix="${{ inputs.artifact-prefix }}"
+          if [[ -z "${prefix}" ]]; then
+            prefix="${{ inputs.bin }}"
+          fi
+          echo "prefix=${prefix}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: ./artifacts
+          pattern: '${{ steps.artifact.outputs.prefix }}-linux-*'
+
+      - name: Prepare container artifacts
+        run: |
+          # List what we have
+          ls -la ./artifacts/
+
+          # Prepare AMD64 binary
+          amd64_dir=$(ls -d ./artifacts/*-linux-amd64 2>/dev/null | head -1)
+          if [[ -n "${amd64_dir}" ]]; then
+            mkdir -p ./artifacts/linux-amd64
+            cp "${amd64_dir}/bin/${{ inputs.bin }}" ./artifacts/linux-amd64/${{ inputs.bin }}
+            chmod +x ./artifacts/linux-amd64/${{ inputs.bin }}
+          fi
+
+          # Prepare ARM64 binary
+          arm64_dir=$(ls -d ./artifacts/*-linux-aarch64 2>/dev/null | head -1)
+          if [[ -n "${arm64_dir}" ]]; then
+            mkdir -p ./artifacts/linux-arm64
+            cp "${arm64_dir}/bin/${{ inputs.bin }}" ./artifacts/linux-arm64/${{ inputs.bin }}
+            chmod +x ./artifacts/linux-arm64/${{ inputs.bin }}
+          fi
+
+          ls -la ./artifacts/linux-*/
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to DockerHub
+        if: ${{ vars.PUSH_TO_DOCKERHUB == 'true' }}
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        continue-on-error: true
+        with:
+          username: ${{ secrets.DOCKERHUB_PUSH_USER }}
+          password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
+
+      - name: Generate Docker tags
+        id: tags
+        env:
+          PUSH_TO_DOCKERHUB: ${{ vars.PUSH_TO_DOCKERHUB }}
+        run: |
+          owner="${{ steps.ctx.outputs.owner }}"
+          version="${{ steps.ctx.outputs.version }}"
+          sha="${{ github.sha }}"
+          sha_short="${{ steps.ctx.outputs.sha_short }}"
+          bin="${{ inputs.bin }}"
+
+          # Always tag with SHA
+          tags="ghcr.io/${owner}/${bin}:${sha}"
+          tags="${tags},ghcr.io/${owner}/${bin}:${sha_short}"
+
+          if [[ "${{ steps.ctx.outputs.is_release }}" == "true" ]]; then
+            # Version tag
+            tags="${tags},ghcr.io/${owner}/${bin}:${version}"
+
+            # DockerHub tags (only if PUSH_TO_DOCKERHUB var is set)
+            if [[ "${PUSH_TO_DOCKERHUB}" == "true" ]]; then
+              tags="${tags},${owner}/${bin}:${version}"
+            fi
+
+            # Latest tag (only for non-prerelease)
+            if [[ "${{ steps.ctx.outputs.prerelease }}" != "true" ]]; then
+              tags="${tags},ghcr.io/${owner}/${bin}:latest"
+              if [[ "${PUSH_TO_DOCKERHUB}" == "true" ]]; then
+                tags="${tags},${owner}/${bin}:latest"
+              fi
+            fi
+          else
+            # Canary tag for main branch
+            if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+              tags="${tags},ghcr.io/${owner}/${bin}:canary"
+              if [[ "${PUSH_TO_DOCKERHUB}" == "true" ]]; then
+                tags="${tags},${owner}/${bin}:canary"
+              fi
+            fi
+          fi
+
+          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          push: true
+          platforms: linux/amd64,linux/arm64
+          context: ./
+          file: ${{ inputs.dockerfile }}
+          build-args: |
+            BIN_ARM64=./artifacts/linux-arm64/${{ inputs.bin }}
+            BIN_AMD64=./artifacts/linux-amd64/${{ inputs.bin }}
+            BIN_NAME=${{ inputs.bin }}
+          tags: ${{ steps.tags.outputs.tags }}
+
+      - name: Test images
+        run: |
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.bin }}:${{ steps.ctx.outputs.sha_short }} --version

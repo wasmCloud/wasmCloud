@@ -1,0 +1,81 @@
+name: wit-publish
+
+on:
+  push:
+    tags:
+      - 'wit-wasmcloud-identity-v*'
+      - 'wit-wasmcloud-bus-v*'
+      - 'wit-wasmcloud-postgres-v*'
+      - 'wit-wasmcloud-secrets-v*'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          sparse-checkout: |
+            wit
+            .github
+
+      - name: Extract tag context
+        id: ctx
+        run: |
+          tag="${GITHUB_REF_NAME}"
+
+          # Determine package name and directory from tag
+          if [[ "$tag" == wit-wasmcloud-identity-v* ]]; then
+            package_name="wasmcloud-identity"
+            package_dir="identity"
+            version="${tag#wit-wasmcloud-identity-v}"
+          elif [[ "$tag" == wit-wasmcloud-bus-v* ]]; then
+            package_name="wasmcloud-bus"
+            package_dir="bus"
+            version="${tag#wit-wasmcloud-bus-v}"
+          elif [[ "$tag" == wit-wasmcloud-postgres-v* ]]; then
+            package_name="wasmcloud-postgres"
+            package_dir="postgres"
+            version="${tag#wit-wasmcloud-postgres-v}"
+          elif [[ "$tag" == wit-wasmcloud-secrets-v* ]]; then
+            package_name="wasmcloud-secrets"
+            package_dir="secrets"
+            version="${tag#wit-wasmcloud-secrets-v}"
+          else
+            echo "Unknown tag format: $tag"
+            exit 1
+          fi
+
+          echo "package_name=${package_name}" >> "$GITHUB_OUTPUT"
+          echo "package_dir=${package_dir}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tarball=wit-${package_name}-${version}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "Publishing ${package_name} version ${version} from wit/${package_dir}"
+
+      - uses: ./.github/actions/configure-wkg
+        with:
+          oci-username: ${{ github.repository_owner }}
+          oci-password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build WIT package
+        working-directory: wit/${{ steps.ctx.outputs.package_dir }}
+        run: wkg wit build -o package.wasm
+
+      - name: Push to GHCR
+        working-directory: wit/${{ steps.ctx.outputs.package_dir }}
+        run: wkg publish package.wasm
+
+      - name: Package tarball for release
+        run: |
+          tar -cvzf ${{ steps.ctx.outputs.tarball }} -C wit ${{ steps.ctx.outputs.package_dir }}/wit
+
+      - name: Release
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        with:
+          files: ${{ steps.ctx.outputs.tarball }}
+          make_latest: 'false'
