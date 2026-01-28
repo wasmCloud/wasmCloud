@@ -50,7 +50,7 @@ clap = { workspace = true, features = [
     "std",
     "string",
 ], optional = true }
-clap_complete = { workspace = true }
+clap_complete = { workspace = true, features = ["unstable-dynamic"] }
 clap-markdown = { workspace = true }
 cloudevents-sdk = { workspace = true }
 command-group = { workspace = true, features = ["with-tokio"] }

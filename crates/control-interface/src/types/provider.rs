@@ -12,7 +12,7 @@ use crate::Result;
 pub struct ProviderDescription {
     /// Provider's unique identifier
     #[serde(default)]
-    pub(crate) id: String,
+    pub id: String,
     /// Image reference for this provider, if applicable
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) image_ref: Option<String>,
