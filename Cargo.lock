@@ -8625,6 +8625,7 @@ dependencies = [
 name = "wascap"
 version = "0.16.1"
 dependencies = [
+ "anyhow",
  "data-encoding",
  "humantime",
  "nkeys",
