@@ -251,8 +251,13 @@ impl Provider {
                                         "component.ref",
                                         Arc::clone(&component.image_reference),
                                     ),
+                                    KeyValue::new("component.id", Arc::clone(&component.id)),
                                     KeyValue::new("lattice", Arc::clone(&lattice_id)),
                                     KeyValue::new("host", Arc::clone(&host_id)),
+                                    KeyValue::new(
+                                        "export.operation",
+                                        "wasi:http/incoming-handler.handle",
+                                    ),
                                 ],
                             },
                             req,
