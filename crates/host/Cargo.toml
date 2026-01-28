@@ -47,6 +47,7 @@ tokio = { workspace = true, features = [
 ] }
 tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true, features = ["net", "time"] }
+tokio-util = { workspace = true, features = ["time"]}
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 ulid = { workspace = true, features = ["std"] }

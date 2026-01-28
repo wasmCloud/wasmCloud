@@ -37,6 +37,9 @@ pub mod store;
 /// [crate::wasmbus::Host] implementation
 pub mod wasmbus;
 
+/// [crate::cache::Cache] trait for caching data
+pub mod cache;
+
 /// experimental workload identity implementation
 pub mod workload_identity;
 
