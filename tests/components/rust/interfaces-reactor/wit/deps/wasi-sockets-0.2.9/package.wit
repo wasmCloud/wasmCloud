@@ -1,7 +1,10 @@
-package wasi:sockets@0.2.2;
+package wasi:sockets@0.2.9;
 
 @since(version = 0.2.0)
 interface network {
+  @unstable(feature = network-error-code)
+  use wasi:io/error@0.2.9.{error};
+
   /// An opaque resource that represents access to (a subset of) the network.
   /// This enables context-based security for networking.
   /// There is no need for this to map 1:1 to a physical network interface.
@@ -128,6 +131,19 @@ interface network {
     ipv4(ipv4-socket-address),
     ipv6(ipv6-socket-address),
   }
+
+  /// Attempts to extract a network-related `error-code` from the stream
+  /// `error` provided.
+  ///
+  /// Stream operations which return `stream-error::last-operation-failed`
+  /// have a payload with more information about the operation that failed.
+  /// This payload can be passed through to this function to see if there's
+  /// network-related information about the error to return.
+  ///
+  /// Note that this function is fallible because not all stream-related
+  /// errors are network-related errors.
+  @unstable(feature = network-error-code)
+  network-error-code: func(err: borrow<error>) -> option<error-code>;
 }
 
 /// This interface provides a value-export of the default network handle..
@@ -144,7 +160,7 @@ interface instance-network {
 @since(version = 0.2.0)
 interface ip-name-lookup {
   @since(version = 0.2.0)
-  use wasi:io/poll@0.2.2.{pollable};
+  use wasi:io/poll@0.2.9.{pollable};
   @since(version = 0.2.0)
   use network.{network, error-code, ip-address};
 
@@ -200,11 +216,11 @@ interface ip-name-lookup {
 @since(version = 0.2.0)
 interface tcp {
   @since(version = 0.2.0)
-  use wasi:io/streams@0.2.2.{input-stream, output-stream};
+  use wasi:io/streams@0.2.9.{input-stream, output-stream};
   @since(version = 0.2.0)
-  use wasi:io/poll@0.2.2.{pollable};
+  use wasi:io/poll@0.2.9.{pollable};
   @since(version = 0.2.0)
-  use wasi:clocks/monotonic-clock@0.2.2.{duration};
+  use wasi:clocks/monotonic-clock@0.2.9.{duration};
   @since(version = 0.2.0)
   use network.{network, error-code, ip-socket-address, ip-address-family};
 
@@ -542,11 +558,11 @@ interface tcp {
     /// Initiate a graceful shutdown.
     ///
     /// - `receive`: The socket is not expecting to receive any data from
-    /// the peer. The `input-stream` associated with this socket will be
-    /// closed. Any data still in the receive queue at time of calling
-    /// this method will be discarded.
+    ///   the peer. The `input-stream` associated with this socket will be
+    ///   closed. Any data still in the receive queue at time of calling
+    ///   this method will be discarded.
     /// - `send`: The socket has no more data to send to the peer. The `output-stream`
-    /// associated with this socket will be closed and a FIN packet will be sent.
+    ///   associated with this socket will be closed and a FIN packet will be sent.
     /// - `both`: Same effect as `receive` & `send` combined.
     ///
     /// This function is idempotent; shutting down a direction more than once
@@ -601,7 +617,7 @@ interface tcp-create-socket {
 @since(version = 0.2.0)
 interface udp {
   @since(version = 0.2.0)
-  use wasi:io/poll@0.2.2.{pollable};
+  use wasi:io/poll@0.2.9.{pollable};
   @since(version = 0.2.0)
   use network.{network, error-code, ip-socket-address, ip-address-family};
 
@@ -685,11 +701,11 @@ interface udp {
     /// The POSIX equivalent in pseudo-code is:
     /// ```text
     /// if (was previously connected) {
-      /// connect(s, AF_UNSPEC)
-      /// }
+    /// 	connect(s, AF_UNSPEC)
+    /// }
     /// if (remote_address is Some) {
-      /// connect(s, remote_address)
-      /// }
+    /// 	connect(s, remote_address)
+    /// }
     /// ```
     ///
     /// Unlike in POSIX, the socket must already be explicitly bound.
@@ -909,21 +925,21 @@ interface udp-create-socket {
 @since(version = 0.2.0)
 world imports {
   @since(version = 0.2.0)
+  import wasi:io/error@0.2.9;
+  @since(version = 0.2.0)
   import network;
   @since(version = 0.2.0)
   import instance-network;
   @since(version = 0.2.0)
-  import wasi:io/poll@0.2.2;
+  import wasi:io/poll@0.2.9;
   @since(version = 0.2.0)
   import udp;
   @since(version = 0.2.0)
   import udp-create-socket;
   @since(version = 0.2.0)
-  import wasi:io/error@0.2.2;
+  import wasi:io/streams@0.2.9;
   @since(version = 0.2.0)
-  import wasi:io/streams@0.2.2;
-  @since(version = 0.2.0)
-  import wasi:clocks/monotonic-clock@0.2.2;
+  import wasi:clocks/monotonic-clock@0.2.9;
   @since(version = 0.2.0)
   import tcp;
   @since(version = 0.2.0)
