@@ -229,7 +229,7 @@ anyhow = { version = "1", default-features = false }
 assert-json-diff = { version = "2", default-features = false }
 astral-tokio-tar = { version = "0.5.6", default-features = false }
 async-compression = { version = "0.4", default-features = false }
-async-nats = { version = "0.45", default-features = false }
+async-nats = { version = "0.41", default-features = false }
 async_zip = { version = "0.0.18", default-features = false }
 async-trait = { version = "0.1", default-features = false }
 aws-config = { version = "1.6", default-features = false }
@@ -400,9 +400,9 @@ wasmcloud-secrets-types = { version = "^0.8.0", path = "./crates/secrets-types",
 wasmcloud-test-util = { version = "^0.19.0", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "^0.16.0", path = "./crates/tracing", default-features = false }
 wasmparser = { version = "0.241", default-features = false }
-wasmtime = { version = "40.0.0", default-features = false }
-wasmtime-wasi = { version = "40.0.0", default-features = false }
-wasmtime-wasi-http = { version = "40.0.0", default-features = false }
+wasmtime = { version = "38.0.4", default-features = false }
+wasmtime-wasi = { version = "38.0.4", default-features = false }
+wasmtime-wasi-http = { version = "38.0.4", default-features = false }
 wasmtime-wit-bindgen = { version = "38.0.4", default-features = false }
 wat = { version = "1", default-features = false }
 webpki-roots = { version = "1.0", default-features = false }
@@ -418,8 +418,8 @@ wrpc-interface-http = { version = "0.34", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.30", default-features = false }
 wrpc-transport = { version = "0.28", default-features = false }
 wrpc-transport-nats = { version = "0.29.0", default-features = false, features = [
-  "async-nats-0_39",
-] }
+  "async-nats-0_41",
+]}
 
 [package.metadata.cargo-machete]
 ignored = ["wasmcloud-provider-lattice-controller", "wasmcloud-provider-sdk"]
