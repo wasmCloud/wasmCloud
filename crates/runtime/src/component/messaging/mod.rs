@@ -22,7 +22,7 @@ where
         msg: wrpc::wasmcloud::messaging0_2_0::types::BrokerMessage,
     ) -> anyhow::Result<Result<(), String>> {
         // Set the parent of the current context to the span passed in
-        Span::current().set_parent(cx.deref().context());
+        let _ = Span::current().set_parent(cx.deref().context());
         let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
 
         // If wasmcloud:messaging@0.3.0 is enabled and we can instantiate the 0.3.0 bindings,

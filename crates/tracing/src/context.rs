@@ -155,5 +155,5 @@ pub fn get_span_context(trace_context: &TraceContext) -> opentelemetry::Context 
 #[allow(clippy::module_name_repetitions)]
 pub fn attach_span_context(trace_context: &TraceContext) {
     let parent_ctx = get_span_context(trace_context);
-    Span::current().set_parent(parent_ctx);
+    let _ = Span::current().set_parent(parent_ctx);
 }

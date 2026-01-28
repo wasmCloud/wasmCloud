@@ -141,7 +141,7 @@ impl crate::TryFrom<HeaderMap> for wasi::http::types::Fields {
     fn try_from(headers: HeaderMap) -> Result<Self, Self::Error> {
         let fields = wasi::http::types::Fields::new();
         for (name, value) in &headers {
-            fields.append(&name.to_string(), &value.as_bytes().to_vec())?;
+            fields.append(name.as_ref(), value.as_bytes())?;
         }
         Ok(fields)
     }

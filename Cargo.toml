@@ -229,7 +229,9 @@ anyhow = { version = "1", default-features = false }
 assert-json-diff = { version = "2", default-features = false }
 astral-tokio-tar = { version = "0.5.6", default-features = false }
 async-compression = { version = "0.4", default-features = false }
-async-nats = { version = "0.41", default-features = false }
+# NOTE: async-nats cannot be updated until wadm-client and wrpc-transport-nats
+# can agree on a version
+async-nats = { version = "0.39", default-features = false }
 async_zip = { version = "0.0.18", default-features = false }
 async-trait = { version = "0.1", default-features = false }
 aws-config = { version = "1.6", default-features = false }
@@ -237,13 +239,13 @@ aws-sdk-s3 = { version = "=1.102", default-features = false }                   
 aws-smithy-runtime = { version = "1.8", default-features = false }
 axum = { version = "0.8", default-features = false }
 axum-extra = { version = "0.12", default-features = false }
-axum-server = { version = "0.8", default-features = false }
+axum-server = { version = "0.7.3", default-features = false }
 azure_core = { version = "0.22", default-features = false }
 azure_storage = { version = "0.21", default-features = false }
 azure_storage_blobs = { version = "0.21", default-features = false }
 base64 = { version = "0.22", default-features = false }
 bigdecimal = { version = "0.4", default-features = false }
-bit-vec = { version = "0.8", default-features = false }
+bit-vec = { version = "0.6.3", default-features = false }
 bytes = { version = "1", default-features = false }
 cap-std = { version = "3", default-features = false }
 cargo_metadata = { version = "0.23", default-features = false }
@@ -326,8 +328,8 @@ serde_with = { version = "3", default-features = false }
 serde_yaml = { version = "0.9", default-features = false }
 serial_test = { version = "3", default-features = false }
 sha2 = { version = "0.10", default-features = false }
-spiffe = { version = "0.9", default-features = false }
-spire-api = { version = "0.5", default-features = false }
+spiffe = { version = "0.6", default-features = false }
+spire-api = { version = "0.3.6", default-features = false }
 sysinfo = { version = "0.37", default-features = false }
 tempfile = { version = "3", default-features = false }
 term-table = { version = "=1.4.0", default-features = false }
@@ -367,7 +369,7 @@ wadm = { version = "0.21", default-features = false }
 wadm-client = { version = "0.10", default-features = false }
 wadm-types = { version = "0.8.3", default-features = false }
 walkdir = { version = "2", default-features = false }
-warp = { version = "0.4", default-features = false }
+warp = { version = "0.3", default-features = false }
 wascap = { version = "^0.16.0", path = "./crates/wascap", default-features = false }
 wash = { version = "0", path = "./crates/wash", default-features = false }
 wasi = { version = "0.14.7", default-features = false }
@@ -418,7 +420,7 @@ wrpc-interface-http = { version = "0.34", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.30", default-features = false }
 wrpc-transport = { version = "0.28", default-features = false }
 wrpc-transport-nats = { version = "0.29.0", default-features = false, features = [
-  "async-nats-0_41",
+  "async-nats-0_39",
 ]}
 
 [package.metadata.cargo-machete]

@@ -143,7 +143,7 @@ pub fn msgpack_to_json_val(msg: Vec<u8>, bin_str: char) -> serde_json::Value {
     }
 }
 
-pub fn configure_table_style(table: &mut Table<'_>, num_rows: usize) {
+pub fn configure_table_style(table: &mut Table, num_rows: usize) {
     table.style = empty_table_style();
     table.separate_rows = false;
 

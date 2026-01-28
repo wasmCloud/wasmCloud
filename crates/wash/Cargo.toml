@@ -139,7 +139,7 @@ wasmtime = { workspace = true, optional = true, features = [
 ] }
 wasmtime-wasi = { workspace = true, optional = true }
 wasmtime-wasi-http = { workspace = true, features = ["default-send-request"], optional = true }
-which = { workspace = true }
+which = { workspace = true, features = [ "real-sys" ] }
 wit-bindgen-wrpc = { workspace = true }
 wit-component = { workspace = true }
 wit-parser = { workspace = true }

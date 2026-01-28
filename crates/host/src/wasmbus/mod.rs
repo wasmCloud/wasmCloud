@@ -236,7 +236,7 @@ impl wrpc_transport::Serve for WrpcServer {
                                 .collect::<Vec<_>>()
                         })
                         .collect::<Vec<(String, String)>>();
-                    span.set_parent(wasmcloud_tracing::context::get_span_context(&trace_context));
+                    let _ = span.set_parent(wasmcloud_tracing::context::get_span_context(&trace_context));
                 }
 
                     let PolicyResponse {

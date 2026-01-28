@@ -20,7 +20,7 @@ use wasmcloud_provider_sdk::core::LinkName;
 use wasmcloud_provider_sdk::provider::WrpcClient;
 use wasmcloud_provider_sdk::{get_connection, HostData, LinkConfig, LinkDeleteInfo, Provider};
 
-use crate::{build_request, get_cors_layer, get_tcp_listener, invoke_component};
+use crate::{build_request, get_cors_layer, get_tcp_listener, invoke_component, axum_deprecated};
 
 /// Lookup for handlers by socket
 ///
@@ -215,7 +215,7 @@ async fn handle_request(
         scheme,
         handlers_by_socket,
     }): extract::State<RequestContext>,
-    axum_extra::extract::Host(authority): axum_extra::extract::Host,
+    axum_deprecated::Host(authority): axum_deprecated::Host,
     request: extract::Request,
 ) -> impl axum::response::IntoResponse {
     let (component_id, wrpc) = {

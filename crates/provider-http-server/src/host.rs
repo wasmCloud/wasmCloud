@@ -22,8 +22,8 @@ use wasmcloud_provider_sdk::provider::WrpcClient;
 use wasmcloud_provider_sdk::{get_connection, HostData, LinkConfig, LinkDeleteInfo, Provider};
 
 use crate::{
-    build_request, get_cors_layer, get_tcp_listener, invoke_component, load_settings,
-    ServiceSettings,
+    axum_deprecated, build_request, get_cors_layer, get_tcp_listener, invoke_component,
+    load_settings, ServiceSettings,
 };
 
 /// This struct holds both the forward and reverse mappings for host-based routing
@@ -101,8 +101,9 @@ impl HttpServerProvider {
                 .await
                 .context("failed to construct TLS config")?;
 
+            let srv = axum_server::from_tcp_rustls(listener, tls);
             tokio::spawn(async move {
-                if let Err(e) = axum_server::from_tcp_rustls(listener, tls)
+                if let Err(e) = srv
                     .handle(task_handle)
                     .serve(
                         service
@@ -121,8 +122,9 @@ impl HttpServerProvider {
         } else {
             debug!(?addr, "bind HTTP listener");
 
+            let srv = axum_server::from_tcp(listener);
             tokio::spawn(async move {
-                if let Err(e) = axum_server::from_tcp(listener)
+                if let Err(e) = srv
                     .handle(task_handle)
                     .serve(
                         service
@@ -240,7 +242,7 @@ async fn handle_request(
         scheme,
         settings,
     }): extract::State<RequestContext>,
-    axum_extra::extract::Host(authority): axum_extra::extract::Host,
+    axum_deprecated::Host(authority): axum_deprecated::Host,
     request: extract::Request,
 ) -> impl axum::response::IntoResponse {
     let timeout = settings.timeout_ms.map(Duration::from_millis);
