@@ -29,6 +29,7 @@ hyper-util = { workspace = true, features = ["server"] }
 humantime = { workspace = true }
 names = { workspace = true }
 nkeys = { workspace = true }
+opentelemetry = { workspace = true }
 opentelemetry-nats = { workspace = true }
 rustls = { workspace = true, features = ["std"] }
 rustls-pemfile = { workspace = true }
