@@ -32,7 +32,7 @@ pub fn parse_project_wit(project_cfg: &ProjectConfig) -> Result<(Resolve, WorldI
 
     // Select the target world that was specified by the user
     let world_id = resolve
-        .select_world(package_id, world.as_deref())
+        .select_world(&[package_id], world.as_deref())
         .context("failed to select world from built resolver")?;
 
     Ok((resolve, world_id))

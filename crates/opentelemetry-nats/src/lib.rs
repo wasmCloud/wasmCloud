@@ -125,7 +125,7 @@ pub fn attach_span_context(msg: &async_nats::Message) {
             let extractor = NatsHeaderExtractor::new(headers);
             let ctx_propagator = TraceContextPropagator::new();
             let parent_ctx = ctx_propagator.extract(&extractor);
-            Span::current().set_parent(parent_ctx);
+            let _ = Span::current().set_parent(parent_ctx);
         }
     }
 }

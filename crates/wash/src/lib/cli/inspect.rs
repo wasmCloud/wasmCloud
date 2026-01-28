@@ -227,25 +227,24 @@ pub fn render_component_claims(
 
     table.add_row(Row::new(vec![
         TableCell::new("Version"),
-        TableCell::new_with_alignment(friendly, 1, Alignment::Right),
+        TableCell::builder(friendly)
+            .alignment(Alignment::Right)
+            .build(),
     ]));
 
     table.add_row(Row::new(vec![
         TableCell::new("Embedded WIT"),
-        TableCell::new_with_alignment(is_component, 1, Alignment::Right),
+        TableCell::builder(is_component)
+            .alignment(Alignment::Right)
+            .build(),
     ]));
 
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        "Tags",
-        2,
-        Alignment::Center,
-    )]));
+    table.add_row(Row::new(vec![TableCell::builder("Tags")
+        .col_span(2)
+        .alignment(Alignment::Center)
+        .build()]));
 
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        tags,
-        2,
-        Alignment::Left,
-    )]));
+    table.add_row(Row::new(vec![TableCell::builder(tags).col_span(2).build()]));
 
     CommandOutput::new(table.render(), map)
 }
@@ -263,7 +262,7 @@ fn token_label(pk: &str) -> String {
     }
 }
 
-fn render_core<T>(claims: &Claims<T>, validation: TokenValidation) -> Table<'_>
+fn render_core<T>(claims: &Claims<T>, validation: TokenValidation) -> Table
 where
     T: serde::Serialize + DeserializeOwned + WascapEntity,
 {
@@ -271,29 +270,36 @@ where
     super::configure_table_style(&mut table);
 
     let headline = format!("{} - {}", claims.name(), token_label(&claims.subject));
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        headline,
-        2,
-        Alignment::Center,
-    )]));
+    table.add_row(Row::new(vec![TableCell::builder(headline)
+        .col_span(2)
+        .alignment(Alignment::Center)
+        .build()]));
 
     table.add_row(Row::new(vec![
         TableCell::new(token_label(&claims.issuer)),
-        TableCell::new_with_alignment(&claims.issuer, 1, Alignment::Right),
+        TableCell::builder(&claims.issuer)
+            .alignment(Alignment::Right)
+            .build(),
     ]));
     table.add_row(Row::new(vec![
         TableCell::new(token_label(&claims.subject)),
-        TableCell::new_with_alignment(&claims.subject, 1, Alignment::Right),
+        TableCell::builder(&claims.subject)
+            .alignment(Alignment::Right)
+            .build(),
     ]));
 
     table.add_row(Row::new(vec![
         TableCell::new("Expires"),
-        TableCell::new_with_alignment(validation.expires_human, 1, Alignment::Right),
+        TableCell::builder(validation.expires_human)
+            .alignment(Alignment::Right)
+            .build(),
     ]));
 
     table.add_row(Row::new(vec![
         TableCell::new("Can Be Used"),
-        TableCell::new_with_alignment(validation.not_before_human, 1, Alignment::Right),
+        TableCell::builder(validation.not_before_human)
+            .alignment(Alignment::Right)
+            .build(),
     ]));
 
     table
@@ -333,59 +339,72 @@ pub(crate) async fn render_provider_claims(
         let mut table = Table::new();
         super::configure_table_style(&mut table);
 
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            format!("{name} - Capability Provider"),
-            2,
-            Alignment::Center,
-        )]));
+        table.add_row(Row::new(vec![TableCell::builder(format!(
+            "{name} - Capability Provider"
+        ))
+        .col_span(2)
+        .alignment(Alignment::Center)
+        .build()]));
 
         table.add_row(Row::new(vec![
             TableCell::new("Account"),
-            TableCell::new_with_alignment(claims.issuer, 1, Alignment::Right),
+            TableCell::builder(claims.issuer)
+                .alignment(Alignment::Right)
+                .build(),
         ]));
         table.add_row(Row::new(vec![
             TableCell::new("Service"),
-            TableCell::new_with_alignment(claims.subject, 1, Alignment::Right),
+            TableCell::builder(claims.subject)
+                .alignment(Alignment::Right)
+                .build(),
         ]));
         table.add_row(Row::new(vec![
             TableCell::new("Vendor"),
-            TableCell::new_with_alignment(metadata.vendor, 1, Alignment::Right),
+            TableCell::builder(metadata.vendor)
+                .alignment(Alignment::Right)
+                .build(),
         ]));
 
         table.add_row(Row::new(vec![
             TableCell::new("Version"),
-            TableCell::new_with_alignment(friendly_ver, 1, Alignment::Right),
+            TableCell::builder(friendly_ver)
+                .alignment(Alignment::Right)
+                .build(),
         ]));
 
         table.add_row(Row::new(vec![
             TableCell::new("Revision"),
-            TableCell::new_with_alignment(friendly_rev, 1, Alignment::Right),
+            TableCell::builder(friendly_rev)
+                .alignment(Alignment::Right)
+                .build(),
         ]));
 
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
+        table.add_row(Row::new(vec![TableCell::builder(
             "Supported Architecture Targets",
-            2,
-            Alignment::Center,
-        )]));
+        )
+        .col_span(2)
+        .alignment(Alignment::Center)
+        .build()]));
 
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
+        table.add_row(Row::new(vec![TableCell::builder(
             artifact.targets().join("\n"),
-            2,
-            Alignment::Left,
-        )]));
+        )
+        .col_span(2)
+        .build()]));
 
         if artifact.schema().is_some() {
-            table.add_row(Row::new(vec![TableCell::new_with_alignment(
+            table.add_row(Row::new(vec![TableCell::builder(
                 "\nLink Definition Schema",
-                2,
-                Alignment::Center,
-            )]));
+            )
+            .col_span(2)
+            .alignment(Alignment::Center)
+            .build()]));
 
-            table.add_row(Row::new(vec![TableCell::new_with_alignment(
+            table.add_row(Row::new(vec![TableCell::builder(
                 "\nUse the JSON output option to extract the schema",
-                2,
-                Alignment::Left,
-            )]));
+            )
+            .col_span(2)
+            .build()]));
         }
 
         table.render()

@@ -186,7 +186,7 @@ where
         >,
     > {
         // Set the parent of the current context to the span passed in
-        Span::current().set_parent(cx.deref().context());
+        let _ = Span::current().set_parent(cx.deref().context());
         let scheme = request.uri().scheme().context("scheme missing")?;
         let scheme = wrpc_interface_http::bindings::wrpc::http::types::Scheme::from(scheme).into();
 

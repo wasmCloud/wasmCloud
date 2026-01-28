@@ -618,7 +618,7 @@ where
                 component_pooling_config.max_memory_size(
                     limits
                         .max_memory_limit
-                        .expect("max_memory_limit should be Some"),
+                        .context("max_memory_limit should be Some")?,
                 );
 
                 let mut component_engine_config = rt.engine_config.clone();
@@ -1200,7 +1200,7 @@ impl<H: MinimalHandler> Debug for Ctx<H> {
 impl<H: MinimalHandler> Ctx<H> {
     fn attach_parent_context(&self) {
         if let Some(context) = self.parent_context.as_ref() {
-            Span::current().set_parent(context.clone());
+            let _ = Span::current().set_parent(context.clone());
         }
     }
 }

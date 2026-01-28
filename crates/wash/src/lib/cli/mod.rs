@@ -521,7 +521,7 @@ const fn keypair_type_to_str(keypair_type: &KeyPairType) -> &'static str {
     }
 }
 
-pub(crate) fn configure_table_style(table: &mut term_table::Table<'_>) {
+pub(crate) fn configure_table_style(table: &mut term_table::Table) {
     table.style = empty_table_style();
     table.separate_rows = false;
 }

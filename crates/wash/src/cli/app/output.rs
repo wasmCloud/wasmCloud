@@ -1,8 +1,4 @@
-use term_table::{
-    row::Row,
-    table_cell::{Alignment, TableCell},
-    Table,
-};
+use term_table::{row::Row, table_cell::TableCell, Table};
 use wadm_types::api::{Status, VersionInfo};
 
 use super::ModelSummary;
@@ -12,14 +8,14 @@ pub fn list_revisions_table(revisions: Vec<VersionInfo>) -> String {
     crate::util::configure_table_style(&mut table, 2);
 
     table.add_row(Row::new(vec![
-        TableCell::new_with_alignment("Version", 1, Alignment::Left),
-        TableCell::new_with_alignment("Deployed", 1, Alignment::Left),
+        TableCell::new("Version"),
+        TableCell::new("Deployed"),
     ]));
 
     for r in &revisions {
         table.add_row(Row::new(vec![
-            TableCell::new_with_alignment(r.version.clone(), 1, Alignment::Left),
-            TableCell::new_with_alignment(r.deployed, 1, Alignment::Left),
+            TableCell::new(r.version.clone()),
+            TableCell::new(r.deployed),
         ]));
     }
 
@@ -30,30 +26,27 @@ pub fn list_models_table(models: Vec<ModelSummary>) -> String {
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table, 3);
     table.add_row(Row::new(vec![
-        TableCell::new_with_alignment("Name", 1, Alignment::Left),
-        TableCell::new_with_alignment("Deployed Version", 1, Alignment::Left),
-        TableCell::new_with_alignment("Status", 1, Alignment::Left),
+        TableCell::new("Name"),
+        TableCell::new("Deployed Version"),
+        TableCell::new("Status"),
     ]));
     for m in &models {
         table.add_row(Row::new(vec![
-            TableCell::new_with_alignment(m.name.clone(), 1, Alignment::Left),
-            TableCell::new_with_alignment(
+            TableCell::new(m.name.clone()),
+            TableCell::new(
                 m.deployed_version
                     .clone()
                     .unwrap_or_else(|| "N/A".to_string()),
-                1,
-                Alignment::Left,
             ),
-            #[allow(deprecated)]
-            TableCell::new_with_alignment(format!("{:?}", m.status), 1, Alignment::Left),
+            TableCell::new(format!("{:?}", m.detailed_status)),
         ]));
 
         if let Some(description) = m.description.as_ref() {
-            table.add_row(Row::new(vec![TableCell::new_with_alignment(
-                format!("  └ {description}"),
-                3,
-                Alignment::Left,
-            )]));
+            table.add_row(Row::new(vec![TableCell::builder(format!(
+                "  └ {description}"
+            ))
+            .col_span(3)
+            .build()]));
         }
     }
 
@@ -69,16 +62,12 @@ pub fn status_table(model_name: String, status: Status) -> String {
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table, 4);
 
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        "",
-        4,
-        Alignment::Center,
-    )]));
+    table.add_row(Row::new(vec![TableCell::builder("").col_span(4).build()]));
 
     table.add_row(Row::new(vec![
-        TableCell::new_with_alignment("Name", 2, Alignment::Left),
-        TableCell::new_with_alignment("Kind", 1, Alignment::Left),
-        TableCell::new_with_alignment("Status", 1, Alignment::Left),
+        TableCell::builder("Name").col_span(2).build(),
+        TableCell::new("Kind"),
+        TableCell::new("Status"),
     ]));
 
     // To better display information in the table, what we want to do here is replace
@@ -95,27 +84,19 @@ pub fn status_table(model_name: String, status: Status) -> String {
             format!("{:?}", s.info.status_type)
         };
         table.add_row(Row::new(vec![
-            TableCell::new_with_alignment(
-                s.name.replace(&model_name_replacer, ""),
-                2,
-                Alignment::Left,
-            ),
-            TableCell::new_with_alignment(&s.kind, 1, Alignment::Left),
-            TableCell::new_with_alignment(status, 1, Alignment::Left),
+            TableCell::builder(s.name.replace(&model_name_replacer, ""))
+                .col_span(2)
+                .build(),
+            TableCell::new(&s.kind),
+            TableCell::new(status),
         ]));
     });
 
     if status.scalers.iter().any(|s| !s.info.message.is_empty()) {
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            "",
-            4,
-            Alignment::Center,
-        )]));
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            "Status Messages",
-            4,
-            Alignment::Left,
-        )]));
+        table.add_row(Row::new(vec![TableCell::builder("").col_span(4).build()]));
+        table.add_row(Row::new(vec![TableCell::builder("Status Messages")
+            .col_span(4)
+            .build()]));
     }
 
     let mut table_output = table.render();

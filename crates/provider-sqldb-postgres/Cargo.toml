@@ -22,7 +22,7 @@ deadpool-postgres = { workspace = true, features = [ "rt_tokio_1" ] }
 futures = { workspace = true }
 geo-types = { workspace = true }
 pg_bigdecimal = { workspace = true }
-postgres-types = { workspace = true, features = [ "with-cidr-0_2" ] }
+postgres-types = { workspace = true, features = [ "with-cidr-0_3" ] }
 rustls = { workspace = true }
 webpki-roots = { workspace = true }
 serde_json = { workspace = true }

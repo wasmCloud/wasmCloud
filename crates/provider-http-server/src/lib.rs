@@ -47,6 +47,7 @@ use wrpc_interface_http::InvokeIncomingHandler as _;
 mod address;
 mod host;
 mod path;
+mod axum_deprecated;
 
 pub async fn run() -> anyhow::Result<()> {
     initialize_observability!(
