@@ -1,0 +1,2 @@
+[overrides]
+"wasmcloud:identity" = { path = "../../../../wit/identity/wit" }

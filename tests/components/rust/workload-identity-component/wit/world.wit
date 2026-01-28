@@ -3,5 +3,5 @@ package test-components:workload-identity;
 world component {
   import wasmcloud:identity/store@0.0.1;
 
-  export wasi:http/incoming-handler@0.2.2;
+  export wasi:http/incoming-handler@0.2.9;
 }
