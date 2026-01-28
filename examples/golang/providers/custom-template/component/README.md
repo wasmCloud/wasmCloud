@@ -4,7 +4,7 @@ This component is meant to test the [custom template capability provider](../) b
 
 ## Build
 
-Use `wash build` to build this component. 
+Use `wash build` to build this component.
 
 ## Deploy
 
