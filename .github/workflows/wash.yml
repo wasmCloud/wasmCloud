@@ -20,6 +20,7 @@ env:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   meta:
@@ -124,6 +125,8 @@ jobs:
       - uses: taiki-e/install-action@a983ca795126a4be4e8a44879ac5c4c3ef66cae1 # v2.65.11
         with:
           tool: wasm-tools@1.225.0 # TODO: update once wit-bindgen-go is fixed
+      - name: Log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
       - name: Run integration tests
         run: make test-integration-ci
         working-directory: ./crates/wash
