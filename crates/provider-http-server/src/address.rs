@@ -20,7 +20,7 @@ use wasmcloud_provider_sdk::core::LinkName;
 use wasmcloud_provider_sdk::provider::WrpcClient;
 use wasmcloud_provider_sdk::{get_connection, HostData, LinkConfig, LinkDeleteInfo, Provider};
 
-use crate::{build_request, get_cors_layer, get_tcp_listener, invoke_component, axum_deprecated};
+use crate::{axum_deprecated, build_request, get_cors_layer, get_tcp_listener, invoke_component};
 
 /// Lookup for handlers by socket
 ///
