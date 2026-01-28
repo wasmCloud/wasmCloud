@@ -410,7 +410,7 @@ which = { version = "8", default-features = false }
 wit-bindgen = { version = "0.51.0", default-features = false }
 wit-bindgen-core = { version = "0.51.0", default-features = false }
 wit-bindgen-go = { version = "0.51.0", default-features = false }
-wit-bindgen-wrpc = { version = "0.9", default-features = false }
+wit-bindgen-wrpc = { version = "0.10", default-features = false }
 wit-component = { version = "0.224.1", default-features = false }
 wit-parser = { version = "0.224.1", default-features = false }
 wrpc-interface-blobstore = { version = "0.21", default-features = false }
