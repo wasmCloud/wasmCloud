@@ -45,9 +45,9 @@ use wasmcloud_provider_sdk::{initialize_observability, load_host_data, run_provi
 use wrpc_interface_http::InvokeIncomingHandler as _;
 
 mod address;
+mod axum_deprecated;
 mod host;
 mod path;
-mod axum_deprecated;
 
 pub async fn run() -> anyhow::Result<()> {
     initialize_observability!(
