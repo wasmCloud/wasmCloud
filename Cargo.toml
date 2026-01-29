@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud"
-version = "1.9.1"
+version = "1.9.2-rc.0"
 description = "wasmCloud is a Cloud Native Computing Foundation (CNCF) project that enables teams to build polyglot applications composed of reusable Wasm components and run them—resiliently and efficiently—across any cloud, Kubernetes, datacenter, or edge."
 default-run = "wasmcloud"
 readme = "README.md"
@@ -304,7 +304,7 @@ path-clean = { version = "1", default-features = false }
 pg_bigdecimal = { version = "0.1", default-features = false }
 pin-project-lite = { version = "0.2", default-features = false }
 postgres-types = { version = "0.2", default-features = false }
-provider-archive = { version = "^0.16.1", path = "./crates/provider-archive", default-features = false }
+provider-archive = { version = "^0.16.2", path = "./crates/provider-archive", default-features = false }
 quote = { version = "1", default-features = false }
 rand = { version = "0.9", default-features = false }
 redis = { version = "0.32.7", default-features = false }
@@ -370,7 +370,7 @@ wadm-client = { version = "0.10", default-features = false }
 wadm-types = { version = "0.8.3", default-features = false }
 walkdir = { version = "2", default-features = false }
 warp = { version = "0.3", default-features = false }
-wascap = { version = "^0.16.0", path = "./crates/wascap", default-features = false }
+wascap = { version = "^0.16.2", path = "./crates/wascap", default-features = false }
 wash = { version = "0", path = "./crates/wash", default-features = false }
 wasi = { version = "0.14.7", default-features = false }
 wasm-pkg-client = { version = "0.13", default-features = false }
@@ -380,8 +380,8 @@ wasm-encoder = { version = "0.241", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-component = { version = "0", path = "crates/component", default-features = false }
 wasmcloud-control-interface = { version = "^3.0.0", path = "./crates/control-interface", default-features = false }
-wasmcloud-core = { version = "^0.21.0", path = "./crates/core", default-features = false }
-wasmcloud-host = { version = "^0.27.0", path = "./crates/host", default-features = false }
+wasmcloud-core = { version = "^0.21.1", path = "./crates/core", default-features = false }
+wasmcloud-host = { version = "^0.27.1", path = "./crates/host", default-features = false }
 wasmcloud-provider-blobstore-azure = { version = "*", path = "./crates/provider-blobstore-azure", default-features = false }
 wasmcloud-provider-blobstore-fs = { version = "*", path = "./crates/provider-blobstore-fs", default-features = false }
 wasmcloud-provider-blobstore-nats = { version = "*", path = "./crates/provider-blobstore-nats", default-features = false }
@@ -393,14 +393,14 @@ wasmcloud-provider-keyvalue-redis = { version = "*", path = "./crates/provider-k
 wasmcloud-provider-keyvalue-vault = { version = "*", path = "./crates/provider-keyvalue-vault", default-features = false }
 wasmcloud-provider-messaging-kafka = { version = "*", path = "./crates/provider-messaging-kafka", default-features = false }
 wasmcloud-provider-messaging-nats = { version = "^0.28.0", path = "./crates/provider-messaging-nats", default-features = false }
-wasmcloud-provider-sdk = { version = "^0.17.0", path = "./crates/provider-sdk", default-features = false }
+wasmcloud-provider-sdk = { version = "^0.17.1", path = "./crates/provider-sdk", default-features = false }
 wasmcloud-provider-sqldb-postgres = { version = "*", path = "./crates/provider-sqldb-postgres", default-features = false }
 wasmcloud-provider-wadm = { version = "*", path = "./crates/provider-wadm", default-features = false }
 wasmcloud-runtime = { version = "^0.12.0", path = "./crates/runtime", default-features = false }
 wasmcloud-secrets-client = { version = "^0.9.0", path = "./crates/secrets-client", default-features = false }
 wasmcloud-secrets-types = { version = "^0.8.0", path = "./crates/secrets-types", default-features = false }
 wasmcloud-test-util = { version = "^0.19.0", path = "./crates/test-util", default-features = false }
-wasmcloud-tracing = { version = "^0.16.0", path = "./crates/tracing", default-features = false }
+wasmcloud-tracing = { version = "^0.16.1", path = "./crates/tracing", default-features = false }
 wasmparser = { version = "0.241", default-features = false }
 wasmtime = { version = "38.0.4", default-features = false }
 wasmtime-wasi = { version = "38.0.4", default-features = false }
