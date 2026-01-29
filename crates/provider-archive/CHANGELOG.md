@@ -5,19 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.16.1 (2025-11-21)
+## 0.16.2 (2026-01-29)
+
+### Chore
+
+ - <csr-id-146d1ecf4396d21e19f595cedb87c29696171880/> wasmCloud-host v0.27.0
+   Bump provider-archive v0.16.1, wasmcloud-core v0.21.0, wasmcloud-tracing v0.16.0, wasmcloud-provider-sdk v0.17.0, wasmcloud-runtime v0.12.0, wasmcloud-secrets-types v0.8.0, wasmcloud-secrets-client v0.9.0, wasmcloud-host v0.27.0, safety bump 7 crates
+   
+   SAFETY BUMP: wasmcloud-tracing v0.16.0, wasmcloud-provider-sdk v0.17.0, wasmcloud-runtime v0.12.0, wasmcloud-secrets-client v0.9.0, wasmcloud-host v0.27.0, wasmcloud-test-util v0.19.0, secrets-nats-kv v0.3.0
 
 ### Bug Fixes
 
+ - <csr-id-8a3891f6c3145c0f7321bec17c51cbf043f3b16b/> remove component spec feature
+   This commit removes the component spec feature that was introduced in
+   2025, leaving the rest of the other changes that occurred in the
+   meantime intact.
  - <csr-id-a0c85491995af8852f91d6ebf1856f84f16199b6/> Fix CVE-2025-62518 by migrating to astral-tokio-tar
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 1 commit contributed to the release over the course of 25 calendar days.
- - 247 days passed between releases.
- - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 3 commits contributed to the release over the course of 93 calendar days.
+ - 315 days passed between releases.
+ - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -27,10 +38,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Remove component spec feature ([`8a3891f`](https://github.com/wasmCloud/wasmCloud/commit/8a3891f6c3145c0f7321bec17c51cbf043f3b16b))
+    - WasmCloud-host v0.27.0 ([`146d1ec`](https://github.com/wasmCloud/wasmCloud/commit/146d1ecf4396d21e19f595cedb87c29696171880))
     - Fix CVE-2025-62518 by migrating to astral-tokio-tar ([`a0c8549`](https://github.com/wasmCloud/wasmCloud/commit/a0c85491995af8852f91d6ebf1856f84f16199b6))
 </details>
 
+## 0.16.1 (2025-11-21)
+
+### Bug Fixes
+
+ - <csr-id-a0c85491995af8852f91d6ebf1856f84f16199b6/> Fix CVE-2025-62518 by migrating to astral-tokio-tar
+
 ## 0.16.0 (2025-03-19)
+
+<csr-id-3078c88f0ebed96027e20997bccc1c125583fad4/>
 
 ### Chore
 
