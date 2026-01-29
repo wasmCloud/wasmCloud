@@ -9740,7 +9740,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-tracing"
-version = "0.16.0"
+version = "0.16.1"
 dependencies = [
  "anyhow",
  "bytes",
