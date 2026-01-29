@@ -5603,7 +5603,7 @@ dependencies = [
 
 [[package]]
 name = "provider-archive"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "astral-tokio-tar",
  "async-compression",
