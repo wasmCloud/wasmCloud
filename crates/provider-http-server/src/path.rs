@@ -15,6 +15,7 @@ use axum::extract::{self};
 use axum::handler::Handler;
 use axum_server::tls_rustls::RustlsConfig;
 use axum_server::Handle;
+use matchit::Router as MatchRouter;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument};
@@ -26,12 +27,18 @@ use crate::{
     load_settings, ServiceSettings,
 };
 
+#[derive(Clone)]
+struct RouteData {
+    target_component: Arc<str>,
+    wrpc: WrpcClient,
+}
+
 /// This struct holds both the forward and reverse mappings for path-based routing
 /// so that they can be modified by just acquiring a single lock in the [`HttpServerProvider`]
 #[derive(Default)]
 struct Router {
     /// Lookup from a path to the component ID that is handling that path
-    paths: HashMap<Arc<str>, (Arc<str>, WrpcClient)>,
+    paths: MatchRouter<RouteData>,
     /// Reverse lookup to find the path for a (component,link_name) pair
     components: HashMap<(Arc<str>, Arc<str>), Arc<str>>,
 }
@@ -162,10 +169,6 @@ impl Provider for HttpServerProvider {
             // When we can return errors from links, tell the host this was invalid
             bail!("Component {target} already has a path registered with link name {name}");
         }
-        if path_router.paths.contains_key(path.as_str()) {
-            // When we can return errors from links, tell the host this was invalid
-            bail!("Path {path} already in use by a different component");
-        }
 
         let wrpc = get_connection()
             .get_wrpc_client(link_config.target_id)
@@ -175,7 +178,23 @@ impl Provider for HttpServerProvider {
         let path = Arc::from(path.clone());
         // Insert the path into the paths map for future lookups
         path_router.components.insert(key, Arc::clone(&path));
-        path_router.paths.insert(path, (target, wrpc));
+
+        if let Err(err) = path_router.paths.insert(
+            path.as_ref(),
+            RouteData {
+                target_component: target,
+                wrpc,
+            },
+        ) {
+            match err {
+                matchit::InsertError::Conflict { with } => {
+                    bail!("Path {path} already in use by a different component: {with}")
+                }
+                _ => {
+                    bail!("Path has invalid format")
+                }
+            }
+        }
 
         Ok(())
     }
@@ -197,7 +216,7 @@ impl Provider for HttpServerProvider {
             .components
             .remove(&(Arc::from(component_id), Arc::from(link_name)));
         if let Some(path) = path {
-            path_router.paths.remove(&path);
+            path_router.paths.remove(path.as_ref());
         }
 
         Ok(())
@@ -233,9 +252,15 @@ async fn handle_request(
     let timeout = settings.timeout_ms.map(Duration::from_millis);
     let req = build_request(request, scheme, authority, &settings).map_err(|err| *err)?;
     let path = req.uri().path();
-    let Some((target_component, wrpc)) = router.read().await.paths.get(path).cloned() else {
+
+    let Ok(RouteData {
+        target_component,
+        wrpc,
+    }) = router.read().await.paths.at(path).map(|m| m.value.clone())
+    else {
         Err((http::StatusCode::NOT_FOUND, "path not found"))?
     };
+
     axum::response::Result::<_, axum::response::ErrorResponse>::Ok(
         invoke_component(
             &wrpc,

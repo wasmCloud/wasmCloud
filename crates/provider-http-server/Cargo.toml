@@ -13,6 +13,8 @@ repository.workspace = true
 status = "actively-developed"
 
 [dependencies]
+matchit = "0.8.4"
+
 anyhow = { workspace = true }
 async-nats = { workspace = true, features = ["ring"] }
 axum = { workspace = true, features = ["http1", "http2", "tokio", "tracing"] }
