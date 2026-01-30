@@ -26,7 +26,7 @@ pub const DEFAULT_NATS_PORT: &str = "4222";
 pub const DEFAULT_NATS_WEBSOCKET_PORT: &str = "4223";
 
 /// Version of wadm used by default for wash
-pub const WADM_VERSION: &str = "v0.21.0";
+pub const WADM_VERSION: &str = "v0.21.1";
 
 /// Default port for the washboard ui used by wash
 pub const DEFAULT_WASH_UI_PORT: &str = "3030";
