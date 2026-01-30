@@ -3,7 +3,7 @@ use core::future::Future;
 
 use anyhow::{bail, Context as _};
 use async_trait::async_trait;
-use tracing::{info_span, instrument, Instrument as _};
+use tracing::{info_span, instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use wasmtime::component::Resource;
 use wasmtime::Store;
@@ -44,7 +44,6 @@ where
     bindings
         .wasmcloud_messaging0_3_0_incoming_handler()
         .call_handle(&mut store, msg)
-        .instrument(call_handle_message)
         .await
         .context("failed to call `wasmcloud:messaging/incoming-handler@0.3.0#handle`")
         .map(|err| err.map_err(|err| err.to_string()))
