@@ -589,8 +589,8 @@ impl Client {
     /// Note that acknowledgement occurs **before** the new bytes are downloaded. Live-updating an component can take a long time
     /// and control clients cannot block waiting for a reply that could come several seconds later.
     ///
-    /// To properly verify that a component has been updated, create  listener for the appropriate [`PublishedEvent`] on the
-    /// control events channel
+    /// To properly verify that a component has been updated, create a listener for the appropriate
+    /// published event on the control events channel
     ///
     /// # Arguments
     ///
