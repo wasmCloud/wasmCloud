@@ -5,7 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v0.44.0 (2025-11-25)
+## v0.44.0 (2026-01-30)
+
+<csr-id-9cde6eb583c5aba6c6d584f944a700243393cbd1/>
+<csr-id-b86d99b63c859d9333ca68694d5e6d81193168fc/>
+<csr-id-d59a43ee1166476aba4479aafbc690a8d7c3ca0f/>
+<csr-id-bf6b86f63e7259d4f3cc696144c216ed01c28d19/>
+<csr-id-9b0c46e1eae85eb9edfc0ee113cea01494dcab59/>
+<csr-id-7a5cd312f1325903e358214efe37b0a794fae446/>
+<csr-id-9258e4485e0329599fd34ccb20f7976ccfd5ad70/>
+<csr-id-b48002dfbdf5fee466d81292c14600cae93a2608/>
+<csr-id-56f75648de9029fc9aa038177a93793b14e8ee26/>
+<csr-id-afa23223e473d832240924d15f1fd8cf51172c25/>
+<csr-id-c199174d2d4e0ea9e05ec56573e881b6b9922824/>
+<csr-id-31c93117b34bb964ad4e6196bc2b577b71cc7f7c/>
+<csr-id-b23ea0bcd310d234ecf3dce0ad2bc1287dde2652/>
+<csr-id-52b618bfe7ca6c80f1a35bb5ea4c0292d3da62c4/>
+<csr-id-2959c391b28b0cb4efa64d2b2438345df852d005/>
+<csr-id-84678bdd8abf1da843fdb1af4c8b20e6aa82aefe/>
+<csr-id-571e3685effd3558c9c1000c7ed0f9a5fee2e840/>
+<csr-id-e34846b7d2ee6bf51e40510db5ab951bd5858f18/>
+<csr-id-56ac4cc8415fd895dc791cee6a6323981e7eca68/>
+<csr-id-fd2b59f9ebb24cf3068a5f5897ba16d0689a4e84/>
+<csr-id-daebc638d2fd9ebbced745aa730b453eaa14b4b0/>
+<csr-id-c32373af45f4e50b6a742db476c52168065d9a9a/>
+<csr-id-80f93f85bdf6358f8c59e620022610ee280723ae/>
+<csr-id-38ff545146c094324b2a7a182cad521e5edd5af3/>
+<csr-id-bf41068efc8192c2f13b19032f5a600e9ed88161/>
+<csr-id-fcd44a38b8fd4c8bf018eb4ca45bd79adcf4b1ff/>
+<csr-id-fc40ecf35443662b3f6627e8059ba7855ec364cd/>
+<csr-id-fec5e21037b75eb27b55db323dc7d3d3ff3f6b68/>
 
 ### Chore
 
@@ -39,6 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-571e3685effd3558c9c1000c7ed0f9a5fee2e840/> adjust URL formatting in help
  - <csr-id-e34846b7d2ee6bf51e40510db5ab951bd5858f18/> fix tests for patch vs minor
  - <csr-id-56ac4cc8415fd895dc791cee6a6323981e7eca68/> update `wash` to new wasmtime
+
+### Chore
+
+ - <csr-id-b879c73d71bbca6d05baefbaadd53cb577d96cf9/> bump wash v0.44.0
 
 ### New Features
 
@@ -79,6 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    the generated link (and related config properties).
  - <csr-id-cd5c01bffa2f5f3ad73b3ab4629d7e06df47daee/> add wadm_component_name alias for manifest targeting
  - <csr-id-0a5d216b6a264bf4c4a9c56b304511561c3fd25a/> check for semver compatible versions of tools
+ - <csr-id-7fd06d9b48798fd8359b1ec5254a4992eeed4110/> add support for user/password in NATS connection options
 
 ### Bug Fixes
 
@@ -116,6 +150,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    command (but with no actual internal wash command matching), and
    printing help.
  - <csr-id-575636a1f874af341774298272e04011fb4a44dd/> disallow setting hostcore label
+ - <csr-id-fa8d5efc328c242784f8956906472bb9313be5bd/> wash use of updaetd wit-parser dep
+ - <csr-id-0b6512b7d8389dda2c11558366874e3f824094bd/> manual fixes for updated deps
+ - <csr-id-8a3891f6c3145c0f7321bec17c51cbf043f3b16b/> remove component spec feature
+   This commit removes the component spec feature that was introduced in
+   2025, leaving the rest of the other changes that occurred in the
+   meantime intact.
 
 ### Other
 
@@ -172,9 +212,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 64 commits contributed to the release over the course of 238 calendar days.
- - 248 days passed between releases.
- - 63 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 69 commits contributed to the release over the course of 304 calendar days.
+ - 314 days passed between releases.
+ - 68 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -184,6 +224,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Add support for user/password in NATS connection options ([`7fd06d9`](https://github.com/wasmCloud/wasmCloud/commit/7fd06d9b48798fd8359b1ec5254a4992eeed4110))
+    - Wash use of updaetd wit-parser dep ([`fa8d5ef`](https://github.com/wasmCloud/wasmCloud/commit/fa8d5efc328c242784f8956906472bb9313be5bd))
+    - Manual fixes for updated deps ([`0b6512b`](https://github.com/wasmCloud/wasmCloud/commit/0b6512b7d8389dda2c11558366874e3f824094bd))
+    - Remove component spec feature ([`8a3891f`](https://github.com/wasmCloud/wasmCloud/commit/8a3891f6c3145c0f7321bec17c51cbf043f3b16b))
+    - Bump wash v0.44.0 ([`b879c73`](https://github.com/wasmCloud/wasmCloud/commit/b879c73d71bbca6d05baefbaadd53cb577d96cf9))
     - Depend on host 1.9.1 ([`505a01d`](https://github.com/wasmCloud/wasmCloud/commit/505a01d652df64d69dc046e825c2cf378719bc45))
     - Bump to 0.43.0 ([`9cde6eb`](https://github.com/wasmCloud/wasmCloud/commit/9cde6eb583c5aba6c6d584f944a700243393cbd1))
     - Nats archive as zip ([`2484651`](https://github.com/wasmCloud/wasmCloud/commit/2484651f16d51eda9c42acd7fbe266ccf00e8889))
