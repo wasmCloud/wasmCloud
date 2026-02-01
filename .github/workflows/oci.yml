@@ -30,7 +30,7 @@ jobs:
   oci:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
@@ -51,7 +51,7 @@ jobs:
         continue-on-error: true
       - run: rm -rf "${{ runner.temp }}/nix-store-arm64"
 
-      - uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb
+      - uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
         id: cache
         with:
           path: ${{ runner.temp }}/nix-store-oci
@@ -78,7 +78,7 @@ jobs:
 
       - name: Login to GitHub Container Registry
         if: startswith(github.ref, format('refs/tags/{0}v', inputs.prefix)) || github.ref == 'refs/heads/main'
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -87,7 +87,7 @@ jobs:
       - name: Login to DockerHub
         if: startswith(github.ref, format('refs/tags/{0}v', inputs.prefix)) || github.ref == 'refs/heads/main'
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           username: ${{ secrets.DOCKERHUB_PUSH_USER }}
           password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}

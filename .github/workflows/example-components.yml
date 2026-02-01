@@ -66,7 +66,7 @@ jobs:
   prepare-wash-cache:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/install-cached-wash-cli
 
   # Ensure that `wash build` and `wash app validate` works for all example projects below
@@ -202,7 +202,7 @@ jobs:
             wasm-bin: 'http_password_checker_s.wasm'
             test_deploy: local.wadm.yaml
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       # Set up language toolchain
       - name: Setup WebAssembly toolchains for language
@@ -354,7 +354,7 @@ jobs:
             lang: 'python'
             wasm-bin: 'http_hello_world_s.wasm'
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       # Determine tag version (if this is a release tag), without the 'v'
       - name: Determine version
         id: meta
@@ -373,7 +373,7 @@ jobs:
         with:
           path: artifacts
       - name: install wash (current)
-        uses: taiki-e/cache-cargo-install-action@25ef9892608d184944df486ae09ffae168b3cda3 # v3.0.0
+        uses: taiki-e/cache-cargo-install-action@34ce5120836e5f9f1508d8713d7fdea0e8facd6f # v3.0.1
         with:
           tool: wash
           git: https://github.com/${{ github.repository }}
