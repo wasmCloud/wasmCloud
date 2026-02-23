@@ -61,6 +61,10 @@ pub struct WorkloadMetadata {
     loopback: Arc<std::sync::Mutex<loopback::Network>>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
+    /// wRPC routing invoker for import polyfilling via `link_instance`.
+    /// Populated during plugin binding when interfaces have `wrpc:name` config.
+    #[cfg(feature = "wrpc")]
+    wrpc_invoker: crate::plugin::wrpc::codec::RoutingInvoker,
 }
 
 impl WorkloadMetadata {
@@ -84,9 +88,26 @@ impl WorkloadMetadata {
         &self.workload_namespace
     }
 
+    /// Returns a reference to the wasmtime [`Component`].
+    pub fn component(&self) -> &Component {
+        &self.component
+    }
+
     /// Returns a reference to the wasmtime engine used to compile this component.
     pub fn engine(&self) -> &wasmtime::Engine {
         self.component.engine()
+    }
+
+    /// Returns a mutable reference to the wRPC routing invoker.
+    #[cfg(feature = "wrpc")]
+    pub fn wrpc_invoker_mut(&mut self) -> &mut crate::plugin::wrpc::codec::RoutingInvoker {
+        &mut self.wrpc_invoker
+    }
+
+    /// Returns a clone of the wRPC routing invoker.
+    #[cfg(feature = "wrpc")]
+    pub fn wrpc_invoker(&self) -> &crate::plugin::wrpc::codec::RoutingInvoker {
+        &self.wrpc_invoker
     }
 
     /// Returns a mutable reference to the component's linker.
@@ -249,6 +270,8 @@ impl WorkloadService {
                 plugins: None,
                 loopback,
                 linked_components: Default::default(),
+                #[cfg(feature = "wrpc")]
+                wrpc_invoker: Default::default(),
             },
             handle: None,
             max_restarts,
@@ -315,6 +338,8 @@ impl WorkloadComponent {
                 plugins: None,
                 loopback,
                 linked_components: Default::default(),
+                #[cfg(feature = "wrpc")]
+                wrpc_invoker: Default::default(),
             },
             name: component_name.into(),
             // TODO: Implement pooling and instance limits
@@ -1091,6 +1116,13 @@ impl ResolvedWorkload {
                 .insert(linked_component_id.clone(), linked_component_ctx);
         }
 
+        // Populate the wRPC routing invoker from binding-time configuration
+        #[cfg(feature = "wrpc")]
+        {
+            shared_ctx.wrpc_ctx =
+                crate::plugin::wrpc::codec::WrpcState::new(metadata.wrpc_invoker.clone());
+        }
+
         let store = wasmtime::Store::new(metadata.engine(), shared_ctx);
 
         Ok(store)
@@ -1318,8 +1350,10 @@ impl UnresolvedWorkload {
                 // Find interfaces that this plugin can satisfy for this component
                 let mut matching_interfaces = HashSet::new();
                 for wit_interface in required_interfaces.iter() {
-                    // Check if plugin supports this interface
-                    if plugin_interfaces.includes_bidirectional(wit_interface) {
+                    // Check if plugin supports this interface (static world match or dynamic can_handle)
+                    if p.can_handle(wit_interface)
+                        || plugin_interfaces.includes_bidirectional(wit_interface)
+                    {
                         matching_interfaces.insert(wit_interface.clone());
                     }
                 }

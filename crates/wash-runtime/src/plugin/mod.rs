@@ -51,6 +51,9 @@ pub mod wasmcloud_messaging;
 #[cfg(all(feature = "wasi-webgpu", not(target_os = "windows")))]
 pub mod wasi_webgpu;
 
+#[cfg(feature = "wrpc")]
+pub mod wrpc;
+
 /// The [`HostPlugin`] trait provides an interface for implementing built-in plugins for the host.
 /// A plugin is primarily responsible for implementing a specific [`WitWorld`] as a collection of
 /// imports and exports that will be directly linked to the workload's [`wasmtime::component::Linker`].
@@ -80,6 +83,18 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// # Returns
     /// A `WitWorld` containing the plugin's imports and exports.
     fn world(&self) -> WitWorld;
+
+    /// Returns whether this plugin can dynamically handle the given interface.
+    ///
+    /// This is checked in addition to the static [`HostPlugin::world`] matching.
+    /// Plugins that handle arbitrary interfaces (e.g., wrpc bridging) can override
+    /// this to match based on interface configuration rather than a fixed world.
+    ///
+    /// # Returns
+    /// `true` if this plugin can handle the interface, `false` otherwise.
+    fn can_handle(&self, _interface: &crate::wit::WitInterface) -> bool {
+        false
+    }
 
     /// Called when the plugin is started during host initialization.
     ///

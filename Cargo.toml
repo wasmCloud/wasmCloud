@@ -130,6 +130,11 @@ tokio-postgres-rustls = { version = "0.13", default-features = false }
 ulid = { version = "1", default-features = false }
 webpki-roots = { version = "0.26", default-features = false }
 
+# wrpc deps
+wrpc-transport = { git = "https://github.com/bytecodealliance/wrpc", rev = "59cd471a", default-features = false }
+wrpc-transport-nats = { git = "https://github.com/bytecodealliance/wrpc", rev = "59cd471a", default-features = false }
+wrpc-runtime-wasmtime = { git = "https://github.com/bytecodealliance/wrpc", rev = "59cd471a", default-features = false }
+
 # socket deps (used by wash-runtime sockets module)
 cap-net-ext = "3.4.4"
 cap-std = "3.4.4"

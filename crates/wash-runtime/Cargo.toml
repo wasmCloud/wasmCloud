@@ -17,7 +17,7 @@ workspace = true
 [features]
 default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet"]
 oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:sha2", "dep:wit-component"]
-washlet = ["oci"]
+washlet = ["oci", "wrpc"]
 wasi-config = []
 wasi-logging = []
 wasi-blobstore = []
@@ -30,6 +30,7 @@ wasmcloud-postgres = [
     "dep:bit-vec", "dep:cidr", "dep:geo-types",
     "dep:ulid", "dep:webpki-roots",
 ]
+wrpc = ["dep:wrpc-transport", "dep:wrpc-transport-nats", "dep:wrpc-runtime-wasmtime"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -61,7 +62,7 @@ rustls-pemfile = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio-rustls = { workspace = true }
-tokio-util = { workspace = true, features = ["rt"] }
+tokio-util = { workspace = true, features = ["rt", "codec"] }
 tonic = { workspace = true, features = [
     "gzip",
     "tls-aws-lc",
@@ -105,6 +106,11 @@ tokio-postgres-rustls = { optional = true, workspace = true }
 ulid = { optional = true, workspace = true, features = ["std"] }
 url = { workspace = true }
 webpki-roots = { optional = true, workspace = true }
+
+# wRPC dependencies (optional, behind 'wrpc' feature)
+wrpc-transport = { optional = true, workspace = true }
+wrpc-transport-nats = { optional = true, workspace = true }
+wrpc-runtime-wasmtime = { optional = true, workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true, default-features = true }

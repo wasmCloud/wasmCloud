@@ -25,6 +25,10 @@ pub struct SharedCtx {
     pub table: wasmtime::component::ResourceTable,
     /// Contexts for linked components
     pub contexts: HashMap<Arc<str>, Ctx>,
+    /// wRPC context providing the routing invoker for `link_instance` import polyfilling,
+    /// and resource table access during encode/decode for export serving.
+    #[cfg(feature = "wrpc")]
+    pub(crate) wrpc_ctx: crate::plugin::wrpc::codec::WrpcState,
 }
 
 impl SharedCtx {
@@ -33,6 +37,8 @@ impl SharedCtx {
             active_ctx: context,
             table: ResourceTable::new(),
             contexts: Default::default(),
+            #[cfg(feature = "wrpc")]
+            wrpc_ctx: Default::default(),
         }
     }
 
@@ -174,6 +180,23 @@ impl WasiHttpView for SharedCtx {
             None => Err(wasmtime_wasi_http::HttpError::trap(anyhow::anyhow!(
                 "http client not available"
             ))),
+        }
+    }
+}
+
+// Implement WrpcView for wrpc-runtime-wasmtime codec support.
+// The NoopInvoker is never actually used for transport — real wRPC invocations
+// go through captured `wrpc_transport_nats::Client` instances in plugin closures.
+#[cfg(feature = "wrpc")]
+impl wrpc_runtime_wasmtime::WrpcView for SharedCtx {
+    type Invoke = crate::plugin::wrpc::codec::RoutingInvoker;
+
+    fn wrpc(
+        &mut self,
+    ) -> wrpc_runtime_wasmtime::WrpcCtxView<'_, crate::plugin::wrpc::codec::RoutingInvoker> {
+        wrpc_runtime_wasmtime::WrpcCtxView {
+            ctx: &mut self.wrpc_ctx,
+            table: &mut self.table,
         }
     }
 }

@@ -1,0 +1,18 @@
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: hello
+spec:
+  replicas: 1
+  template:
+    spec:
+      hostInterfaces:
+        - namespace: wrpc-examples
+          package: hello
+          interfaces:
+            - handler
+          config:
+            "wrpc:name": hello
+      components:
+        - name: hello-world
+          image: ttl.sh/lxfontes/wrpc-server:test
