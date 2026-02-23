@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use tracing::{debug, instrument};
+use tracing::{debug, info, instrument};
 use wasmtime::component::types::ComponentItem;
 
 use crate::engine::ctx::SharedCtx;
@@ -41,16 +41,27 @@ pub(super) async fn bind_imports(
             None => continue,
         };
 
-        let instance_name = interface.instance();
-
         // Find this interface in the component's imports
         for (import_name, import_item) in component_type.imports(engine) {
-            if import_name != instance_name {
-                continue;
-            }
             let ComponentItem::ComponentInstance(instance_ty) = import_item else {
                 continue;
             };
+
+            let wit_import = WitInterface::from(import_name);
+            if interface.contains(&wit_import) {
+                info!(
+                    import_name = %import_name,
+                    routing_key = %routing_key,
+                    "interface matches component import, collecting functions"
+                );
+            } else {
+                info!(
+                    import_name = %import_name,
+                    routing_key = %routing_key,
+                    "interface does not match component import, skipping"
+                );
+                continue;
+            }
 
             let wrpc_prefix = format!("{prefix}.{routing_key}");
 
@@ -66,25 +77,24 @@ pub(super) async fn bind_imports(
             );
 
             debug!(
-                instance = %instance_name,
+                import_name = %import_name,
                 routing_key = %routing_key,
                 "binding wrpc import via link_instance"
             );
 
             // Register the route so the RoutingInvoker can delegate to this client
-            item.wrpc_invoker_mut()
-                .add_route(instance_name.as_str(), wrpc_client);
+            item.wrpc_invoker_mut().add_route(import_name, wrpc_client);
 
             // Use wrpc-runtime-wasmtime's link_instance to polyfill all functions
             let linker = item.linker();
-            let mut linker_instance = linker.instance(&instance_name)?;
+            let mut linker_instance = linker.instance(import_name)?;
             wrpc_runtime_wasmtime::link_instance::<SharedCtx>(
                 engine,
                 &mut linker_instance,
-                [],                    // guest_resources: none
+                [],                                               // guest_resources: none
                 HashMap::<Box<str>, HashMap<Box<str>, _>>::new(), // host_resources: none
                 instance_ty,
-                instance_name.as_str(),
+                import_name,
             )?;
         }
     }

@@ -219,6 +219,22 @@ fn collect_exports(
                 continue;
             };
 
+            let wit_export = WitInterface::from(export_name);
+            if interface.contains(&wit_export) {
+                info!(
+                    export_name = %export_name,
+                    routing_key = %routing_key,
+                    "interface matches component export, collecting functions"
+                );
+            } else {
+                info!(
+                    export_name = %export_name,
+                    routing_key = %routing_key,
+                    "interface does not match component export, skipping"
+                );
+                continue;
+            }
+
             info!(
                 export_name= %export_name,
                 routing_key = %routing_key,
