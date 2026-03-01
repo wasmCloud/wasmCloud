@@ -14,7 +14,7 @@ runs:
           accept-flake-config = true
 
     # Setup Cachix cache
-    - uses: cachix/cachix-action@0fc020193b5a1fa3ac4575aa3a7d3aa6a35435ad
+    - uses: cachix/cachix-action@3ba601ff5bbb07c7220846facfa2cd81eeee15a1
       continue-on-error: true
       with:
         name: wasmcloud
