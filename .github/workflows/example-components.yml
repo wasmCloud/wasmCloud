@@ -66,7 +66,7 @@ jobs:
   prepare-wash-cache:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/install-cached-wash-cli
 
   # Ensure that `wash build` and `wash app validate` works for all example projects below
@@ -202,7 +202,7 @@ jobs:
             wasm-bin: 'http_password_checker_s.wasm'
             test_deploy: local.wadm.yaml
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       # Set up language toolchain
       - name: Setup WebAssembly toolchains for language
@@ -250,7 +250,7 @@ jobs:
           exit 0;
 
       # Save example as an artifact for later step(s)
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         if: ${{ startswith(github.ref, format('refs/tags/{0}', matrix.project.tag-prefix)) }}
         with:
           name: wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.folder }}
@@ -354,7 +354,7 @@ jobs:
             lang: 'python'
             wasm-bin: 'http_hello_world_s.wasm'
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       # Determine tag version (if this is a release tag), without the 'v'
       - name: Determine version
         id: meta
@@ -369,11 +369,11 @@ jobs:
           echo "ref-prefix=$REF_PREFIX" >> $GITHUB_OUTPUT;
           echo "wasmcloud-toml-path=examples/${{ matrix.project.lang }}/components/${{ matrix.project.folder }}/wasmcloud.toml" >> $GITHUB_OUTPUT;
       # Download all artifacts (example component binaries) to work dir
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           path: artifacts
       - name: install wash (current)
-        uses: taiki-e/cache-cargo-install-action@25ef9892608d184944df486ae09ffae168b3cda3 # v3.0.0
+        uses: taiki-e/cache-cargo-install-action@2bfc3cedaf2ee5e7fa5d0ae034ccd5fb50cf8e1f # v3.0.2
         with:
           tool: wash
           git: https://github.com/${{ github.repository }}

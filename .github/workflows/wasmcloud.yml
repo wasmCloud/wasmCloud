@@ -102,7 +102,7 @@ jobs:
       wasmcloud_modified: ${{ steps.changes.outputs.wasmcloud }}
       providers_modified: ${{ steps.changes.outputs.providers }}
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         id: changes
         with:
@@ -188,7 +188,7 @@ jobs:
     name: wash-${{ matrix.config.target }}
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: ./.github/actions/install-nix
         # need to run condition inside job steps so that job will pass if all steps are skipped
         # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
@@ -245,7 +245,7 @@ jobs:
     name: wasmcloud-${{ matrix.config.target }}
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: ./.github/actions/install-nix
         # need to run condition inside job steps so that job will pass if all steps are skipped
         # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
@@ -285,7 +285,7 @@ jobs:
     name: ${{ matrix.name }}-provider-${{ matrix.target }}
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: ./.github/actions/install-nix
         # need to run condition inside job steps so that job will pass if all steps are skipped
         # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
@@ -300,7 +300,7 @@ jobs:
     name: wash-x86_64-pc-windows-msvc
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - run: rustup show
       - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5
@@ -311,7 +311,7 @@ jobs:
       - run: mkdir "artifact/bin"
       - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
 
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: wash-x86_64-pc-windows-msvc
           path: artifact
@@ -321,11 +321,11 @@ jobs:
     needs: build-wash-bin
     runs-on: macos-15
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: wash-aarch64-apple-darwin
           path: aarch64
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: wash-x86_64-apple-darwin
           path: x86_64
@@ -333,7 +333,7 @@ jobs:
       - run: mkdir -p ./artifact/bin
       - run: lipo -create ./aarch64/bin/wash ./x86_64/bin/wash -output ./artifact/bin/wash
 
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: wash-universal-darwin
           path: artifact
@@ -343,11 +343,11 @@ jobs:
     needs: build-wasmcloud-bin
     runs-on: macos-15
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: wasmcloud-aarch64-apple-darwin
           path: aarch64
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: wasmcloud-x86_64-apple-darwin
           path: x86_64
@@ -355,7 +355,7 @@ jobs:
       - run: mkdir -p ./artifact/bin
       - run: lipo -create ./aarch64/bin/wasmcloud ./x86_64/bin/wasmcloud -output ./artifact/bin/wasmcloud
 
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: wasmcloud-universal-darwin
           path: artifact
@@ -364,7 +364,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     needs: build-wash-bin
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: wash-aarch64-unknown-linux-musl
       - run: chmod +x ./bin/wash
@@ -374,11 +374,11 @@ jobs:
     runs-on: ubuntu-24.04-arm
     needs: build-wash-bin
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: wash-aarch64-unknown-linux-musl-oci
       - run: docker load < ./wash-aarch64-unknown-linux-musl-oci
@@ -388,7 +388,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build-wash-bin
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: wash-x86_64-unknown-linux-musl
       - run: chmod +x ./bin/wash
@@ -405,7 +405,7 @@ jobs:
           - wash-aarch64-apple-darwin
           - wash-universal-darwin
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: ${{ matrix.artifact }}
       - run: chmod +x ./bin/wash
@@ -423,7 +423,7 @@ jobs:
           - wash-x86_64-apple-darwin
           - wash-universal-darwin
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: ${{ matrix.artifact }}
       - run: chmod +x ./bin/wash
@@ -434,7 +434,7 @@ jobs:
     runs-on: windows-latest
     needs: build-wash-windows
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: wash-x86_64-pc-windows-msvc
       - run: .\bin\wash.exe --version
@@ -443,7 +443,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     needs: build-wasmcloud-bin
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: wasmcloud-aarch64-unknown-linux-musl
       - run: chmod +x ./bin/wasmcloud
@@ -453,7 +453,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build-wasmcloud-bin
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: wasmcloud-x86_64-unknown-linux-musl
       - run: chmod +x ./bin/wasmcloud
@@ -470,7 +470,7 @@ jobs:
           - wasmcloud-aarch64-apple-darwin
           - wasmcloud-universal-darwin
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: ${{ matrix.artifact }}
       - run: chmod +x ./bin/wasmcloud
@@ -488,7 +488,7 @@ jobs:
           - wasmcloud-x86_64-apple-darwin
           - wasmcloud-universal-darwin
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: ${{ matrix.artifact }}
       - run: chmod +x ./bin/wasmcloud
@@ -499,7 +499,7 @@ jobs:
     runs-on: windows-latest
     needs: build-wasmcloud-bin
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: wasmcloud-x86_64-pc-windows-gnu
       - run: .\bin\wasmcloud.exe --version
@@ -511,11 +511,11 @@ jobs:
     name: cargo nextest
     runs-on: ubuntu-latest-8-cores
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - uses: actions/cache/restore@9255dc7a253b0ccc959486e2bca901246202afeb
+      - uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
         with:
           path: ${{ runner.temp }}/nix-store
           key: wasmcloud-cargo-doc-${{ github.sha }}
@@ -545,11 +545,11 @@ jobs:
     name: cargo ${{ matrix.check }}
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - uses: actions/cache/restore@9255dc7a253b0ccc959486e2bca901246202afeb
+      - uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
         with:
           path: ${{ runner.temp }}/nix-store
           key: wasmcloud-cargo-doc-${{ github.sha }}
@@ -570,11 +570,11 @@ jobs:
     if: ${{ needs.meta.outputs.wasmcloud_modified == 'true' || startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: ./.github/actions/install-nix
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-      - uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb
+      - uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
         id: cache
         with:
           path: ${{ runner.temp }}/nix-store
@@ -728,8 +728,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           path: artifacts
           pattern: wasmcloud-*
@@ -779,8 +779,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           path: artifacts
           pattern: wash-*
@@ -848,7 +848,7 @@ jobs:
       - test-wash-linux-x86_64
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - uses: ./.github/actions/install-nix
         with:
@@ -856,11 +856,11 @@ jobs:
       - name: Install NFPM
         run: nix profile install -L --inputs-from . 'nixpkgs-unstable#nfpm'
 
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: wash-aarch64-unknown-linux-musl
           path: ./crates/wash/aarch64
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: wash-x86_64-unknown-linux-musl
           path: ./crates/wash/x86_64
@@ -949,7 +949,7 @@ jobs:
     needs: cargo
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Extract tag context
         id: ctx
@@ -980,7 +980,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -1004,7 +1004,7 @@ jobs:
 
       - name: Create Pull Request
         if: ${{ !inputs.do-release }}
-        uses: peter-evans/create-pull-request@98357b18bf14b5342f975ff684046ec3b2a07725
+        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0
         with:
           branch: release-${{ inputs.crate }}
           signoff: true
