@@ -87,7 +87,7 @@ Note: This quickstart requires the [Rust toolchain](https://www.rust-lang.org/to
 | `wash dev`        | Start a development server for a Wasm component with hot-reload |
 | `wash host`       | Act as a host.                                                  |
 | `wash inspect`    | Inspect a Wasm component's embedded WIT interfaces              |
-| `wash new`        | Create a new project from a template or git repository          |
+| `wash new`        | Create a new project from a git repository                      |
 | `wash oci`        | Push or pull Wasm components to/from an OCI registry            |
 | `wash plugin`     | Manage wash plugins                                             |
 | `wash update`     | Update wash to the latest version                               |
@@ -193,17 +193,11 @@ Check if hosts registered correctly:
 
 ```sh
 ❯ kubectl get host
-NAME                    HOSTID                                 HOSTGROUP         READY   AGE
-near-jam-0148           a67300ea-558b-4bb7-b126-253e66d997ae   public-ingress    True    2m10s
-nonchalant-crown-3127   8cf2c415-409f-4dd8-b334-8a9dbb2d4aa4   default           True    2m10s
-obscene-thunder-6047    2f5aa990-c06a-4d1c-9dcf-edc4a8535fd5   private-ingress   True    2m9s
+NAME                   HOSTID                                 HOSTGROUP   READY   AGE
+thinkable-zebra-8670   8247719b-0d85-4940-a03d-7076e045d5ac   default     True    64s
+uppity-religion-0822   3c2a7116-05fd-4f2f-9e6b-8291bd018fb7   default     True    66s
+vivacious-band-6937    eb27df8b-c5b0-48a3-bafe-a7e92eb19746   default     True    66s
 ```
-
-- `public-ingress`: Hostgroup with HTTP enabled and bound to localhost port 80, simulating a load-balancer
-- `private-ingress`: Hostgroup with HTTP enabled and cluster-only access, simulating an internal load-balancer ( Kubernetes Service Name `hostgroup-private-ingress` )
-- `default`: Hostgroup with no incoming HTTP, for `wasmcloud:messaging` handlers & Services
-
-In this setup, HTTP workloads usually go to `public-ingress`.
 
 ## Documentation
 
