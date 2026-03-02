@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Task API</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        max-width: 600px;
+        margin: 40px auto;
+        padding: 20px;
+        background: #f5f5f5;
+      }
+      h1 {
+        color: #333;
+        margin-bottom: 24px;
+      }
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-weight: 500;
+        color: #444;
+      }
+      select,
+      textarea {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 14px;
+        margin-bottom: 16px;
+      }
+      textarea {
+        min-height: 120px;
+        resize: vertical;
+      }
+      button {
+        background: #0066cc;
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        border-radius: 4px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #0052a3;
+      }
+      button:disabled {
+        background: #999;
+        cursor: not-allowed;
+      }
+      #result {
+        margin-top: 24px;
+        padding: 16px;
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        display: none;
+      }
+      #result.error {
+        border-color: #cc0000;
+        background: #fff5f5;
+        color: #cc0000;
+      }
+      #result.success {
+        border-color: #00cc66;
+        background: #f5fff5;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Task API</h1>
+    <form id="taskForm">
+      <label for="payload">Payload</label>
+      <textarea
+        id="payload"
+        name="payload"
+        placeholder="Enter your message here..."
+      ></textarea>
+
+      <button type="submit" id="submitBtn">Send Task</button>
+    </form>
+
+    <div id="result"></div>
+
+    <script>
+      const form = document.getElementById("taskForm");
+      const payloadTextarea = document.getElementById("payload");
+      const submitBtn = document.getElementById("submitBtn");
+      const resultDiv = document.getElementById("result");
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+
+        const payload = payloadTextarea.value;
+
+        if (!payload.trim()) {
+          showResult("Payload is required", true);
+          return;
+        }
+
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Sending...";
+        resultDiv.style.display = "none";
+
+        try {
+          const body = { payload };
+
+          const response = await fetch("/task", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+          });
+
+          const text = await response.text();
+
+          if (response.ok) {
+            showResult(text, false);
+          } else {
+            showResult(`Error ${response.status}: ${text}`, true);
+          }
+        } catch (err) {
+          showResult(`Request failed: ${err.message}`, true);
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Send Task";
+        }
+      });
+
+      function showResult(message, isError) {
+        resultDiv.textContent = message;
+        resultDiv.className = isError ? "error" : "success";
+        resultDiv.style.display = "block";
+      }
+    </script>
+  </body>
+</html>

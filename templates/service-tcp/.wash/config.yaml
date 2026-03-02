@@ -1,0 +1,11 @@
+version: 2.0.0-rc.7
+
+build:
+  command: cargo build --workspace --target wasm32-wasip2 --release
+  component_path: target/wasm32-wasip2/release/http_api.wasm
+
+dev:
+  service_file: target/wasm32-wasip2/release/service-leet.wasm
+
+new:
+  command: cargo fetch
