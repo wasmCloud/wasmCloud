@@ -30,7 +30,8 @@ spec:
         - name: data-cert
           secret:
             secretName: {{ $top.Values.global.certificates.dataCertSecretName }}
-      serviceAccountName: {{ include "runtime-operator.serviceAccountName" $top }}-runtime
+            # update this
+      serviceAccountName: {{ include "runtime.serviceAccountName" $top }}
       {{- include "runtime-operator.imagePullSecrets" $top | nindent 6 }}
       containers:
         - name: host

@@ -1,3 +1,4 @@
+{{- if .Values.operator.enabled }}
 {{- $registry := .Values.operator.image.registry | default .Values.global.image.registry | default "docker.io" -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -22,7 +23,7 @@ spec:
         - name: operator-cert
           secret:
             secretName: {{ .Values.global.certificates.operatorCertSecretName }}
-      serviceAccountName: {{ include "runtime-operator.serviceAccountName" . }}
+      serviceAccountName: {{ include "operator.serviceAccountName" . }}
       {{- include "runtime-operator.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: runtime-operator
@@ -32,6 +33,9 @@ spec:
             - "-nats-ca=/operator-cert/ca.crt"
             - "-nats-client-cert=/operator-cert/tls.crt"
             - "-nats-client-key=/operator-cert/tls.key"
+            {{- if .Values.operator.watchNamespaces }}
+            - "-watch-namespaces={{ .Values.operator.watchNamespaces | join "," }}"
+            {{- end }}
           imagePullPolicy: {{ .Values.operator.image.pull_policy }}
           volumeMounts:
             - name: operator-cert
@@ -44,3 +48,4 @@ spec:
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       terminationGracePeriodSeconds: 0
+{{- end }}

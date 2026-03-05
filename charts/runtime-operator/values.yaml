@@ -31,10 +31,13 @@ nats:
   serviceAccount:
     # -- Specifies whether a service account should be created
     create: true
+    # -- Name of the service account to use. If not set and create is true, a name is generated using the fullname template. If not set and create is false, "default" is used.
+    name: ""
     # -- Annotations to add to the service account
     annotations: {}
 
 operator:
+  enabled: true
   image:
     registry: ghcr.io
     repository: wasmcloud/runtime-operator
@@ -49,8 +52,12 @@ operator:
   serviceAccount:
     # -- Specifies whether a service account should be created
     create: true
+    # -- Name of the service account to use. If not set and create is true, a name is generated using the fullname template. If not set and create is false, "default" is used.
+    name: ""
     # -- Annotations to add to the service account
     annotations: {}
+  # -- List of namespaces to watch. If empty, the operator watches all namespaces.
+  watchNamespaces: []
 
 gateway:
   enabled: true
@@ -68,6 +75,8 @@ gateway:
   serviceAccount:
     # -- Specifies whether a service account should be created
     create: true
+    # -- Name of the service account to use. If not set and create is true, a name is generated using the fullname template. If not set and create is false, "default" is used.
+    name: ""
     # -- Annotations to add to the service account
     annotations: {}
 
@@ -75,6 +84,8 @@ runtime:
   serviceAccount:
     # -- Specifies whether a service account should be created
     create: true
+    # -- Name of the service account to use. If not set and create is true, a name is generated using the fullname template. If not set and create is false, "default" is used.
+    name: ""
     # -- Annotations to add to the service account
     annotations: {}
   image:

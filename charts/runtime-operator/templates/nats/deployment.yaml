@@ -26,7 +26,7 @@ spec:
         - name: nats-cert
           secret:
             secretName: {{ .Values.global.certificates.natsCertSecretName }}
-      serviceAccountName: {{ include "runtime-operator.serviceAccountName" . }}-nats
+      serviceAccountName: {{ include "nats.serviceAccountName" . }}
       {{- include "runtime-operator.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: nats

@@ -51,13 +51,46 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Create the name of the service account to use
+Create the name of the service account to use for the runtime-operator
 */}}
-{{- define "runtime-operator.serviceAccountName" -}}
+{{- define "operator.serviceAccountName" -}}
 {{- if .Values.operator.serviceAccount.create }}
 {{- default (include "runtime-operator.fullname" .) .Values.operator.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.operator.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create the name of the service account to use for the runtime
+*/}}
+{{- define "runtime.serviceAccountName" -}}
+{{- if .Values.runtime.serviceAccount.create }}
+{{- default (printf "%s-runtime" (include "runtime-operator.fullname" .)) .Values.runtime.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.runtime.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create the name of the service account to use for the runtime gateway
+*/}}
+{{- define "gateway.serviceAccountName" -}}
+{{- if .Values.gateway.serviceAccount.create }}
+{{- default (printf "%s-gateway" (include "runtime-operator.fullname" .)) .Values.gateway.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.gateway.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create the name of the service account to use for NATS
+*/}}
+{{- define "nats.serviceAccountName" -}}
+{{- if .Values.nats.serviceAccount.create }}
+{{- default (printf "%s-nats" (include "runtime-operator.fullname" .)) .Values.nats.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.nats.serviceAccount.name }}
 {{- end }}
 {{- end }}
 

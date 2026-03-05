@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -30,6 +31,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -73,6 +75,7 @@ func main() {
 		cpuBackpressureThreshold    float64
 		memoryBackpressureThreshold float64
 		disableArtifactController   bool
+		watchNamespaces             string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8081", "The address the metrics endpoint binds to. "+
@@ -103,6 +106,12 @@ func main() {
 		"disable-artifact-controller",
 		false,
 		"Delegates Artifact reconciliation to an external controller.",
+	)
+	flag.StringVar(
+		&watchNamespaces,
+		"watch-namespaces",
+		"",
+		"Comma-separated list of namespaces to watch. If empty, watches all namespaces.",
 	)
 
 	opts := zap.Options{
@@ -186,10 +195,25 @@ func main() {
 		// generate self-signed certificates for the metrics server. While convenient for development and testing,
 		// this setup is not recommended for production.
 	}
+	var cacheOpts cache.Options
+
+	// If watch namespaces is set, only watch the specified namespaces. Otherwise, watch all namespaces.
+	if watchNamespaces != "" {
+		namespaces := strings.Split(watchNamespaces, ",")
+		toWatchNamespaces := make(map[string]cache.Config, len(namespaces))
+		for _, ns := range namespaces {
+			ns = strings.TrimSpace(ns)
+			if ns != "" {
+				toWatchNamespaces[ns] = cache.Config{}
+			}
+		}
+		cacheOpts.DefaultNamespaces = toWatchNamespaces
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
+		Cache:                  cacheOpts,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,

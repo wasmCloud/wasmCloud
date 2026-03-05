@@ -19,7 +19,8 @@ spec:
         wasmcloud.com/name: runtime-gateway
         {{- include "runtime-operator.labels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "runtime-operator.serviceAccountName" . }}-gateway
+      # change this
+      serviceAccountName: {{ include "gateway.serviceAccountName" . }}
       {{- include "runtime-operator.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: runtime-operator
