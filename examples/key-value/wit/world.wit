@@ -1,0 +1,7 @@
+package wasmcloud:redis-keyvalue;
+
+world redis-keyvalue {
+  import wasi:keyvalue/store@0.2.0-draft;
+
+  export wasi:http/incoming-handler@0.2.2;
+}

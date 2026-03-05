@@ -1,0 +1,21 @@
+build:
+  command: cargo build --target wasm32-wasip2 --release
+  component_path: target/wasm32-wasip2/release/redis_keyvalue.wasm
+
+dev:
+  # Backend: in_memory (default)
+  # No configuration needed. Data is lost when the process exits.
+
+  # Backend: filesystem
+  # Uncomment the line below to persist data to disk.
+  # wasi_keyvalue_path: /tmp/keyvalue-store
+
+  # Backend: nats
+  # Uncomment the line below to use NATS JetStream as the keyvalue store.
+  # Requires a running NATS server with JetStream enabled.
+  # wasi_keyvalue_nats_url: nats://127.0.0.1:4222
+
+  # Backend: redis
+  # Uncomment the line below to use Redis as the keyvalue store.
+  # Requires a running Redis server.
+  # wasi_keyvalue_redis_url: redis://127.0.0.1:6379

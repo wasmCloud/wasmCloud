@@ -1,3 +1,6 @@
+// Increase the default recursion limit
+#![recursion_limit = "256"]
+
 use std::{
     io::{BufWriter, IsTerminal},
     path::PathBuf,

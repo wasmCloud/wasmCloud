@@ -129,8 +129,22 @@ impl CliCommand for DevCommand {
             host_builder.with_plugin(Arc::new(plugin::wasi_logging::TracingLogger::default()))?;
         debug!("Logging plugin registered");
 
-        // Add keyvalue plugin
-        if let Some(keyvalue_path) = &dev_config.wasi_keyvalue_path {
+        // Add keyvalue plugin — Redis > NATS > filesystem > in-memory
+        if let Some(redis_url) = &dev_config.wasi_keyvalue_redis_url {
+            host_builder = host_builder.with_plugin(Arc::new(
+                plugin::wasi_keyvalue::RedisKeyValue::from_url(redis_url)
+                    .context("failed to configure Redis keyvalue plugin")?,
+            ))?;
+            debug!(url = %redis_url, "WASI KeyValue plugin registered with Redis backend");
+        } else if let Some(nats_url) = &dev_config.wasi_keyvalue_nats_url {
+            let nats_client = async_nats::connect(nats_url.as_str())
+                .await
+                .context("failed to connect to NATS for keyvalue plugin")?;
+            host_builder = host_builder.with_plugin(Arc::new(
+                plugin::wasi_keyvalue::NatsKeyValue::new(&nats_client),
+            ))?;
+            debug!(url = %nats_url, "WASI KeyValue plugin registered with NATS backend");
+        } else if let Some(keyvalue_path) = &dev_config.wasi_keyvalue_path {
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_keyvalue::FilesystemKeyValue::new(keyvalue_path.clone()),
             ))?;

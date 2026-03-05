@@ -171,9 +171,21 @@ pub struct DevConfig {
     #[serde(default)]
     pub wasi_webgpu: bool,
 
+    /// Optional Redis connection URL for the WASI keyvalue plugin.
+    /// Example: redis://127.0.0.1:6379
+    /// When set, takes precedence over wasi_keyvalue_path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wasi_keyvalue_redis_url: Option<String>,
+
     /// Optional path for WASI keyvalue filesystem storage. If not set, an in-memory store is used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasi_keyvalue_path: Option<PathBuf>,
+
+    /// Optional NATS connection URL for the WASI keyvalue plugin.
+    /// Example: nats://127.0.0.1:4222
+    /// When set, takes precedence over wasi_keyvalue_path but is overridden by wasi_keyvalue_redis_url.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wasi_keyvalue_nats_url: Option<String>,
 
     /// Optional path for WASI blobstore filesystem storage. If not set, an in-memory store is used.
     #[serde(skip_serializing_if = "Option::is_none")]

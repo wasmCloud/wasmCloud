@@ -2,6 +2,9 @@
 //!
 //! These tests verify end-to-end workflows with real file I/O and network access.
 
+// Increase the default recursion limit
+#![recursion_limit = "256"]
+
 use anyhow::{Context, Result};
 use std::fs;
 use std::time::Duration;

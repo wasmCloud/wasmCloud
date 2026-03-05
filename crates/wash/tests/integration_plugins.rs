@@ -3,6 +3,9 @@
 //! This test validates the plugin test command functionality using the oauth plugin.
 //! It runs the plugin test command with various combinations of command and hook flags.
 
+// Increase the default recursion limit
+#![recursion_limit = "256"]
+
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
