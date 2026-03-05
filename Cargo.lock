@@ -6673,7 +6673,6 @@ version = "2.0.0-rc.7"
 dependencies = [
  "anyhow",
  "async-nats",
- "async-trait",
  "bytes",
  "chrono",
  "clap",
@@ -6701,15 +6700,12 @@ dependencies = [
  "tokio",
  "tonic-prost-build",
  "tracing",
- "tracing-subscriber",
  "url",
  "uuid",
  "wash-runtime",
  "wasm-metadata 0.244.0",
  "wasm-pkg-client",
  "wasm-pkg-core",
- "wasmtime",
- "wasmtime-wasi",
  "wat",
  "wit-component 0.244.0",
 ]

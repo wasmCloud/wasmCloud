@@ -10,10 +10,7 @@ use wasm_metadata::Payload;
 
 pub(crate) const OCI_CACHE_DIR: &str = "oci";
 
-use crate::{
-    cli::{CliCommand, CliContext, CommandOutput},
-    plugin::bindings::wasmcloud::wash::types::HookType,
-};
+use crate::cli::{CliCommand, CliContext, CommandOutput};
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum OciCommand {
@@ -28,18 +25,6 @@ impl CliCommand for OciCommand {
         match self {
             OciCommand::Pull(cmd) => cmd.handle(ctx).await,
             OciCommand::Push(cmd) => cmd.handle(ctx).await,
-        }
-    }
-    fn enable_pre_hook(&self) -> Option<HookType> {
-        match self {
-            OciCommand::Pull(_) => None,
-            OciCommand::Push(_) => Some(HookType::BeforePush),
-        }
-    }
-    fn enable_post_hook(&self) -> Option<HookType> {
-        match self {
-            OciCommand::Pull(_) => None,
-            OciCommand::Push(_) => Some(HookType::AfterPush),
         }
     }
 }

@@ -1,6 +1,0 @@
-package wasmcloud:plugin@0.1.0;
-
-world aspire-otel {
-    import wasmcloud:wash/types@0.0.2;
-    export wasmcloud:wash/plugin@0.0.2;
-}

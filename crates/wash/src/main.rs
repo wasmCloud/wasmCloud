@@ -11,8 +11,7 @@ use clap_complete::generate;
 use tracing::{Level, error, info, instrument, trace, warn};
 
 use wash::cli::{
-    CONFIG_DIR_NAME, CONFIG_FILE_NAME, CliCommand, CliCommandExt, CliContext, CommandOutput,
-    OutputKind, plugin::ComponentPluginCommand,
+    CONFIG_DIR_NAME, CONFIG_FILE_NAME, CliCommand, CliContext, CommandOutput, OutputKind,
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -21,8 +20,6 @@ use wash::cli::{
     about,
     version,
     arg_required_else_help = true,
-    allow_external_subcommands = true,
-    subcommand_value_name = "COMMAND|PLUGIN",
     color = clap::ColorChoice::Auto
 )]
 struct Cli {
@@ -105,9 +102,6 @@ enum WashCliCommand {
     /// Push or pull Wasm components to/from an OCI registry
     #[clap(name = "oci", alias = "docker", subcommand)]
     Oci(wash::cli::oci::OciCommand),
-    /// Manage wash plugins
-    #[clap(name = "plugin", subcommand)]
-    Plugin(wash::cli::plugin::PluginCommand),
     /// Update wash to the latest version
     #[clap(name = "update", alias = "upgrade")]
     Update(wash::cli::update::UpdateCommand),
@@ -126,15 +120,6 @@ impl CliCommand for WashCliCommand {
                 // Handle completion generation directly here since we need access to the full CLI
                 let mut wash_cmd = Cli::command();
 
-                let plugins = ctx.plugin_manager().get_commands().await;
-                if !plugins.is_empty() {
-                    wash_cmd = wash_cmd
-                        .subcommand(clap::Command::new("\n\x1b[4mPlugins:\x1b[0m").about("\n"));
-                }
-                for plugin in plugins {
-                    wash_cmd = wash_cmd.subcommand(plugin.metadata())
-                }
-
                 let cli_name = wash_cmd.get_name().to_owned();
                 generate(cmd.shell(), &mut wash_cmd, cli_name, &mut std::io::stdout());
 
@@ -146,40 +131,8 @@ impl CliCommand for WashCliCommand {
             WashCliCommand::Host(cmd) => cmd.handle(ctx).await,
             WashCliCommand::New(cmd) => cmd.handle(ctx).await,
             WashCliCommand::Oci(cmd) => cmd.handle(ctx).await,
-            WashCliCommand::Plugin(cmd) => cmd.handle(ctx).await,
             WashCliCommand::Update(cmd) => cmd.handle(ctx).await,
             WashCliCommand::Wit(cmd) => cmd.handle(ctx).await,
-        }
-    }
-
-    fn enable_pre_hook(&self) -> Option<wash::plugin::bindings::wasmcloud::wash::types::HookType> {
-        match self {
-            WashCliCommand::Build(cmd) => cmd.enable_pre_hook(),
-            WashCliCommand::Completion(cmd) => cmd.enable_pre_hook(),
-            WashCliCommand::Config(cmd) => cmd.enable_pre_hook(),
-            WashCliCommand::Dev(cmd) => cmd.enable_pre_hook(),
-            WashCliCommand::Inspect(cmd) => cmd.enable_pre_hook(),
-            WashCliCommand::Host(cmd) => cmd.enable_pre_hook(),
-            WashCliCommand::New(cmd) => cmd.enable_pre_hook(),
-            WashCliCommand::Oci(cmd) => cmd.enable_pre_hook(),
-            WashCliCommand::Plugin(cmd) => cmd.enable_pre_hook(),
-            WashCliCommand::Update(cmd) => cmd.enable_pre_hook(),
-            WashCliCommand::Wit(cmd) => cmd.enable_pre_hook(),
-        }
-    }
-    fn enable_post_hook(&self) -> Option<wash::plugin::bindings::wasmcloud::wash::types::HookType> {
-        match self {
-            WashCliCommand::Build(cmd) => cmd.enable_post_hook(),
-            WashCliCommand::Completion(cmd) => cmd.enable_post_hook(),
-            WashCliCommand::Config(cmd) => cmd.enable_post_hook(),
-            WashCliCommand::Dev(cmd) => cmd.enable_post_hook(),
-            WashCliCommand::Inspect(cmd) => cmd.enable_post_hook(),
-            WashCliCommand::Host(cmd) => cmd.enable_post_hook(),
-            WashCliCommand::New(cmd) => cmd.enable_post_hook(),
-            WashCliCommand::Oci(cmd) => cmd.enable_post_hook(),
-            WashCliCommand::Plugin(cmd) => cmd.enable_post_hook(),
-            WashCliCommand::Update(cmd) => cmd.enable_post_hook(),
-            WashCliCommand::Wit(cmd) => cmd.enable_post_hook(),
         }
     }
 }
@@ -250,7 +203,7 @@ async fn main() {
     // From now on relative paths will be relative to the project path
     // ***********************************
 
-    let mut wash_cmd = Cli::command();
+    let wash_cmd = Cli::command();
     // Create global context with output kind and directory paths
     let mut ctx_builder = CliContext::builder()
         .non_interactive(non_interactive)
@@ -270,20 +223,7 @@ async fn main() {
     }
 
     let ctx = match ctx_builder.build().await {
-        Ok(ctx) => {
-            // Register plugin commands
-            let plugins = ctx.plugin_manager().get_commands().await;
-            // Slight hack to display a delimiter between builtins and plugins (\x1b[4munderlined\x1b[0m)
-            if !plugins.is_empty() {
-                wash_cmd =
-                    wash_cmd.subcommand(clap::Command::new("\n\x1b[4mPlugins:\x1b[0m").about("\n"));
-            }
-            for plugin in plugins {
-                wash_cmd = wash_cmd.subcommand(plugin.metadata())
-            }
-
-            ctx
-        }
+        Ok(ctx) => ctx,
         Err(e) => {
             error!(error = ?e, "failed to infer global context");
             // In the rare case that this fails, we'll parse and initialize the CLI here to output properly.
@@ -324,21 +264,9 @@ async fn main() {
     }
 
     // Since some interactive commands may hide the cursor, we need to ensure it is shown again on exit
-    // Clone the host Arc to move into the ctrl-c handler
-    let host_for_handler = ctx.host().clone();
     if let Err(e) = ctrlc::set_handler(move || {
         let term = dialoguer::console::Term::stdout();
         let _ = term.show_cursor();
-
-        // Stop all running workloads and the host runtime
-        // Note: Signal handlers run outside the normal runtime context,
-        // so block_on is safe here and won't deadlock
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let host = host_for_handler.clone();
-            if let Err(e) = handle.block_on(async move { host.stop().await }) {
-                eprintln!("Error stopping host: {e:?}");
-            }
-        }
 
         // Exit with standard SIGINT code (128 + 2)
         std::process::exit(130);
@@ -347,9 +275,6 @@ async fn main() {
     }
 
     let command_output = if let Some(command) = cli.command {
-        run_command(ctx, command).await
-    } else if let Some((subcommand, args)) = matches.subcommand() {
-        let command: ComponentPluginCommand = ComponentPluginCommand::new(subcommand, args);
         run_command(ctx, command).await
     } else {
         Ok(CommandOutput::error(
@@ -377,22 +302,8 @@ async fn run_command<C>(ctx: CliContext, command: C) -> anyhow::Result<CommandOu
 where
     C: CliCommand + std::fmt::Debug,
 {
-    trace!(command = ?command, "running command pre-hook");
-    if let Err(e) = command.pre_hook(&ctx).await {
-        error!(error = ?e, "failed to run pre-hook for command");
-        return Ok(CommandOutput::error(e, None));
-    }
-
     trace!(command = ?command, "handling command");
-    let command_output = command.handle(&ctx).await;
-
-    trace!(command = ?command, "running command post-hook");
-    if let Err(e) = command.post_hook(&ctx).await {
-        error!(error = ?e, "failed to run post-hook for command");
-        return Ok(CommandOutput::error(e, None));
-    }
-
-    command_output
+    command.handle(&ctx).await
 }
 
 /// Helper function to ensure that we're exiting the program consistently and with the correct output format.

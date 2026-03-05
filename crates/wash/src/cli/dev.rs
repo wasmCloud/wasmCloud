@@ -17,7 +17,6 @@ use wash_runtime::{
 use crate::{
     cli::{CliCommand, CliContext, CommandOutput, component_build::build_dev_component},
     config::{Config, load_config},
-    plugin::bindings::wasmcloud::wash::types::HookType,
     wit::WitConfig,
 };
 
@@ -45,10 +44,6 @@ impl CliCommand for DevCommand {
             }),
         )
         .context("failed to load config for development")?;
-
-        // Call pre-hooks before starting dev session
-        // Empty context for pre-hooks, consider adding more
-        ctx.call_hooks(HookType::BeforeDev, Arc::default()).await;
 
         let dev_config = config.dev();
         let http_addr = dev_config
@@ -235,9 +230,6 @@ impl CliCommand for DevCommand {
         } else {
             debug!(workload_id = workload_id, "workload stopped successfully");
         }
-
-        // Empty context for AfterDev, consider adding more
-        ctx.call_hooks(HookType::AfterDev, Arc::default()).await;
 
         Ok(CommandOutput::ok(
             "Development command executed successfully".to_string(),

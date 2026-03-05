@@ -11,7 +11,5 @@ pub mod config;
 pub mod inspect;
 /// Create new wash projects
 pub mod new;
-/// Plugin management for wash
-pub mod plugin;
 /// Manage WebAssembly Interface Types (WIT) for wash components
 pub(crate) mod wit;

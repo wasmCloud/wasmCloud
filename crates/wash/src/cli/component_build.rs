@@ -8,7 +8,6 @@ use serde::Serialize;
 use tokio::process::Command;
 use tracing::{debug, error, info, instrument, trace};
 
-use crate::plugin::bindings::wasmcloud::wash::types::HookType;
 use crate::wit::WitConfig;
 use crate::{
     cli::{CliCommand, CliContext, CommandOutput},
@@ -51,13 +50,6 @@ impl CliCommand for ComponentBuildCommand {
                 "project_path": result.project_path,
             })),
         ))
-    }
-
-    fn enable_pre_hook(&self) -> Option<HookType> {
-        Some(HookType::BeforeBuild)
-    }
-    fn enable_post_hook(&self) -> Option<HookType> {
-        Some(HookType::AfterBuild)
     }
 }
 
@@ -123,20 +115,8 @@ pub async fn perform_component_build(
         "building component at specified project path",
     );
 
-    // Execute pre-build hooks
-    trace!("executing before-build hooks");
-    ctx.call_hooks(HookType::BeforeBuild, std::sync::Arc::default())
-        .await;
-
     let builder = ComponentBuilder::new(ctx.project_dir().into(), command, wit_dir, skip_fetch);
-    let result = builder.build(ctx, config).await;
-
-    // Execute post-build hooks (even if build failed, plugins may want to know)
-    trace!("executing after-build hooks");
-    ctx.call_hooks(HookType::AfterBuild, std::sync::Arc::default())
-        .await;
-
-    result
+    builder.build(ctx, config).await
 }
 
 /// Component builder that handles the actual build process
