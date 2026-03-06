@@ -313,6 +313,12 @@ impl<T, Y> WorkloadTracker<T, Y> {
         let item = self.workloads.get(workload_id)?;
         item.components.get(component_id)
     }
+
+    pub fn get_component_data_mut(&mut self, component_id: &str) -> Option<&mut Y> {
+        let workload_id = self.components.get(component_id)?;
+        let item = self.workloads.get_mut(workload_id)?;
+        item.components.get_mut(component_id)
+    }
 }
 
 /// Locks an untrusted path to be within the given root directory.

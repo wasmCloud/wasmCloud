@@ -1,0 +1,11 @@
+[package]
+name = "task-leet"
+version = "0.1.0"
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true }
+wstd = { workspace = true }

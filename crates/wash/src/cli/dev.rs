@@ -57,6 +57,11 @@ impl CliCommand for DevCommand {
         host_builder =
             host_builder.with_plugin(Arc::new(plugin::wasi_config::DynamicConfig::default()))?;
 
+        // Enable wasmcloud:messaging
+        host_builder = host_builder.with_plugin(Arc::new(
+            plugin::wasmcloud_messaging::InMemoryMessaging::default(),
+        ))?;
+
         // Add blobstore plugin
         if let Some(blobstore_path) = &dev_config.wasi_blobstore_path {
             host_builder = host_builder.with_plugin(Arc::new(

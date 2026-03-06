@@ -1,0 +1,18 @@
+[workspace]
+resolver = "3"
+package.edition = "2024"
+package.authors = ["The wasmCloud Team"]
+members = ["http-api", "task-leet"]
+
+[workspace.dependencies]
+wit-bindgen = "0.46.0"
+wstd = "0.6.3"
+serde = { version = "1.0", features = ["derive"] }
+anyhow = "1.0"
+
+[profile.release]
+# Optimize for small code size
+lto = true
+opt-level = "s"
+strip = true
+
