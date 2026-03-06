@@ -254,6 +254,7 @@ impl Host {
                 interfaces: HashSet::from([interface]),
                 version,
                 config: HashMap::new(),
+                name: None,
             })
         };
 
@@ -295,6 +296,7 @@ impl Host {
                 ]),
                 version: None,
                 config: HashMap::new(),
+                name: None,
             });
         }
 

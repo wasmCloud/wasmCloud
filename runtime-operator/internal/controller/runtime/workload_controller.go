@@ -161,6 +161,7 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 			Version:    hi.Version,
 			Interfaces: hi.Interfaces,
 			Config:     hiConfig,
+			Name:       hi.Name,
 		})
 	}
 

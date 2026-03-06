@@ -1336,6 +1336,33 @@ impl UnresolvedWorkload {
                     .iter()
                     .flat_map(|(_, interfaces)| interfaces.clone())
                     .collect();
+
+                // Validate: if multiple named entries of the same namespace:package
+                // are matched to this plugin, the plugin must support named instances
+                let mut ns_pkg_named: HashMap<(&str, &str), Vec<&str>> = HashMap::new();
+                for iface in &plugin_matched_interfaces {
+                    if let Some(name) = &iface.name {
+                        ns_pkg_named
+                            .entry((iface.namespace.as_str(), iface.package.as_str()))
+                            .or_default()
+                            .push(name.as_str());
+                    }
+                }
+                for ((ns, pkg), mut names) in ns_pkg_named {
+                    if names.len() > 1 && !p.supports_named_instances() {
+                        names.sort_unstable();
+                        bail!(
+                            "plugin '{}' does not support named instances, but workload \
+                             requires {} named entries for {ns}:{pkg} (names: {}). \
+                             The plugin must implement supports_named_instances() to \
+                             handle multiplexed interfaces.",
+                            plugin_id,
+                            names.len(),
+                            names.join(", ")
+                        );
+                    }
+                }
+
                 debug!(
                     plugin_id = plugin_id,
                     interfaces = ?plugin_matched_interfaces,
@@ -1762,6 +1789,7 @@ mod tests {
         on_workload_bind_count: Arc<AtomicUsize>,
         on_workload_item_bind_count: Arc<AtomicUsize>,
         on_workload_resolved_count: Arc<AtomicUsize>,
+        named_instance_support: bool,
     }
 
     impl MockPlugin {
@@ -1777,7 +1805,13 @@ mod tests {
                 on_workload_bind_count: Arc::new(AtomicUsize::new(0)),
                 on_workload_item_bind_count: Arc::new(AtomicUsize::new(0)),
                 on_workload_resolved_count: Arc::new(AtomicUsize::new(0)),
+                named_instance_support: false,
             }
+        }
+
+        fn with_named_instance_support(mut self) -> Self {
+            self.named_instance_support = true;
+            self
         }
 
         /// Returns the number of times the specified method was called.
@@ -1804,6 +1838,10 @@ mod tests {
 
         fn world(&self) -> WitWorld {
             self.world.clone()
+        }
+
+        fn supports_named_instances(&self) -> bool {
+            self.named_instance_support
         }
 
         async fn on_workload_bind(
@@ -1939,6 +1977,7 @@ mod tests {
             interfaces: ["container".to_string()].into_iter().collect(),
             version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
             config: std::collections::HashMap::new(),
+            name: None,
         };
 
         let plugin = Arc::new(MockPlugin::new(
@@ -2316,6 +2355,7 @@ mod tests {
             interfaces: ["handler".to_string()].into_iter().collect(),
             version: Some(semver::Version::parse("0.2.0").unwrap()),
             config: std::collections::HashMap::new(),
+            name: None,
         };
 
         let messaging_consumer = WitInterface {
@@ -2326,6 +2366,7 @@ mod tests {
                 .collect(),
             version: Some(semver::Version::parse("0.2.0").unwrap()),
             config: std::collections::HashMap::new(),
+            name: None,
         };
 
         let logging = WitInterface {
@@ -2334,6 +2375,7 @@ mod tests {
             interfaces: ["logging".to_string()].into_iter().collect(),
             version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
             config: std::collections::HashMap::new(),
+            name: None,
         };
 
         let messaging_plugin = Arc::new(MockPlugin::new(
@@ -2376,6 +2418,7 @@ mod tests {
                         .collect(),
                     version: Some(semver::Version::parse("0.2.0").unwrap()),
                     config: std::collections::HashMap::new(),
+                    name: None,
                 },
                 logging,
             ],
@@ -2407,6 +2450,7 @@ mod tests {
             interfaces: ["logging".to_string()].into_iter().collect(),
             version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
             config: std::collections::HashMap::new(),
+            name: None,
         };
 
         let plugin = Arc::new(MockPlugin::new(
@@ -2442,5 +2486,145 @@ mod tests {
         assert_eq!(bound_plugins.len(), 1);
         let (_bound_plugin, component_ids) = &bound_plugins[0];
         assert_eq!(component_ids.len(), 1);
+    }
+
+    fn keyvalue_interface(name: Option<&str>) -> WitInterface {
+        WitInterface {
+            namespace: "wasi".to_string(),
+            package: "keyvalue".to_string(),
+            interfaces: ["store".to_string()].into_iter().collect(),
+            version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
+            config: std::collections::HashMap::new(),
+            name: name.map(String::from),
+        }
+    }
+
+    /// Two named `wasi:keyvalue` entries, plugin doesn't support naming -> error
+    #[tokio::test]
+    async fn test_named_interfaces_fail_without_plugin_support() {
+        let plugin = Arc::new(MockPlugin::new(
+            "keyvalue-plugin",
+            vec![],
+            vec![keyvalue_interface(None)],
+        ));
+
+        let mut plugins = HashMap::new();
+        plugins.insert(plugin.id(), plugin.clone() as Arc<dyn HostPlugin>);
+
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![create_test_component("component1")],
+            vec![
+                keyvalue_interface(Some("cache")),
+                keyvalue_interface(Some("sessions")),
+            ],
+        );
+
+        let result = workload.bind_plugins(&plugins).await;
+        match result {
+            Ok(_) => panic!("Expected error for unsupported named instances"),
+            Err(e) => {
+                let err_msg = format!("{e}");
+                assert!(
+                    err_msg.contains("does not support named instances"),
+                    "Expected 'does not support named instances' error, got: {err_msg}"
+                );
+            }
+        }
+    }
+
+    /// Same setup but plugin returns `supports_named_instances() == true` -> succeeds
+    #[tokio::test]
+    async fn test_named_interfaces_succeed_with_plugin_support() {
+        let plugin = Arc::new(
+            MockPlugin::new("keyvalue-plugin", vec![], vec![keyvalue_interface(None)])
+                .with_named_instance_support(),
+        );
+
+        let mut plugins = HashMap::new();
+        plugins.insert(plugin.id(), plugin.clone() as Arc<dyn HostPlugin>);
+
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![create_test_component("component1")],
+            vec![
+                keyvalue_interface(Some("cache")),
+                keyvalue_interface(Some("sessions")),
+            ],
+        );
+
+        let result = workload.bind_plugins(&plugins).await;
+        if let Err(e) = result {
+            panic!("Expected success but got error: {e}");
+        }
+    }
+
+    /// Only one named entry -> no multiplexing needed, passes even without plugin support
+    #[tokio::test]
+    async fn test_single_named_interface_no_validation() {
+        let plugin = Arc::new(MockPlugin::new(
+            "keyvalue-plugin",
+            vec![],
+            vec![keyvalue_interface(None)],
+        ));
+
+        let mut plugins = HashMap::new();
+        plugins.insert(plugin.id(), plugin.clone() as Arc<dyn HostPlugin>);
+
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![create_test_component("component1")],
+            vec![keyvalue_interface(Some("cache"))],
+        );
+
+        let result = workload.bind_plugins(&plugins).await;
+        if let Err(e) = result {
+            panic!("Single named entry should not require named instance support: {e}");
+        }
+    }
+
+    /// Existing unnamed entries -> no change in behavior
+    #[tokio::test]
+    async fn test_unnamed_interfaces_backwards_compatible() {
+        let iface = WitInterface {
+            namespace: "wasi".to_string(),
+            package: "blobstore".to_string(),
+            interfaces: ["container".to_string()].into_iter().collect(),
+            version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
+            config: std::collections::HashMap::new(),
+            name: None,
+        };
+
+        let plugin = Arc::new(MockPlugin::new(
+            "blobstore-plugin",
+            vec![],
+            vec![iface.clone()],
+        ));
+
+        let mut plugins = HashMap::new();
+        plugins.insert(plugin.id(), plugin.clone() as Arc<dyn HostPlugin>);
+
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![create_test_component("component1")],
+            vec![iface],
+        );
+
+        let result = workload.bind_plugins(&plugins).await;
+        if let Err(e) = result {
+            panic!("Unnamed interfaces should work as before: {e}");
+        }
     }
 }

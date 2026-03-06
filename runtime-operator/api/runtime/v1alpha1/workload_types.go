@@ -125,6 +125,14 @@ type HostInterface struct {
 	// Provides the config / configmap / secret references for this host interface
 	ConfigLayer `json:",inline"`
 
+	// Name uniquely identifies this interface instance when multiple entries
+	// share the same namespace+package. Components use this name as the
+	// identifier parameter in resource-opening functions (e.g., store::open(name)).
+	// Required when multiple entries of the same namespace:package exist.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]*$`
+	Name string `json:"name,omitempty"`
+
 	// +kubebuilder:validation:Required
 	Namespace string `json:"namespace"`
 	// +kubebuilder:validation:Required
@@ -172,7 +180,7 @@ type WorkloadSpec struct {
 
 func (s *WorkloadSpec) EnsureHostInterface(iface HostInterface) {
 	for i, existing := range s.HostInterfaces {
-		if existing.Namespace == iface.Namespace && existing.Package == iface.Package {
+		if existing.Namespace == iface.Namespace && existing.Package == iface.Package && existing.Name == iface.Name {
 			existing.EnsureInterfaces(iface.Interfaces...)
 			if iface.Config != nil && existing.Config == nil {
 				existing.Config = make(map[string]string)

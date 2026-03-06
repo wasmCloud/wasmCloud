@@ -38,6 +38,7 @@ fn http_counter_host_interfaces(http_host_config: &str) -> Vec<WitInterface> {
                 config.insert("host".to_string(), http_host_config.to_string());
                 config
             },
+            name: None,
         },
         WitInterface {
             namespace: "wasi".to_string(),
@@ -51,6 +52,7 @@ fn http_counter_host_interfaces(http_host_config: &str) -> Vec<WitInterface> {
             .collect(),
             version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
             config: HashMap::new(),
+            name: None,
         },
         WitInterface {
             namespace: "wasi".to_string(),
@@ -60,6 +62,7 @@ fn http_counter_host_interfaces(http_host_config: &str) -> Vec<WitInterface> {
                 .collect(),
             version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
             config: HashMap::new(),
+            name: None,
         },
         WitInterface {
             namespace: "wasi".to_string(),
@@ -67,6 +70,7 @@ fn http_counter_host_interfaces(http_host_config: &str) -> Vec<WitInterface> {
             interfaces: ["logging".to_string()].into_iter().collect(),
             version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
             config: HashMap::new(),
+            name: None,
         },
         WitInterface {
             namespace: "wasi".to_string(),
@@ -74,6 +78,7 @@ fn http_counter_host_interfaces(http_host_config: &str) -> Vec<WitInterface> {
             interfaces: ["store".to_string()].into_iter().collect(),
             version: Some(semver::Version::parse("0.2.0-rc.1").unwrap()),
             config: HashMap::new(),
+            name: None,
         },
     ]
 }

@@ -85,6 +85,21 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// A `WitWorld` containing the plugin's imports and exports.
     fn world(&self) -> WitWorld;
 
+    /// Returns whether this plugin supports handling multiple named instances
+    /// of the same namespace:package interface.
+    ///
+    /// When a workload declares multiple host interfaces with the same
+    /// namespace:package but different names (e.g., two `wasi:keyvalue` entries
+    /// named "cache" and "sessions"), the plugin must be able to distinguish
+    /// and route to each named backend.
+    ///
+    /// The default is `false`, which causes binding to fail if the workload
+    /// requires named multiplexing. Plugins that implement multiplexing
+    /// should override this to return `true`.
+    fn supports_named_instances(&self) -> bool {
+        false
+    }
+
     /// Called when the plugin is started during host initialization.
     ///
     /// This method allows plugins to perform any necessary setup before

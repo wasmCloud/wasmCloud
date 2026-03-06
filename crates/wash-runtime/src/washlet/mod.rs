@@ -506,6 +506,11 @@ impl From<types::v2::WitInterface> for crate::wit::WitInterface {
             },
             interfaces: wi.interfaces.into_iter().collect(),
             config: wi.config,
+            name: if wi.name.is_empty() {
+                None
+            } else {
+                Some(wi.name)
+            },
         }
     }
 }
@@ -585,6 +590,7 @@ impl From<crate::wit::WitInterface> for types::v2::WitInterface {
             version: wi.version.map(|v| v.to_string()).unwrap_or_default(),
             interfaces: wi.interfaces.into_iter().collect(),
             config: wi.config,
+            name: wi.name.unwrap_or_default(),
         }
     }
 }

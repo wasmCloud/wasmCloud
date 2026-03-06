@@ -92,6 +92,7 @@ async fn test_http_blobstore_integration() -> Result<()> {
                         config.insert("host".to_string(), "foo".to_string());
                         config
                     },
+                    name: None,
                 },
                 WitInterface {
                     namespace: "wasi".to_string(),
@@ -105,6 +106,7 @@ async fn test_http_blobstore_integration() -> Result<()> {
                     .collect(),
                     version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
                     config: HashMap::new(),
+                    name: None,
                 },
             ],
             volumes: vec![],

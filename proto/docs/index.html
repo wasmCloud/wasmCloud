@@ -401,6 +401,16 @@
                   <td><p> </p></td>
                 </tr>
               
+                <tr>
+                  <td>name</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p>Optional instance name for multi-backend routing. When multiple entries
+share the same namespace:package, each must have a unique name. Components
+use this name as the identifier in resource-opening functions (e.g.,
+store::open(name) for keyvalue, create-container(name) for blobstore). </p></td>
+                </tr>
+              
             </tbody>
           </table>
 
