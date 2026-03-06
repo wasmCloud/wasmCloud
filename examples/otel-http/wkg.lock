@@ -12,6 +12,15 @@ version = "0.2.0-draft"
 digest = "sha256:de369d910c03300962eff97e9cb16d344c064da16e4a3d0c9b12b5c0d7ab8781"
 
 [[packages]]
+name = "wasi:clocks"
+registry = "wasi.dev"
+
+[[packages.versions]]
+requirement = "=0.2.0"
+version = "0.2.0"
+digest = "sha256:51911098e929732f65d1d84f8dc393299f18a9e8de632d854714f37142efe97b"
+
+[[packages]]
 name = "wasi:config"
 registry = "wasi.dev"
 
@@ -25,9 +34,9 @@ name = "wasi:http"
 registry = "wasi.dev"
 
 [[packages.versions]]
-requirement = "=0.2.0"
-version = "0.2.0"
-digest = "sha256:5a568e6e2d60c1ce51220e1833cdd5b88db9f615720edc762a9b4a6f36b383bd"
+requirement = "=0.2.2"
+version = "0.2.2"
+digest = "sha256:a1f129cdf1fde55ec2d4ae8d998c39a7e5cf7544a8bd84a831054ac0d2ac64dd"
 
 [[packages]]
 name = "wasi:keyvalue"
@@ -55,21 +64,3 @@ registry = "wasi.dev"
 requirement = "=0.2.0-rc.1"
 version = "0.2.0-rc.1"
 digest = "sha256:4f4969ab60f39ca84830fe654e51e2bf852097eafb79626f616cd2fba11fdd54"
-
-[[packages]]
-name = "wasmcloud:messaging"
-registry = "wasmcloud.com"
-
-[[packages.versions]]
-requirement = "=0.2.0"
-version = "0.2.0"
-digest = "sha256:bd2182f0a304b9a54a6b363f2f655422c8c0f00a03073c0195f1614a92dfdc7b"
-
-[[packages]]
-name = "wasmcloud:postgres"
-registry = "wasmcloud.com"
-
-[[packages.versions]]
-requirement = "=0.1.1-draft"
-version = "0.1.1-draft"
-digest = "sha256:8bb72ea90cecb5c87e463da8c1a7642b61a44e6c7993fcab6112c03f44a9140a"

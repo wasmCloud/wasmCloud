@@ -1,0 +1,468 @@
+package wasi:otel@0.2.0-rc.1;
+
+interface types {
+  /// The key part of attribute `key-value` pairs.
+  type key = string;
+
+  /// The value part of attribute `key-value` pairs.
+  ///
+  /// This corresponds with the `AnyValue` type defined in the [attribute spec](https://opentelemetry.io/docs/specs/otel/common/#anyvalue).
+  /// Because WIT doesn't support recursive types, the data needs to be serialized. JSON is used as the encoding format.
+  type value = string;
+
+  /// A key-value pair describing an attribute.
+  record key-value {
+    /// The attribute name.
+    key: key,
+    /// The attribute value.
+    value: value,
+  }
+
+  /// An immutable representation of the entity producing telemetry as attributes.
+  record %resource {
+    /// Attributes that identify the resource.
+    attributes: list<key-value>,
+    /// The schema URL to be recorded in the emitted resource.
+    schema-url: option<string>,
+  }
+
+  /// Describes the instrumentation scope that produced telemetry.
+  record instrumentation-scope {
+    /// Name of the instrumentation scope.
+    name: string,
+    /// The library version.
+    version: option<string>,
+    /// Schema URL used by this library.
+    /// https://opentelemetry.io/docs/specs/otel/schemas/#schema-url
+    schema-url: option<string>,
+    /// Specifies the instrumentation scope attributes to associate with emitted telemetry.
+    attributes: list<key-value>,
+  }
+}
+
+interface tracing {
+  use wasi:clocks/wall-clock@0.2.0.{datetime};
+  use types.{key-value, instrumentation-scope};
+
+  /// The trace that this `span-context` belongs to.
+  ///
+  /// 16 bytes encoded as a hexadecimal string.
+  type trace-id = string;
+
+  /// The id of this `span-context`.
+  ///
+  /// 8 bytes encoded as a hexadecimal string.
+  type span-id = string;
+
+  /// Flags that can be set on a `span-context`.
+  flags trace-flags {
+    /// Whether the `span` should be sampled or not.
+    sampled,
+  }
+
+  /// Carries system-specific configuration data, represented as a list of key-value pairs. `trace-state` allows multiple tracing systems to participate in the same trace.
+  ///
+  /// If any invalid keys or values are provided then the `trace-state` will be treated as an empty list.
+  type trace-state = list<tuple<string, string>>;
+
+  /// Identifying trace information about a span that can be serialized and propagated.
+  record span-context {
+    /// The `trace-id` for this `span-context`.
+    trace-id: trace-id,
+    /// The `span-id` for this `span-context`.
+    span-id: span-id,
+    /// The `trace-flags` for this `span-context`.
+    trace-flags: trace-flags,
+    /// Whether this `span-context` was propagated from a remote parent.
+    is-remote: bool,
+    /// The `trace-state` for this `span-context`.
+    trace-state: trace-state,
+  }
+
+  /// Describes the relationship between the Span, its parents, and its children in a trace.
+  enum span-kind {
+    /// Indicates that the span describes a request to some remote service. This span is usually the parent of a remote server span and does not end until the response is received.
+    client,
+    /// Indicates that the span covers server-side handling of a synchronous RPC or other remote request. This span is often the child of a remote client span that was expected to wait for a response.
+    server,
+    /// Indicates that the span describes the initiators of an asynchronous request. This parent span will often end before the corresponding child consumer span, possibly even before the child span starts. In messaging scenarios with batching, tracing individual messages requires a new producer span per message to be created.
+    producer,
+    /// Indicates that the span describes a child of an asynchronous consumer request.
+    consumer,
+    /// Default value. Indicates that the span represents an internal operation within an application, as opposed to an operations with remote parents or children.
+    internal,
+  }
+
+  /// An event describing a specific moment in time on a span and associated attributes.
+  record event {
+    /// Event name.
+    name: string,
+    /// Event time.
+    time: datetime,
+    /// Event attributes.
+    attributes: list<key-value>,
+  }
+
+  /// Describes a relationship to another `span`.
+  record link {
+    /// Denotes which `span` to link to.
+    span-context: span-context,
+    /// Attributes describing the link.
+    attributes: list<key-value>,
+  }
+
+  /// The `status` of a `span`.
+  variant status {
+    /// The default status.
+    unset,
+    /// The operation has been validated by an Application developer or Operator to have completed successfully.
+    ok,
+    /// The operation contains an error with a description.
+    error(string),
+  }
+
+  /// The data associated with a span.
+  record span-data {
+    /// Span context.
+    span-context: span-context,
+    /// Span parent id.
+    parent-span-id: string,
+    /// Span kind.
+    span-kind: span-kind,
+    /// Span name.
+    name: string,
+    /// Span start time.
+    start-time: datetime,
+    /// Span end time.
+    end-time: datetime,
+    /// Span attributes.
+    attributes: list<key-value>,
+    /// Span events.
+    events: list<event>,
+    /// Span Links.
+    links: list<link>,
+    /// Span status.
+    status: status,
+    /// Instrumentation scope that produced this span.
+    instrumentation-scope: instrumentation-scope,
+    /// Number of attributes dropped by the span due to limits being reached.
+    dropped-attributes: u32,
+    /// Number of events dropped by the span due to limits being reached.
+    dropped-events: u32,
+    /// Number of links dropped by the span due to limits being reached.
+    dropped-links: u32,
+  }
+
+  /// Called when a span is started.
+  on-start: func(context: span-context);
+
+  /// Called when a span is ended.
+  on-end: func(span: span-data);
+
+  /// Returns the span context of the host.
+  outer-span-context: func() -> span-context;
+}
+
+interface logs {
+  use types.{instrumentation-scope, %resource, value, key-value};
+  use tracing.{span-id, trace-id, trace-flags};
+  use wasi:clocks/wall-clock@0.2.0.{datetime};
+
+  /// Represents the recording of an event.
+  record log-record {
+    /// Time when the event occurred.
+    timestamp: option<datetime>,
+    /// Time when the event was observed.
+    observed-timestamp: option<datetime>,
+    /// The severity text(also known as log level).
+    severity-text: option<string>,
+    /// The numerical value of the severity ranging from 1-24.
+    severity-number: option<u8>,
+    /// The body of the log record.
+    body: option<value>,
+    /// Additional information about the specific event occurrence.
+    attributes: option<list<key-value>>,
+    /// Name that identifies the class / type of event.
+    event-name: option<string>,
+    /// Describes the source of the log.
+    %resource: option<%resource>,
+    /// Describes the scope that emitted the log.
+    instrumentation-scope: option<instrumentation-scope>,
+    /// Request trace id.
+    trace-id: option<trace-id>,
+    /// Request span id.
+    span-id: option<span-id>,
+    /// W3C trace flag.
+    trace-flags: option<trace-flags>,
+  }
+
+  /// Called when a log is emitted.
+  on-emit: func(data: log-record);
+}
+
+interface metrics {
+  use wasi:clocks/wall-clock@0.2.0.{datetime};
+  use wasi:clocks/monotonic-clock@0.2.0.{duration};
+  use types.{key-value, instrumentation-scope, %resource};
+  use tracing.{span-id, trace-id};
+
+  /// An error resulting from `export` being called.
+  type error = string;
+
+  /// A set of bucket counts, encoded in a contiguous array of counts.
+  record exponential-bucket {
+    /// The bucket index of the first entry in the `counts` list.
+    offset: s32,
+    /// A list where `counts[i]` carries the count of the bucket at index `offset + i`.
+    ///
+    /// `counts[i]` is the count of values greater than base^(offset+i) and less than
+    /// or equal to base^(offset+i+1).
+    counts: list<u64>,
+  }
+
+  /// Defines the window that an aggregation was calculated over.
+  enum temporality {
+    /// A measurement interval that continues to expand forward in time from a
+    /// starting point.
+    ///
+    /// New measurements are added to all previous measurements since a start time.
+    ///
+    /// This is the default temporality.
+    cumulative,
+    /// A measurement interval that resets each cycle.
+    ///
+    /// Measurements from one cycle are recorded independently, measurements from
+    /// other cycles do not affect them.
+    delta,
+    /// Configures Synchronous Counter and Histogram instruments to use
+    /// Delta aggregation temporality, which allows them to shed memory
+    /// following a cardinality explosion, thus use less memory.
+    low-memory,
+  }
+
+  /// The number types available for any given instrument.
+  variant metric-number {
+    %f64(f64),
+    %s64(s64),
+    %u64(u64),
+  }
+
+  /// A measurement sampled from a time series providing a typical example.
+  record exemplar {
+    /// The attributes recorded with the measurement but filtered out of the
+    /// time series' aggregated data.
+    filtered-attributes: list<key-value>,
+    /// The time when the measurement was recorded.
+    time: datetime,
+    /// The measured value.
+    value: metric-number,
+    /// The ID of the span that was active during the measurement.
+    ///
+    /// If no span was active or the span was not sampled this will be empty.
+    span-id: span-id,
+    /// The ID of the trace the active span belonged to during the measurement.
+    ///
+    /// If no span was active or the span was not sampled this will be empty.
+    trace-id: trace-id,
+  }
+
+  /// A single data point in a time series to be associated with a `gauge`.
+  record gauge-data-point {
+    /// `attributes` is the set of key value pairs that uniquely identify the
+    /// time series.
+    attributes: list<key-value>,
+    /// The value of this data point.
+    value: metric-number,
+    /// The sampled `exemplar`s collected during the time series.
+    exemplars: list<exemplar>,
+  }
+
+  /// A measurement of the current value of an instrument.
+  record gauge {
+    /// Represents individual aggregated measurements with unique attributes.
+    data-points: list<gauge-data-point>,
+    /// The time when the time series was started.
+    start-time: option<datetime>,
+    /// The time when the time series was recorded.
+    time: datetime,
+  }
+
+  /// A single data point in a time series to be associated with a `sum`.
+  record sum-data-point {
+    /// `attributes` is the set of key value pairs that uniquely identify the
+    /// time series.
+    attributes: list<key-value>,
+    /// The value of this data point.
+    value: metric-number,
+    /// The sampled `exemplar`s collected during the time series.
+    exemplars: list<exemplar>,
+  }
+
+  /// Represents the sum of all measurements of values from an instrument.
+  record sum {
+    /// Represents individual aggregated measurements with unique attributes.
+    data-points: list<sum-data-point>,
+    /// The time when the time series was started.
+    start-time: datetime,
+    /// The time when the time series was recorded.
+    time: datetime,
+    /// Describes if the aggregation is reported as the change from the last report
+    /// time, or the cumulative changes since a fixed start time.
+    temporality: temporality,
+    /// Whether this aggregation only increases or decreases.
+    is-monotonic: bool,
+  }
+
+  /// A single data point in a time series to be associated with a `histogram`.
+  record histogram-data-point {
+    /// The set of key value pairs that uniquely identify the time series.
+    attributes: list<key-value>,
+    /// The number of updates this histogram has been calculated with.
+    count: u64,
+    /// The upper bounds of the buckets of the histogram.
+    bounds: list<f64>,
+    /// The count of each of the buckets.
+    bucket-counts: list<u64>,
+    /// The minimum value recorded.
+    min: option<metric-number>,
+    /// The maximum value recorded.
+    max: option<metric-number>,
+    /// The sum of the values recorded
+    sum: metric-number,
+    /// The sampled `exemplar`s collected during the time series.
+    exemplars: list<exemplar>,
+  }
+
+  /// Represents the histogram of all measurements of values from an instrument.
+  record histogram {
+    /// Individual aggregated measurements with unique attributes.
+    data-points: list<histogram-data-point>,
+    /// The time when the time series was started.
+    start-time: datetime,
+    /// The time when the time series was recorded.
+    time: datetime,
+    /// Describes if the aggregation is reported as the change from the last report
+    /// time, or the cumulative changes since a fixed start time.
+    temporality: temporality,
+  }
+
+  /// A single data point in a time series to be associated with an `exponential-histogram `.
+  record exponential-histogram-data-point {
+    /// The set of key value pairs that uniquely identify the time series.
+    attributes: list<key-value>,
+    /// The number of updates this histogram has been calculated with.
+    count: u64,
+    /// The minimum value recorded.
+    min: option<metric-number>,
+    /// The maximum value recorded.
+    max: option<metric-number>,
+    /// The maximum value recorded.
+    sum: metric-number,
+    /// Describes the resolution of the histogram.
+    ///
+    /// Boundaries are located at powers of the base, where:
+    ///
+    ///   base = 2 ^ (2 ^ -scale)
+    scale: s8,
+    /// The number of values whose absolute value is less than or equal to
+    /// `zero_threshold`.
+    ///
+    /// When `zero_threshold` is `0`, this is the number of values that cannot be
+    /// expressed using the standard exponential formula as well as values that have
+    /// been rounded to zero.
+    zero-count: u64,
+    /// The range of positive value bucket counts.
+    positive-bucket: exponential-bucket,
+    /// The range of negative value bucket counts.
+    negative-bucket: exponential-bucket,
+    /// The width of the zero region.
+    ///
+    /// Where the zero region is defined as the closed interval
+    /// [-zero_threshold, zero_threshold].
+    zero-threshold: f64,
+    /// The sampled exemplars collected during the time series.
+    exemplars: list<exemplar>,
+  }
+
+  /// The histogram of all measurements of values from an instrument.
+  record exponential-histogram {
+    /// The individual aggregated measurements with unique attributes.
+    data-points: list<exponential-histogram-data-point>,
+    /// When the time series was started.
+    start-time: datetime,
+    /// The time when the time series was recorded.
+    time: datetime,
+    /// Describes if the aggregation is reported as the change from the last report
+    /// time, or the cumulative changes since a fixed start time.
+    temporality: temporality,
+  }
+
+  /// Metric data for all types.
+  variant metric-data {
+    /// Metric data for an f64 gauge.
+    f64-gauge(gauge),
+    /// Metric data for an f64 sum.
+    f64-sum(sum),
+    /// Metric data for an f64 histogram.
+    f64-histogram(histogram),
+    /// Metric data for an f64 exponential-histogram.
+    f64-exponential-histogram(exponential-histogram),
+    /// Metric data for an u64 gauge.
+    u64-gauge(gauge),
+    /// Metric data for an u64 sum.
+    u64-sum(sum),
+    /// Metric data for an u64 histogram.
+    u64-histogram(histogram),
+    /// Metric data for an u64 exponential-histogram.
+    u64-exponential-histogram(exponential-histogram),
+    /// Metric data for an s64 gauge.
+    s64-gauge(gauge),
+    /// Metric data for an s64 sum.
+    s64-sum(sum),
+    /// Metric data for an s64 histogram.
+    s64-histogram(histogram),
+    /// Metric data for an s64 exponential-histogram.
+    s64-exponential-histogram(exponential-histogram),
+  }
+
+  /// A collection of one or more aggregated time series from a metric.
+  record metric {
+    /// The name of the metric that created this data.
+    name: string,
+    /// The description of the metric, which can be used in documentation.
+    description: string,
+    /// The unit in which the metric reports.
+    unit: string,
+    /// The aggregated data from a metric.
+    data: metric-data,
+  }
+
+  /// A collection of `metric`s produced by a meter.
+  record scope-metrics {
+    /// The instrumentation scope that the meter was created with.
+    scope: instrumentation-scope,
+    /// The list of aggregations created by the meter.
+    metrics: list<metric>,
+  }
+
+  /// A collection of `scope-metrics` and the associated `resource` that created them.
+  record resource-metrics {
+    /// The entity that collected the metrics.
+    %resource: %resource,
+    /// The collection of metrics with unique `instrumentation-scope`s.
+    scope-metrics: list<scope-metrics>,
+  }
+
+  /// Exports a resource's metric data.
+  %export: func(metrics: resource-metrics) -> result<_, error>;
+}
+
+world imports {
+  import types;
+  import wasi:clocks/wall-clock@0.2.0;
+  import tracing;
+  import wasi:io/poll@0.2.0;
+  import wasi:clocks/monotonic-clock@0.2.0;
+  import metrics;
+  import logs;
+}

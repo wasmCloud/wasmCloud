@@ -78,6 +78,10 @@ pub struct HostCommand {
     /// Timeout for pulling artifacts from OCI registries
     #[clap(long = "registry-pull-timeout", value_parser = humantime::parse_duration, default_value = "30s")]
     pub registry_pull_timeout: Duration,
+
+    /// Enable WASI OpenTelemetry plugin
+    #[clap(long = "wasi-otel", default_value_t = false)]
+    pub wasi_otel: bool,
 }
 
 impl CliCommand for HostCommand {
@@ -151,6 +155,12 @@ impl CliCommand for HostCommand {
             cluster_host_builder = cluster_host_builder.with_http_handler(Arc::new(
                 wash_runtime::host::http::HttpServer::new(http_router, addr).await?,
             ));
+        }
+
+        // Enable otel plugin
+        if self.wasi_otel {
+            cluster_host_builder = cluster_host_builder
+                .with_plugin(Arc::new(plugin::wasi_otel::WasiOtel::default()))?;
         }
 
         // Enable WASI WebGPU if requested

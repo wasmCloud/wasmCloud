@@ -77,13 +77,14 @@ async fn main() -> anyhow::Result<()> {
 
 The crate supports the following cargo features:
 
-- `wasi-http` (default): HTTP client and server support via `wasmtime-wasi-http`
-- `wasi-config` (default): Runtime configuration interface
-- `wasi-logging` (default): Logging interface
-- `wasi-blobstore` (default): Blob storage interface
-- `wasi-keyvalue` (default): Key-value storage interface
-- `wasi-webgpu` WebGPU interface
 - `oci`: OCI registry integration for pulling components
+- `wasi-blobstore` (default): Blob storage interface
+- `wasi-config` (default): Runtime configuration interface
+- `wasi-http` (default): HTTP client and server support via `wasmtime-wasi-http`
+- `wasi-keyvalue` (default): Key-value storage interface
+- `wasi-logging` (default): Logging interface
+- `wasi-otel` (default): OpenTelemetry interface
+- `wasi-webgpu` WebGPU interface
 
 ### Architecture
 

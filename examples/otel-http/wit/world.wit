@@ -1,0 +1,18 @@
+package wasmcloud:hello;
+
+world hello {
+   import wasi:blobstore/blobstore@0.2.0-draft;
+   import wasi:blobstore/container@0.2.0-draft;
+   import wasi:http/outgoing-handler@0.2.2;
+   import wasi:keyvalue/store@0.2.0-draft;
+   import wasi:keyvalue/atomics@0.2.0-draft;
+   import wasi:logging/logging@0.1.0-draft;
+   import wasi:config/store@0.2.0-rc.1;
+   import wasi:clocks/wall-clock@0.2.0;
+   import wasi:otel/types@0.2.0-rc.1;
+   import wasi:otel/tracing@0.2.0-rc.1;
+   import wasi:otel/logs@0.2.0-rc.1;
+   import wasi:otel/metrics@0.2.0-rc.1;
+
+   export wasi:http/incoming-handler@0.2.2;
+}

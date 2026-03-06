@@ -1,0 +1,8 @@
+# Rust build artifacts
+target/
+
+# Wash build artifacts
+build/
+
+# Wash dependencies
+wit/deps/

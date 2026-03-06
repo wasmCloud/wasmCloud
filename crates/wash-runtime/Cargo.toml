@@ -15,8 +15,9 @@ path = "src/lib.rs"
 workspace = true
 
 [features]
-default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet"]
+default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel"]
 oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:sha2", "dep:wit-component"]
+wasi-otel = []
 washlet = ["oci"]
 wasi-config = []
 wasi-logging = []
@@ -79,9 +80,11 @@ prost = { workspace = true, default-features = true }
 tonic-prost = { workspace = true, default-features = true }
 opentelemetry = { workspace = true, features = ["trace", "metrics", "logs"] }
 opentelemetry-appender-tracing = { workspace = true }
-opentelemetry_sdk = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = ["logs"] }
 opentelemetry-http = { workspace = true }
-opentelemetry-otlp = { workspace = true, features = ["grpc-tonic", "trace", "logs"] }
+
+# Otel dependencies (optional, behind 'wasi-otel' feature)
+opentelemetry-otlp = { workspace = true, features = ["grpc-tonic","http-proto", "trace", "logs"] }
 opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
 wasi-graphics-context-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "067d92d0eabd264e15486b9cecbb9f7020257b7b", optional = true }
 wasi-webgpu-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "067d92d0eabd264e15486b9cecbb9f7020257b7b", optional = true }

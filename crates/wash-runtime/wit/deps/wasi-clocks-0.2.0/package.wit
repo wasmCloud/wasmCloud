@@ -1,5 +1,16 @@
 package wasi:clocks@0.2.0;
 
+interface wall-clock {
+  record datetime {
+    seconds: u64,
+    nanoseconds: u32,
+  }
+
+  now: func() -> datetime;
+
+  resolution: func() -> datetime;
+}
+
 interface monotonic-clock {
   use wasi:io/poll@0.2.0.{pollable};
 
@@ -14,16 +25,5 @@ interface monotonic-clock {
   subscribe-instant: func(when: instant) -> pollable;
 
   subscribe-duration: func(when: duration) -> pollable;
-}
-
-interface wall-clock {
-  record datetime {
-    seconds: u64,
-    nanoseconds: u32,
-  }
-
-  now: func() -> datetime;
-
-  resolution: func() -> datetime;
 }
 

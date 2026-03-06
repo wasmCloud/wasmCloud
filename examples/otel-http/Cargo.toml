@@ -1,0 +1,13 @@
+[package]
+name = "otel-http"
+edition = "2021"
+version = "0.1.0"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1.0"
+wit-bindgen = "0.41.0"

@@ -195,6 +195,10 @@ pub struct DevConfig {
     /// Example: postgres://user:pass@bouncer:6432?sslmode=require&pool_size=10
     #[serde(skip_serializing_if = "Option::is_none")]
     pub postgres_url: Option<String>,
+
+    /// Enable WASI OpenTelemetry support
+    #[serde(default)]
+    pub wasi_otel: bool,
 }
 
 /// Load configuration with hierarchical merging
