@@ -34,13 +34,13 @@ Quick install (latest release)
 **Linux/macOS:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wasmcloud/wash/refs/heads/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/refs/heads/main/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/wasmcloud/wash/refs/heads/main/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/wasmcloud/wasmCloud/refs/heads/main/install.ps1 | iex
 ```
 
 Make sure to move `wash` to somewhere in your `PATH`.
@@ -48,8 +48,8 @@ Make sure to move `wash` to somewhere in your `PATH`.
 ### From Source
 
 ```bash
-git clone https://github.com/wasmcloud/wash.git
-cd wash
+git clone https://github.com/wasmcloud/wasmCloud.git
+cd wasmCloud
 cargo install --path .
 ```
 
@@ -60,7 +60,7 @@ Note: This quickstart requires the [Rust toolchain](https://www.rust-lang.org/to
 1. **Create a new component:**
 
    ```bash
-   wash new https://github.com/wasmCloud/wash.git --subfolder examples/http-hello-world
+   wash new https://github.com/wasmCloud/wasmCloud.git --subfolder examples/http-hello-world
    ```
 
 2. **Build your component:**

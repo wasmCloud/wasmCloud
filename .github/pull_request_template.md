@@ -8,7 +8,7 @@ Please make sure you include the following information:
   this can be brief.
 
 Our development process is documented in:
-https://github.com/wasmCloud/wash/blob/main/CONTRIBUTING.md
+https://github.com/wasmCloud/wasmCloud/blob/main/CONTRIBUTING.md
 
 Please ensure all communication follows the code of conduct:
 https://github.com/cncf/foundation/blob/main/code-of-conduct.md
