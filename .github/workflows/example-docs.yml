@@ -1,21 +1,7 @@
 name: example-docs
 
 on:
-  workflow_call:
-    inputs:
-      include:
-        description: Directory to scan for markdown files. Relative to the repository root.
-        required: false
-        type: string
-      base_directory:
-        description: Base directory which links must not reach out of. Relative to the repository root.
-        required: false
-        type: string
-      ignore_paths:
-        description: Comma-separated list of paths to ignore during the scan. Relative to the repository root.
-        required: false
-        type: string
-
+  workflow_dispatch:
 permissions:
   contents: read
 

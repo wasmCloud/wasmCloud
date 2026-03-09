@@ -2,13 +2,6 @@ name: Benchmark
 
 on:
   workflow_dispatch:
-    inputs:
-      branch:
-        description: 'Branch to benchmark'
-        required: true
-        default: 'main'
-        type: string
-
 permissions:
   contents: read
 

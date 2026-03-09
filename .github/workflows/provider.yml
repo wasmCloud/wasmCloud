@@ -1,23 +1,7 @@
 name: providers-build-and-release
 
 on:
-  workflow_call:
-    inputs:
-      name:
-        description: Provider name
-        required: true
-        type: string
-      embed_wit:
-        description: Whether to include the WIT in the provider archive
-        required: false
-        default: true
-        type: boolean
-    secrets:
-      subject:
-        description: Capability provider issuer subject key
-      issuer:
-        description: Capability provider issuer key
-
+  workflow_dispatch:
 permissions:
   contents: read
 

@@ -1,13 +1,7 @@
 name: artifacthub-publish
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'chart/artifacthub-repo.yml'
-      - '.github/workflows/artifacthub.yml'
-
+  workflow_dispatch:
 permissions:
   contents: read
 

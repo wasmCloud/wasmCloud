@@ -1,10 +1,7 @@
 name: wit-wasmcloud-identity-publish
 
 on:
-  push:
-    tags:
-      - 'wit-wasmcloud-identity-v*'
-
+  workflow_dispatch:
 permissions:
   contents: read
 

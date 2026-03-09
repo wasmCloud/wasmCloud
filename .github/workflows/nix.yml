@@ -1,10 +1,7 @@
 name: nix
 
 on:
-  pull_request:
-  merge_group:
-  push:
-
+  workflow_dispatch:
 permissions:
   contents: read
 

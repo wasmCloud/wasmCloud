@@ -1,16 +1,7 @@
 name: Build and Push k6runner
 
 on:
-  push:
-    tags:
-      - 'k6runner-v*'
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version tag (without "v" prefix)'
-        required: true
-        type: string
-
 env:
   IMAGE_NAME: k6runner
 

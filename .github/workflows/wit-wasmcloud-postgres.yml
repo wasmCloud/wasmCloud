@@ -1,10 +1,7 @@
 name: wit-wasmcloud-postgres-publish
 
 on:
-  push:
-    tags:
-      - 'wit-wasmcloud-postgres-v*'
-
+  workflow_dispatch:
 permissions:
   contents: read
 

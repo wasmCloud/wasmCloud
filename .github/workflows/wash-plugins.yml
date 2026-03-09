@@ -1,10 +1,7 @@
 name: wash-plugins-publish
 
 on:
-  push:
-    tags:
-      - 'wash-plugin-v*'
-
+  workflow_dispatch:
 permissions:
   contents: read
 

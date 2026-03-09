@@ -1,14 +1,7 @@
 name: wasmcloud-host-chart
 
 on:
-  push:
-    tags:
-      - 'wasmcloud-host-chart-v[0-9].[0-9]+.[0-9]+'
-  pull_request:
-    paths:
-      - 'charts/wasmcloud-host/**'
-      - '.github/workflows/wasmcloud-host-chart.yml'
-
+  workflow_dispatch:
 permissions:
   contents: read
 
