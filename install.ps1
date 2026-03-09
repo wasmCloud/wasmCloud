@@ -1,5 +1,5 @@
 # Install script for wash - The Wasm Shell (Windows PowerShell)
-# Usage: iwr -useb https://raw.githubusercontent.com/wasmcloud/wash/main/install.ps1 | iex
+# Usage: iwr -useb https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.ps1 | iex
 # Usage with options: ./install.ps1 -InstallDir "C:\tools" -Version "1.0.0-beta.10" -Verify -AddToPath -Force
 #
 # Parameters:
@@ -27,7 +27,7 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 # Constants
-$REPO = "wasmcloud/wash"
+$REPO = "wasmcloud/wasmCloud"
 $TMP_DIR = Join-Path $env:TEMP "wash-install-$((Get-Date).Ticks)"
 
 # Helper functions
