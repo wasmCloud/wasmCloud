@@ -1,10 +1,7 @@
 name: wit-wasmcloud-bus-publish
 
 on:
-  push:
-    tags:
-      - 'wit-wasmcloud-bus-v*'
-
+  workflow_dispatch:
 permissions:
   contents: read
 

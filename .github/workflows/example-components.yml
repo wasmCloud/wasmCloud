@@ -1,49 +1,7 @@
 name: example-components
 
 on:
-  merge_group:
-  push:
-    branches:
-      - main
-    tags:
-      - component-blobby-v[0-9]+.[0-9]+.[0-9]+*
-      - component-blobby-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-dog-fetcher-v[0-9]+.[0-9]+.[0-9]+*
-      - component-dog-fetcher-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-echo-messaging-v[0-9]+.[0-9]+.[0-9]+*
-      - component-echo-messaging-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-ferris-says-v[0-9]+.[0-9]+.[0-9]+*
-      - component-ferris-says-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-http-blobstore-v[0-9]+.[0-9]+.[0-9]+*
-      - component-http-blobstore-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-http-hello-world-v[0-9]+.[0-9]+.[0-9]+*
-      - component-http-hello-world-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-http-hello-world-tinygo-v[0-9]+.[0-9]+.[0-9]+*
-      - component-http-hello-world-tinygo-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-http-hello-world-python-v[0-9]+.[0-9]+.[0-9]+*
-      - component-http-hello-world-python-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+*
-      - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-http-keyvalue-counter-v[0-9]+.[0-9]+.[0-9]+*
-      - component-http-keyvalue-counter-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-keyvalue-messaging-v[0-9]+.[0-9]+.[0-9]+*
-      - component-keyvalue-messaging-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-sqldb-postgres-query-v[0-9]+.[0-9]+.[0-9]+*
-      - component-sqldb-postgres-query-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-http-task-manager-v[0-9]+.[0-9]+.[0-9]+*
-      - component-http-password-checker-rust-v[0-9]+.[0-9]+.[0-9]+*
-      - component-http-password-checker-rust-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-http-task-manager-v[0-9]+.[0-9]+.[0-9]+-*
-      - component-messaging-image-processor-worker-rust-v[0-9]+.[0-9]+.[0-9]+*
-      - component-messaging-image-processor-worker-rust-v[0-9]+.[0-9]+.[0-9]+-*
-  pull_request:
-    branches: [main]
-    paths:
-      - .github/workflows/example-components.yml
-      - crates/wash/**
-      - examples/rust/components/**
-      - examples/python/components/**
-
+  workflow_dispatch:
 permissions:
   contents: read
 

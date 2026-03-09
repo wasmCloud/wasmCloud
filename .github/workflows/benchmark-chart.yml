@@ -5,15 +5,7 @@ env:
   CHART_TESTING_NAMESPACE: chart-testing
 
 on:
-  push:
-    tags:
-      - 'benchmark-chart-v[0-9].[0-9]+.[0-9]+'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'charts/benchmark/**'
-      - '.github/workflows/benchmark-chart.yml'
-
+  workflow_dispatch:
 permissions:
   contents: read
 

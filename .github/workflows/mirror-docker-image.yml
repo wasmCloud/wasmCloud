@@ -2,19 +2,6 @@ name: mirror-docker-image
 
 on:
   workflow_dispatch:
-    inputs:
-      image:
-        type: string
-        description: |
-          oras-compatible image ref to mirror (ex. 'docker.io/library/busybox')
-      version:
-        type: string
-        description: |
-          Version of the source image to mirror (ex. '@<digest>', ':<tag>')
-      output-image:
-        description: |
-          Image path under 'wasmcloud/mirrors' to use (ex. 'a' -> 'wasmcloud/mirrors/a:<tag>', 'tools/b' -> 'wasmcloud/mirrors/tools/b:<tag>')
-
 permissions: {}
 
 jobs:

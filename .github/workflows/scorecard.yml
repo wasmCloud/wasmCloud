@@ -4,17 +4,7 @@
 
 name: security-supply-chain-scorecard
 on:
-  # For Branch-Protection check. Only the default branch is supported. See
-  # https://github.com/ossf/scorecard/blob/main/docs/checks.md#branch-protection
-  branch_protection_rule:
-  # To guarantee Maintained check is occasionally updated. See
-  # https://github.com/ossf/scorecard/blob/main/docs/checks.md#maintained
-  schedule:
-    - cron: '32 22 * * 3'
-  push:
-    branches: [ "main" ]
-
-# Declare default permissions as read only.
+  workflow_dispatch:
 permissions: read-all
 
 jobs:

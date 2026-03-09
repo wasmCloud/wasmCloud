@@ -3,8 +3,7 @@
 
 name: DCO
 on:
-  merge_group:
-
+  workflow_dispatch:
 permissions: {}
 
 jobs:

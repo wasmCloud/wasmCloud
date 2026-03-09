@@ -1,7 +1,7 @@
 name: check-licenses
 
-on: [push, pull_request]
-
+on:
+  workflow_dispatch:
 permissions:
   contents: read
 

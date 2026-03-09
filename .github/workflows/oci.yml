@@ -1,27 +1,7 @@
 name: oci-release
 
 on:
-  workflow_call:
-    inputs:
-      bin:
-        description: Binary name
-        required: true
-        type: string
-      prefix:
-        description: Prefix name
-        required: true
-        type: string
-    secrets:
-      CACHIX_AUTH_TOKEN:
-        description: Token for authenticating with Cachix
-        required: true
-      DOCKERHUB_PUSH_USER:
-        description: Username for DockerHub
-        required: true
-      DOCKERHUB_PUSH_PASSWORD:
-        description: Password for DockerHub
-        required: true
-
+  workflow_dispatch:
 permissions:
   contents: read
   packages: write
