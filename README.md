@@ -18,6 +18,9 @@ wasmCloud is an open source Cloud Native Computing Foundation (CNCF) project tha
 
 wasmCloud offers faster development cycles with reusable, polyglot components and centrally maintainable apps, allowing platform teams to manage thousands of diverse applications. It integrates seamlessly with existing stacks like Kubernetes and cloud providers, while providing portability across different operating systems and architectures without new builds. With custom capabilities, scale-to-zero, fault-tolerant features, and deployment across clouds, wasmCloud enables secure, reliable, and scalable applications without vendor lock-in.
 
+> [!WARNING] 
+> We are moving wasmCloud v2 from `wasmCloud/wash` to this repo. When completed, wasmCloud v1 will be available at branch `release-1.9.x`
+
 # Getting Started
 
 ## Installation
