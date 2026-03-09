@@ -1,7 +1,7 @@
 # wash - The Wasm Shell
 
 [![Apache 2.0 License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![GitHub Release](https://img.shields.io/github/v/release/wasmcloud/wash)](https://github.com/wasmcloud/wash/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/wasmcloud/wasmCloud)](https://github.com/wasmcloud/wasmCloud/releases)
 
 **wash** is the comprehensive command-line tool for developing, building, and managing WebAssembly components. It provides an intuitive developer experience for the modern Wasm ecosystem, from project scaffolding to building and pushing components to OCI registries.
 
@@ -25,7 +25,7 @@
 
 ### Pre-built Binaries
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/wasmcloud/wash/releases).
+Download the latest release for your platform from [GitHub Releases](https://github.com/wasmcloud/wasmCloud/releases).
 
 ### Install
 
@@ -212,8 +212,8 @@ vivacious-band-6937    eb27df8b-c5b0-48a3-bafe-a7e92eb19746   default     True  
 
 ## Support
 
-- [GitHub Issues](https://github.com/wasmcloud/wash/issues) - Bug reports and feature requests
-- [GitHub Discussions](https://github.com/wasmcloud/wash/discussions) - Community support and Q&A
+- [GitHub Issues](https://github.com/wasmcloud/wasmCloud/issues) - Bug reports and feature requests
+- [GitHub Discussions](https://github.com/wasmcloud/wasmCloud/discussions) - Community support and Q&A
 - [WebAssembly Community](https://webassembly.org/community/) - Broader WebAssembly ecosystem
 
 ## License

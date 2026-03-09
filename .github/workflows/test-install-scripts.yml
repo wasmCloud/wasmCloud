@@ -42,8 +42,8 @@ jobs:
           cd /tmp/wash-test
 
           # Test the actual curl installation that users will run
-          echo "Running: curl -sSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | bash"
-          curl -sSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | INSTALL_DIR=/tmp/wash-test bash
+          echo "Running: curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash"
+          curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | INSTALL_DIR=/tmp/wash-test bash
 
           # Verify installation
           if [ -f "/tmp/wash-test/wash" ]; then
@@ -74,11 +74,11 @@ jobs:
 
             # Test help flag first
             echo "Testing help flag..."
-            curl -sSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | bash -s -- --help
+            curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- --help
 
             # Test installation with verification flag
-            echo "Running: curl -sSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | bash -s -- -v"
-            if curl -sSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | INSTALL_DIR=/tmp/wash-verify-test bash -s -- -v; then
+            echo "Running: curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- -v"
+            if curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | INSTALL_DIR=/tmp/wash-verify-test bash -s -- -v; then
               echo "✅ Installation with verification succeeded!"
 
               # Verify the binary was installed
@@ -114,8 +114,8 @@ jobs:
           cd /tmp/wash-version-test
 
           # Test installation with specific version
-          echo "Running: curl -sSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | bash -s -- --version ${{ inputs.test_version }}"
-          if curl -sSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | INSTALL_DIR=/tmp/wash-version-test bash -s -- --version "${{ inputs.test_version }}"; then
+          echo "Running: curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- --version ${{ inputs.test_version }}"
+          if curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | INSTALL_DIR=/tmp/wash-version-test bash -s -- --version "${{ inputs.test_version }}"; then
             echo "✅ Version-specific installation succeeded!"
 
             # Verify the binary was installed
@@ -150,7 +150,7 @@ jobs:
           $env:INSTALL_DIR = $testDir
           $env:ADD_TO_PATH = "true"
 
-          iwr -useb https://raw.githubusercontent.com/wasmcloud/wash/main/install.ps1 | iex
+          iwr -useb https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.ps1 | iex
 
           $washPath = Join-Path $testDir "wash.exe"
           if (Test-Path $washPath) {
@@ -180,7 +180,7 @@ jobs:
             # Download script to a file
             try {
               $scriptPath = Join-Path $env:TEMP "install-verify.ps1"
-              Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wasmcloud/wash/main/install.ps1" -OutFile $scriptPath
+              Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.ps1" -OutFile $scriptPath
 
               # Execute script with verification
               & $scriptPath -InstallDir $testDir -Verify -Force
@@ -221,7 +221,7 @@ jobs:
           # Download script to a file
           try {
             $scriptPath = Join-Path $env:TEMP "install-version.ps1"
-            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wasmcloud/wash/main/install.ps1" -OutFile $scriptPath
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.ps1" -OutFile $scriptPath
 
             # Execute script with specific version
             & $scriptPath -InstallDir $testDir -Version "${{ inputs.test_version }}" -Force
@@ -253,7 +253,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Test Configuration" >> $GITHUB_STEP_SUMMARY
           echo "- Test Version: ${{ inputs.test_version || 'latest' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Repository: wasmcloud/wash (public)" >> $GITHUB_STEP_SUMMARY
+          echo "- Repository: wasmcloud/wasmCloud (public)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           echo "### Results" >> $GITHUB_STEP_SUMMARY
@@ -274,25 +274,25 @@ jobs:
           echo "**Linux/macOS:**" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
           echo '# Standard installation (latest version)' >> $GITHUB_STEP_SUMMARY
-          echo 'curl -sSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | bash' >> $GITHUB_STEP_SUMMARY
+          echo 'curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo '# With signature verification (requires GitHub CLI)' >> $GITHUB_STEP_SUMMARY
-          echo 'curl -sSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | bash -s -- -v' >> $GITHUB_STEP_SUMMARY
+          echo 'curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- -v' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo '# Install a specific version' >> $GITHUB_STEP_SUMMARY
-          echo 'curl -sSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | bash -s -- --version 1.0.0-beta.10' >> $GITHUB_STEP_SUMMARY
+          echo 'curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- --version 1.0.0-beta.10' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo '# Install a specific version with verification' >> $GITHUB_STEP_SUMMARY
-          echo 'curl -sSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | bash -s -- --version 1.0.0-beta.10 -v' >> $GITHUB_STEP_SUMMARY
+          echo 'curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- --version 1.0.0-beta.10 -v' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Windows (PowerShell):**" >> $GITHUB_STEP_SUMMARY
           echo '```powershell' >> $GITHUB_STEP_SUMMARY
           echo '# Standard installation (latest version)' >> $GITHUB_STEP_SUMMARY
-          echo 'iwr -useb https://raw.githubusercontent.com/wasmcloud/wash/main/install.ps1 | iex' >> $GITHUB_STEP_SUMMARY
+          echo 'iwr -useb https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.ps1 | iex' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo '# With signature verification (requires GitHub CLI)' >> $GITHUB_STEP_SUMMARY
-          echo 'Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wasmcloud/wash/main/install.ps1" -UseBasicParsing | Invoke-Expression; Install-Wash -Verify' >> $GITHUB_STEP_SUMMARY
+          echo 'Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.ps1" -UseBasicParsing | Invoke-Expression; Install-Wash -Verify' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo '# Install a specific version' >> $GITHUB_STEP_SUMMARY
           echo './install.ps1 -Version "1.0.0-beta.10"' >> $GITHUB_STEP_SUMMARY

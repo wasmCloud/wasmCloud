@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Install script for wash - The Wasm Shell
-# Usage: curl -fsSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash
 # Options: -v to enable signature verification (requires GitHub CLI)
 #
 # Environment variables:
@@ -19,7 +19,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Constants
-REPO="wasmcloud/wash"
+REPO="wasmcloud/wasmCloud"
 INSTALL_DIR="${INSTALL_DIR:-$(pwd)}"
 TMP_DIR="/tmp/wash-install-$$"
 VERIFY_SIGNATURE=false
@@ -349,13 +349,13 @@ Environment variables:
 
 Examples:
   # Standard installation (latest version)
-  curl -fsSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash
 
   # Install with signature verification
-  curl -fsSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | bash -s -- -v
+  curl -fsSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- -v
 
   # Install a specific version
-  curl -fsSL https://raw.githubusercontent.com/wasmcloud/wash/main/install.sh | bash -s -- --version 1.0.0-beta.10
+  curl -fsSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- --version 1.0.0-beta.10
 EOF
 }
 
