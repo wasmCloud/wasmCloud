@@ -119,5 +119,5 @@ pbjson-build = { workspace = true, default-features = true }
 tokio = { workspace = true, features = ["full"] }
 tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }
-wat = { workspace = true }
+wat = { workspace = true, features = ["component-model"] }
 gag = "1.0"
