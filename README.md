@@ -5,6 +5,10 @@
 
 **wash** is the comprehensive command-line tool for developing, building, and managing WebAssembly components. It provides an intuitive developer experience for the modern Wasm ecosystem, from project scaffolding to building and pushing components to OCI registries.
 
+> [!WARNING] 
+> We are moving wasmCloud v2 to `wasmCloud/wasmCloud` repository.
+
+
 ## Features
 
 - **Project Creation**: Generate new WebAssembly component projects from templates
