@@ -21,7 +21,7 @@ use tokio::{fs, io::AsyncWriteExt};
 
 use crate::cli::{CliCommand, CliContext, CommandOutput};
 
-const REPO: &str = "wasmcloud/wash";
+const REPO: &str = "wasmcloud/wasmCloud";
 const BINARY_NAME: &str = "wash";
 
 #[derive(Debug, Deserialize)]

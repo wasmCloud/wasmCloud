@@ -4,7 +4,7 @@ This repository contains a WebAssembly component built using [`wstd`](https://gi
 
 # Quickstart
 
-To start a local development loop with [Wasm Shell](https://github.com/wasmCloud/wash):
+To start a local development loop with [Wasm Shell](https://github.com/wasmCloud/wasmCloud):
 
 ```shell
 wash dev

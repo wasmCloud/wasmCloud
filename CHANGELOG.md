@@ -1978,8 +1978,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
  - <csr-id-4fb8118f8fd74a4baf8019f3ab6c6cea2fd1c889/> require revision and version args on sign cmd
  - <csr-id-544fa7e4c117512e613de15626e05853f1244f6b/> resubscribing when lattice connection change
-   related to https://github.com/wasmCloud/wash/issues/741
-   related to https://github.com/wasmCloud/wash/pull/742
+   related to https://github.com/wasmCloud/wasmCloud/issues/741
+   related to https://github.com/wasmCloud/wasmCloud/pull/742
 
 ### Other
 
