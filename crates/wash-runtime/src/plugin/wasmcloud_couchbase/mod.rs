@@ -168,7 +168,7 @@ async fn store_document(
         Err(e) => {
             return Ok(Err(DocumentError::Unexpected(format!(
                 "request failed: {e}"
-            ))))
+            ))));
         }
     };
 
@@ -205,7 +205,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             None => {
                 return Ok(Err(DocumentError::Unexpected(
                     "no bucket configured for this component".to_string(),
-                )))
+                )));
             }
         };
 
@@ -214,7 +214,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             Err(e) => {
                 return Ok(Err(DocumentError::Unexpected(format!(
                     "failed to build URL: {e}"
-                ))))
+                ))));
             }
         };
 
@@ -229,7 +229,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             Err(e) => {
                 return Ok(Err(DocumentError::Unexpected(format!(
                     "request failed: {e}"
-                ))))
+                ))));
             }
         };
 
@@ -240,7 +240,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
                     Err(e) => {
                         return Ok(Err(DocumentError::Unexpected(format!(
                             "failed to parse response: {e}"
-                        ))))
+                        ))));
                     }
                 };
                 Ok(Ok(document::Document {
@@ -257,10 +257,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
     }
 
     #[instrument(skip_all, fields(key = %key))]
-    async fn exists(
-        &mut self,
-        key: String,
-    ) -> anyhow::Result<Result<bool, DocumentError>> {
+    async fn exists(&mut self, key: String) -> anyhow::Result<Result<bool, DocumentError>> {
         let Some(plugin) = self.get_plugin::<WasmcloudCouchbase>(PLUGIN_COUCHBASE_ID) else {
             return Ok(Err(DocumentError::Unexpected(
                 "couchbase plugin not available".to_string(),
@@ -273,7 +270,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             None => {
                 return Ok(Err(DocumentError::Unexpected(
                     "no bucket configured for this component".to_string(),
-                )))
+                )));
             }
         };
 
@@ -282,7 +279,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             Err(e) => {
                 return Ok(Err(DocumentError::Unexpected(format!(
                     "failed to build URL: {e}"
-                ))))
+                ))));
             }
         };
 
@@ -297,7 +294,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             Err(e) => {
                 return Ok(Err(DocumentError::Unexpected(format!(
                     "request failed: {e}"
-                ))))
+                ))));
             }
         };
 
@@ -329,7 +326,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             None => {
                 return Ok(Err(DocumentError::Unexpected(
                     "no bucket configured for this component".to_string(),
-                )))
+                )));
             }
         };
 
@@ -338,7 +335,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             Err(e) => {
                 return Ok(Err(DocumentError::Unexpected(format!(
                     "failed to build URL: {e}"
-                ))))
+                ))));
             }
         };
 
@@ -354,7 +351,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             Err(e) => {
                 return Ok(Err(DocumentError::Unexpected(format!(
                     "existence check failed: {e}"
-                ))))
+                ))));
             }
         };
 
@@ -384,7 +381,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             None => {
                 return Ok(Err(DocumentError::Unexpected(
                     "no bucket configured for this component".to_string(),
-                )))
+                )));
             }
         };
 
@@ -393,7 +390,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             Err(e) => {
                 return Ok(Err(DocumentError::Unexpected(format!(
                     "failed to build URL: {e}"
-                ))))
+                ))));
             }
         };
 
@@ -420,7 +417,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             None => {
                 return Ok(Err(DocumentError::Unexpected(
                     "no bucket configured for this component".to_string(),
-                )))
+                )));
             }
         };
 
@@ -429,7 +426,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             Err(e) => {
                 return Ok(Err(DocumentError::Unexpected(format!(
                     "failed to build URL: {e}"
-                ))))
+                ))));
             }
         };
 
@@ -445,7 +442,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             Err(e) => {
                 return Ok(Err(DocumentError::Unexpected(format!(
                     "existence check failed: {e}"
-                ))))
+                ))));
             }
         };
 
@@ -474,7 +471,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             None => {
                 return Ok(Err(DocumentError::Unexpected(
                     "no bucket configured for this component".to_string(),
-                )))
+                )));
             }
         };
 
@@ -483,7 +480,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             Err(e) => {
                 return Ok(Err(DocumentError::Unexpected(format!(
                     "failed to build URL: {e}"
-                ))))
+                ))));
             }
         };
 
@@ -498,7 +495,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
             Err(e) => {
                 return Ok(Err(DocumentError::Unexpected(format!(
                     "request failed: {e}"
-                ))))
+                ))));
             }
         };
 
