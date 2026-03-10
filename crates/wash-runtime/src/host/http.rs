@@ -32,7 +32,10 @@ use crate::wit::WitInterface;
 use anyhow::{Context, ensure};
 use http_body_util::BodyExt;
 use hyper::client::conn::http2;
-use hyper_util::{rt::{TokioExecutor, TokioTimer}, server::conn::auto};
+use hyper_util::{
+    rt::{TokioExecutor, TokioTimer},
+    server::conn::auto,
+};
 use opentelemetry::context::FutureExt;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
