@@ -29,7 +29,7 @@ wasmcloud-postgres = [
     "dep:deadpool-postgres", "dep:postgres-types",
     "dep:bigdecimal", "dep:pg_bigdecimal",
     "dep:bit-vec", "dep:cidr", "dep:geo-types",
-    "dep:ulid", "dep:webpki-roots",
+    "dep:ulid",
 ]
 
 [dependencies]
@@ -40,7 +40,9 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 hostname = { workspace = true }
-hyper = { workspace = true, features = ["server", "http1"] }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["server", "http1", "http2"] }
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio", "server-auto"] }
 moka = { workspace = true, features = ["sync"]}
 names = { workspace = true }
 redis = { workspace = true }
@@ -108,7 +110,7 @@ tokio-postgres = { optional = true, workspace = true, features = [ "runtime", "w
 tokio-postgres-rustls = { optional = true, workspace = true }
 ulid = { optional = true, workspace = true, features = ["std"] }
 url = { workspace = true }
-webpki-roots = { optional = true, workspace = true }
+webpki-roots = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true, default-features = true }

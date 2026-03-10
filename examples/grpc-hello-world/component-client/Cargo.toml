@@ -1,0 +1,23 @@
+[package]
+name = "component-client"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.cargo-machete]
+ignored = ["prost"]
+
+[dependencies]
+wstd = "0.6.3"
+serde = { version = "1.0", features = ["derive"] }
+tonic = { version = "0.12", default-features = false, features = ["codegen", "prost"] }
+prost = "0.13"
+tower-service = { version = "0.3.2" }
+http = "1.1"
+http-body-util = "0.1"
+bytes = "1"
+
+[build-dependencies]
+tonic-build = "0.12"
