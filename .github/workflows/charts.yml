@@ -40,8 +40,8 @@ jobs:
           chart-version: v2-canary
           chart-app-version: canary
           registry: ghcr.io
-          registry-username: ricochet
-          registry-password: ${{ secrets.WASMCLOUD_PACKAGES_PAT }}
+          registry-username: ${{ github.repository_owner }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
           registry-namespace: wasmcloud/charts
 
   release:
@@ -57,6 +57,6 @@ jobs:
         with:
           chart-name: runtime-operator
           registry: ghcr.io
-          registry-username: ricochet
-          registry-password: ${{ secrets.WASMCLOUD_PACKAGES_PAT }}
+          registry-username: ${{ github.repository_owner }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
           registry-namespace: wasmcloud/charts
