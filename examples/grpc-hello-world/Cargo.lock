@@ -152,6 +152,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "bin-client"
+version = "0.0.1"
+dependencies = [
+ "prost",
+ "tokio",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
 name = "bin-server"
 version = "0.0.1"
 dependencies = [
@@ -188,6 +198,20 @@ dependencies = [
  "http-body-util",
  "prost",
  "serde",
+ "tonic",
+ "tonic-build",
+ "tower-service",
+ "wstd",
+]
+
+[[package]]
+name = "component-server"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "http",
+ "http-body-util",
+ "prost",
  "tonic",
  "tonic-build",
  "tower-service",

@@ -3,7 +3,7 @@ resolver = "3"
 package.edition = "2024"
 package.authors = ["The wasmCloud Team"]
 package.version = "0.0.1"
-members = ["component-client", "bin-server"] 
+members = ["component-client", "component-server", "bin-server", "bin-client"]
 
 
 [profile.release]

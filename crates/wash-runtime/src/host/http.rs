@@ -32,7 +32,7 @@ use crate::wit::WitInterface;
 use anyhow::{Context, ensure};
 use http_body_util::BodyExt;
 use hyper::client::conn::http2;
-use hyper_util::{rt::TokioExecutor, server::conn::auto};
+use hyper_util::{rt::{TokioExecutor, TokioTimer}, server::conn::auto};
 use opentelemetry::context::FutureExt;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -550,6 +550,7 @@ async fn run_http_server<T: Router>(
                                 .keep_alive(true);
                             builder
                                 .http2()
+                                .timer(TokioTimer::new())
                                 .keep_alive_interval(Some(Duration::from_secs(20)));
 
                             let result = if let Some(acceptor) = tls_acceptor_clone {

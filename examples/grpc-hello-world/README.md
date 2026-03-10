@@ -1,26 +1,9 @@
 # gRPC Hello World
 
-This example demonstrates how to make gRPC calls from a wasmCloud component. The component uses the `wasi:http/outgoing-handler` interface to make HTTP/2 requests to a gRPC server, with automatic protocol handling by the wash-runtime.
+This example demonstrates how to make gRPC calls from a wasmCloud component.
 
-## Architecture
 
-```
-Component (Wasm)
-    ↓ generates tonic::GreeterClient
-    ↓ calls service methods (say_hello)
-    ↓
-WasiGrpcService (implements tower::Service)
-    ↓ converts gRPC requests to WASI outgoing-http requests via wstd crate
-    ↓ adds Content-Type: application/grpc header
-    ↓
-Host Runtime (wash-runtime)
-    ↓ detects gRPC via Content-Type header
-    ↓ enforces HTTP/2 protocol
-    ↓
-gRPC Server
-```
-
-## Running the Test Server
+## Component as gRPC Client
 
 Start the gRPC Server on port 50051:
 
@@ -31,7 +14,21 @@ cargo run -p bin-server
 In another shell, start a wash dev session:
 
 ```bash
-wash dev
+wash -C component-client dev
 ```
 
 Navigate to [http://localhost:8000](http://localhost:8000)
+
+## Component as gRPC Server
+
+Start the gRPC Server using wash dev:
+
+```bash
+wash -C component-server dev
+```
+
+In another shell, run the gRPC Client:
+
+```bash
+cargo run -p bin-client
+```

@@ -2,4 +2,4 @@ version: 2.0.0-rc.8
 
 build:
   command: cargo build -p component-client --target wasm32-wasip2 --release
-  component_path: target/wasm32-wasip2/release/component_client.wasm
+  component_path: ../target/wasm32-wasip2/release/component_client.wasm
