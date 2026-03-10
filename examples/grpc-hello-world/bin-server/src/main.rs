@@ -17,7 +17,7 @@ impl Greeter for MyGreeter {
         request: Request<HelloRequest>,
     ) -> Result<Response<HelloReply>, Status> {
         let reply = HelloReply {
-            message: format!("Hello {}!", request.into_inner().name),
+            message: format!("Hello from GRPC: {}!", request.into_inner().name),
         };
         Ok(Response::new(reply))
     }

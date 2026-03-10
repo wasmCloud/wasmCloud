@@ -2,16 +2,17 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use http_body_util::BodyExt;
+use serde::Deserialize;
 use tonic::Request as GrpcRequest;
 
 use hello_world::HelloRequest;
 use hello_world::greeter_client::GreeterClient;
 
+use wstd::http::{Body, Request, Response, StatusCode};
+
 pub mod hello_world {
     tonic::include_proto!("helloworld");
 }
-
-use wstd::http::{Body, Request, Response, StatusCode};
 
 static UI_HTML: &str = include_str!("../ui.html");
 
@@ -110,15 +111,20 @@ async fn home(_req: Request<Body>) -> Result<Response<Body>, wstd::http::Error> 
         .map_err(Into::into)
 }
 
-async fn greet(_req: Request<Body>) -> Result<Response<Body>, wstd::http::Error> {
+#[derive(Deserialize)]
+struct GreetRequest {
+    name: String,
+}
+
+async fn greet(mut req: Request<Body>) -> Result<Response<Body>, wstd::http::Error> {
+    let js_req: GreetRequest = req.body_mut().json().await?;
+
     // Create the gRPC client
     let svc = WasiGrpcService::new("http://localhost:50051".parse().unwrap());
     let mut client = GreeterClient::new(svc);
 
     // Make the gRPC call
-    let request = GrpcRequest::new(HelloRequest {
-        name: "wasmCloud".to_string(),
-    });
+    let request = GrpcRequest::new(HelloRequest { name: js_req.name });
 
     eprintln!("Sending gRPC request...");
     let response = client.say_hello(request).await?;

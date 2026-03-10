@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <body>
+    <input type="text" id="name" value="wasmCloud!" />
+    <button onclick="sendRequest()">Send gRPC Request</button>
+    <br />
+    <div id="response"></div>
+    <script>
+      async function sendRequest() {
+        const name = document.getElementById("name").value;
+        const response = await fetch("/greet", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ name: name }),
+        });
+        const blob = await response.text();
+        const responseDiv = document.getElementById("response");
+        responseDiv.innerText = blob;
+      }
+    </script>
+  </body>
+</html>
