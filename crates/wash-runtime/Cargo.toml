@@ -15,7 +15,7 @@ path = "src/lib.rs"
 workspace = true
 
 [features]
-default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel"]
+default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "wasmcloud-couchbase", "washlet", "wasi-otel"]
 oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:sha2", "dep:wit-component"]
 wasi-otel = []
 washlet = ["oci"]
@@ -31,6 +31,7 @@ wasmcloud-postgres = [
     "dep:bit-vec", "dep:cidr", "dep:geo-types",
     "dep:ulid",
 ]
+wasmcloud-couchbase = ["dep:reqwest"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -84,6 +85,9 @@ opentelemetry = { workspace = true, features = ["trace", "metrics", "logs"] }
 opentelemetry-appender-tracing = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["logs"] }
 opentelemetry-http = { workspace = true }
+
+# Couchbase dependencies (optional, behind 'wasmcloud-couchbase' feature)
+reqwest = { workspace = true, optional = true }
 
 # Otel dependencies (optional, behind 'wasi-otel' feature)
 opentelemetry-otlp = { workspace = true, features = ["grpc-tonic","http-proto", "trace", "metrics", "logs"] }

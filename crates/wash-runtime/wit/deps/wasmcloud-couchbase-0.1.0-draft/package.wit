@@ -1,0 +1,59 @@
+package wasmcloud:couchbase@0.1.0-draft;
+
+/// Types for Couchbase document operations
+interface types {
+  /// Errors that can occur during document operations
+  variant document-error {
+    /// Document was not found
+    not-found,
+    /// Document already exists (for insert-only operations)
+    already-exists,
+    /// CAS mismatch during an optimistic-lock operation
+    cas-mismatch,
+    /// Unexpected or internal error
+    unexpected(string),
+  }
+
+  /// A Couchbase document returned from a get operation
+  record document {
+    /// The document key
+    key: string,
+    /// Document content serialized as a JSON string
+    content: string,
+    /// Compare-and-swap value for optimistic locking (0 if unavailable)
+    cas: u64,
+  }
+}
+
+/// Interface for Couchbase key-value document operations
+interface document {
+  use types.{document, document-error};
+
+  /// Retrieve a document by key
+  get: func(key: string) -> result<document, document-error>;
+
+  /// Check whether a document exists without fetching its content
+  exists: func(key: string) -> result<bool, document-error>;
+
+  /// Insert a new document; fails with already-exists if the key is taken
+  ///
+  /// Returns the CAS value of the inserted document (0 when unavailable via REST).
+  insert: func(key: string, content: string, expiry-secs: u32) -> result<u64, document-error>;
+
+  /// Upsert a document, creating or replacing it unconditionally
+  ///
+  /// Returns the CAS value of the stored document (0 when unavailable via REST).
+  upsert: func(key: string, content: string, expiry-secs: u32) -> result<u64, document-error>;
+
+  /// Replace an existing document; fails with not-found if the key is missing
+  ///
+  /// When cas is non-zero the operation fails with cas-mismatch if the stored
+  /// CAS does not match. Returns the new CAS value.
+  replace: func(key: string, content: string, cas: u64, expiry-secs: u32) -> result<u64, document-error>;
+
+  /// Remove a document
+  ///
+  /// When cas is non-zero the operation fails with cas-mismatch if the stored
+  /// CAS does not match.
+  remove: func(key: string, cas: u64) -> result<_, document-error>;
+}

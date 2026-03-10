@@ -37,6 +37,10 @@ world postgres {
   import wasmcloud:postgres/prepared@0.1.1-draft;
 }
 
+world couchbase {
+  import wasmcloud:couchbase/types@0.1.0-draft;
+  import wasmcloud:couchbase/document@0.1.0-draft;
+}
 
 world otel {
     import wasi:otel/types@0.2.0-rc.1;

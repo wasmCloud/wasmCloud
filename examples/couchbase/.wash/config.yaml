@@ -1,0 +1,22 @@
+build:
+  command: cargo build --target wasm32-wasip2 --release
+  component_path: target/wasm32-wasip2/release/couchbase_example.wasm
+
+dev:
+  # Couchbase cluster URL (Management REST API port 8091).
+  # Credentials are embedded in the URL: http://user:password@host:port
+  couchbase_url: http://Administrator:password@localhost:8091
+
+  # HTTP server listen address
+  http_addr: 127.0.0.1:8000
+
+  # Per-interface config: tells the couchbase plugin which bucket this
+  # component should read from and write to.
+  host_interfaces:
+    - namespace: wasmcloud
+      package: couchbase
+      interfaces:
+        - types
+        - document
+      config:
+        bucket: demo
