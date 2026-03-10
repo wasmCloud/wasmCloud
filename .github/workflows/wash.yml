@@ -246,3 +246,25 @@ jobs:
           token: ${{ github.token }}
           prerelease: false
           generate_release_notes: true
+
+  update-homebrew:
+    needs: upload-release-assets
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/wash-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#wash-v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch Homebrew tap update
+        env:
+          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+        run: |
+          gh api repos/wasmCloud/homebrew-wasmcloud/dispatches \
+            -f event_type=brew-formula-update \
+            -f 'client_payload[tag_prefix]=wash' \
+            -f 'client_payload[tag_version]=${{ steps.version.outputs.version }}'
