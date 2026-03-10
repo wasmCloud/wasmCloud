@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+package.edition = "2024"
+package.authors = ["The wasmCloud Team"]
+package.version = "0.0.1"
+members = ["component-client", "bin-server"] 
+
+
+[profile.release]
+# Optimize for small code size
+lto = true
+opt-level = "s"
+strip = true
+

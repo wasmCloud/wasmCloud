@@ -23,13 +23,16 @@ use std::{
     net::SocketAddr,
     path::Path,
     sync::Arc,
+    time::Duration,
 };
 
 use crate::engine::ctx::SharedCtx;
 use crate::engine::workload::ResolvedWorkload;
 use crate::wit::WitInterface;
 use anyhow::{Context, ensure};
-use hyper::server::conn::http1;
+use http_body_util::BodyExt;
+use hyper::client::conn::http2;
+use hyper_util::{rt::TokioExecutor, server::conn::auto};
 use opentelemetry::context::FutureExt;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -40,7 +43,9 @@ use wasmtime_wasi_http::{
     WasiHttpView,
     bindings::{ProxyPre, http::types::Scheme},
     body::HyperOutgoingBody,
+    hyper_request_error,
     io::TokioIo,
+    types::{HostFutureIncomingResponse, IncomingResponse, OutgoingRequestConfig},
 };
 
 use rustls::{ServerConfig, pki_types::CertificateDer};
@@ -158,7 +163,8 @@ impl Router for DynamicRouter {
                 .headers()
                 .get(hyper::header::HOST)
                 .and_then(|h| h.to_str().ok())
-                .context("no Host header in request")?;
+                .or_else(|| req.uri().authority().map(|a| a.as_str()))
+                .context("no Host header or :authority in request")?;
             let Some(workload_set) = lock.get(workload_host) else {
                 anyhow::bail!("no workload bound to host header: {}", workload_host);
             };
@@ -491,11 +497,13 @@ impl<T: Router> HostHandler for HttpServer<T> {
                 wasmtime_wasi_http::HttpError::trap(anyhow::anyhow!("request not allowed: {}", e))
             })?;
 
-        // NOTE(lxf): Bring wasi-http code if needed
-        // Separate HTTP / GRPC handling
-        Ok(wasmtime_wasi_http::types::default_send_request(
-            request, config,
-        ))
+        if is_grpc_request(&request) {
+            Ok(send_grpc_request(request, config))
+        } else {
+            Ok(wasmtime_wasi_http::types::default_send_request(
+                request, config,
+            ))
+        }
     }
 }
 
@@ -536,13 +544,20 @@ async fn run_http_server<T: Router>(
                                 }
                             });
 
+                            let mut builder = auto::Builder::new(TokioExecutor::new());
+                            builder
+                                .http1()
+                                .keep_alive(true);
+                            builder
+                                .http2()
+                                .keep_alive_interval(Some(Duration::from_secs(20)));
+
                             let result = if let Some(acceptor) = tls_acceptor_clone {
                                 // Handle HTTPS connection
                                 match acceptor.accept(client).await {
                                     Ok(tls_stream) => {
-                                        http1::Builder::new()
-                                            .keep_alive(true)
-                                            .serve_connection(TokioIo::new(tls_stream), service)
+                                        builder
+                                            .serve_connection_with_upgrades(TokioIo::new(tls_stream), service)
                                             .await
                                     }
                                     Err(e) => {
@@ -551,10 +566,9 @@ async fn run_http_server<T: Router>(
                                     }
                                 }
                             } else {
-                                // Handle HTTP connection
-                                http1::Builder::new()
-                                    .keep_alive(true)
-                                    .serve_connection(TokioIo::new(client), service)
+                                // Handle HTTP/h2c connection
+                                builder
+                                    .serve_connection_with_upgrades(TokioIo::new(client), service)
                                     .await
                             };
 
@@ -762,10 +776,13 @@ async fn load_tls_config(
         .ok_or_else(|| anyhow::anyhow!("No private key found in file: {}", key_path.display()))?;
 
     // Create rustls server config
-    let config = ServerConfig::builder()
+    let mut config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(cert_chain, key)
         .context("Failed to create TLS configuration")?;
+
+    // Advertise both h2 and http/1.1 via ALPN
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
     // If CA is provided, configure client certificate verification
     if let Some(ca_path) = ca_path {
@@ -789,4 +806,142 @@ async fn load_tls_config(
     }
 
     Ok(config)
+}
+
+/// Check if a request is a gRPC request based on Content-Type header.
+fn is_grpc_request(req: &hyper::Request<HyperOutgoingBody>) -> bool {
+    req.headers()
+        .get(hyper::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("application/grpc"))
+}
+
+/// Send a gRPC request over HTTP/2.
+fn send_grpc_request(
+    request: hyper::Request<HyperOutgoingBody>,
+    config: OutgoingRequestConfig,
+) -> HostFutureIncomingResponse {
+    let handle = wasmtime_wasi::runtime::spawn(async move {
+        Ok(send_grpc_request_handler(request, config).await)
+    });
+    HostFutureIncomingResponse::pending(handle)
+}
+
+/// Async handler that sends a gRPC request using HTTP/2.
+async fn send_grpc_request_handler(
+    mut request: hyper::Request<HyperOutgoingBody>,
+    OutgoingRequestConfig {
+        use_tls,
+        connect_timeout,
+        first_byte_timeout,
+        between_bytes_timeout,
+    }: OutgoingRequestConfig,
+) -> Result<IncomingResponse, wasmtime_wasi_http::bindings::http::types::ErrorCode> {
+    use tokio::net::TcpStream;
+    use tokio::time::timeout;
+    use wasmtime_wasi_http::bindings::http::types::ErrorCode;
+
+    let authority = if let Some(authority) = request.uri().authority() {
+        if authority.port().is_some() {
+            authority.to_string()
+        } else {
+            let port = if use_tls { 443 } else { 80 };
+            format!("{authority}:{port}")
+        }
+    } else {
+        return Err(ErrorCode::HttpRequestUriInvalid);
+    };
+
+    let tcp_stream = timeout(connect_timeout, TcpStream::connect(&authority))
+        .await
+        .map_err(|_| ErrorCode::ConnectionTimeout)?
+        .map_err(|_| ErrorCode::ConnectionRefused)?;
+
+    let (mut sender, worker) = if use_tls {
+        use rustls::pki_types::ServerName;
+
+        let root_cert_store = rustls::RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.into(),
+        };
+        let mut config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth();
+        config.alpn_protocols = vec![b"h2".to_vec()];
+
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+        let mut parts = authority.split(':');
+        let host = parts.next().unwrap_or(&authority);
+        let domain = ServerName::try_from(host)
+            .map_err(|e| {
+                tracing::warn!("dns lookup error: {e:?}");
+                ErrorCode::ConnectionRefused
+            })?
+            .to_owned();
+        let stream = connector.connect(domain, tcp_stream).await.map_err(|e| {
+            tracing::warn!("tls protocol error: {e:?}");
+            ErrorCode::TlsProtocolError
+        })?;
+        let stream = TokioIo::new(stream);
+
+        let (sender, conn) = timeout(
+            connect_timeout,
+            http2::handshake(TokioExecutor::new(), stream),
+        )
+        .await
+        .map_err(|_| ErrorCode::ConnectionTimeout)?
+        .map_err(hyper_request_error)?;
+
+        let worker = wasmtime_wasi::runtime::spawn(async move {
+            if let Err(e) = conn.await {
+                tracing::warn!("dropping error {e}");
+            }
+        });
+
+        (sender, worker)
+    } else {
+        // h2c (HTTP/2 over cleartext)
+        let stream = TokioIo::new(tcp_stream);
+        let (sender, conn) = timeout(
+            connect_timeout,
+            http2::handshake(TokioExecutor::new(), stream),
+        )
+        .await
+        .map_err(|_| ErrorCode::ConnectionTimeout)?
+        .map_err(hyper_request_error)?;
+
+        let worker = wasmtime_wasi::runtime::spawn(async move {
+            if let Err(e) = conn.await {
+                tracing::warn!("dropping error {e}");
+            }
+        });
+
+        (sender, worker)
+    };
+
+    // Strip scheme/authority from URI for the actual HTTP/2 request
+    // The URI was already validated, so rebuilding with just path+query is safe
+    if let Ok(uri) = hyper::Uri::builder()
+        .path_and_query(
+            request
+                .uri()
+                .path_and_query()
+                .map(|p| p.as_str())
+                .unwrap_or("/"),
+        )
+        .build()
+    {
+        *request.uri_mut() = uri;
+    }
+
+    let resp = timeout(first_byte_timeout, sender.send_request(request))
+        .await
+        .map_err(|_| ErrorCode::ConnectionReadTimeout)?
+        .map_err(hyper_request_error)?
+        .map(|body| body.map_err(hyper_request_error).boxed_unsync());
+
+    Ok(IncomingResponse {
+        resp,
+        worker: Some(worker),
+        between_bytes_timeout,
+    })
 }
