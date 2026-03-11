@@ -645,7 +645,10 @@ impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
     #[instrument(skip(self))]
     async fn new_outgoing_value(&mut self) -> anyhow::Result<Resource<OutgoingValueHandle>> {
         let handle = OutgoingValueHandle {
-            pipe: MemoryOutputPipe::new(usize::MAX),
+            // Cap at u32::MAX so the pipe capacity fits in a 32-bit wasm usize.
+            // The wasi::io std::io::Write impl converts check_write()'s u64 via
+            // try_into::<usize>(), which fails on wasm32 when the value exceeds u32::MAX.
+            pipe: MemoryOutputPipe::new(u32::MAX as usize),
             container: None,
             object_name: None,
         };
