@@ -170,23 +170,7 @@ impl FuelConsumptionMeter {
                 .with_description(
                     "Measure fuel consumption for components that export host plugin interfaces",
                 )
-                .with_boundaries(vec![
-                    0.0,
-                    50_000.0,
-                    100_000.0,
-                    250_000.0,
-                    500_000.0,
-                    750_000.0,
-                    1_000_000.0,
-                    2_500_000.0,
-                    5_000_000.0,
-                    7_500_000.0,
-                    10_000_000.0,
-                    25_000_000.0,
-                    50_000_000.0,
-                    75_000_000.0,
-                    100_000_000.0,
-                ])
+                .with_boundaries(fuel_histogram_boundaries())
                 .build()
         });
         Self { hist }
@@ -211,5 +195,27 @@ impl FuelConsumptionMeter {
         } else {
             func(store).await
         }
+    }
+}
+
+/// Generate histogram boundaries for fuel consumption metrics.
+///
+/// Produces boundaries following multipliers [1, 2.5, 5, 7.5] per decade,
+/// starting at 50,000 up to a u64::MAX
+fn fuel_histogram_boundaries() -> Vec<f64> {
+    const MAX: f64 = u64::MAX as f64;
+    const MULTIPLIERS: [f64; 4] = [1.0, 2.5, 5.0, 7.5];
+
+    let mut boundaries = vec![0.0];
+    let mut base = 50_000.0;
+    loop {
+        for &m in &MULTIPLIERS {
+            let value = base * m;
+            if value > MAX {
+                return boundaries;
+            }
+            boundaries.push(value);
+        }
+        base *= 10.0;
     }
 }
