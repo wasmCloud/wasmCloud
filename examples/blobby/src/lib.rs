@@ -242,6 +242,8 @@ fn put_object(
             content_length, copied_bytes
         ))
     } else {
+        drop(stream);
+        OutgoingValue::finish(result_value).map_err(|e| e.to_string())?;
         Ok(())
     }
 }
