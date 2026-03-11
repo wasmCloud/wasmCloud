@@ -254,6 +254,8 @@ pub struct CliContext {
     project_dir: PathBuf,
     // the original working directory when the CLI was invoked, used for resolving relative paths in commands
     original_working_dir: PathBuf,
+    // Enable fuel meter
+    enable_meters: bool,
 }
 
 impl Deref for CliContext {
@@ -270,6 +272,7 @@ pub struct CliContextBuilder {
     non_interactive: bool,
     config: Option<PathBuf>,
     project_dir: Option<PathBuf>,
+    enable_meters: bool,
 }
 
 impl CliContextBuilder {
@@ -285,6 +288,11 @@ impl CliContextBuilder {
 
     pub fn project_dir(mut self, project_dir: PathBuf) -> Self {
         self.project_dir = Some(project_dir);
+        self
+    }
+
+    pub fn enable_meters(mut self, enable_meters: bool) -> Self {
+        self.enable_meters = enable_meters;
         self
     }
 
@@ -363,6 +371,7 @@ impl CliContextBuilder {
             project_dir,
             original_working_dir,
             config: self.config,
+            enable_meters: self.enable_meters,
         })
     }
 }
@@ -462,6 +471,10 @@ impl CliContext {
 
     pub fn project_config_path(&self) -> PathBuf {
         locate_project_config(self.project_dir())
+    }
+
+    pub fn enable_meters(&self) -> bool {
+        self.enable_meters
     }
 
     pub fn load_config<T>(&self, overrides: Option<T>) -> anyhow::Result<Config>

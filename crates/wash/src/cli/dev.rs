@@ -6,7 +6,9 @@ use clap::Args;
 use tokio::{select, sync::mpsc};
 use tracing::{debug, info, instrument, warn};
 use wash_runtime::{
+    engine::Engine,
     host::{Host, HostApi},
+    observability::Meters,
     plugin::{self},
     types::{
         Component, HostPathVolume, LocalResources, Service, Volume, VolumeMount, VolumeType,
@@ -51,7 +53,14 @@ impl CliCommand for DevCommand {
             .clone()
             .unwrap_or_else(|| "0.0.0.0:8000".to_string());
 
-        let mut host_builder = Host::builder();
+        let engine = Engine::builder()
+            .with_pooling_allocator(true)
+            .with_fuel_consumption(ctx.enable_meters())
+            .build()?;
+
+        let mut host_builder = Host::builder()
+            .with_engine(engine)
+            .with_meters(Meters::new(ctx.enable_meters()));
 
         // Enable wasi config
         host_builder =
