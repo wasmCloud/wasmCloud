@@ -54,6 +54,7 @@ use wasmtime::component::Component;
 
 use crate::engine::workload::ResolvedWorkload;
 use crate::engine::{Engine, uses_wasi_http};
+use crate::observability::Meters;
 use crate::plugin::HostPlugin;
 use crate::types::*;
 use crate::wit::{WitInterface, WitWorld};
@@ -206,6 +207,7 @@ pub struct Host {
     // endpoints: HashMap<String, EndpointConfiguration>
     pub(crate) http_handler: std::sync::Arc<dyn crate::host::http::HostHandler>,
     config: HostConfig,
+    meters: Meters,
 }
 
 impl Host {
@@ -314,6 +316,8 @@ impl Host {
     /// # Errors
     /// Returns an error if any plugin fails to start.
     pub async fn start(self) -> anyhow::Result<Arc<Self>> {
+        self.http_handler.inject_meters(&self.meters).await;
+
         self.http_handler
             .start()
             .await
@@ -321,6 +325,8 @@ impl Host {
 
         // Start all plugins, any errors means the host fails to start.
         for (id, plugin) in &self.plugins {
+            plugin.inject_meters(&self.meters).await;
+
             if let Err(e) = plugin.start().await {
                 tracing::error!(id = id, err = ?e, "failed to start plugin");
                 bail!(e)
@@ -800,6 +806,7 @@ pub struct HostBuilder {
     labels: HashMap<String, String>,
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
     config: Option<HostConfig>,
+    meters: Meters,
 }
 
 impl Default for HostBuilder {
@@ -813,6 +820,7 @@ impl Default for HostBuilder {
             labels: Default::default(),
             http_handler: Default::default(),
             config: Default::default(),
+            meters: Default::default(),
         }
     }
 }
@@ -847,6 +855,11 @@ impl HostBuilder {
 
         self.plugins.insert(plugin_id, plugin);
         Ok(self)
+    }
+
+    pub fn with_meters(mut self, meters: Meters) -> Self {
+        self.meters = meters;
+        self
     }
 
     /// Sets the hostname for this host.
@@ -949,6 +962,7 @@ impl HostBuilder {
             system_monitor: Arc::new(RwLock::new(SystemMonitor::new())),
             http_handler,
             config: self.config.unwrap_or_default(),
+            meters: self.meters,
         })
     }
 }

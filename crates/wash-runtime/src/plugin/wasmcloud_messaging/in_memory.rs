@@ -3,9 +3,11 @@ use std::sync::Arc;
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::{ResolvedWorkload, UnresolvedWorkload, WorkloadItem};
+use crate::observability::Meters;
 use crate::plugin::HostPlugin;
 use crate::wit::{WitInterface, WitWorld};
 use anyhow::Context;
+use opentelemetry::KeyValue;
 use tokio::sync::{Notify, RwLock, oneshot};
 use tracing::{Instrument, debug, instrument, warn};
 
@@ -56,12 +58,14 @@ struct ComponentData {
 #[derive(Clone)]
 pub struct InMemoryMessaging {
     tracker: Arc<RwLock<WorkloadTracker<WorkloadData, ComponentData>>>,
+    meters: Arc<RwLock<Meters>>,
 }
 
 impl InMemoryMessaging {
     pub fn new() -> Self {
         Self {
             tracker: Arc::new(RwLock::new(WorkloadTracker::default())),
+            meters: Default::default(),
         }
     }
 }
@@ -221,6 +225,10 @@ impl HostPlugin for InMemoryMessaging {
         }
     }
 
+    async fn inject_meters(&self, meters: &Meters) {
+        *self.meters.write().await = meters.clone();
+    }
+
     async fn on_workload_bind(
         &self,
         workload: &UnresolvedWorkload,
@@ -317,6 +325,8 @@ impl HostPlugin for InMemoryMessaging {
 
         // Spawn the message processing task
         let task_component_id = component_id.clone();
+        let fuel_meter = self.meters.read().await.fuel_consumption.clone();
+
         let handle = tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -356,19 +366,29 @@ impl HostPlugin for InMemoryMessaging {
                             reply_to = %msg.reply_to.as_deref().unwrap_or("<none>"),
                         );
 
-                        match proxy
-                            .wasmcloud_messaging_handler()
-                            .call_handle_message(store, &msg)
-                            .instrument(span)
-                            .await
-                        {
+                        let result = fuel_meter.observe(
+                            &[
+                                KeyValue::new("plugin", PLUGIN_MESSAGING_MEMORY_ID),
+                                KeyValue::new("subject", msg.subject.to_string()),
+                            ],
+                            &mut store,
+                            async move |store| {
+                                proxy
+                                    .wasmcloud_messaging_handler()
+                                    .call_handle_message(store, &msg)
+                                    .instrument(span)
+                                    .await
+                            }
+                        ).await;
+
+                        match result {
                             Ok(_) => {
                                 debug!("Message handled successfully");
                             }
                             Err(e) => {
                                 warn!("Error handling message: {e}");
                             }
-                        }
+                        };
                     }
                 }
             }
