@@ -83,7 +83,7 @@ impl<'a> Host for ActiveCtx<'a> {
         subject: String,
         body: Vec<u8>,
         timeout_ms: u32,
-    ) -> anyhow::Result<Result<types::BrokerMessage, String>> {
+    ) -> wasmtime::Result<Result<types::BrokerMessage, String>> {
         let Some(plugin) = self.get_plugin::<InMemoryMessaging>(PLUGIN_MESSAGING_MEMORY_ID) else {
             return Ok(Err("plugin not available".to_string()));
         };
@@ -98,7 +98,7 @@ impl<'a> Host for ActiveCtx<'a> {
                     data.pending_requests.clone(),
                     data.notify.clone(),
                 ),
-                None => anyhow::bail!("workload state not found"),
+                None => wasmtime::bail!("workload state not found"),
             }
         };
 
@@ -163,7 +163,7 @@ impl<'a> Host for ActiveCtx<'a> {
     }
 
     #[instrument(skip_all, fields(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>")))]
-    async fn publish(&mut self, msg: types::BrokerMessage) -> anyhow::Result<Result<(), String>> {
+    async fn publish(&mut self, msg: types::BrokerMessage) -> wasmtime::Result<Result<(), String>> {
         let Some(plugin) = self.get_plugin::<InMemoryMessaging>(PLUGIN_MESSAGING_MEMORY_ID) else {
             return Ok(Err("plugin not available".to_string()));
         };
@@ -177,7 +177,7 @@ impl<'a> Host for ActiveCtx<'a> {
                     data.pending_requests.clone(),
                     data.notify.clone(),
                 ),
-                None => anyhow::bail!("workload state not found"),
+                None => wasmtime::bail!("workload state not found"),
             }
         };
 
@@ -316,6 +316,7 @@ impl HostPlugin for InMemoryMessaging {
         let instance_pre = workload.instantiate_pre(component_id).await?;
 
         let pre = bindings::MessagingPre::new(instance_pre)
+            .map_err(anyhow::Error::from)
             .context("failed to instantiate messaging pre")?;
 
         let workload = workload.clone();
@@ -378,6 +379,7 @@ impl HostPlugin for InMemoryMessaging {
                                     .call_handle_message(store, &msg)
                                     .instrument(span)
                                     .await
+                                    .map_err(Into::into)
                             }
                         ).await;
 

@@ -231,6 +231,7 @@ impl Host {
         // Create a minimal engine just for introspection
         let engine = self.engine.inner();
         let component = Component::new(engine, component_bytes)
+            .map_err(anyhow::Error::from)
             .context("failed to parse component for interface extraction")?;
         let ty = component.component_type();
 

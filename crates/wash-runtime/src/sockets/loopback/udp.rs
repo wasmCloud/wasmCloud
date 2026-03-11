@@ -1,12 +1,12 @@
 use crate::sockets::loopback::Network;
 use crate::sockets::util::{ErrorCode, is_valid_address_family, is_valid_remote_address};
 use crate::sockets::{SocketAddrCheck, SocketAddressFamily};
-use anyhow::Context as _;
 use core::mem;
 use core::net::SocketAddr;
 use core::num::NonZeroU16;
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
+use wasmtime::error::Context as _;
 
 pub struct UdpEndpoint {
     pub tx: mpsc::UnboundedSender<(UdpDatagram, OwnedSemaphorePermit)>,

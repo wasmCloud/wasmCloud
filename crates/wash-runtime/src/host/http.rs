@@ -310,7 +310,7 @@ impl HostHandler for NullServer {
         _config: wasmtime_wasi_http::types::OutgoingRequestConfig,
         _allowed_hosts: &[String],
     ) -> wasmtime_wasi_http::HttpResult<wasmtime_wasi_http::types::HostFutureIncomingResponse> {
-        Err(wasmtime_wasi_http::HttpError::trap(anyhow::anyhow!(
+        Err(wasmtime_wasi_http::HttpError::trap(wasmtime::format_err!(
             "http client not available"
         )))
     }
@@ -733,7 +733,9 @@ pub async fn handle_component_request(
 
     let req = store.data_mut().new_incoming_request(scheme, req)?;
     let out = store.data_mut().new_response_outparam(sender)?;
-    let pre = ProxyPre::new(pre).context("failed to instantiate proxy pre")?;
+    let pre = ProxyPre::new(pre)
+        .map_err(anyhow::Error::from)
+        .context("failed to instantiate proxy pre")?;
 
     // Run the http request itself in a separate task so the task can
     // optionally continue to execute beyond after the initial

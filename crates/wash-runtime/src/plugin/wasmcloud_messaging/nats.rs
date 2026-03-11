@@ -6,12 +6,12 @@ use crate::engine::workload::{ResolvedWorkload, WorkloadItem};
 use crate::observability::Meters;
 use crate::plugin::HostPlugin;
 use crate::wit::{WitInterface, WitWorld};
-use anyhow::{Context, bail};
 use async_nats::Subscriber;
 use futures::stream::StreamExt;
 use opentelemetry::KeyValue;
 use tokio::sync::RwLock;
 use tracing::{Instrument, debug, instrument, warn};
+use wasmtime::error::Context as _;
 
 const PLUGIN_MESSAGING_ID: &str = "wasmcloud-messaging";
 
@@ -57,7 +57,7 @@ impl<'a> Host for ActiveCtx<'a> {
         subject: String,
         body: Vec<u8>,
         timeout_ms: u32,
-    ) -> anyhow::Result<Result<types::BrokerMessage, String>> {
+    ) -> wasmtime::Result<Result<types::BrokerMessage, String>> {
         let Some(plugin) = self.get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID) else {
             return Ok(Err("plugin not available".to_string()));
         };
@@ -85,7 +85,7 @@ impl<'a> Host for ActiveCtx<'a> {
     }
 
     #[instrument(skip_all, fields(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>")))]
-    async fn publish(&mut self, msg: types::BrokerMessage) -> anyhow::Result<Result<(), String>> {
+    async fn publish(&mut self, msg: types::BrokerMessage) -> wasmtime::Result<Result<(), String>> {
         let Some(plugin) = self.get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID) else {
             return Ok(Err("plugin not available".to_string()));
         };
@@ -160,7 +160,7 @@ impl HostPlugin for NatsMessaging {
             };
 
             let WorkloadItem::Component(component_handle) = component_handle else {
-                bail!("Service can not be tracked");
+                anyhow::bail!("Service can not be tracked");
             };
 
             self.tracker.write().await.add_component(
@@ -208,8 +208,9 @@ impl HostPlugin for NatsMessaging {
                     for sub in subscriptions {
                         drop(sub);
                     }
-                    return Err(anyhow::Error::new(e))
-                        .context(format!("failed to subscribe to {subject}"));
+                    return Err(
+                        anyhow::anyhow!(e).context(format!("failed to subscribe to {subject}"))
+                    );
                 }
             };
 
@@ -272,6 +273,7 @@ impl HostPlugin for NatsMessaging {
                                     .call_handle_message(store, &msg)
                                     .instrument(span)
                                     .await
+                                    .map_err(Into::into)
                             }
                         ).await;
 

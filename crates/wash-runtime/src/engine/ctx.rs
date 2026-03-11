@@ -36,7 +36,7 @@ impl SharedCtx {
         }
     }
 
-    pub fn set_active_ctx(&mut self, id: &Arc<str>) -> anyhow::Result<()> {
+    pub fn set_active_ctx(&mut self, id: &Arc<str>) -> wasmtime::Result<()> {
         if id == &self.active_ctx.component_id {
             return Ok(());
         }
@@ -46,7 +46,9 @@ impl SharedCtx {
             self.contexts.insert(old_ctx.component_id.clone(), old_ctx);
             Ok(())
         } else {
-            Err(anyhow::anyhow!("Context for component {id} not found"))
+            Err(wasmtime::format_err!(
+                "Context for component {id} not found"
+            ))
         }
     }
 }
@@ -176,7 +178,7 @@ impl WasiHttpView for SharedCtx {
                 config,
                 &self.active_ctx.allowed_hosts,
             ),
-            None => Err(wasmtime_wasi_http::HttpError::trap(anyhow::anyhow!(
+            None => Err(wasmtime_wasi_http::HttpError::trap(wasmtime::format_err!(
                 "http client not available"
             ))),
         }

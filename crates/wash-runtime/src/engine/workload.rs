@@ -324,7 +324,7 @@ impl WorkloadComponent {
     }
 
     /// Pre-instantiate the component to prepare for instantiation.
-    pub fn pre_instantiate(&mut self) -> anyhow::Result<InstancePre<SharedCtx>> {
+    pub fn pre_instantiate(&mut self) -> wasmtime::Result<InstancePre<SharedCtx>> {
         let component = self.metadata.component.clone();
         self.metadata.linker.instantiate_pre(&component)
     }
@@ -720,9 +720,9 @@ impl ResolvedWorkload {
                     trace!(name = import_name, index = ?instance_idx, "found import at index");
 
                     // Preinstantiate the plugin instance so we can use it later
-                    let pre = plugin_component
-                        .pre_instantiate()
-                        .context("failed to pre-instantiate during component linking")?;
+                    let pre = plugin_component.pre_instantiate().map_err(|e| {
+                        e.context("failed to pre-instantiate during component linking")
+                    })?;
 
                     let mut linker_instance = match linker.instance(import_name) {
                         Ok(i) => i,
@@ -808,7 +808,9 @@ impl ResolvedWorkload {
 
                                                 let func = instance
                                                     .get_func(&mut store, func_idx)
-                                                    .context("function not found")?;
+                                                    .ok_or_else(|| {
+                                                        wasmtime::format_err!("function not found")
+                                                    })?;
                                                 trace!(
                                                     name = %import_name,
                                                     fn_name = %export_name,
@@ -818,10 +820,7 @@ impl ResolvedWorkload {
                                                 let mut params_buf =
                                                     Vec::with_capacity(params.len());
                                                 for v in params {
-                                                    params_buf
-                                                        .push(lower(&mut store, v).context(
-                                                            "failed to lower parameter",
-                                                        )?);
+                                                    params_buf.push(lower(&mut store, v)?);
                                                 }
                                                 trace!(
                                                     name = %import_name,
@@ -845,10 +844,9 @@ impl ResolvedWorkload {
                                                     ),
                                                 )
                                                 .await
-                                                .context(
-                                                    "function call timed out after 30 seconds",
-                                                )?
-                                                .context("failed to call function")?;
+                                                .map_err(|e| wasmtime::format_err!(
+                                                    "function call timed out after 30 seconds: {e}",
+                                                ))??;
 
                                                 trace!(
                                                     name = %import_name,
@@ -857,11 +855,11 @@ impl ResolvedWorkload {
                                                     "lifting results"
                                                 );
                                                 for (i, v) in results_buf.into_iter().enumerate() {
-                                                    *results
-                                                        .get_mut(i)
-                                                        .context("result index out of bounds")? =
-                                                        lift(&mut store, v)
-                                                            .context("failed to lift result")?;
+                                                    *results.get_mut(i).ok_or_else(|| {
+                                                        wasmtime::format_err!(
+                                                            "result index out of bounds"
+                                                        )
+                                                    })? = lift(&mut store, v)?;
                                                 }
                                                 trace!(
                                                     name = %import_name,
@@ -870,17 +868,13 @@ impl ResolvedWorkload {
                                                     "invoked dynamic export"
                                                 );
 
-                                                func.post_return_async(&mut store)
-                                                    .await
-                                                    .context("failed to execute post-return")?;
-
                                                 store.data_mut().set_active_ctx(&prev_id)?;
 
                                                 Ok(())
                                             })
                                         },
                                     )
-                                    .context("failed to create async func")?;
+                                    .map_err(|e| e.context("failed to create async func"))?;
                             }
                             ComponentItem::Resource(resource_ty) => {
                                 let (item, _idx) = match plugin_component
@@ -927,10 +921,10 @@ impl ResolvedWorkload {
 
                                 linker_instance
                                         .resource(export_name, ResourceType::host::<ResourceAny>(), |_, _| Ok(()))
-                                        .with_context(|| {
-                                            format!(
+                                        .map_err(|e| {
+                                            e.context(format!(
                                                 "failed to define resource import: {import_name}.{export_name}"
-                                            )
+                                            ))
                                         })
                                         .unwrap_or_else(|e| {
                                             trace!(name = import_name, resource = export_name, error = %e, "error defining resource import, skipping");

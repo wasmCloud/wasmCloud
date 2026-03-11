@@ -70,7 +70,7 @@ impl<'a> bindings::wasi::config::store::Host for ActiveCtx<'a> {
     async fn get(
         &mut self,
         key: String,
-    ) -> anyhow::Result<Result<Option<String>, bindings::wasi::config::store::Error>> {
+    ) -> wasmtime::Result<Result<Option<String>, bindings::wasi::config::store::Error>> {
         let Some(plugin) = self.get_plugin::<DynamicConfig>(WASI_CONFIG_ID) else {
             return Ok(Ok(None));
         };
@@ -84,7 +84,7 @@ impl<'a> bindings::wasi::config::store::Host for ActiveCtx<'a> {
     #[instrument(skip(self))]
     async fn get_all(
         &mut self,
-    ) -> anyhow::Result<Result<Vec<(String, String)>, bindings::wasi::config::store::Error>> {
+    ) -> wasmtime::Result<Result<Vec<(String, String)>, bindings::wasi::config::store::Error>> {
         let Some(plugin) = self.get_plugin::<DynamicConfig>(WASI_CONFIG_ID) else {
             return Ok(Ok(vec![]));
         };

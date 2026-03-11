@@ -366,6 +366,7 @@ impl Engine {
         // Add HTTP interfaces to the linker if feature is enabled and component uses them
         if uses_wasi_http(&wasmtime_component) {
             wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
+                .map_err(anyhow::Error::from)
                 .context("failed to add wasi:http/types to linker")?;
         }
 
@@ -418,6 +419,7 @@ impl Engine {
             None => {
                 tracing::debug!("no digest provided, compiling component without caching");
                 let compiled = Component::new(&self.inner, bytes.as_ref())
+                    .map_err(anyhow::Error::from)
                     .context("failed to compile component from bytes")?;
                 Ok(compiled)
             }
@@ -429,10 +431,13 @@ impl Engine {
                 self.cache
                     .try_get_with(key, || {
                         Component::new(inner, bytes_ref)
+                            .map_err(anyhow::Error::from)
                             .context("failed to compile component from bytes")
                             .map(CacheValue)
                     })
-                    .map_err(|e| anyhow::anyhow!(e).context("compilation cache error"))
+                    .map_err(|e: Arc<anyhow::Error>| {
+                        anyhow::anyhow!(e).context("compilation cache error")
+                    })
                     .map(|v| v.0)
             }
         }
@@ -464,6 +469,7 @@ impl Engine {
         // Add HTTP interfaces to the linker
         if uses_wasi_http(&wasmtime_component) {
             wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
+                .map_err(anyhow::Error::from)
                 .context("failed to add wasi:http/types to linker")?;
         }
 
@@ -587,9 +593,6 @@ impl EngineBuilder {
             cfg
         } else {
             let mut cfg = wasmtime::Config::default();
-            // Async support must be enabled
-            cfg.async_support(true);
-
             // The pooling allocator can be more efficient for workloads with many short-lived instances
             if let Ok(true) = use_pooling_allocator_by_default(self.use_pooling_allocator) {
                 tracing::debug!("using pooling allocator by default");
