@@ -242,10 +242,9 @@ fn put_object(
             content_length, copied_bytes
         ))
     } else {
-        // Flush must be called before drop to ensure the AsyncWriteStream worker task
-        // has finished writing all bytes to the underlying sink before we drop the stream.
-        // Dropping without flushing first aborts the worker (via AbortOnDropJoinHandle),
-        // which can leave the temp file empty when finish() reads it.
+        // Flush before drop: ensures any buffered bytes are committed to the underlying
+        // pipe before we drop the stream handle. With MemoryOutputPipe this is a no-op,
+        // but it's correct defensive practice for any OutputStream implementation.
         stream.flush().map_err(|e| e.to_string())?;
         drop(stream);
         OutgoingValue::finish(result_value).map_err(|e| e.to_string())?;

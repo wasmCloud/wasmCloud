@@ -6,14 +6,13 @@ use crate::engine::workload::WorkloadItem;
 use crate::plugin::HostPlugin;
 use crate::plugin::WorkloadTracker;
 use crate::wit::{WitInterface, WitWorld};
-use anyhow::Context;
 use async_nats::jetstream::object_store::{self, List, Object, ObjectStore};
 use futures::StreamExt;
 use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
 use tracing::instrument;
 use wasmtime::component::Resource;
-use wasmtime_wasi::p2::pipe::{AsyncReadStream, AsyncWriteStream};
+use wasmtime_wasi::p2::pipe::{AsyncReadStream, MemoryOutputPipe};
 use wasmtime_wasi::p2::{InputStream, OutputStream};
 
 const PLUGIN_BLOBSTORE_ID: &str = "wasi-blobstore";
@@ -61,7 +60,7 @@ pub struct IncomingValueHandle {
 /// Resource representation for an outgoing value (data being written)
 /// The operation is delayed until `finish` is called
 pub struct OutgoingValueHandle {
-    pub temp_file: tempfile::NamedTempFile,
+    pub pipe: MemoryOutputPipe,
     pub container: Option<ContainerData>,
     pub object_name: Option<String>,
 }
@@ -645,12 +644,8 @@ impl<'a> bindings::wasi::blobstore::container::HostStreamObjectNames for ActiveC
 impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
     #[instrument(skip(self))]
     async fn new_outgoing_value(&mut self) -> anyhow::Result<Resource<OutgoingValueHandle>> {
-        let temp_file = tempfile::Builder::new()
-            .tempfile()
-            .context("failed to create buffer file")?;
-
         let handle = OutgoingValueHandle {
-            temp_file,
+            pipe: MemoryOutputPipe::new(usize::MAX),
             container: None,
             object_name: None,
         };
@@ -666,12 +661,10 @@ impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
     ) -> anyhow::Result<Result<Resource<bindings::wasi::io0_2_1::streams::OutputStream>, ()>> {
         let handle = self.table.get_mut(&outgoing_value)?;
 
-        let file_wrapper = tokio::fs::File::from_std(handle.temp_file.reopen()?);
-        let stream = AsyncWriteStream::new(8192, file_wrapper);
-
-        // Return the pipe as the output stream - this is the same pipe that will be
-        // read in finish()
-        let boxed: Box<dyn OutputStream> = Box::new(stream);
+        // Use the same MemoryOutputPipe that finish() will read from.
+        // MemoryOutputPipe is backed by Arc<Mutex<BytesMut>>, so writes are
+        // synchronous and immediately visible — no async-worker race condition.
+        let boxed: Box<dyn OutputStream> = Box::new(handle.pipe.clone());
 
         let resource = self.table.push(boxed)?;
         Ok(Ok(resource))
@@ -701,11 +694,18 @@ impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
             }
         };
 
-        let mut file = tokio::fs::File::from_std(handle.temp_file.reopen()?);
+        // Read all bytes from the in-memory pipe and send to NATS.
+        // Wrap the Bytes in a one-shot stream so async-nats can consume it as
+        // an AsyncRead — avoids async I/O races from temp-file AsyncWriteStream.
+        let contents = handle.pipe.contents();
+        let stream = futures::stream::once(std::future::ready(
+            Ok::<bytes::Bytes, std::io::Error>(contents),
+        ));
+        let mut reader = tokio_util::io::StreamReader::new(stream);
 
         match container_data
             .store
-            .put(object_name.as_str(), &mut file)
+            .put(object_name.as_str(), &mut reader)
             .await
         {
             Ok(_) => {}
