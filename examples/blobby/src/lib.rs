@@ -242,6 +242,11 @@ fn put_object(
             content_length, copied_bytes
         ))
     } else {
+        // Flush must be called before drop to ensure the AsyncWriteStream worker task
+        // has finished writing all bytes to the underlying sink before we drop the stream.
+        // Dropping without flushing first aborts the worker (via AbortOnDropJoinHandle),
+        // which can leave the temp file empty when finish() reads it.
+        stream.flush().map_err(|e| e.to_string())?;
         drop(stream);
         OutgoingValue::finish(result_value).map_err(|e| e.to_string())?;
         Ok(())
