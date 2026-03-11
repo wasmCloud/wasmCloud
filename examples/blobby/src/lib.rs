@@ -1,8 +1,8 @@
 use std::num::ParseIntError;
 
 use ::http::{
-    header::{ALLOW, CONTENT_LENGTH},
     Method, StatusCode,
+    header::{ALLOW, CONTENT_LENGTH},
 };
 use wasmcloud_component::{
     debug, error, http, info,
@@ -60,7 +60,7 @@ impl http::Server for Blobby {
         request: http::IncomingRequest,
     ) -> http::Result<http::Response<impl http::OutgoingBody>> {
         let container_id = DEFAULT_CONTAINER_NAME.to_string();
-        
+
         // Ensure the container exists
         let container = match ensure_container(&container_id) {
             Ok(container) => container,
@@ -90,21 +90,26 @@ impl http::Server for Blobby {
                         .map_err(|e| http::ErrorCode::InternalError(Some(e.to_string())));
                 }
                 // File List
-                Method::POST=> {
+                Method::POST => {
                     let mut js_list = Vec::<String>::new();
 
-                    let object_list = container.list_objects().map_err(|e| http::ErrorCode::InternalError(Some(e.to_string())))?;
-                    while let Ok((list_result, stream_end)) = object_list.read_stream_object_names(100) {
+                    let object_list = container
+                        .list_objects()
+                        .map_err(|e| http::ErrorCode::InternalError(Some(e.to_string())))?;
+                    while let Ok((list_result, stream_end)) =
+                        object_list.read_stream_object_names(100)
+                    {
                         js_list.extend(list_result);
-                         
-                        if stream_end{
-                            break
+
+                        if stream_end {
+                            break;
                         }
                     }
 
                     js_list.sort();
 
-                    let js_response = serde_json::to_string_pretty(&js_list).map_err(|e| http::ErrorCode::InternalError(Some(e.to_string())))?;
+                    let js_response = serde_json::to_string_pretty(&js_list)
+                        .map_err(|e| http::ErrorCode::InternalError(Some(e.to_string())))?;
 
                     return http::Response::builder()
                         .status(StatusCode::OK)
@@ -121,7 +126,7 @@ impl http::Server for Blobby {
         }
 
         let file_name = path.to_string();
-        
+
         match parts.method {
             Method::GET => {
                 let (data, _size) = match get_object(container, &file_name) {

@@ -701,9 +701,9 @@ impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
         // Wrap the Bytes in a one-shot stream so async-nats can consume it as
         // an AsyncRead — avoids async I/O races from temp-file AsyncWriteStream.
         let contents = handle.pipe.contents();
-        let stream = futures::stream::once(std::future::ready(
-            Ok::<bytes::Bytes, std::io::Error>(contents),
-        ));
+        let stream = futures::stream::once(std::future::ready(Ok::<bytes::Bytes, std::io::Error>(
+            contents,
+        )));
         let mut reader = tokio_util::io::StreamReader::new(stream);
 
         match container_data
