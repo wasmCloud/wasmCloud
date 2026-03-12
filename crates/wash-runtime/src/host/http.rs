@@ -78,6 +78,7 @@ pub trait Router: Send + Sync + 'static {
         workload_id: &str,
         request: &hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
         config: &wasmtime_wasi_http::types::OutgoingRequestConfig,
+        _allowed_hosts: &[String],
     ) -> anyhow::Result<()>;
 
     /// Pick a workload ID based on the incoming request
@@ -151,6 +152,7 @@ impl Router for DynamicRouter {
         _workload_id: &str,
         _request: &hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
         _config: &wasmtime_wasi_http::types::OutgoingRequestConfig,
+        _allowed_hosts: &[String],
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -215,6 +217,7 @@ impl Router for DevRouter {
         _workload_id: &str,
         _request: &hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
         _config: &wasmtime_wasi_http::types::OutgoingRequestConfig,
+        _allowed_hosts: &[String],
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -259,6 +262,7 @@ pub trait HostHandler: Send + Sync + 'static {
         workload_id: &str,
         request: hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
         config: wasmtime_wasi_http::types::OutgoingRequestConfig,
+        allowed_hosts: &[String],
     ) -> wasmtime_wasi_http::HttpResult<wasmtime_wasi_http::types::HostFutureIncomingResponse>;
 }
 
@@ -302,6 +306,7 @@ impl HostHandler for NullServer {
         _workload_id: &str,
         _request: hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
         _config: wasmtime_wasi_http::types::OutgoingRequestConfig,
+        _allowed_hosts: &[String],
     ) -> wasmtime_wasi_http::HttpResult<wasmtime_wasi_http::types::HostFutureIncomingResponse> {
         Err(wasmtime_wasi_http::HttpError::trap(anyhow::anyhow!(
             "http client not available"
@@ -493,9 +498,10 @@ impl<T: Router> HostHandler for HttpServer<T> {
         workload_id: &str,
         request: hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
         config: wasmtime_wasi_http::types::OutgoingRequestConfig,
+        allowed_hosts: &[String],
     ) -> wasmtime_wasi_http::HttpResult<wasmtime_wasi_http::types::HostFutureIncomingResponse> {
         self.router
-            .allow_outgoing_request(workload_id, &request, &config)
+            .allow_outgoing_request(workload_id, &request, &config, allowed_hosts)
             .map_err(|e| {
                 wasmtime_wasi_http::HttpError::trap(anyhow::anyhow!("request not allowed: {}", e))
             })?;

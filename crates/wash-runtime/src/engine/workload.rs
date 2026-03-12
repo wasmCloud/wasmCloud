@@ -1053,7 +1053,8 @@ impl ResolvedWorkload {
         let mut ctx_builder = Ctx::builder(metadata.workload_id(), metadata.id())
             .with_http_handler(self.http_handler.clone())
             .with_wasi_ctx(wasi_ctx_builder.build())
-            .with_sockets(sockets_ctx);
+            .with_sockets(sockets_ctx)
+            .with_allowed_hosts(metadata.local_resources.allowed_hosts.clone());
 
         if let Some(plugins) = &metadata.plugins {
             ctx_builder = ctx_builder.with_plugins(plugins.clone());
