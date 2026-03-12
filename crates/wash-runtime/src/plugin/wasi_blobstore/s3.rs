@@ -10,7 +10,7 @@ use crate::wit::{WitInterface, WitWorld};
 use anyhow::Context;
 use futures::TryStreamExt;
 use object_store::aws::{AmazonS3, AmazonS3Builder};
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt};
 use tokio::sync::RwLock;
 use tracing::instrument;
 use wasmtime::component::Resource;
@@ -1028,7 +1028,7 @@ impl HostPlugin for S3Blobstore {
             None => {
                 tracing::warn!(
                     workload_id = workload.id(),
-                    "no buckets configured for S3 blobstore \u2014 workload will be denied access to all containers"
+                    "no buckets configured for S3 blobstore \u{2014} workload will be denied access to all containers"
                 );
                 vec![]
             }
