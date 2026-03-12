@@ -1046,7 +1046,6 @@ async fn send_grpc_request_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use http_body_util::BodyExt;
     use wasmtime_wasi_http::body::HyperOutgoingBody;
 
     fn build_request(uri: &str) -> hyper::Request<HyperOutgoingBody> {
