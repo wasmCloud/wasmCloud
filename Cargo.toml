@@ -66,6 +66,7 @@ kube = { version = "1", default-features = false }
 kube-derive = { version = "1", default-features = false }
 notify = { version = "8.0.0", default-features = false, features = ["macos_fsevent"] }
 moka = { version = "0.12", default-features = false }
+object_store = { version = "0.13", default-features = false }
 oci-client = { version = "0.15.0", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots"]}
 oci-wasm = { version = "0.3.0", default-features = false, features = ["rustls-tls"] }
 opentelemetry = { version = "0.31", default-features = false }
@@ -131,9 +132,6 @@ tokio-postgres = { version = "0.7", default-features = false }
 tokio-postgres-rustls = { version = "0.13", default-features = false }
 ulid = { version = "1", default-features = false }
 webpki-roots = { version = "0.26", default-features = false }
-
-# S3 deps (used by wash-runtime wasi-blobstore-s3)
-object_store = { version = "0.13", default-features = false, features = ["aws"] }
 
 # socket deps (used by wash-runtime sockets module)
 cap-net-ext = "3.4.4"
