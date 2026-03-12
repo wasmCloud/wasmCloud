@@ -70,6 +70,9 @@ struct Cli {
     #[clap(short = 'C', default_value = find_project_root().into_os_string())]
     project_path: PathBuf,
 
+    #[clap(long = "enable-meters", help = "Enable host meters", global = true)]
+    enable_meters: bool,
+
     #[clap(subcommand)]
     command: Option<WashCliCommand>,
 }
@@ -207,7 +210,8 @@ async fn main() {
     // Create global context with output kind and directory paths
     let mut ctx_builder = CliContext::builder()
         .non_interactive(non_interactive)
-        .project_dir(project_absolute_path);
+        .project_dir(project_absolute_path)
+        .enable_meters(global_args.enable_meters);
 
     // Load custom config if provided, otherwise will default to XDG config path
     if let Some(config_path) = global_args.user_config {

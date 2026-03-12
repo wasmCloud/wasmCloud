@@ -100,6 +100,12 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
         false
     }
 
+    /// Injects metrics into the plugin.
+    ///
+    /// # Arguments
+    /// * `meters` - A `Meters` object containing the metrics to inject.
+    async fn inject_meters(&self, _meters: &crate::observability::Meters) {}
+
     /// Called when the plugin is started during host initialization.
     ///
     /// This method allows plugins to perform any necessary setup before

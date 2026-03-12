@@ -510,6 +510,7 @@ pub struct EngineBuilder {
     max_instances: Option<u32>,
     compilation_cache_size: Option<u64>,
     compilation_cache_ttl: Option<Duration>,
+    fuel_consumption: bool,
 }
 
 impl EngineBuilder {
@@ -531,6 +532,12 @@ impl EngineBuilder {
     /// This is a 'hint' and can be overridden by environment variables.
     pub fn with_max_instances(mut self, max: u32) -> Self {
         self.max_instances = Some(max);
+        self
+    }
+
+    /// Enables or disables fuel consumption for the engine.
+    pub fn with_fuel_consumption(mut self, enable: bool) -> Self {
+        self.fuel_consumption = enable;
         self
     }
 
@@ -590,6 +597,9 @@ impl EngineBuilder {
                     new_pooling_config(self.max_instances.unwrap_or(1000)),
                 ));
             }
+
+            cfg.consume_fuel(self.fuel_consumption);
+
             cfg
         };
 

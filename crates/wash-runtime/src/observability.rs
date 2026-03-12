@@ -1,3 +1,5 @@
+use std::{any::Any, collections::HashMap, sync::Arc};
+
 use anyhow::Context;
 
 use opentelemetry::{KeyValue, trace::TracerProvider};
@@ -103,6 +105,18 @@ pub fn initialize_observability(
         .with(otel_tracer_layer)
         .init();
 
+    let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
+        .with_tonic()
+        .build()
+        .context("failed to create OTEL tonic exporter")?;
+
+    let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+        .with_periodic_exporter(metric_exporter)
+        .with_resource(resource.clone())
+        .build();
+
+    opentelemetry::global::set_meter_provider(meter_provider.clone());
+
     // Return a shutdown function to flush providers on exit
     let shutdown_fn = move || {
         if let Err(e) = tracer_provider.shutdown() {
@@ -110,6 +124,9 @@ pub fn initialize_observability(
         }
         if let Err(e) = log_provider.shutdown() {
             eprintln!("failed to shutdown log provider: {e}");
+        }
+        if let Err(e) = meter_provider.shutdown() {
+            eprintln!("failed to shutdown meter provider: {e}");
         }
     };
 
@@ -122,4 +139,83 @@ fn directive(directive: impl AsRef<str>) -> anyhow::Result<Directive> {
         .as_ref()
         .parse()
         .with_context(|| format!("failed to parse filter: {}", directive.as_ref()))
+}
+
+#[derive(Clone, Default)]
+pub struct Meters {
+    pub fuel_consumption: FuelConsumptionMeter,
+    /// User-defined meters
+    pub meters: HashMap<String, Arc<dyn Any + Send + Sync + 'static>>,
+}
+
+impl Meters {
+    pub fn new(enabled: bool) -> Self {
+        Self {
+            fuel_consumption: FuelConsumptionMeter::new(enabled),
+            meters: Default::default(),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct FuelConsumptionMeter {
+    hist: Option<opentelemetry::metrics::Histogram<u64>>,
+}
+
+impl FuelConsumptionMeter {
+    pub(crate) fn new(enabled: bool) -> Self {
+        let hist = enabled.then(|| {
+            opentelemetry::global::meter("wash-runtime")
+                .u64_histogram("fuel.consumption")
+                .with_description(
+                    "Measure fuel consumption for components that export host plugin interfaces",
+                )
+                .with_boundaries(fuel_histogram_boundaries())
+                .build()
+        });
+        Self { hist }
+    }
+
+    pub async fn observe<T, F, R>(
+        &self,
+        attributes: &[KeyValue],
+        store: &mut wasmtime::Store<T>,
+        func: F,
+    ) -> anyhow::Result<R>
+    where
+        F: AsyncFnOnce(&mut wasmtime::Store<T>) -> anyhow::Result<R>,
+    {
+        if let Some(fuel_meter) = &self.hist {
+            store.set_fuel(u64::MAX)?;
+            let result = func(store).await?;
+            let consumed_fuel = u64::MAX - store.get_fuel()?;
+            fuel_meter.record(consumed_fuel, attributes);
+
+            Ok(result)
+        } else {
+            func(store).await
+        }
+    }
+}
+
+/// Generate histogram boundaries for fuel consumption metrics.
+///
+/// Produces boundaries following multipliers [1, 2.5, 5, 7.5] per decade,
+/// starting at 50,000 up to a u64::MAX
+fn fuel_histogram_boundaries() -> Vec<f64> {
+    const MAX: f64 = u64::MAX as f64;
+    const MULTIPLIERS: [f64; 4] = [1.0, 2.5, 5.0, 7.5];
+
+    let mut boundaries = vec![0.0];
+    let mut base = 50_000.0;
+    loop {
+        for &m in &MULTIPLIERS {
+            let value = base * m;
+            if value > MAX {
+                return boundaries;
+            }
+            boundaries.push(value);
+        }
+        base *= 10.0;
+    }
 }
