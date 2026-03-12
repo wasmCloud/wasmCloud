@@ -1,14 +1,14 @@
 //! Contains [`lift`] and [`lower`] functions to convert values from one component
 //! instance to another in the context of a single [`wasmtime::Store`].
 
-use anyhow::{Context as _, bail};
 use tracing::trace;
 use wasmtime::component::Val;
+use wasmtime::error::Context as _;
 use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::engine::ctx::SharedCtx;
 
-pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> anyhow::Result<Val> {
+pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> wasmtime::Result<Val> {
     match v {
         &Val::Bool(v) => Ok(Val::Bool(v)),
         &Val::S8(v) => Ok(Val::S8(v)),
@@ -27,7 +27,7 @@ pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> anyhow::
             let vs = vs
                 .iter()
                 .map(|v| lower(store, v))
-                .collect::<anyhow::Result<_>>()?;
+                .collect::<wasmtime::Result<_>>()?;
             Ok(Val::List(vs))
         }
         Val::Record(vs) => {
@@ -37,14 +37,14 @@ pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> anyhow::
                     let v = lower(store, v)?;
                     Ok((name.clone(), v))
                 })
-                .collect::<anyhow::Result<_>>()?;
+                .collect::<wasmtime::Result<_>>()?;
             Ok(Val::Record(vs))
         }
         Val::Tuple(vs) => {
             let vs = vs
                 .iter()
                 .map(|v| lower(store, v))
-                .collect::<anyhow::Result<_>>()?;
+                .collect::<wasmtime::Result<_>>()?;
             Ok(Val::Tuple(vs))
         }
         Val::Variant(k, v) => {
@@ -122,11 +122,13 @@ pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> anyhow::
                 }
             }
         }
-        &Val::Future(_) | &Val::Stream(_) | &Val::ErrorContext(_) => bail!("async not supported"),
+        &Val::Future(_) | &Val::Stream(_) | &Val::ErrorContext(_) => {
+            wasmtime::bail!("async not supported")
+        }
     }
 }
 
-pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> anyhow::Result<Val> {
+pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> wasmtime::Result<Val> {
     match v {
         Val::Bool(v) => Ok(Val::Bool(v)),
         Val::S8(v) => Ok(Val::S8(v)),
@@ -145,7 +147,7 @@ pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> anyhow::Re
             let vs = vs
                 .into_iter()
                 .map(|v| lift(store, v))
-                .collect::<anyhow::Result<_>>()?;
+                .collect::<wasmtime::Result<_>>()?;
             Ok(Val::List(vs))
         }
         Val::Record(vs) => {
@@ -155,14 +157,14 @@ pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> anyhow::Re
                     let v = lift(store, v)?;
                     Ok((name, v))
                 })
-                .collect::<anyhow::Result<_>>()?;
+                .collect::<wasmtime::Result<_>>()?;
             Ok(Val::Record(vs))
         }
         Val::Tuple(vs) => {
             let vs = vs
                 .into_iter()
                 .map(|v| lift(store, v))
-                .collect::<anyhow::Result<_>>()?;
+                .collect::<wasmtime::Result<_>>()?;
             Ok(Val::Tuple(vs))
         }
         Val::Variant(k, v) => {
@@ -228,13 +230,14 @@ pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> anyhow::Re
                 ))
             } else {
                 trace!(resource = ?any, "lifting resource");
-                // Resource lifting logic: push the resource into the store's table and return a new Val::Resource
                 let res = store.data_mut().table.push(any)?;
                 Ok(Val::Resource(
                     res.try_into_resource_any(store.as_context_mut())?,
                 ))
             }
         }
-        Val::Future(_) | Val::Stream(_) | Val::ErrorContext(_) => bail!("async not supported"),
+        Val::Future(_) | Val::Stream(_) | Val::ErrorContext(_) => {
+            wasmtime::bail!("async not supported")
+        }
     }
 }

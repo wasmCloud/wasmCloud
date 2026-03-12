@@ -55,6 +55,7 @@ impl WebGpu {
                     flags: wasi_webgpu_wasmtime::reexports::wgpu_types::InstanceFlags::from_build_config(),
                     memory_budget_thresholds: Default::default(),
                 },
+                None,
             )),
         }
     }

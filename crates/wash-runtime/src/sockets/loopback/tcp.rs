@@ -2,7 +2,6 @@ use crate::sockets::SocketAddressFamily;
 use crate::sockets::loopback::Network;
 use crate::sockets::tcp::ConnectingTcpStream;
 use crate::sockets::util::ErrorCode;
-use anyhow::Context as _;
 use bytes::Bytes;
 use core::mem;
 use core::net::SocketAddr;
@@ -13,6 +12,7 @@ use std::collections::hash_map;
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
+use wasmtime::error::Context as _;
 
 type LoopbackChannel = (Bytes, OwnedSemaphorePermit);
 

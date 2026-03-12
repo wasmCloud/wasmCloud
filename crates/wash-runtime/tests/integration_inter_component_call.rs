@@ -60,10 +60,15 @@ pub struct CustomLogging {
 }
 
 impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
-    async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
+    async fn log(
+        &mut self,
+        level: Level,
+        context: String,
+        message: String,
+    ) -> wasmtime::Result<()> {
         let plugin = self
             .get_plugin::<CustomLogging>("logging")
-            .ok_or_else(|| anyhow::anyhow!("failed to get plugin"))?;
+            .ok_or_else(|| wasmtime::format_err!("failed to get plugin"))?;
 
         let per_component_info = plugin
             .tracker
@@ -73,7 +78,7 @@ impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
             .cloned();
 
         if !per_component_info.is_some_and(|info| info.workload_id == &*self.workload_id) {
-            return Err(anyhow::anyhow!("workload ID mismatch"));
+            return Err(wasmtime::format_err!("workload ID mismatch"));
         }
 
         let prev_ctx_id = plugin.prev_ctx_id.lock().await.clone();

@@ -5,7 +5,6 @@ use super::util::{is_valid_address_family, is_valid_remote_address};
 use super::{
     MAX_UDP_DATAGRAM_SIZE, SocketAddrUse, SocketAddressFamily, UdpSocket, WasiSocketsCtxView,
 };
-use anyhow::anyhow;
 use async_trait::async_trait;
 use std::net::SocketAddr;
 use tokio::io::Interest;
@@ -84,7 +83,7 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
             .ctx
             .loopback
             .lock()
-            .map_err(|e| SocketError::trap(anyhow!("{e}")))?;
+            .map_err(|e| SocketError::trap(wasmtime::format_err!("{e}")))?;
         socket
             .bind(local_address, &mut loopback)
             .map_err(super::network::socket_error_from_util)?;
@@ -118,7 +117,9 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
             .any(|c| c.is::<IncomingDatagramStream>() || c.is::<OutgoingDatagramStream>());
 
         if has_active_streams {
-            return Err(SocketError::trap(anyhow!("UDP streams not dropped yet")));
+            return Err(SocketError::trap(wasmtime::format_err!(
+                "UDP streams not dropped yet"
+            )));
         }
 
         let socket = self.table.get_mut(&this)?;
@@ -140,7 +141,7 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
                 .ctx
                 .loopback
                 .lock()
-                .map_err(|e| SocketError::trap(anyhow!("{e}")))?;
+                .map_err(|e| SocketError::trap(wasmtime::format_err!("{e}")))?;
             socket
                 .disconnect(&mut loopback)
                 .map_err(super::network::socket_error_from_util)?;
@@ -159,7 +160,7 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
                 .ctx
                 .loopback
                 .lock()
-                .map_err(|e| SocketError::trap(anyhow!("{e}")))?;
+                .map_err(|e| SocketError::trap(wasmtime::format_err!("{e}")))?;
             socket
                 .connect(connect_addr, &mut loopback)
                 .map_err(super::network::socket_error_from_util)?;
@@ -247,7 +248,7 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
     fn address_family(
         &mut self,
         this: Resource<udp::UdpSocket>,
-    ) -> Result<IpAddressFamily, anyhow::Error> {
+    ) -> wasmtime::Result<IpAddressFamily> {
         let this = rebind_udp_borrow(&this);
         let socket = self.table.get(&this)?;
         Ok(socket.address_family().into())
@@ -319,17 +320,21 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
     fn subscribe(
         &mut self,
         this: Resource<udp::UdpSocket>,
-    ) -> anyhow::Result<Resource<DynPollable>> {
+    ) -> wasmtime::Result<Resource<DynPollable>> {
         let this = rebind_udp_borrow(&this);
         wasmtime_wasi_io::poll::subscribe(self.table, this)
     }
 
-    fn drop(&mut self, this: Resource<udp::UdpSocket>) -> Result<(), anyhow::Error> {
+    fn drop(&mut self, this: Resource<udp::UdpSocket>) -> wasmtime::Result<()> {
         let this = rebind_udp_own(this);
         // As in the filesystem implementation, we assume closing a socket
         // doesn't block.
         let socket = self.table.delete(this)?;
-        let mut loopback = self.ctx.loopback.lock().map_err(|e| anyhow!("{e}"))?;
+        let mut loopback = self
+            .ctx
+            .loopback
+            .lock()
+            .map_err(|e| wasmtime::format_err!("{e}"))?;
         socket.drop(&mut loopback)?;
 
         Ok(())
@@ -426,12 +431,12 @@ impl udp::HostIncomingDatagramStream for WasiSocketsCtxView<'_> {
     fn subscribe(
         &mut self,
         this: Resource<udp::IncomingDatagramStream>,
-    ) -> anyhow::Result<Resource<DynPollable>> {
+    ) -> wasmtime::Result<Resource<DynPollable>> {
         let this = rebind_incoming_borrow(&this);
         wasmtime_wasi_io::poll::subscribe(self.table, this)
     }
 
-    fn drop(&mut self, this: Resource<udp::IncomingDatagramStream>) -> Result<(), anyhow::Error> {
+    fn drop(&mut self, this: Resource<udp::IncomingDatagramStream>) -> wasmtime::Result<()> {
         let this = rebind_incoming_own(this);
         // As in the filesystem implementation, we assume closing a socket
         // doesn't block.
@@ -582,7 +587,7 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
             )
             .await?;
             let Some(mut permit) = stream.permit.take() else {
-                return Err(SocketError::trap(anyhow::anyhow!(
+                return Err(SocketError::trap(wasmtime::format_err!(
                     "unpermitted: must call check-send first"
                 )));
             };
@@ -599,7 +604,7 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
             }
             let mut loopback = loopback
                 .lock()
-                .map_err(|e| SocketError::trap(anyhow::anyhow!("{e}")))?;
+                .map_err(|e| SocketError::trap(wasmtime::format_err!("{e}")))?;
             if let Some(tx) = loopback
                 .connect_udp(&stream.local_address, &addr)
                 .map_err(super::network::socket_error_from_util)?
@@ -624,7 +629,7 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
                     [None, None] => return Ok(0),
                     [Some(datagram), None] => datagram,
                     _ => {
-                        return Err(SocketError::trap(anyhow::anyhow!(
+                        return Err(SocketError::trap(wasmtime::format_err!(
                             "unpermitted: argument exceeds permitted size"
                         )));
                     }
@@ -634,7 +639,7 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
             }
             OutgoingDatagramStream::Unspecified { lo, net } => {
                 if datagrams.len() > 1 {
-                    return Err(SocketError::trap(anyhow::anyhow!(
+                    return Err(SocketError::trap(wasmtime::format_err!(
                         "unpermitted: argument exceeds permitted size"
                     )));
                 }
@@ -647,12 +652,12 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
                 stream.send_state = SendState::Idle;
             }
             SendState::Permitted(_) => {
-                return Err(SocketError::trap(anyhow::anyhow!(
+                return Err(SocketError::trap(wasmtime::format_err!(
                     "unpermitted: argument exceeds permitted size"
                 )));
             }
             SendState::Idle | SendState::Waiting => {
-                return Err(SocketError::trap(anyhow::anyhow!(
+                return Err(SocketError::trap(wasmtime::format_err!(
                     "unpermitted: must call check-send first"
                 )));
             }
@@ -702,12 +707,12 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
     fn subscribe(
         &mut self,
         this: Resource<udp::OutgoingDatagramStream>,
-    ) -> anyhow::Result<Resource<DynPollable>> {
+    ) -> wasmtime::Result<Resource<DynPollable>> {
         let this = rebind_outgoing_borrow(&this);
         wasmtime_wasi_io::poll::subscribe(self.table, this)
     }
 
-    fn drop(&mut self, this: Resource<udp::OutgoingDatagramStream>) -> Result<(), anyhow::Error> {
+    fn drop(&mut self, this: Resource<udp::OutgoingDatagramStream>) -> wasmtime::Result<()> {
         let this = rebind_outgoing_own(this);
         // As in the filesystem implementation, we assume closing a socket
         // doesn't block.

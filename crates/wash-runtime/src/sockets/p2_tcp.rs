@@ -249,7 +249,7 @@ impl TcpWriter {
             WriteState::Ready => {}
             WriteState::Closed => return Err(StreamError::Closed),
             WriteState::Writing(_) | WriteState::Closing(_) | WriteState::Error(_) => {
-                return Err(StreamError::Trap(anyhow::anyhow!(
+                return Err(StreamError::Trap(wasmtime::format_err!(
                     "unpermitted: must call check_write first"
                 )));
             }
@@ -412,7 +412,7 @@ fn try_lock_for_stream<T>(mutex: &Mutex<T>) -> Result<tokio::sync::MutexGuard<'_
 
 fn try_lock_for_socket<T>(mutex: &Mutex<T>) -> SocketResult<tokio::sync::MutexGuard<'_, T>> {
     mutex.try_lock().map_err(|_| {
-        SocketError::trap(anyhow::anyhow!(
+        SocketError::trap(wasmtime::format_err!(
             "concurrent access to resource not supported"
         ))
     })
@@ -499,7 +499,7 @@ impl OutputStream for LoopbackOutputStream {
         let mut tx = self
             .tx
             .lock()
-            .map_err(|e| StreamError::Trap(anyhow::anyhow!("{e}")))?;
+            .map_err(|e| StreamError::Trap(wasmtime::format_err!("{e}")))?;
         let Some(tx) = tx.as_mut() else {
             return Err(StreamError::Closed);
         };
@@ -507,7 +507,7 @@ impl OutputStream for LoopbackOutputStream {
             let permits = Arc::clone(&self.permits);
             permits.try_acquire_many_owned(n).ok()
         }) else {
-            return Err(StreamError::Trap(anyhow::anyhow!(
+            return Err(StreamError::Trap(wasmtime::format_err!(
                 "write beyond capacity of LoopbackOutputStream"
             )));
         };

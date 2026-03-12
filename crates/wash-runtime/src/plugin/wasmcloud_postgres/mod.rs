@@ -183,7 +183,7 @@ impl<'a> query::Host for ActiveCtx<'a> {
         &mut self,
         q: String,
         params: Vec<PgValue>,
-    ) -> anyhow::Result<Result<Vec<query::ResultRow>, QueryError>> {
+    ) -> wasmtime::Result<Result<Vec<query::ResultRow>, QueryError>> {
         let Some(plugin) = self.get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID) else {
             return Ok(Err(QueryError::Unexpected(
                 "postgres plugin not available".to_string(),
@@ -244,7 +244,7 @@ impl<'a> query::Host for ActiveCtx<'a> {
     }
 
     #[instrument(skip_all, fields(query = %q))]
-    async fn query_batch(&mut self, q: String) -> anyhow::Result<Result<(), QueryError>> {
+    async fn query_batch(&mut self, q: String) -> wasmtime::Result<Result<(), QueryError>> {
         let Some(plugin) = self.get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID) else {
             return Ok(Err(QueryError::Unexpected(
                 "postgres plugin not available".to_string(),
@@ -293,7 +293,7 @@ impl<'a> prepared::Host for ActiveCtx<'a> {
     async fn prepare(
         &mut self,
         statement: String,
-    ) -> anyhow::Result<Result<String, StatementPrepareError>> {
+    ) -> wasmtime::Result<Result<String, StatementPrepareError>> {
         let Some(plugin) = self.get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID) else {
             return Ok(Err(StatementPrepareError::Unexpected(
                 "postgres plugin not available".to_string(),
@@ -358,7 +358,7 @@ impl<'a> prepared::Host for ActiveCtx<'a> {
         &mut self,
         stmt_token: String,
         params: Vec<PgValue>,
-    ) -> anyhow::Result<Result<u64, PreparedStatementExecError>> {
+    ) -> wasmtime::Result<Result<u64, PreparedStatementExecError>> {
         let Some(plugin) = self.get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID) else {
             return Ok(Err(PreparedStatementExecError::Unexpected(
                 "postgres plugin not available".to_string(),

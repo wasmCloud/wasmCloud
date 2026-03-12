@@ -1,10 +1,10 @@
 use super::WasiSocketsCtxView;
 use super::network::SocketError;
-use anyhow::Result;
 use std::mem;
 use std::net::ToSocketAddrs;
 use std::pin::Pin;
 use std::vec;
+use wasmtime::Result;
 use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::{Host, HostResolveAddressStream};
 use wasmtime_wasi::p2::bindings::sockets::network::{ErrorCode, IpAddress};

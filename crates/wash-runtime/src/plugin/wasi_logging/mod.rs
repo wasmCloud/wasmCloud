@@ -12,7 +12,7 @@ use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::HostPlugin;
 use crate::wit::{WitInterface, WitWorld};
-use anyhow::bail;
+use wasmtime::bail;
 
 const PLUGIN_LOGGING_ID: &str = "wasi-logging";
 
@@ -40,7 +40,12 @@ struct ComponentInfo {
 }
 
 impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
-    async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
+    async fn log(
+        &mut self,
+        level: Level,
+        context: String,
+        message: String,
+    ) -> wasmtime::Result<()> {
         let Some(plugin) = self.get_plugin::<TracingLogger>(PLUGIN_LOGGING_ID) else {
             bail!("TracingLogger plugin not found in context");
         };

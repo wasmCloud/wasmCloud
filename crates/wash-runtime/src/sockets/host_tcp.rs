@@ -63,7 +63,7 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
             .ctx
             .loopback
             .lock()
-            .map_err(|e| super::network::SocketError::trap(anyhow::anyhow!("{e}")))?;
+            .map_err(|e| super::network::SocketError::trap(wasmtime::format_err!("{e}")))?;
         self.table
             .get_mut(&this)?
             .start_bind(local_address, &mut loopback)
@@ -100,7 +100,7 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
             .ctx
             .loopback
             .lock()
-            .map_err(|e| super::network::SocketError::trap(anyhow::anyhow!("{e}")))?;
+            .map_err(|e| super::network::SocketError::trap(wasmtime::format_err!("{e}")))?;
         let future = socket
             .start_connect(&remote_address, &mut loopback)
             .map_err(se)?
@@ -125,7 +125,7 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
             .ctx
             .loopback
             .lock()
-            .map_err(|e| super::network::SocketError::trap(anyhow::anyhow!("{e}")))?;
+            .map_err(|e| super::network::SocketError::trap(wasmtime::format_err!("{e}")))?;
         socket.finish_connect(result, &mut loopback).map_err(se)?;
         let (input, output) = socket.p2_streams()?;
         let input = self.table.push_child(input, &this)?;
@@ -140,7 +140,7 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
             .ctx
             .loopback
             .lock()
-            .map_err(|e| super::network::SocketError::trap(anyhow::anyhow!("{e}")))?;
+            .map_err(|e| super::network::SocketError::trap(wasmtime::format_err!("{e}")))?;
         socket.start_listen(&mut loopback).map_err(se)?;
         Ok(())
     }
@@ -197,7 +197,7 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
         ))
     }
 
-    fn is_listening(&mut self, this: Resource<UpstreamTcpSocket>) -> Result<bool, anyhow::Error> {
+    fn is_listening(&mut self, this: Resource<UpstreamTcpSocket>) -> wasmtime::Result<bool> {
         let this = Resource::<super::tcp::TcpSocket>::new_borrow(this.rep());
         let socket = self.table.get(&this)?;
         Ok(socket.is_listening())
@@ -206,7 +206,7 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
     fn address_family(
         &mut self,
         this: Resource<UpstreamTcpSocket>,
-    ) -> Result<IpAddressFamily, anyhow::Error> {
+    ) -> wasmtime::Result<IpAddressFamily> {
         let this = Resource::<super::tcp::TcpSocket>::new_borrow(this.rep());
         let socket = self.table.get(&this)?;
         match socket.address_family() {
@@ -344,7 +344,7 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
     fn subscribe(
         &mut self,
         this: Resource<UpstreamTcpSocket>,
-    ) -> anyhow::Result<Resource<DynPollable>> {
+    ) -> wasmtime::Result<Resource<DynPollable>> {
         let this = Resource::<super::tcp::TcpSocket>::new_borrow(this.rep());
         wasmtime_wasi_io::poll::subscribe(self.table, this)
     }
@@ -383,14 +383,18 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
                             ShutdownType::Send => {
                                 tx.lock()
                                     .map_err(|e| {
-                                        super::network::SocketError::trap(anyhow::anyhow!("{e}"))
+                                        super::network::SocketError::trap(wasmtime::format_err!(
+                                            "{e}"
+                                        ))
                                     })?
                                     .take();
                             }
                             ShutdownType::Both => {
                                 tx.lock()
                                     .map_err(|e| {
-                                        super::network::SocketError::trap(anyhow::anyhow!("{e}"))
+                                        super::network::SocketError::trap(wasmtime::format_err!(
+                                            "{e}"
+                                        ))
                                     })?
                                     .take();
                                 if let Ok(mut guard) = rx.try_lock()
@@ -409,14 +413,14 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
         }
     }
 
-    fn drop(&mut self, this: Resource<UpstreamTcpSocket>) -> Result<(), anyhow::Error> {
+    fn drop(&mut self, this: Resource<UpstreamTcpSocket>) -> wasmtime::Result<()> {
         let this = Resource::<super::tcp::TcpSocket>::new_own(this.rep());
         let socket = self.table.delete(this)?;
         let mut loopback = self
             .ctx
             .loopback
             .lock()
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            .map_err(|e| wasmtime::format_err!("{e}"))?;
         socket.drop(&mut loopback)?;
 
         Ok(())

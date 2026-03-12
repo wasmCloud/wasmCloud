@@ -1,18 +1,20 @@
 use super::WasiSocketsCtxView;
 use super::network::{self as our_network, SocketError};
 use super::util::{from_ipv4_addr, from_ipv6_addr, to_ipv4_addr, to_ipv6_addr};
-use anyhow::Error;
 use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::sockets::network::{
     self, ErrorCode, IpAddress, IpSocketAddress, Ipv4SocketAddress, Ipv6SocketAddress,
 };
 
 impl network::Host for WasiSocketsCtxView<'_> {
-    fn convert_error_code(&mut self, error: SocketError) -> anyhow::Result<ErrorCode> {
+    fn convert_error_code(&mut self, error: SocketError) -> wasmtime::Result<ErrorCode> {
         error.downcast()
     }
 
-    fn network_error_code(&mut self, err: Resource<Error>) -> anyhow::Result<Option<ErrorCode>> {
+    fn network_error_code(
+        &mut self,
+        err: Resource<wasmtime::Error>,
+    ) -> wasmtime::Result<Option<ErrorCode>> {
         let err = self.table.get(&err)?;
 
         if let Some(err) = err.downcast_ref::<std::io::Error>() {
@@ -24,7 +26,7 @@ impl network::Host for WasiSocketsCtxView<'_> {
 }
 
 impl network::HostNetwork for WasiSocketsCtxView<'_> {
-    fn drop(&mut self, this: Resource<network::Network>) -> Result<(), anyhow::Error> {
+    fn drop(&mut self, this: Resource<network::Network>) -> wasmtime::Result<()> {
         let this = Resource::<our_network::Network>::new_own(this.rep());
         self.table.delete(this)?;
         Ok(())
