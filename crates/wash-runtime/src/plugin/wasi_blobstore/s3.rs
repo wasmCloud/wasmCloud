@@ -239,10 +239,14 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         let store = match plugin.get_or_create_store(&self.component_id, &name).await {
             Ok(Some(store)) => store,
             Ok(None) => {
-                return Ok(Err("S3 client not configured for this component".to_string()));
+                return Ok(Err(
+                    "S3 client not configured for this component".to_string()
+                ));
             }
             Err(e) => {
-                return Ok(Err(format!("failed to create S3 client for bucket '{name}': {e}")));
+                return Ok(Err(format!(
+                    "failed to create S3 client for bucket '{name}': {e}"
+                )));
             }
         };
 
@@ -277,10 +281,14 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         let store = match plugin.get_or_create_store(&self.component_id, &name).await {
             Ok(Some(store)) => store,
             Ok(None) => {
-                return Ok(Err("S3 client not configured for this component".to_string()));
+                return Ok(Err(
+                    "S3 client not configured for this component".to_string()
+                ));
             }
             Err(e) => {
-                return Ok(Err(format!("failed to create S3 client for bucket '{name}': {e}")));
+                return Ok(Err(format!(
+                    "failed to create S3 client for bucket '{name}': {e}"
+                )));
             }
         };
 
@@ -312,10 +320,14 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         let store = match plugin.get_or_create_store(&self.component_id, &name).await {
             Ok(Some(store)) => store,
             Ok(None) => {
-                return Ok(Err("S3 client not configured for this component".to_string()));
+                return Ok(Err(
+                    "S3 client not configured for this component".to_string()
+                ));
             }
             Err(e) => {
-                return Ok(Err(format!("failed to create S3 client for bucket '{name}': {e}")));
+                return Ok(Err(format!(
+                    "failed to create S3 client for bucket '{name}': {e}"
+                )));
             }
         };
 
@@ -364,10 +376,14 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         let store = match plugin.get_or_create_store(&self.component_id, &name).await {
             Ok(Some(store)) => store,
             Ok(None) => {
-                return Ok(Err("S3 client not configured for this component".to_string()));
+                return Ok(Err(
+                    "S3 client not configured for this component".to_string()
+                ));
             }
             Err(e) => {
-                return Ok(Err(format!("failed to create S3 client for bucket '{name}': {e}")));
+                return Ok(Err(format!(
+                    "failed to create S3 client for bucket '{name}': {e}"
+                )));
             }
         };
 
@@ -417,7 +433,9 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         {
             Ok(Some(s)) => s,
             Ok(None) => {
-                return Ok(Err("S3 client not configured for this component".to_string()));
+                return Ok(Err(
+                    "S3 client not configured for this component".to_string()
+                ));
             }
             Err(e) => {
                 return Ok(Err(format!("failed to create S3 client: {e}")));
@@ -441,7 +459,9 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
             {
                 Ok(Some(s)) => s,
                 Ok(None) => {
-                    return Ok(Err("S3 client not configured for this component".to_string()));
+                    return Ok(Err(
+                        "S3 client not configured for this component".to_string()
+                    ));
                 }
                 Err(e) => {
                     return Ok(Err(format!("failed to create S3 client: {e}")));
@@ -501,7 +521,9 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         {
             Ok(Some(s)) => s,
             Ok(None) => {
-                return Ok(Err("S3 client not configured for this component".to_string()));
+                return Ok(Err(
+                    "S3 client not configured for this component".to_string()
+                ));
             }
             Err(e) => {
                 return Ok(Err(format!("failed to create S3 client: {e}")));
@@ -511,7 +533,9 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         let src_path = object_path(&src.object);
         match src_store.delete(&src_path).await {
             Ok(_) => Ok(Ok(())),
-            Err(e) => Ok(Err(format!("failed to delete source object after move: {e}"))),
+            Err(e) => Ok(Err(format!(
+                "failed to delete source object after move: {e}"
+            ))),
         }
     }
 }
@@ -633,7 +657,9 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
             .map(|obj| obj.location.to_string())
             .collect();
 
-        let resource = self.table.push(StreamObjectNamesHandle { objects: names })?;
+        let resource = self
+            .table
+            .push(StreamObjectNamesHandle { objects: names })?;
         Ok(Ok(resource))
     }
 
@@ -1045,13 +1071,12 @@ impl HostPlugin for S3Blobstore {
             let mut tracker = self.tracker.write().await;
             let workload_id = component_handle.workload_id().to_string();
             let component_id = component_handle.id().to_string();
-            let item = tracker
-                .workloads
-                .entry(workload_id)
-                .or_insert_with(|| crate::plugin::WorkloadTrackerItem {
+            let item = tracker.workloads.entry(workload_id).or_insert_with(|| {
+                crate::plugin::WorkloadTrackerItem {
                     workload_data: None,
                     components: HashMap::new(),
-                });
+                }
+            });
             item.components.insert(
                 component_id.clone(),
                 ComponentData {
