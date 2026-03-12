@@ -470,7 +470,7 @@ async fn workload_start(
     };
 
     info!(
-        worload_id=?workload_id,
+        workload_id=?workload_id,
         namespace=?request.workload.namespace,
         name=?request.workload.name,
         "Starting workload");
@@ -484,7 +484,7 @@ async fn workload_stop(
     req: types::v2::WorkloadStopRequest,
 ) -> anyhow::Result<types::v2::WorkloadStopResponse> {
     info!(
-        worload_id=?req.workload_id,
+        workload_id=?req.workload_id,
         "Stopping workload");
 
     host.workload_stop(req.into()).await.map(|resp| resp.into())
@@ -496,7 +496,7 @@ async fn workload_status(
     req: types::v2::WorkloadStatusRequest,
 ) -> anyhow::Result<types::v2::WorkloadStatusResponse> {
     debug!(
-        worload_id=?req.workload_id,
+        workload_id=?req.workload_id,
         "Fetching workload status");
 
     host.workload_status(req.into())

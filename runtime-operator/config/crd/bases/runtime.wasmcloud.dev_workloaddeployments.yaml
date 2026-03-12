@@ -263,6 +263,14 @@ spec:
                                 type: string
                               minItems: 1
                               type: array
+                            name:
+                              description: |-
+                                Name uniquely identifies this interface instance when multiple entries
+                                share the same namespace+package. Components use this name as the
+                                identifier parameter in resource-opening functions (e.g., store::open(name)).
+                                Required when multiple entries of the same namespace:package exist.
+                              pattern: ^[a-z0-9][a-z0-9-]*$
+                              type: string
                             namespace:
                               type: string
                             package:

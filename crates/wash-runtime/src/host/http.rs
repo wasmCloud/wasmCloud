@@ -677,8 +677,6 @@ async fn handle_http_request<T: Router>(
                 Ok(resp) => resp,
                 Err(e) => {
                     error!(err = ?e, "failed to invoke component");
-                    // TODO: Add in the actual error message in the response body
-                    // .body(HyperOutgoingBody::new(e.to_string()))
                     error_response(500)
                 }
             }
@@ -874,8 +872,6 @@ pub fn check_allowed_hosts(
     request: &hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
     allowed_hosts: &[String],
 ) -> anyhow::Result<()> {
-    // TODO: Implement internal allowed hosts validation
-
     if allowed_hosts.is_empty() {
         return Ok(());
     }
@@ -885,10 +881,12 @@ pub fn check_allowed_hosts(
         .host()
         .context("outgoing request has no host")?;
 
+    let request_host_lower = request_host.to_ascii_lowercase();
     for pattern in allowed_hosts {
         if let Some(suffix) = pattern.strip_prefix('*') {
             // Wildcard: *.example.com matches foo.example.com but not example.com
-            if let Some(prefix) = request_host.strip_suffix(suffix)
+            let suffix_lower = suffix.to_ascii_lowercase();
+            if let Some(prefix) = request_host_lower.strip_suffix(suffix_lower.as_str())
                 && !prefix.is_empty()
             {
                 return Ok(());
@@ -967,10 +965,13 @@ async fn send_grpc_request_handler(
         let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
         let mut parts = authority.split(':');
         let host = parts.next().unwrap_or(&authority);
+        if host.is_empty() {
+            return Err(ErrorCode::HttpRequestUriInvalid);
+        }
         let domain = ServerName::try_from(host)
             .map_err(|e| {
-                tracing::warn!("dns lookup error: {e:?}");
-                ErrorCode::ConnectionRefused
+                tracing::warn!("invalid server name '{host}': {e:?}");
+                ErrorCode::HttpRequestUriInvalid
             })?
             .to_owned();
         let stream = connector.connect(domain, tcp_stream).await.map_err(|e| {
@@ -1040,4 +1041,84 @@ async fn send_grpc_request_handler(
         worker: Some(worker),
         between_bytes_timeout,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasmtime_wasi_http::body::HyperOutgoingBody;
+
+    fn build_request(uri: &str) -> hyper::Request<HyperOutgoingBody> {
+        hyper::Request::builder()
+            .uri(uri)
+            .body(HyperOutgoingBody::default())
+            .unwrap()
+    }
+
+    // --- check_allowed_hosts tests ---
+
+    #[test]
+    fn empty_allowed_hosts_permits_any() {
+        let req = build_request("http://anything.example.com/path");
+        assert!(check_allowed_hosts(&req, &[]).is_ok());
+    }
+
+    #[test]
+    fn exact_match_works() {
+        let req = build_request("http://example.com/path");
+        let hosts = vec!["example.com".to_string()];
+        assert!(check_allowed_hosts(&req, &hosts).is_ok());
+    }
+
+    #[test]
+    fn exact_match_is_case_insensitive() {
+        let req = build_request("http://example.com/path");
+        let hosts = vec!["Example.COM".to_string()];
+        assert!(check_allowed_hosts(&req, &hosts).is_ok());
+    }
+
+    #[test]
+    fn wildcard_matches_subdomain() {
+        let req = build_request("http://sub.example.com/path");
+        let hosts = vec!["*.example.com".to_string()];
+        assert!(check_allowed_hosts(&req, &hosts).is_ok());
+    }
+
+    #[test]
+    fn wildcard_does_not_match_bare_domain() {
+        let req = build_request("http://example.com/path");
+        let hosts = vec!["*.example.com".to_string()];
+        assert!(check_allowed_hosts(&req, &hosts).is_err());
+    }
+
+    #[test]
+    fn wildcard_is_case_insensitive() {
+        let req = build_request("http://sub.example.com/path");
+        let hosts = vec!["*.Example.COM".to_string()];
+        assert!(check_allowed_hosts(&req, &hosts).is_ok());
+    }
+
+    #[test]
+    fn non_matching_host_is_rejected() {
+        let req = build_request("http://evil.com/path");
+        let hosts = vec!["example.com".to_string()];
+        let err = check_allowed_hosts(&req, &hosts).unwrap_err();
+        assert!(err.to_string().contains("not allowed"));
+    }
+
+    #[test]
+    fn request_with_no_host_returns_error() {
+        let req = build_request("/path-only");
+        let hosts = vec!["example.com".to_string()];
+        let err = check_allowed_hosts(&req, &hosts).unwrap_err();
+        assert!(err.to_string().contains("no host"));
+    }
+
+    // --- error_response tests ---
+
+    #[test]
+    fn error_response_returns_correct_status() {
+        assert_eq!(error_response(404).status(), 404);
+        assert_eq!(error_response(500).status(), 500);
+    }
 }

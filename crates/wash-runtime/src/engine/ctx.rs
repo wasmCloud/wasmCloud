@@ -268,3 +268,76 @@ impl CtxBuilder {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ctx_builder_sets_ids() {
+        let ctx = Ctx::builder("wk-1", "comp-1").build();
+        assert_eq!(ctx.workload_id.as_ref(), "wk-1");
+        assert_eq!(ctx.component_id.as_ref(), "comp-1");
+    }
+
+    #[test]
+    fn ctx_builder_generates_uuid_id() {
+        let ctx = Ctx::builder("wk", "comp").build();
+        // id should be a valid UUID v4 string
+        assert!(uuid::Uuid::parse_str(&ctx.id).is_ok());
+    }
+
+    #[test]
+    fn ctx_builder_uses_default_wasi_ctx_when_none_provided() {
+        // Should not panic — proves default WasiCtx is created
+        let _ctx = Ctx::builder("wk", "comp").build();
+    }
+
+    #[test]
+    fn shared_ctx_new_sets_active_ctx() {
+        let ctx = Ctx::builder("wk", "comp-a").build();
+        let shared = SharedCtx::new(ctx);
+        assert_eq!(shared.active_ctx.component_id.as_ref(), "comp-a");
+        assert!(shared.contexts.is_empty());
+    }
+
+    #[test]
+    fn set_active_ctx_swaps_context() {
+        let ctx_a = Ctx::builder("wk", "comp-a").build();
+        let ctx_b = Ctx::builder("wk", "comp-b").build();
+        let comp_b_id: Arc<str> = Arc::from("comp-b");
+
+        let mut shared = SharedCtx::new(ctx_a);
+        shared.contexts.insert(comp_b_id.clone(), ctx_b);
+
+        shared.set_active_ctx(&comp_b_id).unwrap();
+        assert_eq!(shared.active_ctx.component_id.as_ref(), "comp-b");
+        // The old context should now be in the map
+        assert!(
+            shared
+                .contexts
+                .contains_key(&Arc::from("comp-a") as &Arc<str>)
+        );
+    }
+
+    #[test]
+    fn set_active_ctx_returns_error_for_unknown_id() {
+        let ctx = Ctx::builder("wk", "comp-a").build();
+        let mut shared = SharedCtx::new(ctx);
+        let unknown: Arc<str> = Arc::from("nonexistent");
+        let result = shared.set_active_ctx(&unknown);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn set_active_ctx_is_noop_when_already_active() {
+        let ctx = Ctx::builder("wk", "comp-a").build();
+        let mut shared = SharedCtx::new(ctx);
+        let comp_a: Arc<str> = Arc::from("comp-a");
+        // Should succeed and be a no-op
+        shared.set_active_ctx(&comp_a).unwrap();
+        assert_eq!(shared.active_ctx.component_id.as_ref(), "comp-a");
+        assert!(shared.contexts.is_empty());
+    }
+}

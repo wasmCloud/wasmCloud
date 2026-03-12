@@ -691,21 +691,21 @@ impl ResolvedWorkload {
                     let mut all_components = self.components.write().await;
                     let (plugin_component, instance_idx) = {
                         let Some(exporter_component) = interface_map.get(import_name) else {
-                            // TODO: error because unsatisfied import, if there's no available
-                            // export then it's an unresolvable workload
-                            trace!(
+                            // Import not provided by another component in the workload.
+                            // This is expected for host-provided interfaces (e.g. wasi:*).
+                            // If it's not host-provided, linking will fail later with a
+                            // clear error from wasmtime.
+                            warn!(
                                 name = import_name,
-                                "import not found in component exports, skipping"
+                                "import not found in component exports, assuming host-provided"
                             );
                             continue;
                         };
                         let Some(plugin_component) = all_components.get_mut(exporter_component)
                         else {
-                            trace!(
-                                name = import_name,
-                                "exporting component not found in all components, skipping"
+                            anyhow::bail!(
+                                "exporting component '{exporter_component}' for import '{import_name}' not found"
                             );
-                            continue;
                         };
                         let Some((ComponentItem::ComponentInstance(_), idx)) = plugin_component
                             .metadata
