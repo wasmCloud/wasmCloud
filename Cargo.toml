@@ -132,6 +132,9 @@ tokio-postgres-rustls = { version = "0.13", default-features = false }
 ulid = { version = "1", default-features = false }
 webpki-roots = { version = "0.26", default-features = false }
 
+# S3 deps (used by wash-runtime wasi-blobstore-s3)
+object_store = { version = "0.13", default-features = false, features = ["aws"] }
+
 # socket deps (used by wash-runtime sockets module)
 cap-net-ext = "3.4.4"
 cap-std = "3.4.4"
