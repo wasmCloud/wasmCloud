@@ -150,11 +150,11 @@ impl Router for DynamicRouter {
     fn allow_outgoing_request(
         &self,
         _workload_id: &str,
-        _request: &hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
+        request: &hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
         _config: &wasmtime_wasi_http::types::OutgoingRequestConfig,
-        _allowed_hosts: &[String],
+        allowed_hosts: &[String],
     ) -> anyhow::Result<()> {
-        Ok(())
+        check_allowed_hosts(request, allowed_hosts)
     }
 
     /// Pick a workload ID based on the incoming request
@@ -500,11 +500,15 @@ impl<T: Router> HostHandler for HttpServer<T> {
         config: wasmtime_wasi_http::types::OutgoingRequestConfig,
         allowed_hosts: &[String],
     ) -> wasmtime_wasi_http::HttpResult<wasmtime_wasi_http::types::HostFutureIncomingResponse> {
-        self.router
-            .allow_outgoing_request(workload_id, &request, &config, allowed_hosts)
-            .map_err(|e| {
-                wasmtime_wasi_http::HttpError::trap(anyhow::anyhow!("request not allowed: {}", e))
-            })?;
+        if let Err(e) =
+            self.router
+                .allow_outgoing_request(workload_id, &request, &config, allowed_hosts)
+        {
+            warn!(workload_id = %workload_id, err = %e, "outgoing request denied by allowed_hosts policy");
+            return Err(wasmtime_wasi_http::HttpError::trap(
+                wasmtime_wasi_http::bindings::http::types::ErrorCode::HttpRequestDenied,
+            ));
+        }
 
         if is_grpc_request(&request) {
             Ok(send_grpc_request(request, config))
@@ -816,6 +820,44 @@ async fn load_tls_config(
     }
 
     Ok(config)
+}
+
+/// Check if an outgoing request's host is permitted by the allowed_hosts list.
+///
+/// If `allowed_hosts` is empty, all requests are allowed.
+/// Supports wildcard patterns like `*.example.com` which match any subdomain.
+pub fn check_allowed_hosts(
+    request: &hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
+    allowed_hosts: &[String],
+) -> anyhow::Result<()> {
+    // TODO: Implement internal allowed hosts validation
+
+    if allowed_hosts.is_empty() {
+        return Ok(());
+    }
+
+    let request_host = request
+        .uri()
+        .host()
+        .context("outgoing request has no host")?;
+
+    for pattern in allowed_hosts {
+        if let Some(suffix) = pattern.strip_prefix('*') {
+            // Wildcard: *.example.com matches foo.example.com but not example.com
+            if let Some(prefix) = request_host.strip_suffix(suffix)
+                && !prefix.is_empty()
+            {
+                return Ok(());
+            }
+        } else if request_host.eq_ignore_ascii_case(pattern) {
+            return Ok(());
+        }
+    }
+
+    anyhow::bail!(
+        "outgoing request to host '{}' is not allowed by allowed_hosts policy",
+        request_host
+    )
 }
 
 /// Check if a request is a gRPC request based on Content-Type header.
