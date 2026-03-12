@@ -130,6 +130,7 @@ fn main() {
         "inter-component-call-caller",
         "inter-component-call-callee",
         "inter-component-call-middleware",
+        "http-allowed-hosts",
     ];
 
     // Rebuild fixtures if examples changed

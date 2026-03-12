@@ -75,7 +75,7 @@ async fn test_http_webgpu_integration() -> Result<()> {
                     config: HashMap::new(),
                     environment: HashMap::new(),
                     volume_mounts: vec![],
-                    allowed_hosts: vec![],
+                    allowed_hosts: Default::default(),
                 },
                 pool_size: 1,
                 max_invocations: 100,

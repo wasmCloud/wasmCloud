@@ -562,7 +562,7 @@ impl From<types::v2::LocalResources> for crate::types::LocalResources {
             cpu_limit: lr.cpu_limit,
             config: lr.config,
             volume_mounts: lr.volume_mounts.into_iter().map(Into::into).collect(),
-            allowed_hosts: lr.allowed_hosts,
+            allowed_hosts: lr.allowed_hosts.into(),
             environment: lr.environment,
         }
     }

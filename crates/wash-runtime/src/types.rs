@@ -15,7 +15,7 @@
 //!   [`EmptyDirVolume`], [`HostPathVolume`]
 
 use bytes::Bytes;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::wit::WitInterface;
 
@@ -81,7 +81,7 @@ pub struct LocalResources {
     // wasi:cli/env variables, copied to WasiCtxBuilder
     pub environment: HashMap<String, String>,
     pub volume_mounts: Vec<VolumeMount>,
-    pub allowed_hosts: Vec<String>,
+    pub allowed_hosts: Arc<[String]>,
 }
 
 impl Default for LocalResources {
@@ -92,7 +92,7 @@ impl Default for LocalResources {
             config: HashMap::new(),
             environment: HashMap::new(),
             volume_mounts: Vec::new(),
-            allowed_hosts: Vec::new(),
+            allowed_hosts: Default::default(),
         }
     }
 }

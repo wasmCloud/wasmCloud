@@ -110,6 +110,8 @@ pub struct Ctx {
     plugins: HashMap<&'static str, Arc<dyn Any + Send + Sync>>,
     /// The HTTP handler for outgoing HTTP requests.
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    /// A list of allowed hosts for outgoing HTTP requests.
+    allowed_hosts: Arc<[String]>,
 }
 
 impl Ctx {
@@ -168,9 +170,12 @@ impl WasiHttpView for SharedCtx {
         config: wasmtime_wasi_http::types::OutgoingRequestConfig,
     ) -> wasmtime_wasi_http::HttpResult<wasmtime_wasi_http::types::HostFutureIncomingResponse> {
         match &self.active_ctx.http_handler {
-            Some(handler) => {
-                handler.outgoing_request(&self.active_ctx.workload_id, request, config)
-            }
+            Some(handler) => handler.outgoing_request(
+                &self.active_ctx.workload_id,
+                request,
+                config,
+                &self.active_ctx.allowed_hosts,
+            ),
             None => Err(wasmtime_wasi_http::HttpError::trap(anyhow::anyhow!(
                 "http client not available"
             ))),
@@ -187,6 +192,7 @@ pub struct CtxBuilder {
     sockets: Option<crate::sockets::WasiSocketsCtx>,
     plugins: HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>,
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    allowed_hosts: Arc<[String]>,
 }
 
 impl CtxBuilder {
@@ -199,6 +205,7 @@ impl CtxBuilder {
             sockets: None,
             http_handler: None,
             plugins: HashMap::new(),
+            allowed_hosts: Default::default(),
         }
     }
 
@@ -229,6 +236,11 @@ impl CtxBuilder {
         self
     }
 
+    pub fn with_allowed_hosts(mut self, allowed_hosts: Arc<[String]>) -> Self {
+        self.allowed_hosts = allowed_hosts;
+        self
+    }
+
     pub fn build(self) -> Ctx {
         let plugins = self
             .plugins
@@ -250,6 +262,7 @@ impl CtxBuilder {
             sockets: self.sockets.unwrap_or_default(),
             plugins,
             http_handler: self.http_handler,
+            allowed_hosts: self.allowed_hosts,
         }
     }
 }
