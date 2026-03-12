@@ -8,8 +8,9 @@ use crate::plugin::HostPlugin;
 use crate::plugin::WorkloadTracker;
 use crate::wit::{WitInterface, WitWorld};
 use anyhow::Context;
+use futures::TryStreamExt;
 use object_store::aws::{AmazonS3, AmazonS3Builder};
-use object_store::{ObjectStore, ObjectStoreExt};
+use object_store::ObjectStore;
 use tokio::sync::RwLock;
 use tracing::instrument;
 use wasmtime::component::Resource;
@@ -331,10 +332,10 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
             }
         };
 
-        // Delete all objects in the bucket.
+        // S3 bucket deletion is not supported via the object_store crate,
+        // so we delete all objects in the bucket instead.
         let list_result = store.list(None);
 
-        use futures::TryStreamExt;
         let objects: Vec<_> = match list_result.try_collect().await {
             Ok(objects) => objects,
             Err(e) => {
@@ -388,12 +389,12 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         };
 
         // Try to list with a max of 1 result to see if the bucket is accessible.
-        use futures::TryStreamExt;
         match store.list(None).try_next().await {
             Ok(_) => Ok(Ok(true)),
             Err(object_store::Error::NotFound { .. }) => Ok(Ok(false)),
-            // Bucket exists but might be empty or accessible
-            Err(_) => Ok(Ok(true)),
+            Err(e) => Ok(Err(format!(
+                "failed to check if container '{name}' exists: {e}"
+            ))),
         }
     }
 
@@ -561,6 +562,8 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         }))
     }
 
+    // NOTE: This reads the entire object into memory. For large objects,
+    // callers should use ranged reads (non-zero start / end < u64::MAX).
     #[instrument(skip(self, container))]
     async fn get_data(
         &mut self,
@@ -627,7 +630,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         // Prepare the write operation — actual upload happens on `finish`.
         let handle = self.table.get_mut(&data)?;
         handle.container = Some(container_data);
-        handle.object_name = Some(name.as_str().to_string());
+        handle.object_name = Some(name);
 
         Ok(Ok(()))
     }
@@ -640,8 +643,6 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         let container_data = self.table.get(&container)?;
 
         let list_result = container_data.store.list(None);
-
-        use futures::TryStreamExt;
         let objects: Vec<_> = match list_result.try_collect().await {
             Ok(objects) => objects,
             Err(e) => {
@@ -783,8 +784,6 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         };
 
         let list_result = container_data.store.list(None);
-
-        use futures::TryStreamExt;
         let objects: Vec<_> = match list_result.try_collect().await {
             Ok(objects) => objects,
             Err(e) => {
@@ -1024,9 +1023,15 @@ impl HostPlugin for S3Blobstore {
             return Ok(());
         };
 
-        let buckets = match interface.config.get("buckets") {
+        let buckets: Vec<String> = match interface.config.get("buckets") {
             Some(buckets) => buckets.split(',').map(|s| s.to_string()).collect(),
-            None => vec![],
+            None => {
+                tracing::warn!(
+                    workload_id = workload.id(),
+                    "no buckets configured for S3 blobstore \u2014 workload will be denied access to all containers"
+                );
+                vec![]
+            }
         };
 
         let read_only = interface
