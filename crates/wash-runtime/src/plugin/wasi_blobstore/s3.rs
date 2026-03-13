@@ -240,27 +240,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
             }
         };
 
-        let store = match plugin.get_or_create_store(&self.component_id, &name).await {
-            Ok(Some(store)) => store,
-            Ok(None) => {
-                return Ok(Err(
-                    "S3 client not configured for this component".to_string()
-                ));
-            }
-            Err(e) => {
-                return Ok(Err(format!(
-                    "failed to create S3 client for bucket '{name}': {e}"
-                )));
-            }
-        };
-
-        let container_data = ContainerData {
-            name: name.clone(),
-            store,
-        };
-
-        let resource = self.table.push(container_data)?;
-        Ok(Ok(resource))
+        Ok(Err("Not implemented".to_string()))
     }
 
     #[instrument(skip(self))]
@@ -321,41 +301,43 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
             }
         };
 
-        let store = match plugin.get_or_create_store(&self.component_id, &name).await {
-            Ok(Some(store)) => store,
-            Ok(None) => {
-                return Ok(Err(
-                    "S3 client not configured for this component".to_string()
-                ));
-            }
-            Err(e) => {
-                return Ok(Err(format!(
-                    "failed to create S3 client for bucket '{name}': {e}"
-                )));
-            }
-        };
+        Ok(Err("Not implemented".to_string()))
 
-        // S3 bucket deletion is not supported via the object_store crate,
-        // so we delete all objects in the bucket instead.
-        let list_result = store.list(None);
+        // let store = match plugin.get_or_create_store(&self.component_id, &name).await {
+        //     Ok(Some(store)) => store,
+        //     Ok(None) => {
+        //         return Ok(Err(
+        //             "S3 client not configured for this component".to_string()
+        //         ));
+        //     }
+        //     Err(e) => {
+        //         return Ok(Err(format!(
+        //             "failed to create S3 client for bucket '{name}': {e}"
+        //         )));
+        //     }
+        // };
 
-        let objects: Vec<_> = match list_result.try_collect().await {
-            Ok(objects) => objects,
-            Err(e) => {
-                return Ok(Err(format!("failed to list objects for deletion: {e}")));
-            }
-        };
+        // // S3 bucket deletion is not supported via the object_store crate,
+        // // so we delete all objects in the bucket instead.
+        // let list_result = store.list(None);
 
-        for obj in objects {
-            if let Err(e) = store.delete(&obj.location).await {
-                return Ok(Err(format!(
-                    "failed to delete object '{}': {e}",
-                    obj.location
-                )));
-            }
-        }
+        // let objects: Vec<_> = match list_result.try_collect().await {
+        //     Ok(objects) => objects,
+        //     Err(e) => {
+        //         return Ok(Err(format!("failed to list objects for deletion: {e}")));
+        //     }
+        // };
 
-        Ok(Ok(()))
+        // for obj in objects {
+        //     if let Err(e) = store.delete(&obj.location).await {
+        //         return Ok(Err(format!(
+        //             "failed to delete object '{}': {e}",
+        //             obj.location
+        //         )));
+        //     }
+        // }
+
+        // Ok(Ok(()))
     }
 
     #[instrument(skip(self))]
@@ -377,28 +359,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
             }
         };
 
-        let store = match plugin.get_or_create_store(&self.component_id, &name).await {
-            Ok(Some(store)) => store,
-            Ok(None) => {
-                return Ok(Err(
-                    "S3 client not configured for this component".to_string()
-                ));
-            }
-            Err(e) => {
-                return Ok(Err(format!(
-                    "failed to create S3 client for bucket '{name}': {e}"
-                )));
-            }
-        };
-
-        // Try to list with a max of 1 result to see if the bucket is accessible.
-        match store.list(None).try_next().await {
-            Ok(_) => Ok(Ok(true)),
-            Err(object_store::Error::NotFound { .. }) => Ok(Ok(false)),
-            Err(e) => Ok(Err(format!(
-                "failed to check if container '{name}' exists: {e}"
-            ))),
-        }
+        Ok(Err("Not implemented".to_string()))
     }
 
     #[instrument(skip(self))]
