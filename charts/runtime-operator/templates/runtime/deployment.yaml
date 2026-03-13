@@ -24,6 +24,8 @@ spec:
         {{- include "runtime-operator.labels" $top | nindent 8 }}
     spec:
       volumes:
+        - name: oci-cache
+          emptyDir: {}
         - name: runtime-cert
           secret:
             secretName: {{ $top.Values.global.certificates.runtimeCertSecretName }}
@@ -53,6 +55,7 @@ spec:
             - "--data-nats-tls-ca=/data-cert/ca.crt"
             - "--data-nats-tls-cert=/data-cert/tls.crt"
             - "--data-nats-tls-key=/data-cert/tls.key"
+            - "--oci-cache-dir=/oci-cache"
             {{- if and (.http) (.http.enabled) }}
             - "--http-addr=0.0.0.0:9191"
             {{- end }}
@@ -61,6 +64,8 @@ spec:
             {{- end }}
           imagePullPolicy: {{ $top.Values.runtime.image.pull_policy }}
           volumeMounts:
+            - name: oci-cache
+              mountPath: /oci-cache
             - name: runtime-cert
               mountPath: /runtime-cert
               readOnly: true

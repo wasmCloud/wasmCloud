@@ -695,7 +695,7 @@ impl ResolvedWorkload {
                             // This is expected for host-provided interfaces (e.g. wasi:*).
                             // If it's not host-provided, linking will fail later with a
                             // clear error from wasmtime.
-                            warn!(
+                            debug!(
                                 name = import_name,
                                 "import not found in component exports, assuming host-provided"
                             );

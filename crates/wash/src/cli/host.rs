@@ -83,6 +83,10 @@ pub struct HostCommand {
     #[clap(long = "registry-pull-timeout", value_parser = humantime::parse_duration, default_value = "30s")]
     pub registry_pull_timeout: Duration,
 
+    /// The directory to use for caching OCI artifacts
+    #[clap(long = "oci-cache-dir")]
+    pub oci_cache_dir: Option<PathBuf>,
+
     /// Enable WASI OpenTelemetry plugin
     #[clap(long = "wasi-otel", default_value_t = false)]
     pub wasi_otel: bool,
@@ -124,7 +128,7 @@ impl CliCommand for HostCommand {
         let host_config = wash_runtime::host::HostConfig {
             allow_oci_insecure: self.allow_insecure_registries,
             oci_pull_timeout: Some(self.registry_pull_timeout),
-            ..Default::default()
+            oci_cache_dir: self.oci_cache_dir.clone(),
         };
 
         let engine = Engine::builder()
