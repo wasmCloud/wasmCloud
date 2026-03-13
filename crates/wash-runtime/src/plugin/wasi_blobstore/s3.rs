@@ -7,13 +7,13 @@ use crate::engine::workload::WorkloadItem;
 use crate::plugin::HostPlugin;
 use crate::plugin::WorkloadTracker;
 use crate::wit::{WitInterface, WitWorld};
-use anyhow::Context;
 use futures::TryStreamExt;
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::{ObjectStore, ObjectStoreExt};
 use tokio::sync::RwLock;
 use tracing::instrument;
 use wasmtime::component::Resource;
+use wasmtime::error::Context;
 use wasmtime_wasi::p2::pipe::{AsyncWriteStream, MemoryInputPipe};
 use wasmtime_wasi::p2::{InputStream, OutputStream};
 
@@ -143,7 +143,7 @@ impl S3Blobstore {
         &self,
         component_id: &str,
         bucket: &str,
-    ) -> Result<Option<Arc<AmazonS3>>, anyhow::Error> {
+    ) -> wasmtime::Result<Option<Arc<AmazonS3>>> {
         // Fast path: read lock
         {
             let tracker = self.tracker.read().await;
@@ -174,7 +174,7 @@ impl S3Blobstore {
 }
 
 /// Build an `AmazonS3` client from environment variables for the given bucket.
-fn build_s3_from_env(env: &HashMap<String, String>, bucket: &str) -> anyhow::Result<AmazonS3> {
+fn build_s3_from_env(env: &HashMap<String, String>, bucket: &str) -> wasmtime::Result<AmazonS3> {
     let mut builder = AmazonS3Builder::new().with_bucket_name(bucket);
 
     if let Some(region) = env.get("AWS_REGION") {
@@ -211,7 +211,10 @@ fn build_s3_from_env(env: &HashMap<String, String>, bucket: &str) -> anyhow::Res
         builder = builder.with_virtual_hosted_style_request(false);
     }
 
-    builder.build().context("failed to build S3 client")
+    builder
+        .build()
+        .map_err(|e| wasmtime::format_err!("{e}"))
+        .context("failed to build S3 client")
 }
 
 /// Convert an object name into an `object_store::path::Path`.
@@ -225,7 +228,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
     async fn create_container(
         &mut self,
         name: ContainerName,
-    ) -> anyhow::Result<Result<Resource<ContainerData>, BlobstoreError>> {
+    ) -> wasmtime::Result<Result<Resource<ContainerData>, BlobstoreError>> {
         let Some(plugin) = self.get_plugin::<S3Blobstore>(PLUGIN_BLOBSTORE_ID) else {
             return Ok(Err("blobstore plugin not available".to_string()));
         };
@@ -264,7 +267,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
     async fn get_container(
         &mut self,
         name: ContainerName,
-    ) -> anyhow::Result<Result<Resource<ContainerData>, BlobstoreError>> {
+    ) -> wasmtime::Result<Result<Resource<ContainerData>, BlobstoreError>> {
         let Some(plugin) = self.get_plugin::<S3Blobstore>(PLUGIN_BLOBSTORE_ID) else {
             return Ok(Err("blobstore plugin not available".to_string()));
         };
@@ -306,7 +309,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
     async fn delete_container(
         &mut self,
         name: ContainerName,
-    ) -> anyhow::Result<Result<(), BlobstoreError>> {
+    ) -> wasmtime::Result<Result<(), BlobstoreError>> {
         let Some(plugin) = self.get_plugin::<S3Blobstore>(PLUGIN_BLOBSTORE_ID) else {
             return Ok(Err("blobstore plugin not available".to_string()));
         };
@@ -359,7 +362,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
     async fn container_exists(
         &mut self,
         name: ContainerName,
-    ) -> anyhow::Result<Result<bool, BlobstoreError>> {
+    ) -> wasmtime::Result<Result<bool, BlobstoreError>> {
         let Some(plugin) = self.get_plugin::<S3Blobstore>(PLUGIN_BLOBSTORE_ID) else {
             return Ok(Err("blobstore plugin not available".to_string()));
         };
@@ -403,7 +406,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         &mut self,
         src: ObjectId,
         dest: ObjectId,
-    ) -> anyhow::Result<Result<(), BlobstoreError>> {
+    ) -> wasmtime::Result<Result<(), BlobstoreError>> {
         let Some(plugin) = self.get_plugin::<S3Blobstore>(PLUGIN_BLOBSTORE_ID) else {
             return Ok(Err("blobstore plugin not available".to_string()));
         };
@@ -494,7 +497,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         &mut self,
         src: ObjectId,
         dest: ObjectId,
-    ) -> anyhow::Result<Result<(), BlobstoreError>> {
+    ) -> wasmtime::Result<Result<(), BlobstoreError>> {
         let Some(plugin) = self.get_plugin::<S3Blobstore>(PLUGIN_BLOBSTORE_ID) else {
             return Ok(Err("blobstore plugin not available".to_string()));
         };
@@ -545,7 +548,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
     async fn name(
         &mut self,
         container: Resource<ContainerData>,
-    ) -> anyhow::Result<Result<String, ContainerError>> {
+    ) -> wasmtime::Result<Result<String, ContainerError>> {
         let container_data = self.table.get(&container)?;
         Ok(Ok(container_data.name.clone()))
     }
@@ -553,7 +556,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
     async fn info(
         &mut self,
         container: Resource<ContainerData>,
-    ) -> anyhow::Result<Result<ContainerMetadata, ContainerError>> {
+    ) -> wasmtime::Result<Result<ContainerMetadata, ContainerError>> {
         let container_data = self.table.get(&container)?;
 
         Ok(Ok(ContainerMetadata {
@@ -571,7 +574,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         name: ObjectName,
         start: u64,
         end: u64,
-    ) -> anyhow::Result<Result<Resource<IncomingValueHandle>, ContainerError>> {
+    ) -> wasmtime::Result<Result<Resource<IncomingValueHandle>, ContainerError>> {
         let container_data = self.table.get(&container)?;
 
         let path = object_path(&name);
@@ -611,7 +614,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         container: Resource<ContainerData>,
         name: ObjectName,
         data: Resource<OutgoingValueHandle>,
-    ) -> anyhow::Result<Result<(), ContainerError>> {
+    ) -> wasmtime::Result<Result<(), ContainerError>> {
         let Some(plugin) = self.get_plugin::<S3Blobstore>(PLUGIN_BLOBSTORE_ID) else {
             return Ok(Err("blobstore plugin not available".to_string()));
         };
@@ -639,7 +642,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
     async fn list_objects(
         &mut self,
         container: Resource<ContainerData>,
-    ) -> anyhow::Result<Result<Resource<StreamObjectNamesHandle>, ContainerError>> {
+    ) -> wasmtime::Result<Result<Resource<StreamObjectNamesHandle>, ContainerError>> {
         let container_data = self.table.get(&container)?;
 
         let list_result = container_data.store.list(None);
@@ -669,7 +672,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         &mut self,
         container: Resource<ContainerData>,
         name: ObjectName,
-    ) -> anyhow::Result<Result<(), ContainerError>> {
+    ) -> wasmtime::Result<Result<(), ContainerError>> {
         let Some(plugin) = self.get_plugin::<S3Blobstore>(PLUGIN_BLOBSTORE_ID) else {
             return Ok(Err("blobstore plugin not available".to_string()));
         };
@@ -697,7 +700,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         &mut self,
         container: Resource<ContainerData>,
         names: Vec<ObjectName>,
-    ) -> anyhow::Result<Result<(), ContainerError>> {
+    ) -> wasmtime::Result<Result<(), ContainerError>> {
         let Some(plugin) = self.get_plugin::<S3Blobstore>(PLUGIN_BLOBSTORE_ID) else {
             return Ok(Err("blobstore plugin not available".to_string()));
         };
@@ -728,7 +731,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         &mut self,
         container: Resource<ContainerData>,
         name: ObjectName,
-    ) -> anyhow::Result<Result<bool, ContainerError>> {
+    ) -> wasmtime::Result<Result<bool, ContainerError>> {
         let container_data = self.table.get(&container)?;
         let path = object_path(&name);
 
@@ -744,7 +747,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         &mut self,
         container: Resource<ContainerData>,
         name: ObjectName,
-    ) -> anyhow::Result<Result<ObjectMetadata, ContainerError>> {
+    ) -> wasmtime::Result<Result<ObjectMetadata, ContainerError>> {
         let container_data = self.table.get(&container)?;
         let path = object_path(&name);
 
@@ -767,7 +770,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
     async fn clear(
         &mut self,
         container: Resource<ContainerData>,
-    ) -> anyhow::Result<Result<(), ContainerError>> {
+    ) -> wasmtime::Result<Result<(), ContainerError>> {
         let Some(plugin) = self.get_plugin::<S3Blobstore>(PLUGIN_BLOBSTORE_ID) else {
             return Ok(Err("blobstore plugin not available".to_string()));
         };
@@ -806,7 +809,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         Ok(Ok(()))
     }
 
-    async fn drop(&mut self, rep: Resource<ContainerData>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<ContainerData>) -> wasmtime::Result<()> {
         tracing::debug!(
             workload_id = self.workload_id.as_ref(),
             component_id = self.component_id.as_ref(),
@@ -823,7 +826,7 @@ impl<'a> bindings::wasi::blobstore::container::HostStreamObjectNames for ActiveC
         &mut self,
         stream: Resource<StreamObjectNamesHandle>,
         len: u64,
-    ) -> anyhow::Result<Result<(Vec<ObjectName>, bool), ContainerError>> {
+    ) -> wasmtime::Result<Result<(Vec<ObjectName>, bool), ContainerError>> {
         let stream_handle = self.table.get_mut(&stream)?;
 
         let mut objects = Vec::<ObjectName>::new();
@@ -845,7 +848,7 @@ impl<'a> bindings::wasi::blobstore::container::HostStreamObjectNames for ActiveC
         &mut self,
         stream: Resource<StreamObjectNamesHandle>,
         num: u64,
-    ) -> anyhow::Result<Result<(u64, bool), ContainerError>> {
+    ) -> wasmtime::Result<Result<(u64, bool), ContainerError>> {
         let stream_handle = self.table.get_mut(&stream)?;
 
         for i in 0..num {
@@ -857,7 +860,7 @@ impl<'a> bindings::wasi::blobstore::container::HostStreamObjectNames for ActiveC
         Ok(Ok((num, false)))
     }
 
-    async fn drop(&mut self, rep: Resource<StreamObjectNamesHandle>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<StreamObjectNamesHandle>) -> wasmtime::Result<()> {
         tracing::debug!(
             workload_id = self.workload_id.as_ref(),
             component_id = self.component_id.as_ref(),
@@ -871,9 +874,10 @@ impl<'a> bindings::wasi::blobstore::container::HostStreamObjectNames for ActiveC
 
 impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
     #[instrument(skip(self))]
-    async fn new_outgoing_value(&mut self) -> anyhow::Result<Resource<OutgoingValueHandle>> {
+    async fn new_outgoing_value(&mut self) -> wasmtime::Result<Resource<OutgoingValueHandle>> {
         let temp_file = tempfile::Builder::new()
             .tempfile()
+            .map_err(|e| wasmtime::format_err!("{e}"))
             .context("failed to create buffer file")?;
 
         let handle = OutgoingValueHandle {
@@ -890,7 +894,8 @@ impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
     async fn outgoing_value_write_body(
         &mut self,
         outgoing_value: Resource<OutgoingValueHandle>,
-    ) -> anyhow::Result<Result<Resource<bindings::wasi::io0_2_1::streams::OutputStream>, ()>> {
+    ) -> wasmtime::Result<Result<Resource<bindings::wasi::io0_2_1::streams::OutputStream>, ()>>
+    {
         let handle = self.table.get_mut(&outgoing_value)?;
 
         let file_wrapper = tokio::fs::File::from_std(handle.temp_file.reopen()?);
@@ -905,7 +910,7 @@ impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
     async fn finish(
         &mut self,
         outgoing_value: Resource<OutgoingValueHandle>,
-    ) -> anyhow::Result<Result<(), BlobstoreError>> {
+    ) -> wasmtime::Result<Result<(), BlobstoreError>> {
         let mut handle = self.table.delete(outgoing_value)?;
         let container_data = match handle.container {
             Some(data) => data,
@@ -930,6 +935,7 @@ impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
         // Read the temp file contents and upload to S3
         let data = tokio::fs::read(handle.temp_file.path())
             .await
+            .map_err(|e| wasmtime::format_err!("{e}"))
             .context("failed to read temp file")?;
 
         let path = object_path(&object_name);
@@ -944,7 +950,7 @@ impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
         }
     }
 
-    async fn drop(&mut self, rep: Resource<OutgoingValueHandle>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<OutgoingValueHandle>) -> wasmtime::Result<()> {
         self.table.delete(rep)?;
         Ok(())
     }
@@ -955,7 +961,7 @@ impl<'a> bindings::wasi::blobstore::types::HostIncomingValue for ActiveCtx<'a> {
     async fn incoming_value_consume_sync(
         &mut self,
         incoming_value: Resource<IncomingValueHandle>,
-    ) -> anyhow::Result<Result<Vec<u8>, BlobstoreError>> {
+    ) -> wasmtime::Result<Result<Vec<u8>, BlobstoreError>> {
         let data = self.table.delete(incoming_value)?;
         Ok(Ok(data.data))
     }
@@ -964,7 +970,7 @@ impl<'a> bindings::wasi::blobstore::types::HostIncomingValue for ActiveCtx<'a> {
     async fn incoming_value_consume_async(
         &mut self,
         incoming_value: Resource<IncomingValueHandle>,
-    ) -> anyhow::Result<
+    ) -> wasmtime::Result<
         Result<Resource<bindings::wasi::blobstore::types::IncomingValueAsyncBody>, BlobstoreError>,
     > {
         let data = self.table.delete(incoming_value)?;
@@ -975,12 +981,15 @@ impl<'a> bindings::wasi::blobstore::types::HostIncomingValue for ActiveCtx<'a> {
         Ok(Ok(stream))
     }
 
-    async fn size(&mut self, incoming_value: Resource<IncomingValueHandle>) -> anyhow::Result<u64> {
+    async fn size(
+        &mut self,
+        incoming_value: Resource<IncomingValueHandle>,
+    ) -> wasmtime::Result<u64> {
         let data = self.table.get(&incoming_value)?;
         Ok(data.data.len() as u64)
     }
 
-    async fn drop(&mut self, rep: Resource<IncomingValueHandle>) -> anyhow::Result<()> {
+    async fn drop(&mut self, rep: Resource<IncomingValueHandle>) -> wasmtime::Result<()> {
         tracing::debug!(
             workload_id = self.workload_id.as_ref(),
             resource_id = ?rep,
