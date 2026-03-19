@@ -1,4 +1,4 @@
-version: 2.0.0-rc.8
+version: 2.0.0
 
 build:
   command: cargo build -p component-server --target wasm32-wasip2 --release
