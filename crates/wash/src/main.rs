@@ -15,7 +15,7 @@ use wash::cli::{
 };
 
 #[derive(Debug, Clone, Parser)]
-#[clap(
+#[command(
     name = "wash",
     about,
     version,
@@ -23,57 +23,39 @@ use wash::cli::{
     color = clap::ColorChoice::Auto
 )]
 struct Cli {
-    #[clap(
-        short = 'o',
-        long = "output",
-        default_value = "text",
-        help = "Specify output format (text or json)",
-        global = true
-    )]
+    /// Specify output format (text or json)
+    #[arg(short = 'o', long = "output", default_value = "text", global = true)]
     pub(crate) output: OutputKind,
 
-    #[clap(
-        long = "help-markdown",
-        help = "Print help in markdown format (conflicts with --help and --output json)",
-        hide = true,
-        global = true
-    )]
+    /// Print help in markdown format (conflicts with --help and --output json)
+    #[arg(long = "help-markdown", hide = true, global = true)]
     help_markdown: bool,
 
-    #[clap(
-        short = 'l',
-        long = "log-level",
-        default_value_t = Level::INFO,
-        help = "Set the opentelemetry log level (trace, debug, info, warn, error)",
-        global = true
-    )]
+    /// Set the opentelemetry log level (trace, debug, info, warn, error)
+    #[arg(short = 'l', long = "log-level", default_value_t = Level::INFO, global = true)]
     log_level: Level,
 
-    #[clap(long = "verbose", help = "Enable verbose output", global = true)]
+    /// Enable verbose output
+    #[arg(long = "verbose", global = true)]
     verbose: bool,
 
-    #[clap(
-        long = "non-interactive",
-        help = "Run in non-interactive mode (skip terminal checks for host exec). Automatically enabled when stdin is not a TTY",
-        global = true
-    )]
+    /// Run in non-interactive mode (skip terminal checks for host exec). Automatically enabled when stdin is not a TTY
+    #[arg(long = "non-interactive", global = true)]
     non_interactive: bool,
 
-    #[clap(
-        long = "user-config",
-        help = "Path to user configuration file.",
-        global = true
-    )]
+    /// Path to user configuration file
+    #[arg(long = "user-config", global = true)]
     user_config: Option<PathBuf>,
 
     /// Path to the project directory
-    #[clap(short = 'C', default_value = find_project_root().into_os_string())]
+    #[arg(short = 'C', default_value = find_project_root().into_os_string())]
     project_path: PathBuf,
 
-    #[clap(long = "enable-meters", help = "Enable host meters", global = true)]
+    /// Enable host meters
+    #[arg(long = "enable-meters", global = true)]
     enable_meters: bool,
 
-    #[clap(subcommand)]
+    #[command(subcommand)]
     command: Option<WashCliCommand>,
 }
 
@@ -82,35 +64,27 @@ struct Cli {
 #[derive(Debug, Clone, Subcommand)]
 enum WashCliCommand {
     /// Build a Wasm component
-    #[clap(name = "build")]
     Build(wash::cli::component_build::ComponentBuildCommand),
     /// Generate shell completions
-    #[clap(name = "completion")]
     Completion(wash::cli::completion::CompletionCommand),
     /// View configuration for wash
-    #[clap(name = "config", subcommand)]
-    Config(wash::cli::config::ConfigCommand),
+    Config(wash::cli::config::ConfigArgs),
     /// Start a development server for a Wasm component
-    #[clap(name = "dev")]
     Dev(wash::cli::dev::DevCommand),
     /// Inspect a Wasm component's embedded WIT
-    #[clap(name = "inspect", hide = true)]
     Inspect(wash::cli::inspect::InspectCommand),
     /// Act as a Host
-    #[clap(name = "host")]
     Host(wash::cli::host::HostCommand),
     /// Create a new project from a template or git repository
-    #[clap(name = "new")]
     New(wash::cli::new::NewCommand),
     /// Push or pull Wasm components to/from an OCI registry
-    #[clap(name = "oci", alias = "docker", subcommand)]
-    Oci(wash::cli::oci::OciCommand),
+    #[command(alias = "docker")]
+    Oci(wash::cli::oci::OciArgs),
     /// Update wash to the latest version
-    #[clap(name = "update", alias = "upgrade")]
+    #[command(alias = "upgrade")]
     Update(wash::cli::update::UpdateCommand),
     /// Manage WIT dependencies
-    #[clap(name = "wit", subcommand)]
-    Wit(wash::cli::wit::WitCommand),
+    Wit(wash::cli::wit::WitArgs),
 }
 
 impl CliCommand for WashCliCommand {
@@ -149,7 +123,21 @@ async fn main() {
         .disable_help_subcommand(true)
         .ignore_errors(true)
         .get_matches();
-    let global_args = Cli::from_arg_matches(&global_parser).unwrap_or_else(|e| e.exit());
+    // Use unwrap_or to provide defaults when the first parse fails.
+    // This can happen when a nested subcommand is missing (e.g., `wash config`
+    // without a subcommand like `init`). By falling through with defaults,
+    // the second parse below can show proper help via arg_required_else_help.
+    let global_args = Cli::from_arg_matches(&global_parser).unwrap_or(Cli {
+        output: OutputKind::Text,
+        help_markdown: false,
+        log_level: Level::INFO,
+        verbose: false,
+        non_interactive: false,
+        user_config: None,
+        project_path: find_project_root(),
+        enable_meters: false,
+        command: None,
+    });
 
     // Check for --non-interactive flag before parsing (to avoid requiring plugin commands to be registered)
     let non_interactive_flag = global_args.non_interactive;

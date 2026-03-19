@@ -107,7 +107,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result, bail};
-use clap::Subcommand;
+use clap::{Parser, Subcommand};
 use tracing::{debug, info, instrument};
 
 use crate::{
@@ -117,31 +117,45 @@ use crate::{
 };
 
 /// Manage WIT dependencies for wasmCloud components
+#[derive(Parser, Debug, Clone)]
+#[command(subcommand_required = true, arg_required_else_help = true)]
+pub struct WitArgs {
+    #[command(subcommand)]
+    command: WitCommand,
+}
+
+impl CliCommand for WitArgs {
+    #[instrument(level = "debug", skip_all, name = "wit")]
+    async fn handle(&self, ctx: &CliContext) -> Result<CommandOutput> {
+        self.command.handle(ctx).await
+    }
+}
+
+/// WIT dependency management subcommands
 #[derive(Debug, Clone, Subcommand)]
 pub enum WitCommand {
     /// Fetch WIT dependencies (reads from wit/world.wit imports)
     Fetch {
-        #[clap(long, help = "Remove existing dependencies before fetching")]
+        /// Remove existing dependencies before fetching
+        #[arg(long)]
         clean: bool,
     },
 
     /// Update dependencies to latest compatible versions
     Update {
-        #[clap(
-            help = "Specific package to update (e.g., wasi:http). If not specified, updates all packages"
-        )]
+        /// Specific package to update (e.g., wasi:http). If not specified, updates all packages
         package: Option<String>,
     },
 
     /// Add a new WIT dependency
     Add {
-        #[clap(help = "Package to add (e.g., wasi:keyvalue or wasi:keyvalue@0.2.0-draft)")]
+        /// Package to add (e.g., wasi:keyvalue or wasi:keyvalue@0.2.0-draft)
         package: String,
     },
 
     /// Remove a WIT dependency
     Remove {
-        #[clap(help = "Package to remove (e.g., wasi:keyvalue)")]
+        /// Package to remove (e.g., wasi:keyvalue)
         package: String,
     },
 
@@ -150,10 +164,8 @@ pub enum WitCommand {
 
     /// Build a WIT package into a Wasm binary
     Build {
-        #[clap(
-            long = "output-file",
-            help = "Output file path for the built Wasm package"
-        )]
+        /// Output file path for the built Wasm package
+        #[arg(long = "output-file")]
         output_file: Option<PathBuf>,
     },
 }

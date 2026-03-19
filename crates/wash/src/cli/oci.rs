@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 use chrono::Utc;
-use clap::{Args, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use tracing::instrument;
 use wash_runtime::oci::{OciConfig, OciPullPolicy, pull_component, push_component};
 use wasm_metadata::Payload;
@@ -12,10 +12,27 @@ pub(crate) const OCI_CACHE_DIR: &str = "oci";
 
 use crate::cli::{CliCommand, CliContext, CommandOutput};
 
+/// Push or pull Wasm components to/from an OCI registry
+#[derive(Parser, Debug, Clone)]
+#[command(subcommand_required = true, arg_required_else_help = true)]
+pub struct OciArgs {
+    #[command(subcommand)]
+    command: OciCommand,
+}
+
 #[derive(Subcommand, Debug, Clone)]
 pub enum OciCommand {
+    /// Pull a Wasm component from an OCI registry
     Pull(PullCommand),
+    /// Push a Wasm component to an OCI registry
     Push(PushCommand),
+}
+
+impl CliCommand for OciArgs {
+    #[instrument(level = "debug", skip_all, name = "oci")]
+    async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
+        self.command.handle(ctx).await
+    }
 }
 
 impl CliCommand for OciCommand {
@@ -32,19 +49,18 @@ impl CliCommand for OciCommand {
 #[derive(Args, Debug, Clone)]
 pub struct PullCommand {
     /// The OCI reference to pull
-    #[clap(name = "reference")]
     reference: String,
     /// The path to write the pulled component to
-    #[clap(name = "component_path", default_value = "component.wasm")]
+    #[arg(default_value = "component.wasm")]
     component_path: PathBuf,
     /// Use HTTP or HTTPS protocol
-    #[clap(long = "insecure", default_value_t = false)]
+    #[arg(long = "insecure", default_value_t = false)]
     insecure: bool,
     /// Username for basic authentication
-    #[clap(short, long)]
+    #[arg(short, long)]
     user: Option<String>,
     /// Password for basic authentication
-    #[clap(short, long)]
+    #[arg(short, long)]
     password: Option<String>,
 }
 
@@ -94,19 +110,17 @@ impl PullCommand {
 #[derive(Args, Debug, Clone)]
 pub struct PushCommand {
     /// The OCI reference to push
-    #[clap(name = "reference")]
     reference: String,
     /// The path to the component to push
-    #[clap(name = "component_path")]
     component_path: PathBuf,
     /// Use HTTP or HTTPS protocol
-    #[clap(long = "insecure", default_value_t = false)]
+    #[arg(long = "insecure", default_value_t = false)]
     insecure: bool,
-    #[clap(short, long)]
     /// Username for basic authentication
+    #[arg(short, long)]
     user: Option<String>,
     /// Password for basic authentication
-    #[clap(short, long)]
+    #[arg(short, long)]
     password: Option<String>,
 }
 

@@ -22,6 +22,7 @@ use crate::{
     wit::WitConfig,
 };
 
+/// Start a development server for a Wasm component
 #[derive(Debug, Clone, Args)]
 pub struct DevCommand {}
 

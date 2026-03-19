@@ -1,5 +1,5 @@
 use anyhow::Context as _;
-use clap::Subcommand;
+use clap::{Parser, Subcommand};
 use tracing::instrument;
 
 use crate::{
@@ -7,16 +7,23 @@ use crate::{
     config::{Config, generate_default_config, load_config, local_config_path},
 };
 
-/// Create a new component project from a template, git repository, or local path
+/// View and manage wash configuration
+#[derive(Parser, Debug, Clone)]
+#[command(subcommand_required = true, arg_required_else_help = true)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    command: ConfigCommand,
+}
+
 #[derive(Subcommand, Debug, Clone)]
 pub enum ConfigCommand {
     /// Initialize a new configuration file for wash
     Init {
-        #[clap(long)]
         /// Overwrite existing configuration
+        #[arg(long)]
         force: bool,
-        #[clap(long)]
         /// Overwrite global configuration instead of project
+        #[arg(long)]
         global: bool,
     },
     /// Print the current version and local directories used by wash
@@ -25,6 +32,13 @@ pub enum ConfigCommand {
     Show {},
     // TODO(#27): validate config command
     // TODO(#29): cleanup config command, to clean the dirs we use
+}
+
+impl CliCommand for ConfigArgs {
+    #[instrument(level = "debug", skip_all, name = "config")]
+    async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
+        self.command.handle(ctx).await
+    }
 }
 
 impl CliCommand for ConfigCommand {
