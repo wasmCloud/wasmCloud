@@ -367,30 +367,34 @@ impl HostPlugin for InMemoryMessaging {
                             reply_to = %msg.reply_to.as_deref().unwrap_or("<none>"),
                         );
 
-                        let result = fuel_meter.observe(
-                            &[
-                                KeyValue::new("plugin", PLUGIN_MESSAGING_MEMORY_ID),
-                                KeyValue::new("subject", msg.subject.to_string()),
-                            ],
-                            &mut store,
-                            async move |store| {
-                                proxy
-                                    .wasmcloud_messaging_handler()
-                                    .call_handle_message(store, &msg)
-                                    .instrument(span)
-                                    .await
-                                    .map_err(Into::into)
-                            }
-                        ).await;
+                        let fuel_meter = fuel_meter.clone();
 
-                        match result {
-                            Ok(_) => {
-                                debug!("Message handled successfully");
-                            }
-                            Err(e) => {
-                                warn!("Error handling message: {e}");
-                            }
-                        };
+                        tokio::spawn(async move {
+                            let result = fuel_meter.observe(
+                                &[
+                                    KeyValue::new("plugin", PLUGIN_MESSAGING_MEMORY_ID),
+                                    KeyValue::new("subject", msg.subject.to_string()),
+                                ],
+                                &mut store,
+                                async move |store| {
+                                    proxy
+                                        .wasmcloud_messaging_handler()
+                                        .call_handle_message(store, &msg)
+                                        .instrument(span)
+                                        .await
+                                        .map_err(Into::into)
+                                }
+                            ).await;
+
+                            match result {
+                                Ok(_) => {
+                                    debug!("Message handled successfully");
+                                }
+                                Err(e) => {
+                                    warn!("Error handling message: {e}");
+                                }
+                            };
+                        });
                     }
                 }
             }
