@@ -19,7 +19,7 @@ proto-lint:
 # Local Dev
 .PHONY: kind-setup
 kind-setup:
-	kind create cluster --name wasmcloud --config "kind-config.yaml"
+	kind create cluster --name wasmcloud --config "deploy/kind/kind-config.yaml"
 
 .PHONY: kind-nuke
 kind-nuke:
