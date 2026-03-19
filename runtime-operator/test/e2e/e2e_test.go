@@ -31,7 +31,7 @@ import (
 )
 
 // namespace where the project is deployed in
-const namespace = "operator-system"
+const namespace = "wasmcloud-system"
 
 // serviceAccountName created for the project
 const serviceAccountName = "operator-controller-manager"
@@ -45,52 +45,14 @@ const metricsRoleBindingName = "operator-metrics-binding"
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
 
-	// Before running the tests, set up the environment by creating the namespace,
-	// installing CRDs, and deploying the controller.
-	BeforeAll(func() {
-		By("creating manager namespace")
-		cmd := exec.Command("kubectl", "create", "ns", namespace)
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
-
-		By("installing CRDs")
-		cmd = exec.Command("make", "install")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
-
-		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
-	})
-
-	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
-	// and deleting the namespace.
-	AfterAll(func() {
-		By("cleaning up the curl pod for metrics")
-		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
-		_, _ = utils.Run(cmd)
-
-		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
-		_, _ = utils.Run(cmd)
-
-		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
-		_, _ = utils.Run(cmd)
-
-		By("removing manager namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", namespace)
-		_, _ = utils.Run(cmd)
-	})
-
 	// After each test, check for failures and collect logs, events,
 	// and pod descriptions for debugging.
 	AfterEach(func() {
 		specReport := CurrentSpecReport()
 		if specReport.Failed() {
 			By("Fetching controller manager pod logs")
-			cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
+			cmd := exec.Command("kubectl", "logs", "-n", namespace,
+				"-l", "wasmcloud.com/name=runtime-operator", "--tail=200")
 			controllerLogs, err := utils.Run(cmd)
 			if err == nil {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs:\n %s", controllerLogs)
@@ -107,22 +69,13 @@ var _ = Describe("Manager", Ordered, func() {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Kubernetes events: %s", err)
 			}
 
-			By("Fetching curl-metrics logs")
-			cmd = exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
-			metricsOutput, err := utils.Run(cmd)
+			By("Fetching all pod status")
+			cmd = exec.Command("kubectl", "get", "pods", "-n", namespace, "-o", "wide")
+			podOutput, err := utils.Run(cmd)
 			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Metrics logs:\n %s", metricsOutput)
+				_, _ = fmt.Fprintf(GinkgoWriter, "Pod status:\n%s", podOutput)
 			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get curl-metrics logs: %s", err)
-			}
-
-			By("Fetching controller manager pod description")
-			cmd = exec.Command("kubectl", "describe", "pod", controllerPodName, "-n", namespace)
-			podDescription, err := utils.Run(cmd)
-			if err == nil {
-				fmt.Println("Pod description:\n", podDescription)
-			} else {
-				fmt.Println("Failed to describe controller pod")
+				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get pod status: %s", err)
 			}
 		}
 	})
@@ -134,9 +87,8 @@ var _ = Describe("Manager", Ordered, func() {
 		It("should run successfully", func() {
 			By("validating that the controller-manager pod is running as expected")
 			verifyControllerUp := func(g Gomega) {
-				// Get the name of the controller-manager pod
 				cmd := exec.Command("kubectl", "get",
-					"pods", "-l", "control-plane=controller-manager",
+					"pods", "-l", "wasmcloud.com/name=runtime-operator",
 					"-o", "go-template={{ range .items }}"+
 						"{{ if not .metadata.deletionTimestamp }}"+
 						"{{ .metadata.name }}"+
@@ -149,7 +101,6 @@ var _ = Describe("Manager", Ordered, func() {
 				podNames := utils.GetNonEmptyLines(podOutput)
 				g.Expect(podNames).To(HaveLen(1), "expected 1 controller pod running")
 				controllerPodName = podNames[0]
-				g.Expect(controllerPodName).To(ContainSubstring("controller-manager"))
 
 				// Validate the pod's status
 				cmd = exec.Command("kubectl", "get",
@@ -164,6 +115,10 @@ var _ = Describe("Manager", Ordered, func() {
 		})
 
 		It("should ensure the metrics endpoint is serving metrics", func() {
+			if skipPrometheusInstall {
+				Skip("Prometheus not installed, skipping metrics test")
+			}
+
 			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
 			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
 				"--clusterrole=operator-metrics-reader",
@@ -235,15 +190,101 @@ var _ = Describe("Manager", Ordered, func() {
 		})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
+	})
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput := getMetricsOutput()
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+	Context("Infrastructure", func() {
+		It("should have all pods running", func() {
+			for _, label := range []string{"nats", "runtime-operator", "runtime-gateway", "hostgroup"} {
+				verifyPodReady := func(g Gomega) {
+					cmd := exec.Command("kubectl", "wait", "--for=condition=Ready",
+						"pod", "-l", fmt.Sprintf("wasmcloud.com/name=%s", label),
+						"-n", namespace, "--timeout=10s")
+					_, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred())
+				}
+				Eventually(verifyPodReady).WithTimeout(3 * time.Minute).Should(Succeed())
+			}
+		})
+	})
+
+	Context("Host Registration", func() {
+		It("should register at least one host", func() {
+			verifyHostRegistered := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "hosts.runtime.wasmcloud.dev",
+					"-n", namespace, "-o", "jsonpath={.items}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).NotTo(Equal("[]"), "no hosts registered yet")
+			}
+			Eventually(verifyHostRegistered).WithTimeout(2 * time.Minute).Should(Succeed())
+		})
+	})
+
+	Context("Workload Lifecycle", func() {
+		const sampleDeployment = "config/samples/deployment.yaml"
+
+		It("should deploy a workload and become ready", func() {
+			By("applying the sample WorkloadDeployment")
+			cmd := exec.Command("kubectl", "apply", "-n", namespace, "-f", sampleDeployment)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for WorkloadDeployment to become Ready")
+			verifyWorkloadReady := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "workloaddeployment", "hello",
+					"-n", namespace,
+					"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("True"))
+			}
+			Eventually(verifyWorkloadReady).WithTimeout(3 * time.Minute).Should(Succeed())
+
+			By("verifying WorkloadReplicaSet was created")
+			cmd = exec.Command("kubectl", "get", "workloadreplicasets.runtime.wasmcloud.dev",
+				"-n", namespace, "-o", "jsonpath={.items}")
+			output, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).NotTo(Equal("[]"))
+
+			By("verifying Workload CR was created")
+			cmd = exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
+				"-n", namespace, "-o", "jsonpath={.items}")
+			output, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).NotTo(Equal("[]"))
+		})
+
+		It("should serve HTTP traffic through the gateway", func() {
+			verifyHTTP := func(g Gomega) {
+				cmd := exec.Command("curl", "-s", "-o", "/dev/null",
+					"-w", "%{http_code}",
+					"-H", "Host: hello.localhost.direct",
+					"http://localhost:80")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("200"))
+			}
+			Eventually(verifyHTTP).WithTimeout(1 * time.Minute).Should(Succeed())
+		})
+
+		It("should clean up workload resources on delete", func() {
+			By("deleting the WorkloadDeployment")
+			cmd := exec.Command("kubectl", "delete", "workloaddeployment", "hello",
+				"-n", namespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for Workload CRs to be cleaned up")
+			verifyCleanup := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
+					"-n", namespace, "-o", "jsonpath={.items}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("[]"))
+			}
+			Eventually(verifyCleanup).WithTimeout(1 * time.Minute).Should(Succeed())
+		})
 	})
 })
 
