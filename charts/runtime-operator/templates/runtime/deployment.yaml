@@ -1,4 +1,4 @@
-{{- $registry := .Values.runtime.image.registry | default .Values.global.image.registry | default "docker.io" -}}
+{{- $registry := .Values.runtime.image.registry | default .Values.global.image.registry -}}
 {{- $top := . }}
 {{- range .Values.runtime.hostGroups }}
 apiVersion: apps/v1
@@ -37,7 +37,7 @@ spec:
       {{- include "runtime-operator.imagePullSecrets" $top | nindent 6 }}
       containers:
         - name: host
-          image: {{ printf "%s/%s" $registry $top.Values.runtime.image.repository }}:{{ $top.Values.runtime.image.tag | default $top.Chart.AppVersion }}
+          image: {{ if $registry }}{{ printf "%s/%s" $registry $top.Values.runtime.image.repository }}{{ else }}{{ $top.Values.runtime.image.repository }}{{ end }}:{{ $top.Values.runtime.image.tag | default $top.Chart.AppVersion }}
           env:
             - name: WASMCLOUD_HOST_IP
               valueFrom:

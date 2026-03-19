@@ -1,5 +1,5 @@
 {{- if .Values.operator.enabled }}
-{{- $registry := .Values.operator.image.registry | default .Values.global.image.registry | default "docker.io" -}}
+{{- $registry := .Values.operator.image.registry | default .Values.global.image.registry -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,7 +27,7 @@ spec:
       {{- include "runtime-operator.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: runtime-operator
-          image: {{ printf "%s/%s" $registry .Values.operator.image.repository }}:{{ .Values.operator.image.tag | default .Chart.AppVersion }}
+          image: {{ if $registry }}{{ printf "%s/%s" $registry .Values.operator.image.repository }}{{ else }}{{ .Values.operator.image.repository }}{{ end }}:{{ .Values.operator.image.tag | default .Chart.AppVersion }}
           args:
             - "-nats-url=nats://nats:4222"
             - "-nats-ca=/operator-cert/ca.crt"

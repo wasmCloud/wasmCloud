@@ -1,5 +1,5 @@
 {{- if .Values.gateway.enabled -}}
-{{- $registry := .Values.gateway.image.registry | default .Values.global.image.registry | default "docker.io" -}}
+{{- $registry := .Values.gateway.image.registry | default .Values.global.image.registry -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,7 +24,7 @@ spec:
       {{- include "runtime-operator.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: runtime-operator
-          image: {{ printf "%s/%s" $registry .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}
+          image: {{ if $registry }}{{ printf "%s/%s" $registry .Values.gateway.image.repository }}{{ else }}{{ .Values.gateway.image.repository }}{{ end }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}
           args:
             - "-bind-addr=0.0.0.0:8000"
             {{- with .Values.gateway.fallbackEndpoint }}
