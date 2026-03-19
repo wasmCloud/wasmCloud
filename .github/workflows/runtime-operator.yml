@@ -9,6 +9,8 @@ on:
     paths:
       - "runtime-operator/**"
       - "proto/**"
+      - "charts/runtime-operator/**"
+      - "kind-config.yaml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -42,24 +44,68 @@ jobs:
         working-directory: runtime-operator
         run: make test
 
-  test-e2e:
+  build:
     needs: [lint, test]
     runs-on: ubuntu-latest
-    # NOTE(lxf): Disabled until we update prometheus/cert-manager in the test setup
-    if: false
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Build operator image
+        working-directory: runtime-operator
+        run: make docker-build IMG=example.com/operator:v0.0.1
+      - name: Save operator image
+        run: docker save example.com/operator:v0.0.1 -o /tmp/operator-image.tar
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: operator-image
+          path: /tmp/operator-image.tar
+          retention-days: 1
+
+  test-e2e:
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - uses: ./.github/actions/setup-go
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: operator-image
+          path: /tmp
+      - name: Load operator image
+        run: docker load -i /tmp/operator-image.tar
       - uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
         with:
-          cluster_name: kind
-      - name: Running Test e2e
+          cluster_name: wasmcloud-e2e
+          config: kind-config.yaml
+      - name: Run e2e tests
         working-directory: runtime-operator
         run: make test-e2e
+        env:
+          SKIP_IMAGE_BUILD: "true"
+          PROMETHEUS_INSTALL_SKIP: "true"
+          CERT_MANAGER_INSTALL_SKIP: "true"
+          KIND_CLUSTER_NAME: wasmcloud-e2e
+      - name: Dump diagnostics
+        if: failure()
+        run: |
+          echo "=== Pod Status ==="
+          kubectl get pods -n wasmcloud-system -o wide
+          echo "=== Events ==="
+          kubectl get events -n wasmcloud-system --sort-by=.lastTimestamp
+          echo "=== Operator Logs ==="
+          kubectl logs -n wasmcloud-system -l wasmcloud.com/name=runtime-operator --tail=200 || true
+          echo "=== Gateway Logs ==="
+          kubectl logs -n wasmcloud-system -l wasmcloud.com/name=runtime-gateway --tail=200 || true
+          echo "=== Host Logs ==="
+          kubectl logs -n wasmcloud-system -l wasmcloud.com/name=hostgroup --tail=200 || true
+          echo "=== CRD Resources ==="
+          kubectl get hosts.runtime.wasmcloud.dev -A -o yaml || true
+          kubectl get workloaddeployments.runtime.wasmcloud.dev -A -o yaml || true
+          kubectl get workloads.runtime.wasmcloud.dev -A -o yaml || true
 
   canary:
     if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'canary')
-    needs: [lint, test]
+    needs: [lint, test, test-e2e]
     permissions:
       contents: write
       packages: write
@@ -75,7 +121,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [lint, test]
+    needs: [lint, test, test-e2e]
     permissions:
       contents: write
       packages: write
