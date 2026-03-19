@@ -5,19 +5,13 @@
 
 **wash** is the comprehensive command-line tool for developing, building, and managing WebAssembly components. It provides an intuitive developer experience for the modern Wasm ecosystem, from project scaffolding to building and pushing components to OCI registries.
 
-> [!WARNING] 
-> We are moving wasmCloud v2 to `wasmCloud/wasmCloud` repository.
-
-
 ## Features
 
 - **Project Creation**: Generate new WebAssembly component projects from templates
 - **Multi-Language Build System**: Compile components for multiple languages (Rust, Go, TypeScript)
 - **Development Loop**: Built-in hot-reload development server (`wash dev`)
 - **OCI Registry Integration**: Push and pull components to/from OCI-compatible registries
-- **Plugin System**: Extensible architecture with WebAssembly-based plugins
 - **Component Inspection**: Analyze component WIT interfaces and metadata
-- **Environment Health Checks**: Built-in diagnostics and system verification
 - **Configuration Management**: Hierarchical configuration with global and project-level settings
 - **Self-Updates**: Keep wash up-to-date with the latest features and fixes
 
@@ -90,31 +84,13 @@ Note: This quickstart requires the [Rust toolchain](https://www.rust-lang.org/to
 | `wash completion` | Generate shell completion scripts for wash                      |
 | `wash dev`        | Start a development server for a Wasm component with hot-reload |
 | `wash host`       | Act as a host.                                                  |
-| `wash inspect`    | Inspect a Wasm component's embedded WIT interfaces              |
 | `wash new`        | Create a new project from a git repository                      |
 | `wash oci`        | Push or pull Wasm components to/from an OCI registry            |
-| `wash plugin`     | Manage wash plugins                                             |
 | `wash update`     | Update wash to the latest version                               |
 | `wash wit`        | Manage WIT dependencies                                         |
 | `wash help`       | Print this message or the help of the given subcommand(s)       |
 
-Run `wash --help` or `wash <command> --help` for detailed usage information.
-
-### Plugin Commands
-
-wash also supports custom commands through its plugin system. Plugins are automatically discovered and made available as subcommands.
-
-## Plugin System
-
-wash features an extensible plugin architecture built on WebAssembly:
-
-- **Built-in Plugins**: oauth, blobstore-filesystem, aspire-otel
-- **Platform Integration**: Plugins can integrate wash with specific platforms (like wasmCloud)
-- **Custom Plugins**: Write your own plugins using the WebAssembly Component Model
-- **Automatic Discovery**: Plugins in the `plugins/` directory are automatically loaded
-- **Hook System**: Plugins can register pre and post-command hooks for workflow customization
-
-Use `wash plugin --help` to see plugin management commands.
+Run `wash --help` or `wash help <command>` for detailed usage information.
 
 ### Shell Completion
 
