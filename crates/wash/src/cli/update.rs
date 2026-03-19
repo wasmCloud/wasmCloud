@@ -60,19 +60,19 @@ pub struct Asset {
 #[derive(Args, Debug, Default, Clone)]
 pub struct UpdateCommand {
     /// Force update even if already on the latest version
-    #[clap(long, short = 'f')]
+    #[arg(long, short = 'f')]
     force: bool,
 
     /// Check for updates without applying them
-    #[clap(long, short = 'd')]
+    #[arg(long, short = 'd')]
     dry_run: bool,
 
     /// Point at a different repository for updates
-    #[clap(long, default_value = REPO)]
+    #[arg(long, default_value = REPO)]
     git: String,
 
     /// GitHub token for private repository access. Can also be set via GITHUB_TOKEN, GH_TOKEN, or GITHUB_ACCESS_TOKEN environment variables
-    #[clap(long, env = "WASH_GITHUB_TOKEN")]
+    #[arg(long, env = "WASH_GITHUB_TOKEN")]
     token: Option<String>,
 }
 

@@ -19,7 +19,7 @@ use crate::{
 #[derive(Debug, Clone, Args, Serialize)]
 pub struct ComponentBuildCommand {
     /// Skip fetching WIT dependencies, useful for offline builds
-    #[clap(long = "skip-fetch")]
+    #[arg(long = "skip-fetch")]
     skip_fetch: bool,
 }
 

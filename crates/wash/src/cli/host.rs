@@ -14,81 +14,81 @@ use crate::cli::{CliCommand, CliContext, CommandOutput};
 #[derive(Debug, Clone, Args)]
 pub struct HostCommand {
     /// The host group label to assign to the host
-    #[clap(long = "host-group", default_value = "default")]
+    #[arg(long = "host-group", default_value = "default")]
     pub host_group: String,
 
     /// NATS URL for Control Plane communications
-    #[clap(long = "scheduler-nats-url", default_value = "nats://localhost:4222")]
+    #[arg(long = "scheduler-nats-url", default_value = "nats://localhost:4222")]
     pub scheduler_nats_url: String,
 
     /// Path to TLS CA certificate file for NATS Scheduler connection
-    #[clap(long = "scheduler-nats-tls-ca")]
+    #[arg(long = "scheduler-nats-tls-ca")]
     pub scheduler_nats_tls_ca: Option<PathBuf>,
 
     /// Enable TLS handshake first mode for NATS Scheduler connection
-    #[clap(long = "scheduler-nats-tls-first", default_value_t = false)]
+    #[arg(long = "scheduler-nats-tls-first", default_value_t = false)]
     pub scheduler_nats_tls_first: bool,
 
     /// Path to NATS TLS certificate file for NATS Scheduler connection
-    #[clap(long = "scheduler-nats-tls-cert")]
+    #[arg(long = "scheduler-nats-tls-cert")]
     pub scheduler_nats_tls_cert: Option<PathBuf>,
 
     /// Path to NATS TLS private key file for NATS Scheduler connection
-    #[clap(long = "scheduler-nats-tls-key")]
+    #[arg(long = "scheduler-nats-tls-key")]
     pub scheduler_nats_tls_key: Option<PathBuf>,
 
     /// NATS URL for Data Plane communications
-    #[clap(long = "data-nats-url", default_value = "nats://localhost:4222")]
+    #[arg(long = "data-nats-url", default_value = "nats://localhost:4222")]
     pub data_nats_url: String,
 
     /// The path to TLS CA certificate file for NATS Data connection
-    #[clap(long = "data-nats-tls-ca")]
+    #[arg(long = "data-nats-tls-ca")]
     pub data_nats_tls_ca: Option<PathBuf>,
 
     /// Enable TLS handshake first mode for NATS Data connection
-    #[clap(long = "data-nats-tls-first", default_value_t = false)]
+    #[arg(long = "data-nats-tls-first", default_value_t = false)]
     pub data_nats_tls_first: bool,
 
     /// Path to NATS TLS certificate file for NATS Data connection
-    #[clap(long = "data-nats-tls-cert")]
+    #[arg(long = "data-nats-tls-cert")]
     pub data_nats_tls_cert: Option<PathBuf>,
 
     /// Path to NATS TLS private key file for NATS Data connection
-    #[clap(long = "data-nats-tls-key")]
+    #[arg(long = "data-nats-tls-key")]
     pub data_nats_tls_key: Option<PathBuf>,
 
     /// The host name to assign to the host
-    #[clap(long = "host-name")]
+    #[arg(long = "host-name")]
     pub host_name: Option<String>,
 
     /// The address on which the HTTP server will listen
-    #[clap(long = "http-addr")]
+    #[arg(long = "http-addr")]
     pub http_addr: Option<SocketAddr>,
 
     /// Enable WASI WebGPU support
     #[cfg(not(target_os = "windows"))]
-    #[clap(long = "wasi-webgpu", default_value_t = false)]
+    #[arg(long = "wasi-webgpu", default_value_t = false)]
     pub wasi_webgpu: bool,
 
     /// PostgreSQL connection URL for the wasmcloud:postgres plugin
     /// (e.g. postgres://user:pass@bouncer:6432?sslmode=require&pool_size=10)
-    #[clap(long = "postgres-url", env = "WASH_POSTGRES_URL")]
+    #[arg(long = "postgres-url", env = "WASH_POSTGRES_URL")]
     pub postgres_url: Option<String>,
 
     /// Allow insecure OCI Registries
-    #[clap(long = "allow-insecure-registries", default_value_t = false)]
+    #[arg(long = "allow-insecure-registries", default_value_t = false)]
     pub allow_insecure_registries: bool,
 
     /// Timeout for pulling artifacts from OCI registries
-    #[clap(long = "registry-pull-timeout", value_parser = humantime::parse_duration, default_value = "30s")]
+    #[arg(long = "registry-pull-timeout", value_parser = humantime::parse_duration, default_value = "30s")]
     pub registry_pull_timeout: Duration,
 
     /// The directory to use for caching OCI artifacts
-    #[clap(long = "oci-cache-dir")]
+    #[arg(long = "oci-cache-dir")]
     pub oci_cache_dir: Option<PathBuf>,
 
     /// Enable WASI OpenTelemetry plugin
-    #[clap(long = "wasi-otel", default_value_t = false)]
+    #[arg(long = "wasi-otel", default_value_t = false)]
     pub wasi_otel: bool,
 }
 

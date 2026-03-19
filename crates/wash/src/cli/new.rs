@@ -17,20 +17,19 @@ use crate::{
 /// Create a new component project from a git repository
 #[derive(Args, Debug, Clone)]
 pub struct NewCommand {
-    /// Git repository URL to clone
-    #[clap(help = "Git repository URL to use as project template")]
+    /// Git repository URL to use as project template
     git: String,
 
     /// Project name and local directory to create (defaults to repository/subfolder name)
-    #[clap(long)]
+    #[arg(long)]
     name: Option<String>,
 
     /// Subdirectory within the git repository to use
-    #[clap(long)]
+    #[arg(long)]
     subfolder: Option<String>,
 
     /// Git reference (branch, tag, or commit) to checkout
-    #[clap(long, name = "ref")]
+    #[arg(long)]
     git_ref: Option<String>,
 }
 

@@ -7,7 +7,7 @@ use clap_complete::Shell;
 #[derive(Debug, Clone, Args)]
 pub struct CompletionCommand {
     /// The shell to generate completions for
-    #[clap(value_enum)]
+    #[arg(value_enum)]
     shell: Shell,
 }
 
