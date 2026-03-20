@@ -91,6 +91,8 @@ open http://localhost:8000/
 
 ## Project structure
 
+This template creates the following structure:
+
 ```
 service-tcp/
 ├── .wash/config.yaml          # wash (wasmCloud Shell) project config (build + dev)
