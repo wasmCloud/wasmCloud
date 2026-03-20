@@ -123,3 +123,4 @@ tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }
 wat = { workspace = true, features = ["component-model"] }
 gag = "1.0"
+testcontainers = { workspace = true }

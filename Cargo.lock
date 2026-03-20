@@ -7140,6 +7140,7 @@ dependencies = [
  "sha2",
  "sysinfo",
  "tempfile",
+ "testcontainers",
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
