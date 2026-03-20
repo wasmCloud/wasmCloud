@@ -87,6 +87,7 @@ jobs:
         env:
           RUST_BACKTRACE: "1"
           OCI_INTEGRATION_TESTS: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
+          NATS_INTEGRATION_TESTS: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
         run: |
           cargo test --workspace
 
