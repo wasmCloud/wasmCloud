@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::HostPlugin;
 use crate::plugin::WorkloadTracker;
 use crate::wit::{WitInterface, WitWorld};
 use async_nats::jetstream::object_store::{self, List, Object, ObjectStore};
+use bytes::Bytes;
 use futures::StreamExt;
 use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
@@ -16,8 +16,8 @@ use wasmtime::component::Resource;
 use wasmtime::error::Context;
 use wasmtime_wasi::p2::pipe::AsyncReadStream;
 use wasmtime_wasi::p2::{InputStream, OutputStream};
-use wasmtime_wasi_io::streams::{StreamError, StreamResult};
 use wasmtime_wasi_io::poll::Pollable;
+use wasmtime_wasi_io::streams::{StreamError, StreamResult};
 
 const PLUGIN_BLOBSTORE_ID: &str = "wasi-blobstore";
 
