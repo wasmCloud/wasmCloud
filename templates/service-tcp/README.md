@@ -2,6 +2,16 @@
 
 A wasmCloud v2 service-and-component template written in Rust that demonstrates the **wasmCloud service model** with `wasi:sockets`.
 
+```                                                                       
+┌──────────┐   POST /task   ┌──────────┐   TCP :7777   ┌──────────────┐   
+│  Browser  │ ────────────► │ http-api │ ────────────► │ service-leet │   
+│  (user)   │ ◄──────────── │(component)│ ◄──────────── │  (service)   │  
+└──────────┘   "h3110"      └──────────┘   "h3110"     └──────────────┘   
+                             stateless                  long-running      
+                             per-request                persistent TCP    
+                             scales out                 listener          
+```             
+
 The template has two parts:
 
 | Part | Type | What it does |
@@ -39,15 +49,11 @@ wasmCloud supports two kinds of Wasm workloads, and this template uses both:
 
 The `http-api/` workload is a standard **HTTP component** that exports `wasi:http/incoming-handler`. The runtime instantiates it on demand for each incoming request, runs it to completion, and tears it down. Because components hold no state between invocations, the host can scale them horizontally — spinning up as many concurrent instances as needed to meet demand, with near-zero overhead per instance.
 
-Components are defined with `#[wstd::http_server]` and compiled as a `cdylib`.
-
 ### Services — long-running and stateful
 
 The `service-leet/` workload is a **service** — a long-running process that exports `wasi:cli/run`. The runtime calls it once on startup and expects it to block indefinitely in a server loop. Services can maintain state across requests — open sockets, connection pools, caches, background tasks — anything that is expensive to create per-request and benefits from being long-lived.
 
 Services bind TCP sockets to loopback (`127.0.0.1`). The runtime enforces this: any `0.0.0.0` bind is silently rewritten to `127.0.0.1`. Components on the same host can connect to those loopback addresses. External callers cannot.
-
-Services are defined with `#[wstd::main]` and compiled as a standard binary.
 
 ### Why both?
 
@@ -87,7 +93,7 @@ open http://localhost:8000/
 
 ```
 service-tcp/
-├── .wash/config.yaml          # wash project config (build + dev)
+├── .wash/config.yaml          # wash (wasmCloud Shell) project config (build + dev)
 ├── Cargo.toml                 # Rust workspace root
 ├── wit/
 │   └── world.wit              # WIT world definition
