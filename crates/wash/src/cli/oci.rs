@@ -49,19 +49,19 @@ impl CliCommand for OciCommand {
 #[derive(Args, Debug, Clone)]
 pub struct PullCommand {
     /// The OCI reference to pull
-    reference: String,
+    pub reference: String,
     /// The path to write the pulled component to
     #[arg(default_value = "component.wasm")]
-    component_path: PathBuf,
+    pub component_path: PathBuf,
     /// Use HTTP or HTTPS protocol
     #[arg(long = "insecure", default_value_t = false)]
-    insecure: bool,
+    pub insecure: bool,
     /// Username for basic authentication
     #[arg(short, long)]
-    user: Option<String>,
+    pub user: Option<String>,
     /// Password for basic authentication
     #[arg(short, long)]
-    password: Option<String>,
+    pub password: Option<String>,
 }
 
 impl PullCommand {
@@ -110,18 +110,18 @@ impl PullCommand {
 #[derive(Args, Debug, Clone)]
 pub struct PushCommand {
     /// The OCI reference to push
-    reference: String,
+    pub reference: String,
     /// The path to the component to push
-    component_path: PathBuf,
+    pub component_path: PathBuf,
     /// Use HTTP or HTTPS protocol
     #[arg(long = "insecure", default_value_t = false)]
-    insecure: bool,
+    pub insecure: bool,
     /// Username for basic authentication
     #[arg(short, long)]
-    user: Option<String>,
+    pub user: Option<String>,
     /// Password for basic authentication
     #[arg(short, long)]
-    password: Option<String>,
+    pub password: Option<String>,
 }
 
 impl PushCommand {

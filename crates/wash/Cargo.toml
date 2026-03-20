@@ -78,6 +78,7 @@ tempfile = { version = "3.0", default-features = false }
 tokio = { version = "1.45.1", default-features = false, features = ["full"] }
 reqwest = { workspace = true, features = ["json"] }
 wash-runtime = { workspace = true, features = ["wasi-keyvalue", "wasi-blobstore"] }
+testcontainers = { workspace = true }
 wat = { workspace = true }
 
 [package.metadata.binstall]
