@@ -9,4 +9,4 @@ version = "0.1.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-wstd = "0.6.3"
+wstd = "0.6"
