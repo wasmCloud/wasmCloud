@@ -9,7 +9,7 @@ version = "0.1.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-wstd = "0.6.3"
+wstd = "0.6"
 qrcode = "0.14.1"
 image = "0.25"
 serde = { version = "1.0", features = ["derive"] }

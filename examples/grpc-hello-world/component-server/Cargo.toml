@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 ignored = ["prost"]
 
 [dependencies]
-wstd = "0.6.3"
+wstd = "0.6"
 tonic = { version = "0.12", default-features = false, features = ["codegen", "prost"] }
 prost = "0.13"
 tower-service = { version = "0.3.2" }
