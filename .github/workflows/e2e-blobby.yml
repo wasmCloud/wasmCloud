@@ -1,0 +1,114 @@
+name: e2e-blobby
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "examples/blobby/**"
+      - ".github/workflows/e2e-blobby.yml"
+  pull_request:
+    paths:
+      - "examples/blobby/**"
+      - ".github/workflows/e2e-blobby.yml"
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-blobby:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Build wash
+        run: cargo build --release
+        env:
+          RUST_BACKTRACE: "1"
+
+      - name: Add wash to PATH
+        run: echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
+
+      - name: Verify wash
+        run: wash --version
+
+      - name: Build blobby
+        working-directory: examples/blobby
+        run: wash build
+
+      - name: Verify blobby component
+        working-directory: examples/blobby
+        run: |
+          test -f target/wasm32-wasip2/release/blobby.wasm
+          echo "Blobby component built successfully"
+
+      - name: Test blobby with wash dev
+        working-directory: examples/blobby
+        run: |
+          mkdir -p tmp/blobstore
+
+          wash dev --detached &
+          WASH_PID=$!
+
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8000/ > /dev/null 2>&1; then
+              echo "Blobby server is ready"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "::error::Timed out waiting for blobby server"
+              wash dev stop 2>/dev/null || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo "=== Testing POST (upload) ==="
+          echo "Hello from e2e test" > /tmp/testfile.txt
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: text/plain" \
+            http://127.0.0.1:8000/e2e-test.txt \
+            --data-binary @/tmp/testfile.txt)
+          echo "Upload status: ${HTTP_STATUS}"
+          test "$HTTP_STATUS" = "200"
+
+          echo "=== Testing GET (download) ==="
+          CONTENT=$(curl -sf http://127.0.0.1:8000/e2e-test.txt)
+          echo "Downloaded content: ${CONTENT}"
+          echo "$CONTENT" | grep -q "Hello from e2e test"
+
+          echo "=== Testing POST / (list) ==="
+          LIST=$(curl -sf -X POST http://127.0.0.1:8000/)
+          echo "File list: ${LIST}"
+          echo "$LIST" | grep -q "e2e-test.txt"
+
+          echo "=== Testing DELETE ==="
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X DELETE http://127.0.0.1:8000/e2e-test.txt)
+          echo "Delete status: ${HTTP_STATUS}"
+          test "$HTTP_STATUS" = "200"
+
+          echo "=== Verify file deleted ==="
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            http://127.0.0.1:8000/e2e-test.txt)
+          echo "Get after delete status: ${HTTP_STATUS}"
+          test "$HTTP_STATUS" = "404"
+
+          echo "All blobby CRUD tests passed"
+          wash dev stop 2>/dev/null || true
