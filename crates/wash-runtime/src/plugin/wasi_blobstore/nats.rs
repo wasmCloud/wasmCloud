@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::HostPlugin;
@@ -13,8 +14,10 @@ use tokio::sync::RwLock;
 use tracing::instrument;
 use wasmtime::component::Resource;
 use wasmtime::error::Context;
-use wasmtime_wasi::p2::pipe::{AsyncReadStream, AsyncWriteStream};
+use wasmtime_wasi::p2::pipe::AsyncReadStream;
 use wasmtime_wasi::p2::{InputStream, OutputStream};
+use wasmtime_wasi_io::streams::{StreamError, StreamResult};
+use wasmtime_wasi_io::poll::Pollable;
 
 const PLUGIN_BLOBSTORE_ID: &str = "wasi-blobstore";
 
@@ -64,6 +67,41 @@ pub struct OutgoingValueHandle {
     pub temp_file: tempfile::NamedTempFile,
     pub container: Option<ContainerData>,
     pub object_name: Option<String>,
+}
+
+/// An `OutputStream` that writes synchronously to a file.
+///
+/// Unlike `AsyncWriteStream`, this does not spawn a background task, so there
+/// is no race between the writer and a subsequent `finish()` that reopens
+/// the file. Tempfile I/O is typically very fast (often backed by tmpfs).
+struct TempFileOutputStream {
+    file: std::fs::File,
+}
+
+#[async_trait::async_trait]
+impl Pollable for TempFileOutputStream {
+    async fn ready(&mut self) {}
+}
+
+#[async_trait::async_trait]
+impl OutputStream for TempFileOutputStream {
+    fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
+        use std::io::Write;
+        self.file
+            .write_all(&bytes)
+            .map_err(|e| StreamError::LastOperationFailed(e.into()))
+    }
+
+    fn flush(&mut self) -> StreamResult<()> {
+        use std::io::Write;
+        self.file
+            .flush()
+            .map_err(|e| StreamError::LastOperationFailed(e.into()))
+    }
+
+    fn check_write(&mut self) -> StreamResult<usize> {
+        Ok(1024 * 1024) // 1MB at a time
+    }
 }
 
 /// Resource representation for streaming object names
@@ -667,13 +705,12 @@ impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
     {
         let handle = self.table.get_mut(&outgoing_value)?;
 
-        let file_wrapper = tokio::fs::File::from_std(handle.temp_file.reopen()?);
-        let stream = AsyncWriteStream::new(8192, file_wrapper);
+        // Reopen the tempfile so the OutputStream has its own file descriptor.
+        // TempFileOutputStream writes synchronously — no background task, no race.
+        let file = handle.temp_file.reopen()?;
+        let stream = TempFileOutputStream { file };
 
-        // Return the pipe as the output stream - this is the same pipe that will be
-        // read in finish()
         let boxed: Box<dyn OutputStream> = Box::new(stream);
-
         let resource = self.table.push(boxed)?;
         Ok(Ok(resource))
     }
@@ -719,8 +756,10 @@ impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
     }
 
     async fn drop(&mut self, rep: Resource<OutgoingValueHandle>) -> wasmtime::Result<()> {
-        self.table.delete(rep)?;
-        Ok(())
+        match self.finish(rep).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 }
 
