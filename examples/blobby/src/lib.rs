@@ -66,9 +66,7 @@ async fn main(request: Request<Body>) -> Result<Response<Body>, wstd::http::Erro
                 .get("content-length")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse().ok())
-                .ok_or_else(|| {
-                    wstd::http::Error::msg("Content-Length header is required")
-                })?;
+                .ok_or_else(|| wstd::http::Error::msg("Content-Length header is required"))?;
 
             match put_object(&container, &file_name, &mut body, content_length).await {
                 Ok(_) => Ok(Response::builder()
@@ -98,9 +96,7 @@ async fn main(request: Request<Body>) -> Result<Response<Body>, wstd::http::Erro
 }
 
 fn ensure_container(name: &str) -> Result<Container, wstd::http::Error> {
-    if !blobstore::container_exists(name)
-        .map_err(|e| wstd::http::Error::msg(e))?
-    {
+    if !blobstore::container_exists(name).map_err(|e| wstd::http::Error::msg(e))? {
         blobstore::create_container(name).map_err(|e| wstd::http::Error::msg(e))
     } else {
         blobstore::get_container(name).map_err(|e| wstd::http::Error::msg(e))
@@ -124,10 +120,7 @@ fn list_objects(container: &Container) -> Result<Vec<String>, wstd::http::Error>
     Ok(names)
 }
 
-fn get_object(
-    container: &Container,
-    object_name: &str,
-) -> Result<AsyncInputStream, String> {
+fn get_object(container: &Container, object_name: &str) -> Result<AsyncInputStream, String> {
     if !container.has_object(object_name)? {
         return Err("Object not found".to_string());
     }
