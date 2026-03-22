@@ -92,7 +92,7 @@ runtime:
     registry: ghcr.io
     repository: wasmcloud/wash
     pull_policy: Always
-    tag: "2.0.0"
+    tag: "2.0.1"
   hostGroups:
     - name: default
       replicas: 1
