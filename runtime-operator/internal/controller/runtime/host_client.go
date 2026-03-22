@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	runtimev2 "go.wasmcloud.dev/runtime-operator/pkg/rpc/wasmcloud/runtime/v2"
-	"go.wasmcloud.dev/runtime-operator/pkg/wasmbus"
+	runtimev2 "go.wasmcloud.dev/runtime-operator/v2/pkg/rpc/wasmcloud/runtime/v2"
+	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"

@@ -5,7 +5,7 @@ managed:
   override:
     - file_option: go_package
       # JAF: change this once runtime-operator is moved to wasmCloud
-      value: go.wasmcloud.dev/runtime-operator/pkg/rpc/wasmcloud/runtime/v2
+      value: go.wasmcloud.dev/runtime-operator/v2/pkg/rpc/wasmcloud/runtime/v2
       path: wasmcloud/runtime/v2
 plugins:
   # Docs
