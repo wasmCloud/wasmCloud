@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	runtime_controllers "go.wasmcloud.dev/runtime-operator/v2/internal/controller/runtime"
-	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
+	runtime_controllers "go.wasmcloud.dev/runtime-operator/internal/controller/runtime"
+	"go.wasmcloud.dev/runtime-operator/pkg/wasmbus"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 

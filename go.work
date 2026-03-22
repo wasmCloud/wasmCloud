@@ -4,5 +4,3 @@ use (
 	./runtime-gateway/
 	./runtime-operator/
 )
-
-replace go.wasmcloud.dev/runtime-operator/v2 v2.0.0 => ./runtime-operator
