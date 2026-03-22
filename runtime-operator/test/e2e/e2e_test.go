@@ -27,7 +27,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"go.wasmcloud.dev/runtime-operator/test/utils"
+	"go.wasmcloud.dev/runtime-operator/v2/test/utils"
 )
 
 // namespace where the project is deployed in

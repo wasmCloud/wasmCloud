@@ -18,7 +18,7 @@ resources:
   domain: wasmcloud.dev
   group: runtime
   kind: Host
-  path: go.wasmcloud.dev/runtime-operator/api/runtime/v1alpha1
+  path: go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -27,7 +27,7 @@ resources:
   domain: wasmcloud.dev
   group: runtime
   kind: Artifact
-  path: go.wasmcloud.dev/runtime-operator/api/runtime/v1alpha1
+  path: go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -36,7 +36,7 @@ resources:
   domain: wasmcloud.dev
   group: runtime
   kind: Workload
-  path: go.wasmcloud.dev/runtime-operator/api/runtime/v1alpha1
+  path: go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -45,7 +45,7 @@ resources:
   domain: wasmcloud.dev
   group: runtime
   kind: WorkloadReplicaSet
-  path: go.wasmcloud.dev/runtime-operator/api/runtime/v1alpha1
+  path: go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -54,6 +54,6 @@ resources:
   domain: wasmcloud.dev
   group: runtime
   kind: WorkloadDeployment
-  path: go.wasmcloud.dev/runtime-operator/api/runtime/v1alpha1
+  path: go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1
   version: v1alpha1
 version: "3"

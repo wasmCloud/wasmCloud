@@ -1,7 +1,7 @@
 package v1alpha1
 
 import (
-	"go.wasmcloud.dev/runtime-operator/api/condition"
+	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 

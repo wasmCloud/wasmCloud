@@ -135,3 +135,17 @@ jobs:
       push: true
       tags: |
         type=semver,pattern={{version}},value=${{ github.ref_name }}
+
+  go-module-tag:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Create Go module tag
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          git tag "runtime-operator/${VERSION}"
+          git push origin "runtime-operator/${VERSION}"
