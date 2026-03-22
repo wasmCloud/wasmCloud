@@ -38,12 +38,12 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	"go.wasmcloud.dev/runtime-operator/pkg/wasmbus"
+	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
 
 	"github.com/nats-io/nats.go"
-	runtime_operator "go.wasmcloud.dev/runtime-operator"
+	runtime_operator "go.wasmcloud.dev/runtime-operator/v2"
 
-	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/api/runtime/v1alpha1"
+	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
