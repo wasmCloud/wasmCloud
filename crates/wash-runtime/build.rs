@@ -33,8 +33,8 @@ fn check_and_rebuild_fixtures(
     let wasm_dir = workspace_dir.join("crates/wash-runtime/tests/wasm");
 
     if !fixtures_dir.exists() {
-        println!("No fixtures dir found at {}", fixtures_dir.display());
-        anyhow::bail!("No fixtures dir found");
+        // Not present when this crate is used as a library dependency — skip silently.
+        return Ok(());
     }
 
     // Create wasm directory if it doesn't exist
@@ -132,6 +132,11 @@ fn check_and_rebuild_fixtures(
 fn check_and_rebuild_p3_fixtures(workspace_dir: &Path, p3_fixtures: &[&str]) -> anyhow::Result<()> {
     let fixtures_dir = workspace_dir.join("crates/wash-runtime/tests/fixtures");
     let wasm_dir = workspace_dir.join("crates/wash-runtime/tests/wasm");
+
+    if !fixtures_dir.exists() {
+        // Not present when this crate is used as a library dependency — skip silently.
+        return Ok(());
+    }
 
     fs::create_dir_all(&wasm_dir)?;
 
@@ -278,7 +283,6 @@ fn main() {
     );
     let workspace_dir = workspace_dir().expect("failed to get workspace dir");
 
-    // Track specific example directories we care about
     let tracked_examples = [
         "http-counter",
         "cron-service",
@@ -303,8 +307,6 @@ fn main() {
         "inter-component-call-p3-callee",
     ];
 
-    // Build test fixtures. The rerun-if-changed directives ensure these only
-    // rebuild when fixture source files actually change, not on every build.
     check_and_rebuild_fixtures(&workspace_dir, &tracked_examples)
         .expect("failed to check/rebuild fixtures");
 
