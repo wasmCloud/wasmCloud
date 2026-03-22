@@ -1,4 +1,4 @@
-module go.wasmcloud.dev/runtime-operator/v2
+module go.wasmcloud.dev/runtime-operator
 
 go 1.25.0
 
