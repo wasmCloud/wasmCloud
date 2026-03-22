@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"go.wasmcloud.dev/runtime-operator/pkg/wasmbus/wasmbustest"
+	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus/wasmbustest"
 )
 
 func TestNatsConnect(t *testing.T) {

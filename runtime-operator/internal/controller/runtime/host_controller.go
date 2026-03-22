@@ -13,11 +13,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	"go.wasmcloud.dev/runtime-operator/api/condition"
-	"go.wasmcloud.dev/runtime-operator/pkg/wasmbus"
+	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
+	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
 
-	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/api/runtime/v1alpha1"
-	runtimev2 "go.wasmcloud.dev/runtime-operator/pkg/rpc/wasmcloud/runtime/v2"
+	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
+	runtimev2 "go.wasmcloud.dev/runtime-operator/v2/pkg/rpc/wasmcloud/runtime/v2"
 )
 
 const (

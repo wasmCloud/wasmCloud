@@ -5,7 +5,7 @@ go 1.25.0
 tool github.com/air-verse/air
 
 require (
-	go.wasmcloud.dev/runtime-operator v0.1.4
+	go.wasmcloud.dev/runtime-operator/v2 v2.0.0
 	k8s.io/api v0.34.1
 	k8s.io/apimachinery v0.34.1
 	sigs.k8s.io/controller-runtime v0.22.3
