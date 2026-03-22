@@ -9,9 +9,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"go.wasmcloud.dev/runtime-operator/api/condition"
+	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 
-	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/api/runtime/v1alpha1"
+	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 )
 
 const (

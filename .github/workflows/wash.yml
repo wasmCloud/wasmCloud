@@ -16,7 +16,7 @@ on:
     branches:
       - main
     tags:
-      - "wash-v*"
+      - "v*"
 
 defaults:
   run:
@@ -137,7 +137,7 @@ jobs:
         type=raw,value=canary-v2
 
   docker-release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/wash-v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
       packages: write
@@ -147,10 +147,10 @@ jobs:
       push: true
       image: ghcr.io/wasmcloud/wash
       tags: |
-        type=match,pattern=wash-v(.*),group=1
+        type=semver,pattern={{version}},value=${{ github.ref_name }}
 
   release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/wash-v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -251,7 +251,7 @@ jobs:
 
   update-homebrew:
     needs: upload-release-assets
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/wash-v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -259,7 +259,7 @@ jobs:
       - name: Extract version from tag
         id: version
         run: |
-          VERSION="${GITHUB_REF_NAME#wash-v}"
+          VERSION="${GITHUB_REF_NAME#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch Homebrew tap update
