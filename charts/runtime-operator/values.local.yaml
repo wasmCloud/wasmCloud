@@ -1,18 +1,10 @@
-operator:
-  image:
-    tag: canary
-
 gateway:
   enabled: true
-  image:
-    tag: canary
   service:
     type: NodePort
     nodePort: 30950
 
 runtime:
-  image:
-    tag: canary-v2
   hostGroups:
     - name: default
       replicas: 3
