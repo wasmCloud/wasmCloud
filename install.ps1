@@ -1,10 +1,10 @@
 # Install script for wash - The Wasm Shell (Windows PowerShell)
 # Usage: iwr -useb https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.ps1 | iex
-# Usage with options: ./install.ps1 -InstallDir "C:\tools" -Version "1.0.0-beta.10" -Verify -AddToPath -Force
+# Usage with options: ./install.ps1 -InstallDir "C:\tools" -Version "v2.0.1" -Verify -AddToPath -Force
 #
 # Parameters:
 # - InstallDir: Directory to install wash binary (default: current directory)
-# - Version: Install a specific version (e.g., "1.0.0-beta.9", "v1.0.0-beta.9", or "wash-v1.0.0-beta.10")
+# - Version: Install a specific version (e.g., "v2.0.1", or "wash-v2.0.0-rc.8" for pre-2.0 releases)
 # - Verify: Enable signature verification (requires GitHub CLI)
 # - AddToPath: Automatically add install directory to user PATH
 # - Force: Overwrite existing installation without prompting
@@ -224,7 +224,7 @@ function Get-ReleaseByVersion {
     # 2. With 'wash-v' prefix, for pre-2.0 releases that used that convention
     $candidates = @($RequestedVersion)
     if (-not $RequestedVersion.StartsWith('wash-v')) {
-        $bare = $RequestedVersion.TrimStart('v')
+        $bare = if ($RequestedVersion.StartsWith('v')) { $RequestedVersion.Substring(1) } else { $RequestedVersion }
         $candidates += "wash-v$bare"
     }
 
