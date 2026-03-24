@@ -333,7 +333,7 @@ Usage: $0 [OPTIONS]
 
 Options:
   -v, --verify       Enable signature verification (requires GitHub CLI)
-  --version VERSION  Install a specific version (e.g., 1.0.0-beta.9, v1.0.0-beta.9, or wash-v1.0.0-beta.10)
+  --version VERSION  Install a specific version (e.g., v2.0.1, or wash-v2.0.0-rc.8 for pre-2.0 releases)
   -h, --help         Show this help message
 
 Environment variables:
@@ -348,7 +348,7 @@ Examples:
   curl -fsSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- -v
 
   # Install a specific version
-  curl -fsSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- --version 1.0.0-beta.10
+  curl -fsSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- --version v2.0.1
 EOF
 }
 
