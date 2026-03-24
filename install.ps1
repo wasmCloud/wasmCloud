@@ -211,17 +211,6 @@ function Get-LatestRelease {
 function Get-ReleaseByVersion {
     param([string]$RequestedVersion)
 
-    # Normalize version format - wash releases use 'wash-v' prefix
-    if (-not $RequestedVersion.StartsWith('wash-v')) {
-        # Remove any leading 'v' if present
-        if ($RequestedVersion.StartsWith('v')) {
-            $RequestedVersion = $RequestedVersion.Substring(1)
-        }
-        # Add 'wash-v' prefix
-        $RequestedVersion = "wash-v$RequestedVersion"
-    }
-
-    $apiUrl = "https://api.github.com/repos/$REPO/releases/tags/$RequestedVersion"
     $headers = @{
         'User-Agent' = 'wash-installer'
     }
@@ -230,31 +219,41 @@ function Get-ReleaseByVersion {
         $headers['Authorization'] = "token $GitHubToken"
     }
 
-    Write-Info "Fetching release information for version $RequestedVersion..."
-
-    try {
-        $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
+    # Build a list of candidate tags to try in order:
+    # 1. The version as provided (e.g. v2.0.1 or wash-v2.0.0-rc.8)
+    # 2. With 'wash-v' prefix, for pre-2.0 releases that used that convention
+    $candidates = @($RequestedVersion)
+    if (-not $RequestedVersion.StartsWith('wash-v')) {
+        $bare = $RequestedVersion.TrimStart('v')
+        $candidates += "wash-v$bare"
     }
-    catch {
-        if ($_.Exception.Response.StatusCode -eq 404) {
-            Write-Error "Version $RequestedVersion not found"
-            Write-Error "Please verify the version exists. You can check available versions at:"
-            Write-Error "https://github.com/$REPO/releases"
+
+    foreach ($candidate in $candidates) {
+        $apiUrl = "https://api.github.com/repos/$REPO/releases/tags/$candidate"
+
+        Write-Info "Fetching release information for version $candidate..."
+
+        try {
+            $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
+            if ($response.tag_name) {
+                return $response.tag_name
+            }
         }
-        else {
+        catch {
+            if ($_.Exception.Response.StatusCode -eq 404) {
+                continue
+            }
             Write-Error "Failed to fetch release information from GitHub API"
             Write-Error "Please check your internet connection and try again"
             Write-Error "Error: $($_.Exception.Message)"
+            exit 1
         }
-        exit 1
     }
 
-    if (-not $response.tag_name) {
-        Write-Error "Version $RequestedVersion not found"
-        exit 1
-    }
-
-    return $response.tag_name
+    Write-Error "Version $RequestedVersion not found"
+    Write-Error "Please verify the version exists. You can check available versions at:"
+    Write-Error "https://github.com/$REPO/releases"
+    exit 1
 }
 
 # Get asset ID for the specified platform
