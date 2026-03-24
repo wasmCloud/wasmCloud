@@ -115,54 +115,47 @@ get_latest_release() {
 # Get release information for a specific version
 get_release_by_version() {
     local version="$1"
-
-    # Normalize version format - wash releases use 'wash-v' prefix
-    if [[ ! "$version" =~ ^wash-v ]]; then
-        # Remove any leading 'wash-' prefix if present (without the 'v')
-        version="${version#wash-}"
-        # Remove any leading 'v' if present
-        version="${version#v}"
-        # Add 'wash-v' prefix
-        version="wash-v${version}"
-    fi
-
-    local api_url="https://api.github.com/repos/${REPO}/releases/tags/${version}"
     local curl_args=("-s")
 
     if [ -n "${GITHUB_TOKEN:-}" ]; then
         curl_args+=("-H" "Authorization: token ${GITHUB_TOKEN:-}")
     fi
 
-    log_info "Fetching release information for version ${version}..."
-
-    local response
-    if ! response=$(curl "${curl_args[@]}" "$api_url" 2>/dev/null); then
-        log_error "Failed to fetch release information from GitHub API"
-        log_error "Please check your internet connection and try again"
-        exit 1
+    # Build a list of candidate tags to try in order:
+    # 1. The version as provided (e.g. v2.0.1 or wash-v2.0.0-rc.8)
+    # 2. With 'wash-v' prefix, for pre-2.0 releases that used that convention
+    local candidates=("$version")
+    if [[ ! "$version" =~ ^wash-v ]]; then
+        local bare="${version#v}"
+        candidates+=("wash-v${bare}")
     fi
 
-    # Check for API errors (404, etc.)
-    if echo "$response" | grep -q '"message".*"Not Found"'; then
-        log_error "Version ${version} not found"
-        log_error "Please verify the version exists. You can check available versions at:"
-        log_error "https://github.com/${REPO}/releases"
-        exit 1
-    fi
+    local response tag_name
+    for candidate in "${candidates[@]}"; do
+        local api_url="https://api.github.com/repos/${REPO}/releases/tags/${candidate}"
 
-    # Extract tag name using basic JSON parsing
-    local tag_name
-    if ! tag_name=$(echo "$response" | grep '"tag_name"' | head -n 1 | cut -d '"' -f 4); then
-        log_error "Failed to parse release information from API response"
-        exit 1
-    fi
+        log_info "Fetching release information for version ${candidate}..."
 
-    if [ -z "$tag_name" ]; then
-        log_error "Version ${version} not found"
-        exit 1
-    fi
+        if ! response=$(curl "${curl_args[@]}" "$api_url" 2>/dev/null); then
+            log_error "Failed to fetch release information from GitHub API"
+            log_error "Please check your internet connection and try again"
+            exit 1
+        fi
 
-    echo "$tag_name"
+        if echo "$response" | grep -q '"message".*"Not Found"'; then
+            continue
+        fi
+
+        if tag_name=$(echo "$response" | grep '"tag_name"' | head -n 1 | cut -d '"' -f 4) && [ -n "$tag_name" ]; then
+            echo "$tag_name"
+            return 0
+        fi
+    done
+
+    log_error "Version ${version} not found"
+    log_error "Please verify the version exists. You can check available versions at:"
+    log_error "https://github.com/${REPO}/releases"
+    exit 1
 }
 
 # Get asset ID for the specified platform
