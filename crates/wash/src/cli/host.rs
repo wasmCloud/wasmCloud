@@ -75,9 +75,9 @@ pub struct HostCommand {
     #[arg(long = "postgres-url", env = "WASH_POSTGRES_URL")]
     pub postgres_url: Option<String>,
 
-    /// Allow insecure OCI Registries
-    #[arg(long = "allow-insecure-registries", default_value_t = false)]
-    pub allow_insecure_registries: bool,
+    /// Force usage of HTTP for OCI Registries
+    #[arg(long = "force-http-oci-registries", default_value_t = false)]
+    pub force_http_oci_registries: bool,
 
     /// Timeout for pulling artifacts from OCI registries
     #[arg(long = "registry-pull-timeout", value_parser = humantime::parse_duration, default_value = "30s")]
@@ -126,7 +126,7 @@ impl CliCommand for HostCommand {
         let data_nats_client = Arc::new(data_nats_client);
 
         let host_config = wash_runtime::host::HostConfig {
-            allow_oci_insecure: self.allow_insecure_registries,
+            force_http_oci_registries: self.force_http_oci_registries,
             oci_pull_timeout: Some(self.registry_pull_timeout),
             oci_cache_dir: self.oci_cache_dir.clone(),
         };

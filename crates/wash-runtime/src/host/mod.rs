@@ -782,7 +782,7 @@ impl std::fmt::Debug for Host {
 /// Config for the [`Host`]
 #[derive(Clone, Debug)]
 pub struct HostConfig {
-    pub allow_oci_insecure: bool,
+    pub force_http_oci_registries: bool,
     pub oci_pull_timeout: Option<Duration>,
     pub oci_cache_dir: Option<PathBuf>,
 }
@@ -790,7 +790,7 @@ pub struct HostConfig {
 impl Default for HostConfig {
     fn default() -> Self {
         Self {
-            allow_oci_insecure: false,
+            force_http_oci_registries: false,
             oci_pull_timeout: Duration::from_secs(30).into(),
             oci_cache_dir: None,
         }
