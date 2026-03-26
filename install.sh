@@ -6,7 +6,7 @@
 #
 # Environment variables:
 # - GITHUB_TOKEN: GitHub personal access token (optional, for higher API rate limits)
-# - INSTALL_DIR: Directory to install wash binary (default: current directory)
+# - INSTALL_DIR: Directory to install wash binary (default: ~/.wash/bin)
 # - WASH_VERSION: Specific version to install (default: latest). Can also be set via --version flag.
 
 set -euo pipefail
@@ -20,9 +20,10 @@ NC='\033[0m' # No Color
 
 # Constants
 REPO="wasmcloud/wasmCloud"
-INSTALL_DIR="${INSTALL_DIR:-$(pwd)}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.wash/bin}"
 TMP_DIR="/tmp/wash-install-$$"
 VERIFY_SIGNATURE=false
+NO_MODIFY_PATH=false
 VERSION="${WASH_VERSION:-}"
 
 # Helper functions
@@ -210,8 +211,6 @@ install_wash() {
     local platform="$1"
     local version="$2"
     
-    local binary_name="wash-${platform}"
-    
     log_info "Detected platform: ${platform}"
     log_info "Latest version: ${version}"
     
@@ -286,12 +285,96 @@ install_wash() {
         log_warn "Could not verify installation. Try running: ${INSTALL_DIR}/wash --help"
     fi
     
+    # Configure PATH
+    configure_path
+
     # Show next steps
     echo >&2
     log_info "Next steps:"
-    echo "  1. Add ${INSTALL_DIR} to your PATH if not already included" >&2
-    echo "  2. Run 'wash --help' to see available commands" >&2
-    echo "  3. Run 'wash new' to create your first WebAssembly component" >&2
+    echo "  1. Run 'wash --help' to see available commands" >&2
+    echo "  2. Run 'wash new' to create your first WebAssembly component" >&2
+}
+
+# Add INSTALL_DIR to the user's shell profile
+configure_path() {
+    # Check if INSTALL_DIR is already in PATH
+    case ":$PATH:" in
+        *":${INSTALL_DIR}:"*)
+            log_info "${INSTALL_DIR} is already in PATH"
+            return 0
+            ;;
+    esac
+
+    # Skip profile modification if --no-modify-path was passed
+    if [ "$NO_MODIFY_PATH" = "true" ]; then
+        log_info "Skipping PATH modification (--no-modify-path)"
+        log_info "Manually add ${INSTALL_DIR} to your PATH"
+        return 0
+    fi
+
+    # Skip profile modification in CI or non-interactive shells
+    if [ "${CI:-}" = "true" ] || [ ! -t 2 ]; then
+        log_info "Non-interactive environment detected, skipping PATH modification"
+        log_info "Add ${INSTALL_DIR} to your PATH to use wash"
+        return 0
+    fi
+
+    local shell_name
+    shell_name=$(basename "${SHELL:-}")
+
+    case "$shell_name" in
+        zsh)
+            _patch_profile "${HOME}/.zshrc"
+            ;;
+        bash)
+            # Prefer .bashrc; fall back to .bash_profile
+            if [ -f "${HOME}/.bashrc" ]; then
+                _patch_profile "${HOME}/.bashrc"
+            else
+                _patch_profile "${HOME}/.bash_profile"
+            fi
+            ;;
+        fish)
+            _patch_fish_profile
+            ;;
+        *)
+            log_warn "Unknown shell '${shell_name}' — manually add ${INSTALL_DIR} to your PATH"
+            ;;
+    esac
+}
+
+# Append an export line to a POSIX shell profile, skipping if already present
+_patch_profile() {
+    local profile_file="$1"
+    local line="export PATH=\"${INSTALL_DIR}:\$PATH\""
+
+    if [ -f "$profile_file" ] && grep -qF "${INSTALL_DIR}" "$profile_file"; then
+        log_info "${INSTALL_DIR} already referenced in ${profile_file}"
+        return 0
+    fi
+
+    echo "" >> "$profile_file"
+    echo "# Added by wash installer" >> "$profile_file"
+    echo "$line" >> "$profile_file"
+    log_success "Added ${INSTALL_DIR} to PATH in ${profile_file}"
+    log_info "Restart your shell or run: source ${profile_file}"
+}
+
+# Append a fish-style PATH entry, skipping if already present
+_patch_fish_profile() {
+    local config_file="${HOME}/.config/fish/config.fish"
+
+    if [ -f "$config_file" ] && grep -qF "${INSTALL_DIR}" "$config_file"; then
+        log_info "${INSTALL_DIR} already referenced in ${config_file}"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$config_file")"
+    echo "" >> "$config_file"
+    echo "# Added by wash installer" >> "$config_file"
+    echo "fish_add_path ${INSTALL_DIR}" >> "$config_file"
+    log_success "Added ${INSTALL_DIR} to PATH in ${config_file}"
+    log_info "Restart your shell or run: source ${config_file}"
 }
 
 # Parse command line arguments
@@ -300,6 +383,10 @@ parse_args() {
         case $1 in
             -v|--verify)
                 VERIFY_SIGNATURE=true
+                shift
+                ;;
+            --no-modify-path)
+                NO_MODIFY_PATH=true
                 shift
                 ;;
             --version)
@@ -332,13 +419,14 @@ Install script for wash - The Wasm Shell
 Usage: $0 [OPTIONS]
 
 Options:
-  -v, --verify       Enable signature verification (requires GitHub CLI)
-  --version VERSION  Install a specific version (e.g., v2.0.1, or wash-v2.0.0-rc.8 for pre-2.0 releases)
-  -h, --help         Show this help message
+  -v, --verify         Enable signature verification (requires GitHub CLI)
+  --version VERSION    Install a specific version (e.g., v2.0.1, or wash-v2.0.0-rc.8 for pre-2.0 releases)
+  --no-modify-path     Don't modify shell profile to add wash to PATH
+  -h, --help           Show this help message
 
 Environment variables:
   GITHUB_TOKEN    GitHub personal access token (optional, for higher API rate limits)
-  INSTALL_DIR     Directory to install wash binary (default: current directory)
+  INSTALL_DIR     Directory to install wash binary (default: ~/.wash/bin)
 
 Examples:
   # Standard installation (latest version)
@@ -404,6 +492,7 @@ main() {
     parse_args "$@"
 
     log_info "Installing wash - The Wasm Shell"
+    log_info "Install directory: ${INSTALL_DIR}"
     echo >&2
 
     # Check dependencies

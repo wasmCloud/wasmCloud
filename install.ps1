@@ -1,25 +1,27 @@
 # Install script for wash - The Wasm Shell (Windows PowerShell)
 # Usage: iwr -useb https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.ps1 | iex
-# Usage with options: ./install.ps1 -InstallDir "C:\tools" -Version "v2.0.1" -Verify -AddToPath -Force
+# Usage with options: ./install.ps1 -InstallDir "C:\tools" -Version "v2.0.1" -Verify -NoModifyPath -Force
+# Note: -AddToPath is deprecated (PATH is now modified by default; use -NoModifyPath to opt out)
 #
 # Parameters:
-# - InstallDir: Directory to install wash binary (default: current directory)
+# - InstallDir: Directory to install wash binary (default: %USERPROFILE%\.wash\bin)
 # - Version: Install a specific version (e.g., "v2.0.1", or "wash-v2.0.0-rc.8" for pre-2.0 releases)
 # - Verify: Enable signature verification (requires GitHub CLI)
-# - AddToPath: Automatically add install directory to user PATH
+# - NoModifyPath: Don't modify the user PATH environment variable
 # - Force: Overwrite existing installation without prompting
 #
 # Environment variables:
 # - $env:GITHUB_TOKEN: GitHub personal access token (optional, for higher API rate limits)
-# - $env:INSTALL_DIR: Directory to install wash binary (overrides -InstallDir)
+# - $env:INSTALL_DIR: Directory to install wash binary (overrides -InstallDir, default: %USERPROFILE%\.wash\bin)
 
 param(
-    [string]$InstallDir = $(if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { $PWD }),
+    [string]$InstallDir = $(if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { Join-Path $env:USERPROFILE ".wash\bin" }),
     [string]$GitHubToken = $env:GITHUB_TOKEN,
     [string]$Version = "",
     [switch]$Verify,
-    [switch]$AddToPath,
-    [switch]$Force
+    [switch]$NoModifyPath,
+    [switch]$Force,
+    [switch]$AddToPath  # Deprecated: PATH is now modified by default. Use -NoModifyPath to opt out.
 )
 
 # Set strict mode
@@ -57,23 +59,39 @@ function Cleanup {
     }
 }
 
-# Add directory to PATH
-function Add-ToPath {
+# Automatically add directory to user PATH unless opted out or in CI
+function Add-ToPathAuto {
     param([string]$Directory)
-    
+
     $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-    
-    # Check if directory is already in PATH
-    if ($currentPath -split ';' | Where-Object { $_ -eq $Directory }) {
-        Write-Info "Directory $Directory is already in PATH"
+
+    # Check if directory is already in PATH (case-insensitive for Windows)
+    if ($currentPath -and ($currentPath -split ';' | Where-Object { $_ -ieq $Directory })) {
+        Write-Info "$Directory is already in PATH"
         return
     }
-    
+
+    # Skip if -NoModifyPath was passed
+    if ($NoModifyPath) {
+        Write-Info "Skipping PATH modification (-NoModifyPath)"
+        Write-Info "Manually add $Directory to your PATH"
+        return
+    }
+
+    # Skip in CI environments
+    if ($env:CI -eq "true") {
+        Write-Info "CI environment detected, skipping PATH modification"
+        Write-Info "Add $Directory to your PATH to use wash"
+        return
+    }
+
     try {
         $newPath = if ($currentPath) { "$currentPath;$Directory" } else { $Directory }
         [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
+        # Also update the current session
+        $env:PATH = "$env:PATH;$Directory"
         Write-Success "Added $Directory to user PATH"
-        Write-Info "Please restart your terminal or run: refreshenv"
+        Write-Info "PATH is updated for this session and future sessions"
     }
     catch {
         Write-Error "Failed to add $Directory to PATH: $($_.Exception.Message)"
@@ -304,8 +322,6 @@ function Install-Wash {
         [string]$TargetVersion
     )
 
-    $binaryName = "wash-$Platform"
-
     Write-Info "Detected platform: $Platform"
     Write-Info "Version: $TargetVersion"
 
@@ -417,33 +433,27 @@ function Install-Wash {
         Write-Warn "Could not verify installation. Try running: $installPath --help"
     }
     
+    # Configure PATH
+    Add-ToPathAuto $InstallDir
+
     # Show next steps
     Write-Host ""
     Write-Info "Next steps:"
-    Write-Host "  1. Add $InstallDir to your PATH if not already included"
-    Write-Host "  2. Run 'wash --help' to see available commands"
-    Write-Host "  3. Run 'wash new' to create your first WebAssembly component"
-    Write-Host ""
-    
-    # Handle PATH addition
-    if ($AddToPath) {
-        Add-ToPath $InstallDir
-    } else {
-        Write-Info "To add to PATH for current session:"
-        Write-Host "  `$env:PATH += ';$InstallDir'"
-        Write-Host ""
-        Write-Info "To add to PATH permanently:"
-        Write-Host "  [Environment]::SetEnvironmentVariable('PATH', `$env:PATH + ';$InstallDir', 'User')"
-        Write-Host ""
-        Write-Info "Or run the installer again with -AddToPath flag"
-    }
+    Write-Host "  1. Run 'wash --help' to see available commands"
+    Write-Host "  2. Run 'wash new' to create your first WebAssembly component"
 }
 
 # Main execution
 function Main {
     Write-Info "Installing wash - The Wasm Shell"
+    Write-Info "Install directory: $InstallDir"
     Write-Host ""
-    
+
+    # Warn on deprecated -AddToPath flag
+    if ($AddToPath) {
+        Write-Warn "-AddToPath is deprecated: PATH is now modified by default. Use -NoModifyPath to opt out."
+    }
+
     # Check for GitHub token (optional, for higher API rate limits)
     if (-not $GitHubToken) {
         Write-Info "No GitHub token provided. Using anonymous API access (subject to rate limits)"
