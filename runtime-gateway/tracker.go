@@ -128,6 +128,26 @@ func (ht *HostTracker) DeregisterHost(ctx context.Context, hostID string) error 
 	ht.lock.Lock()
 	defer ht.lock.Unlock()
 
+	// Collect all workload IDs that were assigned to this host so we can clean
+	// them out of ht.workloads and ht.hostnames. Leaving them would leak memory
+	// proportional to workload churn and would cause stale hostname mappings if
+	// a new host ever reuses the same hostID.
+	var affected []string
+	for workloadID, hID := range ht.workloads {
+		if hID == hostID {
+			affected = append(affected, workloadID)
+		}
+	}
+	for _, workloadID := range affected {
+		delete(ht.workloads, workloadID)
+		for hostname, workloadSet := range ht.hostnames {
+			workloadSet.Delete(workloadID)
+			if workloadSet.Len() == 0 {
+				delete(ht.hostnames, hostname)
+			}
+		}
+	}
+
 	delete(ht.hosts, hostID)
 	return nil
 }
