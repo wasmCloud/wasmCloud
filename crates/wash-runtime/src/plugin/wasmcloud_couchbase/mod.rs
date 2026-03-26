@@ -148,7 +148,7 @@ async fn store_document(
     url: &str,
     content: &str,
     expiry_secs: u32,
-) -> anyhow::Result<Result<u64, DocumentError>> {
+) -> wasmtime::Result<Result<u64, DocumentError>> {
     let body = url::form_urlencoded::Serializer::new(String::new())
         .append_pair("value", content)
         .append_pair("flags", "0")
@@ -192,7 +192,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
     async fn get(
         &mut self,
         key: String,
-    ) -> anyhow::Result<Result<document::Document, DocumentError>> {
+    ) -> wasmtime::Result<Result<document::Document, DocumentError>> {
         let Some(plugin) = self.get_plugin::<WasmcloudCouchbase>(PLUGIN_COUCHBASE_ID) else {
             return Ok(Err(DocumentError::Unexpected(
                 "couchbase plugin not available".to_string(),
@@ -257,7 +257,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
     }
 
     #[instrument(skip_all, fields(key = %key))]
-    async fn exists(&mut self, key: String) -> anyhow::Result<Result<bool, DocumentError>> {
+    async fn exists(&mut self, key: String) -> wasmtime::Result<Result<bool, DocumentError>> {
         let Some(plugin) = self.get_plugin::<WasmcloudCouchbase>(PLUGIN_COUCHBASE_ID) else {
             return Ok(Err(DocumentError::Unexpected(
                 "couchbase plugin not available".to_string(),
@@ -313,7 +313,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
         key: String,
         content: String,
         expiry_secs: u32,
-    ) -> anyhow::Result<Result<u64, DocumentError>> {
+    ) -> wasmtime::Result<Result<u64, DocumentError>> {
         let Some(plugin) = self.get_plugin::<WasmcloudCouchbase>(PLUGIN_COUCHBASE_ID) else {
             return Ok(Err(DocumentError::Unexpected(
                 "couchbase plugin not available".to_string(),
@@ -368,7 +368,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
         key: String,
         content: String,
         expiry_secs: u32,
-    ) -> anyhow::Result<Result<u64, DocumentError>> {
+    ) -> wasmtime::Result<Result<u64, DocumentError>> {
         let Some(plugin) = self.get_plugin::<WasmcloudCouchbase>(PLUGIN_COUCHBASE_ID) else {
             return Ok(Err(DocumentError::Unexpected(
                 "couchbase plugin not available".to_string(),
@@ -404,7 +404,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
         content: String,
         _cas: u64,
         expiry_secs: u32,
-    ) -> anyhow::Result<Result<u64, DocumentError>> {
+    ) -> wasmtime::Result<Result<u64, DocumentError>> {
         let Some(plugin) = self.get_plugin::<WasmcloudCouchbase>(PLUGIN_COUCHBASE_ID) else {
             return Ok(Err(DocumentError::Unexpected(
                 "couchbase plugin not available".to_string(),
@@ -458,7 +458,7 @@ impl<'a> document::Host for ActiveCtx<'a> {
         &mut self,
         key: String,
         _cas: u64,
-    ) -> anyhow::Result<Result<(), DocumentError>> {
+    ) -> wasmtime::Result<Result<(), DocumentError>> {
         let Some(plugin) = self.get_plugin::<WasmcloudCouchbase>(PLUGIN_COUCHBASE_ID) else {
             return Ok(Err(DocumentError::Unexpected(
                 "couchbase plugin not available".to_string(),
