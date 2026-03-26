@@ -23,6 +23,7 @@ import (
 const (
 	hostHeartbeatTimeout  = 5 * time.Second
 	hostReconcileInterval = 1 * time.Minute
+	hostFinalizerName     = "runtime.wasmcloud.dev/host-finalizer"
 )
 
 // HostReconciler reconciles a Host object
@@ -80,6 +81,32 @@ func (r *HostReconciler) reconcileReady(_ context.Context, host *runtimev1alpha1
 	return fmt.Errorf("host has not reported recently")
 }
 
+// finalize deletes all Workload objects assigned to this host so that the
+// ReplicaSet controller can immediately schedule replacements rather than
+// waiting for the unhealthy-workload grace period to expire.
+// +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=workloads,verbs=get;list;delete
+func (r *HostReconciler) finalize(ctx context.Context, host *runtimev1alpha1.Host) error {
+	workloadList := &runtimev1alpha1.WorkloadList{}
+	if err := r.List(ctx, workloadList); err != nil {
+		return err
+	}
+
+	for i := range workloadList.Items {
+		workload := &workloadList.Items[i]
+		if workload.Status.HostID != host.HostID {
+			continue
+		}
+		if workload.DeletionTimestamp != nil {
+			continue
+		}
+		if err := r.Delete(ctx, workload); client.IgnoreNotFound(err) != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // SetupWithManager sets up the controller with the Manager.
 // +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=hosts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=hosts/status,verbs=get;update;patch
@@ -92,6 +119,7 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		&runtimev1alpha1.Host{},
 		hostReconcileInterval)
 
+	reconciler.SetFinalizer(hostFinalizerName, r.finalize)
 	reconciler.SetCondition(runtimev1alpha1.HostConditionReporting, r.reconcileReporting)
 	reconciler.SetCondition(condition.TypeReady, r.reconcileReady)
 
@@ -102,7 +130,7 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		if host.Status.AnyUnknown(condition.TypeReady) {
 			return nil
 		}
-		// Delete unresponsive host
+		// Delete unresponsive host; the finalizer will clean up assigned workloads.
 		return r.Delete(ctx, host)
 	})
 
@@ -142,19 +170,31 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 
 		host := &runtimev1alpha1.Host{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:   req.FriendlyName,
-				Labels: req.GetLabels(),
+				Name: req.FriendlyName,
 			},
-			HostID:   req.Id,
-			Hostname: req.Hostname,
-			HTTPPort: req.HttpPort,
 		}
+
+		// CreateOrUpdate handles spec and metadata (labels, HostID, Hostname,
+		// HTTPPort). The mutate func sets these fields so they are applied on
+		// both create and update paths (c.Get overwrites the pre-populated
+		// struct for existing objects).
 		_, err := controllerutil.CreateOrUpdate(ctx, h.client, host, func() error {
-			host.Status.LastSeen = metav1.Now()
+			host.Labels = req.GetLabels()
+			host.HostID = req.Id
+			host.Hostname = req.Hostname
+			host.HTTPPort = req.HttpPort
 			return nil
 		})
 		if err != nil {
 			fmt.Println("Failed to create or update Host resource:", err)
+			return
+		}
+
+		// Status is a separate subresource; c.Update() (used by CreateOrUpdate)
+		// silently ignores status fields. Use Status().Update() to persist LastSeen.
+		host.Status.LastSeen = metav1.Now()
+		if err := h.client.Status().Update(ctx, host); err != nil {
+			fmt.Println("Failed to update Host status:", err)
 		}
 	})
 
