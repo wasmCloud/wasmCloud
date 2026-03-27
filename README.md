@@ -44,7 +44,7 @@ Make sure to move `wash` to somewhere in your `PATH`.
 ```bash
 git clone https://github.com/wasmcloud/wasmCloud.git
 cd wasmCloud
-cargo install --path .
+cargo install --path crates/wash
 ```
 
 ## Quickstart
