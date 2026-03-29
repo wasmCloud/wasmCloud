@@ -34,10 +34,11 @@ func (a *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	var hostname string
-
+	var path string
 	for _, iface := range workload.Spec.HostInterfaces {
 		if iface.Namespace == "wasi" && iface.Package == "http" && slices.Contains(iface.Interfaces, "incoming-handler") {
 			if h, ok := iface.Config["host"]; ok {
+				path = iface.Config["path"]
 				hostname = h
 				break
 			}
@@ -52,7 +53,7 @@ func (a *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	log.Info("Reconciling Workload")
 
 	if workload.DeletionTimestamp != nil {
-		if err := a.Registry.DeregisterWorkload(ctx, workload.Status.HostID, workload.Status.WorkloadID, hostname); err != nil {
+		if err := a.Registry.DeregisterWorkload(ctx, workload.Status.HostID, workload.Status.WorkloadID, hostname, path); err != nil {
 			log.Error(err, "failed to deregister workload")
 			return ctrl.Result{}, err
 		}
@@ -60,12 +61,12 @@ func (a *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	if workload.Status.IsAvailable() {
-		if err := a.Registry.RegisterWorkload(ctx, workload.Status.HostID, workload.Status.WorkloadID, hostname); err != nil {
+		if err := a.Registry.RegisterWorkload(ctx, workload.Status.HostID, workload.Status.WorkloadID, hostname, path); err != nil {
 			log.Error(err, "failed to register workload")
 			return ctrl.Result{}, err
 		}
 	} else {
-		if err := a.Registry.DeregisterWorkload(ctx, workload.Status.HostID, workload.Status.WorkloadID, hostname); err != nil {
+		if err := a.Registry.DeregisterWorkload(ctx, workload.Status.HostID, workload.Status.WorkloadID, hostname, path); err != nil {
 			log.Error(err, "failed to deregister workload")
 			return ctrl.Result{}, err
 		}
