@@ -51,7 +51,7 @@ func MergeEnvVar(envs ...[]corev1.EnvVar) []corev1.EnvVar {
 		}
 	}
 
-	keys := make([]string, 0)
+	keys := make([]string, 0, len(idx))
 	for k := range idx {
 		keys = append(keys, k)
 	}
