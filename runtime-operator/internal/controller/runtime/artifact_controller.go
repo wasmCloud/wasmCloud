@@ -87,8 +87,6 @@ func (r *ArtifactReconciler) finalize(ctx context.Context, artifact *runtimev1al
 
 	return nil
 }
-	return nil
-}
 
 // SetupWithManager sets up the controller with the Manager.
 // +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=artifacts,verbs=get;list;watch;create;update;patch;delete

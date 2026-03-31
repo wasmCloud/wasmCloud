@@ -191,7 +191,6 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 		}
 
 		// Status is a separate subresource; c.Update() (used by CreateOrUpdate)
-		// Status is a separate subresource; c.Update() (used by CreateOrUpdate)
 		// silently ignores status fields. Use Status().Patch() to persist
 		// LastSeen without conflicting with concurrent metadata changes (e.g.
 		// the ConditionedReconciler adding a finalizer between CreateOrUpdate
@@ -201,6 +200,7 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 		if err := h.client.Status().Patch(ctx, host, client.MergeFrom(base)); err != nil {
 			fmt.Println("Failed to update Host status:", err)
 		}
+	})
 
 	<-ctx.Done()
 	return subscription.Drain()
