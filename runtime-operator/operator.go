@@ -28,6 +28,10 @@ type EmbeddedOperatorConfig struct {
 	// Disable Artifact Controller. If set, Artifacts must be marked as 'Ready' elsewhere.
 	// Useful when introducing a custom artifact management solution.
 	DisableArtifactController bool
+	// Namespace restricts the HostPodReconciler to watching Pods in this
+	// namespace only. Should match the namespace the operator is deployed in.
+	// If empty, all namespaces are watched.
+	Namespace string
 }
 
 // EmbeddedOperator is the main struct for the embedded operator.
@@ -65,6 +69,14 @@ func NewEmbeddedOperator(
 		UnreachableTimeout: cfg.HeartbeatTTL,
 		CPUThreshold:       cfg.HostCPUThreshold,
 		MemoryThreshold:    cfg.HostMemoryThreshold,
+	}).SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+
+	if err = (&runtime_controllers.HostPodReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Namespace: cfg.Namespace,
 	}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}

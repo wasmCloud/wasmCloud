@@ -39,8 +39,9 @@ func (a *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				log.Error(err, "failed to deregister workload on deletion")
 				return ctrl.Result{}, err
 			}
+			base := workload.DeepCopy()
 			controllerutil.RemoveFinalizer(workload, gatewayWorkloadFinalizerName)
-			return ctrl.Result{}, a.Update(ctx, workload)
+			return ctrl.Result{}, a.Patch(ctx, workload, client.MergeFrom(base))
 		}
 		return ctrl.Result{}, nil
 	}
@@ -59,8 +60,9 @@ func (a *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// Ensure our finalizer is present so we can deregister on deletion.
 	if !controllerutil.ContainsFinalizer(workload, gatewayWorkloadFinalizerName) {
+		base := workload.DeepCopy()
 		controllerutil.AddFinalizer(workload, gatewayWorkloadFinalizerName)
-		return ctrl.Result{}, a.Update(ctx, workload)
+		return ctrl.Result{}, a.Patch(ctx, workload, client.MergeFrom(base))
 	}
 
 	log.Info("Reconciling Workload")
@@ -128,16 +130,18 @@ func (a *HostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 				log.Error(err, "failed to deregister host on deletion")
 				return ctrl.Result{}, err
 			}
+			base := host.DeepCopy()
 			controllerutil.RemoveFinalizer(host, gatewayHostFinalizerName)
-			return ctrl.Result{}, a.Update(ctx, host)
+			return ctrl.Result{}, a.Patch(ctx, host, client.MergeFrom(base))
 		}
 		return ctrl.Result{}, nil
 	}
 
 	// Ensure our finalizer is present so we can deregister on deletion.
 	if !controllerutil.ContainsFinalizer(host, gatewayHostFinalizerName) {
+		base := host.DeepCopy()
 		controllerutil.AddFinalizer(host, gatewayHostFinalizerName)
-		return ctrl.Result{}, a.Update(ctx, host)
+		return ctrl.Result{}, a.Patch(ctx, host, client.MergeFrom(base))
 	}
 
 	log.Info("Reconciling Host")
