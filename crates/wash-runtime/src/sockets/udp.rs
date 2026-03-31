@@ -492,3 +492,191 @@ impl UdpSocket {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::sockets::WasiSocketsCtx;
+    use cap_net_ext::AddressFamily;
+
+    fn make_ipv4_socket() -> NetworkUdpSocket {
+        let ctx = WasiSocketsCtx::default();
+        NetworkUdpSocket::new(&ctx, AddressFamily::Ipv4).unwrap()
+    }
+
+    fn bind_socket(socket: &mut NetworkUdpSocket) {
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        socket.bind(addr).unwrap();
+        socket.finish_bind().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_new_socket_default_state() {
+        let socket = make_ipv4_socket();
+        assert!(!socket.is_bound());
+        assert!(!socket.is_connected());
+    }
+
+    #[tokio::test]
+    async fn test_bind_and_finish_bind() {
+        let mut socket = make_ipv4_socket();
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+
+        socket.bind(addr).unwrap();
+        // BindStarted is not yet Bound
+        assert!(!socket.is_bound());
+
+        socket.finish_bind().unwrap();
+        assert!(socket.is_bound());
+        assert!(!socket.is_connected());
+    }
+
+    #[tokio::test]
+    async fn test_finish_bind_without_bind_errors() {
+        let mut socket = make_ipv4_socket();
+        let result = socket.finish_bind();
+        assert!(matches!(result, Err(ErrorCode::NotInProgress)));
+    }
+
+    #[tokio::test]
+    async fn test_connect_from_bound() {
+        let mut socket = make_ipv4_socket();
+        bind_socket(&mut socket);
+
+        let remote: std::net::SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        let result = socket.connect(remote);
+        assert!(result.is_ok());
+        assert!(socket.is_connected());
+    }
+
+    #[tokio::test]
+    async fn test_connect_from_default_errors() {
+        let mut socket = make_ipv4_socket();
+        let remote: std::net::SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        let result = socket.connect(remote);
+        assert!(matches!(result, Err(ErrorCode::InvalidState)));
+    }
+
+    #[tokio::test]
+    async fn test_connect_rejects_unspecified_addr() {
+        let mut socket = make_ipv4_socket();
+        bind_socket(&mut socket);
+
+        let remote: std::net::SocketAddr = "0.0.0.0:9999".parse().unwrap();
+        let result = socket.connect(remote);
+        assert!(matches!(result, Err(ErrorCode::InvalidArgument)));
+    }
+
+    #[tokio::test]
+    async fn test_connect_rejects_port_zero() {
+        let mut socket = make_ipv4_socket();
+        bind_socket(&mut socket);
+
+        let remote: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let result = socket.connect(remote);
+        assert!(matches!(result, Err(ErrorCode::InvalidArgument)));
+    }
+
+    #[tokio::test]
+    async fn test_connect_rejects_wrong_family() {
+        let mut socket = make_ipv4_socket();
+        bind_socket(&mut socket);
+
+        let remote: std::net::SocketAddr = "[::1]:9999".parse().unwrap();
+        let result = socket.connect(remote);
+        assert!(matches!(result, Err(ErrorCode::InvalidArgument)));
+    }
+
+    #[tokio::test]
+    async fn test_reconnect_from_connected() {
+        // Key wasmtime 43 change: connect-first, disconnect-on-failure
+        let mut socket = make_ipv4_socket();
+        bind_socket(&mut socket);
+
+        let remote1: std::net::SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        socket.connect(remote1).unwrap();
+
+        let remote2: std::net::SocketAddr = "127.0.0.1:8888".parse().unwrap();
+        let result = socket.connect(remote2);
+        assert!(result.is_ok());
+        assert!(socket.is_connected());
+    }
+
+    #[tokio::test]
+    async fn test_disconnect_from_connected() {
+        let mut socket = make_ipv4_socket();
+        bind_socket(&mut socket);
+
+        let remote: std::net::SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        socket.connect(remote).unwrap();
+
+        let result = socket.disconnect();
+        assert!(result.is_ok());
+        assert!(!socket.is_connected());
+        assert!(socket.is_bound());
+    }
+
+    #[tokio::test]
+    async fn test_disconnect_from_bound_errors() {
+        let mut socket = make_ipv4_socket();
+        bind_socket(&mut socket);
+
+        let result = socket.disconnect();
+        assert!(matches!(result, Err(ErrorCode::InvalidState)));
+    }
+
+    #[tokio::test]
+    async fn test_local_address_after_bind() {
+        let mut socket = make_ipv4_socket();
+        bind_socket(&mut socket);
+
+        let addr = socket.local_address();
+        assert!(addr.is_ok());
+        let addr = addr.unwrap();
+        assert_ne!(addr.port(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_local_address_before_bind_errors() {
+        let socket = make_ipv4_socket();
+        let result = socket.local_address();
+        assert!(matches!(result, Err(ErrorCode::InvalidState)));
+    }
+
+    #[tokio::test]
+    async fn test_remote_address_when_connected() {
+        let mut socket = make_ipv4_socket();
+        bind_socket(&mut socket);
+
+        let remote: std::net::SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        socket.connect(remote).unwrap();
+
+        let addr = socket.remote_address().unwrap();
+        assert_eq!(addr, remote);
+    }
+
+    #[tokio::test]
+    async fn test_remote_address_when_not_connected_errors() {
+        let mut socket = make_ipv4_socket();
+        bind_socket(&mut socket);
+
+        let result = socket.remote_address();
+        assert!(matches!(result, Err(ErrorCode::InvalidState)));
+    }
+
+    #[tokio::test]
+    async fn test_hop_limit_roundtrip() {
+        let socket = make_ipv4_socket();
+        socket.set_unicast_hop_limit(64).unwrap();
+        let hop = socket.unicast_hop_limit().unwrap();
+        assert_eq!(hop, 64);
+    }
+
+    #[tokio::test]
+    async fn test_hop_limit_zero_errors() {
+        let socket = make_ipv4_socket();
+        let result = socket.set_unicast_hop_limit(0);
+        assert!(matches!(result, Err(ErrorCode::InvalidArgument)));
+    }
+}
