@@ -63,9 +63,9 @@ func (r *ArtifactReconciler) reconcileReady(_ context.Context, artifact *runtime
 
 // finalize blocks deletion of an Artifact while any WorkloadDeployment in the
 // same namespace still references it. This prevents deployments from being
-// silently stuck in an unrecoverable Unknown state due to a missing artifact.
-// +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=workloaddeployments,verbs=get;list;watch
 func (r *ArtifactReconciler) finalize(ctx context.Context, artifact *runtimev1alpha1.Artifact) error {
+	log := ctrl.LoggerFrom(ctx)
+
 	deploymentList := &runtimev1alpha1.WorkloadDeploymentList{}
 	if err := r.List(ctx, deploymentList, client.InNamespace(artifact.Namespace)); err != nil {
 		return err
@@ -77,12 +77,16 @@ func (r *ArtifactReconciler) finalize(ctx context.Context, artifact *runtimev1al
 		}
 		for _, configArtifact := range deployment.Spec.Artifacts {
 			if configArtifact.ArtifactFrom.Name == artifact.Name {
+				log.Info("artifact deletion blocked: still referenced by WorkloadDeployment",
+					"deployment", fmt.Sprintf("%s/%s", deployment.Namespace, deployment.Name))
 				return fmt.Errorf("artifact is still referenced by WorkloadDeployment %s/%s",
 					deployment.Namespace, deployment.Name)
 			}
 		}
 	}
 
+	return nil
+}
 	return nil
 }
 

@@ -120,11 +120,9 @@ func (r *HostPodReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Pod{}, builder.WithPredicates(
 			// Only enqueue Pods that carry the HostPodLabel — avoids processing
-			// every Pod in the cluster.
+			// every Pod in the namespace. Namespace scoping is handled by the
+			// cache (ByObject in cmd/main.go), so no namespace check is needed here.
 			predicate.NewPredicateFuncs(func(obj client.Object) bool {
-				if r.Namespace != "" && obj.GetNamespace() != r.Namespace {
-					return false
-				}
 				_, ok := obj.GetLabels()[HostPodLabel]
 				return ok
 			}),

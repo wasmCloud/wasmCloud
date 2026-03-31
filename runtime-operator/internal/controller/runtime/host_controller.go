@@ -191,12 +191,16 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 		}
 
 		// Status is a separate subresource; c.Update() (used by CreateOrUpdate)
-		// silently ignores status fields. Use Status().Update() to persist LastSeen.
+		// Status is a separate subresource; c.Update() (used by CreateOrUpdate)
+		// silently ignores status fields. Use Status().Patch() to persist
+		// LastSeen without conflicting with concurrent metadata changes (e.g.
+		// the ConditionedReconciler adding a finalizer between CreateOrUpdate
+		// and this call).
+		base := host.DeepCopy()
 		host.Status.LastSeen = metav1.Now()
-		if err := h.client.Status().Update(ctx, host); err != nil {
+		if err := h.client.Status().Patch(ctx, host, client.MergeFrom(base)); err != nil {
 			fmt.Println("Failed to update Host status:", err)
 		}
-	})
 
 	<-ctx.Done()
 	return subscription.Drain()
