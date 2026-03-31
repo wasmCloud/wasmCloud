@@ -3,7 +3,7 @@
 use super::util::{
     ErrorCode, get_unicast_hop_limit, is_valid_address_family, is_valid_remote_address,
     receive_buffer_size, send_buffer_size, set_receive_buffer_size, set_send_buffer_size,
-    set_unicast_hop_limit, udp_bind, udp_disconnect, udp_socket,
+    set_unicast_hop_limit, udp_bind, udp_connect, udp_disconnect, udp_socket,
 };
 use super::{SocketAddrCheck, SocketAddressFamily, WasiSocketsCtx};
 
@@ -11,7 +11,6 @@ use cap_net_ext::AddressFamily;
 use io_lifetimes::AsSocketlike as _;
 use io_lifetimes::raw::{FromRawSocketlike as _, IntoRawSocketlike as _};
 use rustix::io::Errno;
-use rustix::net::connect;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::debug;
@@ -124,7 +123,7 @@ impl NetworkUdpSocket {
         if !self.is_connected() {
             return Err(ErrorCode::InvalidState);
         }
-        udp_disconnect(&self.socket)?;
+        udp_disconnect(&self.socket).map_err(ErrorCode::from)?;
         self.udp_state = UdpState::Bound;
         Ok(())
     }
@@ -139,28 +138,26 @@ impl NetworkUdpSocket {
             _ => return Err(ErrorCode::InvalidState),
         }
 
-        // We disconnect & (re)connect in two distinct steps for two reasons:
-        // - To leave our socket instance in a consistent state in case the
-        //   connect fails.
-        // - When reconnecting to a different address, Linux sometimes fails
-        //   if there isn't a disconnect in between.
-
-        // Step #1: Disconnect
-        if let UdpState::Connected(..) = self.udp_state {
-            udp_disconnect(&self.socket)?;
-            self.udp_state = UdpState::Bound;
-        }
-        // Step #2: (Re)connect
-        connect(&self.socket, &addr).map_err(|error| match error {
-            Errno::AFNOSUPPORT => ErrorCode::InvalidArgument, // See `udp_bind` implementation.
-            Errno::INPROGRESS => {
-                debug!("UDP connect returned EINPROGRESS, which should never happen");
-                ErrorCode::Unknown
+        match udp_connect(&self.socket, addr) {
+            Ok(()) => {
+                self.udp_state = UdpState::Connected(addr);
+                Ok(())
             }
-            err => err.into(),
-        })?;
-        self.udp_state = UdpState::Connected(addr);
-        Ok(())
+            Err(e) => {
+                // Revert to a consistent state:
+                _ = udp_disconnect(&self.socket);
+                self.udp_state = UdpState::Bound;
+
+                Err(match e {
+                    Errno::AFNOSUPPORT => ErrorCode::InvalidArgument, // See `udp_bind` implementation.
+                    Errno::INPROGRESS => {
+                        debug!("UDP connect returned EINPROGRESS, which should never happen");
+                        ErrorCode::Unknown
+                    }
+                    err => err.into(),
+                })
+            }
+        }
     }
 
     fn local_address(&self) -> Result<SocketAddr, ErrorCode> {

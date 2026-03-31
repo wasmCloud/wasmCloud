@@ -49,11 +49,12 @@ impl WebGpu {
         Self {
             gpu: Arc::new(wasi_webgpu_wasmtime::reexports::wgpu_core::global::Global::new(
                 "webgpu",
-                &wasi_webgpu_wasmtime::reexports::wgpu_types::InstanceDescriptor {
+                wasi_webgpu_wasmtime::reexports::wgpu_types::InstanceDescriptor {
                     backends,
                     backend_options,
                     flags: wasi_webgpu_wasmtime::reexports::wgpu_types::InstanceFlags::from_build_config(),
                     memory_budget_thresholds: Default::default(),
+                    display: None,
                 },
                 None,
             )),

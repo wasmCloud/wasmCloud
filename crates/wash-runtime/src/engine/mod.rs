@@ -365,7 +365,7 @@ impl Engine {
 
         // Add HTTP interfaces to the linker if feature is enabled and component uses them
         if uses_wasi_http(&wasmtime_component) {
-            wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
+            wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
                 .map_err(anyhow::Error::from)
                 .context("failed to add wasi:http/types to linker")?;
         }
@@ -468,7 +468,7 @@ impl Engine {
 
         // Add HTTP interfaces to the linker
         if uses_wasi_http(&wasmtime_component) {
-            wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
+            wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
                 .map_err(anyhow::Error::from)
                 .context("failed to add wasi:http/types to linker")?;
         }
