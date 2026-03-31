@@ -215,12 +215,13 @@ func main() {
 
 	// Restrict the Pod cache to the operator's own namespace so the cache
 	// only requires a namespaced Role (not a ClusterRole) for Pod list/watch.
-	operatorNamespace := os.Getenv("OPERATOR_NAMESPACE")
-	if operatorNamespace != "" {
+	// ByObject overrides DefaultNamespaces for the specified type, so Pods are
+	// always scoped to the operator namespace regardless of -watch-namespaces.
+	if operatorCfg.Namespace != "" {
 		cacheOpts.ByObject = map[client.Object]cache.ByObject{
 			&corev1.Pod{}: {
 				Namespaces: map[string]cache.Config{
-					operatorNamespace: {},
+					operatorCfg.Namespace: {},
 				},
 			},
 		}
