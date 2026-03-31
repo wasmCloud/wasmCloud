@@ -1,25 +1,27 @@
 # Install script for wash - The Wasm Shell (Windows PowerShell)
 # Usage: iwr -useb https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.ps1 | iex
-# Usage with options: ./install.ps1 -InstallDir "C:\tools" -Version "1.0.0-beta.10" -Verify -AddToPath -Force
+# Usage with options: ./install.ps1 -InstallDir "C:\tools" -Version "v2.0.1" -Verify -NoModifyPath -Force
+# Note: -AddToPath is deprecated (PATH is now modified by default; use -NoModifyPath to opt out)
 #
 # Parameters:
-# - InstallDir: Directory to install wash binary (default: current directory)
-# - Version: Install a specific version (e.g., "1.0.0-beta.9", "v1.0.0-beta.9", or "wash-v1.0.0-beta.10")
+# - InstallDir: Directory to install wash binary (default: %USERPROFILE%\.wash\bin)
+# - Version: Install a specific version (e.g., "v2.0.1", or "wash-v2.0.0-rc.8" for pre-2.0 releases)
 # - Verify: Enable signature verification (requires GitHub CLI)
-# - AddToPath: Automatically add install directory to user PATH
+# - NoModifyPath: Don't modify the user PATH environment variable
 # - Force: Overwrite existing installation without prompting
 #
 # Environment variables:
 # - $env:GITHUB_TOKEN: GitHub personal access token (optional, for higher API rate limits)
-# - $env:INSTALL_DIR: Directory to install wash binary (overrides -InstallDir)
+# - $env:INSTALL_DIR: Directory to install wash binary (overrides -InstallDir, default: %USERPROFILE%\.wash\bin)
 
 param(
-    [string]$InstallDir = $(if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { $PWD }),
+    [string]$InstallDir = $(if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { Join-Path $env:USERPROFILE ".wash\bin" }),
     [string]$GitHubToken = $env:GITHUB_TOKEN,
     [string]$Version = "",
     [switch]$Verify,
-    [switch]$AddToPath,
-    [switch]$Force
+    [switch]$NoModifyPath,
+    [switch]$Force,
+    [switch]$AddToPath  # Deprecated: PATH is now modified by default. Use -NoModifyPath to opt out.
 )
 
 # Set strict mode
@@ -57,23 +59,39 @@ function Cleanup {
     }
 }
 
-# Add directory to PATH
-function Add-ToPath {
+# Automatically add directory to user PATH unless opted out or in CI
+function Add-ToPathAuto {
     param([string]$Directory)
-    
+
     $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-    
-    # Check if directory is already in PATH
-    if ($currentPath -split ';' | Where-Object { $_ -eq $Directory }) {
-        Write-Info "Directory $Directory is already in PATH"
+
+    # Check if directory is already in PATH (case-insensitive for Windows)
+    if ($currentPath -and ($currentPath -split ';' | Where-Object { $_ -ieq $Directory })) {
+        Write-Info "$Directory is already in PATH"
         return
     }
-    
+
+    # Skip if -NoModifyPath was passed
+    if ($NoModifyPath) {
+        Write-Info "Skipping PATH modification (-NoModifyPath)"
+        Write-Info "Manually add $Directory to your PATH"
+        return
+    }
+
+    # Skip in CI environments
+    if ($env:CI -eq "true") {
+        Write-Info "CI environment detected, skipping PATH modification"
+        Write-Info "Add $Directory to your PATH to use wash"
+        return
+    }
+
     try {
         $newPath = if ($currentPath) { "$currentPath;$Directory" } else { $Directory }
         [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
+        # Also update the current session
+        $env:PATH = "$env:PATH;$Directory"
         Write-Success "Added $Directory to user PATH"
-        Write-Info "Please restart your terminal or run: refreshenv"
+        Write-Info "PATH is updated for this session and future sessions"
     }
     catch {
         Write-Error "Failed to add $Directory to PATH: $($_.Exception.Message)"
@@ -211,17 +229,6 @@ function Get-LatestRelease {
 function Get-ReleaseByVersion {
     param([string]$RequestedVersion)
 
-    # Normalize version format - wash releases use 'wash-v' prefix
-    if (-not $RequestedVersion.StartsWith('wash-v')) {
-        # Remove any leading 'v' if present
-        if ($RequestedVersion.StartsWith('v')) {
-            $RequestedVersion = $RequestedVersion.Substring(1)
-        }
-        # Add 'wash-v' prefix
-        $RequestedVersion = "wash-v$RequestedVersion"
-    }
-
-    $apiUrl = "https://api.github.com/repos/$REPO/releases/tags/$RequestedVersion"
     $headers = @{
         'User-Agent' = 'wash-installer'
     }
@@ -230,31 +237,41 @@ function Get-ReleaseByVersion {
         $headers['Authorization'] = "token $GitHubToken"
     }
 
-    Write-Info "Fetching release information for version $RequestedVersion..."
-
-    try {
-        $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
+    # Build a list of candidate tags to try in order:
+    # 1. The version as provided (e.g. v2.0.1 or wash-v2.0.0-rc.8)
+    # 2. With 'wash-v' prefix, for pre-2.0 releases that used that convention
+    $candidates = @($RequestedVersion)
+    if (-not $RequestedVersion.StartsWith('wash-v')) {
+        $bare = if ($RequestedVersion.StartsWith('v')) { $RequestedVersion.Substring(1) } else { $RequestedVersion }
+        $candidates += "wash-v$bare"
     }
-    catch {
-        if ($_.Exception.Response.StatusCode -eq 404) {
-            Write-Error "Version $RequestedVersion not found"
-            Write-Error "Please verify the version exists. You can check available versions at:"
-            Write-Error "https://github.com/$REPO/releases"
+
+    foreach ($candidate in $candidates) {
+        $apiUrl = "https://api.github.com/repos/$REPO/releases/tags/$candidate"
+
+        Write-Info "Fetching release information for version $candidate..."
+
+        try {
+            $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
+            if ($response.tag_name) {
+                return $response.tag_name
+            }
         }
-        else {
+        catch {
+            if ($_.Exception.Response.StatusCode -eq 404) {
+                continue
+            }
             Write-Error "Failed to fetch release information from GitHub API"
             Write-Error "Please check your internet connection and try again"
             Write-Error "Error: $($_.Exception.Message)"
+            exit 1
         }
-        exit 1
     }
 
-    if (-not $response.tag_name) {
-        Write-Error "Version $RequestedVersion not found"
-        exit 1
-    }
-
-    return $response.tag_name
+    Write-Error "Version $RequestedVersion not found"
+    Write-Error "Please verify the version exists. You can check available versions at:"
+    Write-Error "https://github.com/$REPO/releases"
+    exit 1
 }
 
 # Get asset ID for the specified platform
@@ -304,8 +321,6 @@ function Install-Wash {
         [string]$Platform,
         [string]$TargetVersion
     )
-
-    $binaryName = "wash-$Platform"
 
     Write-Info "Detected platform: $Platform"
     Write-Info "Version: $TargetVersion"
@@ -418,33 +433,27 @@ function Install-Wash {
         Write-Warn "Could not verify installation. Try running: $installPath --help"
     }
     
+    # Configure PATH
+    Add-ToPathAuto $InstallDir
+
     # Show next steps
     Write-Host ""
     Write-Info "Next steps:"
-    Write-Host "  1. Add $InstallDir to your PATH if not already included"
-    Write-Host "  2. Run 'wash --help' to see available commands"
-    Write-Host "  3. Run 'wash new' to create your first WebAssembly component"
-    Write-Host ""
-    
-    # Handle PATH addition
-    if ($AddToPath) {
-        Add-ToPath $InstallDir
-    } else {
-        Write-Info "To add to PATH for current session:"
-        Write-Host "  `$env:PATH += ';$InstallDir'"
-        Write-Host ""
-        Write-Info "To add to PATH permanently:"
-        Write-Host "  [Environment]::SetEnvironmentVariable('PATH', `$env:PATH + ';$InstallDir', 'User')"
-        Write-Host ""
-        Write-Info "Or run the installer again with -AddToPath flag"
-    }
+    Write-Host "  1. Run 'wash --help' to see available commands"
+    Write-Host "  2. Run 'wash new' to create your first WebAssembly component"
 }
 
 # Main execution
 function Main {
     Write-Info "Installing wash - The Wasm Shell"
+    Write-Info "Install directory: $InstallDir"
     Write-Host ""
-    
+
+    # Warn on deprecated -AddToPath flag
+    if ($AddToPath) {
+        Write-Warn "-AddToPath is deprecated: PATH is now modified by default. Use -NoModifyPath to opt out."
+    }
+
     # Check for GitHub token (optional, for higher API rate limits)
     if (-not $GitHubToken) {
         Write-Info "No GitHub token provided. Using anonymous API access (subject to rate limits)"
