@@ -452,3 +452,151 @@ pub fn parse_host(name: &str) -> Result<url::Host, ErrorCode> {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use cap_net_ext::AddressFamily;
+
+    #[test]
+    fn test_udp_socket_ipv4() {
+        let sock = udp_socket(AddressFamily::Ipv4);
+        assert!(sock.is_ok());
+    }
+
+    #[test]
+    fn test_udp_socket_ipv6() {
+        let sock = udp_socket(AddressFamily::Ipv6);
+        assert!(sock.is_ok());
+    }
+
+    #[test]
+    fn test_udp_bind_ipv4_ephemeral() {
+        let sock = udp_socket(AddressFamily::Ipv4).unwrap();
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let result = udp_bind(&sock, addr);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_udp_bind_ipv6_ephemeral() {
+        let sock = udp_socket(AddressFamily::Ipv6).unwrap();
+        let addr: SocketAddr = "[::1]:0".parse().unwrap();
+        let result = udp_bind(&sock, addr);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_udp_bind_address_in_use() {
+        use io_lifetimes::AsSocketlike as _;
+
+        let sock1 = udp_socket(AddressFamily::Ipv4).unwrap();
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        udp_bind(&sock1, addr).unwrap();
+
+        // Read the assigned port via std
+        let port = sock1
+            .as_socketlike_view::<std::net::UdpSocket>()
+            .local_addr()
+            .unwrap()
+            .port();
+
+        // Second bind to same port should fail
+        let sock2 = udp_socket(AddressFamily::Ipv4).unwrap();
+        let addr2: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let result = udp_bind(&sock2, addr2);
+        assert!(matches!(result, Err(ErrorCode::AddressInUse)));
+    }
+
+    #[test]
+    fn test_udp_connect_ipv4() {
+        let sock = udp_socket(AddressFamily::Ipv4).unwrap();
+        let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        udp_bind(&sock, bind_addr).unwrap();
+
+        let remote: SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        let result = udp_connect(&sock, remote);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_udp_disconnect_ipv4() {
+        let sock = udp_socket(AddressFamily::Ipv4).unwrap();
+        let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        udp_bind(&sock, bind_addr).unwrap();
+
+        let remote: SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        udp_connect(&sock, remote).unwrap();
+
+        let result = udp_disconnect(&sock);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_udp_connect_reconnect() {
+        // Connect to one address, then connect to another without disconnecting.
+        // This exercises the Linux EINVAL retry path in udp_connect().
+        let sock = udp_socket(AddressFamily::Ipv4).unwrap();
+        let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        udp_bind(&sock, bind_addr).unwrap();
+
+        let remote1: SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        udp_connect(&sock, remote1).unwrap();
+
+        let remote2: SocketAddr = "127.0.0.1:8888".parse().unwrap();
+        let result = udp_connect(&sock, remote2);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_udp_disconnect_then_reconnect() {
+        let sock = udp_socket(AddressFamily::Ipv4).unwrap();
+        let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        udp_bind(&sock, bind_addr).unwrap();
+
+        let remote1: SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        udp_connect(&sock, remote1).unwrap();
+        udp_disconnect(&sock).unwrap();
+
+        let remote2: SocketAddr = "127.0.0.1:8888".parse().unwrap();
+        let result = udp_connect(&sock, remote2);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_is_valid_remote_address_rejects_unspecified() {
+        let addr: SocketAddr = "0.0.0.0:1234".parse().unwrap();
+        assert!(!is_valid_remote_address(addr));
+    }
+
+    #[test]
+    fn test_is_valid_remote_address_rejects_port_zero() {
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        assert!(!is_valid_remote_address(addr));
+    }
+
+    #[test]
+    fn test_is_valid_remote_address_accepts_valid() {
+        let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        assert!(is_valid_remote_address(addr));
+    }
+
+    #[test]
+    fn test_is_valid_address_family_ipv4() {
+        let v4: IpAddr = "127.0.0.1".parse().unwrap();
+        assert!(is_valid_address_family(v4, SocketAddressFamily::Ipv4));
+        assert!(!is_valid_address_family(v4, SocketAddressFamily::Ipv6));
+    }
+
+    #[test]
+    fn test_is_valid_address_family_ipv6() {
+        let v6: IpAddr = "::1".parse().unwrap();
+        assert!(is_valid_address_family(v6, SocketAddressFamily::Ipv6));
+        assert!(!is_valid_address_family(v6, SocketAddressFamily::Ipv4));
+
+        // IPv4-mapped IPv6 addresses should be rejected for IPv6 sockets
+        let mapped: IpAddr = "::ffff:127.0.0.1".parse().unwrap();
+        assert!(!is_valid_address_family(mapped, SocketAddressFamily::Ipv6));
+    }
+}
