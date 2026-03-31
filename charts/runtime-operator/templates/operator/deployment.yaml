@@ -36,6 +36,11 @@ spec:
             {{- if .Values.operator.watchNamespaces }}
             - "-watch-namespaces={{ .Values.operator.watchNamespaces | join "," }}"
             {{- end }}
+          env:
+            - name: OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           imagePullPolicy: {{ .Values.operator.image.pull_policy }}
           volumeMounts:
             - name: operator-cert

@@ -23,7 +23,7 @@ spec:
       serviceAccountName: {{ include "gateway.serviceAccountName" . }}
       {{- include "runtime-operator.imagePullSecrets" . | nindent 6 }}
       containers:
-        - name: runtime-operator
+        - name: runtime-gateway
           image: {{ if $registry }}{{ printf "%s/%s" $registry .Values.gateway.image.repository }}{{ else }}{{ .Values.gateway.image.repository }}{{ end }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}
           args:
             - "-bind-addr=0.0.0.0:8000"
