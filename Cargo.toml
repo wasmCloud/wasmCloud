@@ -112,10 +112,10 @@ wasm-pkg-client = { version = "0.10.0", default-features = false }
 wasm-pkg-core = { version = "0.10.0", default-features = false }
 wasm-metadata = { version = "0.244.0", default-features = false, features = ["oci"] }
 wasmcloud = { path = "crates/wasmcloud", default-features = false }
-wasmtime = { version = "42", default-features = false }
-wasmtime-wasi = { version = "42", default-features = false }
-wasmtime-wasi-io = { version = "42", default-features = false }
-wasmtime-wasi-http = { version = "42", default-features = false }
+wasmtime = { version = "43", default-features = false }
+wasmtime-wasi = { version = "43", default-features = false }
+wasmtime-wasi-io = { version = "43", default-features = false }
+wasmtime-wasi-http = { version = "43", default-features = false }
 wit-component = { version = "0.244.0", default-features = false }
 wash-runtime = { path = "crates/wash-runtime", default-features = false }
 wat = { version = "1.244.0", default-features = false }

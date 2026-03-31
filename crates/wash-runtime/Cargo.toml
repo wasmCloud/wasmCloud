@@ -55,7 +55,7 @@ tracing = { workspace = true }
 wasmtime = { workspace = true, features = ["anyhow", "component-model", "component-model-async", "cranelift", "pooling-allocator", "gc", "gc-null"] }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-io = { workspace = true }
-wasmtime-wasi-http = { workspace = true, features = ["default-send-request"] }
+wasmtime-wasi-http = { workspace = true, features = ["default-send-request", "p2"] }
 cap-net-ext = { workspace = true }
 cap-std = { workspace = true }
 io-lifetimes = { workspace = true }
@@ -88,8 +88,8 @@ opentelemetry-http = { workspace = true }
 # Otel dependencies (optional, behind 'wasi-otel' feature)
 opentelemetry-otlp = { workspace = true, features = ["grpc-tonic","http-proto", "trace", "metrics", "logs"] }
 opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
-wasi-graphics-context-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "44589be680e7d059cb379f163c04826fe48c9f74", optional = true }
-wasi-webgpu-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "44589be680e7d059cb379f163c04826fe48c9f74", optional = true }
+wasi-graphics-context-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "9d29c9aed18bfa3080233dfee4498953351cb14c", optional = true }
+wasi-webgpu-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "9d29c9aed18bfa3080233dfee4498953351cb14c", optional = true }
 
 # OCI dependencies (optional, behind 'oci' feature)
 docker_credential = { workspace = true, optional = true }

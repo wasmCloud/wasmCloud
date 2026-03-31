@@ -1,6 +1,6 @@
 use super::host_network::{ip_socket_address_to_socket_addr, socket_addr_to_ip_socket_address};
 use super::network::{SocketError, SocketResult};
-use super::p2_udp::{IncomingDatagramStream, OutgoingDatagramStream, SendState};
+use super::p2_udp::{IncomingDatagramStream, OutgoingDatagramStream};
 use super::util::{is_valid_address_family, is_valid_remote_address};
 use super::{
     MAX_UDP_DATAGRAM_SIZE, SocketAddrUse, SocketAddressFamily, UdpSocket, WasiSocketsCtxView,
@@ -129,25 +129,6 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
             return Err(ErrorCode::InvalidState.into());
         }
 
-        // We disconnect & (re)connect in two distinct steps for two reasons:
-        // - To leave our socket instance in a consistent state in case the
-        //   connect fails.
-        // - When reconnecting to a different address, Linux sometimes fails
-        //   if there isn't a disconnect in between.
-
-        // Step #1: Disconnect
-        if socket.is_connected() {
-            let mut loopback = self
-                .ctx
-                .loopback
-                .lock()
-                .map_err(|e| SocketError::trap(wasmtime::format_err!("{e}")))?;
-            socket
-                .disconnect(&mut loopback)
-                .map_err(super::network::socket_error_from_util)?;
-        }
-
-        // Step #2: (Re)connect
         if let Some(connect_addr) = remote_address {
             let Some(check) = socket.socket_addr_check() else {
                 return Err(ErrorCode::InvalidState.into());
@@ -164,6 +145,15 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
             socket
                 .connect(connect_addr, &mut loopback)
                 .map_err(super::network::socket_error_from_util)?;
+        } else if socket.is_connected() {
+            let mut loopback = self
+                .ctx
+                .loopback
+                .lock()
+                .map_err(|e| SocketError::trap(wasmtime::format_err!("{e}")))?;
+            socket
+                .disconnect(&mut loopback)
+                .map_err(super::network::socket_error_from_util)?;
         }
         let is_loopback = remote_address.map(|addr| addr.ip().to_canonical().is_loopback());
 
@@ -178,7 +168,7 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
                     inner: socket.socket().clone(),
                     remote_address,
                     family: socket.address_family(),
-                    send_state: SendState::Idle,
+                    check_send_permit_count: 0,
                     socket_addr_check: socket.socket_addr_check().cloned(),
                 }),
             ),
@@ -210,7 +200,7 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
                             inner: net.socket().clone(),
                             remote_address,
                             family: net.address_family(),
-                            send_state: SendState::Idle,
+                            check_send_permit_count: 0,
                             socket_addr_check: net.socket_addr_check().cloned(),
                         },
                     },
@@ -474,8 +464,10 @@ impl Pollable for IncomingDatagramStream {
                 return;
             }
         };
-        // FIXME: Add `Interest::ERROR` when we update to tokio 1.32.
-        _ = stream.inner.ready(Interest::READABLE).await;
+        _ = stream
+            .inner
+            .ready(Interest::READABLE.add(Interest::ERROR))
+            .await;
     }
 }
 
@@ -495,19 +487,22 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
             }
         };
 
-        let permit = match stream.send_state {
-            SendState::Idle => {
-                const PERMIT: usize = 16;
-                stream.send_state = SendState::Permitted(PERMIT);
-                PERMIT
-            }
-            SendState::Permitted(n) => n,
-            SendState::Waiting => 0,
-        };
-        if permit > 1 && is_unspecified {
+        let count: u64 =
+            if std::pin::pin!(stream.inner.ready(Interest::WRITABLE.add(Interest::ERROR)))
+                .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+                .is_ready()
+            {
+                16
+            } else {
+                0
+            };
+
+        stream.check_send_permit_count = count as usize;
+
+        if count > 1 && is_unspecified {
             return Ok(1);
         }
-        Ok(u64::try_from(permit).unwrap_or(u64::MAX))
+        Ok(count)
     }
 
     async fn send(
@@ -647,25 +642,17 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
             }
         };
 
-        match stream.send_state {
-            SendState::Permitted(n) if n >= datagrams.len() => {
-                stream.send_state = SendState::Idle;
-            }
-            SendState::Permitted(_) => {
-                return Err(SocketError::trap(wasmtime::format_err!(
-                    "unpermitted: argument exceeds permitted size"
-                )));
-            }
-            SendState::Idle | SendState::Waiting => {
-                return Err(SocketError::trap(wasmtime::format_err!(
-                    "unpermitted: must call check-send first"
-                )));
-            }
-        }
-
         if datagrams.is_empty() {
             return Ok(0);
         }
+
+        if datagrams.len() > stream.check_send_permit_count {
+            return Err(SocketError::trap(wasmtime::format_err!(
+                "unpermitted: argument exceeds permitted size"
+            )));
+        }
+
+        stream.check_send_permit_count -= datagrams.len();
 
         let mut count = 0;
 
@@ -692,8 +679,8 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
                     return Ok(count);
                 }
                 Err(e) if matches!(e.downcast_ref(), Some(ErrorCode::WouldBlock)) => {
-                    stream.send_state = SendState::Waiting;
-                    return Ok(count);
+                    debug_assert!(count == 0);
+                    return Ok(0);
                 }
                 Err(e) => {
                     return Err(e);
@@ -741,14 +728,10 @@ impl Pollable for OutgoingDatagramStream {
                 net
             }
         };
-        match stream.send_state {
-            SendState::Idle | SendState::Permitted(_) => {}
-            SendState::Waiting => {
-                // FIXME: Add `Interest::ERROR` when we update to tokio 1.32.
-                _ = stream.inner.ready(Interest::WRITABLE).await;
-                stream.send_state = SendState::Idle;
-            }
-        }
+        _ = stream
+            .inner
+            .ready(Interest::WRITABLE.add(Interest::ERROR))
+            .await;
     }
 }
 

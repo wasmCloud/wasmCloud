@@ -43,12 +43,14 @@ use tracing::{Instrument, debug, error, info, instrument, warn};
 use wasmtime::Store;
 use wasmtime::component::InstancePre;
 use wasmtime_wasi_http::{
-    WasiHttpView,
-    bindings::{ProxyPre, http::types::Scheme},
-    body::HyperOutgoingBody,
-    hyper_request_error,
     io::TokioIo,
-    types::{HostFutureIncomingResponse, IncomingResponse, OutgoingRequestConfig},
+    p2::{
+        WasiHttpView,
+        bindings::{ProxyPre, http::types::Scheme},
+        body::HyperOutgoingBody,
+        hyper_request_error,
+        types::{HostFutureIncomingResponse, IncomingResponse, OutgoingRequestConfig},
+    },
 };
 
 use rustls::{ServerConfig, pki_types::CertificateDer};
@@ -76,8 +78,8 @@ pub trait Router: Send + Sync + 'static {
     fn allow_outgoing_request(
         &self,
         workload_id: &str,
-        request: &hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
-        config: &wasmtime_wasi_http::types::OutgoingRequestConfig,
+        request: &hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+        config: &wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
         _allowed_hosts: &[String],
     ) -> anyhow::Result<()>;
 
@@ -150,8 +152,8 @@ impl Router for DynamicRouter {
     fn allow_outgoing_request(
         &self,
         _workload_id: &str,
-        request: &hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
-        _config: &wasmtime_wasi_http::types::OutgoingRequestConfig,
+        request: &hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+        _config: &wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
         allowed_hosts: &[String],
     ) -> anyhow::Result<()> {
         check_allowed_hosts(request, allowed_hosts)
@@ -215,8 +217,8 @@ impl Router for DevRouter {
     fn allow_outgoing_request(
         &self,
         _workload_id: &str,
-        _request: &hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
-        _config: &wasmtime_wasi_http::types::OutgoingRequestConfig,
+        _request: &hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+        _config: &wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
         _allowed_hosts: &[String],
     ) -> anyhow::Result<()> {
         Ok(())
@@ -262,10 +264,10 @@ pub trait HostHandler: Send + Sync + 'static {
     fn outgoing_request(
         &self,
         workload_id: &str,
-        request: hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
-        config: wasmtime_wasi_http::types::OutgoingRequestConfig,
+        request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+        config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
         allowed_hosts: &[String],
-    ) -> wasmtime_wasi_http::HttpResult<wasmtime_wasi_http::types::HostFutureIncomingResponse>;
+    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>;
 }
 
 impl std::fmt::Debug for dyn HostHandler {
@@ -306,13 +308,14 @@ impl HostHandler for NullServer {
     fn outgoing_request(
         &self,
         _workload_id: &str,
-        _request: hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
-        _config: wasmtime_wasi_http::types::OutgoingRequestConfig,
+        _request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+        _config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
         _allowed_hosts: &[String],
-    ) -> wasmtime_wasi_http::HttpResult<wasmtime_wasi_http::types::HostFutureIncomingResponse> {
-        Err(wasmtime_wasi_http::HttpError::trap(wasmtime::format_err!(
-            "http client not available"
-        )))
+    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
+    {
+        Err(wasmtime_wasi_http::p2::HttpError::trap(
+            wasmtime::format_err!("http client not available"),
+        ))
     }
 }
 
@@ -507,24 +510,25 @@ impl<T: Router> HostHandler for HttpServer<T> {
     fn outgoing_request(
         &self,
         workload_id: &str,
-        request: hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
-        config: wasmtime_wasi_http::types::OutgoingRequestConfig,
+        request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+        config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
         allowed_hosts: &[String],
-    ) -> wasmtime_wasi_http::HttpResult<wasmtime_wasi_http::types::HostFutureIncomingResponse> {
+    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
+    {
         if let Err(e) =
             self.router
                 .allow_outgoing_request(workload_id, &request, &config, allowed_hosts)
         {
             warn!(workload_id = %workload_id, err = %e, "outgoing request denied by allowed_hosts policy");
-            return Err(wasmtime_wasi_http::HttpError::trap(
-                wasmtime_wasi_http::bindings::http::types::ErrorCode::HttpRequestDenied,
+            return Err(wasmtime_wasi_http::p2::HttpError::trap(
+                wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::HttpRequestDenied,
             ));
         }
 
         if is_grpc_request(&request) {
             Ok(send_grpc_request(request, config))
         } else {
-            Ok(wasmtime_wasi_http::types::default_send_request(
+            Ok(wasmtime_wasi_http::p2::default_send_request(
                 request, config,
             ))
         }
@@ -729,8 +733,8 @@ pub async fn handle_component_request(
         .unwrap_or_default();
     let uri = req.uri().to_string();
 
-    let req = store.data_mut().new_incoming_request(scheme, req)?;
-    let out = store.data_mut().new_response_outparam(sender)?;
+    let req = store.data_mut().http().new_incoming_request(scheme, req)?;
+    let out = store.data_mut().http().new_response_outparam(sender)?;
     let pre = ProxyPre::new(pre)
         .map_err(anyhow::Error::from)
         .context("failed to instantiate proxy pre")?;
@@ -869,7 +873,7 @@ async fn load_tls_config(
 /// If `allowed_hosts` is empty, all requests are allowed.
 /// Supports wildcard patterns like `*.example.com` which match any subdomain.
 pub fn check_allowed_hosts(
-    request: &hyper::Request<wasmtime_wasi_http::body::HyperOutgoingBody>,
+    request: &hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
     allowed_hosts: &[String],
 ) -> anyhow::Result<()> {
     if allowed_hosts.is_empty() {
@@ -930,10 +934,10 @@ async fn send_grpc_request_handler(
         first_byte_timeout,
         between_bytes_timeout,
     }: OutgoingRequestConfig,
-) -> Result<IncomingResponse, wasmtime_wasi_http::bindings::http::types::ErrorCode> {
+) -> Result<IncomingResponse, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> {
     use tokio::net::TcpStream;
     use tokio::time::timeout;
-    use wasmtime_wasi_http::bindings::http::types::ErrorCode;
+    use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
 
     let authority = if let Some(authority) = request.uri().authority() {
         if authority.port().is_some() {
@@ -1046,7 +1050,7 @@ async fn send_grpc_request_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wasmtime_wasi_http::body::HyperOutgoingBody;
+    use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
 
     fn build_request(uri: &str) -> hyper::Request<HyperOutgoingBody> {
         hyper::Request::builder()
