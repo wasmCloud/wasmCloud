@@ -17,7 +17,7 @@ use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        http::{DevRouter, HttpServer},
+        http::{DevRouter, HttpServer, WasiOutgoingHandler},
     },
     plugin::wasi_blobstore::InMemoryBlobstore,
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
@@ -38,7 +38,12 @@ async fn test_http_blobstore_integration() -> Result<()> {
     let engine = Engine::builder().build()?;
 
     // Create HTTP server plugin on a dynamically allocated port
-    let http_plugin = HttpServer::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let http_plugin = HttpServer::new(
+        DevRouter::default(),
+        WasiOutgoingHandler,
+        "127.0.0.1:0".parse()?,
+    )
+    .await?;
     let addr = http_plugin.addr();
 
     // Create blobstore plugin
@@ -203,7 +208,12 @@ async fn test_plugin_lifecycle() -> Result<()> {
     println!("Testing plugin lifecycle");
 
     let engine = Engine::builder().build()?;
-    let http_plugin = HttpServer::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let http_plugin = HttpServer::new(
+        DevRouter::default(),
+        WasiOutgoingHandler,
+        "127.0.0.1:0".parse()?,
+    )
+    .await?;
 
     let host = HostBuilder::new()
         .with_engine(engine)
