@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Configure plugins
     let http_router = DynamicRouter::default();
-    let http_handler = HttpServer::new(http_router, WasiOutgoingHandler, "127.0.0.1:8080".parse()?).await?;
+    let http_handler = HttpServer::new(http_router, "127.0.0.1:8080".parse()?).await?;
     let wasi_config_plugin = DynamicConfig::default();
 
     // Build and start the host

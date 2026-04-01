@@ -7,7 +7,7 @@ use tokio::{select, sync::mpsc};
 use tracing::{debug, info, instrument, warn};
 use wash_runtime::{
     engine::Engine,
-    host::{Host, HostApi, http::WasiOutgoingHandler},
+    host::{Host, HostApi},
     observability::Meters,
     plugin::{self},
     types::{
@@ -122,7 +122,6 @@ impl CliCommand for DevCommand {
 
             let http_server = wash_runtime::host::http::HttpServer::new_with_tls(
                 http_handler,
-                WasiOutgoingHandler,
                 http_addr.parse()?,
                 cert_path,
                 key_path,
@@ -136,12 +135,8 @@ impl CliCommand for DevCommand {
             "https"
         } else {
             debug!("No TLS configuration provided - server will use HTTP");
-            let http_server = wash_runtime::host::http::HttpServer::new(
-                http_handler,
-                WasiOutgoingHandler,
-                http_addr.parse()?,
-            )
-            .await?;
+            let http_server =
+                wash_runtime::host::http::HttpServer::new(http_handler, http_addr.parse()?).await?;
             host_builder = host_builder.with_http_handler(Arc::new(http_server));
             "http"
         };
