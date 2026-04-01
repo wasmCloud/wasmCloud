@@ -480,7 +480,7 @@ impl<T: Router, O: OutgoingHandler> std::fmt::Debug for HttpServer<T, O> {
     }
 }
 
-impl<T: Router, O: OutgoingHandler> HttpServer<T, O> {
+impl<T: Router> HttpServer<T, WasiOutgoingHandler> {
     /// Creates a new HTTP server that eagerly binds to the specified address.
     ///
     /// The socket is bound immediately so the port is reserved. Use port `0`
@@ -493,8 +493,82 @@ impl<T: Router, O: OutgoingHandler> HttpServer<T, O> {
     /// # Arguments
     /// * `router` - The router implementation for handling requests
     /// * `addr` - The socket address to bind to
-    pub async fn new(router: T, outgoing_handler: O, addr: SocketAddr) -> anyhow::Result<Self> {
+    pub async fn new(router: T, addr: SocketAddr) -> anyhow::Result<Self> {
         crate::init_crypto();
+        let listener = TcpListener::bind(addr).await?;
+        let addr = listener.local_addr()?;
+        Ok(Self {
+            router: Arc::new(router),
+            outgoing_handler: WasiOutgoingHandler,
+            addr,
+            workload_handles: Arc::default(),
+            shutdown_tx: Arc::new(RwLock::new(None)),
+            tls_acceptor: None,
+            listener: Arc::new(tokio::sync::Mutex::new(Some(listener))),
+            meters: Default::default(),
+        })
+    }
+
+    /// Creates a new HTTPS server with TLS support.
+    ///
+    /// # Arguments
+    /// * `router` - The router implementation for handling requests
+    /// * `addr` - The socket address to bind to
+    /// * `cert_path` - Path to the TLS certificate file
+    /// * `key_path` - Path to the private key file
+    /// * `ca_path` - Optional path to CA certificate for mutual TLS
+    ///
+    /// # Returns
+    /// A new `HttpServer` instance configured for HTTPS connections.
+    ///
+    /// # Errors
+    /// Returns an error if the TLS configuration cannot be loaded.
+    pub async fn new_with_tls(
+        router: T,
+        addr: SocketAddr,
+        cert_path: &Path,
+        key_path: &Path,
+        ca_path: Option<&Path>,
+    ) -> anyhow::Result<Self> {
+        let tls_config = load_tls_config(cert_path, key_path, ca_path).await?;
+        let tls_acceptor = TlsAcceptor::from(Arc::new(tls_config));
+
+        let listener = TcpListener::bind(addr).await?;
+        let addr = listener.local_addr()?;
+        Ok(Self {
+            router: Arc::new(router),
+            outgoing_handler: WasiOutgoingHandler,
+            addr,
+            workload_handles: Arc::default(),
+            shutdown_tx: Arc::new(RwLock::new(None)),
+            tls_acceptor: Some(tls_acceptor),
+            listener: Arc::new(tokio::sync::Mutex::new(Some(listener))),
+            meters: Default::default(),
+        })
+    }
+}
+
+impl<T: Router, O: OutgoingHandler> HttpServer<T, O> {
+    /// Returns the actual bound address (useful when binding to port 0).
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    /// Creates a new HTTP server with a custom outgoing request handler.
+    ///
+    /// Use this when you need to customise egress behaviour (e.g. custom TLS
+    /// roots, proxying, or mock handlers in tests). For the common case use
+    /// [`new`](HttpServer::new) instead, which defaults to [`WasiOutgoingHandler`].
+    ///
+    /// # Arguments
+    /// * `router` - The router implementation for handling requests
+    /// * `outgoing_handler` - Custom handler for outgoing HTTP requests
+    /// * `addr` - The socket address to bind to
+    pub async fn new_with_outgoing_handler(
+        router: T,
+        outgoing_handler: O,
+        addr: SocketAddr,
+    ) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
         let addr = listener.local_addr()?;
         Ok(Self {
@@ -509,30 +583,25 @@ impl<T: Router, O: OutgoingHandler> HttpServer<T, O> {
         })
     }
 
-    /// Returns the actual bound address (useful when binding to port 0).
-    pub fn addr(&self) -> SocketAddr {
-        self.addr
-    }
-
-    /// Creates a new HTTPS server with TLS support.
+    /// Creates a new HTTPS server with TLS support and a custom outgoing request handler.
+    ///
+    /// Use this when you need both TLS and custom egress behaviour. For the
+    /// common case use [`new_with_tls`](HttpServer::new_with_tls) instead.
     ///
     /// Side effect: installs the process-level rustls crypto provider via
     /// [`crate::init_crypto`] (idempotent).
     ///
     /// # Arguments
     /// * `router` - The router implementation for handling requests
-    /// * `outgoing_handler` - The handler responsible for outgoing HTTP requests
+    /// * `outgoing_handler` - Custom handler for outgoing HTTP requests
     /// * `addr` - The socket address to bind to
     /// * `cert_path` - Path to the TLS certificate file
     /// * `key_path` - Path to the private key file
     /// * `ca_path` - Optional path to CA certificate for mutual TLS
     ///
-    /// # Returns
-    /// A new `HttpServer` instance configured for HTTPS connections.
-    ///
     /// # Errors
     /// Returns an error if the TLS configuration cannot be loaded.
-    pub async fn new_with_tls(
+    pub async fn new_with_tls_and_outgoing_handler(
         router: T,
         outgoing_handler: O,
         addr: SocketAddr,

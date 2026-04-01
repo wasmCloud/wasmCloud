@@ -14,7 +14,7 @@ use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        http::{DynamicRouter, HttpServer, WasiOutgoingHandler},
+        http::{DynamicRouter, HttpServer},
     },
     plugin::{wasi_config::DynamicConfig, wasi_logging::TracingLogger},
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
@@ -25,8 +25,7 @@ const HTTP_ALLOWED_HOSTS_WASM: &[u8] = include_bytes!("wasm/http_allowed_hosts.w
 
 async fn start_host(addr: &str) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let engine = Engine::builder().build()?;
-    let http_server =
-        HttpServer::new(DynamicRouter::default(), WasiOutgoingHandler, addr.parse()?).await?;
+    let http_server = HttpServer::new(DynamicRouter::default(), addr.parse()?).await?;
     let bound_addr = http_server.addr();
     let host = HostBuilder::new()
         .with_engine(engine)
