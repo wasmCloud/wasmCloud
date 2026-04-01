@@ -19,7 +19,7 @@ use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        http::{DevRouter, HttpServer},
+        http::{DevRouter, HttpServer, WasiOutgoingHandler},
     },
     plugin::wasi_blobstore::NatsBlobstore,
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
@@ -60,7 +60,12 @@ async fn setup() -> Result<TestHarness> {
         .context("Failed to connect to NATS")?;
 
     let engine = Engine::builder().build()?;
-    let http_plugin = HttpServer::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let http_plugin = HttpServer::new(
+        DevRouter::default(),
+        WasiOutgoingHandler,
+        "127.0.0.1:0".parse()?,
+    )
+    .await?;
     let addr = http_plugin.addr();
     let blobstore_plugin = NatsBlobstore::new(&nats_client);
 

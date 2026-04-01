@@ -13,7 +13,7 @@ use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        http::{DevRouter, HttpServer},
+        http::{DevRouter, HttpServer, WasiOutgoingHandler},
     },
     plugin::{
         wasi_blobstore::InMemoryBlobstore, wasi_config::DynamicConfig,
@@ -86,7 +86,8 @@ fn http_counter_host_interfaces(http_host_config: &str) -> Vec<WitInterface> {
 /// Build and start a host with the standard set of plugins (HTTP, blobstore, keyvalue, logging, config).
 async fn start_host_with_all_plugins(addr: &str) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let engine = Engine::builder().build()?;
-    let http_server = HttpServer::new(DevRouter::default(), addr.parse()?).await?;
+    let http_server =
+        HttpServer::new(DevRouter::default(), WasiOutgoingHandler, addr.parse()?).await?;
     let bound_addr = http_server.addr();
     let host = HostBuilder::new()
         .with_engine(engine)

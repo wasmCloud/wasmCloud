@@ -5,6 +5,7 @@ use clap::Args;
 use tracing::info;
 use wash_runtime::{
     engine::Engine,
+    host::http::WasiOutgoingHandler,
     observability::Meters,
     plugin::{self},
 };
@@ -194,6 +195,7 @@ impl CliCommand for HostCommand {
             {
                 wash_runtime::host::http::HttpServer::new_with_tls(
                     http_router,
+                    WasiOutgoingHandler,
                     addr,
                     cert_path,
                     key_path,
@@ -201,7 +203,8 @@ impl CliCommand for HostCommand {
                 )
                 .await?
             } else {
-                wash_runtime::host::http::HttpServer::new(http_router, addr).await?
+                wash_runtime::host::http::HttpServer::new(http_router, WasiOutgoingHandler, addr)
+                    .await?
             };
             cluster_host_builder = cluster_host_builder.with_http_handler(Arc::new(http_server));
         }

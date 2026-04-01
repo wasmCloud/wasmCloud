@@ -283,6 +283,37 @@ impl Router for DynamicRouter {
     }
 }
 
+/// Trait defining the behavior for handling outgoing HTTP requests
+/// Allows for custom egress logic such as transport, TLS configuration, or protocol handling
+/// Use this trait to override the default HTTP client behavior in the HTTP server
+pub trait OutgoingHandler: Send + Sync + 'static {
+    fn send(
+        &self,
+        _request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+        _config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
+    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>;
+}
+
+#[derive(Default)]
+pub struct WasiOutgoingHandler;
+
+impl OutgoingHandler for WasiOutgoingHandler {
+    fn send(
+        &self,
+        request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+        config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
+    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
+    {
+        if is_grpc_request(&request) {
+            Ok(send_grpc_request(request, config))
+        } else {
+            Ok(wasmtime_wasi_http::p2::default_send_request(
+                request, config,
+            ))
+        }
+    }
+}
+
 /// Development router that routes all requests to the last resolved workload
 #[derive(Default)]
 pub struct DevRouter {
@@ -430,8 +461,9 @@ pub type WorkloadHandles =
 /// This plugin implements the `wasi:http/incoming-handler` interface and routes
 /// HTTP requests to appropriate WebAssembly components based on virtual hosting.
 /// It supports both HTTP and HTTPS connections with optional mutual TLS.
-pub struct HttpServer<T: Router> {
+pub struct HttpServer<T: Router, O: OutgoingHandler = WasiOutgoingHandler> {
     router: Arc<T>,
+    outgoing_handler: O,
     addr: SocketAddr,
     workload_handles: WorkloadHandles,
     shutdown_tx: Arc<RwLock<Option<mpsc::Sender<()>>>>,
@@ -440,7 +472,7 @@ pub struct HttpServer<T: Router> {
     meters: RwLock<Meters>,
 }
 
-impl<T: Router> std::fmt::Debug for HttpServer<T> {
+impl<T: Router, O: OutgoingHandler> std::fmt::Debug for HttpServer<T, O> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HttpServer")
             .field("addr", &self.addr)
@@ -448,7 +480,7 @@ impl<T: Router> std::fmt::Debug for HttpServer<T> {
     }
 }
 
-impl<T: Router> HttpServer<T> {
+impl<T: Router, O: OutgoingHandler> HttpServer<T, O> {
     /// Creates a new HTTP server that eagerly binds to the specified address.
     ///
     /// The socket is bound immediately so the port is reserved. Use port `0`
@@ -461,12 +493,13 @@ impl<T: Router> HttpServer<T> {
     /// # Arguments
     /// * `router` - The router implementation for handling requests
     /// * `addr` - The socket address to bind to
-    pub async fn new(router: T, addr: SocketAddr) -> anyhow::Result<Self> {
+    pub async fn new(router: T, outgoing_handler: O, addr: SocketAddr) -> anyhow::Result<Self> {
         crate::init_crypto();
         let listener = TcpListener::bind(addr).await?;
         let addr = listener.local_addr()?;
         Ok(Self {
             router: Arc::new(router),
+            outgoing_handler,
             addr,
             workload_handles: Arc::default(),
             shutdown_tx: Arc::new(RwLock::new(None)),
@@ -488,6 +521,7 @@ impl<T: Router> HttpServer<T> {
     ///
     /// # Arguments
     /// * `router` - The router implementation for handling requests
+    /// * `outgoing_handler` - The handler responsible for outgoing HTTP requests
     /// * `addr` - The socket address to bind to
     /// * `cert_path` - Path to the TLS certificate file
     /// * `key_path` - Path to the private key file
@@ -500,6 +534,7 @@ impl<T: Router> HttpServer<T> {
     /// Returns an error if the TLS configuration cannot be loaded.
     pub async fn new_with_tls(
         router: T,
+        outgoing_handler: O,
         addr: SocketAddr,
         cert_path: &Path,
         key_path: &Path,
@@ -513,6 +548,7 @@ impl<T: Router> HttpServer<T> {
         let addr = listener.local_addr()?;
         Ok(Self {
             router: Arc::new(router),
+            outgoing_handler,
             addr,
             workload_handles: Arc::default(),
             shutdown_tx: Arc::new(RwLock::new(None)),
@@ -524,7 +560,7 @@ impl<T: Router> HttpServer<T> {
 }
 
 #[async_trait::async_trait]
-impl<T: Router> HostHandler for HttpServer<T> {
+impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
     async fn inject_meters(&self, meters: &crate::observability::Meters) {
         *self.meters.write().await = meters.clone();
     }
@@ -632,14 +668,7 @@ impl<T: Router> HostHandler for HttpServer<T> {
                 wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::HttpRequestDenied,
             ));
         }
-
-        if is_grpc_request(&request) {
-            Ok(send_grpc_request(request, config))
-        } else {
-            Ok(wasmtime_wasi_http::p2::default_send_request(
-                request, config,
-            ))
-        }
+        self.outgoing_handler.send(request, config)
     }
 }
 
