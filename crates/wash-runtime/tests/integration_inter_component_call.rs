@@ -22,7 +22,7 @@ use wash_runtime::{
     },
     host::{
         HostApi, HostBuilder,
-        http::{DevRouter, HttpServer},
+        http::{DevRouter, HttpServer, WasiOutgoingHandler},
     },
     plugin::{HostPlugin, wasi_config::DynamicConfig, wasi_keyvalue::InMemoryKeyValue},
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
@@ -173,7 +173,12 @@ async fn test_inter_component_call() -> Result<()> {
     let engine = Engine::builder().build()?;
 
     // Create HTTP server plugin on a dynamically allocated port
-    let http_plugin = HttpServer::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let http_plugin = HttpServer::new(
+        DevRouter::default(),
+        WasiOutgoingHandler,
+        "127.0.0.1:0".parse()?,
+    )
+    .await?;
     let addr = http_plugin.addr();
 
     // Create keyvalue plugin for counter persistence (still using built-in)
