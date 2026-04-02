@@ -1300,3 +1300,169 @@ impl TcpSocket {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::sockets::WasiSocketsCtx;
+
+    fn make_ipv4_socket() -> NetworkTcpSocket {
+        let ctx = WasiSocketsCtx::default();
+        NetworkTcpSocket::new(&ctx, SocketAddressFamily::Ipv4).unwrap()
+    }
+
+    fn bind_socket(socket: &mut NetworkTcpSocket) {
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        socket.start_bind(addr).unwrap();
+        socket.finish_bind().unwrap();
+    }
+
+    // --- State transition tests ---
+
+    #[tokio::test]
+    async fn test_new_socket_default_state() {
+        let socket = make_ipv4_socket();
+        assert!(!socket.is_listening());
+        assert!(matches!(socket.address_family(), SocketAddressFamily::Ipv4));
+    }
+
+    #[tokio::test]
+    async fn test_start_bind_and_finish_bind() {
+        let mut socket = make_ipv4_socket();
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+
+        socket.start_bind(addr).unwrap();
+        // BindStarted — not yet bound, local_address not available
+        assert!(!socket.is_listening());
+
+        socket.finish_bind().unwrap();
+        // Now Bound
+        assert!(!socket.is_listening());
+    }
+
+    #[tokio::test]
+    async fn test_finish_bind_without_start_errors() {
+        let mut socket = make_ipv4_socket();
+        let result = socket.finish_bind();
+        assert!(matches!(result, Err(ErrorCode::NotInProgress)));
+    }
+
+    #[tokio::test]
+    async fn test_start_listen_from_bound() {
+        let mut socket = make_ipv4_socket();
+        bind_socket(&mut socket);
+
+        let result = socket.start_listen();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_start_listen_from_default_errors() {
+        let mut socket = make_ipv4_socket();
+        let result = socket.start_listen();
+        assert!(matches!(result, Err(ErrorCode::InvalidState)));
+    }
+
+    #[tokio::test]
+    async fn test_finish_listen_from_listen_started() {
+        let mut socket = make_ipv4_socket();
+        bind_socket(&mut socket);
+        socket.start_listen().unwrap();
+
+        let result = socket.finish_listen();
+        assert!(result.is_ok());
+        assert!(socket.is_listening());
+    }
+
+    #[tokio::test]
+    async fn test_finish_listen_without_start_errors() {
+        let mut socket = make_ipv4_socket();
+        bind_socket(&mut socket);
+
+        let result = socket.finish_listen();
+        assert!(matches!(result, Err(ErrorCode::NotInProgress)));
+    }
+
+    // --- Address tests ---
+
+    #[tokio::test]
+    async fn test_local_address_after_bind() {
+        let mut socket = make_ipv4_socket();
+        bind_socket(&mut socket);
+
+        let addr = socket.local_address().unwrap();
+        assert_ne!(addr.port(), 0);
+        assert!(addr.ip().is_loopback());
+    }
+
+    #[tokio::test]
+    async fn test_local_address_before_bind_errors() {
+        let socket = make_ipv4_socket();
+        let result = socket.local_address();
+        assert!(matches!(result, Err(ErrorCode::InvalidState)));
+    }
+
+    #[tokio::test]
+    async fn test_address_family() {
+        let socket = make_ipv4_socket();
+        assert!(matches!(socket.address_family(), SocketAddressFamily::Ipv4));
+    }
+
+    // --- Socket option tests ---
+
+    #[tokio::test]
+    async fn test_keep_alive_roundtrip() {
+        let socket = make_ipv4_socket();
+        socket.set_keep_alive_enabled(true).unwrap();
+        assert!(socket.keep_alive_enabled().unwrap());
+
+        socket.set_keep_alive_enabled(false).unwrap();
+        assert!(!socket.keep_alive_enabled().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_hop_limit_roundtrip() {
+        let mut socket = make_ipv4_socket();
+        socket.set_hop_limit(64).unwrap();
+        assert_eq!(socket.hop_limit().unwrap(), 64);
+    }
+
+    #[tokio::test]
+    async fn test_hop_limit_zero_errors() {
+        let mut socket = make_ipv4_socket();
+        let result = socket.set_hop_limit(0);
+        assert!(matches!(result, Err(ErrorCode::InvalidArgument)));
+    }
+
+    #[tokio::test]
+    async fn test_listen_backlog_size() {
+        let mut socket = make_ipv4_socket();
+        let result = socket.set_listen_backlog_size(64);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_listen_backlog_size_zero_errors() {
+        let mut socket = make_ipv4_socket();
+        let result = socket.set_listen_backlog_size(0);
+        assert!(matches!(result, Err(ErrorCode::InvalidArgument)));
+    }
+
+    #[tokio::test]
+    async fn test_receive_buffer_size_roundtrip() {
+        let mut socket = make_ipv4_socket();
+        socket.set_receive_buffer_size(65536).unwrap();
+        // OS may clamp, just verify we get a non-zero value back
+        let size = socket.receive_buffer_size().unwrap();
+        assert!(size > 0);
+    }
+
+    #[tokio::test]
+    async fn test_send_buffer_size_roundtrip() {
+        let mut socket = make_ipv4_socket();
+        socket.set_send_buffer_size(65536).unwrap();
+        let size = socket.send_buffer_size().unwrap();
+        assert!(size > 0);
+    }
+}
