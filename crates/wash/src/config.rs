@@ -199,6 +199,10 @@ pub struct DevConfig {
     /// Enable WASI OpenTelemetry support
     #[serde(default)]
     pub wasi_otel: bool,
+
+    /// Enable WASIP3 support for components that target wasi@0.3 interfaces
+    #[serde(default)]
+    pub wasip3: bool,
 }
 
 /// Load configuration with hierarchical merging

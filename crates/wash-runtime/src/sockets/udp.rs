@@ -111,7 +111,7 @@ impl NetworkUdpSocket {
         }
     }
 
-    fn is_connected(&self) -> bool {
+    pub(crate) fn is_connected(&self) -> bool {
         matches!(self.udp_state, UdpState::Connected(..))
     }
 
@@ -171,7 +171,7 @@ impl NetworkUdpSocket {
         Ok(addr)
     }
 
-    fn remote_address(&self) -> Result<SocketAddr, ErrorCode> {
+    pub(crate) fn remote_address(&self) -> Result<SocketAddr, ErrorCode> {
         if !matches!(self.udp_state, UdpState::Connected(..)) {
             return Err(ErrorCode::InvalidState);
         }

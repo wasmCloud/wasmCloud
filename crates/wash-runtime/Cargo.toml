@@ -31,6 +31,7 @@ wasmcloud-postgres = [
     "dep:bit-vec", "dep:cidr", "dep:geo-types",
     "dep:ulid",
 ]
+wasip3 = ["wasmtime-wasi/p3", "wasmtime-wasi-http/p3"]
 
 [dependencies]
 anyhow = { workspace = true }

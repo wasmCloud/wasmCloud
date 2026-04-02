@@ -63,6 +63,8 @@ mod sysinfo;
 use sysinfo::SystemMonitor;
 
 pub mod http;
+#[cfg(feature = "wasip3")]
+pub mod http_p3;
 
 /// The API for interacting with a wasmcloud host.
 ///

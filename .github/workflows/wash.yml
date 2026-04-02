@@ -90,6 +90,9 @@ jobs:
           NATS_INTEGRATION_TESTS: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
         run: |
           cargo test --workspace
+      - name: Test with wasip3
+        run: |
+          cargo test -p wash-runtime --features wasip3
 
   lint:
     runs-on: ubuntu-latest
@@ -118,7 +121,7 @@ jobs:
           cargo +nightly fmt -- --check
       - name: Lint
         run: |
-          cargo clippy --workspace
+          cargo clippy --workspace --features wasip3
       - name: Check for unused dependencies
         run: |
           cargo machete
