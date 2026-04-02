@@ -20,6 +20,13 @@ pub(crate) mod tcp;
 pub(crate) mod udp;
 pub(crate) mod util;
 
+#[cfg(feature = "wasip3")]
+pub(crate) mod host_ip_name_lookup_p3;
+#[cfg(feature = "wasip3")]
+pub(crate) mod host_tcp_p3;
+#[cfg(feature = "wasip3")]
+pub(crate) mod host_udp_p3;
+
 pub use tcp::TcpSocket;
 pub use udp::UdpSocket;
 
@@ -156,6 +163,51 @@ pub enum SocketAddrUse {
     UdpConnect,
     /// Sending datagram on non-connected UDP socket
     UdpOutgoingDatagram,
+}
+
+/// Convert our custom `util::ErrorCode` to the P3 bindings `ErrorCode`.
+#[cfg(feature = "wasip3")]
+pub(crate) fn p3_error_code_from_util(
+    error: util::ErrorCode,
+) -> wasmtime_wasi::p3::bindings::sockets::types::ErrorCode {
+    use wasmtime_wasi::p3::bindings::sockets::types::ErrorCode as P3ErrorCode;
+    match error {
+        util::ErrorCode::Unknown => P3ErrorCode::Other(None),
+        util::ErrorCode::AccessDenied => P3ErrorCode::AccessDenied,
+        util::ErrorCode::NotSupported => P3ErrorCode::NotSupported,
+        util::ErrorCode::InvalidArgument => P3ErrorCode::InvalidArgument,
+        util::ErrorCode::OutOfMemory => P3ErrorCode::OutOfMemory,
+        util::ErrorCode::Timeout => P3ErrorCode::Timeout,
+        util::ErrorCode::InvalidState => P3ErrorCode::InvalidState,
+        util::ErrorCode::AddressNotBindable => P3ErrorCode::AddressNotBindable,
+        util::ErrorCode::AddressInUse => P3ErrorCode::AddressInUse,
+        util::ErrorCode::RemoteUnreachable => P3ErrorCode::RemoteUnreachable,
+        util::ErrorCode::ConnectionRefused => P3ErrorCode::ConnectionRefused,
+        util::ErrorCode::ConnectionReset => P3ErrorCode::ConnectionReset,
+        util::ErrorCode::ConnectionAborted => P3ErrorCode::ConnectionAborted,
+        util::ErrorCode::DatagramTooLarge => P3ErrorCode::DatagramTooLarge,
+        util::ErrorCode::NotInProgress => P3ErrorCode::InvalidState,
+        util::ErrorCode::ConcurrencyConflict => P3ErrorCode::InvalidState,
+    }
+}
+
+/// Convert our `util::ErrorCode` to a P3 `SocketError` (TrappableError).
+#[cfg(feature = "wasip3")]
+pub(crate) fn p3_socket_error_from_util(
+    error: util::ErrorCode,
+) -> wasmtime_wasi::p3::sockets::SocketError {
+    p3_error_code_from_util(error).into()
+}
+
+/// Register P3 socket interfaces with the linker using our custom socket implementation.
+#[cfg(feature = "wasip3")]
+pub fn add_p3_to_linker(
+    linker: &mut wasmtime::component::Linker<crate::engine::ctx::SharedCtx>,
+) -> anyhow::Result<()> {
+    use wasmtime_wasi::p3::bindings::sockets::{ip_name_lookup, types};
+    ip_name_lookup::add_to_linker::<_, WasiSockets>(linker, crate::engine::ctx::extract_sockets)?;
+    types::add_to_linker::<_, WasiSockets>(linker, crate::engine::ctx::extract_sockets)?;
+    Ok(())
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]

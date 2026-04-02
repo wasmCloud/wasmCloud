@@ -61,6 +61,9 @@ pub struct WorkloadMetadata {
     loopback: Arc<std::sync::Mutex<loopback::Network>>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
+    /// Whether WASIP3 support is enabled for this component's engine.
+    #[cfg(feature = "wasip3")]
+    wasip3_enabled: bool,
 }
 
 impl WorkloadMetadata {
@@ -151,6 +154,12 @@ impl WorkloadMetadata {
         crate::engine::exports_wasi_http(&self.component)
     }
 
+    /// Returns whether this component targets WASIP3 and the engine has P3 enabled.
+    #[cfg(feature = "wasip3")]
+    pub fn targets_p3(&self) -> bool {
+        self.wasip3_enabled && crate::engine::targets_wasip3(&self.component)
+    }
+
     /// Computes and returns the [`WitWorld`] of this component.
     pub fn world(&self) -> WitWorld {
         let mut imports = HashMap::new();
@@ -235,6 +244,7 @@ impl WorkloadService {
         local_resources: LocalResources,
         max_restarts: u64,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
+        #[cfg(feature = "wasip3")] wasip3_enabled: bool,
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
@@ -249,6 +259,8 @@ impl WorkloadService {
                 plugins: None,
                 loopback,
                 linked_components: Default::default(),
+                #[cfg(feature = "wasip3")]
+                wasip3_enabled,
             },
             handle: None,
             max_restarts,
@@ -260,6 +272,17 @@ impl WorkloadService {
         let component = self.metadata.component.clone();
         let pre = self.metadata.linker.instantiate_pre(&component)?;
         let command = CommandPre::new(pre)?;
+        Ok(command)
+    }
+
+    /// Pre-instantiate the component for P3 execution.
+    #[cfg(feature = "wasip3")]
+    pub fn pre_instantiate_p3(
+        &mut self,
+    ) -> anyhow::Result<wasmtime_wasi::p3::bindings::CommandPre<SharedCtx>> {
+        let component = self.metadata.component.clone();
+        let pre = self.metadata.linker.instantiate_pre(&component)?;
+        let command = wasmtime_wasi::p3::bindings::CommandPre::new(pre)?;
         Ok(command)
     }
 
@@ -301,6 +324,7 @@ impl WorkloadComponent {
         volume_mounts: Vec<(PathBuf, VolumeMount)>,
         local_resources: LocalResources,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
+        #[cfg(feature = "wasip3")] wasip3_enabled: bool,
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
@@ -315,6 +339,8 @@ impl WorkloadComponent {
                 plugins: None,
                 loopback,
                 linked_components: Default::default(),
+                #[cfg(feature = "wasip3")]
+                wasip3_enabled,
             },
             name: component_name.into(),
             // TODO: Implement pooling and instance limits
@@ -461,6 +487,15 @@ impl ResolvedWorkload {
     /// Executes the service, if present, and returns whether it was run.
     #[instrument(name="execute_service", skip_all, fields(workload.id = self.id.as_ref(), workload.name = self.name.as_ref(), workload.namespace = self.namespace.as_ref()))]
     pub(crate) async fn execute_service(&mut self) -> anyhow::Result<bool> {
+        #[cfg(feature = "wasip3")]
+        if self
+            .service
+            .as_ref()
+            .is_some_and(|s| s.metadata.targets_p3())
+        {
+            return self.execute_service_p3().await;
+        }
+
         let service = self
             .service
             .as_mut()
@@ -493,6 +528,69 @@ impl ResolvedWorkload {
             });
 
             // Store the handle to ensure the service can be cleaned up during workload shutdown
+            if let Some(s) = self.service.as_mut() {
+                s.handle = Some(Arc::new(handle));
+            }
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Execute a service using P3 (wasi:cli@0.3) CommandPre.
+    #[cfg(feature = "wasip3")]
+    async fn execute_service_p3(&mut self) -> anyhow::Result<bool> {
+        let service = self
+            .service
+            .as_mut()
+            .map(|s| (s.pre_instantiate_p3(), s.max_restarts));
+
+        if let Some((Ok(pre), mut max_restarts)) = service {
+            let mut store = if let Some(service) = self.service.as_ref() {
+                self.new_store_from_metadata(&service.metadata, true)
+                    .await?
+            } else {
+                bail!("service unexpectedly missing during execution");
+            };
+
+            let handle = tokio::spawn(async move {
+                loop {
+                    let instance = match pre.instantiate_async(&mut store).await {
+                        Ok(i) => i,
+                        Err(e) => {
+                            warn!(err = %e, "failed to instantiate P3 service");
+                            break;
+                        }
+                    };
+                    let result = store
+                        .run_concurrent(async move |accessor| {
+                            instance.wasi_cli_run().call_run(accessor).await
+                        })
+                        .await;
+                    match result {
+                        Ok(Ok(Ok(()))) => {
+                            info!("P3 service exited successfully");
+                            break;
+                        }
+                        Ok(Ok(Err(()))) => {
+                            warn!(retries = max_restarts, "P3 service exited with error");
+                            if max_restarts == 0 {
+                                warn!("max restarts reached, P3 service will not be restarted");
+                                break;
+                            }
+                        }
+                        Ok(Err(e)) | Err(e) => {
+                            warn!(err = %e, retries = max_restarts, "P3 service execution failed");
+                            if max_restarts == 0 {
+                                warn!("max restarts reached, P3 service will not be restarted");
+                                break;
+                            }
+                        }
+                    }
+                    max_restarts = max_restarts.saturating_sub(1);
+                }
+            });
+
             if let Some(s) = self.service.as_mut() {
                 s.handle = Some(Arc::new(handle));
             }

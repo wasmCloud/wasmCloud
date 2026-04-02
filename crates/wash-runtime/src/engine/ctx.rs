@@ -111,8 +111,11 @@ pub struct Ctx {
     /// These all implement the [`HostPlugin`] trait, but they are cast as `Arc<dyn Any + Send + Sync>`
     /// to support downcasting to the specific plugin type in [`Ctx::get_plugin`]
     plugins: HashMap<&'static str, Arc<dyn Any + Send + Sync>>,
-    /// The HTTP hooks for outgoing HTTP requests (implements WasiHttpHooks).
+    /// The HTTP hooks for outgoing HTTP requests (implements WasiHttpHooks for P2).
     http_hooks: CtxHttpHooks,
+    /// The HTTP hooks for outgoing HTTP requests (implements WasiHttpHooks for P3).
+    #[cfg(feature = "wasip3")]
+    http_hooks_p3: CtxHttpHooksP3,
 }
 
 impl Ctx {
@@ -166,6 +169,18 @@ impl WasiHttpView for SharedCtx {
     }
 }
 
+// Implement WasiHttpView for wasi:http P3
+#[cfg(feature = "wasip3")]
+impl wasmtime_wasi_http::p3::WasiHttpView for SharedCtx {
+    fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+        wasmtime_wasi_http::p3::WasiHttpCtxView {
+            ctx: &mut self.active_ctx.http,
+            table: &mut self.table,
+            hooks: &mut self.active_ctx.http_hooks_p3,
+        }
+    }
+}
+
 /// HTTP hooks implementation that delegates to a [`HostHandler`](crate::host::http::HostHandler).
 struct CtxHttpHooks {
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
@@ -188,6 +203,79 @@ impl WasiHttpHooks for CtxHttpHooks {
                 wasmtime::format_err!("http client not available"),
             )),
         }
+    }
+}
+
+/// P3 HTTP hooks implementation that enforces allowed hosts and delegates
+/// to the default send_request for actual HTTP transport.
+#[cfg(feature = "wasip3")]
+struct CtxHttpHooksP3 {
+    allowed_hosts: Arc<[String]>,
+}
+
+#[cfg(feature = "wasip3")]
+impl wasmtime_wasi_http::p3::WasiHttpHooks for CtxHttpHooksP3 {
+    fn send_request(
+        &mut self,
+        request: hyper::http::Request<
+            http_body_util::combinators::UnsyncBoxBody<
+                bytes::Bytes,
+                wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
+            >,
+        >,
+        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+        fut: Box<
+            dyn std::future::Future<
+                    Output = Result<(), wasmtime_wasi_http::p3::bindings::http::types::ErrorCode>,
+                > + Send,
+        >,
+    ) -> Box<
+        dyn std::future::Future<
+                Output = Result<
+                    (
+                        hyper::http::Response<
+                            http_body_util::combinators::UnsyncBoxBody<
+                                bytes::Bytes,
+                                wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
+                            >,
+                        >,
+                        Box<
+                            dyn std::future::Future<
+                                    Output = Result<
+                                        (),
+                                        wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
+                                    >,
+                                > + Send,
+                        >,
+                    ),
+                    wasmtime_wasi::TrappableError<
+                        wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
+                    >,
+                >,
+            > + Send,
+    > {
+        use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode as P3ErrorCode;
+
+        // Check allowed hosts before sending
+        if let Err(_e) = crate::host::http::check_allowed_hosts(&request, &self.allowed_hosts) {
+            return Box::new(async move {
+                Err(wasmtime_wasi::TrappableError::from(
+                    P3ErrorCode::HttpRequestDenied,
+                ))
+            });
+        }
+
+        // Delegate to the default send_request implementation
+        _ = fut;
+        Box::new(async move {
+            use http_body_util::BodyExt;
+            let (res, io) = wasmtime_wasi_http::p3::default_send_request(request, options).await?;
+            Ok((
+                res.map(BodyExt::boxed_unsync),
+                Box::new(io)
+                    as Box<dyn std::future::Future<Output = Result<(), P3ErrorCode>> + Send>,
+            ))
+        })
     }
 }
 
@@ -256,6 +344,11 @@ impl CtxBuilder {
             .map(|(k, v)| (k, v as Arc<dyn Any + Send + Sync>))
             .collect();
 
+        #[cfg(feature = "wasip3")]
+        let http_hooks_p3 = CtxHttpHooksP3 {
+            allowed_hosts: self.allowed_hosts.clone(),
+        };
+
         let http_hooks = CtxHttpHooks {
             http_handler: self.http_handler,
             workload_id: self.workload_id.clone(),
@@ -276,6 +369,8 @@ impl CtxBuilder {
             sockets: self.sockets.unwrap_or_default(),
             plugins,
             http_hooks,
+            #[cfg(feature = "wasip3")]
+            http_hooks_p3,
         }
     }
 }
