@@ -707,7 +707,7 @@ async fn invoke_component_handler(
 
     // Check if this component targets WASIP3 and dispatch accordingly
     #[cfg(feature = "wasip3")]
-    if crate::engine::targets_wasip3(instance_pre.component()) {
+    if crate::engine::targets_wasip3_http(instance_pre.component()) {
         let resp =
             crate::host::http_p3::handle_component_request_p3(store, instance_pre, req, fuel_meter)
                 .await?;
@@ -716,7 +716,7 @@ async fn invoke_component_handler(
         let body = HyperOutgoingBody::new(
             body.map_err(|e| {
                 wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::InternalError(Some(
-                    format!("{e:?}"),
+                    format!("failed to convert P3 http body: {e:?}"),
                 ))
             })
             .boxed_unsync(),

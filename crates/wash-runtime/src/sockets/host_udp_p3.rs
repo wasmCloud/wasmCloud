@@ -3,8 +3,7 @@
 use super::WasiSocketsCtxView;
 use super::udp::UdpSocket;
 use crate::sockets::{
-    MAX_UDP_DATAGRAM_SIZE, SocketAddrUse, SocketAddressFamily, WasiSockets,
-    p3_socket_error_from_util as se,
+    MAX_UDP_DATAGRAM_SIZE, SocketAddrUse, WasiSockets, p3_socket_error_from_util as se,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -37,7 +36,7 @@ fn get_socket_mut<'a>(
     let socket = Resource::<UdpSocket>::new_borrow(socket.rep());
     table
         .get_mut(&socket)
-        .context("failed to get UDP socket resource from table")
+        .context("failed to get mutable UDP socket resource from table")
         .map_err(SocketError::trap)
 }
 
@@ -324,10 +323,7 @@ impl HostUdpSocket for WasiSocketsCtxView<'_> {
         socket: Resource<UpstreamUdpSocket>,
     ) -> wasmtime::Result<IpAddressFamily> {
         let sock = get_socket(self.table, &socket)?;
-        Ok(match sock.address_family() {
-            SocketAddressFamily::Ipv4 => IpAddressFamily::Ipv4,
-            SocketAddressFamily::Ipv6 => IpAddressFamily::Ipv6,
-        })
+        Ok(sock.address_family().into())
     }
 
     fn get_unicast_hop_limit(&mut self, socket: Resource<UpstreamUdpSocket>) -> SocketResult<u8> {

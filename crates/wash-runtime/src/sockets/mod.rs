@@ -216,6 +216,16 @@ pub(crate) enum SocketAddressFamily {
     Ipv6,
 }
 
+#[cfg(feature = "wasip3")]
+impl From<SocketAddressFamily> for wasmtime_wasi::p3::bindings::sockets::types::IpAddressFamily {
+    fn from(family: SocketAddressFamily) -> Self {
+        match family {
+            SocketAddressFamily::Ipv4 => Self::Ipv4,
+            SocketAddressFamily::Ipv6 => Self::Ipv6,
+        }
+    }
+}
+
 #[cfg(all(test, feature = "wasip3"))]
 mod tests_p3 {
     use super::*;

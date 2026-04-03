@@ -543,7 +543,7 @@ impl Host {
             .await?;
 
         // If the service didn't run and we had one, warn
-        if service_present && !resolved_workload.execute_service().await? {
+        if service_present && resolved_workload.execute_service().await?.is_none() {
             warn!(
                 workload_id = request.workload_id,
                 "service did not properly execute"
@@ -995,6 +995,41 @@ mod tests {
                         pool_size: 1,
                         max_invocations: 100,
                     }],
+                    host_interfaces: vec![],
+                    volumes: vec![],
+                },
+            })
+            .await;
+
+        assert!(matches!(
+            workload_status,
+            Ok(WorkloadStartResponse {
+                workload_status: WorkloadStatus {
+                    workload_state: WorkloadState::Error,
+                    ..
+                }
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_service_start_failed_with_invalid_wasm() {
+        let host = Host::builder().build().expect("failed to build host");
+
+        let workload_status = host
+            .workload_start(WorkloadStartRequest {
+                workload_id: "test-bad-service".to_string(),
+                workload: Workload {
+                    namespace: "wasmcloud".to_string(),
+                    name: "bad-service-test".to_string(),
+                    annotations: Default::default(),
+                    service: Some(crate::types::Service {
+                        bytes: vec![0xDE, 0xAD, 0xBE, 0xEF].into(),
+                        digest: None,
+                        local_resources: Default::default(),
+                        max_restarts: 0,
+                    }),
+                    components: vec![],
                     host_interfaces: vec![],
                     volumes: vec![],
                 },
