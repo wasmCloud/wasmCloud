@@ -118,6 +118,71 @@ func (r *WorkloadReconciler) findFreeHost(ctx context.Context, workload *runtime
 	return "", fmt.Errorf("no suitable host found")
 }
 
+// materializeLocalResources converts a spec-level LocalResources into the
+// runtimev2 equivalent, materializing config layers and volume mounts.
+func materializeLocalResources(ctx context.Context, c client.Client, namespace string, spec *runtimev1alpha1.LocalResources, label string) (*runtimev2.LocalResources, error) {
+	lr := &runtimev2.LocalResources{}
+	if spec == nil {
+		return lr, nil
+	}
+
+	lr.AllowedHosts = spec.AllowedHosts
+	lr.Config = spec.Config
+
+	if spec.Environment != nil {
+		env, err := MaterializeConfigLayer(ctx, c, namespace, spec.Environment)
+		if err != nil {
+			return nil, fmt.Errorf("materializing local resources config for %s: %w", label, err)
+		}
+		lr.Environment = env
+	}
+
+	if spec.VolumeMounts != nil {
+		lr.VolumeMounts = make([]*runtimev2.VolumeMount, 0, len(spec.VolumeMounts))
+		for _, vm := range spec.VolumeMounts {
+			lr.VolumeMounts = append(lr.VolumeMounts, &runtimev2.VolumeMount{
+				Name:      vm.Name,
+				MountPath: vm.MountPath,
+				ReadOnly:  vm.ReadOnly,
+			})
+		}
+	}
+
+	return lr, nil
+}
+
+// injectServiceDNSAliases adds host-aliases to wasi:http/incoming-handler
+// HostInterfaces so the wash-runtime DynamicRouter accepts requests arriving
+// via Kubernetes Service DNS.
+func injectServiceDNSAliases(hostInterfaces []*runtimev2.WitInterface, svcName, namespace string) {
+	aliases := strings.Join([]string{
+		svcName,
+		fmt.Sprintf("%s.%s", svcName, namespace),
+		fmt.Sprintf("%s.%s.svc", svcName, namespace),
+	}, ",")
+
+	for i, hi := range hostInterfaces {
+		if hi.Namespace != "wasi" || hi.Package != "http" {
+			continue
+		}
+		hasIncomingHandler := false
+		for _, iface := range hi.Interfaces {
+			if iface == "incoming-handler" {
+				hasIncomingHandler = true
+				break
+			}
+		}
+		if !hasIncomingHandler {
+			continue
+		}
+		if hi.Config == nil {
+			hi.Config = make(map[string]string)
+		}
+		hi.Config["host-aliases"] = aliases
+		hostInterfaces[i] = hi
+	}
+}
+
 func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *runtimev1alpha1.Workload) error {
 	if workload.Status.HostID == "" {
 		return condition.ErrStatusUnknown(fmt.Errorf("waiting for Host Selection"))
@@ -166,38 +231,13 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 	}
 
 	for _, c := range workload.Spec.Components {
-		localResources := &runtimev2.LocalResources{}
-
-		if c.LocalResources != nil {
-			localResources.AllowedHosts = c.LocalResources.AllowedHosts
-			localResources.Config = c.LocalResources.Config
-
-			if c.LocalResources.Environment != nil {
-				localEnvironment, err := MaterializeConfigLayer(ctx, r.Client, workload.Namespace, c.LocalResources.Environment)
-				if err != nil {
-					return fmt.Errorf("materializing local resources config for component %q: %w", c.Name, err)
-				}
-				localResources.Environment = localEnvironment
-			}
-
-			if c.LocalResources.VolumeMounts != nil {
-				localResources.VolumeMounts = make([]*runtimev2.VolumeMount, 0, len(c.LocalResources.VolumeMounts))
-				for _, vm := range c.LocalResources.VolumeMounts {
-					volumeMount := &runtimev2.VolumeMount{
-						Name:      vm.Name,
-						MountPath: vm.MountPath,
-					}
-					if vm.ReadOnly {
-						volumeMount.ReadOnly = true
-					}
-					localResources.VolumeMounts = append(localResources.VolumeMounts, volumeMount)
-				}
-			}
+		localResources, err := materializeLocalResources(ctx, r.Client, workload.Namespace, c.LocalResources, fmt.Sprintf("component %q", c.Name))
+		if err != nil {
+			return err
 		}
 
-		var imagePullSecret *runtimev2.ImagePullSecret = nil
+		var imagePullSecret *runtimev2.ImagePullSecret
 		if c.ImagePullSecret != nil {
-			var err error
 			imagePullSecret, err = MaterializeImagePullSecret(ctx, r.Client, workload.Namespace, c.ImagePullSecret.Name, c.Image)
 			if err != nil {
 				return fmt.Errorf("materializing image pull secret for component %q: %w", c.Name, err)
@@ -215,76 +255,19 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 		})
 	}
 
-	// When a KubernetesService is specified, inject DNS aliases for the service
-	// into the wasi:http/incoming-handler HostInterface config. This allows
-	// the wash-runtime DynamicRouter to accept requests arriving via Kubernetes
-	// Service DNS (e.g. from cluster-internal callers), not just the external
-	// hostname configured in config["host"].
 	if workload.Spec.KubernetesService != nil {
-		svcName := workload.Spec.KubernetesService.Name
-		ns := workload.Namespace
-		aliases := []string{
-			svcName,
-			fmt.Sprintf("%s.%s", svcName, ns),
-			fmt.Sprintf("%s.%s.svc", svcName, ns),
-		}
-		aliasesStr := strings.Join(aliases, ",")
-
-		for i, hi := range witWorld.HostInterfaces {
-			if hi.Namespace == "wasi" && hi.Package == "http" {
-				hasIncomingHandler := false
-				for _, iface := range hi.Interfaces {
-					if iface == "incoming-handler" {
-						hasIncomingHandler = true
-						break
-					}
-				}
-				if !hasIncomingHandler {
-					continue
-				}
-				if hi.Config == nil {
-					hi.Config = make(map[string]string)
-				}
-				hi.Config["host-aliases"] = aliasesStr
-				witWorld.HostInterfaces[i] = hi
-			}
-		}
+		injectServiceDNSAliases(witWorld.HostInterfaces, workload.Spec.KubernetesService.Name, workload.Namespace)
 	}
 
 	var service *runtimev2.Service
 	if s := workload.Spec.Service; s != nil {
-		localResources := &runtimev2.LocalResources{}
-
-		if s.LocalResources != nil {
-			localResources.AllowedHosts = s.LocalResources.AllowedHosts
-			localResources.Config = s.LocalResources.Config
-
-			if s.LocalResources.Environment != nil {
-				localEnvironment, err := MaterializeConfigLayer(ctx, r.Client, workload.Namespace, s.LocalResources.Environment)
-				if err != nil {
-					return fmt.Errorf("materializing local resources config for service: %w", err)
-				}
-				localResources.Environment = localEnvironment
-			}
-
-			if s.LocalResources.VolumeMounts != nil {
-				localResources.VolumeMounts = make([]*runtimev2.VolumeMount, 0, len(s.LocalResources.VolumeMounts))
-				for _, vm := range s.LocalResources.VolumeMounts {
-					volumeMount := &runtimev2.VolumeMount{
-						Name:      vm.Name,
-						MountPath: vm.MountPath,
-					}
-					if vm.ReadOnly {
-						volumeMount.ReadOnly = true
-					}
-					localResources.VolumeMounts = append(localResources.VolumeMounts, volumeMount)
-				}
-			}
+		localResources, err := materializeLocalResources(ctx, r.Client, workload.Namespace, s.LocalResources, "service")
+		if err != nil {
+			return err
 		}
 
-		var imagePullSecret *runtimev2.ImagePullSecret = nil
+		var imagePullSecret *runtimev2.ImagePullSecret
 		if s.ImagePullSecret != nil {
-			var err error
 			imagePullSecret, err = MaterializeImagePullSecret(ctx, r.Client, workload.Namespace, s.ImagePullSecret.Name, s.Image)
 			if err != nil {
 				return fmt.Errorf("materializing image pull secret for service: %w", err)
