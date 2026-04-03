@@ -94,7 +94,9 @@ pub trait Router: Send + Sync + 'static {
 #[derive(Default)]
 pub struct DynamicRouter {
     host_to_workload: tokio::sync::RwLock<HashMap<String, HashSet<String>>>,
-    workload_to_host: tokio::sync::RwLock<HashMap<String, String>>,
+    /// Maps workload_id -> all hostnames (primary + aliases) registered for it.
+    /// Used by on_workload_unbind to remove all entries cleanly.
+    workload_to_host: tokio::sync::RwLock<HashMap<String, Vec<String>>>,
 }
 
 /// Implementation of Router that maps Host headers to workload IDs
@@ -115,34 +117,57 @@ impl Router for DynamicRouter {
             anyhow::bail!("workload did not request wasi:http/incoming-handler interface");
         };
 
-        let host_header = http_iface
+        let primary_host = http_iface
             .config
             .get("host")
             .cloned()
             .context("No host header found")?;
 
+        // Collect primary hostname plus any DNS aliases injected by the operator.
+        // Aliases are a comma-separated list of Service DNS names (e.g.
+        // "my-svc,my-svc.default,my-svc.default.svc,my-svc.default.svc.cluster.local")
+        // that allow cluster-internal callers to reach this workload via Service DNS.
+        let mut all_hosts = vec![primary_host.clone()];
+        if let Some(aliases) = http_iface.config.get("host-aliases") {
+            all_hosts.extend(
+                aliases
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+            );
+        }
+
+        let workload_id = resolved_handle.id().to_string();
+
         {
             let mut lock = self.workload_to_host.write().await;
-            lock.insert(resolved_handle.id().to_string(), host_header.clone());
+            lock.insert(workload_id.clone(), all_hosts.clone());
         }
 
         {
             let mut lock = self.host_to_workload.write().await;
-            let entry = lock.entry(host_header.clone()).or_insert_with(HashSet::new);
-            entry.insert(resolved_handle.id().to_string());
+            for host in &all_hosts {
+                let entry = lock.entry(host.clone()).or_insert_with(HashSet::new);
+                entry.insert(workload_id.clone());
+            }
         }
 
         Ok(())
     }
 
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
-        let mut lock = self.workload_to_host.write().await;
-        if let Some(host_header) = lock.remove(workload_id) {
-            let mut host_lock = self.host_to_workload.write().await;
-            if let Some(workload_set) = host_lock.get_mut(&host_header) {
-                workload_set.remove(workload_id);
-                if workload_set.is_empty() {
-                    host_lock.remove(&host_header);
+        let hostnames = {
+            let mut wth_lock = self.workload_to_host.write().await;
+            wth_lock.remove(workload_id)
+        };
+        if let Some(hostnames) = hostnames {
+            let mut htw_lock = self.host_to_workload.write().await;
+            for hostname in &hostnames {
+                if let Some(workload_set) = htw_lock.get_mut(hostname) {
+                    workload_set.remove(workload_id);
+                    if workload_set.is_empty() {
+                        htw_lock.remove(hostname);
+                    }
                 }
             }
         }

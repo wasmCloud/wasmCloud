@@ -161,6 +161,15 @@ func (h *HostInterface) EnsureInterfaces(ifaces ...string) {
 	}
 }
 
+// KubernetesServiceRef references an existing Kubernetes Service that the
+// operator will manage an EndpointSlice for, pointing to the host pods that
+// are running this workload.
+type KubernetesServiceRef struct {
+	// Name is the name of the Kubernetes Service in the same namespace.
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+}
+
 // WorkloadSpec defines the desired state of Workload.
 type WorkloadSpec struct {
 	// +kubebuilder:validation:Optional
@@ -176,6 +185,15 @@ type WorkloadSpec struct {
 	Service *WorkloadService `json:"service,omitempty"`
 	// +kubebuilder:validation:Optional
 	Volumes []Volume `json:"volumes,omitempty"`
+
+	// KubernetesService references an existing Kubernetes Service that the
+	// operator will maintain an EndpointSlice for, pointing to the host pods
+	// running this workload. When set, the operator also registers DNS aliases
+	// for the service (e.g. service-name, service-name.namespace.svc.cluster.local)
+	// with the host so cluster-internal callers can reach the workload via
+	// Service DNS without going through an external gateway.
+	// +kubebuilder:validation:Optional
+	KubernetesService *KubernetesServiceRef `json:"kubernetesService,omitempty"`
 }
 
 func (s *WorkloadSpec) EnsureHostInterface(iface HostInterface) {

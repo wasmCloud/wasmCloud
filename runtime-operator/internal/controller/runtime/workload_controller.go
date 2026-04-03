@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,9 +30,8 @@ const (
 // WorkloadReconciler reconciles a Workload object
 type WorkloadReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Bus    wasmbus.Bus
-
+	Scheme     *runtime.Scheme
+	Bus        wasmbus.Bus
 	reconciler condition.AnyConditionedReconciler
 }
 
@@ -213,6 +213,42 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 			MaxInvocations:  c.MaxInvocations,
 			LocalResources:  localResources,
 		})
+	}
+
+	// When a KubernetesService is specified, inject DNS aliases for the service
+	// into the wasi:http/incoming-handler HostInterface config. This allows
+	// the wash-runtime DynamicRouter to accept requests arriving via Kubernetes
+	// Service DNS (e.g. from cluster-internal callers), not just the external
+	// hostname configured in config["host"].
+	if workload.Spec.KubernetesService != nil {
+		svcName := workload.Spec.KubernetesService.Name
+		ns := workload.Namespace
+		aliases := []string{
+			svcName,
+			fmt.Sprintf("%s.%s", svcName, ns),
+			fmt.Sprintf("%s.%s.svc", svcName, ns),
+		}
+		aliasesStr := strings.Join(aliases, ",")
+
+		for i, hi := range witWorld.HostInterfaces {
+			if hi.Namespace == "wasi" && hi.Package == "http" {
+				hasIncomingHandler := false
+				for _, iface := range hi.Interfaces {
+					if iface == "incoming-handler" {
+						hasIncomingHandler = true
+						break
+					}
+				}
+				if !hasIncomingHandler {
+					continue
+				}
+				if hi.Config == nil {
+					hi.Config = make(map[string]string)
+				}
+				hi.Config["host-aliases"] = aliasesStr
+				witWorld.HostInterfaces[i] = hi
+			}
+		}
 	}
 
 	var service *runtimev2.Service

@@ -60,7 +60,11 @@ operator:
   watchNamespaces: []
 
 gateway:
-  enabled: true
+  # -- DEPRECATED: runtime-gateway has been removed. HTTP routing is now handled
+  # by the runtime-operator via EndpointSlices 
+  # Set service.name in your WorkloadDeployment spec to enable automatic
+  # EndpointSlice management.
+  enabled: false
   # -- Fallback endpoint when no workloads are available. Example: "http://notfound.svc.cluster.local"
   fallbackEndpoint: ""
   image:
