@@ -599,4 +599,30 @@ mod tests {
         let mapped: IpAddr = "::ffff:127.0.0.1".parse().unwrap();
         assert!(!is_valid_address_family(mapped, SocketAddressFamily::Ipv6));
     }
+
+    #[tokio::test]
+    async fn test_tcp_bind_ipv4_ephemeral() {
+        let sock = tokio::net::TcpSocket::new_v4().unwrap();
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let result = tcp_bind(&sock, addr);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_tcp_bind_ipv6_ephemeral() {
+        let sock = tokio::net::TcpSocket::new_v6().unwrap();
+        let addr: SocketAddr = "[::1]:0".parse().unwrap();
+        let result = tcp_bind(&sock, addr);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_tcp_bind_assigns_port() {
+        let sock = tokio::net::TcpSocket::new_v4().unwrap();
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        tcp_bind(&sock, addr).unwrap();
+        let bound = sock.local_addr().unwrap();
+        assert_ne!(bound.port(), 0);
+        assert!(bound.ip().is_loopback());
+    }
 }
