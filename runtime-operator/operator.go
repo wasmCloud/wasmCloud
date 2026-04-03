@@ -103,6 +103,13 @@ func NewEmbeddedOperator(
 		return nil, err
 	}
 
+	if err = (&runtime_controllers.WorkloadRouteReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		return nil, err
+	}
+
 	return &EmbeddedOperator{
 		Bus:      bus,
 		NatsConn: nc,

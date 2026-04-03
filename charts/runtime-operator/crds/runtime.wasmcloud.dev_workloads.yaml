@@ -267,6 +267,22 @@ spec:
                 additionalProperties:
                   type: string
                 type: object
+              kubernetesService:
+                description: |-
+                  KubernetesService references an existing Kubernetes Service that the
+                  operator will maintain an EndpointSlice for, pointing to the host pods
+                  running this workload. When set, the operator also registers DNS aliases
+                  for the service (e.g. service-name, service-name.namespace.svc.cluster.local)
+                  with the host so cluster-internal callers can reach the workload via
+                  Service DNS without going through an external gateway.
+                properties:
+                  name:
+                    description: Name is the name of the Kubernetes Service in the
+                      same namespace.
+                    type: string
+                required:
+                - name
+                type: object
               service:
                 description: |-
                   WorkloadService represents a long-running service that is part of the workload.
