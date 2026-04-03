@@ -1652,6 +1652,216 @@ mod tests {
         let size = socket.send_buffer_size().unwrap();
         assert!(size > 0);
     }
+
+    #[cfg(feature = "wasip3")]
+    mod p3 {
+        use super::*;
+        use crate::sockets::loopback;
+
+        #[tokio::test]
+        async fn test_listen_p3_from_bound() {
+            let mut socket = make_ipv4_socket();
+            bind_socket(&mut socket);
+            let result = socket.listen_p3();
+            assert!(result.is_ok(), "listen_p3 from Bound should succeed");
+            assert!(socket.is_listening());
+        }
+
+        #[tokio::test]
+        async fn test_listen_p3_implicit_bind() {
+            let mut socket = make_ipv4_socket();
+            let result = socket.listen_p3();
+            assert!(
+                result.is_ok(),
+                "listen_p3 from Default should succeed with implicit bind"
+            );
+            assert!(socket.is_listening());
+        }
+
+        #[tokio::test]
+        async fn test_listen_p3_from_listening_errors() {
+            let mut socket = make_ipv4_socket();
+            bind_socket(&mut socket);
+            socket.listen_p3().unwrap();
+            let result = socket.listen_p3();
+            assert!(
+                matches!(result, Err(ErrorCode::InvalidState)),
+                "listen_p3 from Listening should error"
+            );
+        }
+
+        #[tokio::test]
+        async fn test_tcp_listener_arc_after_listen_p3() {
+            let mut socket = make_ipv4_socket();
+            bind_socket(&mut socket);
+            socket.listen_p3().unwrap();
+            let listener = socket.tcp_listener_arc();
+            assert!(listener.is_ok(), "should get listener Arc after listen_p3");
+        }
+
+        #[tokio::test]
+        async fn test_tcp_listener_arc_before_listen_errors() {
+            let socket = make_ipv4_socket();
+            let result = socket.tcp_listener_arc();
+            assert!(
+                matches!(result, Err(ErrorCode::InvalidState)),
+                "tcp_listener_arc before listen should error"
+            );
+        }
+
+        #[tokio::test]
+        async fn test_take_send_stream_from_connected() {
+            let mut socket = make_ipv4_socket();
+            bind_socket(&mut socket);
+            socket.listen_p3().unwrap();
+            let listener = socket.tcp_listener_arc().unwrap().clone();
+            let local_addr = listener.local_addr().unwrap();
+
+            let client = tokio::net::TcpStream::connect(local_addr).await.unwrap();
+            let (accepted, _) = listener.accept().await.unwrap();
+
+            let mut connected = NetworkTcpSocket {
+                tcp_state: TcpState::Connected(std::sync::Arc::new(accepted)),
+                listen_backlog_size: DEFAULT_TCP_BACKLOG,
+                family: SocketAddressFamily::Ipv4,
+                options: Default::default(),
+                send_taken: false,
+                receive_taken: false,
+            };
+
+            let result = connected.take_send_stream();
+            assert!(result.is_ok(), "first take_send_stream should succeed");
+
+            let result = connected.take_send_stream();
+            assert!(
+                matches!(result, Err(ErrorCode::InvalidState)),
+                "second take_send_stream should fail"
+            );
+
+            drop(client);
+        }
+
+        #[tokio::test]
+        async fn test_take_receive_stream_from_connected() {
+            let mut socket = make_ipv4_socket();
+            bind_socket(&mut socket);
+            socket.listen_p3().unwrap();
+            let listener = socket.tcp_listener_arc().unwrap().clone();
+            let local_addr = listener.local_addr().unwrap();
+
+            let client = tokio::net::TcpStream::connect(local_addr).await.unwrap();
+            let (accepted, _) = listener.accept().await.unwrap();
+
+            let mut connected = NetworkTcpSocket {
+                tcp_state: TcpState::Connected(std::sync::Arc::new(accepted)),
+                listen_backlog_size: DEFAULT_TCP_BACKLOG,
+                family: SocketAddressFamily::Ipv4,
+                options: Default::default(),
+                send_taken: false,
+                receive_taken: false,
+            };
+
+            let result = connected.take_receive_stream();
+            assert!(result.is_ok(), "first take_receive_stream should succeed");
+
+            let result = connected.take_receive_stream();
+            assert!(
+                matches!(result, Err(ErrorCode::InvalidState)),
+                "second take_receive_stream should fail"
+            );
+
+            drop(client);
+        }
+
+        #[test]
+        fn test_take_send_stream_before_connected_errors() {
+            let socket = make_ipv4_socket();
+            let mut tcp = TcpSocket::Network(socket);
+            let result = tcp.take_send_stream();
+            assert!(
+                result.is_err(),
+                "take_send_stream on unconnected should fail"
+            );
+        }
+
+        #[test]
+        fn test_take_receive_stream_before_connected_errors() {
+            let socket = make_ipv4_socket();
+            let mut tcp = TcpSocket::Network(socket);
+            let result = tcp.take_receive_stream();
+            assert!(
+                result.is_err(),
+                "take_receive_stream on unconnected should fail"
+            );
+        }
+
+        #[test]
+        fn test_new_error_creates_closed_socket() {
+            let err = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "test");
+            let socket = NetworkTcpSocket::new_error(err, SocketAddressFamily::Ipv4);
+            assert!(socket.local_address().is_err());
+        }
+
+        #[test]
+        fn test_loopback_socket_props_roundtrip() {
+            let lo_socket = loopback::TcpSocket {
+                state: loopback::TcpState::Closed,
+                listen_backlog_size: 42,
+                keep_alive_enabled: true,
+                keep_alive_idle_time: 1000,
+                keep_alive_interval: 500,
+                keep_alive_count: 3,
+                hop_limit: 64,
+                receive_buffer_size: 8192,
+                send_buffer_size: 4096,
+                family: SocketAddressFamily::Ipv4,
+            };
+
+            let props = LoopbackSocketProps::from(&lo_socket);
+            assert_eq!(props.listen_backlog_size, 42);
+            assert!(props.keep_alive_enabled);
+            assert_eq!(props.keep_alive_idle_time, 1000);
+            assert_eq!(props.keep_alive_interval, 500);
+            assert_eq!(props.keep_alive_count, 3);
+            assert_eq!(props.hop_limit, 64);
+            assert_eq!(props.receive_buffer_size, 8192);
+            assert_eq!(props.send_buffer_size, 4096);
+            assert_eq!(props.family, SocketAddressFamily::Ipv4);
+        }
+
+        #[test]
+        fn test_loopback_socket_props_to_accepted_socket() {
+            let props = LoopbackSocketProps {
+                listen_backlog_size: 128,
+                keep_alive_enabled: false,
+                keep_alive_idle_time: 7200,
+                keep_alive_interval: 75,
+                keep_alive_count: 9,
+                hop_limit: 255,
+                receive_buffer_size: 65536,
+                send_buffer_size: 32768,
+                family: SocketAddressFamily::Ipv6,
+            };
+
+            let (local_tx, _local_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (_remote_tx, remote_rx) = tokio::sync::mpsc::unbounded_channel();
+            let conn = loopback::TcpConn {
+                local_address: "127.0.0.1:8080".parse().unwrap(),
+                remote_address: "127.0.0.1:9090".parse().unwrap(),
+                rx: remote_rx,
+                tx: local_tx,
+            };
+
+            let accepted = props.to_accepted_socket(conn);
+            assert!(!accepted.keep_alive_enabled);
+            assert_eq!(accepted.hop_limit, 255);
+            assert_eq!(accepted.family, SocketAddressFamily::Ipv6);
+            assert!(matches!(
+                accepted.state,
+                loopback::TcpState::Connected { accepted: true, .. }
+            ));
+        }
+    }
 }
 
 /// Properties copied from a loopback TcpSocket for creating accepted sockets.
