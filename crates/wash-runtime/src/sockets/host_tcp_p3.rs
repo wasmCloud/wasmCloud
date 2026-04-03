@@ -550,10 +550,7 @@ impl HostTcpSocket for WasiSocketsCtxView<'_> {
         socket: Resource<UpstreamTcpSocket>,
     ) -> wasmtime::Result<IpAddressFamily> {
         let sock = get_socket(self.table, &socket)?;
-        Ok(match sock.address_family() {
-            SocketAddressFamily::Ipv4 => IpAddressFamily::Ipv4,
-            SocketAddressFamily::Ipv6 => IpAddressFamily::Ipv6,
-        })
+        Ok(sock.address_family().into())
     }
 
     fn set_listen_backlog_size(

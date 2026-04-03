@@ -11,6 +11,8 @@ use std::{
 use crate::sockets::{self, SocketAddrUse, loopback};
 use anyhow::{Context as _, bail, ensure};
 use tokio::{sync::RwLock, task::JoinHandle, time::timeout};
+#[cfg(feature = "wasip3")]
+use tracing::error;
 use tracing::{Instrument, debug, info, instrument, trace, warn};
 use wasmtime::component::{
     Component, Instance, InstancePre, Linker, ResourceAny, ResourceType, Val, types::ComponentItem,
@@ -486,7 +488,7 @@ pub struct ResolvedWorkload {
 impl ResolvedWorkload {
     /// Executes the service, if present, and returns whether it was run.
     #[instrument(name="execute_service", skip_all, fields(workload.id = self.id.as_ref(), workload.name = self.name.as_ref(), workload.namespace = self.namespace.as_ref()))]
-    pub(crate) async fn execute_service(&mut self) -> anyhow::Result<bool> {
+    pub(crate) async fn execute_service(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
         #[cfg(feature = "wasip3")]
         if self
             .service
@@ -496,50 +498,45 @@ impl ResolvedWorkload {
             return self.execute_service_p3().await;
         }
 
-        let service = self
-            .service
-            .as_mut()
-            .map(|s| (s.pre_instantiate(), s.max_restarts));
-
-        if let Some((Ok(pre), mut max_restarts)) = service {
-            // This will always be present since we just checked above, but we need this structure
-            // to only borrow the service metadata
-            let mut store = if let Some(service) = self.service.as_ref() {
-                self.new_store_from_metadata(&service.metadata, true)
-                    .await?
-            } else {
-                bail!("service unexpectedly missing during execution");
-            };
-            let instance = pre.instantiate_async(&mut store).await?;
-            let handle = tokio::spawn(async move {
-                loop {
-                    if let Err(e) = instance.wasi_cli_run().call_run(&mut store).await {
-                        warn!(err = %e, retries = max_restarts, "service execution failed");
-                        if max_restarts == 0 {
-                            warn!("max restarts reached, service will not be restarted");
-                            break;
-                        }
-                    } else {
-                        info!("service exited successfully");
+        let Some(service) = self.service.as_mut() else {
+            return Ok(None);
+        };
+        let pre = service.pre_instantiate()?;
+        let mut max_restarts = service.max_restarts;
+        // Re-borrow immutably after the mutable borrow for pre_instantiate() is done
+        let Some(service) = self.service.as_ref() else {
+            bail!("service unexpectedly missing during execution");
+        };
+        let mut store = self
+            .new_store_from_metadata(&service.metadata, true)
+            .await?;
+        let instance = pre.instantiate_async(&mut store).await?;
+        let handle = tokio::spawn(async move {
+            loop {
+                if let Err(e) = instance.wasi_cli_run().call_run(&mut store).await {
+                    warn!(err = %e, retries = max_restarts, "service execution failed");
+                    if max_restarts == 0 {
+                        warn!("max restarts reached, service will not be restarted");
                         break;
                     }
-                    max_restarts = max_restarts.saturating_sub(1);
+                } else {
+                    info!("service exited successfully");
+                    break;
                 }
-            });
-
-            // Store the handle to ensure the service can be cleaned up during workload shutdown
-            if let Some(s) = self.service.as_mut() {
-                s.handle = Some(Arc::new(handle));
+                max_restarts = max_restarts.saturating_sub(1);
             }
-            Ok(true)
-        } else {
-            Ok(false)
+        });
+
+        let handle = Arc::new(handle);
+        if let Some(s) = self.service.as_mut() {
+            s.handle = Some(Arc::clone(&handle));
         }
+        Ok(Some(handle))
     }
 
     /// Execute a service using P3 (wasi:cli@0.3) CommandPre.
     #[cfg(feature = "wasip3")]
-    async fn execute_service_p3(&mut self) -> anyhow::Result<bool> {
+    async fn execute_service_p3(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
         let service = self
             .service
             .as_mut()
@@ -573,7 +570,7 @@ impl ResolvedWorkload {
                             break;
                         }
                         Ok(Ok(Err(()))) => {
-                            warn!(retries = max_restarts, "P3 service exited with error");
+                            error!(retries = max_restarts, "P3 service exited with error");
                             if max_restarts == 0 {
                                 warn!("max restarts reached, P3 service will not be restarted");
                                 break;
@@ -591,12 +588,13 @@ impl ResolvedWorkload {
                 }
             });
 
+            let handle = Arc::new(handle);
             if let Some(s) = self.service.as_mut() {
-                s.handle = Some(Arc::new(handle));
+                s.handle = Some(Arc::clone(&handle));
             }
-            Ok(true)
+            Ok(Some(handle))
         } else {
-            Ok(false)
+            Ok(None)
         }
     }
 

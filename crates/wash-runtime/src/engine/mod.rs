@@ -206,6 +206,21 @@ pub fn targets_wasip3(component: &Component) -> bool {
             .any(|(export, _)| export.starts_with("wasi:") && export.contains("@0.3"))
 }
 
+/// Detect whether a component targets WASIP3 HTTP specifically by checking for
+/// `wasi:http` imports/exports with `@0.3`. Used for HTTP dispatch to avoid
+/// routing a component that imports `wasi:cli@0.3` but exports `wasi:http@0.2`
+/// through the P3 HTTP handler.
+#[cfg(feature = "wasip3")]
+pub fn targets_wasip3_http(component: &Component) -> bool {
+    let ty = component.component_type();
+    let engine = component.engine();
+    ty.imports(engine)
+        .any(|(name, _)| name.starts_with("wasi:http") && name.contains("@0.3"))
+        || ty
+            .exports(engine)
+            .any(|(name, _)| name.starts_with("wasi:http") && name.contains("@0.3"))
+}
+
 pub mod ctx;
 mod value;
 pub mod workload;
