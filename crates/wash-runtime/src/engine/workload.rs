@@ -2012,6 +2012,8 @@ mod tests {
             Vec::new(),
             local_resources,
             Arc::default(),
+            #[cfg(feature = "wasip3")]
+            false,
         )
     }
 
@@ -2034,6 +2036,8 @@ mod tests {
             Vec::new(),
             local_resources,
             Arc::default(),
+            #[cfg(feature = "wasip3")]
+            false,
         )
     }
 
@@ -2056,6 +2060,8 @@ mod tests {
             local_resources,
             3,
             Arc::default(),
+            #[cfg(feature = "wasip3")]
+            false,
         )
     }
 

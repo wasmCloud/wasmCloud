@@ -210,8 +210,107 @@ pub fn add_p3_to_linker(
     Ok(())
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SocketAddressFamily {
     Ipv4,
     Ipv6,
+}
+
+#[cfg(all(test, feature = "wasip3"))]
+mod tests_p3 {
+    use super::*;
+
+    #[test]
+    fn test_p3_error_code_maps_all_variants() {
+        use wasmtime_wasi::p3::bindings::sockets::types::ErrorCode as P3;
+
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::AccessDenied),
+            P3::AccessDenied
+        ));
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::NotSupported),
+            P3::NotSupported
+        ));
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::InvalidArgument),
+            P3::InvalidArgument
+        ));
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::OutOfMemory),
+            P3::OutOfMemory
+        ));
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::Timeout),
+            P3::Timeout
+        ));
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::InvalidState),
+            P3::InvalidState
+        ));
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::AddressNotBindable),
+            P3::AddressNotBindable
+        ));
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::AddressInUse),
+            P3::AddressInUse
+        ));
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::RemoteUnreachable),
+            P3::RemoteUnreachable
+        ));
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::ConnectionRefused),
+            P3::ConnectionRefused
+        ));
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::ConnectionReset),
+            P3::ConnectionReset
+        ));
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::ConnectionAborted),
+            P3::ConnectionAborted
+        ));
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::DatagramTooLarge),
+            P3::DatagramTooLarge
+        ));
+    }
+
+    #[test]
+    fn test_p3_error_code_maps_p2_only_variants_to_invalidstate() {
+        use wasmtime_wasi::p3::bindings::sockets::types::ErrorCode as P3;
+
+        // P3 collapsed NotInProgress and ConcurrencyConflict into InvalidState
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::NotInProgress),
+            P3::InvalidState
+        ));
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::ConcurrencyConflict),
+            P3::InvalidState
+        ));
+    }
+
+    #[test]
+    fn test_p3_error_code_maps_unknown_to_other() {
+        use wasmtime_wasi::p3::bindings::sockets::types::ErrorCode as P3;
+
+        assert!(matches!(
+            p3_error_code_from_util(util::ErrorCode::Unknown),
+            P3::Other(None)
+        ));
+    }
+
+    #[test]
+    fn test_p3_socket_error_from_util_converts() {
+        // Just verify it doesn't panic and produces a SocketError
+        let err = p3_socket_error_from_util(util::ErrorCode::ConnectionRefused);
+        let code = err.downcast().expect("should downcast to ErrorCode");
+        assert!(matches!(
+            code,
+            wasmtime_wasi::p3::bindings::sockets::types::ErrorCode::ConnectionRefused
+        ));
+    }
 }
