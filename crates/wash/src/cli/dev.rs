@@ -177,6 +177,15 @@ impl CliCommand for DevCommand {
             debug!("wasmcloud:postgres plugin registered");
         }
 
+        // Add couchbase plugin if configured
+        if let Some(couchbase_url) = &dev_config.couchbase_url {
+            host_builder = host_builder.with_plugin(Arc::new(
+                plugin::wasmcloud_couchbase::WasmcloudCouchbase::new(couchbase_url)
+                    .context("failed to configure couchbase plugin")?,
+            ))?;
+            debug!("wasmcloud:couchbase plugin registered");
+        }
+
         // Add otel plugin
         if dev_config.wasi_otel {
             host_builder =

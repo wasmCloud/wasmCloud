@@ -47,6 +47,9 @@ pub mod wasi_logging;
 #[cfg(all(feature = "wasmcloud-postgres", not(doctest)))]
 pub mod wasmcloud_postgres;
 
+#[cfg(all(feature = "wasmcloud-couchbase", not(doctest)))]
+pub mod wasmcloud_couchbase;
+
 #[cfg(feature = "wasi-otel")]
 pub mod wasi_otel;
 

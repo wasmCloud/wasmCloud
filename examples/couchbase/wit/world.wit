@@ -1,0 +1,8 @@
+package wasmcloud:couchbase-example;
+
+world couchbase-example {
+  import wasmcloud:couchbase/types@0.1.0-draft;
+  import wasmcloud:couchbase/document@0.1.0-draft;
+
+  export wasi:http/incoming-handler@0.2.2;
+}

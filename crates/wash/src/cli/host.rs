@@ -75,6 +75,11 @@ pub struct HostCommand {
     #[arg(long = "postgres-url", env = "WASH_POSTGRES_URL")]
     pub postgres_url: Option<String>,
 
+    /// Couchbase cluster URL for the wasmcloud:couchbase plugin
+    /// (e.g. http://Administrator:password@localhost:8091)
+    #[clap(long = "couchbase-url", env = "WASH_COUCHBASE_URL")]
+    pub couchbase_url: Option<String>,
+
     /// Allow insecure OCI Registries
     #[arg(long = "allow-insecure-registries", default_value_t = false)]
     pub allow_insecure_registries: bool,
@@ -158,6 +163,13 @@ impl CliCommand for HostCommand {
             cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
                 plugin::wasmcloud_postgres::WasmcloudPostgres::new(postgres_url)
                     .context("failed to configure postgres plugin")?,
+            ))?;
+        }
+
+        if let Some(couchbase_url) = &self.couchbase_url {
+            cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
+                plugin::wasmcloud_couchbase::WasmcloudCouchbase::new(couchbase_url)
+                    .context("failed to configure couchbase plugin")?,
             ))?;
         }
 

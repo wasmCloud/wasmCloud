@@ -196,6 +196,11 @@ pub struct DevConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub postgres_url: Option<String>,
 
+    /// Optional Couchbase cluster URL for the wasmcloud:couchbase plugin.
+    /// Example: http://Administrator:password@localhost:8091
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub couchbase_url: Option<String>,
+
     /// Enable WASI OpenTelemetry support
     #[serde(default)]
     pub wasi_otel: bool,
