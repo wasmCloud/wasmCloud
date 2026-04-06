@@ -6,6 +6,9 @@
 /// wasmbus host
 pub mod wasmbus;
 
+/// Host-local TTL cache helpers
+pub(crate) mod cache;
+
 /// OCI artifact fetching
 pub mod oci;
 
