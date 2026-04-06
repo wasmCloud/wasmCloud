@@ -112,6 +112,143 @@ fn check_and_rebuild_fixtures(
     Ok(())
 }
 
+/// P3 fixtures are built with wasm32-wasip1 and then componentized with the reactor adapter.
+/// WIT deps are resolved from the shared `p3-wit-deps/` directory — each subdirectory
+/// contains a WIT package that gets copied into the fixture's `wit/deps/` before building.
+/// The fixture's `wkg.toml` documents these overrides for use with `wkg wit fetch` outside
+/// the build script.
+fn check_and_rebuild_p3_fixtures(workspace_dir: &Path, p3_fixtures: &[&str]) -> anyhow::Result<()> {
+    let fixtures_dir = workspace_dir.join("crates/wash-runtime/tests/fixtures");
+    let wasm_dir = workspace_dir.join("crates/wash-runtime/tests/wasm");
+
+    fs::create_dir_all(&wasm_dir)?;
+
+    // Reactor adapter from the pinned provider crate (matches our wasmtime version)
+    let reactor_adapter =
+        wasi_preview1_component_adapter_provider::WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER;
+
+    // Watch the shared P3 WIT deps
+    let shared_wit = fixtures_dir.join("p3-wit-deps");
+    println!("cargo:rerun-if-changed={}", shared_wit.display());
+
+    for example in p3_fixtures {
+        let example_dir = fixtures_dir.join(example);
+        if !example_dir.exists() {
+            return Err(anyhow::anyhow!(
+                "P3 fixture directory {} does not exist",
+                example_dir.display()
+            ));
+        }
+
+        println!(
+            "cargo:rerun-if-changed={}/Cargo.toml",
+            example_dir.display()
+        );
+        let src_dir = example_dir.join("src");
+        if src_dir.exists() {
+            println!("cargo:rerun-if-changed={}", src_dir.display());
+        }
+        let wit_dir = example_dir.join("wit");
+        if wit_dir.exists() {
+            println!("cargo:rerun-if-changed={}", wit_dir.display());
+        }
+
+        // Step 0: Resolve WIT deps from shared p3-wit-deps/ into fixture's wit/deps/
+        resolve_p3_wit_deps(&shared_wit, &example_dir)?;
+
+        // Step 1: Build the core module with wasm32-wasip1
+        let status = Command::new("cargo")
+            .args(["build", "--target", "wasm32-wasip1", "--release"])
+            .current_dir(&example_dir)
+            .status();
+
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(_) => {
+                println!("cargo:warning=Failed to build P3 fixture {}", example);
+                continue;
+            }
+            Err(e) => {
+                println!(
+                    "cargo:warning=Failed to execute cargo for P3 fixture {}: {}",
+                    example, e
+                );
+                continue;
+            }
+        }
+
+        // Step 2: Componentize with reactor adapter using wit-component crate
+        let artifact_dir = example_dir.join("target/wasm32-wasip1/release");
+        if !artifact_dir.exists() {
+            println!("cargo:warning=No artifact dir for P3 fixture {}", example);
+            continue;
+        }
+
+        for wasm_entry in fs::read_dir(&artifact_dir)? {
+            let wasm_entry = wasm_entry?;
+            let wasm_path = wasm_entry.path();
+
+            if wasm_path.extension().and_then(|s| s.to_str()) == Some("wasm") {
+                let dest =
+                    wasm_dir.join(wasm_path.file_name().expect("wasm file should have a name"));
+
+                let core_module = fs::read(&wasm_path)?;
+                let component = wit_component::ComponentEncoder::default()
+                    .validate(true)
+                    .module(&core_module)
+                    .expect("failed to set module")
+                    .adapter("wasi_snapshot_preview1", reactor_adapter)
+                    .expect("failed to set adapter")
+                    .encode()
+                    .expect("failed to encode component");
+                fs::write(&dest, component)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Copy shared P3 WIT packages into a fixture's `wit/deps/` directory.
+/// Each subdirectory in `shared_wit_dir` contains a `package.wit` declaring a WIT package.
+/// We read the package declaration to determine the correct `wit/deps/` directory name
+/// (e.g., `wasi-http-0.3.0-rc-2026-03-15`).
+fn resolve_p3_wit_deps(shared_wit_dir: &Path, fixture_dir: &Path) -> anyhow::Result<()> {
+    let deps_dir = fixture_dir.join("wit/deps");
+    fs::create_dir_all(&deps_dir)?;
+
+    for entry in fs::read_dir(shared_wit_dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+
+        let pkg_wit = entry.path().join("package.wit");
+        if !pkg_wit.exists() {
+            continue;
+        }
+
+        // Read the package declaration to get namespace:name@version
+        let content = fs::read_to_string(&pkg_wit)?;
+        let Some(pkg_line) = content.lines().find(|l| l.starts_with("package ")) else {
+            continue;
+        };
+
+        // Parse "package wasi:http@0.3.0-rc-2026-03-15;" -> "wasi-http-0.3.0-rc-2026-03-15"
+        let pkg_id = pkg_line
+            .trim_start_matches("package ")
+            .trim_end_matches(';')
+            .trim();
+        let dep_name = pkg_id.replace([':', '@'], "-");
+
+        let dest_dir = deps_dir.join(&dep_name);
+        fs::create_dir_all(&dest_dir)?;
+        fs::copy(&pkg_wit, dest_dir.join("package.wit"))?;
+    }
+
+    Ok(())
+}
+
 fn main() {
     let out_dir = PathBuf::from(
         env::var("OUT_DIR").expect("failed to look up `OUT_DIR` from environment variables"),
@@ -133,9 +270,23 @@ fn main() {
         "http-allowed-hosts",
     ];
 
-    // Rebuild fixtures if examples changed
+    // P3 fixtures: built with wasm32-wasip1 + reactor adapter
+    let p3_fixtures = [
+        "http-handler-p3",
+        "http-blobstore-p3",
+        "cli-service-p3",
+        "socket-test-p3",
+        "inter-component-call-p3-caller",
+        "inter-component-call-p3-callee",
+    ];
+
+    // Build test fixtures. The rerun-if-changed directives ensure these only
+    // rebuild when fixture source files actually change, not on every build.
     check_and_rebuild_fixtures(&workspace_dir, &tracked_examples)
         .expect("failed to check/rebuild fixtures");
+
+    check_and_rebuild_p3_fixtures(&workspace_dir, &p3_fixtures)
+        .expect("failed to check/rebuild P3 fixtures");
 
     let top_proto_dir = workspace_dir.join("proto");
     let proto_dir = top_proto_dir.join("wasmcloud/runtime/v2");

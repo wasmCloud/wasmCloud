@@ -7,7 +7,6 @@
 use crate::engine::ctx::SharedCtx;
 use crate::observability::FuelConsumptionMeter;
 use http_body_util::BodyExt;
-use tracing::error;
 use wasmtime::Store;
 use wasmtime::component::InstancePre;
 use wasmtime_wasi_http::p3::bindings::ServicePre;
@@ -45,30 +44,58 @@ pub async fn handle_component_request_p3(
         .map_err(|e| anyhow::anyhow!(e).context("failed to instantiate P3 service"))?;
 
     // Use run_concurrent to get an Accessor for the P3 async component model.
-    // run_concurrent returns Result<R> where R is the closure return.
-    let result: Result<wasmtime_wasi_http::p3::Response, ErrorCode> = store
-        .run_concurrent(async move |accessor| service.handle(accessor, wasi_req).await)
-        .await??;
+    // The handler invocation, response conversion, AND body collection must all
+    // happen inside run_concurrent since the body stream requires the concurrent
+    // runtime to pump data from the component.
+    let result: anyhow::Result<hyper::Response<http_body_util::Collected<bytes::Bytes>>> = store
+        .run_concurrent(async move |store| {
+            let handler_fut = async {
+                let result = service.handle(store, wasi_req).await;
+                match result {
+                    Ok(Ok(response)) => {
+                        let http_response =
+                            store.with(|s| response.into_http(s, async { Ok(()) }))?;
+                        let (parts, body) = http_response.into_parts();
+                        let body = body.collect().await.map_err(|e| {
+                            anyhow::anyhow!("failed to collect P3 response body: {e:?}")
+                        })?;
+                        Ok(hyper::Response::from_parts(parts, body))
+                    }
+                    Ok(Err(error_code)) => {
+                        tracing::error!(?error_code, "P3 HTTP handler returned error");
+                        let body = http_body_util::Empty::new()
+                            .map_err(|never| match never {})
+                            .boxed_unsync()
+                            .collect()
+                            .await
+                            .map_err(|e| anyhow::anyhow!("failed to collect error body: {e:?}"))?;
+                        Ok(hyper::Response::builder()
+                            .status(500)
+                            .body(body)
+                            .map_err(anyhow::Error::from)?)
+                    }
+                    Err(e) => Err(anyhow::anyhow!(e).context("P3 handler trap")),
+                }
+            };
+            let io_fut = async {
+                if let Err(e) = req_io.await {
+                    tracing::error!(err = ?e, "P3 request I/O error");
+                }
+            };
+            let (handler_result, _) = tokio::join!(handler_fut, io_fut);
+            handler_result
+        })
+        .await?;
 
-    // Wait for request I/O to complete
-    if let Err(e) = req_io.await {
-        error!(err = ?e, "P3 request I/O error");
-    }
-
+    // Convert collected body back to a streaming body for the hyper response
     match result {
         Ok(response) => {
-            let http_response = response.into_http(&mut store, async { Ok(()) })?;
-            Ok(http_response)
-        }
-        Err(error_code) => {
-            error!(?error_code, "P3 HTTP handler returned error");
-            let body: P3Body = http_body_util::Empty::new()
+            let (parts, collected) = response.into_parts();
+            let body: P3Body = http_body_util::Full::new(collected.to_bytes())
                 .map_err(|never| match never {})
                 .boxed_unsync();
-            hyper::Response::builder()
-                .status(500)
-                .body(body)
-                .map_err(anyhow::Error::from)
+            Ok(hyper::Response::from_parts(parts, body))
         }
+        Err(e) => Err(e),
     }
 }

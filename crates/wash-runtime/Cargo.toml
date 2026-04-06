@@ -117,6 +117,8 @@ webpki-roots = { workspace = true }
 anyhow = { workspace = true, default-features = true }
 tonic-prost-build = { workspace = true, default-features = true }
 pbjson-build = { workspace = true, default-features = true }
+wasi-preview1-component-adapter-provider = "43"
+wit-component = { workspace = true, default-features = false }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

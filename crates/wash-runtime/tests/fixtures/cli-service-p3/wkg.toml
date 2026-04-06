@@ -1,0 +1,3 @@
+[overrides]
+"wasi:cli" = { path = "../p3-wit-deps/wasi-cli" }
+"wasi:clocks" = { path = "../p3-wit-deps/wasi-clocks" }

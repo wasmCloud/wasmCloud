@@ -11,9 +11,7 @@ use std::{
 use crate::sockets::{self, SocketAddrUse, loopback};
 use anyhow::{Context as _, bail, ensure};
 use tokio::{sync::RwLock, task::JoinHandle, time::timeout};
-#[cfg(feature = "wasip3")]
-use tracing::error;
-use tracing::{Instrument, debug, info, instrument, trace, warn};
+use tracing::{Instrument, debug, error, info, instrument, trace, warn};
 use wasmtime::component::{
     Component, Instance, InstancePre, Linker, ResourceAny, ResourceType, Val, types::ComponentItem,
 };
@@ -514,7 +512,7 @@ impl ResolvedWorkload {
         let handle = tokio::spawn(async move {
             loop {
                 if let Err(e) = instance.wasi_cli_run().call_run(&mut store).await {
-                    warn!(err = %e, retries = max_restarts, "service execution failed");
+                    error!(err = %e, retries = max_restarts, "service execution failed");
                     if max_restarts == 0 {
                         warn!("max restarts reached, service will not be restarted");
                         break;
@@ -555,7 +553,7 @@ impl ResolvedWorkload {
                     let instance = match pre.instantiate_async(&mut store).await {
                         Ok(i) => i,
                         Err(e) => {
-                            warn!(err = %e, "failed to instantiate P3 service");
+                            error!(err = %e, "failed to instantiate P3 service");
                             break;
                         }
                     };
@@ -577,7 +575,7 @@ impl ResolvedWorkload {
                             }
                         }
                         Ok(Err(e)) | Err(e) => {
-                            warn!(err = %e, retries = max_restarts, "P3 service execution failed");
+                            error!(err = %e, retries = max_restarts, "P3 service execution failed");
                             if max_restarts == 0 {
                                 warn!("max restarts reached, P3 service will not be restarted");
                                 break;
@@ -1983,12 +1981,25 @@ mod tests {
         }
     }
 
-    /// HTTP counter component fixture for testing with actual WIT interfaces.
-    const HTTP_COUNTER_WASM: &[u8] = include_bytes!("../../tests/wasm/http_counter.wasm");
+    /// Load a test fixture wasm file at runtime rather than compile time.
+    /// This avoids requiring fixture wasm files during `cargo build` — they're
+    /// only needed when tests actually run.
+    fn load_fixture(name: &str) -> Vec<u8> {
+        let path = format!("{}/tests/wasm/{name}", env!("CARGO_MANIFEST_DIR"));
+        std::fs::read(&path).unwrap_or_else(|e| panic!("fixture {path} not found: {e}"))
+    }
 
-    const MESSAGE_HANDLER_WASM: &[u8] = include_bytes!("../../tests/wasm/messaging_handler.wasm");
+    fn http_counter_wasm() -> Vec<u8> {
+        load_fixture("http_counter.wasm")
+    }
 
-    const SERVICE_WASM: &[u8] = include_bytes!("../../tests/wasm/cpu-usage-service.wasm");
+    fn messaging_handler_wasm() -> Vec<u8> {
+        load_fixture("messaging_handler.wasm")
+    }
+
+    fn service_wasm() -> Vec<u8> {
+        load_fixture("cpu-usage-service.wasm")
+    }
     /// Creates a test component using the http_counter fixture.
     /// This provides a real component with actual WIT interface imports.
     fn create_test_component(id: &str) -> WorkloadComponent {
@@ -1996,7 +2007,8 @@ mod tests {
         let linker = Linker::new(&engine);
 
         // Use the actual http_counter fixture component
-        let component = Component::new(&engine, HTTP_COUNTER_WASM).unwrap();
+        let wasm = http_counter_wasm();
+        let component = Component::new(&engine, &wasm).unwrap();
 
         let local_resources = LocalResources::default();
 
@@ -2019,8 +2031,8 @@ mod tests {
         let engine = wasmtime::Engine::default();
         let linker = Linker::new(&engine);
 
-        // Use the actual http_counter fixture component
-        let component = Component::new(&engine, MESSAGE_HANDLER_WASM).unwrap();
+        let wasm = messaging_handler_wasm();
+        let component = Component::new(&engine, &wasm).unwrap();
 
         let local_resources = LocalResources::default();
 
@@ -2043,8 +2055,8 @@ mod tests {
         let engine = wasmtime::Engine::default();
         let linker = Linker::new(&engine);
 
-        // Use the actual http_counter fixture component
-        let component = Component::new(&engine, SERVICE_WASM).unwrap();
+        let wasm = service_wasm();
+        let component = Component::new(&engine, &wasm).unwrap();
 
         let local_resources = LocalResources::default();
 

@@ -6,5 +6,5 @@ edition = "2024"
 [workspace]
 
 [dependencies]
-wit-bindgen = "0.46.0"
+wit-bindgen = "0.54.0"
 tokio = { version = "1", default-features = false, features = ["sync", "macros", "io-util", "rt", "time"] }
