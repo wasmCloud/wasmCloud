@@ -819,6 +819,7 @@ impl Host {
             config.policy_service_config.policy_topic.clone(),
             config.policy_service_config.policy_timeout_ms,
             config.policy_service_config.policy_changes_topic.clone(),
+            config.policy_service_config.policy_cache_ttl,
         )
         .await?;
 
