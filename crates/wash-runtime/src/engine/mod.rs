@@ -689,6 +689,11 @@ impl EngineBuilder {
 
             cfg.consume_fuel(self.fuel_consumption);
 
+            #[cfg(feature = "wasip3")]
+            if self.wasip3 {
+                cfg.wasm_component_model_async(true);
+            }
+
             cfg
         };
 
