@@ -146,7 +146,7 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.Host{}).
-		Named("workload-Host").
+		Named("workload-host").
 		Complete(r)
 }
 

@@ -317,6 +317,6 @@ func (r *WorkloadReplicaSetReconciler) SetupWithManager(mgr ctrl.Manager) error 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.WorkloadReplicaSet{}).
 		Owns(&runtimev1alpha1.Workload{}).
-		Named("workload-WorkloadReplicaSet").
+		Named("workload-replicaset").
 		Complete(r)
 }

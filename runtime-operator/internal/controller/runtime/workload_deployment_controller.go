@@ -284,7 +284,7 @@ func (r *WorkloadDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.WorkloadDeployment{}).
 		Owns(&runtimev1alpha1.WorkloadReplicaSet{}).
-		Named("workload-WorkloadDeployment").
+		Named("workload-deployment").
 		Complete(r)
 }
 
