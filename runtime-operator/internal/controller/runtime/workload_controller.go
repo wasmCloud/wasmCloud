@@ -402,6 +402,6 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.Workload{}).
-		Named("workload-Replica").
+		Named("workload-replica").
 		Complete(r)
 }
