@@ -121,16 +121,12 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
-	// Determine the port. All hosts in a host group share the same HTTPPort;
-	// if they unexpectedly differ, use the first value and log a warning.
+	// Set the port to the first HTTPPort, since all Hosts within the same HostGroup have the same HTTPPort.
+	// Doing a range, since endpoints is a map object and can't use index.
 	var port int32
 	for _, ep := range endpoints {
-		if port == 0 {
-			port = ep.httpPort
-		} else if port != ep.httpPort {
-			log.Info("warning: hosts have different HTTPPort values for this service, using first", "port", port)
-			break
-		}
+		port = ep.httpPort
+		break
 	}
 
 	portName := "http"
