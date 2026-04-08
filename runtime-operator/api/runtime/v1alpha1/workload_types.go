@@ -170,6 +170,18 @@ type KubernetesServiceRef struct {
 	Name string `json:"name"`
 }
 
+// KubernetesSpec groups Kubernetes-specific configuration for a workload.
+type KubernetesSpec struct {
+	// Service references an existing Kubernetes Service that the operator will
+	// maintain an EndpointSlice for, pointing to the host pods running this
+	// workload. When set, the operator also registers DNS aliases for the
+	// service (e.g. service-name, service-name.namespace.svc.cluster.local)
+	// with the host so cluster-internal callers can reach the workload via
+	// Service DNS without going through an external gateway.
+	// +kubebuilder:validation:Optional
+	Service *KubernetesServiceRef `json:"service,omitempty"`
+}
+
 // WorkloadSpec defines the desired state of Workload.
 type WorkloadSpec struct {
 	// +kubebuilder:validation:Optional
@@ -186,14 +198,10 @@ type WorkloadSpec struct {
 	// +kubebuilder:validation:Optional
 	Volumes []Volume `json:"volumes,omitempty"`
 
-	// KubernetesService references an existing Kubernetes Service that the
-	// operator will maintain an EndpointSlice for, pointing to the host pods
-	// running this workload. When set, the operator also registers DNS aliases
-	// for the service (e.g. service-name, service-name.namespace.svc.cluster.local)
-	// with the host so cluster-internal callers can reach the workload via
-	// Service DNS without going through an external gateway.
+	// Kubernetes groups Kubernetes-specific configuration such as Service
+	// references and endpoint management.
 	// +kubebuilder:validation:Optional
-	KubernetesService *KubernetesServiceRef `json:"kubernetesService,omitempty"`
+	Kubernetes *KubernetesSpec `json:"kubernetes,omitempty"`
 }
 
 func (s *WorkloadSpec) EnsureHostInterface(iface HostInterface) {

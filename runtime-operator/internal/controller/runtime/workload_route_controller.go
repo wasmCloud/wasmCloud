@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	// workloadKubernetesServiceIndex indexes Workloads by their KubernetesService name.
-	workloadKubernetesServiceIndex = "spec.kubernetesServiceName"
+	// workloadKubernetesServiceIndex indexes Workloads by their Kubernetes.Service name.
+	workloadKubernetesServiceIndex = "spec.kubernetes.service.name"
 	// hostIDIndex indexes Hosts by their HostID field for O(1) lookup.
 	hostIDIndex = "spec.hostId"
 	// routeManagerLabel is the label applied to EndpointSlices managed by this controller.
@@ -255,10 +255,10 @@ func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		workloadKubernetesServiceIndex,
 		func(rawObj client.Object) []string {
 			workload, ok := rawObj.(*runtimev1alpha1.Workload)
-			if !ok || workload.Spec.KubernetesService == nil {
+			if !ok || workload.Spec.Kubernetes == nil || workload.Spec.Kubernetes.Service == nil {
 				return nil
 			}
-			return []string{workload.Spec.KubernetesService.Name}
+			return []string{workload.Spec.Kubernetes.Service.Name}
 		},
 	); err != nil {
 		return err
@@ -284,13 +284,13 @@ func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// keyed on the Workload's KubernetesService (namespace/service-name).
 	workloadToServiceRequest := func(_ context.Context, obj client.Object) []reconcile.Request {
 		workload, ok := obj.(*runtimev1alpha1.Workload)
-		if !ok || workload.Spec.KubernetesService == nil {
+		if !ok || workload.Spec.Kubernetes == nil || workload.Spec.Kubernetes.Service == nil {
 			return nil
 		}
 		return []reconcile.Request{
 			{NamespacedName: types.NamespacedName{
 				Namespace: workload.Namespace,
-				Name:      workload.Spec.KubernetesService.Name,
+				Name:      workload.Spec.Kubernetes.Service.Name,
 			}},
 		}
 	}

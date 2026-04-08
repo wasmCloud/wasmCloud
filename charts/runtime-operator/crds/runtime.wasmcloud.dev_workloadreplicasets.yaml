@@ -280,21 +280,27 @@ spec:
                         additionalProperties:
                           type: string
                         type: object
-                      kubernetesService:
+                      kubernetes:
                         description: |-
-                          KubernetesService references an existing Kubernetes Service that the
-                          operator will maintain an EndpointSlice for, pointing to the host pods
-                          running this workload. When set, the operator also registers DNS aliases
-                          for the service (e.g. service-name, service-name.namespace.svc.cluster.local)
-                          with the host so cluster-internal callers can reach the workload via
-                          Service DNS without going through an external gateway.
+                          Kubernetes groups Kubernetes-specific configuration such as Service
+                          references and endpoint management.
                         properties:
-                          name:
-                            description: Name is the name of the Kubernetes Service
-                              in the same namespace.
-                            type: string
-                        required:
-                        - name
+                          service:
+                            description: |-
+                              Service references an existing Kubernetes Service that the operator will
+                              maintain an EndpointSlice for, pointing to the host pods running this
+                              workload. When set, the operator also registers DNS aliases for the
+                              service (e.g. service-name, service-name.namespace.svc.cluster.local)
+                              with the host so cluster-internal callers can reach the workload via
+                              Service DNS without going through an external gateway.
+                            properties:
+                              name:
+                                description: Name is the name of the Kubernetes Service
+                                  in the same namespace.
+                                type: string
+                            required:
+                            - name
+                            type: object
                         type: object
                       service:
                         description: |-
