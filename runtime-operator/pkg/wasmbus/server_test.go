@@ -19,6 +19,8 @@ func TestServerRegisterHandler(t *testing.T) {
 
 	bus := NewNatsBus(nc)
 	server := NewServer(bus, "test")
+	defer server.Drain()
+
 	err = server.RegisterHandler("test", ServerHandlerFunc(func(ctx context.Context, msg *Message) error {
 		reply := NewMessage(msg.Reply)
 		reply.Data = []byte("hello")
@@ -28,7 +30,10 @@ func TestServerRegisterHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := server.Request(context.TODO(), NewMessage("test"))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := server.Request(ctx, NewMessage("test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +42,7 @@ func TestServerRegisterHandler(t *testing.T) {
 		t.Fatalf("want %q, got %q", want, got)
 	}
 
-	_, err = server.Request(context.TODO(), NewMessage("error"))
+	_, err = server.Request(ctx, NewMessage("error"))
 	if err == nil {
 		t.Fatal("expected NO_RESPONDERS")
 	}

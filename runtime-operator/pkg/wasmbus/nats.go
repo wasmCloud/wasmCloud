@@ -78,10 +78,11 @@ func NewNatsBus(nc *nats.Conn) *NatsBus {
 
 // NatsSubscription is a Subscription implementation for NATS.
 type NatsSubscription struct {
-	ch  chan *nats.Msg
-	ns  *nats.Subscription
-	bus Bus
-	wg  sync.WaitGroup
+	ch        chan *nats.Msg
+	ns        *nats.Subscription
+	bus       Bus
+	wg        sync.WaitGroup
+	closeOnce sync.Once
 }
 
 // Handle implements `Subscription.Handle` for NATS.
@@ -106,10 +107,15 @@ func (s *NatsSubscription) Handle(callback SubscriptionCallback) {
 // Drain implements `Subscription.Drain` for NATS.
 func (s *NatsSubscription) Drain() error {
 	err := s.ns.Drain()
-	if err != nil {
-		close(s.ch)
-		s.wg.Wait()
+	// Wait for the NATS subscription to fully drain before closing the
+	// channel, otherwise NATS may try to send on a closed channel.
+	if err == nil {
+		for s.ns.IsValid() {
+			time.Sleep(1 * time.Millisecond)
+		}
 	}
+	s.closeOnce.Do(func() { close(s.ch) })
+	s.wg.Wait()
 	return err
 }
 
