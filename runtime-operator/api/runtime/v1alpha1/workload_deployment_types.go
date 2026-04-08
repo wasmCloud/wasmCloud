@@ -38,13 +38,10 @@ type WorkloadDeploymentSpec struct {
 	// +kubebuilder:validation:Optional
 	Artifacts []WorkloadDeploymentArtifact `json:"artifacts,omitempty"`
 
-	// Service references an existing Kubernetes Service that the operator will
-	// maintain an EndpointSlice for, pointing to the host pods running this
-	// deployment's workloads. When set, the operator also registers DNS aliases
-	// for the service with the host so cluster-internal callers can reach
-	// workloads via Service DNS without going through an external gateway.
+	// Kubernetes groups Kubernetes-specific configuration such as Service
+	// references and endpoint management.
 	// +kubebuilder:validation:Optional
-	Service *KubernetesServiceRef `json:"service,omitempty"`
+	Kubernetes *KubernetesSpec `json:"kubernetes,omitempty"`
 }
 
 // WorkloadDeploymentStatus defines the observed state of WorkloadDeployment.

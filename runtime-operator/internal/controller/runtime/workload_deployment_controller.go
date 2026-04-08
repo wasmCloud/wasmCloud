@@ -73,8 +73,8 @@ func (r *WorkloadDeploymentReconciler) reconcileSync(ctx context.Context, deploy
 	if err := resolveArtifacts(ctx, r.Client, deployment.Namespace, templateCopy, deployment.Spec.Artifacts); err != nil {
 		return err
 	}
-	if deployment.Spec.Service != nil {
-		templateCopy.Spec.KubernetesService = deployment.Spec.Service.DeepCopy()
+	if deployment.Spec.Kubernetes != nil {
+		templateCopy.Spec.Kubernetes = deployment.Spec.Kubernetes.DeepCopy()
 	}
 
 	if want, got := currentReplica.Spec.Template.Hash(), templateCopy.Hash(); want != got {
@@ -104,8 +104,8 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 
 	// Propagate deployment-level service reference into each workload's spec
 	// so the WorkloadRouteReconciler can find it via the field index.
-	if deployment.Spec.Service != nil {
-		replicaSetTemplate.Template.Spec.KubernetesService = deployment.Spec.Service.DeepCopy()
+	if deployment.Spec.Kubernetes != nil {
+		replicaSetTemplate.Template.Spec.Kubernetes = deployment.Spec.Kubernetes.DeepCopy()
 	}
 
 	replicaSetName := fmt.Sprintf("%s-%s", deployment.Name, randHash())
