@@ -85,6 +85,8 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			continue
 		}
 
+		// Hostname is actually the pod IP of the host's Pod, so we can use it directly as the
+		// Endpoint address without needing to fetch the Pod object
 		podIP := host.Hostname
 		httpPort := int32(host.HTTPPort)
 		if _, exists := endpoints[podIP]; !exists {
