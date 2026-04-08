@@ -19,7 +19,7 @@ func TestServerRegisterHandler(t *testing.T) {
 
 	bus := NewNatsBus(nc)
 	server := NewServer(bus, "test")
-	defer server.Drain()
+	defer func() { _ = server.Drain() }()
 
 	err = server.RegisterHandler("test", ServerHandlerFunc(func(ctx context.Context, msg *Message) error {
 		reply := NewMessage(msg.Reply)

@@ -224,35 +224,7 @@ var _ = Describe("Manager", Ordered, func() {
 		const sampleDeployment = "config/samples/deployment.yaml"
 
 		It("should deploy a workload and become ready", func() {
-			By("applying the sample WorkloadDeployment")
-			cmd := exec.Command("kubectl", "apply", "-n", namespace, "-f", sampleDeployment)
-			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("waiting for WorkloadDeployment to become Ready")
-			verifyWorkloadReady := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "workloaddeployment", "hello",
-					"-n", namespace,
-					"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("True"))
-			}
-			Eventually(verifyWorkloadReady).WithTimeout(3 * time.Minute).Should(Succeed())
-
-			By("verifying WorkloadReplicaSet was created")
-			cmd = exec.Command("kubectl", "get", "workloadreplicasets.runtime.wasmcloud.dev",
-				"-n", namespace, "-o", "jsonpath={.items}")
-			output, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).NotTo(Equal("[]"))
-
-			By("verifying Workload CR was created")
-			cmd = exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
-				"-n", namespace, "-o", "jsonpath={.items}")
-			output, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).NotTo(Equal("[]"))
+			verifyWorkloadDeploy(sampleDeployment)
 		})
 
 		It("should serve HTTP traffic through the gateway", func() {
@@ -286,8 +258,10 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyCleanup).WithTimeout(1 * time.Minute).Should(Succeed())
 		})
 
-		// Add test for Service using endpointslices instead of runtime-gateway
-		// uninstall runtime-gateway Service and Deployment, then test that the Service is still routable and that EndpointSlices are created with the correct endpoints
+		// TODO: Add test for Service using endpointslices instead of
+		// runtime-gateway. Uninstall runtime-gateway Service and Deployment,
+		// then test that the Service is still routable and that EndpointSlices
+		// are created with the correct endpoints.
 	})
 
 	Context("Workload w/Service Lifecycle", func() {
@@ -299,7 +273,8 @@ var _ = Describe("Manager", Ordered, func() {
 
 		const sampleDeployment = "config/samples/service_deployment.yaml"
 
-		// delete runtime-gateway Service and Deployment before tests in this context to ensure we're testing the Service with EndpointSlices instead of the runtime-gateway
+		// Delete runtime-gateway Service and Deployment before tests in this context
+		// to ensure we're testing the Service with EndpointSlices.
 		It("should remove runtime-gateway", func() {
 			cmd := exec.Command("kubectl", "delete", "deployment", "runtime-gateway",
 				"-n", namespace)
@@ -313,35 +288,7 @@ var _ = Describe("Manager", Ordered, func() {
 		})
 
 		It("should deploy a workload and become ready", func() {
-			By("applying the sample WorkloadDeployment")
-			cmd := exec.Command("kubectl", "apply", "-n", namespace, "-f", sampleDeployment)
-			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("waiting for WorkloadDeployment to become Ready")
-			verifyWorkloadReady := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "workloaddeployment", "hello",
-					"-n", namespace,
-					"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("True"))
-			}
-			Eventually(verifyWorkloadReady).WithTimeout(3 * time.Minute).Should(Succeed())
-
-			By("verifying WorkloadReplicaSet was created")
-			cmd = exec.Command("kubectl", "get", "workloadreplicasets.runtime.wasmcloud.dev",
-				"-n", namespace, "-o", "jsonpath={.items}")
-			output, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).NotTo(Equal("[]"))
-
-			By("verifying Workload CR was created")
-			cmd = exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
-				"-n", namespace, "-o", "jsonpath={.items}")
-			output, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).NotTo(Equal("[]"))
+			verifyWorkloadDeploy(sampleDeployment)
 		})
 
 		It("should serve HTTP traffic through the gateway", func() {
@@ -398,6 +345,40 @@ var _ = Describe("Manager", Ordered, func() {
 		})
 	})
 })
+
+// verifyWorkloadDeploy applies a WorkloadDeployment manifest and verifies the
+// deployment becomes ready, along with its ReplicaSet and Workload CRs.
+func verifyWorkloadDeploy(sampleDeployment string) {
+	By("applying the sample WorkloadDeployment")
+	cmd := exec.Command("kubectl", "apply", "-n", namespace, "-f", sampleDeployment)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+
+	By("waiting for WorkloadDeployment to become Ready")
+	verifyWorkloadReady := func(g Gomega) {
+		cmd := exec.Command("kubectl", "get", "workloaddeployment", "hello",
+			"-n", namespace,
+			"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}")
+		output, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(output).To(Equal("True"))
+	}
+	Eventually(verifyWorkloadReady).WithTimeout(3 * time.Minute).Should(Succeed())
+
+	By("verifying WorkloadReplicaSet was created")
+	cmd = exec.Command("kubectl", "get", "workloadreplicasets.runtime.wasmcloud.dev",
+		"-n", namespace, "-o", "jsonpath={.items}")
+	output, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).NotTo(Equal("[]"))
+
+	By("verifying Workload CR was created")
+	cmd = exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
+		"-n", namespace, "-o", "jsonpath={.items}")
+	output, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).NotTo(Equal("[]"))
+}
 
 // serviceAccountToken returns a token for the specified service account in the given namespace.
 // It uses the Kubernetes TokenRequest API to generate a token by directly sending a request
