@@ -255,7 +255,7 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 	}
 
 	if workload.Spec.Kubernetes != nil && workload.Spec.Kubernetes.Service != nil {
-		injectServiceDNSAliases(ctx, witWorld.HostInterfaces, workload.Spec.Kubernetes.Service.Name, workload.Namespace)
+		injectServiceDNSAliases(witWorld.HostInterfaces, workload.Spec.Kubernetes.Service.Name, workload.Namespace)
 	}
 
 	var service *runtimev2.Service
