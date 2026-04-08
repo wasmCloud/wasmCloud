@@ -58,6 +58,21 @@ use rustls_pemfile::{certs, private_key};
 use tokio::sync::{RwLock, mpsc};
 use tokio_rustls::TlsAcceptor;
 
+/// Validates a hostname according to RFC 1123.
+fn is_valid_hostname(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+        })
+}
+
 /// Trait defining the routing behavior for HTTP requests
 /// Allows for custom routing logic based on workload IDs and requests
 /// Use this trait to implement custom routing strategies with the default HTTP Extension
@@ -123,6 +138,11 @@ impl Router for DynamicRouter {
             .cloned()
             .context("No host header found")?;
 
+        anyhow::ensure!(
+            is_valid_hostname(&primary_host),
+            "primary host {primary_host:?} is not a valid RFC 1123 hostname"
+        );
+
         // Collect primary hostname plus any DNS aliases injected by the operator.
         // Aliases are a comma-separated list of Service DNS names (e.g.
         // "my-svc,my-svc.default,my-svc.default.svc,my-svc.default.svc.cluster.local")
@@ -133,7 +153,7 @@ impl Router for DynamicRouter {
                 aliases
                     .split(',')
                     .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
+                    .filter(|s| !s.is_empty() && is_valid_hostname(s)),
             );
         }
 
