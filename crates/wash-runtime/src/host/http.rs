@@ -127,7 +127,7 @@ impl Router for DynamicRouter {
         // Aliases are a comma-separated list of Service DNS names (e.g.
         // "my-svc,my-svc.default,my-svc.default.svc,my-svc.default.svc.cluster.local")
         // that allow cluster-internal callers to reach this workload via Service DNS.
-        let mut all_hosts = vec![primary_host.clone()];
+        let mut all_hosts = vec![primary_host];
         if let Some(aliases) = http_iface.config.get("host-aliases") {
             all_hosts.extend(
                 aliases
