@@ -11,7 +11,7 @@ use std::{
 use crate::sockets::{self, SocketAddrUse, loopback};
 use anyhow::{Context as _, bail, ensure};
 use tokio::{sync::RwLock, task::JoinHandle, time::timeout};
-use tracing::{Instrument, debug, info, instrument, trace, warn};
+use tracing::{Instrument, debug, error, info, instrument, trace, warn};
 use wasmtime::component::{
     Component, Instance, InstancePre, Linker, ResourceAny, ResourceType, Val, types::ComponentItem,
 };
@@ -61,6 +61,9 @@ pub struct WorkloadMetadata {
     loopback: Arc<std::sync::Mutex<loopback::Network>>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
+    /// Whether WASIP3 support is enabled for this component's engine.
+    #[cfg(feature = "wasip3")]
+    wasip3_enabled: bool,
 }
 
 impl WorkloadMetadata {
@@ -151,6 +154,12 @@ impl WorkloadMetadata {
         crate::engine::exports_wasi_http(&self.component)
     }
 
+    /// Returns whether this component targets WASIP3 and the engine has P3 enabled.
+    #[cfg(feature = "wasip3")]
+    pub fn targets_p3(&self) -> bool {
+        self.wasip3_enabled && crate::engine::targets_wasip3(&self.component)
+    }
+
     /// Computes and returns the [`WitWorld`] of this component.
     pub fn world(&self) -> WitWorld {
         let mut imports = HashMap::new();
@@ -235,6 +244,7 @@ impl WorkloadService {
         local_resources: LocalResources,
         max_restarts: u64,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
+        #[cfg(feature = "wasip3")] wasip3_enabled: bool,
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
@@ -249,6 +259,8 @@ impl WorkloadService {
                 plugins: None,
                 loopback,
                 linked_components: Default::default(),
+                #[cfg(feature = "wasip3")]
+                wasip3_enabled,
             },
             handle: None,
             max_restarts,
@@ -260,6 +272,17 @@ impl WorkloadService {
         let component = self.metadata.component.clone();
         let pre = self.metadata.linker.instantiate_pre(&component)?;
         let command = CommandPre::new(pre)?;
+        Ok(command)
+    }
+
+    /// Pre-instantiate the component for P3 execution.
+    #[cfg(feature = "wasip3")]
+    pub fn pre_instantiate_p3(
+        &mut self,
+    ) -> anyhow::Result<wasmtime_wasi::p3::bindings::CommandPre<SharedCtx>> {
+        let component = self.metadata.component.clone();
+        let pre = self.metadata.linker.instantiate_pre(&component)?;
+        let command = wasmtime_wasi::p3::bindings::CommandPre::new(pre)?;
         Ok(command)
     }
 
@@ -301,6 +324,7 @@ impl WorkloadComponent {
         volume_mounts: Vec<(PathBuf, VolumeMount)>,
         local_resources: LocalResources,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
+        #[cfg(feature = "wasip3")] wasip3_enabled: bool,
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
@@ -315,6 +339,8 @@ impl WorkloadComponent {
                 plugins: None,
                 loopback,
                 linked_components: Default::default(),
+                #[cfg(feature = "wasip3")]
+                wasip3_enabled,
             },
             name: component_name.into(),
             // TODO: Implement pooling and instance limits
@@ -460,45 +486,113 @@ pub struct ResolvedWorkload {
 impl ResolvedWorkload {
     /// Executes the service, if present, and returns whether it was run.
     #[instrument(name="execute_service", skip_all, fields(workload.id = self.id.as_ref(), workload.name = self.name.as_ref(), workload.namespace = self.namespace.as_ref()))]
-    pub(crate) async fn execute_service(&mut self) -> anyhow::Result<bool> {
+    pub(crate) async fn execute_service(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
+        #[cfg(feature = "wasip3")]
+        if self
+            .service
+            .as_ref()
+            .is_some_and(|s| s.metadata.targets_p3())
+        {
+            return self.execute_service_p3().await;
+        }
+
+        let Some(service) = self.service.as_mut() else {
+            return Ok(None);
+        };
+        let pre = service.pre_instantiate()?;
+        let mut max_restarts = service.max_restarts;
+        // Re-borrow immutably after the mutable borrow for pre_instantiate() is done
+        let Some(service) = self.service.as_ref() else {
+            bail!("service unexpectedly missing during execution");
+        };
+        let mut store = self
+            .new_store_from_metadata(&service.metadata, true)
+            .await?;
+        let instance = pre.instantiate_async(&mut store).await?;
+        let handle = tokio::spawn(async move {
+            loop {
+                if let Err(e) = instance.wasi_cli_run().call_run(&mut store).await {
+                    error!(err = %e, retries = max_restarts, "service execution failed");
+                    if max_restarts == 0 {
+                        warn!("max restarts reached, service will not be restarted");
+                        break;
+                    }
+                } else {
+                    info!("service exited successfully");
+                    break;
+                }
+                max_restarts = max_restarts.saturating_sub(1);
+            }
+        });
+
+        let handle = Arc::new(handle);
+        if let Some(s) = self.service.as_mut() {
+            s.handle = Some(Arc::clone(&handle));
+        }
+        Ok(Some(handle))
+    }
+
+    /// Execute a service using P3 (wasi:cli@0.3) CommandPre.
+    #[cfg(feature = "wasip3")]
+    async fn execute_service_p3(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
         let service = self
             .service
             .as_mut()
-            .map(|s| (s.pre_instantiate(), s.max_restarts));
+            .map(|s| (s.pre_instantiate_p3(), s.max_restarts));
 
         if let Some((Ok(pre), mut max_restarts)) = service {
-            // This will always be present since we just checked above, but we need this structure
-            // to only borrow the service metadata
             let mut store = if let Some(service) = self.service.as_ref() {
                 self.new_store_from_metadata(&service.metadata, true)
                     .await?
             } else {
                 bail!("service unexpectedly missing during execution");
             };
-            let instance = pre.instantiate_async(&mut store).await?;
+
             let handle = tokio::spawn(async move {
                 loop {
-                    if let Err(e) = instance.wasi_cli_run().call_run(&mut store).await {
-                        warn!(err = %e, retries = max_restarts, "service execution failed");
-                        if max_restarts == 0 {
-                            warn!("max restarts reached, service will not be restarted");
+                    let instance = match pre.instantiate_async(&mut store).await {
+                        Ok(i) => i,
+                        Err(e) => {
+                            error!(err = %e, "failed to instantiate P3 service");
                             break;
                         }
-                    } else {
-                        info!("service exited successfully");
-                        break;
+                    };
+                    let result = store
+                        .run_concurrent(async move |accessor| {
+                            instance.wasi_cli_run().call_run(accessor).await
+                        })
+                        .await;
+                    match result {
+                        Ok(Ok(Ok(()))) => {
+                            info!("P3 service exited successfully");
+                            break;
+                        }
+                        Ok(Ok(Err(()))) => {
+                            error!(retries = max_restarts, "P3 service exited with error");
+                            if max_restarts == 0 {
+                                warn!("max restarts reached, P3 service will not be restarted");
+                                break;
+                            }
+                        }
+                        Ok(Err(e)) | Err(e) => {
+                            error!(err = %e, retries = max_restarts, "P3 service execution failed");
+                            if max_restarts == 0 {
+                                warn!("max restarts reached, P3 service will not be restarted");
+                                break;
+                            }
+                        }
                     }
                     max_restarts = max_restarts.saturating_sub(1);
                 }
             });
 
-            // Store the handle to ensure the service can be cleaned up during workload shutdown
+            let handle = Arc::new(handle);
             if let Some(s) = self.service.as_mut() {
-                s.handle = Some(Arc::new(handle));
+                s.handle = Some(Arc::clone(&handle));
             }
-            Ok(true)
+            Ok(Some(handle))
         } else {
-            Ok(false)
+            Ok(None)
         }
     }
 
@@ -1887,12 +1981,25 @@ mod tests {
         }
     }
 
-    /// HTTP counter component fixture for testing with actual WIT interfaces.
-    const HTTP_COUNTER_WASM: &[u8] = include_bytes!("../../tests/wasm/http_counter.wasm");
+    /// Load a test fixture wasm file at runtime rather than compile time.
+    /// This avoids requiring fixture wasm files during `cargo build` — they're
+    /// only needed when tests actually run.
+    fn load_fixture(name: &str) -> Vec<u8> {
+        let path = format!("{}/tests/wasm/{name}", env!("CARGO_MANIFEST_DIR"));
+        std::fs::read(&path).unwrap_or_else(|e| panic!("fixture {path} not found: {e}"))
+    }
 
-    const MESSAGE_HANDLER_WASM: &[u8] = include_bytes!("../../tests/wasm/messaging_handler.wasm");
+    fn http_counter_wasm() -> Vec<u8> {
+        load_fixture("http_counter.wasm")
+    }
 
-    const SERVICE_WASM: &[u8] = include_bytes!("../../tests/wasm/cpu-usage-service.wasm");
+    fn messaging_handler_wasm() -> Vec<u8> {
+        load_fixture("messaging_handler.wasm")
+    }
+
+    fn service_wasm() -> Vec<u8> {
+        load_fixture("cpu-usage-service.wasm")
+    }
     /// Creates a test component using the http_counter fixture.
     /// This provides a real component with actual WIT interface imports.
     fn create_test_component(id: &str) -> WorkloadComponent {
@@ -1900,7 +2007,8 @@ mod tests {
         let linker = Linker::new(&engine);
 
         // Use the actual http_counter fixture component
-        let component = Component::new(&engine, HTTP_COUNTER_WASM).unwrap();
+        let wasm = http_counter_wasm();
+        let component = Component::new(&engine, &wasm).unwrap();
 
         let local_resources = LocalResources::default();
 
@@ -1914,6 +2022,8 @@ mod tests {
             Vec::new(),
             local_resources,
             Arc::default(),
+            #[cfg(feature = "wasip3")]
+            false,
         )
     }
 
@@ -1921,8 +2031,8 @@ mod tests {
         let engine = wasmtime::Engine::default();
         let linker = Linker::new(&engine);
 
-        // Use the actual http_counter fixture component
-        let component = Component::new(&engine, MESSAGE_HANDLER_WASM).unwrap();
+        let wasm = messaging_handler_wasm();
+        let component = Component::new(&engine, &wasm).unwrap();
 
         let local_resources = LocalResources::default();
 
@@ -1936,6 +2046,8 @@ mod tests {
             Vec::new(),
             local_resources,
             Arc::default(),
+            #[cfg(feature = "wasip3")]
+            false,
         )
     }
 
@@ -1943,8 +2055,8 @@ mod tests {
         let engine = wasmtime::Engine::default();
         let linker = Linker::new(&engine);
 
-        // Use the actual http_counter fixture component
-        let component = Component::new(&engine, SERVICE_WASM).unwrap();
+        let wasm = service_wasm();
+        let component = Component::new(&engine, &wasm).unwrap();
 
         let local_resources = LocalResources::default();
 
@@ -1958,6 +2070,8 @@ mod tests {
             local_resources,
             3,
             Arc::default(),
+            #[cfg(feature = "wasip3")]
+            false,
         )
     }
 

@@ -1,0 +1,12 @@
+[package]
+name = "inter-component-call-p3-callee"
+edition = "2021"
+version = "0.0.0"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.54.0", features = ["async-spawn", "inter-task-wakeup"] }

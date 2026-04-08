@@ -1,0 +1,12 @@
+package wasmcloud:test-p3@0.1.0;
+
+world http-blobstore {
+    import wasi:http/types@0.3.0-rc-2026-03-15;
+    import wasi:clocks/types@0.3.0-rc-2026-03-15;
+    import wasi:random/random@0.3.0-rc-2026-03-15;
+    import wasi:blobstore/blobstore@0.2.0-draft;
+    import wasi:blobstore/container@0.2.0-draft;
+    import wasi:blobstore/types@0.2.0-draft;
+
+    export wasi:http/handler@0.3.0-rc-2026-03-15;
+}

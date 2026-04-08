@@ -11,6 +11,9 @@ edition.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+wasip3 = ["wash-runtime/wasip3"]
+
 [lints]
 workspace = true
 

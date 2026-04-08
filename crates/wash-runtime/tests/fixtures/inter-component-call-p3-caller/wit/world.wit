@@ -1,0 +1,14 @@
+package wasmcloud:example@0.0.1;
+
+interface middleware {
+    invoke: func() -> result<_, string>;
+}
+
+world component {
+    import wasi:http/types@0.3.0-rc-2026-03-15;
+    import wasi:clocks/types@0.3.0-rc-2026-03-15;
+    import wasi:random/random@0.3.0-rc-2026-03-15;
+    import middleware;
+
+    export wasi:http/handler@0.3.0-rc-2026-03-15;
+}

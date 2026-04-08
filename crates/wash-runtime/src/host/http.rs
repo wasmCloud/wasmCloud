@@ -730,6 +730,25 @@ async fn invoke_component_handler(
     // Create a new store for this request with plugin contexts
     let store = workload_handle.new_store(component_id).await?;
 
+    // Check if this component targets WASIP3 and dispatch accordingly
+    #[cfg(feature = "wasip3")]
+    if crate::engine::targets_wasip3_http(instance_pre.component()) {
+        let resp =
+            crate::host::http_p3::handle_component_request_p3(store, instance_pre, req, fuel_meter)
+                .await?;
+        // Convert P3 response to a compatible HyperOutgoingBody response
+        let (parts, body) = resp.into_parts();
+        let body = HyperOutgoingBody::new(
+            body.map_err(|e| {
+                wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::InternalError(Some(
+                    format!("failed to convert P3 http body: {e:?}"),
+                ))
+            })
+            .boxed_unsync(),
+        );
+        return Ok(hyper::Response::from_parts(parts, body));
+    }
+
     handle_component_request(store, instance_pre, req, fuel_meter).await
 }
 
@@ -897,8 +916,8 @@ async fn load_tls_config(
 ///
 /// If `allowed_hosts` is empty, all requests are allowed.
 /// Supports wildcard patterns like `*.example.com` which match any subdomain.
-pub fn check_allowed_hosts(
-    request: &hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+pub fn check_allowed_hosts<B>(
+    request: &hyper::Request<B>,
     allowed_hosts: &[String],
 ) -> anyhow::Result<()> {
     if allowed_hosts.is_empty() {

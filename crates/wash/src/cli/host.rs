@@ -90,6 +90,11 @@ pub struct HostCommand {
     /// Enable WASI OpenTelemetry plugin
     #[arg(long = "wasi-otel", default_value_t = false)]
     pub wasi_otel: bool,
+
+    /// Enable WASIP3 support for components that target wasi@0.3 interfaces
+    #[cfg(feature = "wasip3")]
+    #[arg(long = "wasip3", env = "WASH_WASIP3", default_value_t = false)]
+    pub wasip3: bool,
 }
 
 impl CliCommand for HostCommand {
@@ -131,10 +136,15 @@ impl CliCommand for HostCommand {
             oci_cache_dir: self.oci_cache_dir.clone(),
         };
 
-        let engine = Engine::builder()
+        #[allow(unused_mut)]
+        let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
-            .with_fuel_consumption(ctx.enable_meters())
-            .build()?;
+            .with_fuel_consumption(ctx.enable_meters());
+        #[cfg(feature = "wasip3")]
+        {
+            engine_builder = engine_builder.with_wasip3(self.wasip3);
+        }
+        let engine = engine_builder.build()?;
 
         let mut cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default()
             .with_engine(engine)
