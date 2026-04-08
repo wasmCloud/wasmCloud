@@ -60,11 +60,11 @@ operator:
   watchNamespaces: []
 
 gateway:
-  # -- DEPRECATED: runtime-gateway has been removed. HTTP routing is now handled
-  # by the runtime-operator via EndpointSlices 
-  # Set service.name in your WorkloadDeployment spec to enable automatic
-  # EndpointSlice management.
-  enabled: false
+  # -- DEPRECATED: runtime-gateway is being removed. HTTP routing is now handled
+  # by the runtime-operator via EndpointSlices.
+  # Set kubernetetes.service.name in your WorkloadDeployment spec to enable automatic
+  # EndpointSlice management. To disable installing the runtime-gateway, set `enabled` to `false`.
+  enabled: true
   # -- Fallback endpoint when no workloads are available. Example: "http://notfound.svc.cluster.local"
   fallbackEndpoint: ""
   image:
