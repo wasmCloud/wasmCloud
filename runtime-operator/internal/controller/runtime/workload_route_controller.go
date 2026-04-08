@@ -108,15 +108,13 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	if len(endpoints) == 0 {
 		// No ready workloads for this service; delete our EndpointSlice if it exists.
-		existing := &discoveryv1.EndpointSlice{}
-		err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: sliceName}, existing)
-		if errors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+		es := &discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      sliceName,
+				Namespace: namespace,
+			},
 		}
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := r.Delete(ctx, existing); err != nil && !errors.IsNotFound(err) {
+		if err := r.Delete(ctx, es); err != nil && !errors.IsNotFound(err) {
 			return ctrl.Result{}, fmt.Errorf("deleting empty EndpointSlice: %w", err)
 		}
 		log.Info("deleted EndpointSlice (no ready endpoints)", "endpointSlice", sliceName)
