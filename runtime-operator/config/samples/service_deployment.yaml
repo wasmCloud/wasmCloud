@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-workload
+spec:
+  # For typical use, you would use a headless service (clusterIP: None). However, for local testing with kind,
+  # we need to use a NodePort service and specify a nodePort to be able to access the service from outside
+  # the cluster, for testing purposes.
+  #clusterIP: None
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+      # Set to the nodeport configured in the kind cluster that the runtime-gateway used.
+      nodePort: 30950
+---
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: hello-workload
+spec:
+  replicas: 1
+  kubernetes:
+    service:
+      name: hello-workload
+  template:
+    spec:
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            # public dns alias for 127.0.0.1
+            host: hello.localhost.direct
+      components:
+        - name: hello-world
+          image: ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0

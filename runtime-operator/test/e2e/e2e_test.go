@@ -285,6 +285,117 @@ var _ = Describe("Manager", Ordered, func() {
 			}
 			Eventually(verifyCleanup).WithTimeout(1 * time.Minute).Should(Succeed())
 		})
+
+		// Add test for Service using endpointslices instead of runtime-gateway
+		// uninstall runtime-gateway Service and Deployment, then test that the Service is still routable and that EndpointSlices are created with the correct endpoints
+	})
+
+	Context("Workload w/Service Lifecycle", func() {
+		BeforeEach(func() {
+			if !runtimeSupportsHostAliases {
+				Skip("runtime does not support HostAliases, skipping EndpointSlice tests")
+			}
+		})
+
+		const sampleDeployment = "config/samples/service_deployment.yaml"
+
+		// delete runtime-gateway Service and Deployment before tests in this context to ensure we're testing the Service with EndpointSlices instead of the runtime-gateway
+		It("should remove runtime-gateway", func() {
+			cmd := exec.Command("kubectl", "delete", "deployment", "runtime-gateway",
+				"-n", namespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to delete runtime-gateway deployment")
+
+			cmd = exec.Command("kubectl", "delete", "service", "runtime-gateway",
+				"-n", namespace)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to delete runtime-gateway service")
+		})
+
+		It("should deploy a workload and become ready", func() {
+			By("applying the sample WorkloadDeployment")
+			cmd := exec.Command("kubectl", "apply", "-n", namespace, "-f", sampleDeployment)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for WorkloadDeployment to become Ready")
+			verifyWorkloadReady := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "workloaddeployment", "hello",
+					"-n", namespace,
+					"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("True"))
+			}
+			Eventually(verifyWorkloadReady).WithTimeout(3 * time.Minute).Should(Succeed())
+
+			By("verifying WorkloadReplicaSet was created")
+			cmd = exec.Command("kubectl", "get", "workloadreplicasets.runtime.wasmcloud.dev",
+				"-n", namespace, "-o", "jsonpath={.items}")
+			output, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).NotTo(Equal("[]"))
+
+			By("verifying Workload CR was created")
+			cmd = exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
+				"-n", namespace, "-o", "jsonpath={.items}")
+			output, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).NotTo(Equal("[]"))
+		})
+
+		It("should serve HTTP traffic through the gateway", func() {
+			verifyHTTP := func(g Gomega) {
+				cmd := exec.Command("curl", "-s", "-o", "/dev/null",
+					"-w", "%{http_code}",
+					"-H", "Host: hello-workload.default",
+					"http://localhost:80")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("200"))
+			}
+			Eventually(verifyHTTP).WithTimeout(1 * time.Minute).Should(Succeed())
+		})
+
+		It("should clean up workload resources on delete", func() {
+			By("deleting the WorkloadDeployment")
+			cmd := exec.Command("kubectl", "delete", "workloaddeployment", "hello",
+				"-n", namespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for Workload CRs to be cleaned up")
+			verifyCleanup := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
+					"-n", namespace, "-o", "jsonpath={.items}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("[]"))
+			}
+			Eventually(verifyCleanup).WithTimeout(1 * time.Minute).Should(Succeed())
+		})
+	})
+
+	Context("Finalizer", func() {
+		It("should terminate all hostgroup pods when scaled to zero to test finalizer", func() {
+			By("scaling the hostgroup deployment to zero")
+			cmd := exec.Command("kubectl", "scale", "deployment",
+				"-l", "wasmcloud.com/name=hostgroup",
+				"--replicas=0", "-n", namespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for all hostgroup pods to be removed")
+			verifyNoPods := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "pods",
+					"-l", "wasmcloud.com/name=hostgroup",
+					"-n", namespace, "-o", "jsonpath={.items}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("[]"))
+			}
+			Eventually(verifyNoPods).WithTimeout(2 * time.Minute).Should(Succeed())
+		})
 	})
 })
 
