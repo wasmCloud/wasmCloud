@@ -156,7 +156,6 @@ func materializeLocalResources(ctx context.Context, c client.Client, namespace s
 // via Kubernetes Service DNS.
 func injectServiceDNSAliases(hostInterfaces []*runtimev2.WitInterface, svcName, namespace string) {
 	aliases := strings.Join([]string{
-		svcName,
 		fmt.Sprintf("%s.%s", svcName, namespace),
 		fmt.Sprintf("%s.%s.svc", svcName, namespace),
 	}, ",")
@@ -255,8 +254,8 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 		})
 	}
 
-	if workload.Spec.KubernetesService != nil {
-		injectServiceDNSAliases(witWorld.HostInterfaces, workload.Spec.KubernetesService.Name, workload.Namespace)
+	if workload.Spec.Kubernetes != nil && workload.Spec.Kubernetes.Service != nil {
+		injectServiceDNSAliases(ctx, witWorld.HostInterfaces, workload.Spec.Kubernetes.Service.Name, workload.Namespace)
 	}
 
 	var service *runtimev2.Service
