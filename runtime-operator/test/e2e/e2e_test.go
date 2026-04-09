@@ -258,10 +258,6 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyCleanup).WithTimeout(1 * time.Minute).Should(Succeed())
 		})
 
-		// TODO: Add test for Service using endpointslices instead of
-		// runtime-gateway. Uninstall runtime-gateway Service and Deployment,
-		// then test that the Service is still routable and that EndpointSlices
-		// are created with the correct endpoints.
 	})
 
 	Context("Workload w/Service Lifecycle", func() {
