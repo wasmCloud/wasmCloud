@@ -164,21 +164,16 @@ func injectServiceDNSAliases(hostInterfaces []*runtimev2.WitInterface, svcName, 
 		if hi.Namespace != "wasi" || hi.Package != "http" {
 			continue
 		}
-		hasIncomingHandler := false
+
 		for _, iface := range hi.Interfaces {
 			if iface == "incoming-handler" {
-				hasIncomingHandler = true
-				break
+				if hi.Config == nil {
+					hi.Config = make(map[string]string)
+				}
+				hi.Config["host-aliases"] = aliases
+				hostInterfaces[i] = hi
 			}
 		}
-		if !hasIncomingHandler {
-			continue
-		}
-		if hi.Config == nil {
-			hi.Config = make(map[string]string)
-		}
-		hi.Config["host-aliases"] = aliases
-		hostInterfaces[i] = hi
 	}
 }
 
