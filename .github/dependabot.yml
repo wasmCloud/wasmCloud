@@ -1,0 +1,131 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-cargo:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    target-branch: "release-1.9.x"
+    groups:
+      all-cargo-release-1-9:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/runtime-gateway"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-go-runtime-gateway:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/runtime-operator"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-go-runtime-operator:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/.github/actions/helm-publish"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-github-actions-helm-publish:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/.github/actions/lint-go"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-github-actions-lint-go:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/.github/actions/no-diff"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-github-actions-no-diff:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/.github/actions/setup-go"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-github-actions-setup-go:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/.github/actions/setup-rust"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-github-actions-setup-rust:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-docker-root:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "docker"
+    directory: "/runtime-gateway"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-docker-runtime-gateway:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "docker"
+    directory: "/runtime-operator"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-docker-runtime-operator:
+        patterns:
+          - "*"
