@@ -13,7 +13,7 @@ spec:
   type: ClusterIP
   ports: 
     - port: 4222
-      targetPort: nats
+      targetPort: tcp-nats
       protocol: TCP
-      name: nats
+      name: tcp-nats
 {{- end }}

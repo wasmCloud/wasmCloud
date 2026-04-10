@@ -12,6 +12,7 @@ data:
     port: 4222
     jetstream: enabled
 
+    {{- if $.Values.global.tls.enabled }}
     tls {
       cert_file: /nats-cert/tls.crt
       key_file: /nats-cert/tls.key
@@ -26,4 +27,5 @@ data:
         { user: "wasmcloud-data" }
       ]
     }
+    {{- end }}
 {{- end }}

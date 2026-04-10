@@ -6,6 +6,10 @@ global:
     pullSecrets: []
   nameOverride: ""
   fullnameOverride: ""
+  tls:
+    # -- Enable TLS for NATS connections and certificate generation.
+    # Set to false when a service mesh (e.g. Istio) provides mTLS.
+    enabled: true
   certificates:
     # -- Enable automatic generation of self-signed TLS certificates for the operator and runtime hosts
     generate: true
@@ -23,6 +27,10 @@ global:
 # -- Values for installing a basic NATS Server with Ephemeral Storage. If you prefer to install NATS separately, set `enabled` to `false`.
 nats:
   enabled: true
+  # -- Labels to add to the NATS pod template
+  podLabels: {}
+  # -- Annotations to add to the NATS pod template
+  podAnnotations: {}
   image:
     registry: docker.io
     repository: nats
@@ -38,6 +46,10 @@ nats:
 
 operator:
   enabled: true
+  # -- Labels to add to the operator pod template
+  podLabels: {}
+  # -- Annotations to add to the operator pod template
+  podAnnotations: {}
   image:
     registry: ghcr.io
     repository: wasmcloud/runtime-operator
@@ -85,6 +97,10 @@ gateway:
     annotations: {}
 
 runtime:
+  # -- Labels to add to runtime host pod templates
+  podLabels: {}
+  # -- Annotations to add to runtime host pod templates
+  podAnnotations: {}
   serviceAccount:
     # -- Specifies whether a service account should be created
     create: true

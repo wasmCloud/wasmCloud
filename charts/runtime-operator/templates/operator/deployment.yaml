@@ -17,12 +17,18 @@ spec:
     metadata:
       labels:
         wasmcloud.com/name: runtime-operator
-        {{- include "runtime-operator.labels" . | nindent 8 }}
+        {{- include "operator.podLabels" . | nindent 8 }}
+      {{- with .Values.operator.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
+      {{- if $.Values.global.tls.enabled }}
       volumes:
         - name: operator-cert
           secret:
             secretName: {{ .Values.global.certificates.operatorCertSecretName }}
+      {{- end }}
       serviceAccountName: {{ include "operator.serviceAccountName" . }}
       {{- include "runtime-operator.imagePullSecrets" . | nindent 6 }}
       containers:
@@ -30,9 +36,11 @@ spec:
           image: {{ if $registry }}{{ printf "%s/%s" $registry .Values.operator.image.repository }}{{ else }}{{ .Values.operator.image.repository }}{{ end }}:{{ .Values.operator.image.tag | default .Chart.AppVersion }}
           args:
             - "-nats-url=nats://nats:4222"
+            {{- if $.Values.global.tls.enabled }}
             - "-nats-ca=/operator-cert/ca.crt"
             - "-nats-client-cert=/operator-cert/tls.crt"
             - "-nats-client-key=/operator-cert/tls.key"
+            {{- end }}
             {{- if .Values.operator.watchNamespaces }}
             - "-watch-namespaces={{ .Values.operator.watchNamespaces | join "," }}"
             {{- end }}
@@ -42,10 +50,12 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
           imagePullPolicy: {{ .Values.operator.image.pull_policy }}
+          {{- if $.Values.global.tls.enabled }}
           volumeMounts:
             - name: operator-cert
               mountPath: /operator-cert
               readOnly: true
+          {{- end }}
           securityContext:
             capabilities:
               drop:

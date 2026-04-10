@@ -17,15 +17,21 @@ spec:
     metadata:
       labels:
         wasmcloud.com/name: nats
-        {{- include "runtime-operator.labels" . | nindent 8 }}
+        {{- include "nats.podLabels" . | nindent 8 }}
+      {{- with .Values.nats.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       volumes:
         - name: nats-config
           configMap:
             name: nats
+        {{- if $.Values.global.tls.enabled }}
         - name: nats-cert
           secret:
             secretName: {{ .Values.global.certificates.natsCertSecretName }}
+        {{- end }}
       serviceAccountName: {{ include "nats.serviceAccountName" . }}
       {{- include "runtime-operator.imagePullSecrets" . | nindent 6 }}
       containers:
@@ -39,10 +45,12 @@ spec:
           volumeMounts:
             - name: nats-config
               mountPath: /nats-config
+            {{- if $.Values.global.tls.enabled }}
             - name: nats-cert
               mountPath: /nats-cert
+            {{- end }}
           ports:
-            - name: nats
+            - name: tcp-nats
               containerPort: 4222
           securityContext:
             capabilities:

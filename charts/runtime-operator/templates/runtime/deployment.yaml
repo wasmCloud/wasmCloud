@@ -21,17 +21,23 @@ spec:
       labels:
         wasmcloud.com/name: hostgroup
         wasmcloud.com/hostgroup: {{ .name }}
-        {{- include "runtime-operator.labels" $top | nindent 8 }}
+        {{- include "runtime.podLabels" $top | nindent 8 }}
+      {{- with $top.Values.runtime.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       volumes:
         - name: oci-cache
           emptyDir: {}
+        {{- if $top.Values.global.tls.enabled }}
         - name: runtime-cert
           secret:
             secretName: {{ $top.Values.global.certificates.runtimeCertSecretName }}
         - name: data-cert
           secret:
             secretName: {{ $top.Values.global.certificates.dataCertSecretName }}
+        {{- end }}
             # update this
       serviceAccountName: {{ include "runtime.serviceAccountName" $top }}
       {{- include "runtime-operator.imagePullSecrets" $top | nindent 6 }}
@@ -48,16 +54,20 @@ spec:
             - "--host-name=$(WASMCLOUD_HOST_IP)"
             - "--host-group={{ .name }}"
             - "--scheduler-nats-url=nats://nats:4222"
+            {{- if $top.Values.global.tls.enabled }}
             - "--scheduler-nats-tls-ca=/runtime-cert/ca.crt"
             - "--scheduler-nats-tls-cert=/runtime-cert/tls.crt"
             - "--scheduler-nats-tls-key=/runtime-cert/tls.key"
+            {{- end }}
             - "--data-nats-url=nats://nats:4222"
+            {{- if $top.Values.global.tls.enabled }}
             - "--data-nats-tls-ca=/data-cert/ca.crt"
             - "--data-nats-tls-cert=/data-cert/tls.crt"
             - "--data-nats-tls-key=/data-cert/tls.key"
+            {{- end }}
             - "--oci-cache-dir=/oci-cache"
             {{- if and (.http) (.http.enabled) }}
-            - "--http-addr=0.0.0.0:9191"
+            - "--http-addr=0.0.0.0:{{ .http.port }}"
             {{- end }}
             {{- if and (.webgpu) (.webgpu.enabled) }}
             - "--wasi-webgpu"
@@ -66,12 +76,14 @@ spec:
           volumeMounts:
             - name: oci-cache
               mountPath: /oci-cache
+            {{- if $top.Values.global.tls.enabled }}
             - name: runtime-cert
               mountPath: /runtime-cert
               readOnly: true
             - name: data-cert
               mountPath: /data-cert
               readOnly: true
+            {{- end }}
           {{- with .resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -79,7 +91,7 @@ spec:
           ports:
             {{- if and (.http) (.http.enabled) }}
             - name: http
-              containerPort: 9191
+              containerPort: {{ .http.port }}
               protocol: TCP
             {{- end }}
           securityContext:

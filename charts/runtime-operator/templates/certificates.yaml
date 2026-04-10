@@ -1,3 +1,4 @@
+{{- if .Values.global.tls.enabled }}
 {{- if .Values.global.certificates.generate }}
 {{ $ca := genCA "wasmcloud CA" 365 }}
 apiVersion: v1
@@ -67,4 +68,5 @@ data:
   tls.crt: {{ $natsCert.Cert | b64enc }}
   tls.key: {{ $natsCert.Key | b64enc }}
   ca.crt: {{ $ca.Cert | b64enc }}
+{{- end }}
 {{- end }}
