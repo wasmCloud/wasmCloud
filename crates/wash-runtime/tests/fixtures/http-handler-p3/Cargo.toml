@@ -3,10 +3,8 @@ name = "http-handler-p3"
 edition = "2021"
 version = "0.0.0"
 
-[workspace]
-
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = { version = "0.54.0", features = ["async-spawn", "inter-task-wakeup"] }
+wit-bindgen = { workspace = true, features = ["async-spawn", "inter-task-wakeup"] }

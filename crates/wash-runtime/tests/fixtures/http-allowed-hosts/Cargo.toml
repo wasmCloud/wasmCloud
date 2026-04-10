@@ -3,10 +3,8 @@ name = "http-allowed-hosts"
 edition = "2024"
 version = "0.1.0"
 
-[workspace]
-
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-wstd = "0.6"
+wstd = { workspace = true }
