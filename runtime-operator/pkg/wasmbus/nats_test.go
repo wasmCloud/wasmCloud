@@ -42,7 +42,7 @@ func TestNatsPublish(t *testing.T) {
 		defer func() { _ = sub.Drain() }()
 		received := make(chan bool, 1)
 
-		go sub.Handle(func(msg *Message) {
+		sub.Handle(func(msg *Message) {
 			if msg.Subject == testSubject {
 				received <- true
 			}
@@ -97,7 +97,7 @@ func TestNatsSubscribe(t *testing.T) {
 		defer func() { _ = sub.Drain() }()
 
 		received := make(chan bool, 1)
-		go sub.Handle(func(msg *Message) {
+		sub.Handle(func(msg *Message) {
 			if msg.Subject == testSubject {
 				received <- true
 			}
@@ -149,7 +149,7 @@ func TestNatsQueueSubscribe(t *testing.T) {
 		}
 		defer func() { _ = sub.Drain() }()
 		received := make(chan bool, 1)
-		go sub.Handle(func(msg *Message) {
+		sub.Handle(func(msg *Message) {
 			if msg.Subject == "success" {
 				received <- true
 			}

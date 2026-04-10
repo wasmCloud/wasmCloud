@@ -86,22 +86,28 @@ type NatsSubscription struct {
 }
 
 // Handle implements `Subscription.Handle` for NATS.
+// Starts a goroutine to consume messages and returns once the goroutine is ready to receive.
 func (s *NatsSubscription) Handle(callback SubscriptionCallback) {
+	ready := make(chan struct{})
 	s.wg.Add(1)
-	defer s.wg.Done()
-	for {
-		msg, ok := <-s.ch
-		if !ok {
-			break
+	go func() {
+		defer s.wg.Done()
+		close(ready)
+		for {
+			msg, ok := <-s.ch
+			if !ok {
+				break
+			}
+			callback(&Message{
+				Subject: msg.Subject,
+				Reply:   msg.Reply,
+				Header:  Header(msg.Header),
+				Data:    msg.Data,
+				bus:     s.bus,
+			})
 		}
-		callback(&Message{
-			Subject: msg.Subject,
-			Reply:   msg.Reply,
-			Header:  Header(msg.Header),
-			Data:    msg.Data,
-			bus:     s.bus,
-		})
-	}
+	}()
+	<-ready
 }
 
 // Drain implements `Subscription.Drain` for NATS.
