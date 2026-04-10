@@ -43,6 +43,36 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
+Pod labels for the operator (common labels + operator podLabels)
+*/}}
+{{- define "operator.podLabels" -}}
+{{ include "runtime-operator.labels" . }}
+{{- with .Values.operator.podLabels }}
+{{ toYaml . }}
+{{- end }}
+{{- end }}
+
+{{/*
+Pod labels for NATS (common labels + nats podLabels)
+*/}}
+{{- define "nats.podLabels" -}}
+{{ include "runtime-operator.labels" . }}
+{{- with .Values.nats.podLabels }}
+{{ toYaml . }}
+{{- end }}
+{{- end }}
+
+{{/*
+Pod labels for runtime (common labels + runtime podLabels)
+*/}}
+{{- define "runtime.podLabels" -}}
+{{ include "runtime-operator.labels" . }}
+{{- with .Values.runtime.podLabels }}
+{{ toYaml . }}
+{{- end }}
+{{- end }}
+
+{{/*
 Selector labels
 */}}
 {{- define "runtime-operator.selectorLabels" -}}
