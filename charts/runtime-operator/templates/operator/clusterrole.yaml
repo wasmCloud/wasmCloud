@@ -64,8 +64,10 @@ rules:
     - get
     - list
     - watch
-  # EndpointSlice permission can be managed in a Role vs ClusterRole since WorkloadDeployments are deployed to a specific namespace.
-  # See https://wasmcloud.com/docs/kubernetes-operator/operator-manual/roles-and-rolebindings/#restricting-access-of-the-operator-to-namespaces for more details.
+  {{- if not .Values.operator.watchNamespaces }}
+  # EndpointSlice permission can be managed in per Namespace since WorkloadDeployments if desired.
+  # See https://wasmcloud.com/docs/kubernetes-operator/operator-manual/roles-and-rolebindings/#restricting-access-of-the-operator-to-namespaces
+  # for more details.
   - apiGroups:
     - discovery.k8s.io
     resources:
@@ -78,4 +80,5 @@ rules:
     - patch
     - update
     - watch
+  {{- end }}
 {{- end }}
