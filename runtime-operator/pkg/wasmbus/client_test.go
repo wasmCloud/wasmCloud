@@ -122,7 +122,7 @@ func TestLatticeRequest(t *testing.T) {
 		defer func() { _ = sub.Drain() }()
 
 		errCh := make(chan error, 1)
-		go sub.Handle(func(msg *Message) {
+		sub.Handle(func(msg *Message) {
 			resp := &testMessage{}
 			if err := Decode(msg, resp); err != nil {
 				errCh <- err
@@ -178,7 +178,7 @@ func TestLatticeRequest(t *testing.T) {
 		}
 		defer func() { _ = sub.Drain() }()
 
-		go sub.Handle(func(msg *Message) {
+		sub.Handle(func(msg *Message) {
 			respMsg := NewMessage(msg.Reply)
 			respMsg.Header.Set("Content-Type", "bricks")
 			respMsg.Data = []byte("boom")
@@ -215,7 +215,7 @@ func TestLatticeRequest(t *testing.T) {
 		defer func() { _ = sub.Drain() }()
 
 		errCh := make(chan error, 1)
-		go sub.Handle(func(msg *Message) {
+		sub.Handle(func(msg *Message) {
 			resp := &testMessage{}
 			if err := Decode(msg, resp); err != nil {
 				errCh <- err
@@ -268,7 +268,7 @@ func TestLatticeRequest(t *testing.T) {
 		defer func() { _ = sub.Drain() }()
 
 		errCh := make(chan error, 1)
-		go sub.Handle(func(msg *Message) {
+		sub.Handle(func(msg *Message) {
 			resp := &testMessage{}
 			if err := Decode(msg, resp); err != nil {
 				errCh <- err

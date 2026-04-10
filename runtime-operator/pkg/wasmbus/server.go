@@ -92,7 +92,7 @@ func (s *Server) RegisterHandler(subject string, handler AnyServerHandler) error
 	if err != nil {
 		return err
 	}
-	go sub.Handle(func(msg *Message) {
+	sub.Handle(func(msg *Message) {
 		ctx := s.ContextFunc()
 		if err := handler.HandleMessage(ctx, msg); err != nil {
 			s.reportError(ctx, msg, err)
