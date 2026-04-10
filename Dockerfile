@@ -10,7 +10,7 @@ RUN apk --no-cache add protoc protobuf protobuf-dev
 USER nonroot
 
 # copy source code
-COPY . .
+COPY --chown=nonroot:nonroot . .
 
 # build static binary
 RUN cargo build --release --bin wash
