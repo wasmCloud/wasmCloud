@@ -11,7 +11,8 @@ global:
     # Set to false when a service mesh (e.g. Istio) provides mTLS.
     enabled: true
   certificates:
-    # -- Enable automatic generation of self-signed TLS certificates for the operator and runtime hosts
+    # -- Enable automatic generation of self-signed TLS certificates for the operator and runtime hosts.
+    # Ignored when global.tls.enabled is false.
     generate: true
     # -- Name of the Kubernetes Secrets holding the Private CA certificate ( NATS )
     caSecretName: wasmcloud-ca
@@ -122,7 +123,7 @@ runtime:
         enabled: false
       http:
         enabled: true
-        port: 80
+        port: 9191
       resources:
         requests:
           memory: "64Mi"
