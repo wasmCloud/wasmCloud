@@ -3,11 +3,9 @@ name = "http-counter"
 edition = "2021"
 version = "0.1.0"
 
-[workspace]
-
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-anyhow = "1.0"
-wit-bindgen = "0.54.0"
+anyhow = { workspace = true }
+wit-bindgen = { workspace = true }

@@ -3,11 +3,9 @@ name = "socket-test-p3"
 edition = "2021"
 version = "0.0.0"
 
-[workspace]
-
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = { version = "0.54.0", features = ["async-spawn", "inter-task-wakeup"] }
-futures = { version = "0.3", default-features = false, features = ["alloc", "async-await"] }
+wit-bindgen = { workspace = true, features = ["async-spawn", "inter-task-wakeup"] }
+futures = { workspace = true, features = ["alloc", "async-await"] }

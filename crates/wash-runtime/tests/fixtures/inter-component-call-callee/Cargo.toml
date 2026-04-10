@@ -3,10 +3,8 @@ name = "inter-component-call-callee"
 version = "0.1.0"
 edition = "2024"
 
-[workspace]
-
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.54.0"
+wit-bindgen = { workspace = true }

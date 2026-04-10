@@ -3,8 +3,6 @@ name = "cron-service"
 version = "0.1.0"
 edition = "2024"
 
-[workspace]
-
 [dependencies]
-wit-bindgen = "0.54.0"
-tokio = { version = "1", default-features = false, features = ["sync", "macros", "io-util", "rt", "time"] }
+wit-bindgen = { workspace = true }
+tokio = { workspace = true, default-features = false, features = ["sync", "macros", "io-util", "rt", "time"] }

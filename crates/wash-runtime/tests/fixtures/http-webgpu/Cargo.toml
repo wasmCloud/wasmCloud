@@ -3,14 +3,12 @@ name = "http-webgpu"
 edition = "2021"
 version = "0.1.0"
 
-[workspace]
-
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-anyhow = "1.0.100"
-bytemuck = "1.24.0"
-flume = { version = "0.11.1", features = ["spin"] }
-wstd = "0.6"
-wgpu = { git = "https://github.com/wasi-gfx/wgpu.git", rev = "898122bf2cace048e63f065181a86459edb28205", default-features = false, features = ["wasi", "wgsl"] }
+anyhow = { workspace = true }
+bytemuck = { workspace = true }
+flume = { workspace = true, features = ["spin"] }
+wstd = { workspace = true }
+wgpu = { workspace = true, default-features = false, features = ["wasi", "wgsl"] }

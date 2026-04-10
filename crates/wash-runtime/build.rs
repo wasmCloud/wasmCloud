@@ -74,24 +74,36 @@ fn check_and_rebuild_fixtures(
 
         // Build the example
         let status = Command::new("cargo")
-            .args(["build", "--target", "wasm32-wasip2", "--release"])
-            .current_dir(&example_dir)
+            .args([
+                "build",
+                "-p",
+                example,
+                "--target",
+                "wasm32-wasip2",
+                "--release",
+            ])
+            .current_dir(&fixtures_dir)
             .status();
 
         match status {
             Ok(s) if s.success() => {
                 // Copy wasm artifacts
-                let artifact_dir = example_dir.join("target/wasm32-wasip2/release");
+                let artifact_dir = fixtures_dir.join("target/wasm32-wasip2/release");
                 if artifact_dir.exists() {
-                    for wasm_entry in fs::read_dir(&artifact_dir)? {
-                        let wasm_entry = wasm_entry?;
-                        let wasm_path = wasm_entry.path();
+                    let underscored_name = format!("{}.wasm", example.replace("-", "_"));
+                    let underscored_path = artifact_dir.join(&underscored_name);
 
-                        if wasm_path.extension().and_then(|s| s.to_str()) == Some("wasm") {
-                            let dest = wasm_dir
-                                .join(wasm_path.file_name().expect("wasm file should have a name"));
-                            fs::copy(&wasm_path, &dest)?;
-                        }
+                    let (wasm_name, wasm_path) = if underscored_path.exists() {
+                        (underscored_name, underscored_path)
+                    } else {
+                        let hyphenated_name = format!("{example}.wasm");
+                        let hyphenated_path = artifact_dir.join(&hyphenated_name);
+                        (hyphenated_name, hyphenated_path)
+                    };
+
+                    if wasm_path.exists() {
+                        let dest = wasm_dir.join(&wasm_name);
+                        fs::copy(&wasm_path, &dest)?;
                     }
                 }
             }
@@ -158,8 +170,15 @@ fn check_and_rebuild_p3_fixtures(workspace_dir: &Path, p3_fixtures: &[&str]) -> 
 
         // Step 1: Build the core module with wasm32-wasip1
         let status = Command::new("cargo")
-            .args(["build", "--target", "wasm32-wasip1", "--release"])
-            .current_dir(&example_dir)
+            .args([
+                "build",
+                "-p",
+                example,
+                "--target",
+                "wasm32-wasip1",
+                "--release",
+            ])
+            .current_dir(&fixtures_dir)
             .status();
 
         match status {
@@ -178,31 +197,35 @@ fn check_and_rebuild_p3_fixtures(workspace_dir: &Path, p3_fixtures: &[&str]) -> 
         }
 
         // Step 2: Componentize with reactor adapter using wit-component crate
-        let artifact_dir = example_dir.join("target/wasm32-wasip1/release");
+        let artifact_dir = fixtures_dir.join("target/wasm32-wasip1/release");
         if !artifact_dir.exists() {
             println!("cargo:warning=No artifact dir for P3 fixture {}", example);
             continue;
         }
 
-        for wasm_entry in fs::read_dir(&artifact_dir)? {
-            let wasm_entry = wasm_entry?;
-            let wasm_path = wasm_entry.path();
+        let underscored_name = format!("{}.wasm", example.replace("-", "_"));
+        let underscored_path = artifact_dir.join(&underscored_name);
 
-            if wasm_path.extension().and_then(|s| s.to_str()) == Some("wasm") {
-                let dest =
-                    wasm_dir.join(wasm_path.file_name().expect("wasm file should have a name"));
+        let (wasm_name, wasm_path) = if underscored_path.exists() {
+            (underscored_name, underscored_path)
+        } else {
+            let hyphenated_name = format!("{example}.wasm");
+            let hyphenated_path = artifact_dir.join(&hyphenated_name);
+            (hyphenated_name, hyphenated_path)
+        };
 
-                let core_module = fs::read(&wasm_path)?;
-                let component = wit_component::ComponentEncoder::default()
-                    .validate(true)
-                    .module(&core_module)
-                    .expect("failed to set module")
-                    .adapter("wasi_snapshot_preview1", reactor_adapter)
-                    .expect("failed to set adapter")
-                    .encode()
-                    .expect("failed to encode component");
-                fs::write(&dest, component)?;
-            }
+        if wasm_path.exists() {
+            let dest = wasm_dir.join(&wasm_name);
+            let core_module = fs::read(&wasm_path)?;
+            let component = wit_component::ComponentEncoder::default()
+                .validate(true)
+                .module(&core_module)
+                .expect("failed to set module")
+                .adapter("wasi_snapshot_preview1", reactor_adapter)
+                .expect("failed to set adapter")
+                .encode()
+                .expect("failed to encode component");
+            fs::write(&dest, component)?;
         }
     }
 

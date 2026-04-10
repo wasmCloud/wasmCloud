@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    # P2 fixtures (wasm32-wasip2)
+    "http-counter",
+    "cron-service",
+    "cron-component",
+    "http-blobstore",
+    "http-webgpu",
+    "cpu-usage-service",
+    "messaging-handler",
+    "inter-component-call-caller",
+    "inter-component-call-callee",
+    "inter-component-call-middleware",
+    "http-allowed-hosts",
+    # P3 fixtures (wasm32-wasip1 + reactor adapter)
+    "http-handler-p3",
+    "http-blobstore-p3",
+    "cli-service-p3",
+    "socket-test-p3",
+    "inter-component-call-p3-caller",
+    "inter-component-call-p3-callee",
+]
+
+[workspace.dependencies]
+anyhow = "1.0"
+bytemuck = "1.24.0"
+flume = { version = "0.11.1", features = ["spin"] }
+futures = { version = "0.3", default-features = false }
+sysinfo = "0.37.2"
+tokio = { version = "1", default-features = false, features = ["sync", "macros", "io-util", "rt", "time"] }
+wstd = "0.6"
+wasmcloud-component = "0.2.0"
+wgpu = { git = "https://github.com/wasi-gfx/wgpu.git", rev = "898122bf2cace048e63f065181a86459edb28205", default-features = false, features = ["wasi", "wgsl"] }
+wit-bindgen = "0.54.0"
