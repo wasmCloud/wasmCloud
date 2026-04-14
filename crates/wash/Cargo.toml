@@ -75,7 +75,7 @@ pbjson-build = { workspace = true, default-features = true }
 bytes = { version = "1", default-features = false }
 http = { version = "1.3.1", default-features = false }
 http-body-util = { version = "0.1.3", default-features = false }
-rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring", "pem"] }
+rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
 scopeguard = { version = "1.2", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 tokio = { version = "1.45.1", default-features = false, features = ["full"] }

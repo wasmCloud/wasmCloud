@@ -126,4 +126,5 @@ tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }
 wat = { workspace = true, features = ["component-model"] }
 gag = "1.0"
+rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
 testcontainers = { workspace = true }
