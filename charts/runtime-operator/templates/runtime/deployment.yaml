@@ -37,6 +37,11 @@ spec:
         - name: data-cert
           secret:
             secretName: {{ $top.Values.global.certificates.dataCertSecretName }}
+        {{- if and (.http) (.http.enabled) (.http.tls) (.http.tls.enabled) }}
+        - name: tls-cert
+          secret:
+            secretName: {{ if and (.http.tls.certificate) (.http.tls.certificate.secretName) }}{{ .http.tls.certificate.secretName }}{{ else }}hostgroup-{{ .name }}-http-tls{{ end }}
+        {{- end }}
         {{- end }}
       serviceAccountName: {{ include "runtime.serviceAccountName" $top }}
       {{- include "runtime-operator.imagePullSecrets" $top | nindent 6 }}
@@ -67,9 +72,16 @@ spec:
             - "--oci-cache-dir=/oci-cache"
             {{- if and (.http) (.http.enabled) }}
             - "--http-addr=0.0.0.0:{{ .http.port }}"
+            {{- if and ($top.Values.global.tls.enabled) (.http.tls) (.http.tls.enabled) }}
+            - "--tls-cert-path=/tls-cert/tls.crt"
+            - "--tls-key-path=/tls-cert/tls.key"
+            {{- end }}
             {{- end }}
             {{- if and (.webgpu) (.webgpu.enabled) }}
             - "--wasi-webgpu"
+            {{- end }}
+            {{- if and (.wasip3) (.wasip3.enabled) }}
+            - "--wasip3"
             {{- end }}
           imagePullPolicy: {{ $top.Values.runtime.image.pull_policy }}
           volumeMounts:
@@ -82,6 +94,11 @@ spec:
             - name: data-cert
               mountPath: /data-cert
               readOnly: true
+            {{- if and (.http) (.http.enabled) (.http.tls) (.http.tls.enabled) }}
+            - name: tls-cert
+              mountPath: /tls-cert
+              readOnly: true
+            {{- end }}
             {{- end }}
           {{- with .resources }}
           resources:
