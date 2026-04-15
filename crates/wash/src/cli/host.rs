@@ -189,22 +189,21 @@ impl CliCommand for HostCommand {
 
         if let Some(addr) = self.http_addr {
             let http_router = wash_runtime::host::http::DynamicRouter::default();
-            let http_server =
-                if let (Some(cert_path), Some(key_path)) = (&self.tls_cert_path, &self.tls_key_path)
-                {
-                    wash_runtime::host::http::HttpServer::new_with_tls(
-                        http_router,
-                        addr,
-                        cert_path,
-                        key_path,
-                        self.tls_ca_path.as_deref(),
-                    )
-                    .await?
-                } else {
-                    wash_runtime::host::http::HttpServer::new(http_router, addr).await?
-                };
-            cluster_host_builder =
-                cluster_host_builder.with_http_handler(Arc::new(http_server));
+            let http_server = if let (Some(cert_path), Some(key_path)) =
+                (&self.tls_cert_path, &self.tls_key_path)
+            {
+                wash_runtime::host::http::HttpServer::new_with_tls(
+                    http_router,
+                    addr,
+                    cert_path,
+                    key_path,
+                    self.tls_ca_path.as_deref(),
+                )
+                .await?
+            } else {
+                wash_runtime::host::http::HttpServer::new(http_router, addr).await?
+            };
+            cluster_host_builder = cluster_host_builder.with_http_handler(Arc::new(http_server));
         }
 
         // Enable otel plugin
