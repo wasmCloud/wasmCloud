@@ -269,7 +269,7 @@ async fn test_https_rejects_plain_http() -> Result<()> {
     .await;
 
     match result {
-        Err(_) => {} // Timeout — expected
+        Err(_) => {}     // Timeout — expected
         Ok(Err(_)) => {} // Connection error — expected
         Ok(Ok(resp)) => {
             panic!(
