@@ -480,7 +480,12 @@ impl<T: Router> HostHandler for HttpServer<T> {
             .await
             .take()
             .context("HTTP server listener already consumed")?;
-        info!(addr = ?addr, "HTTP server listening");
+        let protocol = if self.tls_acceptor.is_some() {
+            "HTTPS"
+        } else {
+            "HTTP"
+        };
+        info!(addr = ?addr, protocol = protocol, "{protocol} server listening");
         // Start the HTTP server, any incoming requests call Host::handle and then it's routed
         // to the workload based on host header.
         let handler = self.router.clone();
@@ -499,13 +504,6 @@ impl<T: Router> HostHandler for HttpServer<T> {
                 error!(err = ?e, addr = ?addr, "HTTP server error");
             }
         });
-
-        let protocol = if self.tls_acceptor.is_some() {
-            "HTTPS"
-        } else {
-            "HTTP"
-        };
-        debug!(addr = ?addr, protocol = protocol, "HTTP server starting");
         Ok(())
     }
 
