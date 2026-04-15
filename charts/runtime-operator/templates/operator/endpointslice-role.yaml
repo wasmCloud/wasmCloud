@@ -1,7 +1,7 @@
+{{- if and .Values.operator.enabled .Values.operator.serviceAccount.create .Values.operator.watchNamespaces -}}
 # This file contains the ClusterRole and RoleBinding for the EndpointSlice controller, which is only required
 # if the operator is configured to watch specific namespaces. Otherwise, the default ClusterRole will be sufficient
 # for watching all namespaces.
-{{- if and .Values.operator.enabled .Values.operator.serviceAccount.create .Values.operator.watchNamespaces -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
