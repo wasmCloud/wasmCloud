@@ -68,5 +68,30 @@ data:
   tls.crt: {{ $natsCert.Cert | b64enc }}
   tls.key: {{ $natsCert.Key | b64enc }}
   ca.crt: {{ $ca.Cert | b64enc }}
+---
+{{- range .Values.runtime.hostGroups }}
+{{- if and (.http) (.http.enabled) (.http.tls) (.http.tls.enabled) }}
+{{- $cert := .http.tls.certificate | default dict }}
+{{- $genCert := $cert.generate | default dict }}
+{{- if and (not $cert.secretName) ($genCert.enabled) }}
+{{- $cn := $genCert.commonName | default (printf "hostgroup-%s" .name) }}
+{{- $domains := $genCert.domains | default (list (printf "hostgroup-%s" .name) (printf "hostgroup-%s.%s.svc.cluster.local" .name $.Release.Namespace)) }}
+{{ $httpCert := genSignedCert $cn nil $domains ($genCert.validity | default 365 | int) $ca }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hostgroup-{{ .name }}-http-tls
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "runtime-operator.labels" $ | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $httpCert.Cert | b64enc }}
+  tls.key: {{ $httpCert.Key | b64enc }}
+  ca.crt: {{ $ca.Cert | b64enc }}
+---
+{{- end }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- end }}

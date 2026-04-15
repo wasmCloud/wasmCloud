@@ -121,9 +121,29 @@ runtime:
         type: ClusterIP
       webgpu:
         enabled: false
+      wasip3:
+        enabled: false
       http:
         enabled: true
         port: 9191
+        tls:
+          # -- Enable TLS for the HTTP server. Requires global.tls.enabled to be true.
+          # When enabled, a certificate is generated (if global.certificates.generate is true)
+          # and the host serves HTTPS instead of HTTP.
+          enabled: false
+          certificate:
+            # -- Name of the Kubernetes Secret holding the TLS server certificate for this host group. Ignored if global.certificates.generate is true.
+            secretName: ""
+            generate:
+              # -- Whether to generate a self-signed TLS certificate for this host group. Ignored if global.certificates.generate is false or if certificate.secretName is set.
+              enabled: false
+              # -- Validity period (in days) for the generated TLS certificate. Ignored if global.certificates.generate is false.
+              validity: 365
+              # -- Common Name (CN) for the generated TLS certificate.
+              commonName: ""
+              # -- List of DNS Subject Alternative Names (SANs) for the generated TLS certificate.
+              # Example: ["myapp.example.com", "myapp.default.svc.cluster.local"]
+              domains: []
       resources:
         requests:
           memory: "64Mi"
