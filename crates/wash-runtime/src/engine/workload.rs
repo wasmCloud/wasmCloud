@@ -1997,7 +1997,7 @@ mod tests {
     }
 
     fn service_wasm() -> Vec<u8> {
-        load_fixture("cpu-usage-service.wasm")
+        load_fixture("cpu_usage_service.wasm")
     }
     /// Creates a test component using the http_counter fixture.
     /// This provides a real component with actual WIT interface imports.
