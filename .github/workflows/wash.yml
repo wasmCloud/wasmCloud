@@ -93,6 +93,10 @@ jobs:
       - name: Test with wasip3
         run: |
           cargo test -p wash-runtime --features wasip3
+      - name: Build benchmarks
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo bench -p wash-runtime --features wasip3 --no-run
 
   lint:
     runs-on: ubuntu-latest
