@@ -632,12 +632,11 @@ impl ResolvedWorkload {
                         trace!(name, "skipping internal plugin export");
                         continue;
                     }
-                    None => {
-                        if name == "wasmcloud:wash/plugin" {
-                            trace!(name, "skipping internal plugin export");
-                            continue;
-                        }
+                    None if name == "wasmcloud:wash/plugin" => {
+                        trace!(name, "skipping internal plugin export");
+                        continue;
                     }
+                    None => {}
                     _ => {}
                 }
                 if let ComponentItem::ComponentInstance(_) = item {
@@ -1125,8 +1124,8 @@ impl ResolvedWorkload {
 
         // Mount all possible volume mounts in the workload since components share a WasiCtx
         for (host_path, mount) in &components
-            .iter()
-            .flat_map(|(_id, workload_component)| workload_component.metadata.volume_mounts.clone())
+            .values()
+            .flat_map(|workload_component| workload_component.metadata.volume_mounts.clone())
             .collect::<Vec<_>>()
         {
             let dir = tokio::fs::canonicalize(host_path).await?;
