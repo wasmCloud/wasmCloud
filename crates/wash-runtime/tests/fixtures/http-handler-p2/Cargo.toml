@@ -1,0 +1,10 @@
+[package]
+name = "http-handler-p2"
+edition = "2021"
+version = "0.0.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true }

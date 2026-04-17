@@ -16,7 +16,7 @@ use wash_runtime::{
     types::{Component, Service, Workload, WorkloadStartRequest},
 };
 
-const CRON_SERVICE_WASM: &[u8] = include_bytes!("wasm/cron-service.wasm");
+const CRON_SERVICE_WASM: &[u8] = include_bytes!("wasm/cron_service.wasm");
 
 const CRON_COMPONENT_WASM: &[u8] = include_bytes!("wasm/cron_component.wasm");
 

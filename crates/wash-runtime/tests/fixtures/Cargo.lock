@@ -629,6 +629,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-handler-p2"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.54.0",
+]
+
+[[package]]
 name = "http-handler-p3"
 version = "0.0.0"
 dependencies = [

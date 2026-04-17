@@ -313,7 +313,6 @@ async fn test_p3_http_concurrent_requests() -> Result<()> {
     let mut handles = Vec::new();
     for _ in 0..5 {
         let client = client.clone();
-        let addr = addr;
         handles.push(tokio::spawn(async move {
             timeout(
                 Duration::from_secs(10),

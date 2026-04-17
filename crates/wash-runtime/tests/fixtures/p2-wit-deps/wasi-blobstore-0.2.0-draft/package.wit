@@ -2,7 +2,7 @@ package wasi:blobstore@0.2.0-draft;
 
 /// Types used by blobstore
 interface types {
-  use wasi:io/streams@0.2.1.{input-stream, output-stream};
+  use wasi:io/streams@0.2.2.{input-stream, output-stream};
 
   /// name of a container, a collection of objects.
   /// The container name may be any valid UTF-8 string.
@@ -93,7 +93,7 @@ interface types {
 
 /// a Container is a collection of objects
 interface container {
-  use wasi:io/streams@0.2.1.{input-stream, output-stream};
+  use wasi:io/streams@0.2.2.{input-stream, output-stream};
   use types.{container-metadata, error, incoming-value, object-metadata, object-name, outgoing-value};
 
   /// this defines the `container` resource
@@ -166,9 +166,9 @@ interface blobstore {
 }
 
 world imports {
-  import wasi:io/error@0.2.1;
-  import wasi:io/poll@0.2.1;
-  import wasi:io/streams@0.2.1;
+  import wasi:io/error@0.2.2;
+  import wasi:io/poll@0.2.2;
+  import wasi:io/streams@0.2.2;
   import types;
   import container;
   import blobstore;
