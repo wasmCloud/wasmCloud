@@ -592,8 +592,8 @@ impl HostApi for Host {
 
         for plugin in self.plugins.values() {
             let world = plugin.world();
-            imports.extend(world.imports.into_iter());
-            exports.extend(world.exports.into_iter());
+            imports.extend(world.imports);
+            exports.extend(world.exports);
         }
 
         Ok(HostHeartbeat {
