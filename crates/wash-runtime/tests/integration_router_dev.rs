@@ -9,7 +9,7 @@
 //!   matches the currently-bound workload; stopping any other workload is a
 //!   no-op for routing.
 //! - Concurrent reads racing a workload swap all resolve to a response (no
-//!   hangs, no panics from `try_lock` contention).
+//!   hangs, no panics from `try_read` contention).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -171,7 +171,7 @@ async fn test_dev_router_unbind_clears_only_matching() -> Result<()> {
 }
 
 /// Concurrent reads during a workload swap must all resolve (success or
-/// graceful 5xx). Exercises `try_lock()` contention on `last_workload_id`.
+/// graceful 5xx). Exercises `try_read()` contention on `last_workload_id`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_dev_router_concurrent_reads_during_swap() -> Result<()> {
     let (addr, host) = start_host_with_dev_router("127.0.0.1:0").await?;
