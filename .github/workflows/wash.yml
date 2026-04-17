@@ -73,7 +73,7 @@ jobs:
       - name: Setup wasm-tools
         uses: bytecodealliance/actions/wasm-tools/setup@d742827944dcb656569399571a8a45261b5089f6 # v1.1.0
         with:
-          version: "1.223.1"
+          version: "1.247.0"
       - name: Setup protoc
         uses: arduino/setup-protoc@f4d5893b897028ff5739576ea0409746887fa536 # v3.0.0
         with:
