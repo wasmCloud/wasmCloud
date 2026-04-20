@@ -52,6 +52,9 @@ pub mod wasi_otel;
 
 pub mod wasmcloud_messaging;
 
+#[cfg(feature = "wasmcloud-nats")]
+pub mod wasmcloud_nats;
+
 #[cfg(all(feature = "wasi-webgpu", not(target_os = "windows")))]
 pub mod wasi_webgpu;
 
