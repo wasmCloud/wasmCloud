@@ -1,8 +1,24 @@
+# The Runtime Gateway is deprecated as of wasmCloud 2.0.3. HTTP traffic to
+# workloads is now routed by the operator via EndpointSlices tied to standard
+# Kubernetes Services (see a WorkloadDeployment's
+# spec.template.spec.kubernetes.service.name field).
+#
+# The gateway is disabled here so its NodePort Service does not collide with
+# workload Services on port 30950. To re-enable it (e.g. for backwards
+# compatibility with 2.0.2 manifests), set `gateway.enabled: true` and add a
+# service block such as:
+#
+#   gateway:
+#     enabled: true
+#     service:
+#       type: NodePort
+#       nodePorts:
+#         http: 30950
+#
+# See https://wasmcloud.com/docs/kubernetes-operator/operator-manual/helm-values
+# for the full gateway configuration reference.
 gateway:
-  enabled: true
-  service:
-    type: NodePort
-    nodePort: 30950
+  enabled: false
 
 runtime:
   hostGroups:
