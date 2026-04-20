@@ -550,6 +550,9 @@ impl CliCommand for HostCommand {
             .with_plugin(Arc::new(plugin::wasi_keyvalue::NatsKeyValue::new(
                 &data_nats_client,
             )))?
+            .with_plugin(Arc::new(plugin::wasmcloud_nats::WasmcloudNats::new(
+                data_nats_client.clone(),
+            )))?
             .with_meters(Meters::new(ctx.enable_meters()));
 
         #[cfg(feature = "wasm_component_model_implements")]
