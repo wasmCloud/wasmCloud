@@ -2,7 +2,7 @@
 //!
 //! Three kinds of loops: JetStream push (with explicit ack via `MessageHandle`),
 //! core NATS subscriptions (no ack), and KV watches. Each loop dispatches into
-//! the component's `wasmcloud:nats/handler` export.
+//! the component's split `wasmcloud:nats/*-handler` exports.
 
 use std::sync::Arc;
 
@@ -302,7 +302,7 @@ pub(super) async fn spawn_core_subscriptions(
 }
 
 /// Spawn KV watchers. Each watcher dispatches every `entry` into
-/// `handle-kv-event(bucket, entry)`.
+/// `handle-event(bucket, entry)`.
 pub(super) async fn spawn_kv_watches(
     workload: &ResolvedWorkload,
     component_id: &str,

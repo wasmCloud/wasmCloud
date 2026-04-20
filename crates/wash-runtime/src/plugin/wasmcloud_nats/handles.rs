@@ -21,11 +21,10 @@ pub struct MessageHandle {
 
 /// Handle to a pull-based JetStream consumer.
 ///
-/// The consumer is constructed by the component (possibly attaching to an
-/// existing durable) and lives until `delete()` is called or the resource
-/// is dropped.
+/// The consumer is opened by the component and lives until the resource is
+/// dropped.
 pub struct PullConsumerHandle {
-    pub(super) consumer: Consumer<pull::Config>,
+    pub(super) consumer: Option<Consumer<pull::Config>>,
 }
 
 /// Handle to an open JetStream KV bucket.

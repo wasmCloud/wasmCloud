@@ -53,6 +53,14 @@ fn plugin_for<'a>(ctx: &ActiveCtx<'a>) -> Result<Arc<WasmcloudNats>, types::Nats
         .ok_or_else(|| types::NatsError::Unexpected("nats plugin not available".to_string()))
 }
 
+fn kv_op_to_wit(op: jetstream::kv::Operation) -> kv::KvOperation {
+    match op {
+        jetstream::kv::Operation::Put => kv::KvOperation::Put,
+        jetstream::kv::Operation::Delete => kv::KvOperation::Delete,
+        jetstream::kv::Operation::Purge => kv::KvOperation::Purge,
+    }
+}
+
 pub(super) fn kv_entry_to_wit(e: &jetstream::kv::Entry) -> kv::Entry {
     kv::Entry {
         key: e.key.clone(),
@@ -60,14 +68,6 @@ pub(super) fn kv_entry_to_wit(e: &jetstream::kv::Entry) -> kv::Entry {
         revision: e.revision,
         created_at_unix_nanos: e.created.unix_timestamp_nanos().max(0) as u64,
         operation: kv_op_to_wit(e.operation),
-    }
-}
-
-fn kv_op_to_wit(op: jetstream::kv::Operation) -> kv::KvOperation {
-    match op {
-        jetstream::kv::Operation::Put => kv::KvOperation::Put,
-        jetstream::kv::Operation::Delete => kv::KvOperation::Delete,
-        jetstream::kv::Operation::Purge => kv::KvOperation::Purge,
     }
 }
 
@@ -131,23 +131,10 @@ impl<'a> core::Host for ActiveCtx<'a> {
             Err(e) => return Ok(Err(e)),
         };
 
-        let subject = msg.subject;
-        let payload: Bytes = msg.body.into();
-        let has_headers = msg.headers.as_ref().is_some_and(|h| !h.is_empty());
+        let types::NatsMessage { subject, body, .. } = msg;
 
         let timeout_duration = Duration::from_millis(timeout_ms as u64);
-
-        let request_future = async {
-            if has_headers {
-                let headers = wit_headers_to_nats(msg.headers.as_deref().unwrap_or_default());
-                plugin
-                    .client
-                    .request_with_headers(subject, headers, payload)
-                    .await
-            } else {
-                plugin.client.request(subject, payload).await
-            }
-        };
+        let request_future = plugin.client.request(subject, body.into());
 
         let resp = match tokio::time::timeout(timeout_duration, request_future).await {
             Ok(Ok(m)) => m,
@@ -185,23 +172,21 @@ impl<'a> js::Host for ActiveCtx<'a> {
             Err(e) => return Ok(Err(e)),
         };
 
-        let subject = msg.subject;
-        let payload: Bytes = msg.body.into();
-        let has_headers = msg.headers.as_ref().is_some_and(|h| !h.is_empty());
-
-        let ack_future = if has_headers {
-            let headers = wit_headers_to_nats(msg.headers.as_deref().unwrap_or_default());
-            plugin
+        let ack_future = if let Some(headers) = msg.headers.as_ref().filter(|h| !h.is_empty()) {
+            let header_map = wit_headers_to_nats(headers);
+            match plugin
                 .jetstream
-                .publish_with_headers(subject, headers, payload)
+                .publish_with_headers(msg.subject, header_map, msg.body.into())
                 .await
+            {
+                Ok(f) => f,
+                Err(e) => return Ok(Err(jetstream_err("failed to publish", e))),
+            }
         } else {
-            plugin.jetstream.publish(subject, payload).await
-        };
-
-        let ack_future = match ack_future {
-            Ok(f) => f,
-            Err(e) => return Ok(Err(jetstream_err("failed to publish", e))),
+            match plugin.jetstream.publish(msg.subject, msg.body.into()).await {
+                Ok(f) => f,
+                Err(e) => return Ok(Err(jetstream_err("failed to publish", e))),
+            }
         };
 
         let ack = match ack_future.await {
@@ -243,7 +228,7 @@ impl<'a> js::Host for ActiveCtx<'a> {
                 data: m.payload.to_vec(),
                 headers: Some(nats_headers_to_wit(&m.headers)),
             })),
-            Err(e) => Ok(Err(jetstream_err("direct-get failed", e))),
+            Err(e) => Ok(Err(jetstream_err("get-by-sequence failed", e))),
         }
     }
 
@@ -268,21 +253,23 @@ impl<'a> js::Host for ActiveCtx<'a> {
             }
         };
 
-        let deliver_policy = if start_sequence > 0 {
-            jetstream::consumer::DeliverPolicy::ByStartSequence { start_sequence }
+        let effective_start = if start_sequence == 0 {
+            1
         } else {
-            jetstream::consumer::DeliverPolicy::All
+            start_sequence
         };
 
         let pull_consumer = match stream
             .create_consumer(jetstream::consumer::pull::Config {
-                deliver_policy,
+                deliver_policy: jetstream::consumer::DeliverPolicy::ByStartSequence {
+                    start_sequence: effective_start,
+                },
                 ..Default::default()
             })
             .await
         {
             Ok(c) => c,
-            Err(e) => return Ok(Err(jetstream_err("failed to create consumer", e))),
+            Err(e) => return Ok(Err(jetstream_err("failed to create scan consumer", e))),
         };
 
         let mut msg_stream = match pull_consumer.messages().await {
@@ -347,17 +334,20 @@ impl<'a> js::Host for ActiveCtx<'a> {
             }
         };
 
-        let existing: jetstream::consumer::Consumer<jetstream::consumer::pull::Config> =
-            match stream.get_consumer(&consumer).await {
-                Ok(c) => c,
-                Err(e) => {
-                    return Ok(Err(types::NatsError::NotFound(format!(
-                        "consumer '{consumer}' on stream '{stream_name}': {e}"
-                    ))));
-                }
-            };
+        let consumer_cfg = jetstream::consumer::pull::Config {
+            name: Some(consumer.clone()),
+            durable_name: Some(consumer.clone()),
+            ..Default::default()
+        };
 
-        let handle = PullConsumerHandle { consumer: existing };
+        let opened_consumer = match stream.create_consumer(consumer_cfg).await {
+            Ok(c) => c,
+            Err(e) => return Ok(Err(jetstream_err("open pull-consumer failed", e))),
+        };
+
+        let handle = PullConsumerHandle {
+            consumer: Some(opened_consumer),
+        };
         let resource = self.table.push(handle)?;
         Ok(Ok(resource))
     }
@@ -466,7 +456,17 @@ impl<'a> js::HostPullConsumer for ActiveCtx<'a> {
         batch: u32,
         timeout_ms: u32,
     ) -> wasmtime::Result<Result<Vec<Resource<MessageHandle>>, types::NatsError>> {
-        let consumer = self.table.get(&rep)?.consumer.clone();
+        let consumer = {
+            let handle = self.table.get(&rep)?;
+            match handle.consumer.as_ref() {
+                Some(consumer) => consumer.clone(),
+                None => {
+                    return Ok(Err(types::NatsError::Unexpected(
+                        "pull consumer has been dropped".to_string(),
+                    )));
+                }
+            }
+        };
 
         let fetch = consumer
             .fetch()
@@ -542,6 +542,10 @@ impl<'a> kv::Host for ActiveCtx<'a> {
         Ok(Ok(resource))
     }
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// kv::HostBucket
+// ──────────────────────────────────────────────────────────────────────────
 
 const KV_KEYS_BATCH: usize = 1000;
 

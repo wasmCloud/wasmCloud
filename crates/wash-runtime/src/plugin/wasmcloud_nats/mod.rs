@@ -178,12 +178,14 @@ impl HostPlugin for WasmcloudNats {
         component_handle: &mut WorkloadItem<'a>,
         interfaces: HashSet<WitInterface>,
     ) -> anyhow::Result<()> {
-        let Some(interface) = interfaces
+        let nats_interfaces: Vec<&WitInterface> = interfaces
             .iter()
-            .find(|i| i.namespace == "wasmcloud" && i.package == "nats")
-        else {
+            .filter(|i| i.namespace == "wasmcloud" && i.package == "nats")
+            .collect();
+
+        if nats_interfaces.is_empty() {
             return Ok(());
-        };
+        }
 
         bindings::wasmcloud::nats::types::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
             component_handle.linker(),
@@ -202,26 +204,51 @@ impl HostPlugin for WasmcloudNats {
             crate::engine::ctx::extract_active_ctx,
         )?;
 
-        let has_handler = interface
-            .interfaces
-            .iter()
-            .any(|i| i == "jetstream-handler" || i == "core-handler" || i == "kv-handler");
-        if has_handler {
-            let jetstream_subs = interface
-                .config
-                .get("subscriptions")
-                .map(|s| parse_jetstream_subscriptions(s))
-                .unwrap_or_default();
-            let core_subs = interface
-                .config
-                .get("core-subscriptions")
-                .map(|s| parse_core_subscriptions(s))
-                .unwrap_or_default();
-            let kv_watches = interface
-                .config
-                .get("kv-watches")
-                .map(|s| parse_kv_watches(s))
-                .unwrap_or_default();
+        let exports_handler = nats_interfaces.iter().any(|interface| {
+            interface.interfaces.iter().any(|name| {
+                matches!(
+                    name.as_str(),
+                    "handler" | "jetstream-handler" | "core-handler" | "kv-handler"
+                )
+            })
+        });
+
+        if exports_handler {
+            let mut jetstream_subs = Vec::new();
+            let mut core_subs = Vec::new();
+            let mut kv_watches = Vec::new();
+
+            for interface in &nats_interfaces {
+                let has_jetstream = interface
+                    .interfaces
+                    .iter()
+                    .any(|name| matches!(name.as_str(), "handler" | "jetstream-handler"));
+                if has_jetstream {
+                    if let Some(value) = interface.config.get("subscriptions") {
+                        jetstream_subs.extend(parse_jetstream_subscriptions(value));
+                    }
+                }
+
+                let has_core = interface
+                    .interfaces
+                    .iter()
+                    .any(|name| matches!(name.as_str(), "handler" | "core-handler"));
+                if has_core {
+                    if let Some(value) = interface.config.get("core-subscriptions") {
+                        core_subs.extend(parse_core_subscriptions(value));
+                    }
+                }
+
+                let has_kv = interface
+                    .interfaces
+                    .iter()
+                    .any(|name| matches!(name.as_str(), "handler" | "kv-handler"));
+                if has_kv {
+                    if let Some(value) = interface.config.get("kv-watches") {
+                        kv_watches.extend(parse_kv_watches(value));
+                    }
+                }
+            }
 
             let WorkloadItem::Component(component_handle) = component_handle else {
                 anyhow::bail!("Service can not be tracked");
