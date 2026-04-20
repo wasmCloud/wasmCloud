@@ -23,10 +23,11 @@ list of these projects can be found [here](https://github.com/orgs/wasmCloud/rep
 
 ## Maintainers Structure
 
-There are two levels of maintainers for wasmCloud. The wasmCloud org maintainers oversee the overall
-project and its health. Project maintainers focus on a single codebase, a group of related
-codebases, a service (e.g., a website), or a supporting area (e.g., CI or community management). See
-the [Contributor Ladder](./CONTRIBUTION_LADDER.md) for more detail on responsibilities and how to
+There are two levels of maintainers for wasmCloud.
+- **Org maintainers** oversee the overall project and its health.
+- **Project maintainers** focus on a single codebase, a group of related codebases, a service (e.g., a website), or a supporting area (e.g., CI or community management).
+
+See the [Contributor Ladder](./CONTRIBUTION_LADDER.md) for more detail on responsibilities and how to
 progress through them.
 
 ### wasmCloud Org Maintainers
@@ -107,9 +108,9 @@ If an **org maintainer** steps down, the additional steps are:
 
 Any maintainer may take a leave of absence for any reason (which they are not required to
 disclose). To do so, open a PR to mark yourself as "on leave" in [MAINTAINERS.md](./MAINTAINERS.md).
-Maximum leave is 6 months; an additional 6-month extension requires a majority vote of the relevant
-project maintainers. If a maintainer on leave has not contacted other maintainers after 6 months,
-they will be moved to emeritus status. Upon returning, open a PR to remove the "on leave"
+project maintainers. Upon returning, open a PR to remove the "on leave" designation — no additional vote required.
+
+If a maintainer on leave has not contacted other maintainers after 6 months, they may be moved to emeritus status.
 designation — no additional vote required.
 
 ## Decision Making at the wasmCloud org level

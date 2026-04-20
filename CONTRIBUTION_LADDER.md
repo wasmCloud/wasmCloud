@@ -24,10 +24,11 @@ Everyone is a community member! Here are some ways to get more involved:
 - Comment on issues you are interested in.
 - Submit a pull request to fix a bug or add a feature.
 - Report a bug or share a use case.
-- Share a component or provider you built and your experience with it.
+- Share a component or example you built and your experience with it.
 - Come chat with us in [Slack](https://slack.wasmcloud.com/).
 
-All community members must follow our [Code of Conduct](CODE_OF_CONDUCT.md).
+All community members must follow the [CNCF Code of
+Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md).
 
 ## Contributor
 
@@ -39,8 +40,6 @@ basic privileges on the repositories where they are contributors:
 - [Mark issues as duplicates](https://help.github.com/en/articles/about-duplicate-issues-and-pull-requests)
 - Close, reopen, and assign issues and pull requests
 
-Contributors must agree to and follow our [Contributing Guide](CONTRIBUTING.md).
-
 ### How to become a contributor
 
 Maintainers watch for community members who may make good contributors, but don't be shy — if you
@@ -50,8 +49,9 @@ To be recognized as a contributor, the maintainers would like to see you:
 
 - Comment on issues with your experiences and opinions.
 - Add comments and reviews on pull requests.
-- Open pull requests with bug fixes, improvements, or documentation.
 - Open issues with bugs, experience reports, or questions.
+- Open pull requests with bug fixes, improvements, or documentation.
+- Add comments and reviews on pull requests.
 
 ## Project Maintainer
 
