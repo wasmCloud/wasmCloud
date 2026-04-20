@@ -56,6 +56,10 @@ pub mod wasmcloud_messaging;
 
 pub mod wasmcloud_secrets;
 
+/// NATS-native capability: core pub/sub, JetStream, and KV.
+#[cfg(feature = "wasmcloud-nats")]
+pub mod wasmcloud_nats;
+
 /// Host capabilities provided by a WebAssembly component running in its own
 /// supervised store (rather than by a Rust plugin running in-store). Needs
 /// `oci` for the loader that fetches a plugin's wasm.
@@ -85,6 +89,7 @@ pub(crate) mod stream_collect;
     not(target_os = "windows"),
     not(target_arch = "s390x")
 ))]
+
 pub mod wasi_webgpu;
 
 /// A wrapper around a [`std::collections::HashSet`] of [`crate::wit::WitInterface`] that provides convenience methods for looking up interfaces by namespace, package, and set of interfaces.

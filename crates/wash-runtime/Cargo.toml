@@ -32,7 +32,7 @@ path = "src/lib.rs"
 workspace = true
 
 [features]
-default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasi-webgpu", "wasm_component_model_implements"]
+default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasi-webgpu", "wasm_component_model_implements", "wasmcloud-nats"]
 oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:sha2", "dep:wit-component"]
 wasi-otel = []
 washlet = ["oci"]
@@ -48,6 +48,8 @@ wasm_component_model_implements = []
 # long-lived, supervised store, serving cross-store capability calls.
 # See `plugin::component_host` for the adapter and how it wires up.
 host-component-plugins = []
+# NATS-native capability: core pub/sub, JetStream, and KV.
+wasmcloud-nats = []
 wasi-webgpu = ["dep:wasi-webgpu-wasmtime"]
 wasmcloud-postgres = [
     "dep:tokio-postgres", "dep:tokio-postgres-rustls",
@@ -61,7 +63,7 @@ wasi-tls = ["dep:wasmtime-wasi-tls"]
 [dependencies]
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
-async-nats = { workspace = true, features = ["aws-lc-rs"] }
+async-nats = { workspace = true, features = ["server_2_10", "server_2_11", "server_2_12"] }
 async-trait = { workspace = true }
 bon = { workspace = true }
 bytes = { workspace = true }

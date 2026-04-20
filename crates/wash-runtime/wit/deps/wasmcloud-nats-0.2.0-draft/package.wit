@@ -1,0 +1,195 @@
+package wasmcloud:nats@0.2.0-draft;
+
+/// Shared types and errors used across the wasmcloud:nats interfaces.
+interface types {
+  /// A NATS message. Applies to both core and JetStream messages.
+  record nats-message {
+    subject: string,
+    body: list<u8>,
+    reply-to: option<string>,
+    headers: option<list<header-entry>>,
+  }
+
+  /// A single header key-value pair.
+  record header-entry {
+    name: string,
+    value: string,
+  }
+
+  /// Typed errors for NATS operations.
+  variant nats-error {
+    /// Connection / transport error talking to NATS.
+    connection(string),
+    /// Request timed out.
+    timeout(string),
+    /// JetStream-specific error with a detail string.
+    jetstream(string),
+    /// The key was not found in a KV bucket.
+    key-not-found,
+    /// CAS `update` failed. Payload carries the actual current revision.
+    revision-mismatch(u64),
+    /// A pull-consumer `fetch` returned empty within the timeout.
+    no-messages,
+    /// Named resource (stream, bucket, consumer) doesn't exist.
+    not-found(string),
+    /// Anything that doesn't fit the cases above.
+    unexpected(string),
+  }
+}
+
+/// Core NATS: fire-and-forget publish and request/reply. No durability.
+interface core {
+  use types.{nats-message, nats-error};
+
+  /// Publish a message. Fire-and-forget.
+  publish: func(msg: nats-message) -> result<_, nats-error>;
+
+  /// Send a request and wait for a single reply within timeout.
+  request: func(msg: nats-message, timeout-ms: u32) -> result<nats-message, nats-error>;
+}
+
+/// JetStream: durable publish, pull-consumer attach, and message retrieval.
+/// Stream / consumer / bucket lifecycle (admin) is intentionally out of scope
+/// — provision these out-of-band via deployment tooling or the NATS CLI.
+interface jetstream {
+  use types.{nats-message, nats-error, header-entry};
+
+  /// Ack returned from a JetStream publish.
+  record publish-ack {
+    stream-name: string,
+    sequence: u64,
+    duplicate: bool,
+  }
+
+  /// A message retrieved from a JetStream stream (read-only snapshot).
+  record stored-message {
+    subject: string,
+    sequence: u64,
+    data: list<u8>,
+    headers: option<list<header-entry>>,
+  }
+
+  /// Handle to a single JetStream-delivered message. Acknowledgement methods
+  /// consume the handle's internal state — calling ack/nak/term more than once
+  /// returns an error. `in-progress` can be called repeatedly to extend ack-wait.
+  resource message-handle {
+    /// Borrow the underlying message.
+    message: func() -> nats-message;
+    /// Stream sequence number.
+    sequence: func() -> u64;
+    /// Number of times this message has been delivered (1 on first delivery).
+    delivery-count: func() -> u32;
+
+    /// Acknowledge successful processing.
+    ack: func() -> result<_, nats-error>;
+    /// Negative-acknowledge with an optional redelivery delay.
+    nak: func(delay-ms: option<u32>) -> result<_, nats-error>;
+    /// Reset the ack-wait timer while work is still in progress.
+    in-progress: func() -> result<_, nats-error>;
+    /// Reject the message permanently — do not redeliver.
+    term: func() -> result<_, nats-error>;
+  }
+
+  /// Pull-based consumer for batched, backpressure-friendly reads. The
+  /// consumer must already exist on the stream — attach via `open-pull-consumer`.
+  resource pull-consumer {
+    /// Fetch up to `batch` messages, waiting at most `timeout-ms` for the
+    /// first message. Returns `no-messages` if the timeout elapses empty.
+    fetch: func(batch: u32, timeout-ms: u32) -> result<list<message-handle>, nats-error>;
+  }
+
+  /// Publish a message to a JetStream-managed subject.
+  publish: func(msg: nats-message) -> result<publish-ack, nats-error>;
+
+  /// Fetch a single message by its stream sequence number (direct-get).
+  get-by-sequence: func(stream-name: string, sequence: u64) -> result<stored-message, nats-error>;
+
+  /// Sequential replay: read up to `max-count` messages starting from
+  /// `start-sequence`. Stateless — does not create a durable consumer.
+  scan: func(stream-name: string, start-sequence: u64, max-count: u32) -> result<list<stored-message>, nats-error>;
+
+  /// Attach to an existing pull consumer on a stream. The consumer must have
+  /// been provisioned out-of-band (e.g. via the NATS CLI).
+  open-pull-consumer: func(stream-name: string, consumer: string) -> result<pull-consumer, nats-error>;
+}
+
+/// JetStream key-value store. Bucket lifecycle (create/delete/list) is
+/// intentionally out of scope — provision buckets out-of-band.
+interface kv {
+  use types.{nats-error};
+
+  /// Operation that produced a KV entry.
+  enum kv-operation {
+    put,
+    delete,
+    purge,
+  }
+
+  /// A single entry as seen in get/history/watch.
+  record entry {
+    key: string,
+    value: list<u8>,
+    revision: u64,
+    created-at-unix-nanos: u64,
+    operation: kv-operation,
+  }
+
+  /// Status snapshot for a bucket.
+  record bucket-status {
+    bucket: string,
+    values: u64,
+    history: u8,
+    ttl-seconds: u64,
+    bytes: u64,
+  }
+
+  /// Handle to an open KV bucket.
+  resource bucket {
+    /// Fetch the latest entry for a key.
+    get: func(key: string) -> result<option<entry>, nats-error>;
+    /// Put a value. Returns the new revision.
+    put: func(key: string, value: list<u8>) -> result<u64, nats-error>;
+    /// Create a key only if absent. Returns the new revision.
+    create: func(key: string, value: list<u8>) -> result<u64, nats-error>;
+    /// Compare-and-swap. Fails with `revision-mismatch` on conflict.
+    update: func(key: string, value: list<u8>, expected-revision: u64) -> result<u64, nats-error>;
+    /// Delete a key (tombstone, keeps history).
+    delete: func(key: string) -> result<_, nats-error>;
+    /// Purge a key (removes history as well).
+    purge: func(key: string) -> result<_, nats-error>;
+
+    /// List all keys in the bucket.
+    keys: func() -> result<list<string>, nats-error>;
+    /// All historical entries for a key (put/update/delete/purge ops).
+    history: func(key: string) -> result<list<entry>, nats-error>;
+
+    /// Bucket state snapshot.
+    status: func() -> result<bucket-status, nats-error>;
+  }
+
+  /// Open an existing bucket. Errors with `not-found` if it doesn't exist.
+  open: func(bucket: string) -> result<bucket, nats-error>;
+}
+
+/// Handler for JetStream deliveries. The component is responsible for
+/// acknowledging (or nak/term) via the handle — returning Ok without acking
+/// relies on ack-wait to trigger redelivery.
+interface jetstream-handler {
+  use jetstream.{message-handle};
+
+  handle-message: func(handle: message-handle) -> result<_, string>;
+}
+
+/// Handler for core NATS subscriptions. No ack semantics.
+interface core-handler {
+  use types.{nats-message};
+
+  handle-message: func(msg: nats-message) -> result<_, string>;
+}
+
+/// Handler for KV watch events.
+interface kv-handler {
+  use kv.{entry};
+
+  handle-event: func(bucket: string, entry: entry) -> result<_, string>;
+}
