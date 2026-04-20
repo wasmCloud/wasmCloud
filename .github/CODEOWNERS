@@ -1,10 +1,26 @@
-# CODEOWNERS for wash
-# 
-# This file defines the code owners for the wash repository.
-# Code owners are automatically requested for review when someone opens a pull request
-# that modifies code that they own.
+# CODEOWNERS for the wasmCloud monorepo
 #
-# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# Code owners are automatically requested for review when someone opens a pull
+# request that modifies code they own. Teams referenced here are defined in
+# MAINTAINERS.md at the repository root.
 
-# Default owners for everything in the repo
-* @wasmCloud/wash-maintainers
+# Default owner: org maintainers catch anything not matched below
+*                       @wasmCloud/org-maintainers
+
+# wash CLI and runtime
+/crates/wash/           @wasmCloud/wash-maintainers
+/crates/wash-runtime/   @wasmCloud/wash-maintainers
+
+# Go-based runtime components
+/runtime-gateway/       @wasmCloud/go-maintainers
+/runtime-operator/      @wasmCloud/go-maintainers
+/proto/                 @wasmCloud/go-maintainers
+
+# CI, release automation, charts, and deploy assets
+/.github/               @wasmCloud/ci-maintainers
+/charts/                @wasmCloud/ci-maintainers
+/deploy/                @wasmCloud/ci-maintainers
+
+# Examples and project templates
+/examples/              @wasmCloud/examples-maintainers
+/templates/             @wasmCloud/examples-maintainers
