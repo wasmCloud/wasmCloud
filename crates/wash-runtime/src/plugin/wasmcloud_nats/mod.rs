@@ -15,13 +15,51 @@ mod interfaces;
 mod subscriber;
 
 pub(super) mod bindings {
+    // Imports-only world: used to install host imports into the linker
+    // and is the canonical source for shared types (types, core, jetstream, kv).
+    // Does not require the component to export any handler.
     crate::wasmtime::component::bindgen!({
-        world: "nats",
+        world: "nats-imports",
+        imports: { default: async | trappable | tracing },
+        with: {
+            "wasmcloud:nats/jetstream.message-handle": super::handles::MessageHandle,
+            "wasmcloud:nats/jetstream.pull-consumer": super::handles::PullConsumerHandle,
+            "wasmcloud:nats/kv.bucket": super::handles::BucketHandle,
+        },
+    });
+}
+
+// Per-handler worlds, each in its own module so their duplicate import types
+// don't collide with `bindings::wasmcloud::nats::{types,core,jetstream,kv}`.
+// Each world only requires the single export that its spawner actually calls,
+// so a component exporting only one of the three handlers pre-instantiates
+// cleanly (previously a unified `nats` world forced all three exports).
+pub(super) mod jetstream_bindings {
+    crate::wasmtime::component::bindgen!({
+        world: "nats-jetstream-handler",
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
         with: {
             "wasmcloud:nats/jetstream.message-handle": super::handles::MessageHandle,
             "wasmcloud:nats/jetstream.pull-consumer": super::handles::PullConsumerHandle,
+        },
+    });
+}
+
+pub(super) mod core_bindings {
+    crate::wasmtime::component::bindgen!({
+        world: "nats-core-handler",
+        imports: { default: async | trappable | tracing },
+        exports: { default: async | tracing },
+    });
+}
+
+pub(super) mod kv_bindings {
+    crate::wasmtime::component::bindgen!({
+        world: "nats-kv-handler",
+        imports: { default: async | trappable | tracing },
+        exports: { default: async | tracing },
+        with: {
             "wasmcloud:nats/kv.bucket": super::handles::BucketHandle,
         },
     });
