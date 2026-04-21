@@ -16,10 +16,44 @@ use crate::engine::workload::ResolvedWorkload;
 use crate::observability::FuelConsumptionMeter;
 use crate::wasmtime::component::Resource;
 
-use super::bindings::{self, wasmcloud::nats::types};
 use super::handles::{BucketHandle, MessageHandle};
-use super::interfaces::kv_entry_to_wit;
-use super::{CoreSubscriptionConfig, JetStreamSubscriptionConfig, KvWatchConfig, PLUGIN_NATS_ID};
+use super::{
+    CoreSubscriptionConfig, JetStreamSubscriptionConfig, KvWatchConfig, PLUGIN_NATS_ID,
+    core_bindings, jetstream_bindings, kv_bindings,
+};
+
+fn nats_headers_to_core_wit(
+    headers: &async_nats::HeaderMap,
+) -> Vec<core_bindings::wasmcloud::nats::types::HeaderEntry> {
+    let mut out = Vec::new();
+    for (name, values) in headers.iter() {
+        for value in values {
+            out.push(core_bindings::wasmcloud::nats::types::HeaderEntry {
+                name: name.to_string(),
+                value: value.as_str().to_string(),
+            });
+        }
+    }
+    out
+}
+
+fn kv_entry_to_kv_handler_wit(e: &jetstream::kv::Entry) -> kv_bindings::wasmcloud::nats::kv::Entry {
+    let operation = match e.operation {
+        jetstream::kv::Operation::Put => kv_bindings::wasmcloud::nats::kv::KvOperation::Put,
+        jetstream::kv::Operation::Delete => {
+            kv_bindings::wasmcloud::nats::kv::KvOperation::Delete
+        }
+        jetstream::kv::Operation::Purge => kv_bindings::wasmcloud::nats::kv::KvOperation::Purge,
+    };
+
+    kv_bindings::wasmcloud::nats::kv::Entry {
+        key: e.key.clone(),
+        value: e.value.to_vec(),
+        revision: e.revision,
+        created_at_unix_nanos: e.created.unix_timestamp_nanos().max(0) as u64,
+        operation,
+    }
+}
 
 /// Spawn a JetStream push subscription per entry. Each consumer uses explicit
 /// ack so the handler can decide ack / nak / term via the `message-handle`.
@@ -32,7 +66,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
-    let pre = bindings::NatsPre::new(instance_pre)?;
+    let pre = jetstream_bindings::NatsJetstreamHandlerPre::new(instance_pre)?;
 
     for sub in subs {
         let jetstream = jetstream.clone();
@@ -203,7 +237,7 @@ pub(super) async fn spawn_core_subscriptions(
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
-    let pre = bindings::NatsPre::new(instance_pre)?;
+    let pre = core_bindings::NatsCoreHandlerPre::new(instance_pre)?;
 
     for sub in subs {
         let client = client.clone();
@@ -239,10 +273,8 @@ pub(super) async fn spawn_core_subscriptions(
                         };
 
                         let reply_to = raw.reply.as_ref().map(|r| r.to_string());
-                        let headers = raw.headers.as_ref().map(
-                            super::interfaces::nats_headers_to_wit,
-                        );
-                        let msg = types::NatsMessage {
+                        let headers = raw.headers.as_ref().map(nats_headers_to_core_wit);
+                        let msg = core_bindings::wasmcloud::nats::types::NatsMessage {
                             subject: raw.subject.to_string(),
                             reply_to,
                             body: raw.payload.to_vec(),
@@ -312,7 +344,7 @@ pub(super) async fn spawn_kv_watches(
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
-    let pre = bindings::NatsPre::new(instance_pre)?;
+    let pre = kv_bindings::NatsKvHandlerPre::new(instance_pre)?;
 
     for watch in watches {
         let jetstream = jetstream.clone();
@@ -354,7 +386,7 @@ pub(super) async fn spawn_kv_watches(
                             None => break,
                         };
 
-                        let wit_entry = kv_entry_to_wit(&entry);
+                        let wit_entry = kv_entry_to_kv_handler_wit(&entry);
                         let bucket_name = watch.bucket.clone();
 
                         let mut store = match workload.new_store(&component_id).await {
