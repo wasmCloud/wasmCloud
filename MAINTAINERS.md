@@ -69,6 +69,10 @@ Name: Aditya Salunkhe
 GitHub: @Aditya1404Sal
 Organization: Betty Blocks
 
+Name: Pavel Agafonov
+GitHub: @if0ne
+Organization: T-Bank
+
 ## @wasmCloud/go-maintainers
 
 _Covers Go SDK and Go-based tooling, including the runtime gateway, runtime operator, and proto
