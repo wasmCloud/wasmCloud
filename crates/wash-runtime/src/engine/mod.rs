@@ -681,8 +681,9 @@ impl EngineBuilder {
             let mut cfg = wasmtime::Config::default();
 
             let use_pooling_allocator = getenv::<bool>("WASMTIME_POOLING");
-            let use_pooling_allocator = use_pooling_allocator
-                .or(self.use_pooling_allocator)
+            let use_pooling_allocator = self
+                .use_pooling_allocator
+                .or(use_pooling_allocator)
                 .unwrap_or(true);
 
             // The pooling allocator can be more efficient for workloads with many short-lived instances
