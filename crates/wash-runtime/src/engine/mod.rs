@@ -679,12 +679,20 @@ impl EngineBuilder {
             cfg
         } else {
             let mut cfg = wasmtime::Config::default();
+
+            let use_pooling_allocator = getenv::<bool>("WASMTIME_POOLING");
+            let use_pooling_allocator = use_pooling_allocator
+                .or(self.use_pooling_allocator)
+                .unwrap_or(true);
+
             // The pooling allocator can be more efficient for workloads with many short-lived instances
-            if let Ok(true) = use_pooling_allocator_by_default(self.use_pooling_allocator) {
+            if use_pooling_allocator && let Ok(true) = is_pooling_allocator_supported() {
                 tracing::debug!("using pooling allocator by default");
                 cfg.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(
                     new_pooling_config(self.max_instances.unwrap_or(1000)),
                 ));
+            } else if use_pooling_allocator {
+                tracing::warn!("pooling allocator requested but not supported");
             }
 
             cfg.consume_fuel(self.fuel_consumption);
@@ -737,15 +745,7 @@ pub fn imports_wasi_http(component: &Component) -> bool {
 
 // TL;DR this is likely best for machines that can handle the large virtual memory requirement of the pooling allocator
 // https://github.com/bytecodealliance/wasmtime/blob/b943666650696f1eb7ff8b217762b58d5ef5779d/src/commands/serve.rs#L641-L656
-fn use_pooling_allocator_by_default(runtime_preference: Option<bool>) -> anyhow::Result<bool> {
-    if let Some(v) = runtime_preference {
-        return Ok(v);
-    }
-
-    if let Some(v) = getenv("WASMTIME_POOLING") {
-        return Ok(v);
-    }
-
+fn is_pooling_allocator_supported() -> anyhow::Result<bool> {
     const BITS_TO_TEST: u32 = 42;
     let mut config = wasmtime::Config::new();
     config.wasm_memory64(true);
