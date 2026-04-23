@@ -3,35 +3,66 @@ package integration
 import (
 	"context"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 )
 
 var (
-	testEnv        *envtest.Environment
-	k8sClient      client.Client
-	reconcileCount atomic.Int64
-	cancelMgr      context.CancelFunc
+	testEnv   *envtest.Environment
+	k8sClient client.Client
+	cancelMgr context.CancelFunc
 )
 
-type stubReconciler struct {
+type precompileReconciler struct {
 	client.Client
+	Scheme *runtime.Scheme
 }
 
-func (r *stubReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	reconcileCount.Add(1)
+func (r *precompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	var a runtimev1alpha1.Artifact
+	if err := r.Get(ctx, req.NamespacedName, &a); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "precompile-" + a.Name,
+			Namespace: a.Namespace},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{{
+						Name:  "precompile",
+						Image: "ghcr.io/wasmcloud/wash:latest",
+					}},
+				},
+			},
+		},
+	}
+	if err := controllerutil.SetControllerReference(&a, job, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+		return ctrl.Result{}, err
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -49,6 +80,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	scheme := runtime.NewScheme()
+	Expect(clientgoscheme.AddToScheme(scheme)).To(Succeed())
 	Expect(runtimev1alpha1.AddToScheme(scheme)).To(Succeed())
 
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme})
@@ -58,7 +90,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	Expect(
-		ctrl.NewControllerManagedBy(mgr).For(&runtimev1alpha1.Artifact{}).Complete(&stubReconciler{Client: mgr.GetClient()}),
+		ctrl.NewControllerManagedBy(mgr).For(&runtimev1alpha1.Artifact{}).Complete(&precompileReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}),
 	).To(Succeed())
 
 	var mgrCtx context.Context
@@ -92,19 +124,30 @@ var _ = Describe("Artifact CRD", func() {
 	})
 })
 
-var _ = Describe("controller manager", func() {
-	It("reconciles when an Artifact is created", func() {
-		before := reconcileCount.Load()
-
+var _ = Describe("precompile pipeline", func() {
+	It("creates a Job when an Artifact is created", func() {
 		ctx := context.Background()
 		a := &runtimev1alpha1.Artifact{
-			ObjectMeta: metav1.ObjectMeta{Name: "reconcile-me", Namespace: "default"},
+			ObjectMeta: metav1.ObjectMeta{Name: "needs-precompile", Namespace: "default"},
 			Spec:       runtimev1alpha1.ArtifactSpec{Image: "ghcr.io/example/comp:v1"},
 		}
+
 		Expect(k8sClient.Create(ctx, a)).To(Succeed())
 
-		Eventually(func() int64 {
-			return reconcileCount.Load()
-		}, 5*time.Second, 100*time.Millisecond).Should(BeNumerically(">", before))
+		Eventually(func() int {
+			var jobs batchv1.JobList
+			if err := k8sClient.List(ctx, &jobs, client.InNamespace("default")); err != nil {
+				return -1
+			}
+			count := 0
+			for _, j := range jobs.Items {
+				for _, o := range j.OwnerReferences {
+					if o.UID == a.UID {
+						count++
+					}
+				}
+			}
+			return count
+		}, 10*time.Second, 250*time.Millisecond).Should(Equal(1))
 	})
 })
