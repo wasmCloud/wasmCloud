@@ -67,7 +67,20 @@ func (ht *HostTracker) Resolve(ctx context.Context, req *http.Request) LookupRes
 	ht.lock.RLock()
 	defer ht.lock.RUnlock()
 
+	// Per RFC 7230, the Host header may include a port (e.g.
+	// "localhost:8000"). Workload hostnames are registered as bare
+	// hostnames because the upstream WorkloadDeployment CRD validates
+	// them as RFC 1123 names (no port allowed). Look up the exact
+	// header first to preserve any existing host:port registrations,
+	// then fall back to the host portion without the port. This makes
+	// the gateway behave like nginx/traefik/envoy, which all match on
+	// hostname regardless of the port the client appended.
 	workloads, ok := ht.hostnames[req.Host]
+	if !ok {
+		if hostOnly, _, splitErr := net.SplitHostPort(req.Host); splitErr == nil {
+			workloads, ok = ht.hostnames[hostOnly]
+		}
+	}
 	if !ok {
 		scheme, endpoint := ht.Fallback.InvalidHostname(req.Host)
 		return LookupResult{
