@@ -111,14 +111,22 @@ var _ = AfterSuite(func() {
 	Expect(testEnv.Stop()).To(Succeed())
 })
 
+const testArtifactImage = "ghcr.io/example/comp:v1"
+
+func newArtifact(ctx context.Context, name string) *runtimev1alpha1.Artifact {
+	GinkgoHelper()
+	a := &runtimev1alpha1.Artifact{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec: runtimev1alpha1.ArtifactSpec{Image: testArtifactImage},
+	}
+	Expect(k8sClient.Create(ctx, a)).To(Succeed())
+	return a
+}
+
 var _ = Describe("Artifact CRD", func() {
 	It("can be created and read back", func() {
 		ctx := context.Background()
 
-		a := &runtimev1alpha1.Artifact{ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-			Spec: runtimev1alpha1.ArtifactSpec{Image: "ghcr.io/example/comp:v1"},
-		}
-		Expect(k8sClient.Create(ctx, a)).To(Succeed())
+		_ = newArtifact(ctx, "demo")
 
 		var got runtimev1alpha1.Artifact
 		key := types.NamespacedName{Namespace: "default", Name: "demo"}
@@ -130,12 +138,7 @@ var _ = Describe("Artifact CRD", func() {
 var _ = Describe("precompile pipeline", func() {
 	It("creates a Job when an Artifact is created", func() {
 		ctx := context.Background()
-		a := &runtimev1alpha1.Artifact{
-			ObjectMeta: metav1.ObjectMeta{Name: "needs-precompile", Namespace: "default"},
-			Spec:       runtimev1alpha1.ArtifactSpec{Image: "ghcr.io/example/comp:v1"},
-		}
-
-		Expect(k8sClient.Create(ctx, a)).To(Succeed())
+		a := newArtifact(ctx, "needs-precompile")
 
 		Eventually(func() int {
 			var jobs batchv1.JobList
@@ -158,12 +161,7 @@ var _ = Describe("precompile pipeline", func() {
 var _ = Describe("precompile Job spec", func() {
 	It("uses the configured worker image", func() {
 		ctx := context.Background()
-		a := &runtimev1alpha1.Artifact{
-			ObjectMeta: metav1.ObjectMeta{Name: "img-check", Namespace: "default"},
-			Spec:       runtimev1alpha1.ArtifactSpec{Image: "ghcr.io/example/comp:v1"},
-		}
-
-		Expect(k8sClient.Create(ctx, a)).To(Succeed())
+		_ = newArtifact(ctx, "img-check")
 
 		Eventually(func() string {
 			var job batchv1.Job
