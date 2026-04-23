@@ -217,8 +217,8 @@ impl Router for DynamicRouter {
                 .and_then(|h| h.to_str().ok())
                 .or_else(|| req.uri().authority().map(|a| a.as_str()))
                 .context("no Host header or :authority in request")?;
-            let Some(workload_set) = lock.get(workload_host) else {
-                anyhow::bail!("no workload bound to host header: {}", workload_host);
+            let Some(workload_set) = lookup_workload_set(&lock, workload_host) else {
+                anyhow::bail!("no workload bound to host header: {workload_host}");
             };
 
             let workload_id = workload_set
@@ -229,6 +229,44 @@ impl Router for DynamicRouter {
             Ok(workload_id.clone())
         })
     }
+}
+
+/// Resolve a Host header (which may include a port per RFC 7230 §5.4) against
+/// the workload registration map. Tries the exact header first to honour any
+/// `host:port` registration, then falls back to the host-only portion. This
+/// mirrors the behaviour of nginx/traefik/envoy and the Go runtime-gateway.
+///
+/// Handles bracketed IPv6 literals correctly, e.g. `[::1]:8080` strips to `[::1]`.
+fn lookup_workload_set<'a>(
+    map: &'a HashMap<String, HashSet<String>>,
+    workload_host: &str,
+) -> Option<&'a HashSet<String>> {
+    if let Some(set) = map.get(workload_host) {
+        return Some(set);
+    }
+    strip_port(workload_host).and_then(|host_only| map.get(host_only))
+}
+
+/// Strip a port suffix from a host header value, handling bracketed IPv6.
+/// Returns `None` if there is no port to strip, or if the input is an
+/// unbracketed IPv6 literal (which would be ambiguous to split).
+fn strip_port(host: &str) -> Option<&str> {
+    if let Some(rest) = host.strip_prefix('[') {
+        // IPv6 literal: "[::1]:8080" → keep "[::1]"; "[::1]" alone → no port.
+        let close = rest.find(']')?;
+        let after_bracket = &host[close + 2..];
+        if after_bracket.is_empty() {
+            return None;
+        }
+        return Some(&host[..close + 2]);
+    }
+    // Plain host or IPv4: only treat as host:port if there's exactly one ':'.
+    // More than one ':' indicates an unbracketed IPv6 — refuse to truncate.
+    let first = host.find(':')?;
+    if host[first + 1..].contains(':') {
+        return None;
+    }
+    Some(&host[..first])
 }
 
 /// Development router that routes all requests to the last resolved workload
@@ -1186,5 +1224,83 @@ mod tests {
     fn error_response_returns_correct_status() {
         assert_eq!(error_response(404).status(), 404);
         assert_eq!(error_response(500).status(), 500);
+    }
+
+    // --- DynamicRouter host-header port-stripping tests ---
+
+    fn make_set(id: &str) -> HashSet<String> {
+        let mut s = HashSet::new();
+        s.insert(id.to_string());
+        s
+    }
+
+    /// RFC 7230 §5.4: clients MUST include the port when it differs from the
+    /// default for the scheme. A workload registered as "localhost" must still
+    /// be reachable when the client sends "Host: localhost:8080".
+    #[test]
+    fn lookup_workload_set_strips_port_from_host_header() {
+        let mut map = HashMap::new();
+        map.insert("localhost".to_string(), make_set("workload-1"));
+
+        let result = lookup_workload_set(&map, "localhost:8080");
+        assert!(
+            result.is_some_and(|s| s.contains("workload-1")),
+            "port-stripped lookup should find the workload"
+        );
+    }
+
+    /// An exact host:port registration must take precedence over the bare-host fallback.
+    #[test]
+    fn lookup_workload_set_exact_match_takes_precedence() {
+        let mut map = HashMap::new();
+        map.insert("example.com".to_string(), make_set("workload-bare"));
+        map.insert("example.com:8443".to_string(), make_set("workload-exact"));
+
+        let result = lookup_workload_set(&map, "example.com:8443");
+        assert!(
+            result.is_some_and(|s| s.contains("workload-exact")),
+            "exact match should win over bare-host fallback"
+        );
+    }
+
+    /// An unknown host (even after port stripping) must not resolve.
+    #[test]
+    fn lookup_workload_set_unknown_host_returns_none() {
+        let mut map = HashMap::new();
+        map.insert("localhost".to_string(), make_set("workload-1"));
+
+        assert!(lookup_workload_set(&map, "unknown.example:9000").is_none());
+        assert!(lookup_workload_set(&map, "unknown.example").is_none());
+    }
+
+    /// Bracketed IPv6 literals must strip the port without mangling the address.
+    #[test]
+    fn lookup_workload_set_handles_ipv6_brackets() {
+        let mut map = HashMap::new();
+        map.insert("[::1]".to_string(), make_set("workload-v6"));
+
+        let result = lookup_workload_set(&map, "[::1]:8080");
+        assert!(
+            result.is_some_and(|s| s.contains("workload-v6")),
+            "IPv6 bracketed lookup should strip only the port"
+        );
+    }
+
+    /// Unbracketed IPv6 (technically invalid in a Host header) must not be
+    /// truncated at the last colon — that would corrupt the address.
+    #[test]
+    fn strip_port_does_not_mangle_unbracketed_ipv6() {
+        assert_eq!(strip_port("::1"), None);
+        assert_eq!(strip_port("fe80::1"), None);
+    }
+
+    #[test]
+    fn strip_port_basic_cases() {
+        assert_eq!(strip_port("localhost"), None);
+        assert_eq!(strip_port("localhost:8080"), Some("localhost"));
+        assert_eq!(strip_port("example.com:443"), Some("example.com"));
+        assert_eq!(strip_port("[::1]"), None);
+        assert_eq!(strip_port("[::1]:8080"), Some("[::1]"));
+        assert_eq!(strip_port("[2001:db8::1]:443"), Some("[2001:db8::1]"));
     }
 }
