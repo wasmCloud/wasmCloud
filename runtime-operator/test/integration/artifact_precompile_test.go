@@ -54,6 +54,7 @@ func (r *precompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 					Containers: []corev1.Container{{
 						Name:  "precompile",
 						Image: r.WorkerImage,
+						Args:  []string{"--image", a.Spec.Image},
 					}},
 				},
 			},
@@ -174,5 +175,23 @@ var _ = Describe("precompile Job spec", func() {
 			return job.Spec.Template.Spec.Containers[0].Image
 		}).Should(Equal(testWorkerImage))
 
+	})
+
+	It("passes the OCI image reference in Job args", func() {
+		ctx := context.Background()
+		_ = newArtifact(ctx, "args-check")
+
+		Eventually(func() []string {
+			var job batchv1.Job
+			if err := k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default", Name: "precompile-args-check",
+			}, &job); err != nil {
+				return nil
+			}
+			if len(job.Spec.Template.Spec.Containers) == 0 {
+				return nil
+			}
+			return job.Spec.Template.Spec.Containers[0].Args
+		}).Should(ContainElement(testArtifactImage))
 	})
 })
