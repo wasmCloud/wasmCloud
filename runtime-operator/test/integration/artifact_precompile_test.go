@@ -23,6 +23,8 @@ import (
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 )
 
+const testWorkerImage = "ghcr.io/wasmcloud/wash:test"
+
 var (
 	testEnv   *envtest.Environment
 	k8sClient client.Client
@@ -31,7 +33,8 @@ var (
 
 type precompileReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme      *runtime.Scheme
+	WorkerImage string
 }
 
 func (r *precompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -50,7 +53,7 @@ func (r *precompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{
 						Name:  "precompile",
-						Image: "ghcr.io/wasmcloud/wash:latest",
+						Image: r.WorkerImage,
 					}},
 				},
 			},
@@ -90,7 +93,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	Expect(
-		ctrl.NewControllerManagedBy(mgr).For(&runtimev1alpha1.Artifact{}).Complete(&precompileReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}),
+		ctrl.NewControllerManagedBy(mgr).For(&runtimev1alpha1.Artifact{}).Complete(&precompileReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), WorkerImage: testWorkerImage}),
 	).To(Succeed())
 
 	var mgrCtx context.Context
@@ -149,5 +152,29 @@ var _ = Describe("precompile pipeline", func() {
 			}
 			return count
 		}, 10*time.Second, 250*time.Millisecond).Should(Equal(1))
+	})
+})
+
+var _ = Describe("precompile Job spec", func() {
+	It("uses the configured worker image", func() {
+		ctx := context.Background()
+		a := &runtimev1alpha1.Artifact{
+			ObjectMeta: metav1.ObjectMeta{Name: "img-check", Namespace: "default"},
+			Spec:       runtimev1alpha1.ArtifactSpec{Image: "ghcr.io/example/comp:v1"},
+		}
+
+		Expect(k8sClient.Create(ctx, a)).To(Succeed())
+
+		Eventually(func() string {
+			var job batchv1.Job
+			err := k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default", Name: "precompile-img-check"}, &job)
+
+			if err != nil || len(job.Spec.Template.Spec.Containers) == 0 {
+				return ""
+			}
+			return job.Spec.Template.Spec.Containers[0].Image
+		}).Should(Equal(testWorkerImage))
+
 	})
 })
