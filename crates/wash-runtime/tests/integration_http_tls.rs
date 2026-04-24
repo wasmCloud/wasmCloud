@@ -25,17 +25,6 @@ use wash_runtime::{
 
 const HTTP_COUNTER_WASM: &[u8] = include_bytes!("wasm/http_counter.wasm");
 
-/// Ensure the rustls CryptoProvider is installed exactly once per process.
-fn init_crypto() {
-    use std::sync::Once;
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        rustls::crypto::aws_lc_rs::default_provider()
-            .install_default()
-            .expect("failed to install crypto provider");
-    });
-}
-
 /// Generate a self-signed certificate and private key for `localhost`,
 /// write them to a temp directory, and return the paths.
 ///
@@ -186,8 +175,6 @@ fn http_counter_workload_request(http_host_config: &str) -> WorkloadStartRequest
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_https_request_succeeds() -> Result<()> {
-    init_crypto();
-
     let (_dir, cert_path, key_path) = generate_test_certs()?;
     let (addr, host) = start_host_with_tls(&cert_path, &key_path).await?;
 
@@ -253,8 +240,6 @@ async fn test_https_request_succeeds() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_https_rejects_plain_http() -> Result<()> {
-    init_crypto();
-
     let (_dir, cert_path, key_path) = generate_test_certs()?;
     let (addr, _host) = start_host_with_tls(&cert_path, &key_path).await?;
 

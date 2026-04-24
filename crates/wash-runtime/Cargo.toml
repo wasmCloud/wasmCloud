@@ -89,8 +89,8 @@ opentelemetry-http = { workspace = true }
 # Otel dependencies (optional, behind 'wasi-otel' feature)
 opentelemetry-otlp = { workspace = true, features = ["grpc-tonic","http-proto", "trace", "metrics", "logs"] }
 opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
-wasi-graphics-context-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "9d29c9aed18bfa3080233dfee4498953351cb14c", optional = true }
-wasi-webgpu-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "9d29c9aed18bfa3080233dfee4498953351cb14c", optional = true }
+wasi-graphics-context-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "4aa7436d2e358df013a0216346ba23564dd0a2b9", optional = true }
+wasi-webgpu-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "4aa7436d2e358df013a0216346ba23564dd0a2b9", optional = true }
 
 # OCI dependencies (optional, behind 'oci' feature)
 docker_credential = { workspace = true, optional = true }

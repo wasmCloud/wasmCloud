@@ -17,6 +17,32 @@ pub mod washlet;
 // Re-export wasmtime for convenience
 pub use wasmtime;
 
+/// Install the process-level rustls [`CryptoProvider`](rustls::crypto::CryptoProvider).
+///
+/// wasmCloud standardizes on `aws-lc-rs`. Safe to call any number of times from
+/// any number of threads. The install happens at most once per process. If
+/// another crate already installed a provider we leave it in place.
+///
+/// Called automatically by [`host::http::HttpServer::new`] and
+/// [`host::http::HttpServer::new_with_tls`]; call it directly from binaries
+/// that touch TLS before constructing an `HttpServer` (for example, CLIs that
+/// connect to a TLS NATS cluster during startup).
+pub fn init_crypto() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        if rustls::crypto::aws_lc_rs::default_provider()
+            .install_default()
+            .is_err()
+        {
+            tracing::warn!(
+                "a rustls CryptoProvider was already installed; \
+                 wasmCloud standardizes on aws-lc-rs — check dependencies if this is unexpected"
+            );
+        }
+    });
+}
+
 #[cfg(test)]
 mod test {
     use std::collections::HashMap;
