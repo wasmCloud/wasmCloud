@@ -111,9 +111,9 @@ pub struct HostCommand {
 
 impl CliCommand for HostCommand {
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
-        rustls::crypto::aws_lc_rs::default_provider()
-            .install_default()
-            .map_err(|e| anyhow::anyhow!(format!("failed to install crypto provider: {e:?}")))?;
+        // Installed before connect_nats so TLS-enabled NATS clusters have a
+        // crypto provider available. Idempotent; also called by HttpServer::new.
+        wash_runtime::init_crypto();
 
         let scheduler_nats_client = wash_runtime::washlet::connect_nats(
             self.scheduler_nats_url.clone(),

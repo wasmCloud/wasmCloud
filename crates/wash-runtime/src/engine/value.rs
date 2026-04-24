@@ -30,6 +30,17 @@ pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> wasmtime
                 .collect::<wasmtime::Result<_>>()?;
             Ok(Val::List(vs))
         }
+        Val::Map(vs) => {
+            let vs = vs
+                .iter()
+                .map(|(k, v)| {
+                    let k = lower(store, k)?;
+                    let v = lower(store, v)?;
+                    Ok((k, v))
+                })
+                .collect::<wasmtime::Result<_>>()?;
+            Ok(Val::Map(vs))
+        }
         Val::Record(vs) => {
             let vs = vs
                 .iter()
@@ -150,6 +161,17 @@ pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> wasmtime::
                 .collect::<wasmtime::Result<_>>()?;
             Ok(Val::List(vs))
         }
+        Val::Map(vs) => {
+            let vs = vs
+                .into_iter()
+                .map(|(k, v)| {
+                    let k = lift(store, k)?;
+                    let v = lift(store, v)?;
+                    Ok((k, v))
+                })
+                .collect::<wasmtime::Result<_>>()?;
+            Ok(Val::Map(vs))
+        }
         Val::Record(vs) => {
             let vs = vs
                 .into_iter()
@@ -239,5 +261,75 @@ pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> wasmtime::
         Val::Future(_) | Val::Stream(_) | Val::ErrorContext(_) => {
             wasmtime::bail!("async not supported")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::ctx::Ctx;
+
+    fn make_store() -> wasmtime::Store<SharedCtx> {
+        let mut config = wasmtime::Config::new();
+        config.wasm_component_model(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        let ctx = Ctx::builder("test-workload", "test-component").build();
+        wasmtime::Store::new(&engine, SharedCtx::new(ctx))
+    }
+
+    #[test]
+    fn map_lower_scalars() {
+        let mut store = make_store();
+        let mut cx = store.as_context_mut();
+        let val = Val::Map(vec![
+            (Val::String("foo".into()), Val::U32(1)),
+            (Val::String("bar".into()), Val::U32(2)),
+        ]);
+        assert_eq!(lower(&mut cx, &val).unwrap(), val);
+    }
+
+    #[test]
+    fn map_lift_scalars() {
+        let mut store = make_store();
+        let mut cx = store.as_context_mut();
+        let val = Val::Map(vec![
+            (Val::Bool(true), Val::String("yes".into())),
+            (Val::Bool(false), Val::String("no".into())),
+        ]);
+        assert_eq!(lift(&mut cx, val.clone()).unwrap(), val);
+    }
+
+    #[test]
+    fn map_empty() {
+        let mut store = make_store();
+        let mut cx = store.as_context_mut();
+        let val = Val::Map(vec![]);
+        assert_eq!(lower(&mut cx, &val).unwrap(), val);
+        assert_eq!(lift(&mut cx, val.clone()).unwrap(), val);
+    }
+
+    #[test]
+    fn map_preserves_order_and_duplicate_keys() {
+        // Val::Map is a Vec — no deduplication, insertion order preserved
+        let mut store = make_store();
+        let mut cx = store.as_context_mut();
+        let val = Val::Map(vec![
+            (Val::U32(1), Val::String("first".into())),
+            (Val::U32(1), Val::String("duplicate".into())),
+        ]);
+        assert_eq!(lower(&mut cx, &val).unwrap(), val);
+    }
+
+    #[test]
+    fn map_nested_roundtrip() {
+        let mut store = make_store();
+        let mut cx = store.as_context_mut();
+        let val = Val::Map(vec![(
+            Val::String("nums".into()),
+            Val::List(vec![Val::U32(1), Val::U32(2), Val::U32(3)]),
+        )]);
+        let lowered = lower(&mut cx, &val).unwrap();
+        let lifted = lift(&mut cx, lowered).unwrap();
+        assert_eq!(lifted, val);
     }
 }

@@ -28,9 +28,7 @@ pub struct DevCommand {}
 
 impl CliCommand for DevCommand {
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
-        rustls::crypto::aws_lc_rs::default_provider()
-            .install_default()
-            .map_err(|e| anyhow::anyhow!(format!("failed to install crypto provider: {e:?}")))?;
+        wash_runtime::init_crypto();
 
         let project_dir = ctx.project_dir();
         info!(path = ?project_dir, "starting development session for project");

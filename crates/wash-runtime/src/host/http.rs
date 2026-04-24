@@ -398,10 +398,14 @@ impl<T: Router> HttpServer<T> {
     /// to let the OS pick a free port, then call [`addr()`](Self::addr) to
     /// discover the actual address.
     ///
+    /// Side effect: installs the process-level rustls crypto provider via
+    /// [`crate::init_crypto`] (idempotent).
+    ///
     /// # Arguments
     /// * `router` - The router implementation for handling requests
     /// * `addr` - The socket address to bind to
     pub async fn new(router: T, addr: SocketAddr) -> anyhow::Result<Self> {
+        crate::init_crypto();
         let listener = TcpListener::bind(addr).await?;
         let addr = listener.local_addr()?;
         Ok(Self {
@@ -422,6 +426,9 @@ impl<T: Router> HttpServer<T> {
 
     /// Creates a new HTTPS server with TLS support.
     ///
+    /// Side effect: installs the process-level rustls crypto provider via
+    /// [`crate::init_crypto`] (idempotent).
+    ///
     /// # Arguments
     /// * `router` - The router implementation for handling requests
     /// * `addr` - The socket address to bind to
@@ -441,6 +448,7 @@ impl<T: Router> HttpServer<T> {
         key_path: &Path,
         ca_path: Option<&Path>,
     ) -> anyhow::Result<Self> {
+        crate::init_crypto();
         let tls_config = load_tls_config(cert_path, key_path, ca_path).await?;
         let tls_acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
