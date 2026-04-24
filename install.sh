@@ -51,22 +51,48 @@ cleanup() {
 
 trap cleanup EXIT
 
+# Detect whether the current Linux system uses musl libc (e.g. Alpine).
+# Defaults to false (glibc) — glibc is the dominant libc on mainstream
+# distros (Ubuntu, Fedora, Arch, RHEL, ...) and is required for dlopen'ing
+# system libraries like GPU drivers.
+is_musl_linux() {
+    # Alpine and other musl systems ship /lib/ld-musl-<arch>.so.1
+    if compgen -G "/lib/ld-musl-*.so.1" >/dev/null 2>&1; then
+        return 0
+    fi
+    # ldd --version prints "musl libc" on musl systems (to stderr, exit 1)
+    if ldd --version 2>&1 | grep -qi musl; then
+        return 0
+    fi
+    return 1
+}
+
 # Detect platform
 detect_platform() {
     local os arch
-    
+
     case "$(uname -s)" in
-        Linux*)  os="unknown-linux-musl" ;;
+        Linux*)
+            # Default to glibc; fall back to musl on Alpine-style systems.
+            # GPU drivers and other system libraries on mainstream distros
+            # are glibc-linked, so a musl wash can't reliably dlopen them
+            # (e.g. wasi:webgpu silently fails to find a GPU adapter).
+            if is_musl_linux; then
+                os="unknown-linux-musl"
+            else
+                os="unknown-linux-gnu"
+            fi
+            ;;
         Darwin*) os="apple-darwin" ;;
         *)       log_error "Unsupported operating system: $(uname -s)"; exit 1 ;;
     esac
-    
+
     case "$(uname -m)" in
         x86_64)  arch="x86_64" ;;
         arm64|aarch64) arch="aarch64" ;;
         *)       log_error "Unsupported architecture: $(uname -m)"; exit 1 ;;
     esac
-    
+
     echo "${arch}-${os}"
 }
 
