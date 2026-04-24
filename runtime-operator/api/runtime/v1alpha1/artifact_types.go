@@ -9,6 +9,7 @@ import (
 const ArtifactConditionSync condition.ConditionType = "Sync"
 const ArtifactConditionPublished condition.ConditionType = "Published"
 const ArtifactConditionPrecompiled condition.ConditionType = "Precompiled"
+const ArtifactConditionPrecompileFailed condition.ConditionType = "PrecompileFailed"
 
 // ArtifactSpec defines the desired state of Artifact.
 type ArtifactSpec struct {

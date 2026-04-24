@@ -105,6 +105,19 @@ func (r *precompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.Get(ctx, types.NamespacedName{Namespace: a.Namespace, Name: jobName}, &job); err != nil {
 		return ctrl.Result{}, err
 	}
+
+	if failed, msg := jobFailed(&job); failed {
+		a.Status.SetConditions(condition.Condition{
+			Type:               runtimev1alpha1.ArtifactConditionPrecompileFailed,
+			Status:             condition.ConditionTrue,
+			Reason:             "JobFailed",
+			Message:            msg,
+			LastTransitionTime: metav1.Now(),
+		})
+		return ctrl.Result{}, r.Status().Update(ctx, &a)
+
+	}
+
 	if !jobComplete(&job) {
 		return ctrl.Result{}, nil
 	}
@@ -129,6 +142,15 @@ func jobComplete(j *batchv1.Job) bool {
 		}
 	}
 	return false
+}
+
+func jobFailed(j *batchv1.Job) (bool, string) {
+	for _, c := range j.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return true, c.Message
+		}
+	}
+	return false, ""
 }
 
 func variantRecorded(existing []runtimev1alpha1.PrecompiledVariant, v runtimev1alpha1.PrecompiledVariant) bool {
@@ -282,6 +304,38 @@ var _ = Describe("precompile pipeline", func() {
 		},
 		).Should(Succeed())
 
+	})
+	It("sets PrecompileFailed when the Job fails", func() {
+		ctx := context.Background()
+		a := newArtifact(ctx, "precompile-failed")
+
+		var job batchv1.Job
+		Eventually(func(g Gomega) {
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default", Name: "precompile-" + a.Name,
+			}, &job)).To(Succeed())
+		}).Should(Succeed())
+
+		job.Status.Failed = 1
+		job.Status.Conditions = []batchv1.JobCondition{{
+			Type:    batchv1.JobFailed,
+			Status:  corev1.ConditionTrue,
+			Reason:  "Test reason",
+			Message: "Test Message",
+		}}
+		Expect(k8sClient.Status().Update(ctx, &job)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			var got runtimev1alpha1.Artifact
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default", Name: a.Name,
+			}, &got)).To(Succeed())
+
+			failed := got.Status.GetCondition(runtimev1alpha1.ArtifactConditionPrecompileFailed)
+			g.Expect(failed.Status).To(Equal(corev1.ConditionTrue))
+
+			g.Expect(got.Status.Precompiled).To(BeEmpty())
+		}).Should(Succeed())
 	})
 
 })
