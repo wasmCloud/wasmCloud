@@ -78,6 +78,11 @@ func main() {
 		memoryBackpressureThreshold float64
 		disableArtifactController   bool
 		watchNamespaces             string
+		disablePrecompileController bool
+		precompileWorkerImage       string
+		precompileArtifactBaseURL   string
+		precompileTarget            string
+		precompileWasmtimeVersion   string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8081", "The address the metrics endpoint binds to. "+
@@ -97,7 +102,7 @@ func main() {
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.BoolVar(&jsonLog, "json-log", false, "Output logs in JSON format")
-	flag.Float64Var(&cpuBackpressureThreshold, "cpu-backpressure-threshold", 80.0, "CPU backpressure threshold (%)")
+	flag.Float64Var(&cpuBackpressureThreshold, "cpu-backpressure-threshold", 80.0, "CPU back: pressure threshold (%)")
 	flag.Float64Var(
 		&memoryBackpressureThreshold,
 		"memory-backpressure-threshold",
@@ -108,6 +113,36 @@ func main() {
 		"disable-artifact-controller",
 		false,
 		"Delegates Artifact reconciliation to an external controller.",
+	)
+	flag.BoolVar(
+		&disablePrecompileController, 
+		"disable-precompile-controller", 
+		false,
+		"Disable the precompile controller (no Jobs will be emitted for Artifacts).",
+	)
+	flag.StringVar(
+		&precompileWorkerImage,
+		"precompile-worker-image",
+		"",
+		"Container image for the precompile Worker Job. Required when precompile controller is enabled.",
+	)
+	flag.StringVar(
+		&precompileArtifactBaseURL,
+		"precompile-artifact-base-url",
+		"",
+		"Scheme-qualified URL prefix where precompiled .cwasm bytes are written (e.g. nats://precompiled-artifacts). Required when precompile controller is enabled.",
+	)
+	flag.StringVar(
+		&precompileTarget,
+		"precompile-target",
+		"x86_64-unknown-linux-gnu",
+		"Target triple precompiled bytes are produced for.",
+	)
+	flag.StringVar(
+		&precompileWasmtimeVersion,
+		"precompile-wasmtime-version",
+		"",
+		"Wasmtime version the worker image links against. Required when precompile controller is enabled.",
 	)
 	flag.StringVar(
 		&watchNamespaces,
@@ -139,6 +174,12 @@ func main() {
 		HostCPUThreshold:          cpuBackpressureThreshold,
 		HostMemoryThreshold:       memoryBackpressureThreshold,
 		Namespace:                 os.Getenv("OPERATOR_NAMESPACE"),
+		DisablePrecompileController: disablePrecompileController,
+		PrecompileWorkerImage: precompileWorkerImage,
+		PrecompileArtifactBaseURL: precompileArtifactBaseURL,
+		PrecompileTarget: precompileTarget,
+		PrecompileWasmtimeVersion: precompileWasmtimeVersion
+		
 	}
 
 	if natsCreds != "" {

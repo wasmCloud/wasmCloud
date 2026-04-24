@@ -9,6 +9,7 @@ import (
 	"github.com/nats-io/nats.go"
 	runtime_controllers "go.wasmcloud.dev/runtime-operator/v2/internal/controller/runtime"
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
@@ -28,6 +29,16 @@ type EmbeddedOperatorConfig struct {
 	// Disable Artifact Controller. If set, Artifacts must be marked as 'Ready' elsewhere.
 	// Useful when introducing a custom artifact management solution.
 	DisableArtifactController bool
+	// Disable Precompile Controller. If set, no precompile Jobs are emitted.
+	DisablePrecompileController bool
+	// Container image for the precompile Worker Job.
+	PrecompileWorkerImage string
+	// Scheme-qualified URL prefix where precompiled .cwasm bytes are written.
+	PrecompileArtifactBaseURL string
+	// Target triple precompiled bytes are produced for.
+	PrecompileTarget string
+	// Wasmtime version the worker image links against.
+	PrecompileWasmtimeVersion string
 	// Namespace restricts the HostPodReconciler to watching Pods in this
 	// namespace only. Should match the namespace the operator is deployed in.
 	// If empty, all namespaces are watched.
@@ -57,6 +68,24 @@ func NewEmbeddedOperator(
 		if err = (&runtime_controllers.ArtifactReconciler{
 			Client: mgr.GetClient(),
 			Scheme: mgr.GetScheme(),
+		}).SetupWithManager(mgr); err != nil {
+			return nil, err
+		}
+	}
+
+	if !cfg.DisablePrecompileController {
+		if err = (&runtime_controllers.PrecompileReconciler{
+			Client:      mgr.GetClient(),
+			Scheme:      mgr.GetScheme(),
+			WorkerImage: cfg.PrecompileWorkerImage,
+			ArtifactStore: runtime_controllers.ArtifactStoreConfig{
+				BaseURL: cfg.PrecompileArtifactBaseURL,
+				Env: []corev1.EnvVar{
+					{Name: "NATS_URL", Value: cfg.NatsURL},
+				},
+			},
+			Target:          cfg.PrecompileTarget,
+			WasmtimeVersion: cfg.PrecompileWasmtimeVersion,
 		}).SetupWithManager(mgr); err != nil {
 			return nil, err
 		}
