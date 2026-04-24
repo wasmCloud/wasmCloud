@@ -31,7 +31,11 @@ wasmcloud-postgres = [
     "dep:bit-vec", "dep:cidr", "dep:geo-types",
     "dep:ulid",
 ]
-wasip3 = ["wasmtime-wasi/p3", "wasmtime-wasi-http/p3"]
+wasip3 = [
+    "wasmtime-wasi/p3",
+    "wasmtime-wasi-http/p3",
+    "wasmtime-wasi-http/component-model-async",
+]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -128,3 +132,20 @@ wat = { workspace = true, features = ["component-model"] }
 gag = "1.0"
 rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
 testcontainers = { workspace = true }
+criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
+
+[[bench]]
+name = "http_invoke"
+harness = false
+required-features = ["wasip3"]
+
+[[bench]]
+name = "wasmtime_baseline"
+harness = false
+required-features = ["wasip3"]
+
+[[bench]]
+name = "wasmtime_serve"
+harness = false
+required-features = ["wasip3"]
+

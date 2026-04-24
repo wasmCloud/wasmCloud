@@ -234,7 +234,7 @@ impl Router for DynamicRouter {
 /// Development router that routes all requests to the last resolved workload
 #[derive(Default)]
 pub struct DevRouter {
-    last_workload_id: tokio::sync::Mutex<Option<String>>,
+    last_workload_id: std::sync::RwLock<Option<String>>,
 }
 
 #[async_trait::async_trait]
@@ -244,13 +244,19 @@ impl Router for DevRouter {
         resolved_handle: &ResolvedWorkload,
         _component_id: &str,
     ) -> anyhow::Result<()> {
-        let mut lock = self.last_workload_id.lock().await;
+        let mut lock = self
+            .last_workload_id
+            .write()
+            .map_err(|e| anyhow::anyhow!("DevRouter write lock poisoned: {e}"))?;
         lock.replace(resolved_handle.id().to_string());
         Ok(())
     }
 
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
-        let mut lock = self.last_workload_id.lock().await;
+        let mut lock = self
+            .last_workload_id
+            .write()
+            .map_err(|e| anyhow::anyhow!("DevRouter write lock poisoned: {e}"))?;
         if let Some(current_id) = &*lock
             && current_id == workload_id
         {
@@ -274,7 +280,10 @@ impl Router for DevRouter {
         &self,
         _req: &hyper::Request<hyper::body::Incoming>,
     ) -> anyhow::Result<String> {
-        let lock = self.last_workload_id.try_lock()?;
+        let lock = self
+            .last_workload_id
+            .read()
+            .map_err(|e| anyhow::anyhow!("DevRouter read lock poisoned: {e}"))?;
         match &*lock {
             Some(id) => Ok(id.clone()),
             None => anyhow::bail!("no workload available to route request"),
