@@ -107,19 +107,45 @@ func (r *precompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if failed, msg := jobFailed(&job); failed {
-		a.Status.SetConditions(condition.Condition{
-			Type:               runtimev1alpha1.ArtifactConditionPrecompileFailed,
-			Status:             condition.ConditionTrue,
-			Reason:             "JobFailed",
-			Message:            msg,
-			LastTransitionTime: metav1.Now(),
-		})
+		existing := a.Status.GetCondition(runtimev1alpha1.ArtifactConditionPrecompileFailed)
+		if existing.Status == condition.ConditionTrue && existing.Message == msg {
+			return ctrl.Result{}, nil
+		}
+
+		a.Status.SetConditions(
+			condition.Condition{
+				Type:               runtimev1alpha1.ArtifactConditionPrecompileFailed,
+				Status:             condition.ConditionTrue,
+				Reason:             "JobFailed",
+				Message:            msg,
+				LastTransitionTime: metav1.Now(),
+			},
+			condition.Condition{
+				Type:               runtimev1alpha1.ArtifactConditionPrecompileProgressing,
+				Status:             condition.ConditionFalse,
+				Reason:             "JobFailed",
+				LastTransitionTime: metav1.Now(),
+			},
+		)
 		return ctrl.Result{}, r.Status().Update(ctx, &a)
 
 	}
 
 	if !jobComplete(&job) {
-		return ctrl.Result{}, nil
+		existing := a.Status.GetCondition(runtimev1alpha1.ArtifactConditionPrecompileProgressing)
+		if existing.Status == condition.ConditionTrue {
+			return ctrl.Result{}, nil
+		}
+
+		a.Status.SetConditions(
+			condition.Condition{
+				Type:               runtimev1alpha1.ArtifactConditionPrecompileProgressing,
+				Status:             condition.ConditionTrue,
+				Reason:             "JobInFlight",
+				LastTransitionTime: metav1.Now(),
+			},
+		)
+		return ctrl.Result{}, r.Status().Update(ctx, &a)
 	}
 
 	variant := runtimev1alpha1.PrecompiledVariant{
@@ -131,7 +157,15 @@ func (r *precompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 	a.Status.Precompiled = append(a.Status.Precompiled, variant)
-	a.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.ArtifactConditionPrecompiled))
+	a.Status.SetConditions(
+		condition.ReadyCondition(runtimev1alpha1.ArtifactConditionPrecompiled),
+		condition.Condition{
+			Type:               runtimev1alpha1.ArtifactConditionPrecompileProgressing,
+			Status:             condition.ConditionFalse,
+			Reason:             "JobSucceeded",
+			LastTransitionTime: metav1.Now(),
+		},
+	)
 	return ctrl.Result{}, r.Status().Update(ctx, &a)
 }
 
@@ -335,6 +369,45 @@ var _ = Describe("precompile pipeline", func() {
 			g.Expect(failed.Status).To(Equal(corev1.ConditionTrue))
 
 			g.Expect(got.Status.Precompiled).To(BeEmpty())
+		}).Should(Succeed())
+	})
+
+	It("sets PrecompileProgressing while the Job is in flight, and False on completion", func() {
+		ctx := context.Background()
+		a := newArtifact(ctx, "progressing")
+
+		var job batchv1.Job
+		Eventually(func(g Gomega) {
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default", Name: "precompile-" + a.Name,
+			}, &job)).To(Succeed())
+		}).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			var got runtimev1alpha1.Artifact
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default", Name: a.Name,
+			}, &got)).To(Succeed())
+
+			prog := got.Status.GetCondition(runtimev1alpha1.ArtifactConditionPrecompileProgressing)
+			g.Expect(prog.Status).To(Equal(corev1.ConditionTrue))
+		}).Should(Succeed())
+
+		job.Status.Succeeded = 1
+		job.Status.Conditions = []batchv1.JobCondition{{
+			Type:   batchv1.JobComplete,
+			Status: corev1.ConditionTrue,
+		}}
+		Expect(k8sClient.Status().Update(ctx, &job)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			var got runtimev1alpha1.Artifact
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default", Name: a.Name,
+			}, &got)).To(Succeed())
+
+			prog := got.Status.GetCondition(runtimev1alpha1.ArtifactConditionPrecompileProgressing)
+			g.Expect(prog.Status).To(Equal(corev1.ConditionFalse))
 		}).Should(Succeed())
 	})
 
