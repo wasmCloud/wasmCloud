@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
+	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 )
 
@@ -117,6 +118,7 @@ func (r *precompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 	a.Status.Precompiled = append(a.Status.Precompiled, variant)
+	a.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.ArtifactConditionPrecompiled))
 	return ctrl.Result{}, r.Status().Update(ctx, &a)
 }
 
@@ -241,7 +243,7 @@ var _ = Describe("precompile pipeline", func() {
 
 	})
 
-	It("populates status.precompied when the Job succeeds", func() {
+	It("reports successful precompilation in status when the Job succeeds", func() {
 		ctx := context.Background()
 		a := newArtifact(ctx, "populates-status")
 
@@ -273,6 +275,9 @@ var _ = Describe("precompile pipeline", func() {
 			g.Expect(got.Status.Precompiled[0].ArtifactURL).To(Equal(expectedURL))
 			g.Expect(got.Status.Precompiled[0].Target).To(Equal(testTarget))
 			g.Expect(got.Status.Precompiled[0].WasmtimeVersion).To(Equal(testWasmtimeVersion))
+
+			cond := got.Status.GetCondition(runtimev1alpha1.ArtifactConditionPrecompiled)
+			g.Expect(cond.Status).To(Equal(corev1.ConditionTrue))
 
 		},
 		).Should(Succeed())
