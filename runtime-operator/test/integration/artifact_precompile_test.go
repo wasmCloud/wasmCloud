@@ -2,9 +2,9 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
-	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -23,7 +23,24 @@ import (
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 )
 
-const testWorkerImage = "ghcr.io/wasmcloud/wash:test"
+const (
+	testWorkerImage     = "ghcr.io/wasmcloud/wash:test"
+	testArtifactImage   = "ghcr.io/example/comp:v1"
+	testTarget          = "x86_64-unknown-linux-gnu"
+	testWasmtimeVersion = "27.0.0"
+)
+
+type ArtifactStoreConfig struct {
+	BaseURL string
+	Env     []corev1.EnvVar
+}
+
+var testArtifactStore = ArtifactStoreConfig{
+	BaseURL: "nats://precompiled-artifacts",
+	Env: []corev1.EnvVar{
+		{Name: "NATS_URL", Value: "nats://test-nats:4222"},
+	},
+}
 
 var (
 	testEnv   *envtest.Environment
@@ -33,8 +50,11 @@ var (
 
 type precompileReconciler struct {
 	client.Client
-	Scheme      *runtime.Scheme
-	WorkerImage string
+	Scheme          *runtime.Scheme
+	WorkerImage     string
+	ArtifactStore   ArtifactStoreConfig
+	Target          string
+	WasmtimeVersion string
 }
 
 func (r *precompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -42,6 +62,13 @@ func (r *precompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.Get(ctx, req.NamespacedName, &a); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
+	outputURL := fmt.Sprintf("%s/%s/%s-%s.cwasm",
+		r.ArtifactStore.BaseURL,
+		a.Name,
+		r.Target,
+		r.WasmtimeVersion,
+	)
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -54,7 +81,11 @@ func (r *precompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 					Containers: []corev1.Container{{
 						Name:  "precompile",
 						Image: r.WorkerImage,
-						Args:  []string{"--image", a.Spec.Image},
+						Args: []string{
+							"--image", a.Spec.Image,
+							"--output", outputURL,
+						},
+						Env: r.ArtifactStore.Env,
 					}},
 				},
 			},
@@ -94,7 +125,14 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	Expect(
-		ctrl.NewControllerManagedBy(mgr).For(&runtimev1alpha1.Artifact{}).Complete(&precompileReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), WorkerImage: testWorkerImage}),
+		ctrl.NewControllerManagedBy(mgr).For(&runtimev1alpha1.Artifact{}).Complete(&precompileReconciler{
+			Client:          mgr.GetClient(),
+			Scheme:          mgr.GetScheme(),
+			WorkerImage:     testWorkerImage,
+			ArtifactStore:   testArtifactStore,
+			Target:          testTarget,
+			WasmtimeVersion: testWasmtimeVersion,
+		}),
 	).To(Succeed())
 
 	var mgrCtx context.Context
@@ -111,8 +149,6 @@ var _ = AfterSuite(func() {
 	}
 	Expect(testEnv.Stop()).To(Succeed())
 })
-
-const testArtifactImage = "ghcr.io/example/comp:v1"
 
 func newArtifact(ctx context.Context, name string) *runtimev1alpha1.Artifact {
 	GinkgoHelper()
@@ -137,61 +173,32 @@ var _ = Describe("Artifact CRD", func() {
 })
 
 var _ = Describe("precompile pipeline", func() {
-	It("creates a Job when an Artifact is created", func() {
+	It("emits a Job that matches the precompile contract", func() {
 		ctx := context.Background()
-		a := newArtifact(ctx, "needs-precompile")
+		a := newArtifact(ctx, "img-check")
 
-		Eventually(func() int {
-			var jobs batchv1.JobList
-			if err := k8sClient.List(ctx, &jobs, client.InNamespace("default")); err != nil {
-				return -1
-			}
-			count := 0
-			for _, j := range jobs.Items {
-				for _, o := range j.OwnerReferences {
-					if o.UID == a.UID {
-						count++
-					}
-				}
-			}
-			return count
-		}, 10*time.Second, 250*time.Millisecond).Should(Equal(1))
-	})
-})
+		expectedUrl := fmt.Sprintf("%s/%s/%s-%s.cwasm",
+			testArtifactStore.BaseURL, a.Name, testTarget, testWasmtimeVersion)
 
-var _ = Describe("precompile Job spec", func() {
-	It("uses the configured worker image", func() {
-		ctx := context.Background()
-		_ = newArtifact(ctx, "img-check")
-
-		Eventually(func() string {
+		Eventually(func(g Gomega) {
 			var job batchv1.Job
-			err := k8sClient.Get(ctx, types.NamespacedName{
-				Namespace: "default", Name: "precompile-img-check"}, &job)
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: "default", Name: "precompile-" + a.Name}, &job)).To(Succeed())
 
-			if err != nil || len(job.Spec.Template.Spec.Containers) == 0 {
-				return ""
+			g.Expect(job.OwnerReferences).To(ContainElement(HaveField("UID", a.UID)))
+			g.Expect(job.Spec.Template.Spec.Containers).To(HaveLen(1))
+
+			c := job.Spec.Template.Spec.Containers[0]
+			g.Expect(c.Image).To(Equal(testWorkerImage))
+			g.Expect(c.Args).To(Equal([]string{
+				"--image", a.Spec.Image,
+				"--output", expectedUrl,
+			}))
+
+			for _, want := range testArtifactStore.Env {
+				g.Expect(c.Env).To(ContainElement(want))
 			}
-			return job.Spec.Template.Spec.Containers[0].Image
-		}).Should(Equal(testWorkerImage))
+		}).Should(Succeed())
 
 	})
 
-	It("passes the OCI image reference in Job args", func() {
-		ctx := context.Background()
-		_ = newArtifact(ctx, "args-check")
-
-		Eventually(func() []string {
-			var job batchv1.Job
-			if err := k8sClient.Get(ctx, types.NamespacedName{
-				Namespace: "default", Name: "precompile-args-check",
-			}, &job); err != nil {
-				return nil
-			}
-			if len(job.Spec.Template.Spec.Containers) == 0 {
-				return nil
-			}
-			return job.Spec.Template.Spec.Containers[0].Args
-		}).Should(ContainElement(testArtifactImage))
-	})
 })
