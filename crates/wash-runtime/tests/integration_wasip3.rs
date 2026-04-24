@@ -8,106 +8,25 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::{Context, Result};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, time::Duration};
 use tokio::time::timeout;
 
 use wash_runtime::{
     engine::Engine,
-    host::{
-        HostApi, HostBuilder,
-        http::{DevRouter, HttpServer},
-    },
-    plugin::{
-        wasi_blobstore::InMemoryBlobstore, wasi_config::DynamicConfig,
-        wasi_keyvalue::InMemoryKeyValue, wasi_logging::TracingLogger,
-    },
+    host::HostApi,
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
-    wit::WitInterface,
 };
+
+mod common;
+use common::{http_counter_host_interfaces, start_host_with_p3};
 
 const HTTP_COUNTER_WASM: &[u8] = include_bytes!("wasm/http_counter.wasm");
 
-/// Build an engine with wasip3 enabled.
 fn engine_with_p3() -> Engine {
     Engine::builder()
         .with_wasip3(true)
         .build()
         .expect("failed to build engine with wasip3")
-}
-
-/// Build and start a host with wasip3 enabled and standard plugins.
-async fn start_p3_host(addr: &str) -> Result<(std::net::SocketAddr, impl HostApi)> {
-    let engine = engine_with_p3();
-    let http_server = HttpServer::new(DevRouter::default(), addr.parse()?).await?;
-    let bound_addr = http_server.addr();
-    let host = HostBuilder::new()
-        .with_engine(engine)
-        .with_http_handler(Arc::new(http_server))
-        .with_plugin(Arc::new(InMemoryBlobstore::new(None)))?
-        .with_plugin(Arc::new(InMemoryKeyValue::new()))?
-        .with_plugin(Arc::new(TracingLogger::default()))?
-        .with_plugin(Arc::new(DynamicConfig::default()))?
-        .build()?;
-
-    let host = host.start().await.context("Failed to start host")?;
-    Ok((bound_addr, host))
-}
-
-fn http_counter_host_interfaces(host_header: &str) -> Vec<WitInterface> {
-    vec![
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "http".to_string(),
-            interfaces: ["incoming-handler".to_string()].into_iter().collect(),
-            version: Some(semver::Version::parse("0.2.2").unwrap()),
-            config: {
-                let mut config = HashMap::new();
-                config.insert("host".to_string(), host_header.to_string());
-                config
-            },
-            name: None,
-        },
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "blobstore".to_string(),
-            interfaces: [
-                "blobstore".to_string(),
-                "container".to_string(),
-                "types".to_string(),
-            ]
-            .into_iter()
-            .collect(),
-            version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
-            config: HashMap::new(),
-            name: None,
-        },
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "keyvalue".to_string(),
-            interfaces: ["store".to_string(), "atomics".to_string()]
-                .into_iter()
-                .collect(),
-            version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
-            config: HashMap::new(),
-            name: None,
-        },
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "logging".to_string(),
-            interfaces: ["logging".to_string()].into_iter().collect(),
-            version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
-            config: HashMap::new(),
-            name: None,
-        },
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "config".to_string(),
-            interfaces: ["store".to_string()].into_iter().collect(),
-            version: Some(semver::Version::parse("0.2.0-rc.1").unwrap()),
-            config: HashMap::new(),
-            name: None,
-        },
-    ]
 }
 
 // Engine configuration tests
@@ -223,7 +142,7 @@ fn test_targets_wasip3_ignores_non_wasi() {
 
 #[tokio::test]
 async fn test_p2_http_component_works_with_p3_enabled() -> Result<()> {
-    let (addr, host) = start_p3_host("127.0.0.1:0").await?;
+    let (addr, host) = start_host_with_p3("127.0.0.1:0").await?;
 
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
@@ -285,7 +204,7 @@ async fn test_p2_http_component_works_with_p3_enabled() -> Result<()> {
 
 #[tokio::test]
 async fn test_p2_concurrent_requests_with_p3_enabled() -> Result<()> {
-    let (addr, host) = start_p3_host("127.0.0.1:0").await?;
+    let (addr, host) = start_host_with_p3("127.0.0.1:0").await?;
 
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
