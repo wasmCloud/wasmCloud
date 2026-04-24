@@ -161,6 +161,22 @@ jobs:
     strategy:
       matrix:
         include:
+          - target: x86_64-unknown-linux-gnu
+            # Pin minimum glibc to 2.17 (RHEL 7 / CentOS 7 era) for broad
+            # compatibility with mainstream distros. GPU drivers on Ubuntu,
+            # Fedora, Arch, RHEL, etc. are glibc-linked, so this binary can
+            # dlopen them reliably (unlike the musl build).
+            buildTarget: x86_64-unknown-linux-gnu.2.17
+            buildCommand: cargo zigbuild
+            artifact: wash-x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            bin: wash
+          - target: aarch64-unknown-linux-gnu
+            buildTarget: aarch64-unknown-linux-gnu.2.17
+            buildCommand: cargo zigbuild
+            artifact: wash-aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            bin: wash
           - target: x86_64-unknown-linux-musl
             buildCommand: cargo zigbuild
             artifact: wash-x86_64-unknown-linux-musl
@@ -208,7 +224,7 @@ jobs:
 
       - name: Build binary (${{ matrix.target }})
         run: |
-          ${{ matrix.buildCommand }} --release --target ${{ matrix.target }}
+          ${{ matrix.buildCommand }} --release --target ${{ matrix.buildTarget || matrix.target }}
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} ${{ matrix.artifact }}
 
       - name: Create Windows zip archive
