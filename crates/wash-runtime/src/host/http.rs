@@ -73,6 +73,50 @@ fn is_valid_hostname(host: &str) -> bool {
         })
 }
 
+/// Why a request could not be routed to a workload.
+#[derive(Debug)]
+pub enum RouteError {
+    /// Request had no `Host` header a
+    /// genuinely malformed client request. Maps to 400.
+    MissingHost,
+    /// No workload is currently bound to the host.
+    /// `DynamicRouter` passes the offending host header; `DevRouter` is
+    /// host-agnostic and passes an empty string. Maps to 404.
+    NoWorkloadForHost(String),
+    /// Router is momentarily unable to read its routing table (lock
+    /// contention under heavy load). Retrying should succeed. Maps to 503.
+    Unavailable,
+}
+
+impl RouteError {
+    /// HTTP status code for this routing failure.
+    pub fn status(&self) -> u16 {
+        match self {
+            Self::MissingHost => 400,
+            Self::NoWorkloadForHost(_) => 404,
+            Self::Unavailable => 503,
+        }
+    }
+}
+
+impl std::fmt::Display for RouteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingHost => write!(f, "request has no Host header or :authority"),
+            // Empty host means the router is DevRouter and
+            // simply has no workload registered so the host header is
+            // irrelevant to the failure.
+            Self::NoWorkloadForHost(host) if host.is_empty() => {
+                write!(f, "no workload registered")
+            }
+            Self::NoWorkloadForHost(host) => write!(f, "no workload bound to host {host:?}"),
+            Self::Unavailable => write!(f, "router is temporarily unavailable"),
+        }
+    }
+}
+
+impl std::error::Error for RouteError {}
+
 /// Trait defining the routing behavior for HTTP requests
 /// Allows for custom routing logic based on workload IDs and requests
 /// Use this trait to implement custom routing strategies with the default HTTP Extension
@@ -98,11 +142,14 @@ pub trait Router: Send + Sync + 'static {
         _allowed_hosts: &[String],
     ) -> anyhow::Result<()>;
 
-    /// Pick a workload ID based on the incoming request
+    /// Pick a workload ID based on the incoming request.
+    ///
+    /// On failure, the returned [`RouteError`] determines the HTTP status
+    /// code surfaced to the client (see [`RouteError::status`]).
     fn route_incoming_request(
         &self,
         req: &hyper::Request<hyper::body::Incoming>,
-    ) -> anyhow::Result<String>;
+    ) -> Result<String, RouteError>;
 }
 
 /// Router that routes requests by 'Host' header, configured via WitInterface config
@@ -208,23 +255,28 @@ impl Router for DynamicRouter {
     fn route_incoming_request(
         &self,
         req: &hyper::Request<hyper::body::Incoming>,
-    ) -> anyhow::Result<String> {
+    ) -> Result<String, RouteError> {
         tokio::task::block_in_place(move || {
-            let lock = self.host_to_workload.try_read()?;
+            let lock = self
+                .host_to_workload
+                .try_read()
+                .map_err(|_| RouteError::Unavailable)?;
             let workload_host = req
                 .headers()
                 .get(hyper::header::HOST)
                 .and_then(|h| h.to_str().ok())
                 .or_else(|| req.uri().authority().map(|a| a.as_str()))
-                .context("no Host header or :authority in request")?;
+                .ok_or(RouteError::MissingHost)?;
             let Some(workload_set) = lock.get(workload_host) else {
-                anyhow::bail!("no workload bound to host header: {}", workload_host);
+                return Err(RouteError::NoWorkloadForHost(workload_host.to_string()));
             };
 
+            // Entry exists but is empty so treat it as "no workload bound" from the
+            // caller's perspective; same 404 status
             let workload_id = workload_set
                 .iter()
                 .next()
-                .context("no workload IDs found for host header")?;
+                .ok_or_else(|| RouteError::NoWorkloadForHost(workload_host.to_string()))?;
 
             Ok(workload_id.clone())
         })
@@ -273,11 +325,16 @@ impl Router for DevRouter {
     fn route_incoming_request(
         &self,
         _req: &hyper::Request<hyper::body::Incoming>,
-    ) -> anyhow::Result<String> {
-        let lock = self.last_workload_id.try_lock()?;
+    ) -> Result<String, RouteError> {
+        let lock = self
+            .last_workload_id
+            .try_lock()
+            .map_err(|_| RouteError::Unavailable)?;
         match &*lock {
             Some(id) => Ok(id.clone()),
-            None => anyhow::bail!("no workload available to route request"),
+            // DevRouter is host-agnostic; signal "nothing registered" via an
+            // empty host string (see RouteError::NoWorkloadForHost docs).
+            None => Err(RouteError::NoWorkloadForHost(String::new())),
         }
     }
 }
@@ -696,8 +753,12 @@ async fn handle_http_request<T: Router>(
     let method = req.method().clone();
     let uri = req.uri().clone();
 
-    let Ok(workload_id) = handler.route_incoming_request(&req) else {
-        return Ok(error_response(400));
+    let workload_id = match handler.route_incoming_request(&req) {
+        Ok(id) => id,
+        Err(e) => {
+            warn!(err = %e, "failed to route incoming request");
+            return Ok(error_response(e.status()));
+        }
     };
 
     debug!(
