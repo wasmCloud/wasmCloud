@@ -17,138 +17,32 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use futures::future::join_all;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::time::Duration;
 use tokio::time::timeout;
 
 use wash_runtime::{
-    engine::Engine,
-    host::{
-        HostApi, HostBuilder,
-        http::{DynamicRouter, HttpServer},
-    },
-    plugin::{
-        wasi_blobstore::InMemoryBlobstore, wasi_config::DynamicConfig,
-        wasi_keyvalue::InMemoryKeyValue, wasi_logging::TracingLogger,
-    },
-    types::{Component, LocalResources, Workload, WorkloadStartRequest, WorkloadStopRequest},
-    wit::WitInterface,
+    host::HostApi,
+    types::{WorkloadStartRequest, WorkloadStopRequest},
+};
+
+mod common;
+use common::{
+    component_workload_request, default_counter_resources,
+    http_counter_host_interfaces_with_aliases, start_host_with_dynamic_router,
 };
 
 const HTTP_COUNTER_WASM: &[u8] = include_bytes!("wasm/http_counter.wasm");
 
-fn http_counter_host_interfaces(
-    http_host_config: &str,
-    aliases: Option<&str>,
-) -> Vec<WitInterface> {
-    let mut http_config = HashMap::new();
-    http_config.insert("host".to_string(), http_host_config.to_string());
-    if let Some(aliases) = aliases {
-        http_config.insert("host-aliases".to_string(), aliases.to_string());
-    }
-
-    vec![
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "http".to_string(),
-            interfaces: ["incoming-handler".to_string()].into_iter().collect(),
-            version: Some(semver::Version::parse("0.2.2").unwrap()),
-            config: http_config,
-            name: None,
-        },
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "blobstore".to_string(),
-            interfaces: [
-                "blobstore".to_string(),
-                "container".to_string(),
-                "types".to_string(),
-            ]
-            .into_iter()
-            .collect(),
-            version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
-            config: HashMap::new(),
-            name: None,
-        },
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "keyvalue".to_string(),
-            interfaces: ["store".to_string(), "atomics".to_string()]
-                .into_iter()
-                .collect(),
-            version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
-            config: HashMap::new(),
-            name: None,
-        },
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "logging".to_string(),
-            interfaces: ["logging".to_string()].into_iter().collect(),
-            version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
-            config: HashMap::new(),
-            name: None,
-        },
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "config".to_string(),
-            interfaces: ["store".to_string()].into_iter().collect(),
-            version: Some(semver::Version::parse("0.2.0-rc.1").unwrap()),
-            config: HashMap::new(),
-            name: None,
-        },
-    ]
-}
-
-async fn start_host_with_dynamic_router(
-    addr: &str,
-) -> Result<(std::net::SocketAddr, impl HostApi)> {
-    let engine = Engine::builder().build()?;
-    let http_server = HttpServer::new(DynamicRouter::default(), addr.parse()?).await?;
-    let bound_addr = http_server.addr();
-    let host = HostBuilder::new()
-        .with_engine(engine)
-        .with_http_handler(Arc::new(http_server))
-        .with_plugin(Arc::new(InMemoryBlobstore::new(None)))?
-        .with_plugin(Arc::new(InMemoryKeyValue::new()))?
-        .with_plugin(Arc::new(TracingLogger::default()))?
-        .with_plugin(Arc::new(DynamicConfig::default()))?
-        .build()?;
-
-    let host = host.start().await.context("Failed to start host")?;
-    Ok((bound_addr, host))
-}
-
-fn http_counter_workload_request(
-    http_host_config: &str,
-    aliases: Option<&str>,
-) -> WorkloadStartRequest {
-    WorkloadStartRequest {
-        workload_id: uuid::Uuid::new_v4().to_string(),
-        workload: Workload {
-            namespace: "test".to_string(),
-            name: "http-counter-workload".to_string(),
-            annotations: HashMap::new(),
-            service: None,
-            components: vec![Component {
-                name: "http-counter.wasm".to_string(),
-                digest: None,
-                bytes: bytes::Bytes::from_static(HTTP_COUNTER_WASM),
-                local_resources: LocalResources {
-                    memory_limit_mb: 256,
-                    cpu_limit: 1,
-                    config: HashMap::new(),
-                    environment: HashMap::new(),
-                    volume_mounts: vec![],
-                    allowed_hosts: Default::default(),
-                },
-                pool_size: 1,
-                max_invocations: 100,
-            }],
-            host_interfaces: http_counter_host_interfaces(http_host_config, aliases),
-            volumes: vec![],
-        },
-    }
+fn http_counter_request(host_header: &str, aliases: Option<&str>) -> WorkloadStartRequest {
+    component_workload_request(
+        "http-counter.wasm",
+        "http-counter-workload",
+        HTTP_COUNTER_WASM,
+        default_counter_resources(),
+        http_counter_host_interfaces_with_aliases(host_header, aliases),
+    )
 }
 
 /// Fan out concurrent requests across three hostnames (primary + 2 aliases)
@@ -159,7 +53,7 @@ async fn test_dynamic_router_multiple_distinct_hosts_concurrent() -> Result<()> 
 
     let aliases = Some("web.local,admin.local");
 
-    let req = http_counter_workload_request("api.local", aliases);
+    let req = http_counter_request("api.local", aliases);
     host.workload_start(req).await?;
 
     let client = reqwest::Client::new();
@@ -205,7 +99,7 @@ async fn test_dynamic_router_multiple_distinct_hosts_concurrent() -> Result<()> 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_dynamic_router_concurrent_routes_fixed_mapping() -> Result<()> {
     let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
-    let req = http_counter_workload_request("fixed.local", None);
+    let req = http_counter_request("fixed.local", None);
     host.workload_start(req).await?;
 
     let client = reqwest::Client::new();
@@ -254,7 +148,7 @@ async fn test_dynamic_router_concurrent_routes_fixed_mapping() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_dynamic_router_routes_race_with_unbind() -> Result<()> {
     let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
-    let req = http_counter_workload_request("race.local", None);
+    let req = http_counter_request("race.local", None);
     let workload_id = req.workload_id.clone();
     host.workload_start(req).await?;
 

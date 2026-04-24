@@ -12,21 +12,21 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::{Context, Result};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, time::Duration};
 use tokio::time::timeout;
 
 use wash_runtime::{
     engine::Engine,
-    host::{
-        HostApi, HostBuilder,
-        http::{DevRouter, HttpServer},
-    },
-    plugin::{
-        wasi_blobstore::InMemoryBlobstore, wasi_config::DynamicConfig,
-        wasi_keyvalue::InMemoryKeyValue, wasi_logging::TracingLogger,
-    },
+    host::{HostApi, HostBuilder},
     types::{Component, LocalResources, Service, Workload, WorkloadStartRequest},
     wit::WitInterface,
+};
+
+mod common;
+use common::{
+    http_blobstore_host_interfaces as p3_http_blobstore_host_interfaces,
+    http_counter_host_interfaces, http_only_host_interfaces as p3_http_host_interfaces,
+    start_host_with_p3 as start_p3_host,
 };
 
 // P3 fixtures
@@ -50,126 +50,6 @@ fn engine_with_p3() -> Engine {
         .with_wasip3(true)
         .build()
         .expect("failed to build engine with wasip3")
-}
-
-async fn start_p3_host(addr: &str) -> Result<(std::net::SocketAddr, impl HostApi)> {
-    let engine = engine_with_p3();
-    let http_server = HttpServer::new(DevRouter::default(), addr.parse()?).await?;
-    let bound_addr = http_server.addr();
-    let host = HostBuilder::new()
-        .with_engine(engine)
-        .with_http_handler(Arc::new(http_server))
-        .with_plugin(Arc::new(InMemoryBlobstore::new(None)))?
-        .with_plugin(Arc::new(InMemoryKeyValue::new()))?
-        .with_plugin(Arc::new(TracingLogger::default()))?
-        .with_plugin(Arc::new(DynamicConfig::default()))?
-        .build()?;
-
-    let host = host.start().await.context("Failed to start host")?;
-    Ok((bound_addr, host))
-}
-
-fn p3_http_host_interfaces(host_header: &str) -> Vec<WitInterface> {
-    vec![WitInterface {
-        namespace: "wasi".to_string(),
-        package: "http".to_string(),
-        interfaces: ["incoming-handler".to_string()].into_iter().collect(),
-        version: Some(semver::Version::parse("0.2.2").unwrap()),
-        config: {
-            let mut config = HashMap::new();
-            config.insert("host".to_string(), host_header.to_string());
-            config
-        },
-        name: None,
-    }]
-}
-
-fn http_counter_host_interfaces(host_header: &str) -> Vec<WitInterface> {
-    vec![
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "http".to_string(),
-            interfaces: ["incoming-handler".to_string()].into_iter().collect(),
-            version: Some(semver::Version::parse("0.2.2").unwrap()),
-            config: {
-                let mut config = HashMap::new();
-                config.insert("host".to_string(), host_header.to_string());
-                config
-            },
-            name: None,
-        },
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "blobstore".to_string(),
-            interfaces: [
-                "blobstore".to_string(),
-                "container".to_string(),
-                "types".to_string(),
-            ]
-            .into_iter()
-            .collect(),
-            version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
-            config: HashMap::new(),
-            name: None,
-        },
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "keyvalue".to_string(),
-            interfaces: ["store".to_string(), "atomics".to_string()]
-                .into_iter()
-                .collect(),
-            version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
-            config: HashMap::new(),
-            name: None,
-        },
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "logging".to_string(),
-            interfaces: ["logging".to_string()].into_iter().collect(),
-            version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
-            config: HashMap::new(),
-            name: None,
-        },
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "config".to_string(),
-            interfaces: ["store".to_string()].into_iter().collect(),
-            version: Some(semver::Version::parse("0.2.0-rc.1").unwrap()),
-            config: HashMap::new(),
-            name: None,
-        },
-    ]
-}
-
-fn p3_http_blobstore_host_interfaces(host_header: &str) -> Vec<WitInterface> {
-    vec![
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "http".to_string(),
-            interfaces: ["incoming-handler".to_string()].into_iter().collect(),
-            version: Some(semver::Version::parse("0.2.2").unwrap()),
-            config: {
-                let mut config = HashMap::new();
-                config.insert("host".to_string(), host_header.to_string());
-                config
-            },
-            name: None,
-        },
-        WitInterface {
-            namespace: "wasi".to_string(),
-            package: "blobstore".to_string(),
-            interfaces: [
-                "blobstore".to_string(),
-                "container".to_string(),
-                "types".to_string(),
-            ]
-            .into_iter()
-            .collect(),
-            version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
-            config: HashMap::new(),
-            name: None,
-        },
-    ]
 }
 
 // =============================================================================
