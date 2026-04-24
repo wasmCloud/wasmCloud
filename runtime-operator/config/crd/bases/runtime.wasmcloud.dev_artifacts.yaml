@@ -111,6 +111,24 @@ spec:
               observedGeneration:
                 format: int64
                 type: integer
+              precompiled:
+                items:
+                  description: |-
+                    PrecompiledVariant describes one precompiled output of an Artifact
+                    keyed by te (target, wasmtime-version) pair that produced it
+                  properties:
+                    artifactUrl:
+                      type: string
+                    target:
+                      type: string
+                    wasmtimeVersion:
+                      type: string
+                  required:
+                  - artifactUrl
+                  - target
+                  - wasmtimeVersion
+                  type: object
+                type: array
             type: object
         type: object
     served: true

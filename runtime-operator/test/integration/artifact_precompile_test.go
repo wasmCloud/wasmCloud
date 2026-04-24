@@ -69,10 +69,11 @@ func (r *precompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		r.Target,
 		r.WasmtimeVersion,
 	)
+	jobName := "precompile-" + a.Name
 
-	job := &batchv1.Job{
+	desired := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "precompile-" + a.Name,
+			Name:      jobName,
 			Namespace: a.Namespace},
 		Spec: batchv1.JobSpec{
 			Template: corev1.PodTemplateSpec{
@@ -91,14 +92,50 @@ func (r *precompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			},
 		},
 	}
-	if err := controllerutil.SetControllerReference(&a, job, r.Scheme); err != nil {
+	if err := controllerutil.SetControllerReference(&a, desired, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+	if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{}, nil
+
+	var job batchv1.Job
+	if err := r.Get(ctx, types.NamespacedName{Namespace: a.Namespace, Name: jobName}, &job); err != nil {
+		return ctrl.Result{}, err
+	}
+	if !jobComplete(&job) {
+		return ctrl.Result{}, nil
+	}
+
+	variant := runtimev1alpha1.PrecompiledVariant{
+		Target:          r.Target,
+		WasmtimeVersion: r.WasmtimeVersion,
+		ArtifactURL:     outputURL,
+	}
+	if variantRecorded(a.Status.Precompiled, variant) {
+		return ctrl.Result{}, nil
+	}
+	a.Status.Precompiled = append(a.Status.Precompiled, variant)
+	return ctrl.Result{}, r.Status().Update(ctx, &a)
+}
+
+func jobComplete(j *batchv1.Job) bool {
+	for _, c := range j.Status.Conditions {
+		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func variantRecorded(existing []runtimev1alpha1.PrecompiledVariant, v runtimev1alpha1.PrecompiledVariant) bool {
+	for _, e := range existing {
+		if e.Target == v.Target && e.WasmtimeVersion == v.WasmtimeVersion {
+			return true
+		}
+	}
+	return false
 }
 
 func TestIntegration(t *testing.T) {
@@ -125,14 +162,17 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	Expect(
-		ctrl.NewControllerManagedBy(mgr).For(&runtimev1alpha1.Artifact{}).Complete(&precompileReconciler{
-			Client:          mgr.GetClient(),
-			Scheme:          mgr.GetScheme(),
-			WorkerImage:     testWorkerImage,
-			ArtifactStore:   testArtifactStore,
-			Target:          testTarget,
-			WasmtimeVersion: testWasmtimeVersion,
-		}),
+		ctrl.NewControllerManagedBy(mgr).
+			For(&runtimev1alpha1.Artifact{}).
+			Owns(&batchv1.Job{}).
+			Complete(&precompileReconciler{
+				Client:          mgr.GetClient(),
+				Scheme:          mgr.GetScheme(),
+				WorkerImage:     testWorkerImage,
+				ArtifactStore:   testArtifactStore,
+				Target:          testTarget,
+				WasmtimeVersion: testWasmtimeVersion,
+			}),
 	).To(Succeed())
 
 	var mgrCtx context.Context
@@ -198,6 +238,44 @@ var _ = Describe("precompile pipeline", func() {
 				g.Expect(c.Env).To(ContainElement(want))
 			}
 		}).Should(Succeed())
+
+	})
+
+	It("populates status.precompied when the Job succeeds", func() {
+		ctx := context.Background()
+		a := newArtifact(ctx, "populates-status")
+
+		var job batchv1.Job
+		Eventually(func(g Gomega) {
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default", Name: "precompile-" + a.Name,
+			}, &job)).To(Succeed())
+		}).Should(Succeed())
+
+		job.Status.Succeeded = 1
+		job.Status.Conditions = []batchv1.JobCondition{{
+			Type:   batchv1.JobComplete,
+			Status: corev1.ConditionTrue,
+		}}
+		Expect(k8sClient.Status().Update(ctx, &job)).To(Succeed())
+
+		expectedURL := fmt.Sprintf("%s/%s/%s-%s.cwasm",
+			testArtifactStore.BaseURL, a.Name, testTarget, testWasmtimeVersion)
+
+		Eventually(func(g Gomega) {
+			var got runtimev1alpha1.Artifact
+			g.Expect(k8sClient.Get(ctx,
+				types.NamespacedName{
+					Namespace: "default", Name: a.Name,
+				}, &got)).To(Succeed())
+
+			g.Expect(got.Status.Precompiled).To(HaveLen(1))
+			g.Expect(got.Status.Precompiled[0].ArtifactURL).To(Equal(expectedURL))
+			g.Expect(got.Status.Precompiled[0].Target).To(Equal(testTarget))
+			g.Expect(got.Status.Precompiled[0].WasmtimeVersion).To(Equal(testWasmtimeVersion))
+
+		},
+		).Should(Succeed())
 
 	})
 
