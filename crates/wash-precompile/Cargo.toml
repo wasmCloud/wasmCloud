@@ -1,0 +1,17 @@
+[package]
+name = "wash-precompile"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap = {workspace = true, features = ["derive", "std"]}
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "wash-precompile"
+path = "src/main.rs"

@@ -7140,6 +7140,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wash-precompile"
+version = "2.0.3"
+dependencies = [
+ "anyhow",
+ "clap",
+]
+
+[[package]]
 name = "wash-runtime"
 version = "2.0.6"
 dependencies = [

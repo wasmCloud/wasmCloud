@@ -3,7 +3,7 @@ resolver = "3"
 default-members = ["crates/wash"]
 members = [
     "crates/wash-runtime",
-    "crates/wash",
+    "crates/wash", "crates/wash-precompile",
 ]
 
 [workspace.package]
