@@ -29,7 +29,7 @@ use wash_runtime::{
 
 mod common;
 use common::{
-    component_workload_request, default_counter_resources,
+    component_workload_request, default_counter_resources, get_status,
     http_counter_host_interfaces_with_aliases, start_host_with_dynamic_router,
 };
 
@@ -185,6 +185,33 @@ async fn test_dynamic_router_routes_race_with_unbind() -> Result<()> {
     assert_eq!(
         resolved, 20,
         "all in-flight requests must resolve, got {resolved}/20"
+    );
+
+    Ok(())
+}
+
+/// Requests targeting a host that no workload is bound to must return 404
+/// (`RouteError::NoWorkloadForHost`)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_dynamic_router_unknown_host_returns_404() -> Result<()> {
+    let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
+    host.workload_start(http_counter_request("known.local", None))
+        .await?;
+
+    let client = reqwest::Client::new();
+
+    // A bound host succeeds (sanity check)
+    assert!(
+        get_status(&client, addr, "known.local").await?.is_success(),
+        "bound host should succeed"
+    );
+
+    // An unbound host will return 404
+    let status = get_status(&client, addr, "nope.local").await?;
+    assert_eq!(
+        status,
+        reqwest::StatusCode::NOT_FOUND,
+        "unknown host must map to RouteError::NoWorkloadForHost -> 404, got {status}"
     );
 
     Ok(())
