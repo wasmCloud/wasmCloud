@@ -4,6 +4,7 @@ default-members = ["crates/wash"]
 members = [
     "crates/wash-runtime",
     "crates/wash",
+    "crates/xtask",
 ]
 
 [workspace.package]
