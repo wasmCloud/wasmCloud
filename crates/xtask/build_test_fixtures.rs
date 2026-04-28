@@ -133,14 +133,14 @@ fn build_fixtures(
     let shared_wit = fixtures_dir.join(kind.shared_wit_dir());
 
     let target = kind.target();
-    let artifact_dir = fixtures_dir.join(format!("target/{target}/release"));
-
-    let mut failures = vec![];
     let target_dir = std::env::var("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .map(|path| path.join("wasm"))
         .unwrap_or_else(|_| workspace_dir.join("target/wasm"));
+    let artifact_dir = target_dir.join(format!("{target}/release"));
     let target_dir = target_dir.to_string_lossy();
+
+    let mut failures = vec![];
 
     for fixture in fixtures {
         let fixture_dir = fixtures_dir.join(fixture);
