@@ -1,0 +1,125 @@
+package wasmcloud:nats@0.2.0-draft;
+
+/// Shared types and errors used across the wasmcloud:nats interfaces.
+interface types {
+  record nats-message {
+    subject: string,
+    body: list<u8>,
+    reply-to: option<string>,
+    headers: option<list<header-entry>>,
+  }
+
+  record header-entry {
+    name: string,
+    value: string,
+  }
+
+  variant nats-error {
+    connection(string),
+    timeout(string),
+    jetstream(string),
+    key-not-found,
+    revision-mismatch(u64),
+    no-messages,
+    not-found(string),
+    unexpected(string),
+  }
+}
+
+interface core {
+  use types.{nats-message, nats-error};
+
+  publish: func(msg: nats-message) -> result<_, nats-error>;
+  request: func(msg: nats-message, timeout-ms: u32) -> result<nats-message, nats-error>;
+}
+
+interface jetstream {
+  use types.{nats-message, nats-error, header-entry};
+
+  record publish-ack {
+    stream-name: string,
+    sequence: u64,
+    duplicate: bool,
+  }
+
+  record stored-message {
+    subject: string,
+    sequence: u64,
+    data: list<u8>,
+    headers: option<list<header-entry>>,
+  }
+
+  resource message-handle {
+    message: func() -> nats-message;
+    sequence: func() -> u64;
+    delivery-count: func() -> u32;
+    ack: func() -> result<_, nats-error>;
+    nak: func(delay-ms: option<u32>) -> result<_, nats-error>;
+    in-progress: func() -> result<_, nats-error>;
+    term: func() -> result<_, nats-error>;
+  }
+
+  resource pull-consumer {
+    fetch: func(batch: u32, timeout-ms: u32) -> result<list<message-handle>, nats-error>;
+  }
+
+  publish: func(msg: nats-message) -> result<publish-ack, nats-error>;
+  get-by-sequence: func(stream-name: string, sequence: u64) -> result<stored-message, nats-error>;
+  scan: func(stream-name: string, start-sequence: u64, max-count: u32) -> result<list<stored-message>, nats-error>;
+  open-pull-consumer: func(stream-name: string, consumer: string) -> result<pull-consumer, nats-error>;
+}
+
+interface kv {
+  use types.{nats-error};
+
+  enum kv-operation {
+    put,
+    delete,
+    purge,
+  }
+
+  record entry {
+    key: string,
+    value: list<u8>,
+    revision: u64,
+    created-at-unix-nanos: u64,
+    operation: kv-operation,
+  }
+
+  record bucket-status {
+    bucket: string,
+    values: u64,
+    history: u8,
+    ttl-seconds: u64,
+    bytes: u64,
+  }
+
+  resource bucket {
+    get: func(key: string) -> result<option<entry>, nats-error>;
+    put: func(key: string, value: list<u8>) -> result<u64, nats-error>;
+    create: func(key: string, value: list<u8>) -> result<u64, nats-error>;
+    update: func(key: string, value: list<u8>, expected-revision: u64) -> result<u64, nats-error>;
+    delete: func(key: string) -> result<_, nats-error>;
+    purge: func(key: string) -> result<_, nats-error>;
+    keys: func() -> result<list<string>, nats-error>;
+    history: func(key: string) -> result<list<entry>, nats-error>;
+    status: func() -> result<bucket-status, nats-error>;
+  }
+
+  open: func(bucket: string) -> result<bucket, nats-error>;
+}
+
+interface jetstream-handler {
+  use jetstream.{message-handle};
+  handle-message: func(handle: message-handle) -> result<_, string>;
+}
+
+interface core-handler {
+  use types.{nats-message};
+  handle-message: func(msg: nats-message) -> result<_, string>;
+}
+
+interface kv-handler {
+  use kv.{entry};
+  handle-event: func(bucket: string, entry: entry) -> result<_, string>;
+}

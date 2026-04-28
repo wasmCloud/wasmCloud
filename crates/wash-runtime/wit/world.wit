@@ -38,6 +38,30 @@ world postgres {
 }
 
 
+world nats-imports {
+    import wasmcloud:nats/types@0.2.0-draft;
+    import wasmcloud:nats/core@0.2.0-draft;
+    import wasmcloud:nats/jetstream@0.2.0-draft;
+    import wasmcloud:nats/kv@0.2.0-draft;
+}
+
+world nats-jetstream-handler {
+    import wasmcloud:nats/types@0.2.0-draft;
+    import wasmcloud:nats/jetstream@0.2.0-draft;
+    export wasmcloud:nats/jetstream-handler@0.2.0-draft;
+}
+
+world nats-core-handler {
+    import wasmcloud:nats/types@0.2.0-draft;
+    export wasmcloud:nats/core-handler@0.2.0-draft;
+}
+
+world nats-kv-handler {
+    import wasmcloud:nats/types@0.2.0-draft;
+    import wasmcloud:nats/kv@0.2.0-draft;
+    export wasmcloud:nats/kv-handler@0.2.0-draft;
+}
+
 world otel {
     import wasi:otel/types@0.2.0-rc.1;
     import wasi:otel/tracing@0.2.0-rc.1;

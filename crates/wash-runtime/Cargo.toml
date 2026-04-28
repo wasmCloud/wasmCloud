@@ -15,7 +15,7 @@ path = "src/lib.rs"
 workspace = true
 
 [features]
-default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel"]
+default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasmcloud-nats"]
 oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:sha2", "dep:wit-component"]
 wasi-otel = []
 washlet = ["oci"]
@@ -23,6 +23,7 @@ wasi-config = []
 wasi-logging = []
 wasi-blobstore = []
 wasi-keyvalue = []
+wasmcloud-nats = []
 wasi-webgpu = ["dep:wasi-webgpu-wasmtime", "dep:wasi-graphics-context-wasmtime"]
 wasmcloud-postgres = [
     "dep:tokio-postgres", "dep:tokio-postgres-rustls",
@@ -35,7 +36,7 @@ wasip3 = ["wasmtime-wasi/p3", "wasmtime-wasi-http/p3"]
 
 [dependencies]
 anyhow = { workspace = true }
-async-nats = { workspace = true, features = ["aws-lc-rs"] }
+async-nats = { workspace = true, features = ["aws-lc-rs", "server_2_10", "server_2_11"] }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
