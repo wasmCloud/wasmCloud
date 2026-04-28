@@ -20,12 +20,7 @@
 //! Requires Docker. Gated behind `NATS_INTEGRATION_TESTS=1`.
 
 use anyhow::{Context, Result};
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use testcontainers::{
     GenericImage, ImageExt,
     core::{IntoContainerPort, WaitFor},
@@ -209,7 +204,10 @@ async fn setup(latency: Duration) -> Result<TestHarness> {
     let host = host.start().await.context("Failed to start host")?;
 
     let mut subscription_config = HashMap::new();
-    subscription_config.insert("subscriptions".to_string(), SUBSCRIPTION_SUBJECT.to_string());
+    subscription_config.insert(
+        "subscriptions".to_string(),
+        SUBSCRIPTION_SUBJECT.to_string(),
+    );
 
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
@@ -382,10 +380,12 @@ async fn no_unsubscribe_during_steady_state() -> Result<()> {
         .lines()
         .find_map(|line| line.strip_prefix(&needle))
         .map(|tail| tail.split_whitespace().next().unwrap_or("").to_string())
-        .ok_or_else(|| anyhow::anyhow!(
-            "no `SUB {SUBSCRIPTION_SUBJECT} <sid>` line in captured bytes; can't verify \
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no `SUB {SUBSCRIPTION_SUBJECT} <sid>` line in captured bytes; can't verify \
              the workload's subscription is still active. captured:\n{text}"
-        ))?;
+            )
+        })?;
 
     let unsub_for_sid = format!("UNSUB {sid}");
     if text.lines().any(|line| line.starts_with(&unsub_for_sid)) {

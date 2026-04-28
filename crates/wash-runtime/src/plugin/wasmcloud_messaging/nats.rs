@@ -444,7 +444,10 @@ mod tests {
 
     #[test]
     fn subscriptions_config_single() {
-        assert_eq!(parse_subscriptions("tasks.task-worker"), vec!["tasks.task-worker"]);
+        assert_eq!(
+            parse_subscriptions("tasks.task-worker"),
+            vec!["tasks.task-worker"]
+        );
     }
 
     #[test]
@@ -495,7 +498,9 @@ mod tests {
                     task_handle: None,
                 },
             );
-        tracker.components.insert(component_id.clone(), workload_id.clone());
+        tracker
+            .components
+            .insert(component_id.clone(), workload_id.clone());
 
         let data = tracker
             .get_component_data(&component_id)

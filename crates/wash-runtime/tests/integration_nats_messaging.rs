@@ -96,7 +96,10 @@ async fn setup() -> Result<TestHarness> {
     let host = host.start().await.context("Failed to start host")?;
 
     let mut subscription_config = HashMap::new();
-    subscription_config.insert("subscriptions".to_string(), SUBSCRIPTION_SUBJECT.to_string());
+    subscription_config.insert(
+        "subscriptions".to_string(),
+        SUBSCRIPTION_SUBJECT.to_string(),
+    );
 
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
