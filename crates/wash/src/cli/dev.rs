@@ -18,7 +18,7 @@ use wash_runtime::{
 
 use crate::{
     cli::{CliCommand, CliContext, CommandOutput, component_build::build_dev_component},
-    config::{Config, load_config},
+    config::{Config, DevConfig, load_config},
     wit::WitConfig,
 };
 
@@ -40,6 +40,7 @@ impl CliCommand for DevCommand {
             &ctx.user_config_path(),
             Some(project_dir),
             Some(Config {
+                version: None,
                 dev: None,
                 wit: Some(WitConfig {
                     skip_fetch: true,
@@ -50,7 +51,8 @@ impl CliCommand for DevCommand {
         )
         .context("failed to load config for development")?;
 
-        let dev_config = config.dev();
+        let mut dev_config = config.dev();
+        apply_dev_env_overrides(&mut dev_config);
         let http_addr = dev_config
             .address
             .clone()
@@ -404,6 +406,14 @@ async fn create_workload(host: &Host, config: &Config, bytes: Bytes) -> anyhow::
         service,
         volumes,
     })
+}
+
+fn apply_dev_env_overrides(dev_config: &mut DevConfig) {
+    if let Ok(postgres_url) = std::env::var("WASH_POSTGRES_URL")
+        && !postgres_url.is_empty()
+    {
+        dev_config.postgres_url = Some(postgres_url);
+    }
 }
 
 /// Reload the component in the host, stopping the previous workload if needed
