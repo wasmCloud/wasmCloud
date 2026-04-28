@@ -1,40 +1,67 @@
-# http-client
+# HTTP Client in Rust
 
-A WebAssembly component that handles incoming HTTP requests by making outgoing HTTP calls to an upstream service. Demonstrates the `wasi:http/outgoing-handler` import alongside the standard `wasi:http/incoming-handler` export.
+This project template is a WebAssembly component built with [Rust][rust] that demonstrates making outgoing HTTP requests using [`wstd::http::Client`][wstd-client].
 
-## What it does
+It uses [`wstd`][wstd]'s `#[http_server]` proc macro to handle the incoming request and proxies the call upstream.
 
-For every incoming request, the component sends a `GET` to the URL in `UPSTREAM_URL` (default: `https://httpbin.org/get`) and returns the upstream response body and status code.
+[rust]: https://www.rust-lang.org/
+[wstd]: https://github.com/bytecodealliance/wstd
+[wstd-client]: https://docs.rs/wstd/latest/wstd/http/struct.Client.html
 
 ## Prerequisites
 
-- Rust with the `wasm32-wasip2` target: `rustup target add wasm32-wasip2`
-- The `wash` CLI
+- [Wasm Shell (`wash`)][wash]
+- [Rust toolchain][rust-install]
+- The `wasm32-wasip2` Rust target: `rustup target add wasm32-wasip2`
 
-## Running
+[wash]: https://wasmcloud.com/docs/installation
+[rust-install]: https://www.rust-lang.org/tools/install
 
-```bash
+## Local development
+
+Use `wash new` to scaffold a new wasmCloud component project:
+
+```shell
+wash new https://github.com/wasmCloud/wasmCloud.git --name http-client --subfolder templates/http-client
+```
+
+```shell
+cd http-client
+```
+
+To build this project and run in a hot-reloading development loop, run `wash dev` from this directory:
+
+```shell
 wash dev
 ```
 
-This builds the component and starts an HTTP server on `http://localhost:8000`.
+### Send a request to the running component
 
-## Usage
+Once `wash dev` is serving your component, send a request:
 
-```bash
-curl http://localhost:8000
+```shell
+curl localhost:8000
 ```
 
-The response body is the JSON `httpbin.org` returns for the upstream `GET`.
+The component proxies a `GET https://httpbin.org/get` and returns the upstream JSON.
 
 ## Customizing the upstream
 
-Change the `UPSTREAM_URL` constant in [src/lib.rs](src/lib.rs) to point at any HTTPS endpoint. Outgoing TLS is provided by the host runtime; no additional crates are required in the component.
+Change the `UPSTREAM_URL` constant in [src/lib.rs](src/lib.rs) to point at any HTTPS endpoint. Outgoing TLS is provided by the host runtime and no additional crates are required in the component.
 
-## Building manually
+## Build Wasm binary
 
-```bash
-cargo build --target wasm32-wasip2 --release
+```shell
+wash build
 ```
 
-The compiled component is written to `target/wasm32-wasip2/release/http_client.wasm`.
+## WIT Interfaces
+
+This component imports and exports the following [WIT interfaces](https://component-model.bytecodealliance.org/design/wit.html):
+
+```wit
+world http-client {
+  import wasi:http/outgoing-handler@0.2.2;
+  export wasi:http/incoming-handler@0.2.2;
+}
+```

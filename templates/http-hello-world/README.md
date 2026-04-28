@@ -1,19 +1,61 @@
-# `http-hello-world`
+# HTTP Hello World in Rust
 
-This repository contains a WebAssembly component built using [`wstd`](https://github.com/bytecodealliance/wstd) (an async Rust standard library for Wasm components and WASI 0.2) to serve HTTP requests.
+A minimal WebAssembly component built with [Rust][rust] that responds to HTTP requests using the [`wstd`][wstd] async standard library and its `#[http_server]` proc macro.
 
-# Quickstart
+[rust]: https://www.rust-lang.org/
+[wstd]: https://github.com/bytecodealliance/wstd
 
-To start a local development loop with [Wasm Shell](https://github.com/wasmCloud/wasmCloud):
+## Prerequisites
+
+- [Wasm Shell (`wash`)][wash]
+- [Rust toolchain][rust-install]
+- The `wasm32-wasip2` Rust target: `rustup target add wasm32-wasip2`
+
+[wash]: https://wasmcloud.com/docs/installation
+[rust-install]: https://www.rust-lang.org/tools/install
+
+## Local development
+
+Use `wash new` to scaffold a new wasmCloud component project:
+
+```shell
+wash new https://github.com/wasmCloud/wasmCloud.git --name http-hello-world --subfolder templates/http-hello-world
+```
+
+```shell
+cd http-hello-world
+```
+
+To build this project and run in a hot-reloading development loop, run `wash dev` from this directory:
 
 ```shell
 wash dev
 ```
 
-To build the component:
+### Send a request to the running component
+
+Once `wash dev` is serving your component, send a request:
+
+```shell
+curl localhost:8000
+```
+
+```text
+Hello from wasmCloud!
+```
+
+## Build Wasm binary
 
 ```shell
 wash build
 ```
 
-An OCI artifact of this Wasm component is available from [GitHub Packages](https://github.com/orgs/wasmCloud/packages/container/package/components%2Fhello-world) at `ghcr.io/wasmcloud/components/hello-world:0.1.0`.
+## WIT Interfaces
+
+This component exports the following [WIT interfaces](https://component-model.bytecodealliance.org/design/wit.html):
+
+```wit
+world hello {
+  export wasi:http/incoming-handler@0.2.2;
+}
+```

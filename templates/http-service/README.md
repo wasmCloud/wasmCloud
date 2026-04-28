@@ -1,35 +1,51 @@
-# http-service
+# HTTP Service in Rust
 
-A WebAssembly HTTP service component using [`axum`](https://docs.rs/axum) for routing, wired to `wasi:http/incoming-handler` via [`wstd-axum`](https://docs.rs/wstd-axum).
+This project template is a WebAssembly component built with [Rust][rust] that demonstrates an HTTP service with routing, query parameters, and JSON request and response bodies.
 
-## What it does
+The component uses [`axum`][axum] for routing, wired to `wasi:http/incoming-handler` via [`wstd-axum`][wstd-axum]. Standard `axum` runs on `tokio` plus `hyper`. Inside a Wasm component, HTTP arrives through the host-imported `wasi:http` interface, so neither tokio's networking stack nor hyper's socket layer applies. `wstd-axum` adapts an `axum::Router` onto the `wasi:http/incoming-handler` export. The `Cargo.toml` opts out of axum's default features and only enables those that do not require tokio or hyper.
 
-| Method | Path | Behavior |
-|---|---|---|
-| `GET`  | `/`               | Returns a hello message |
-| `GET`  | `/api/greet?name=...` | Returns `Hello, <name>!` (defaults to `world`) |
-| `POST` | `/api/echo`       | Echoes the JSON body back |
-
-## Why `wstd-axum` and not `axum` directly
-
-Standard `axum` runs on `tokio` + `hyper`. Inside a Wasm component, HTTP is provided as a host-imported interface (`wasi:http`), so neither `tokio`'s networking stack nor `hyper`'s socket layer applies. `wstd-axum` adapts an `axum::Router` onto the `wasi:http/incoming-handler` export instead. It is configured in `Cargo.toml` with `axum = { default-features = false, ... }` and only the framework features that do not require `tokio` or `hyper`.
+[rust]: https://www.rust-lang.org/
+[axum]: https://docs.rs/axum
+[wstd-axum]: https://docs.rs/wstd-axum
 
 ## Prerequisites
 
-- Rust with the `wasm32-wasip2` target: `rustup target add wasm32-wasip2`
-- The `wash` CLI
+- [Wasm Shell (`wash`)][wash]
+- [Rust toolchain][rust-install]
+- The `wasm32-wasip2` Rust target: `rustup target add wasm32-wasip2`
 
-## Running
+[wash]: https://wasmcloud.com/docs/installation
+[rust-install]: https://www.rust-lang.org/tools/install
 
-```bash
+## Local development
+
+Use `wash new` to scaffold a new wasmCloud component project:
+
+```shell
+wash new https://github.com/wasmCloud/wasmCloud.git --name http-service --subfolder templates/http-service
+```
+
+```shell
+cd http-service
+```
+
+To build this project and run in a hot-reloading development loop, run `wash dev` from this directory:
+
+```shell
 wash dev
 ```
 
-This builds the component and starts an HTTP server on `http://localhost:8000`.
+## Endpoints
 
-## Usage
+| Endpoint | Method | Description |
+| -------- | ------ | ----------- |
+| `/` | GET | Returns a hello message |
+| `/api/greet` | GET | Returns `Hello, <name>!` (uses the `name` query parameter, defaults to `world`) |
+| `/api/echo` | POST | Echoes the JSON request body |
 
-```bash
+## Send requests to the running component
+
+```shell
 curl http://localhost:8000/
 curl 'http://localhost:8000/api/greet?name=Eric'
 curl -X POST http://localhost:8000/api/echo \
@@ -37,10 +53,18 @@ curl -X POST http://localhost:8000/api/echo \
   -d '{"message":"hello"}'
 ```
 
-## Building manually
+## Build Wasm binary
 
-```bash
-cargo build --target wasm32-wasip2 --release
+```shell
+wash build
 ```
 
-The compiled component is written to `target/wasm32-wasip2/release/http_service.wasm`.
+## WIT Interfaces
+
+This component exports the following [WIT interfaces](https://component-model.bytecodealliance.org/design/wit.html):
+
+```wit
+world http-service {
+  export wasi:http/incoming-handler@0.2.2;
+}
+```

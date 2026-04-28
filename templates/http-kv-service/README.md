@@ -1,18 +1,57 @@
-# http-kv-service
+# HTTP + Key-Value Service in Rust
 
-A WebAssembly HTTP server component that stores and retrieves key-value pairs using any backend you prefer via the `wasi:keyvalue` interface.
+This project template is a WebAssembly component built with [Rust][rust] that stores and retrieves key-value pairs over HTTP, backed by [`wasi:keyvalue`][wasi-kv].
 
-## What it does
+The component speaks only the `wasi:keyvalue/store` interface. The host runtime selects the underlying storage backend (in-memory, filesystem, NATS, Redis, and others) based on `.wash/config.yaml`, so the same component code runs against any supported backend without modification.
 
-- `POST /` — accepts a JSON body `{"key":"...","value":"..."}` and stores the pair
-- `GET /?key=<key>` — returns the stored value, or `404` if the key does not exist
-
-The component itself has no knowledge of the underlying storage. It speaks only the `wasi:keyvalue/store` interface; the host runtime wires that interface to the backend you configure.
+[rust]: https://www.rust-lang.org/
+[wasi-kv]: https://github.com/WebAssembly/wasi-keyvalue
 
 ## Prerequisites
 
-- Rust with the `wasm32-wasip2` target: `rustup target add wasm32-wasip2`
-- The `wash` CLI
+- [Wasm Shell (`wash`)][wash]
+- [Rust toolchain][rust-install]
+- The `wasm32-wasip2` Rust target: `rustup target add wasm32-wasip2`
+
+[wash]: https://wasmcloud.com/docs/installation
+[rust-install]: https://www.rust-lang.org/tools/install
+
+## Local development
+
+Use `wash new` to scaffold a new wasmCloud component project:
+
+```shell
+wash new https://github.com/wasmCloud/wasmCloud.git --name http-kv-service --subfolder templates/http-kv-service
+```
+
+```shell
+cd http-kv-service
+```
+
+To build this project and run in a hot-reloading development loop, run `wash dev` from this directory:
+
+```shell
+wash dev
+```
+
+## Endpoints
+
+| Endpoint | Method | Description |
+| -------- | ------ | ----------- |
+| `/` | POST | Stores a key-value pair from a JSON body `{"key":"...","value":"..."}` |
+| `/?key=<key>` | GET | Returns the value stored at `<key>`, or `404` if the key does not exist |
+
+## Send requests to the running component
+
+```shell
+# Store a value
+curl -X POST http://localhost:8000 \
+  -H "Content-Type: application/json" \
+  -d '{"key":"mykey","value":"myvalue"}'
+
+# Retrieve a value
+curl "http://localhost:8000?key=mykey"
+```
 
 ## Choosing a backend
 
@@ -22,10 +61,13 @@ Set `BACKEND` to one of the following values and uncomment the matching section 
 
 | `BACKEND`      | Description                                | Required config key            | Example value                    |
 |----------------|--------------------------------------------|--------------------------------|----------------------------------|
-| `"in_memory"`  | Ephemeral in-process store (default)       | *(none)*                       | —                                |
+| `"in_memory"`  | Ephemeral in-process store (default)       | *(none)*                       |                                  |
 | `"filesystem"` | Persists data to a local directory         | `wasi_keyvalue_path`           | `/tmp/keyvalue-store`            |
-| `"nats"`       | Uses NATS JetStream as the store           | `wasi_keyvalue_nats_url`       | `nats://127.0.0.1:4222`          |
-| `"redis"`      | Uses a Redis server as the store           | `wasi_keyvalue_redis_url`      | `redis://127.0.0.1:6379`         |
+| `"nats"`       | Uses [NATS][nats] JetStream as the store   | `wasi_keyvalue_nats_url`       | `nats://127.0.0.1:4222`          |
+| `"redis"`      | Uses a [Redis][redis] server as the store  | `wasi_keyvalue_redis_url`      | `redis://127.0.0.1:6379`         |
+
+[nats]: https://nats.io/
+[redis]: https://redis.io/
 
 ### in_memory (default)
 
@@ -73,7 +115,7 @@ dev:
 
 Start a local NATS server with JetStream:
 
-```bash
+```shell
 docker run --name nats -p 4222:4222 nats:latest -js
 ```
 
@@ -94,38 +136,24 @@ dev:
 
 Start a local Redis server:
 
-```bash
+```shell
 docker run --name redis -p 6379:6379 redis:latest
 ```
 
-## Running
+## Build Wasm binary
 
-```bash
-wash dev
+```shell
+wash build
 ```
 
-This builds the component and starts an HTTP server on `http://localhost:8000`.
+## WIT Interfaces
 
-## Usage
+This component uses the following [WIT interfaces](https://component-model.bytecodealliance.org/design/wit.html):
 
-Store a value:
+```wit
+world http-kv-service {
+  import wasi:keyvalue/store@0.2.0-draft;
 
-```bash
-curl -X POST http://localhost:8000 \
-  -H "Content-Type: application/json" \
-  -d '{"key":"mykey","value":"myvalue"}'
+  export wasi:http/incoming-handler@0.2.2;
+}
 ```
-
-Retrieve a value:
-
-```bash
-curl "http://localhost:8000?key=mykey"
-```
-
-## Building manually
-
-```bash
-cargo build --target wasm32-wasip2 --release
-```
-
-The compiled component is written to `target/wasm32-wasip2/release/http_kv_service.wasm`.
