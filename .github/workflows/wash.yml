@@ -301,7 +301,6 @@ jobs:
         run: |
           gh api repos/wasmCloud/homebrew-wasmcloud/dispatches \
             -f event_type=brew-formula-update \
-            -f 'client_payload[tag_prefix]=wash' \
             -f 'client_payload[tag_version]=${{ steps.version.outputs.version }}'
 
   update-winget:
