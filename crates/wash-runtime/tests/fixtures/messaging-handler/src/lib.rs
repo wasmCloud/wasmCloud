@@ -1,4 +1,4 @@
-use crate::bindings::{wasi::logging::logging, wasmcloud::messaging::types::BrokerMessage};
+use crate::bindings::wasmcloud::messaging::{consumer, types::BrokerMessage};
 
 mod bindings {
     use crate::Component;
@@ -14,8 +14,15 @@ mod bindings {
 struct Component;
 
 impl bindings::exports::wasmcloud::messaging::handler::Guest for Component {
-    fn handle_message(_msg: BrokerMessage) -> Result<(), String> {
-        logging::log(logging::Level::Info, "messaging", "hello, world!");
+    fn handle_message(msg: BrokerMessage) -> Result<(), String> {
+        if let Some(reply_to) = msg.reply_to {
+            let reply = BrokerMessage {
+                subject: reply_to,
+                body: msg.body,
+                reply_to: None,
+            };
+            consumer::publish(&reply)?;
+        }
         Ok(())
     }
 }
