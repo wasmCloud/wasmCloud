@@ -270,8 +270,8 @@ pub async fn get_status(
             .send(),
     )
     .await
-    .context("request timed out")?
-    .context("request failed")?;
+    .with_context(|| format!("request to {host_header} timed out"))?
+    .with_context(|| format!("request to {host_header} failed"))?;
     Ok(response.status())
 }
 
