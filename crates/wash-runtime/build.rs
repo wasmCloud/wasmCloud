@@ -4,7 +4,6 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 fn workspace_dir() -> anyhow::Result<PathBuf> {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let mut current_path = PathBuf::from(manifest_dir);
