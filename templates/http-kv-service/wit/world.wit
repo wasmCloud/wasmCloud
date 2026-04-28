@@ -1,6 +1,6 @@
-package wasmcloud:redis-keyvalue;
+package wasmcloud:http-kv-service;
 
-world redis-keyvalue {
+world http-kv-service {
   import wasi:keyvalue/store@0.2.0-draft;
 
   export wasi:http/incoming-handler@0.2.2;

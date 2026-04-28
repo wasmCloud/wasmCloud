@@ -1,4 +1,4 @@
-# key-value
+# http-kv-service
 
 A WebAssembly HTTP server component that stores and retrieves key-value pairs using any backend you prefer via the `wasi:keyvalue` interface.
 
@@ -128,4 +128,4 @@ curl "http://localhost:8000?key=mykey"
 cargo build --target wasm32-wasip2 --release
 ```
 
-The compiled component is written to `target/wasm32-wasip2/release/redis_keyvalue.wasm`.
+The compiled component is written to `target/wasm32-wasip2/release/http_kv_service.wasm`.

@@ -54,7 +54,7 @@ Note: This quickstart requires the [Rust toolchain](https://www.rust-lang.org/to
 1. **Create a new component:**
 
    ```bash
-   wash new https://github.com/wasmCloud/wasmCloud.git --subfolder examples/http-hello-world
+   wash new https://github.com/wasmCloud/wasmCloud.git --subfolder templates/http-hello-world
    ```
 
 2. **Build your component:**
