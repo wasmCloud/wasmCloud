@@ -1,0 +1,10 @@
+[package]
+name = "messaging-echo"
+edition = "2024"
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true }

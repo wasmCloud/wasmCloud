@@ -28,7 +28,7 @@ use wash_runtime::{
     wit::WitInterface,
 };
 
-const MESSAGING_HANDLER_WASM: &[u8] = include_bytes!("wasm/messaging_handler.wasm");
+const MESSAGING_ECHO_WASM: &[u8] = include_bytes!("wasm/messaging_echo.wasm");
 
 const SUBSCRIPTION_SUBJECT: &str = "test.echo";
 
@@ -111,7 +111,7 @@ async fn setup() -> Result<TestHarness> {
             components: vec![Component {
                 name: "messaging-handler".to_string(),
                 digest: None,
-                bytes: bytes::Bytes::from_static(MESSAGING_HANDLER_WASM),
+                bytes: bytes::Bytes::from_static(MESSAGING_ECHO_WASM),
                 local_resources: LocalResources {
                     memory_limit_mb: 256,
                     cpu_limit: 1,

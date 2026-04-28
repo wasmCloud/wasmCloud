@@ -211,6 +211,7 @@ const P2_FIXTURES: &[&str] = &[
     "http-webgpu",
     "cpu-usage-service",
     "messaging-handler",
+    "messaging-echo",
     "inter-component-call-caller",
     "inter-component-call-callee",
     "inter-component-call-middleware",
