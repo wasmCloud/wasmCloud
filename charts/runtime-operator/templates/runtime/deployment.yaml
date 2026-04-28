@@ -54,6 +54,9 @@ spec:
                 fieldRef:
                   fieldPath: status.podIP
           args:
+            {{- if .logLevel }}
+            - "--log-level={{ .logLevel }}"
+            {{- end }}
             - "host"
             - "--host-name=$(WASMCLOUD_HOST_IP)"
             - "--host-group={{ .name }}"

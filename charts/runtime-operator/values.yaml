@@ -36,7 +36,7 @@ nats:
     registry: docker.io
     repository: nats
     pull_policy: Always
-    tag: "2.11.3-alpine"
+    tag: "2.12.8-alpine"
   serviceAccount:
     # -- Specifies whether a service account should be created
     create: true

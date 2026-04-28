@@ -28,6 +28,8 @@ import (
 	"go.wasmcloud.dev/runtime-operator/v2/test/utils"
 )
 
+const envBoolTrue = "true"
+
 var (
 	// Optional Environment Variables:
 	// - PROMETHEUS_INSTALL_SKIP=true: Skips Prometheus Operator installation during test setup (default: true).
@@ -40,13 +42,31 @@ var (
 	isCertManagerAlreadyInstalled = false
 
 	// skipImageBuild skips the docker build step (set SKIP_IMAGE_BUILD=true when image is pre-built)
-	skipImageBuild = os.Getenv("SKIP_IMAGE_BUILD") == "true"
+	skipImageBuild = os.Getenv("SKIP_IMAGE_BUILD") == envBoolTrue
 
 	// operatorImageRepo and operatorImageTag are used for Helm --set overrides
 	operatorImageRepo = "localhost/runtime-operator"
 	operatorImageTag  = "e2e"
 	// projectImage is the full image name built and loaded into Kind
 	projectImage = fmt.Sprintf("%s:%s", operatorImageRepo, operatorImageTag)
+
+	// runtimeImageRepo / runtimeImageTag identify the wash-runtime (host)
+	// image. Set BUILD_RUNTIME_IMAGE=true to build from the local tree (the
+	// only way the host pod actually exercises the code under test); leave
+	// unset to use the published canary tag, which is faster but means the
+	// e2e is testing whatever upstream shipped, not your branch. Set
+	// SKIP_RUNTIME_BUILD=true alongside BUILD_RUNTIME_IMAGE=true to reuse a
+	// previously-built local image (so iteration on test code doesn't
+	// trigger a full cargo build per run).
+	runtimeImageRepo  = "localhost/wasmcloud-wash"
+	buildRuntimeImage = os.Getenv("BUILD_RUNTIME_IMAGE") == envBoolTrue
+	skipRuntimeBuild  = os.Getenv("SKIP_RUNTIME_BUILD") == envBoolTrue
+	// RUNTIME_LOG_LEVEL optionally sets the wash host's `--log-level`. When
+	// unset (the default), the chart leaves the flag off and the host runs
+	// at its built-in INFO level — matching production. Set to e.g. "debug"
+	// when iterating on a failing run that needs the NatsMessaging plugin's
+	// instrumentation in the diagnostic dump.
+	runtimeLogLevel = os.Getenv("RUNTIME_LOG_LEVEL")
 
 	// helmChartPath points to the runtime-operator Helm chart relative to the project dir (runtime-operator/)
 	helmChartPath = "../charts/runtime-operator"
@@ -79,30 +99,67 @@ var _ = BeforeSuite(func() {
 	err := utils.LoadImageToKindClusterWithName(projectImage)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the operator image into Kind")
 
+	if buildRuntimeImage {
+		runtimeImageRef := fmt.Sprintf("%s:%s", runtimeImageRepo, operatorImageTag)
+		if !skipRuntimeBuild {
+			By("building the wash-runtime image from the local tree")
+			// Repo root sits one level above runtime-operator/.
+			cmd := exec.Command("docker", "build", "-t", runtimeImageRef, "..")
+			_, err := utils.Run(cmd)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the wash-runtime image")
+		}
+
+		By("loading the wash-runtime image into Kind")
+		err := utils.LoadImageToKindClusterWithName(runtimeImageRef)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the wash-runtime image into Kind")
+	}
+
 	By("installing the runtime-operator via Helm")
-	cmd := exec.Command("helm", "upgrade", "--install", "--create-namespace",
-		"-n", namespace,
-		"--set", fmt.Sprintf("operator.image.registry=%s", ""),
-		"--set", fmt.Sprintf("operator.image.repository=%s", operatorImageRepo),
-		"--set", fmt.Sprintf("operator.image.tag=%s", operatorImageTag),
-		"--set", "operator.image.pull_policy=Never",
-		"--set", "gateway.image.tag=canary",
-		"--set", "gateway.service.type=NodePort",
-		"--set", "gateway.service.nodePort=30950",
-		"--set", fmt.Sprintf("runtime.image.tag=%s", runtimeImageTag),
-		"--set", "runtime.hostGroups[0].name=default",
-		"--set", "runtime.hostGroups[0].replicas=1",
-		"--set", "runtime.hostGroups[0].service.type=ClusterIP",
-		"--set", "runtime.hostGroups[0].http.enabled=true",
-		"--set", "runtime.hostGroups[0].http.port=80",
-		"--set", "runtime.hostGroups[0].webgpu.enabled=false",
-		"--set", "runtime.hostGroups[0].resources.requests.memory=64Mi",
-		"--set", "runtime.hostGroups[0].resources.requests.cpu=250m",
-		"--set", "runtime.hostGroups[0].resources.limits.memory=512Mi",
-		"--set", "runtime.hostGroups[0].resources.limits.cpu=500m",
-		"--wait", "--timeout=5m",
-		"operator-e2e", helmChartPath,
-	)
+	// Build the full list of `--set key=value` values in one place; the
+	// command line is assembled below.
+	sets := []string{
+		"operator.image.registry=",
+		fmt.Sprintf("operator.image.repository=%s", operatorImageRepo),
+		fmt.Sprintf("operator.image.tag=%s", operatorImageTag),
+		"operator.image.pull_policy=Never",
+		"gateway.image.tag=canary",
+		"gateway.service.type=NodePort",
+		"gateway.service.nodePort=30950",
+		"runtime.hostGroups[0].name=default",
+		"runtime.hostGroups[0].replicas=1",
+		"runtime.hostGroups[0].service.type=ClusterIP",
+		"runtime.hostGroups[0].http.enabled=true",
+		"runtime.hostGroups[0].http.port=80",
+		"runtime.hostGroups[0].webgpu.enabled=false",
+		"runtime.hostGroups[0].resources.requests.memory=64Mi",
+		"runtime.hostGroups[0].resources.requests.cpu=250m",
+		"runtime.hostGroups[0].resources.limits.memory=512Mi",
+		"runtime.hostGroups[0].resources.limits.cpu=500m",
+		// Driven by RUNTIME_LOG_LEVEL env var; empty value leaves the
+		// chart's `{{- if .logLevel }}` guard off, so wash uses INFO.
+		fmt.Sprintf("runtime.hostGroups[0].logLevel=%s", runtimeLogLevel),
+	}
+	if buildRuntimeImage {
+		// Point at the locally-built image and disable pull so kubelet
+		// uses the kind-loaded copy.
+		sets = append(sets,
+			"runtime.image.registry=",
+			fmt.Sprintf("runtime.image.repository=%s", runtimeImageRepo),
+			fmt.Sprintf("runtime.image.tag=%s", operatorImageTag),
+			"runtime.image.pull_policy=Never",
+		)
+	} else {
+		sets = append(sets, fmt.Sprintf("runtime.image.tag=%s", runtimeImageTag))
+	}
+
+	helmArgs := make([]string, 0, 5+2*len(sets)+4)
+	helmArgs = append(helmArgs, "upgrade", "--install", "--create-namespace", "-n", namespace)
+	for _, s := range sets {
+		helmArgs = append(helmArgs, "--set", s)
+	}
+	helmArgs = append(helmArgs, "--wait", "--timeout=5m", "operator-e2e", helmChartPath)
+
+	cmd := exec.Command("helm", helmArgs...)
 	_, err = utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to install the runtime-operator via Helm")
 

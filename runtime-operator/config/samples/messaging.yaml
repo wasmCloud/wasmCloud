@@ -1,0 +1,27 @@
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: messaging-echo
+spec:
+  replicas: 1
+  template:
+    spec:
+      hostInterfaces:
+        - namespace: wasmcloud
+          package: messaging
+          version: "0.2.0"
+          interfaces:
+            - handler
+          config:
+            # The handler component subscribes to this subject. Regression coverage
+            # for https://github.com/wasmCloud/wasmCloud/issues/5074: prior to the
+            # fix, the WorkloadDeployment reached Ready=True but no NATS SUB ever
+            # landed on the bus, so requests on this subject timed out.
+            subscriptions: "test.echo"
+      components:
+        - name: messaging-echo
+          # Component exports wasmcloud:messaging/handler@0.2.0 and replies to
+          # incoming messages by publishing the body back to msg.reply_to. The
+          # fixture under crates/wash-runtime/tests/fixtures/messaging-handler
+          # is the source.
+          image: ghcr.io/wasmcloud/components/messaging-echo-rust:0.1.0
