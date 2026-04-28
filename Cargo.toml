@@ -42,7 +42,7 @@ unnecessary_box_returns = 'deny'
 
 [workspace.dependencies]
 anyhow = { version = "1.0.98", default-features = false }
-async-nats = { version = "0.44", default-features = false }
+async-nats = { version = "0.47", default-features = false, features = ["aws-lc-rs", "jetstream", "kv", "object-store", "service"] }
 atty = { version= "0.2", default-features = false }
 base64 = { version = "0.22", default-features = false, features = ["std"] }
 clap = { version = "4.5.40", default-features = false, features = ["derive", "env", "help", "color", "suggestions", "wrap_help", "cargo", "string"] }
