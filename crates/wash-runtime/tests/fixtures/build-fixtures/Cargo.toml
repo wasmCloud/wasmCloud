@@ -1,0 +1,15 @@
+[package]
+name = "build-fixtures"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[lib]
+name = "build_fixtures"
+path = "lib.rs"
+
+[build-dependencies]
+anyhow = { workspace = true, default-features = true }
+wasi-preview1-component-adapter-provider = "43"
+wit-component = { workspace = true, default-features = false }
+

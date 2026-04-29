@@ -755,6 +755,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "build-fixtures"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "wasi-preview1-component-adapter-provider",
+ "wit-component 0.247.0",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7289,6 +7298,7 @@ dependencies = [
  "async-trait",
  "bigdecimal 0.4.10",
  "bit-vec 0.6.3",
+ "build-fixtures",
  "bytes",
  "cap-net-ext",
  "cap-std",
@@ -7348,7 +7358,6 @@ dependencies = [
  "url",
  "uuid",
  "wasi-graphics-context-wasmtime",
- "wasi-preview1-component-adapter-provider",
  "wasi-webgpu-wasmtime",
  "wasmtime",
  "wasmtime-wasi",
