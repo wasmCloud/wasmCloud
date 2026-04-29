@@ -33,7 +33,6 @@ use wash_runtime::{
     types::{WorkloadStartRequest, WorkloadStopRequest},
 };
 
-mod common;
 use common::{
     component_workload_request, default_counter_resources, get_status,
     http_counter_host_interfaces_with_aliases, start_host_with_dynamic_router,

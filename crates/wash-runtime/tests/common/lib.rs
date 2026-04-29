@@ -242,7 +242,6 @@ pub async fn start_host_with_tls(
 
 /// Start a host with `wasip3` enabled on the engine, a `DevRouter` backed
 /// HTTP server, and the standard plugin set.
-#[cfg(feature = "wasip3")]
 pub async fn start_host_with_p3(addr: &str) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let engine = Engine::builder().with_wasip3(true).build()?;
     let http_server = HttpServer::new(DevRouter::default(), addr.parse()?).await?;

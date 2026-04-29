@@ -23,7 +23,6 @@ use wash_runtime::{
     types::{LocalResources, WorkloadStartRequest, WorkloadStopRequest},
 };
 
-mod common;
 use common::{
     component_workload_request, default_counter_resources, get_status, get_status_and_body,
     http_counter_host_interfaces, http_only_host_interfaces, start_host_with_dev_router,
