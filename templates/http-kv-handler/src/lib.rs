@@ -31,7 +31,7 @@ struct Component;
 ///
 /// Change this constant and uncomment the matching section in `.wash/config.yaml`
 /// to switch backends.
-const BACKEND: &str = "nats";
+const BACKEND: &str = "in_memory";
 
 impl Guest for Component {
     fn handle(request: IncomingRequest, response_out: ResponseOutparam) {

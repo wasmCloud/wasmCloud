@@ -1,10 +1,7 @@
 wit_bindgen::generate!({
     path: "../wit",
     world: "task",
-    with: {
-        "wasmcloud:messaging/types@0.2.0": generate,
-        "wasmcloud:messaging/consumer@0.2.0": generate,
-    },
+    generate_all,
 });
 
 use crate::wasmcloud::messaging::types::BrokerMessage;
