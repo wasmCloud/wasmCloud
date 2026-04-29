@@ -5,7 +5,8 @@ metadata:
 spec:
   type: NodePort
   ports:
-    - port: 80
+    - name: http
+      port: 80
       protocol: TCP
       nodePort: 30950
 ---
