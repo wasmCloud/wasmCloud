@@ -1,0 +1,65 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-cargo:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    target-branch: "release-1.9.x"
+    groups:
+      all-cargo-release-1-9:
+        patterns:
+          - "*"
+
+  # Go modules - one PR for runtime-gateway + runtime-operator
+  - package-ecosystem: "gomod"
+    directories:
+      - "/runtime-gateway"
+      - "/runtime-operator"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-go:
+        patterns:
+          - "*"
+
+  # GitHub Actions - single PR for root workflows + in-tree actions
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+      - "/.github/actions/helm-publish"
+      - "/.github/actions/lint-go"
+      - "/.github/actions/no-diff"
+      - "/.github/actions/setup-go"
+      - "/.github/actions/setup-rust"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-github-actions:
+        patterns:
+          - "*"
+
+  # Docker base images - single PR for all Dockerfiles
+  - package-ecosystem: "docker"
+    directories:
+      - "/"
+      - "/runtime-gateway"
+      - "/runtime-operator"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    groups:
+      all-docker:
+        patterns:
+          - "*"
