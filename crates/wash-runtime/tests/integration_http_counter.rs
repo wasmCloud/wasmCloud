@@ -11,7 +11,6 @@ use tokio::time::timeout;
 
 use wash_runtime::{host::HostApi, types::LocalResources};
 
-mod common;
 use common::{
     component_workload_request, http_counter_host_interfaces, start_host_with_dev_router,
 };
