@@ -1680,7 +1680,7 @@ impl UnresolvedWorkload {
 
         // Notify plugins of the resolved workload
         for (plugin, component_ids) in bound_plugins.iter() {
-            trace!(
+            debug!(
                 plugin_id = plugin.id(),
                 component_count = component_ids.len(),
                 "notifying plugin of resolved workload"

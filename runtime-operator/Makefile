@@ -72,7 +72,7 @@ test: manifests generate fmt vet envtest ## Run tests.
 test-e2e: ## Run the e2e tests. Expected an isolated environment using Kind.
 	@command -v kind >/dev/null 2>&1 || { echo "kind is required"; exit 1; }
 	@kind get clusters | grep -q "$${KIND_CLUSTER_NAME:-kind}" || { echo "Kind cluster not found"; exit 1; }
-	go test ./test/e2e/ -v -ginkgo.v
+	go test ./test/e2e/ -v -ginkgo.v -timeout=30m
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter

@@ -12,6 +12,9 @@ on:
       - "Cargo.*"
       - "rust-toolchain.toml"
       - "rustfmt.toml"
+      - "runtime-operator/test/e2e/**"
+      - "charts/runtime-operator/**"
+      - "deploy/kind/kind-config.yaml"
   push:
     branches:
       - main
@@ -126,7 +129,66 @@ jobs:
         run: |
           cargo machete
 
-  canary:
+  # Integration gate: build the wash image from this commit, install it
+  # alongside the runtime-operator chart in a kind cluster, and run the
+  # operator's e2e suite (including the messaging round-trip from #5074)
+  # against it. The canary tag only moves if this passes. Also runs on
+  # PRs that touch wash, the chart, or the e2e suite, so regressions are
+  # caught before merge rather than after.
+  runtime-operator-e2e:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: ./.github/actions/setup-go
+      - name: Build wash runtime image
+        run: docker build -t localhost/wasmcloud-wash:e2e .
+      - name: Build runtime-operator image
+        working-directory: runtime-operator
+        run: make docker-build IMG=localhost/runtime-operator:e2e
+      - uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        with:
+          cluster_name: wasmcloud-e2e
+          config: deploy/kind/kind-config.yaml
+      - name: Run runtime-operator e2e against locally-built wash
+        working-directory: runtime-operator
+        run: make test-e2e
+        env:
+          # Operator and wash images are already built above; the suite
+          # just needs to load them into kind.
+          SKIP_IMAGE_BUILD: "true"
+          BUILD_RUNTIME_IMAGE: "true"
+          SKIP_RUNTIME_BUILD: "true"
+          # Exercise the messaging spec — this is the regression test for
+          # #5074 and is the whole reason the gate exists.
+          MESSAGING_E2E_IMAGE: ghcr.io/wasmcloud/components/messaging-echo-rust:0.1.0
+          PROMETHEUS_INSTALL_SKIP: "true"
+          CERT_MANAGER_INSTALL_SKIP: "true"
+          KIND_CLUSTER_NAME: wasmcloud-e2e
+      - name: Dump diagnostics
+        if: failure()
+        run: |
+          echo "=== Pod Status ==="
+          kubectl get pods -n wasmcloud-system -o wide || true
+          echo "=== Events ==="
+          kubectl get events -n wasmcloud-system --sort-by=.lastTimestamp || true
+          echo "=== Operator Logs ==="
+          kubectl logs -n wasmcloud-system -l wasmcloud.com/name=runtime-operator --tail=200 || true
+          echo "=== Host Logs ==="
+          kubectl logs -n wasmcloud-system -l wasmcloud.com/name=hostgroup --tail=300 || true
+          echo "=== CRD Resources ==="
+          kubectl get hosts.runtime.wasmcloud.dev -A -o yaml || true
+          kubectl get workloaddeployments.runtime.wasmcloud.dev -A -o yaml || true
+          kubectl get workloads.runtime.wasmcloud.dev -A -o yaml || true
+
+  # The canary docker image is built in parallel with check/lint/e2e to
+  # avoid serializing the slow cargo build behind the slow tests. With
+  # `push: false`, the multi-arch digests are still pushed to ghcr (the
+  # workflow always does that for caching), but the human-visible
+  # `canary-v2` tag is *not* created here — that happens in
+  # `canary-publish` below, gated on every test job passing.
+  canary-build:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
@@ -134,10 +196,53 @@ jobs:
     uses: ./.github/workflows/docker-build-push.yml
     secrets: inherit
     with:
-      push: true
+      push: false
       image: ghcr.io/wasmcloud/wash
       tags: |
         type=raw,value=canary-v2
+
+  # Tag promotion: only move `canary-v2` once check, lint, and the
+  # runtime-operator e2e have all passed against this commit. Reads the
+  # digests uploaded by canary-build and assembles the manifest list.
+  canary-publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [check, lint, runtime-operator-e2e, canary-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Download digests
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ needs.canary-build.outputs.artifact_prefix }}-${{ github.run_id }}-*
+          merge-multiple: true
+      - name: Login to ghcr.io
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/wasmcloud/wash
+          tags: |
+            type=raw,value=canary-v2
+      - name: Create manifest list and push canary-v2 tag
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          # shellcheck disable=SC2046
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/wasmcloud/wash@sha256:%s ' *)
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ghcr.io/wasmcloud/wash:${{ steps.meta.outputs.version }}
 
   docker-release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
