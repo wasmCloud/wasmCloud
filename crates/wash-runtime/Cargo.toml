@@ -114,13 +114,12 @@ url = { workspace = true }
 webpki-roots = { workspace = true }
 
 [build-dependencies]
-anyhow = { workspace = true, default-features = true }
+anyhow = { workspace = true }
 tonic-prost-build = { workspace = true, default-features = true }
 pbjson-build = { workspace = true, default-features = true }
-wasi-preview1-component-adapter-provider = "43"
-wit-component = { workspace = true, default-features = false }
 
 [dev-dependencies]
+build-fixtures = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }

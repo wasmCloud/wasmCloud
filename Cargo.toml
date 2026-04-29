@@ -3,6 +3,7 @@ resolver = "3"
 default-members = ["crates/wash"]
 members = [
     "crates/wash-runtime",
+    "crates/wash-runtime/tests/fixtures/build-fixtures/",
     "crates/wash",
 ]
 
@@ -118,6 +119,7 @@ wasmtime-wasi-io = { version = "44", default-features = false }
 wasmtime-wasi-http = { version = "44", default-features = false }
 wit-component = { version = "0.247.0", default-features = false }
 wash-runtime = { path = "crates/wash-runtime", default-features = false }
+build-fixtures = { path = "crates/wash-runtime/tests/fixtures/build-fixtures/" }
 wat = { version = "1.247.0", default-features = false }
 
 # postgres deps
