@@ -1,6 +1,6 @@
 build:
   command: cargo build --target wasm32-wasip2 --release
-  component_path: target/wasm32-wasip2/release/http_kv_service.wasm
+  component_path: target/wasm32-wasip2/release/http_kv_handler.wasm
 
 dev:
   # Backend: in_memory (default)

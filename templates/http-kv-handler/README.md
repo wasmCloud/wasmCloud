@@ -1,4 +1,4 @@
-# HTTP + Key-Value Service in Rust
+# HTTP + Key-Value Handler in Rust
 
 This project template is a WebAssembly component built with [Rust][rust] that stores and retrieves key-value pairs over HTTP, backed by [`wasi:keyvalue`][wasi-kv].
 
@@ -21,11 +21,11 @@ The component speaks only the `wasi:keyvalue/store` interface. The host runtime 
 Use `wash new` to scaffold a new wasmCloud component project:
 
 ```shell
-wash new https://github.com/wasmCloud/wasmCloud.git --name http-kv-service --subfolder templates/http-kv-service
+wash new https://github.com/wasmCloud/wasmCloud.git --name http-kv-handler --subfolder templates/http-kv-handler
 ```
 
 ```shell
-cd http-kv-service
+cd http-kv-handler
 ```
 
 To build this project and run in a hot-reloading development loop, run `wash dev` from this directory:
@@ -151,7 +151,7 @@ wash build
 This component uses the following [WIT interfaces](https://component-model.bytecodealliance.org/design/wit.html):
 
 ```wit
-world http-kv-service {
+world http-kv-handler {
   import wasi:keyvalue/store@0.2.0-draft;
 
   export wasi:http/incoming-handler@0.2.2;

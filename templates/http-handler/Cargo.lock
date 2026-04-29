@@ -176,7 +176,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "http-service"
+name = "http-handler"
 version = "0.1.0"
 dependencies = [
  "axum",

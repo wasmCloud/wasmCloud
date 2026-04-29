@@ -1,5 +1,5 @@
 [package]
-name = "http-service"
+name = "http-handler"
 edition = "2024"
 version = "0.1.0"
 

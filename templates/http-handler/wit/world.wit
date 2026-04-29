@@ -1,0 +1,5 @@
+package wasmcloud:http-handler;
+
+world http-handler {
+  export wasi:http/incoming-handler@0.2.2;
+}

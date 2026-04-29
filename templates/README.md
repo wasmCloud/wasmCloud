@@ -6,10 +6,10 @@ Project templates for building wasmCloud components and services with Rust.
 
 | Template | Description |
 |---|---|
-| [http-hello-world](./http-hello-world/) | Minimal HTTP server component using `wstd` |
+| [http-hello-world](./http-hello-world/) | Minimal HTTP handler component using `wstd` |
 | [http-client](./http-client/) | Component that makes outgoing HTTP requests |
-| [http-service](./http-service/) | HTTP service component with routing via `wstd-axum` |
-| [http-kv-service](./http-kv-service/) | HTTP service component backed by `wasi:keyvalue` |
+| [http-handler](./http-handler/) | HTTP handler component with routing via `wstd-axum` |
+| [http-kv-handler](./http-kv-handler/) | HTTP handler component backed by `wasi:keyvalue` |
 | [http-api-with-distributed-workloads](./http-api-with-distributed-workloads/) | HTTP API that delegates processing to background workers via messaging |
 | [service-tcp](./service-tcp/) | Service-and-component template demonstrating the wasmCloud service model with `wasi:sockets` and `tokio` |
 

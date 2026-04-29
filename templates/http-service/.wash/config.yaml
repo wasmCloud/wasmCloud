@@ -1,3 +1,0 @@
-build:
-  command: cargo build --target wasm32-wasip2 --release
-  component_path: target/wasm32-wasip2/release/http_service.wasm

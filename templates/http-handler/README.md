@@ -1,6 +1,6 @@
-# HTTP Service in Rust
+# HTTP Handler in Rust
 
-This project template is a WebAssembly component built with [Rust][rust] that demonstrates an HTTP service with routing, query parameters, and JSON request and response bodies.
+This project template is a WebAssembly component built with [Rust][rust] that demonstrates an HTTP handler with routing, query parameters, and JSON request and response bodies.
 
 The component uses [`axum`][axum] for routing, wired to `wasi:http/incoming-handler` via [`wstd-axum`][wstd-axum]. Standard `axum` runs on `tokio` plus `hyper`. Inside a Wasm component, HTTP arrives through the host-imported `wasi:http` interface, so neither tokio's networking stack nor hyper's socket layer applies. `wstd-axum` adapts an `axum::Router` onto the `wasi:http/incoming-handler` export. The `Cargo.toml` opts out of axum's default features and only enables those that do not require tokio or hyper.
 
@@ -22,11 +22,11 @@ The component uses [`axum`][axum] for routing, wired to `wasi:http/incoming-hand
 Use `wash new` to scaffold a new wasmCloud component project:
 
 ```shell
-wash new https://github.com/wasmCloud/wasmCloud.git --name http-service --subfolder templates/http-service
+wash new https://github.com/wasmCloud/wasmCloud.git --name http-handler --subfolder templates/http-handler
 ```
 
 ```shell
-cd http-service
+cd http-handler
 ```
 
 To build this project and run in a hot-reloading development loop, run `wash dev` from this directory:
@@ -64,7 +64,7 @@ wash build
 This component exports the following [WIT interfaces](https://component-model.bytecodealliance.org/design/wit.html):
 
 ```wit
-world http-service {
+world http-handler {
   export wasi:http/incoming-handler@0.2.2;
 }
 ```
