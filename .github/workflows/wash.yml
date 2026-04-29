@@ -82,7 +82,9 @@ jobs:
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
       - name: Build
-        run: cargo build
+        run: |
+          cargo x build-test-fixtures
+          cargo build
       - name: Test
         env:
           RUST_BACKTRACE: "1"

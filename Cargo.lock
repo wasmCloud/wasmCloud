@@ -1844,6 +1844,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotenv-flow"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ccff2060df2e1a42732ab1e7af8c5f930ed3d0255aaadfae66e032781e8d271a"
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9006,6 +9012,20 @@ name = "xml-rs"
 version = "0.8.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
+
+[[package]]
+name = "xtask"
+version = "2.0.5"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dotenv-flow",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wasi-preview1-component-adapter-provider",
+ "wit-component 0.247.0",
+]
 
 [[package]]
 name = "yaml-rust2"

@@ -26,6 +26,8 @@ cargo build
 ### Running Tests
 
 ```bash
+# build wasm test fixtures
+cargo x build-test-fixtures
 # Run all tests
 cargo test
 

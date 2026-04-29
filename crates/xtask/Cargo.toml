@@ -1,0 +1,23 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "xtask"
+path = "main.rs"
+
+[dependencies]
+dotenv-flow = "0.16"
+clap = { workspace = true, features = ["std","derive", "env", "help", "color", "suggestions", "wrap_help", "cargo", "string"] }
+tokio.workspace = true
+anyhow.workspace = true
+
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+wasi-preview1-component-adapter-provider = "43"
+wit-component = { workspace = true, default-features = false }
