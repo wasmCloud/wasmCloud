@@ -10,16 +10,6 @@ updates:
         patterns:
           - "*"
 
-  - package-ecosystem: "cargo"
-    directory: "/"
-    schedule:
-      interval: "monthly"
-    target-branch: "release-1.9.x"
-    groups:
-      all-cargo-release-1-9:
-        patterns:
-          - "*"
-
   # Go modules - one PR for runtime-gateway + runtime-operator
   - package-ecosystem: "gomod"
     directories:
