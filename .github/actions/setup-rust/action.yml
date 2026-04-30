@@ -23,20 +23,20 @@ runs:
   steps:
     # Rust Setup
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@56f84321dbccf38fb67ce29ab63e4754056677e0 # master
+      uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
       with:
         toolchain: ${{ inputs.rust-toolchain }}
         targets: ${{ inputs.rust-targets }}
         # rust-src is required when using cargo-zigbuild for cross-compilation
         components: ${{ inputs.install-zigbuild == 'true' && format('{0}, rust-src', inputs.rust-components) || inputs.rust-components }}
-    - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+    - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
     - name: Install Zig for zigbuild
       if: ${{ inputs.install-zigbuild == 'true' }}
-      uses: mlugg/setup-zig@aa9ad5c14eb3452e235a441c4f9a8e89f20d97bd # v2.0.0
+      uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
       with:
         version: 0.13.0
     - name: Install cargo zigbuild
       if: ${{ inputs.install-zigbuild == 'true' }}
-      uses: taiki-e/install-action@86c23eed46c17b80677df6d8151545ce3e236c61 # v2.50.7
+      uses: taiki-e/install-action@7769b73c2ec98c38dfcf2e18c83cfd4880c038c1 # v2.75.27
       with:
         tool: cargo-zigbuild
