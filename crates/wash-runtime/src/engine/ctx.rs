@@ -206,10 +206,14 @@ impl WasiHttpHooks for CtxHttpHooks {
     }
 }
 
-/// P3 HTTP hooks implementation that enforces allowed hosts and delegates
-/// to the default send_request for actual HTTP transport.
+/// P3 HTTP hooks implementation that delegates outgoing requests to the
+/// configured [`HostHandler`](crate::host::http::HostHandler), so custom egress
+/// (allowed-hosts policy, alternate transports, etc.) applies uniformly to
+/// both P2 and P3 components.
 #[cfg(feature = "wasip3")]
 struct CtxHttpHooksP3 {
+    http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    workload_id: Arc<str>,
     allowed_hosts: Arc<[String]>,
 }
 
@@ -256,26 +260,20 @@ impl wasmtime_wasi_http::p3::WasiHttpHooks for CtxHttpHooksP3 {
     > {
         use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode as P3ErrorCode;
 
-        // Check allowed hosts before sending
-        if let Err(_e) = crate::host::http::check_allowed_hosts(&request, &self.allowed_hosts) {
-            return Box::new(async move {
+        match &self.http_handler {
+            Some(handler) => handler.outgoing_request_p3(
+                &self.workload_id,
+                request,
+                options,
+                fut,
+                &self.allowed_hosts,
+            ),
+            None => Box::new(async move {
                 Err(wasmtime_wasi::TrappableError::from(
-                    P3ErrorCode::HttpRequestDenied,
+                    P3ErrorCode::InternalError(Some("http client not available".to_string())),
                 ))
-            });
+            }),
         }
-
-        // Delegate to the default send_request implementation
-        _ = fut;
-        Box::new(async move {
-            use http_body_util::BodyExt;
-            let (res, io) = wasmtime_wasi_http::p3::default_send_request(request, options).await?;
-            Ok((
-                res.map(BodyExt::boxed_unsync),
-                Box::new(io)
-                    as Box<dyn std::future::Future<Output = Result<(), P3ErrorCode>> + Send>,
-            ))
-        })
     }
 }
 
@@ -346,6 +344,8 @@ impl CtxBuilder {
 
         #[cfg(feature = "wasip3")]
         let http_hooks_p3 = CtxHttpHooksP3 {
+            http_handler: self.http_handler.clone(),
+            workload_id: self.workload_id.clone(),
             allowed_hosts: self.allowed_hosts.clone(),
         };
 

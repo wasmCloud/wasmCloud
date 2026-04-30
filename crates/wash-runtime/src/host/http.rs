@@ -142,6 +142,16 @@ pub trait Router: Send + Sync + 'static {
         _allowed_hosts: &[String],
     ) -> anyhow::Result<()>;
 
+    /// Determine if a P3 outgoing request is allowed.
+    #[cfg(feature = "wasip3")]
+    fn allow_outgoing_request_p3(
+        &self,
+        _workload_id: &str,
+        request: &hyper::Request<crate::host::http_p3::P3OutgoingBody>,
+        _options: &Option<wasmtime_wasi_http::p3::RequestOptions>,
+        allowed_hosts: &[String],
+    ) -> anyhow::Result<()>;
+
     /// Pick a workload ID based on the incoming request.
     ///
     /// On failure, the returned [`RouteError`] determines the HTTP status
@@ -251,6 +261,17 @@ impl Router for DynamicRouter {
         check_allowed_hosts(request, allowed_hosts)
     }
 
+    #[cfg(feature = "wasip3")]
+    fn allow_outgoing_request_p3(
+        &self,
+        _workload_id: &str,
+        request: &hyper::Request<crate::host::http_p3::P3OutgoingBody>,
+        _options: &Option<wasmtime_wasi_http::p3::RequestOptions>,
+        allowed_hosts: &[String],
+    ) -> anyhow::Result<()> {
+        check_allowed_hosts(request, allowed_hosts)
+    }
+
     /// Pick a workload ID based on the incoming request
     fn route_incoming_request(
         &self,
@@ -280,6 +301,63 @@ impl Router for DynamicRouter {
 
             Ok(workload_id.clone())
         })
+    }
+}
+
+/// Trait defining the behavior for handling outgoing HTTP requests.
+///
+/// Allows for custom egress logic such as transport, TLS configuration, or
+/// protocol handling. Use this trait to override the default HTTP client
+/// behavior in the HTTP server. A single implementor can serve both P2 and
+/// P3 components — [`send`](Self::send) handles P2 outgoing requests and
+/// [`send_p3`](Self::send_p3) handles P3 outgoing requests, with a sensible
+/// default that defers to `wasmtime_wasi_http::p3::default_send_request`.
+pub trait OutgoingHandler: Send + Sync + 'static {
+    /// Send an outgoing request from a P2 component.
+    fn send(
+        &self,
+        _request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+        _config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
+    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>;
+
+    /// Send an outgoing request from a P3 component.
+    ///
+    /// The default implementation defers to
+    /// `wasmtime_wasi_http::p3::default_send_request`. Override this when your
+    /// custom egress policy applies to P3 components as well.
+    #[cfg(feature = "wasip3")]
+    fn send_p3(
+        &self,
+        request: hyper::Request<crate::host::http_p3::P3OutgoingBody>,
+        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+        _fut: crate::host::http_p3::P3RequestErrorFuture,
+    ) -> crate::host::http_p3::P3SendFuture {
+        Box::new(async move {
+            use http_body_util::BodyExt;
+            let (res, io) = wasmtime_wasi_http::p3::default_send_request(request, options).await?;
+            let io: crate::host::http_p3::P3RequestErrorFuture = Box::new(io);
+            Ok((res.map(BodyExt::boxed_unsync), io))
+        })
+    }
+}
+
+#[derive(Default)]
+pub struct WasiOutgoingHandler;
+
+impl OutgoingHandler for WasiOutgoingHandler {
+    fn send(
+        &self,
+        request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+        config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
+    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
+    {
+        if is_grpc_request(&request) {
+            Ok(send_grpc_request(request, config))
+        } else {
+            Ok(wasmtime_wasi_http::p2::default_send_request(
+                request, config,
+            ))
+        }
     }
 }
 
@@ -316,6 +394,17 @@ impl Router for DevRouter {
         _workload_id: &str,
         _request: &hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
         _config: &wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
+        _allowed_hosts: &[String],
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    #[cfg(feature = "wasip3")]
+    fn allow_outgoing_request_p3(
+        &self,
+        _workload_id: &str,
+        _request: &hyper::Request<crate::host::http_p3::P3OutgoingBody>,
+        _options: &Option<wasmtime_wasi_http::p3::RequestOptions>,
         _allowed_hosts: &[String],
     ) -> anyhow::Result<()> {
         Ok(())
@@ -370,6 +459,17 @@ pub trait HostHandler: Send + Sync + 'static {
         config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
         allowed_hosts: &[String],
     ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>;
+
+    /// Handle an outgoing HTTP request from a P3 workload.
+    #[cfg(feature = "wasip3")]
+    fn outgoing_request_p3(
+        &self,
+        workload_id: &str,
+        request: hyper::Request<crate::host::http_p3::P3OutgoingBody>,
+        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+        fut: crate::host::http_p3::P3RequestErrorFuture,
+        allowed_hosts: &[String],
+    ) -> crate::host::http_p3::P3SendFuture;
 }
 
 impl std::fmt::Debug for dyn HostHandler {
@@ -419,6 +519,23 @@ impl HostHandler for NullServer {
             wasmtime::format_err!("http client not available"),
         ))
     }
+
+    #[cfg(feature = "wasip3")]
+    fn outgoing_request_p3(
+        &self,
+        _workload_id: &str,
+        _request: hyper::Request<crate::host::http_p3::P3OutgoingBody>,
+        _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+        _fut: crate::host::http_p3::P3RequestErrorFuture,
+        _allowed_hosts: &[String],
+    ) -> crate::host::http_p3::P3SendFuture {
+        use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
+        Box::new(async move {
+            Err(wasmtime_wasi::TrappableError::from(
+                ErrorCode::InternalError(Some("http client not available".to_string())),
+            ))
+        })
+    }
 }
 
 /// A map from host header to resolved workload handles and their associated component id
@@ -430,8 +547,19 @@ pub type WorkloadHandles =
 /// This plugin implements the `wasi:http/incoming-handler` interface and routes
 /// HTTP requests to appropriate WebAssembly components based on virtual hosting.
 /// It supports both HTTP and HTTPS connections with optional mutual TLS.
-pub struct HttpServer<T: Router> {
+///
+/// Use [`HttpServerBuilder`] to construct an instance:
+///
+/// ```rust,ignore
+/// let server = HttpServer::builder(router, "127.0.0.1:8080".parse()?)
+///     .outgoing_handler(my_handler)
+///     .tls(cert_path, key_path, None)
+///     .build()
+///     .await?;
+/// ```
+pub struct HttpServer<T: Router, O: OutgoingHandler = WasiOutgoingHandler> {
     router: Arc<T>,
+    outgoing_handler: O,
     addr: SocketAddr,
     workload_handles: WorkloadHandles,
     shutdown_tx: Arc<RwLock<Option<mpsc::Sender<()>>>>,
@@ -440,7 +568,7 @@ pub struct HttpServer<T: Router> {
     meters: RwLock<Meters>,
 }
 
-impl<T: Router> std::fmt::Debug for HttpServer<T> {
+impl<T: Router, O: OutgoingHandler> std::fmt::Debug for HttpServer<T, O> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HttpServer")
             .field("addr", &self.addr)
@@ -448,56 +576,116 @@ impl<T: Router> std::fmt::Debug for HttpServer<T> {
     }
 }
 
-impl<T: Router> HttpServer<T> {
-    /// Creates a new HTTP server that eagerly binds to the specified address.
-    ///
-    /// The socket is bound immediately so the port is reserved. Use port `0`
-    /// to let the OS pick a free port, then call [`addr()`](Self::addr) to
-    /// discover the actual address.
-    ///
-    /// Side effect: installs the process-level rustls crypto provider via
-    /// [`crate::init_crypto`] (idempotent).
-    ///
-    /// # Arguments
-    /// * `router` - The router implementation for handling requests
-    /// * `addr` - The socket address to bind to
-    pub async fn new(router: T, addr: SocketAddr) -> anyhow::Result<Self> {
-        crate::init_crypto();
-        let listener = TcpListener::bind(addr).await?;
+/// TLS configuration for [`HttpServerBuilder`].
+struct TlsConfig {
+    cert_path: std::path::PathBuf,
+    key_path: std::path::PathBuf,
+    ca_path: Option<std::path::PathBuf>,
+}
+
+/// Builder for [`HttpServer`].
+///
+/// # Required
+/// - `router` and `addr` — set via [`HttpServer::builder`].
+///
+/// # Optional
+/// - [`outgoing_handler`](Self::outgoing_handler) — defaults to [`WasiOutgoingHandler`].
+/// - [`tls`](Self::tls) — enables HTTPS.
+///
+/// # Example
+/// ```rust,ignore
+/// // Minimal — plain HTTP, default outgoing handler
+/// let server = HttpServer::builder(DevRouter::default(), addr)
+///     .build()
+///     .await?;
+///
+/// // Full — HTTPS with custom egress
+/// let server = HttpServer::builder(DynamicRouter::default(), addr)
+///     .outgoing_handler(custom_handler)
+///     .tls(&cert, &key, Some(&ca))
+///     .build()
+///     .await?;
+/// ```
+pub struct HttpServerBuilder<T: Router, O: OutgoingHandler = WasiOutgoingHandler> {
+    router: T,
+    outgoing_handler: O,
+    addr: SocketAddr,
+    tls: Option<TlsConfig>,
+}
+
+impl<T: Router> HttpServerBuilder<T, WasiOutgoingHandler> {
+    fn new(router: T, addr: SocketAddr) -> Self {
+        Self {
+            router,
+            outgoing_handler: WasiOutgoingHandler,
+            addr,
+            tls: None,
+        }
+    }
+}
+
+impl<T: Router, O: OutgoingHandler> HttpServerBuilder<T, O> {
+    /// Set a custom [`OutgoingHandler`], changing the builder's handler type.
+    /// The same handler serves both P2 and P3 outgoing requests.
+    pub fn outgoing_handler<O2: OutgoingHandler>(self, handler: O2) -> HttpServerBuilder<T, O2> {
+        HttpServerBuilder {
+            router: self.router,
+            outgoing_handler: handler,
+            addr: self.addr,
+            tls: self.tls,
+        }
+    }
+
+    /// Enable TLS with the given certificate, key, and optional CA paths.
+    pub fn tls(mut self, cert_path: &Path, key_path: &Path, ca_path: Option<&Path>) -> Self {
+        self.tls = Some(TlsConfig {
+            cert_path: cert_path.to_path_buf(),
+            key_path: key_path.to_path_buf(),
+            ca_path: ca_path.map(Path::to_path_buf),
+        });
+        self
+    }
+
+    /// Bind to the address and build the [`HttpServer`].
+    pub async fn build(self) -> anyhow::Result<HttpServer<T, O>> {
+        let tls_acceptor = match &self.tls {
+            Some(tls) => {
+                let config =
+                    load_tls_config(&tls.cert_path, &tls.key_path, tls.ca_path.as_deref()).await?;
+                Some(TlsAcceptor::from(Arc::new(config)))
+            }
+            None => None,
+        };
+
+        let listener = TcpListener::bind(self.addr).await?;
         let addr = listener.local_addr()?;
-        Ok(Self {
-            router: Arc::new(router),
+
+        Ok(HttpServer {
+            router: Arc::new(self.router),
+            outgoing_handler: self.outgoing_handler,
             addr,
             workload_handles: Arc::default(),
             shutdown_tx: Arc::new(RwLock::new(None)),
-            tls_acceptor: None,
+            tls_acceptor,
             listener: Arc::new(tokio::sync::Mutex::new(Some(listener))),
             meters: Default::default(),
         })
     }
+}
 
-    /// Returns the actual bound address (useful when binding to port 0).
-    pub fn addr(&self) -> SocketAddr {
-        self.addr
+impl<T: Router> HttpServer<T, WasiOutgoingHandler> {
+    /// Returns a new [`HttpServerBuilder`] with the default [`WasiOutgoingHandler`].
+    pub fn builder(router: T, addr: SocketAddr) -> HttpServerBuilder<T, WasiOutgoingHandler> {
+        HttpServerBuilder::new(router, addr)
     }
 
-    /// Creates a new HTTPS server with TLS support.
-    ///
-    /// Side effect: installs the process-level rustls crypto provider via
-    /// [`crate::init_crypto`] (idempotent).
-    ///
-    /// # Arguments
-    /// * `router` - The router implementation for handling requests
-    /// * `addr` - The socket address to bind to
-    /// * `cert_path` - Path to the TLS certificate file
-    /// * `key_path` - Path to the private key file
-    /// * `ca_path` - Optional path to CA certificate for mutual TLS
-    ///
-    /// # Returns
-    /// A new `HttpServer` instance configured for HTTPS connections.
-    ///
-    /// # Errors
-    /// Returns an error if the TLS configuration cannot be loaded.
+    /// Creates a new HTTP server bound to `addr` with the default outgoing handler.
+    pub async fn new(router: T, addr: SocketAddr) -> anyhow::Result<Self> {
+        crate::init_crypto();
+        HttpServerBuilder::new(router, addr).build().await
+    }
+
+    /// Creates a new HTTPS server with TLS and the default outgoing handler.
     pub async fn new_with_tls(
         router: T,
         addr: SocketAddr,
@@ -506,25 +694,22 @@ impl<T: Router> HttpServer<T> {
         ca_path: Option<&Path>,
     ) -> anyhow::Result<Self> {
         crate::init_crypto();
-        let tls_config = load_tls_config(cert_path, key_path, ca_path).await?;
-        let tls_acceptor = TlsAcceptor::from(Arc::new(tls_config));
+        HttpServerBuilder::new(router, addr)
+            .tls(cert_path, key_path, ca_path)
+            .build()
+            .await
+    }
+}
 
-        let listener = TcpListener::bind(addr).await?;
-        let addr = listener.local_addr()?;
-        Ok(Self {
-            router: Arc::new(router),
-            addr,
-            workload_handles: Arc::default(),
-            shutdown_tx: Arc::new(RwLock::new(None)),
-            tls_acceptor: Some(tls_acceptor),
-            listener: Arc::new(tokio::sync::Mutex::new(Some(listener))),
-            meters: Default::default(),
-        })
+impl<T: Router, O: OutgoingHandler> HttpServer<T, O> {
+    /// Returns the actual bound address (useful when binding to port 0).
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
     }
 }
 
 #[async_trait::async_trait]
-impl<T: Router> HostHandler for HttpServer<T> {
+impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
     async fn inject_meters(&self, meters: &crate::observability::Meters) {
         *self.meters.write().await = meters.clone();
     }
@@ -632,14 +817,31 @@ impl<T: Router> HostHandler for HttpServer<T> {
                 wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::HttpRequestDenied,
             ));
         }
+        self.outgoing_handler.send(request, config)
+    }
 
-        if is_grpc_request(&request) {
-            Ok(send_grpc_request(request, config))
-        } else {
-            Ok(wasmtime_wasi_http::p2::default_send_request(
-                request, config,
-            ))
+    #[cfg(feature = "wasip3")]
+    fn outgoing_request_p3(
+        &self,
+        workload_id: &str,
+        request: hyper::Request<crate::host::http_p3::P3OutgoingBody>,
+        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+        fut: crate::host::http_p3::P3RequestErrorFuture,
+        allowed_hosts: &[String],
+    ) -> crate::host::http_p3::P3SendFuture {
+        if let Err(e) =
+            self.router
+                .allow_outgoing_request_p3(workload_id, &request, &options, allowed_hosts)
+        {
+            warn!(workload_id = %workload_id, err = %e, "P3 outgoing request denied by allowed_hosts policy");
+            use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
+            return Box::new(async move {
+                Err(wasmtime_wasi::TrappableError::from(
+                    ErrorCode::HttpRequestDenied,
+                ))
+            });
         }
+        self.outgoing_handler.send_p3(request, options, fut)
     }
 }
 

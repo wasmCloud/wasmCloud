@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use wash_runtime::{
     engine::Engine,
     host::{HostBuilder, HostApi,
-      http::{HttpServer, DynamicRouter},
+      http::{HttpServer, DynamicRouter, WasiOutgoingHandler},
   },
     plugin::{
         wasi_config::DynamicConfig,
