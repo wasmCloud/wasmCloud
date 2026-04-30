@@ -1,6 +1,6 @@
 module go.wasmcloud.dev/runtime-gateway
 
-go 1.25.0
+go 1.26
 
 tool github.com/air-verse/air
 

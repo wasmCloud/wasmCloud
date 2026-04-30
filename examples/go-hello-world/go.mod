@@ -1,6 +1,6 @@
 module go-hello-world
 
-go 1.24
+go 1.26
 
 require (
 	go.bytecodealliance.org/cm v0.3.0
