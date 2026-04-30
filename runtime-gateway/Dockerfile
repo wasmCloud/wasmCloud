@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.4
 
-FROM golang:1.25 AS builder
+FROM golang:1.26 AS builder
 WORKDIR /workspace/runtime-gateway
 
 # dependencies cache
