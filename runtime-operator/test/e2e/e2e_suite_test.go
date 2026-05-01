@@ -71,7 +71,10 @@ var (
 	// helmChartPath points to the runtime-operator Helm chart relative to the project dir (runtime-operator/)
 	helmChartPath = "../charts/runtime-operator"
 
-	runtimeImageTag = "canary"
+	// Pinned to `canary-v2` until wash.yml's first post-cutover canary-publish
+	// run on main produces the new `:canary` tag. Flip to "canary" in a
+	// follow-up PR (or the scheduled cleanup agent) after that lands.
+	runtimeImageTag = "canary-v2"
 	// runtimeSupportsHostAliases indicates whether the runtime supports HostAliases,
 	// which is required for testing with EndpointSlices.
 	runtimeSupportsHostAliases = false

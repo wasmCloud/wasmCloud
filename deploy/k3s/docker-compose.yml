@@ -81,7 +81,9 @@ services:
       - 80:8000
 
   wash-host:
-    image: ghcr.io/wasmcloud/wash:canary
+    # Pinned to canary-v2 until wash.yml's first post-cutover canary-publish
+    # run on main produces the new `:canary` tag. Flip after that lands.
+    image: ghcr.io/wasmcloud/wash:canary-v2
     restart: always
     command: host --scheduler-nats-url nats://nats:4222 --data-nats-url nats://nats:4222 --http-addr 0.0.0.0:8080 --host-group default --host-name wash-host
     depends_on:
