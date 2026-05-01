@@ -204,17 +204,17 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 	}
 	deployment.Status.Replicas = deploymentStatus
 
-	if prevSetName != "" {
-		switch deployment.Spec.DeployPolicy {
-		case runtimev1alpha1.WorkloadDeployPolicyRecreate:
-			// For Policy=Recreate, delete previous replica set too
-		default:
-			// For Policy=RollingUpdate, only delete previous replica set when current replica set is ready
-			if !currentReplica.Status.IsAvailable() {
-				return fmt.Errorf("current ReplicaSet is not available yet")
-			}
-		}
+	// Gate Scale on the active ReplicaSet actually being available, so
+	// WorkloadDeployment.Ready==True implies the underlying Workload is
+	// running on a host. Without this, fresh deploys flip Ready=True the
+	// moment the RS exists, before any workload has been placed.
+	if !currentReplica.Status.IsAvailable() {
+		return condition.ErrStatusUnknown(fmt.Errorf(
+			"current ReplicaSet not available yet: ready=%d unavailable=%d expected=%d",
+			readyReplicas, unavailableReplicas, expectedReplicas))
+	}
 
+	if prevSetName != "" {
 		if err := r.Delete(ctx, &runtimev1alpha1.WorkloadReplicaSet{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      prevSetName,

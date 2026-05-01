@@ -29,6 +29,13 @@ func ErrStatusUnknown(e error) error {
 	return fmt.Errorf("%w: %v", errStatusUnknown, e)
 }
 
+// IsStatusUnknown reports whether err was produced by ErrStatusUnknown.
+// Exposes the unexported sentinel for callers that need to
+// distinguish "we're waiting on something" from a hard error.
+func IsStatusUnknown(err error) bool {
+	return errors.Is(err, errStatusUnknown)
+}
+
 // ErrNoop is an error that indicates no changes should be made to the status.
 // Used to indicate the reconciler is not ready to change the condition status yet.
 func ErrNoop() error {
