@@ -120,12 +120,14 @@ impl CliCommand for DevCommand {
                 );
             }
 
+            let mut tls = wash_runtime::host::http::TlsConfig::new(cert_path, key_path);
+            if let Some(ca) = dev_config.tls_ca_path.as_deref() {
+                tls = tls.with_ca(ca);
+            }
             let http_server = wash_runtime::host::http::HttpServer::new_with_tls(
                 http_handler,
                 http_addr.parse()?,
-                cert_path,
-                key_path,
-                dev_config.tls_ca_path.as_deref(),
+                tls,
             )
             .await?;
 

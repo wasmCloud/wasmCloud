@@ -205,14 +205,11 @@ impl CliCommand for HostCommand {
             let http_server = if let (Some(cert_path), Some(key_path)) =
                 (&self.tls_cert_path, &self.tls_key_path)
             {
-                wash_runtime::host::http::HttpServer::new_with_tls(
-                    http_router,
-                    addr,
-                    cert_path,
-                    key_path,
-                    self.tls_ca_path.as_deref(),
-                )
-                .await?
+                let mut tls = wash_runtime::host::http::TlsConfig::new(cert_path, key_path);
+                if let Some(ca) = self.tls_ca_path.as_deref() {
+                    tls = tls.with_ca(ca);
+                }
+                wash_runtime::host::http::HttpServer::new_with_tls(http_router, addr, tls).await?
             } else {
                 wash_runtime::host::http::HttpServer::new(http_router, addr).await?
             };
