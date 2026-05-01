@@ -67,6 +67,11 @@ jobs:
       # For re-attesting the promoted release manifest digest.
       id-token: write
       attestations: write
+      # actions/attest writes an org-level artifact storage record in
+      # addition to the Sigstore/Rekor/registry attestation. Without this
+      # the attestation still succeeds but the action emits a noisy
+      # "Failed to create storage record" warning per subject.
+      artifact-metadata: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -327,11 +332,16 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
 
+      # Package-manager publishing (homebrew + winget) is best-effort: the
+      # release is already shipped above (tag pushed, images promoted, GH
+      # release created). A failure here should not fail the run state or
+      # suppress the success Slack — re-run the step or republish manually.
       - name: Dispatch Homebrew tap update
         # Run after the GitHub Release exists so the formula update can
         # fetch the binaries and their attestations. Skipped for pre-
         # releases — the homebrew tap formula tracks stable releases only.
         if: ${{ !contains(steps.ver.outputs.tag, '-') }}
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
           VERSION: ${{ steps.ver.outputs.version }}
@@ -348,7 +358,10 @@ jobs:
       - name: Update winget package
         # Skip pre-releases (e.g. -rc.1). action reads the GH Release for
         # the .zip installers, so it must run after the Release exists.
+        # Best-effort: a missing wasmCloud/winget-pkgs fork or a transient
+        # action failure should not poison a release that's already out.
         if: ${{ !contains(steps.ver.outputs.tag, '-') }}
+        continue-on-error: true
         uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
         with:
           identifier: wasmCloud.wash
