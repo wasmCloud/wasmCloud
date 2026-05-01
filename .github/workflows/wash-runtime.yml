@@ -1,9 +1,15 @@
 name: wash-runtime
 
+# Publishes the wash-runtime library crate to crates.io. wash-runtime is
+# co-versioned with the workspace (see crates/wash-runtime/Cargo.toml,
+# version.workspace = true), so the same vX.Y.Z tag that releases wash,
+# runtime-gateway, runtime-operator, and the Helm chart also publishes the
+# crate.
+
 on:
   push:
     tags:
-      - "wash-runtime-v*"
+      - "v*"
 
 defaults:
   run:
@@ -15,6 +21,9 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      # Required for crates.io trusted publishing (OIDC). Replaces the
+      # long-lived CRATES_PUBLISH_TOKEN secret.
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -26,7 +35,7 @@ jobs:
 
       - name: Verify version matches tag
         run: |
-          TAG_VERSION="${GITHUB_REF#refs/tags/wash-runtime-v}"
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
           CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "wash-runtime") | .version')
 
           if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
@@ -36,7 +45,29 @@ jobs:
 
           echo "Version check passed: $TAG_VERSION"
 
+      - name: Authenticate with crates.io (OIDC)
+        # Mints a short-lived crates.io token from this run's OIDC identity.
+        # Requires a one-time "Trusted Publisher" configuration on
+        # crates.io — see RELEASE_RUNBOOK.md (crates.io trusted publishing).
+        id: auth
+        uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe # v1.0.4
+
       - name: Publish to crates.io
+        # Idempotent: a re-run of release-tag.yml that re-pushes the v* tag
+        # (or a manual re-trigger) lands here. crates.io rejects a duplicate
+        # publish; treat that as success so retries don't page noisily.
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
+          set -euo pipefail
           cd crates/wash-runtime
-          cargo publish --token "${{ secrets.CRATES_PUBLISH_TOKEN }}"
+          PUBLISH_LOG=$(mktemp)
+          if cargo publish 2>&1 | tee "${PUBLISH_LOG}"; then
+            exit 0
+          fi
+          if grep -qE "(already (exists|uploaded)|crate version .* is already)" "${PUBLISH_LOG}"; then
+            echo "wash-runtime version already on crates.io — idempotent skip"
+            exit 0
+          fi
+          echo "cargo publish failed for a non-idempotent reason" >&2
+          exit 1

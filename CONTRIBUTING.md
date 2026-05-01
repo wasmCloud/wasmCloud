@@ -145,6 +145,12 @@ Types:
 
 All submissions require review. We use GitHub pull requests for this process.
 
+### When does my change ship?
+
+Releases ship every two weeks: each Tuesday at 16:00 UTC on the train's cycle, the next
+`vX.Y.Z` is cut from `main` automatically. Anything merged before the train leaves ships in
+that release. See [RELEASE_RUNBOOK.md](./RELEASE_RUNBOOK.md#release-cadence) for details.
+
 ## Testing
 
 - Write unit tests for new functionality

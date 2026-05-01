@@ -40,6 +40,9 @@ jobs:
         working-directory: runtime-gateway
         run: go build -v ./
 
+  # The `sha-<full-sha>` tag is what release-tag.yml pins to when promoting
+  # this canary digest as the immutable vX.Y.Z release tag. `canary` itself
+  # moves on every subsequent main push.
   canary:
     if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'canary')
     needs: [lint, test]
@@ -55,19 +58,5 @@ jobs:
       push: true
       tags: |
         type=raw,value=canary
+        type=sha,format=long,prefix=sha-
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [lint, test]
-    permissions:
-      contents: write
-      packages: write
-    uses: ./.github/workflows/docker-build-push.yml
-    secrets: inherit
-    with:
-      working-directory: runtime-gateway
-      file: runtime-gateway/Dockerfile
-      image: ghcr.io/wasmcloud/runtime-gateway
-      push: true
-      tags: |
-        type=semver,pattern={{version}},value=${{ github.ref_name }}

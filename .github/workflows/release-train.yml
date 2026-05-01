@@ -1,0 +1,363 @@
+name: release-train
+
+# Train release model: every two weeks on Tuesday at 16:00 UTC, the train
+# opens a release/vX.Y.Z PR that bumps the workspace version, refreshes
+# Cargo.lock, and updates the Helm chart appVersion. CI runs against the
+# PR; once required checks pass and a maintainer approves, auto-merge fires.
+# This workflow then waits for the PR to merge and exits successfully —
+# release-tag.yml fires via workflow_run on this workflow's success and
+# pushes the vX.Y.Z tag from main, which the existing tag-triggered
+# workflows pick up.
+#
+# The cron runs every Tuesday — the every-two-weeks cadence is enforced by
+# the ISO-week-parity gate in the `gate` job. workflow_dispatch bypasses
+# the gate for manual runs (off-cycle patches, minor/major bumps).
+#
+# See RELEASE_RUNBOOK.md for the human-facing description.
+
+on:
+  schedule:
+    - cron: "0 16 * * 2"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump"
+        required: false
+        type: choice
+        default: "patch"
+        options:
+          - patch
+          - minor
+          - major
+          # rc: from "X.Y.Z" → "X.(Y+1).0-rc.1"; from RC → increment counter.
+          # To finalize an RC into a GA, use the `version` override.
+          - rc
+      version:
+        description: "Explicit X.Y.Z[-rc.N] (overrides bump)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-train
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: ISO-week parity gate
+        id: gate
+        # Train runs on odd ISO weeks, anchored to 2026-W19 (Tue 2026-05-05).
+        # To re-anchor (e.g. to dodge a holiday), flip TRAIN_PARITY below.
+        # workflow_dispatch always proceeds.
+        run: |
+          set -euo pipefail
+          TRAIN_PARITY=1 # 1 = odd ISO weeks; 0 = even ISO weeks
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "manual dispatch — bypassing every-two-weeks gate"
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          WEEK=$(date -u +%V)
+          if (( WEEK % 2 == TRAIN_PARITY )); then
+            echo "ISO week ${WEEK} matches parity ${TRAIN_PARITY} — train runs"
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "ISO week ${WEEK} does not match parity ${TRAIN_PARITY} — skipping (every-two-weeks cadence)"
+            echo "run=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+  release:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # PAT (not GITHUB_TOKEN) so the resulting PR triggers required CI.
+          token: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "wasmcloud-bot"
+          git config user.email "wasmcloud-bot@users.noreply.github.com"
+
+      - name: Compute next version
+        id: bump
+        env:
+          BUMP: ${{ inputs.bump || 'patch' }}
+          OVERRIDE: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          echo "STAGE=compute-version" >> "${GITHUB_ENV}"
+          # Read the workspace.package.version, anchored to the section header
+          # so we can't accidentally pick up a dependency line.
+          CURRENT=$(awk -F'"' '
+            /^\[workspace\.package\]/ { in_pkg = 1; next }
+            /^\[/ && !/^\[workspace\.package\]/ { in_pkg = 0 }
+            in_pkg && /^version = "/ { print $2; exit }
+          ' Cargo.toml)
+          if [[ -z "${CURRENT}" ]]; then
+            echo "could not read [workspace.package] version from Cargo.toml" >&2
+            exit 1
+          fi
+          if [[ -n "${OVERRIDE}" ]]; then
+            NEW="${OVERRIDE}"
+          else
+            # Detect RC base. If CURRENT is "X.Y.Z-rc.N", capture X.Y.Z and N.
+            BASE="${CURRENT%-rc.*}"
+            RC_COUNTER=""
+            if [[ "${CURRENT}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc\.([0-9]+)$ ]]; then
+              RC_COUNTER="${BASH_REMATCH[1]}"
+            fi
+            IFS=. read -r MAJOR MINOR PATCH <<< "${BASE}"
+            case "${BUMP}" in
+              major|minor|patch)
+                # Plain bumps require a GA base — refuse if current is RC,
+                # so an in-flight RC cycle isn't quietly buried under a
+                # patch. Finalize the RC by dispatching with the explicit
+                # `version` override (e.g. `version=2.1.0`).
+                if [[ -n "${RC_COUNTER}" ]]; then
+                  echo "current version ${CURRENT} is a release candidate" >&2
+                  echo "finalize it by dispatching with version=${BASE}, or cut another RC with bump=rc" >&2
+                  exit 1
+                fi
+                case "${BUMP}" in
+                  major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+                  minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+                  patch) PATCH=$((PATCH + 1)) ;;
+                esac
+                NEW="${MAJOR}.${MINOR}.${PATCH}"
+                ;;
+              rc)
+                if [[ -n "${RC_COUNTER}" ]]; then
+                  # Increment the existing RC counter.
+                  NEW="${BASE}-rc.$((RC_COUNTER + 1))"
+                else
+                  # Start a fresh minor-RC cycle from GA.
+                  NEW="${MAJOR}.$((MINOR + 1)).0-rc.1"
+                fi
+                ;;
+              *) echo "unknown bump: ${BUMP}" >&2; exit 1 ;;
+            esac
+          fi
+          # Accept plain semver or semver pre-release (X.Y.Z[-prerelease]).
+          # Build metadata (+...) is not supported by the train.
+          if ! [[ "${NEW}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9.-]*)?$ ]]; then
+            echo "invalid version: ${NEW}" >&2; exit 1
+          fi
+          BRANCH="release/v${NEW}"
+          {
+            echo "current=${CURRENT}"
+            echo "version=${NEW}"
+            echo "branch=${BRANCH}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "bumping ${CURRENT} -> ${NEW} on ${BRANCH}"
+
+      - name: Abort if release branch or tag already exists
+        env:
+          BRANCH: ${{ steps.bump.outputs.branch }}
+          NEW: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "STAGE=preflight" >> "${GITHUB_ENV}"
+          if git ls-remote --exit-code --heads origin "${BRANCH}" >/dev/null 2>&1; then
+            echo "branch ${BRANCH} already exists on origin — close/delete it before re-running" >&2
+            exit 1
+          fi
+          # Tags are immutable: refuse to start the train for a version that
+          # has already shipped, even if the branch was deleted.
+          if git ls-remote --exit-code --tags origin "refs/tags/v${NEW}" >/dev/null 2>&1; then
+            echo "tag v${NEW} already exists on origin — versions are immutable; pick a new version" >&2
+            exit 1
+          fi
+
+      - name: Setup Rust
+        # Only needs cargo for `cargo update --workspace`; no compilation here.
+        uses: ./.github/actions/setup-rust
+
+      - name: Bump versions
+        env:
+          NEW: ${{ steps.bump.outputs.version }}
+          CURRENT: ${{ steps.bump.outputs.current }}
+        run: |
+          set -euo pipefail
+          echo "STAGE=bump-versions" >> "${GITHUB_ENV}"
+          # Workspace version (single source of truth for wash, wash-runtime,
+          # runtime-gateway, runtime-operator). GNU sed on ubuntu-latest; the
+          # `0,/.../` form restricts the substitution to the first match so we
+          # only touch the top-level [workspace.package] version, not any inline
+          # dep version. The pattern accepts a pre-release suffix so this works
+          # whether the current version is GA (X.Y.Z) or an RC (X.Y.Z-rc.N).
+          sed -i -E "0,/^version = \"[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9.-]*)?\"$/{s//version = \"${NEW}\"/}" Cargo.toml
+          if ! grep -qE "^version = \"${NEW}\"$" Cargo.toml; then
+            echo "failed to bump workspace version in Cargo.toml" >&2
+            exit 1
+          fi
+          # Helm chart appVersion tracks the workspace version.
+          sed -i -E "s/^appVersion: \".*\"$/appVersion: \"${NEW}\"/" charts/runtime-operator/Chart.yaml
+          if ! grep -qE "^appVersion: \"${NEW}\"$" charts/runtime-operator/Chart.yaml; then
+            echo "failed to bump appVersion in Chart.yaml" >&2
+            exit 1
+          fi
+          # Refresh Cargo.lock — `--workspace` only updates workspace member
+          # entries (verified empirically: 1 package locked, 79 deps unchanged).
+          cargo update --workspace
+          # Defensive sanity check: confirm only workspace member entries
+          # changed in Cargo.lock. If cargo ever expands this flag's scope,
+          # we want to fail loudly rather than smuggle in transitive bumps.
+          CHANGED_PKGS=$(git diff --unified=0 -- Cargo.lock \
+            | grep -E '^[+-]name = "' \
+            | sed -E 's/^[+-]name = "(.+)"$/\1/' \
+            | sort -u)
+          # Workspace members in this repo: wash, wash-runtime.
+          UNEXPECTED=$(echo "${CHANGED_PKGS}" | grep -vE '^(wash|wash-runtime)?$' || true)
+          if [[ -n "${UNEXPECTED}" ]]; then
+            echo "cargo update --workspace touched non-workspace packages:" >&2
+            echo "${UNEXPECTED}" >&2
+            echo "investigate before continuing — the train should not bump transitive deps" >&2
+            exit 1
+          fi
+          echo "--- diff ---"
+          git --no-pager diff --stat -- Cargo.toml Cargo.lock charts/runtime-operator/Chart.yaml
+
+      - name: Create release branch and commit
+        env:
+          BRANCH: ${{ steps.bump.outputs.branch }}
+          NEW: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "STAGE=create-branch" >> "${GITHUB_ENV}"
+          git checkout -b "${BRANCH}"
+          git add Cargo.toml Cargo.lock charts/runtime-operator/Chart.yaml
+          if git diff --cached --quiet; then
+            echo "no changes staged — version may already be ${NEW}" >&2
+            exit 1
+          fi
+          git commit -m "release: v${NEW}"
+          git push origin "${BRANCH}"
+
+      - name: Open release PR and enable auto-merge
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          BRANCH: ${{ steps.bump.outputs.branch }}
+          NEW: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "STAGE=open-pr" >> "${GITHUB_ENV}"
+          BODY_FILE="$(mktemp)"
+          # Backticks in a single-quoted printf format are literal — shellcheck's
+          # "expressions don't expand in single quotes" warning is the point here.
+          # shellcheck disable=SC2016
+          {
+            printf 'Automated release-train PR for **v%s**.\n\n' "${NEW}"
+            printf '**Action required:** a maintainer needs to approve this PR. Once required checks pass and approval is recorded, auto-merge fires. After merge, `release-tag.yml` waits for canary builds on `main` to pass and then pushes the immutable `v%s` tag, which the existing tag-triggered workflows pick up.\n\n' "${NEW}"
+            printf 'If CI fails: fix forward and push to this branch, or close this PR. The train does not skip — patch releases out-of-cycle can be triggered via `workflow_dispatch` on `release-train.yml`.\n'
+          } > "${BODY_FILE}"
+          PR_URL=$(gh pr create \
+            --base main \
+            --head "${BRANCH}" \
+            --title "release: v${NEW}" \
+            --label "release-train" \
+            --body-file "${BODY_FILE}")
+          echo "pr_url=${PR_URL}" >> "${GITHUB_OUTPUT}"
+          # Rebase (not squash) so the merge commit on main keeps the exact
+          # `release: vX.Y.Z` subject without GitHub appending the `(#NNN)`
+          # PR ref. release-tag.yml's subject check and wash.yml's
+          # canary-binaries trigger both depend on that subject prefix.
+          gh pr merge "${PR_URL}" --auto --rebase
+
+      - name: Notify Slack — train started
+        if: steps.pr.outputs.pr_url != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_RELEASE_WEBHOOK_URL }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+          NEW: ${{ steps.bump.outputs.version }}
+        run: |
+          if [[ -z "${SLACK_WEBHOOK_URL}" ]]; then
+            echo "SLACK_RELEASE_WEBHOOK_URL not set — skipping notification"
+            exit 0
+          fi
+          curl -sSf -X POST -H 'Content-Type: application/json' \
+            --data "$(jq -nc --arg text ":train2: release train started for v${NEW}: ${PR_URL}" '{text: $text}')" \
+            "${SLACK_WEBHOOK_URL}"
+
+      - name: Wait for required checks on release PR
+        if: steps.pr.outputs.pr_url != ''
+        env:
+          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+        run: |
+          set -euo pipefail
+          echo "STAGE=wait-for-checks" >> "${GITHUB_ENV}"
+          # --watch blocks until all required checks complete and exits non-zero
+          # on failure, which we want — the failure step below pages Slack.
+          # NOTE: this only waits for *required* status checks. Configure
+          # branch protection on `main` with the relevant CI as required, or
+          # this step will return immediately and we'll happily merge red CI.
+          gh pr checks "${PR_URL}" --watch --fail-fast --interval 30 --required
+
+      - name: Wait for PR auto-merge to complete
+        if: steps.pr.outputs.pr_url != ''
+        env:
+          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+        run: |
+          set -euo pipefail
+          echo "STAGE=wait-for-merge" >> "${GITHUB_ENV}"
+          # `gh pr checks --required --watch` returned green, but auto-merge
+          # also waits on required reviews. Poll until the PR actually merges
+          # (or is closed) so that release-tag.yml — triggered via workflow_run
+          # on this workflow's success — sees the merge commit on main.
+          DEADLINE=$(( SECONDS + 7200 ))  # 2h
+          while (( SECONDS < DEADLINE )); do
+            STATE=$(gh pr view "${PR_URL}" --json state --jq .state)
+            case "${STATE}" in
+              MERGED)
+                echo "PR merged"
+                exit 0
+                ;;
+              CLOSED)
+                echo "PR was closed without merging" >&2
+                exit 1
+                ;;
+            esac
+            sleep 30
+          done
+          echo "timed out waiting for PR auto-merge — likely awaiting review approval" >&2
+          exit 1
+
+      - name: Notify Slack — train failed
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_RELEASE_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+          NEW: ${{ steps.bump.outputs.version }}
+          STAGE: ${{ env.STAGE }}
+        run: |
+          if [[ -z "${SLACK_WEBHOOK_URL}" ]]; then
+            echo "SLACK_RELEASE_WEBHOOK_URL not set — skipping notification"
+            exit 0
+          fi
+          TEXT=":x: release train failed for v${NEW:-?} at stage \`${STAGE:-unknown}\` — human intervention needed."
+          if [[ -n "${PR_URL}" ]]; then
+            TEXT="${TEXT} PR: ${PR_URL}"
+          fi
+          TEXT="${TEXT} Run: ${RUN_URL}"
+          curl -sSf -X POST -H 'Content-Type: application/json' \
+            --data "$(jq -nc --arg text "${TEXT}" '{text: $text}')" \
+            "${SLACK_WEBHOOK_URL}"

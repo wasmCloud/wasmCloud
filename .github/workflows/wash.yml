@@ -203,7 +203,10 @@ jobs:
 
   # Tag promotion: only move `canary-v2` once check, lint, and the
   # runtime-operator e2e have all passed against this commit. Reads the
-  # digests uploaded by canary-build and assembles the manifest list.
+  # digests uploaded by canary-build and assembles the manifest list. The
+  # `sha-<full-sha>` tag is what release-tag.yml pins to when it promotes
+  # this canary digest as the immutable vX.Y.Z release tag — `canary-v2`
+  # itself moves on every subsequent main push, so we cannot rely on it.
   canary-publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [check, lint, runtime-operator-e2e, canary-build]
@@ -226,15 +229,16 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
           images: ghcr.io/wasmcloud/wash
           tags: |
             type=raw,value=canary-v2
-      - name: Create manifest list and push canary-v2 tag
+            type=sha,format=long,prefix=sha-
+      - name: Create manifest list and push tags
         working-directory: ${{ runner.temp }}/digests
         run: |
           # shellcheck disable=SC2046
@@ -244,25 +248,19 @@ jobs:
         run: |
           docker buildx imagetools inspect ghcr.io/wasmcloud/wash:${{ steps.meta.outputs.version }}
 
-  docker-release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
-      packages: write
-    uses: ./.github/workflows/docker-build-push.yml
-    secrets: inherit
-    with:
-      push: true
-      image: ghcr.io/wasmcloud/wash
-      tags: |
-        type=semver,pattern={{version}},value=${{ github.ref_name }}
-
-  release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+  # Canary matrix binary build. Runs on every release commit on main (i.e.
+  # what release-train just merged) so release-tag.yml can promote the
+  # exact bytes that the canary CI tested instead of rebuilding on tag.
+  # Skipped for non-release main pushes to avoid burning ~7 runners on
+  # every commit. Manual fallback (train offline): push a `release: vX.Y.Z`
+  # commit by hand and this job fires.
+  canary-binaries:
+    if: "github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release: v')"
+    needs: [check, lint, runtime-operator-e2e]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
-      contents: write
+      contents: read
     strategy:
       matrix:
         include:
@@ -327,6 +325,15 @@ jobs:
           version: "29.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set SOURCE_DATE_EPOCH from commit timestamp
+        # Pin embedded timestamps in the binary to the merge commit's author
+        # date so the same commit produces the same bytes on every rebuild.
+        # cargo and rustc honor SOURCE_DATE_EPOCH for build metadata; this
+        # is a prerequisite for any future move toward bit-reproducible
+        # SLSA L4 builds. See https://reproducible-builds.org/docs/source-date-epoch/
+        run: |
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "${GITHUB_ENV}"
+
       - name: Build binary (${{ matrix.target }})
         run: |
           ${{ matrix.buildCommand }} --release --target ${{ matrix.buildTarget || matrix.target }}
@@ -352,80 +359,3 @@ jobs:
           name: ${{ matrix.artifact }}.zip
           path: ${{ matrix.artifact }}.zip
           if-no-files-found: error
-
-  upload-release-assets:
-    needs: release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - name: Download all artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          path: ./artifacts
-          pattern: wash-*
-
-      - name: Generate build provenance attestations
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
-        with:
-          subject-path: "./artifacts/*/wash*"
-
-      - name: Create GitHub Release and upload binaries
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
-        with:
-          name: ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
-          files: |
-            ./artifacts/*/*
-          token: ${{ github.token }}
-          prerelease: false
-          generate_release_notes: true
-
-  update-homebrew:
-    needs: upload-release-assets
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Extract version from tag
-        id: version
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
-      - name: Dispatch Homebrew tap update
-        env:
-          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
-        run: |
-          gh api repos/wasmCloud/homebrew-wasmcloud/dispatches \
-            -f event_type=brew-formula-update \
-            -f 'client_payload[tag_version]=${{ steps.version.outputs.version }}'
-
-  update-winget:
-    needs: upload-release-assets
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Extract version from tag
-        id: version
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
-      - name: Update winget package
-        uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
-        with:
-          identifier: wasmCloud.wash
-          version: ${{ steps.version.outputs.version }}
-          installers-regex: '\.zip$'
-          release-tag: ${{ github.ref_name }}
-          token: ${{ secrets.WASMCLOUD_BOT_PAT }}

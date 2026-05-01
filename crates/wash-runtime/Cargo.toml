@@ -1,6 +1,6 @@
 [package]
 name = "wash-runtime"
-version = "0.2.0"
+version.workspace = true
 description = "Opinionated wasmtime wrapper that provides a runtime and workload API for executing Wasm components"
 edition = "2024"
 license = "Apache-2.0"
