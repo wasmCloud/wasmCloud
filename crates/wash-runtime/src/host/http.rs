@@ -53,8 +53,8 @@ use wasmtime_wasi_http::{
     },
 };
 
-use rustls::{ServerConfig, pki_types::CertificateDer};
-use rustls_pemfile::{certs, private_key};
+use rustls::ServerConfig;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use tokio::sync::{RwLock, mpsc};
 use tokio_rustls::TlsAcceptor;
 
@@ -939,8 +939,7 @@ async fn load_tls_config(
         "Failed to read certificate file: {}",
         cert_path.display()
     ))?;
-    let mut cert_reader = std::io::Cursor::new(cert_data);
-    let cert_chain: Vec<CertificateDer<'static>> = certs(&mut cert_reader)
+    let cert_chain: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&cert_data)
         .collect::<Result<Vec<_>, _>>()
         .context(format!(
             "Failed to parse certificate file: {}",
@@ -958,13 +957,10 @@ async fn load_tls_config(
         "Failed to read private key file: {}",
         key_path.display()
     ))?;
-    let mut key_reader = std::io::Cursor::new(key_data);
-    let key = private_key(&mut key_reader)
-        .context(format!(
-            "Failed to parse private key file: {}",
-            key_path.display()
-        ))?
-        .ok_or_else(|| anyhow::anyhow!("No private key found in file: {}", key_path.display()))?;
+    let key = PrivateKeyDer::from_pem_slice(&key_data).context(format!(
+        "Failed to parse private key file: {}",
+        key_path.display()
+    ))?;
 
     // Create rustls server config
     let mut config = ServerConfig::builder()
@@ -980,8 +976,7 @@ async fn load_tls_config(
         let ca_data = tokio::fs::read(ca_path)
             .await
             .context(format!("Failed to read CA file: {}", ca_path.display()))?;
-        let mut ca_reader = std::io::Cursor::new(ca_data);
-        let ca_certs: Vec<CertificateDer<'static>> = certs(&mut ca_reader)
+        let ca_certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&ca_data)
             .collect::<Result<Vec<_>, _>>()
             .context(format!("Failed to parse CA file: {}", ca_path.display()))?;
 
