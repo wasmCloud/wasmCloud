@@ -217,10 +217,14 @@ jobs:
           # Defensive sanity check: confirm only workspace member entries
           # changed in Cargo.lock. If cargo ever expands this flag's scope,
           # we want to fail loudly rather than smuggle in transitive bumps.
+          # Parse the package name out of each hunk header — git's section-
+          # header detection surfaces the nearest preceding `name = "<pkg>"`
+          # line, e.g. `@@ -7101 +7101 @@ name = "wash"`. We use this rather
+          # than `[+-]name` lines because with -U0 the name lines are
+          # unchanged context and never appear as +/- in the diff.
           CHANGED_PKGS=$(git diff --unified=0 -- Cargo.lock \
-            | grep -E '^[+-]name = "' \
-            | sed -E 's/^[+-]name = "(.+)"$/\1/' \
-            | sort -u)
+            | sed -nE 's/^@@ .* @@ name = "([^"]+)".*$/\1/p' \
+            | sort -u || true)
           # Workspace members in this repo: wash, wash-runtime.
           UNEXPECTED=$(echo "${CHANGED_PKGS}" | grep -vE '^(wash|wash-runtime)?$' || true)
           if [[ -n "${UNEXPECTED}" ]]; then
