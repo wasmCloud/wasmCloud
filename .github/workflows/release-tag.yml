@@ -24,9 +24,11 @@ name: release-tag
 # workflow_dispatch is a recovery hatch: if release-train.yml fails late
 # (e.g. DCO bounces and a human finishes the merge manually), the train
 # run's conclusion is `failure` and this workflow stays skipped. Dispatch
-# manually once main's HEAD is the `release: vX.Y.Z` commit and canary
-# builds on that SHA are green — verify-head reads the version from HEAD,
-# and every downstream step is idempotent.
+# manually with `sha=<merge-sha>` once canary builds on that SHA are green
+# — verify-head reads the version from that SHA's commit subject, and
+# every downstream step is idempotent. Pinning to a SHA matters because
+# follow-up commits (like merging this recovery hatch itself) push the
+# release commit out of HEAD on main.
 #
 # Idempotency:
 #   - If a vX.Y.Z OCI tag already exists at GHCR, the retag step skips it
@@ -39,6 +41,11 @@ on:
     workflows: [release-train]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      sha:
+        description: "Release commit SHA on main to tag (defaults to HEAD)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -61,10 +68,12 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: Checkout main
+      - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: main
+          # workflow_run / workflow_dispatch without a sha → main HEAD.
+          # workflow_dispatch with sha → that exact release commit (recovery).
+          ref: ${{ inputs.sha || 'main' }}
           # PAT so the tag push triggers the downstream tag-listening workflows.
           token: ${{ secrets.WASMCLOUD_BOT_PAT }}
           persist-credentials: true
