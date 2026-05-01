@@ -21,6 +21,13 @@ name: release-tag
 #   - release-train.yml waits for the PR to actually merge before exiting,
 #     so by the time this workflow fires the merge commit is on main.
 #
+# workflow_dispatch is a recovery hatch: if release-train.yml fails late
+# (e.g. DCO bounces and a human finishes the merge manually), the train
+# run's conclusion is `failure` and this workflow stays skipped. Dispatch
+# manually once main's HEAD is the `release: vX.Y.Z` commit and canary
+# builds on that SHA are green — verify-head reads the version from HEAD,
+# and every downstream step is idempotent.
+#
 # Idempotency:
 #   - If a vX.Y.Z OCI tag already exists at GHCR, the retag step skips it
 #     (immutability — never overwrite a published release).
@@ -31,17 +38,20 @@ on:
   workflow_run:
     workflows: [release-train]
     types: [completed]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-tag-${{ github.event.workflow_run.id }}
+  # workflow_run fills workflow_run.id; workflow_dispatch falls back to run_id
+  # so a manual recovery dispatch still gets a unique concurrency slot.
+  group: release-tag-${{ github.event.workflow_run.id || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   promote:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
