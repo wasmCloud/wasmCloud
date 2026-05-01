@@ -7,6 +7,21 @@ license = "Apache-2.0"
 repository = "https://github.com/wasmCloud/wasmCloud"
 authors = ["The wasmCloud Team"]
 categories = ["wasm"]
+readme = "README.md"
+# Allowlist what ships to crates.io. Cargo always includes Cargo.toml,
+# Cargo.lock, Cargo.toml.orig, and .cargo_vcs_info.json regardless. Anything
+# else in the crate directory (notably tests/ with hundreds of MB of
+# gitignored-but-still-cargo-visible fixtures, and any future scratch
+# directory a contributor commits) stays out of the published crate unless
+# explicitly added here.
+include = [
+    "src/**/*",
+    "wit/**/*",
+    "build.rs",
+    "wkg.lock",
+    "README.md",
+    "LICENSE",
+]
 
 [lib]
 path = "src/lib.rs"
