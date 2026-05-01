@@ -5,7 +5,7 @@
 //! P3 `ServicePre`/`Service` to invoke the component.
 //!
 //! It also exposes the type aliases used at the P3 outgoing-request boundary
-//! ([`P3OutgoingBody`], [`P3RequestErrorFuture`], [`P3SendFuture`]). The
+//! ([`P3Body`], [`P3RequestErrorFuture`], [`P3SendFuture`]). The
 //! outgoing-request egress policy itself lives on the unified
 //! [`crate::host::http::OutgoingHandler`] trait via its `send_p3` method.
 
@@ -19,7 +19,7 @@ use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
 
 /// Body type used on the P3 outgoing path (also used as the return-body type
 /// for [`handle_component_request_p3`]).
-pub type P3OutgoingBody = http_body_util::combinators::UnsyncBoxBody<bytes::Bytes, ErrorCode>;
+pub type P3Body = http_body_util::combinators::UnsyncBoxBody<bytes::Bytes, ErrorCode>;
 
 /// Future returned to the guest to communicate request-side processing errors.
 pub type P3RequestErrorFuture = Box<dyn std::future::Future<Output = Result<(), ErrorCode>> + Send>;
@@ -27,7 +27,7 @@ pub type P3RequestErrorFuture = Box<dyn std::future::Future<Output = Result<(), 
 /// Result type returned by the inner future of a P3 outgoing send: a response
 /// paired with an I/O future for response-body errors.
 pub type P3SendResult = Result<
-    (hyper::Response<P3OutgoingBody>, P3RequestErrorFuture),
+    (hyper::Response<P3Body>, P3RequestErrorFuture),
     wasmtime_wasi::TrappableError<ErrorCode>,
 >;
 
@@ -43,7 +43,7 @@ pub async fn handle_component_request_p3(
     pre: InstancePre<SharedCtx>,
     req: hyper::Request<hyper::body::Incoming>,
     fuel_meter: FuelConsumptionMeter,
-) -> anyhow::Result<hyper::Response<P3OutgoingBody>> {
+) -> anyhow::Result<hyper::Response<P3Body>> {
     let _ = &fuel_meter; // fuel metering integration deferred to match P2's observe() pattern
 
     let service_pre = ServicePre::new(pre)
@@ -111,7 +111,7 @@ pub async fn handle_component_request_p3(
     match result {
         Ok(response) => {
             let (parts, collected) = response.into_parts();
-            let body: P3OutgoingBody = http_body_util::Full::new(collected.to_bytes())
+            let body: P3Body = http_body_util::Full::new(collected.to_bytes())
                 .map_err(|never| match never {})
                 .boxed_unsync();
             Ok(hyper::Response::from_parts(parts, body))

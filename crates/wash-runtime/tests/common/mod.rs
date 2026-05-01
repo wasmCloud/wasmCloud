@@ -10,7 +10,7 @@ use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        http::{DevRouter, DynamicRouter, HttpServer},
+        http::{DevRouter, DynamicRouter, HttpServer, TlsConfig},
     },
     plugin::{
         wasi_blobstore::InMemoryBlobstore, wasi_config::DynamicConfig,
@@ -223,9 +223,7 @@ pub async fn start_host_with_tls(
     let http_server = HttpServer::new_with_tls(
         DevRouter::default(),
         "127.0.0.1:0".parse()?,
-        cert_path,
-        key_path,
-        None,
+        TlsConfig::new(cert_path, key_path),
     )
     .await?;
     let bound_addr = http_server.addr();
