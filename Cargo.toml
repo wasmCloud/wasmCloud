@@ -10,7 +10,7 @@ members = [
 authors = ["The wasmCloud Team"]
 edition = "2024"
 rust-version = "1.91.0"
-version = "2.0.5"
+version = "2.0.6"
 
 [workspace.lints.rust]
 warnings = 'deny' # Treat all warnings as errors
