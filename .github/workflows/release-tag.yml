@@ -13,8 +13,8 @@ name: release-tag
 #      with those exact bytes attached (no rebuild on tag).
 #   4. Pushes the immutable annotated `vX.Y.Z` git tag at the merge commit.
 #      That tag triggers the remaining tag-listening workflows (charts
-#      release, runtime-operator go-module-tag, wash-runtime crates.io
-#      publish, wash homebrew + winget updates).
+#      release, runtime-operator go-module-tag, wash homebrew + winget
+#      updates).
 #
 # Why workflow_run on release-train:
 #   - Avoids running on every closed PR repo-wide.

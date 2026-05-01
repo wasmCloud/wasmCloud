@@ -8,12 +8,19 @@ repository = "https://github.com/wasmCloud/wasmCloud"
 authors = ["The wasmCloud Team"]
 categories = ["wasm"]
 readme = "README.md"
-# Allowlist what ships to crates.io. Cargo always includes Cargo.toml,
-# Cargo.lock, Cargo.toml.orig, and .cargo_vcs_info.json regardless. Anything
-# else in the crate directory (notably tests/ with hundreds of MB of
-# gitignored-but-still-cargo-visible fixtures, and any future scratch
-# directory a contributor commits) stays out of the published crate unless
-# explicitly added here.
+# Not published to crates.io: the optional `wasi-webgpu` feature pulls in
+# git-only deps (`wasi-graphics-context-wasmtime`, `wasi-webgpu-wasmtime`
+# from wasi-gfx/wasi-gfx-runtime) that have no crates.io release, and
+# cargo's publish manifest check rejects deps without a version
+# requirement. Revisit once those crates are on crates.io or vendored.
+publish = false
+# Allowlist preserved for the eventual re-enable of publishing. Cargo
+# always includes Cargo.toml, Cargo.lock, Cargo.toml.orig, and
+# .cargo_vcs_info.json regardless. Anything else in the crate directory
+# (notably tests/ with hundreds of MB of gitignored-but-still-cargo-
+# visible fixtures, and any future scratch directory a contributor
+# commits) stays out of the published crate unless explicitly added
+# here.
 include = [
     "src/**/*",
     "wit/**/*",

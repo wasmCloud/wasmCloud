@@ -62,10 +62,9 @@ Wed–Thu as a buffer for any same-week follow-up patch.
    matching OCI release exists), then creates the GitHub Release with the promoted binaries,
    then dispatches Homebrew and runs winget update inline. All sequenced after canary
    validation.
-7. The tag push triggers the remaining tag-listening workflows: `wash-runtime` publishes the
-   library crate to crates.io (idempotent on re-run — already-published versions exit 0);
-   `charts.yml`'s release job repackages the chart at `vX.Y.Z` (charts are templated and
-   deterministic, so rebuild is acceptable here).
+7. The tag push triggers the remaining tag-listening workflow: `charts.yml`'s release job
+   repackages the chart at `vX.Y.Z` (charts are templated and deterministic, so rebuild is
+   acceptable here).
 
 ### Why rebase merge
 
@@ -131,8 +130,7 @@ matrix binary build and is what `release-tag.yml` looks for to identify a releas
      create vX.Y.Z artifacts/*/* --target <MERGE_SHA> --generate-notes`).
    - Dispatch the Homebrew tap update and run winget-releaser as documented in
      `release-tag.yml`.
-5. The `wash-runtime` workflow fires on the `vX.Y.Z` tag push and publishes the crate
-   (idempotent if already published); `charts.yml` repackages and pushes the chart.
+5. `charts.yml` repackages and pushes the chart on the `vX.Y.Z` tag push.
 
 Do not bypass step 3 — promoting a digest that hasn't had the canary suite pass defeats the
 "tested what we're publishing" guarantee.
@@ -142,12 +140,14 @@ Do not bypass step 3 — promoting a digest that hasn't had the canary suite pas
 | Component | What gets published on `vX.Y.Z` |
 |-----------|---------------------------------|
 | `wash` (CLI) | Cross-platform binaries with SLSA provenance, GitHub Release, `ghcr.io/wasmcloud/wash:vX.Y.Z`, Homebrew tap update, winget |
-| `wash-runtime` (library crate) | crates.io |
 | `runtime-gateway` | `ghcr.io/wasmcloud/runtime-gateway:vX.Y.Z` |
 | `runtime-operator` | `ghcr.io/wasmcloud/runtime-operator:vX.Y.Z`, Go module tag `runtime-operator/vX.Y.Z` |
 | Helm chart | `ghcr.io/wasmcloud/charts/runtime-operator:vX.Y.Z` |
 
-All five ship from a single `vX.Y.Z` tag and are co-versioned.
+All four ship from a single `vX.Y.Z` tag and are co-versioned. `wash-runtime` is co-versioned
+with the workspace (it ships inside the `wash` binary and the runtime-gateway / runtime-operator
+images) but is not currently published as a standalone crate on crates.io — see
+`crates/wash-runtime/Cargo.toml` for the reason.
 
 ## Canary builds
 
@@ -176,10 +176,6 @@ The release flow is designed so that **the bytes users pull are the bytes that p
 - **wash binaries.** `canary-binaries` builds the matrix on the release commit (validated by
   `check`/`lint`/`runtime-operator-e2e`). `release-tag.yml` downloads those artifacts and
   attaches them to the GitHub Release directly, with a fresh SLSA attestation.
-- **wash-runtime crate.** Published from source at the tag (`wash-runtime.yml`), with the
-  Cargo.toml version verify gate — the version on the tag must match the version in source.
-  Since the workspace version is bumped by the train and validated by canary CI before the
-  tag is pushed, the published crate matches what was tested.
 - **Helm chart.** Repackaged from source at the tag (`charts.yml`'s `release` job). Charts are
   deterministic templates; rebuild risk is low. (If we want bit-identical charts we'd add an
   ORAS-based retag step here, but it's not strictly necessary for safety.)
@@ -269,8 +265,7 @@ build-once-promote, same immutable tag. The only differences are:
   don't surface it as the project's "latest" release).
 - `homebrew` and `winget` updates are skipped (those distros are for stable users).
 - Everything else publishes: OCI images at `vX.Y.Z-rc.N` (with SLSA attestation), the Helm
-  chart at `vX.Y.Z-rc.N`, the Go module tag `runtime-operator/vX.Y.Z-rc.N`, and the
-  `wash-runtime` crate at `X.Y.Z-rc.N` on crates.io.
+  chart at `vX.Y.Z-rc.N`, and the Go module tag `runtime-operator/vX.Y.Z-rc.N`.
 
 ### Cutting an RC
 
@@ -325,5 +320,4 @@ respond by either:
 - [ ] GitHub Release is visible with correct binaries attached
 - [ ] Docker images are available on GHCR
 - [ ] Homebrew tap updated (check [homebrew-wasmcloud](https://github.com/wasmCloud/homebrew-wasmcloud))
-- [ ] `wash-runtime` crate is visible on [crates.io](https://crates.io/crates/wash-runtime)
 - [ ] Announce the release in [Slack](https://slack.wasmcloud.com) `#announcements`
