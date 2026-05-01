@@ -86,6 +86,25 @@ var _ = Describe("Messaging Subscription", Ordered, func() {
 			"--timeout=2m")
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "hostgroup rollout did not complete")
+
+		// `kubectl rollout status` only waits for the Kubernetes Deployment
+		// to come up, pod Ready means the wash binary is running, not that
+		// it has connected to NATS, sent a heartbeat, and had a Host CR
+		// registered for it. Under Ginkgo's default randomized spec order
+		// this matters: when the messaging spec runs first (immediately
+		// after Helm install), the Host CR may not exist yet, so the
+		// Workload reconciler reports "no suitable host found" and the
+		// workload silently never lands on a host.Wait for an actual Host
+		// so the rest of this spec can trust that workload placement will succeed.
+		By("waiting for a Host CR to be registered")
+		verifyHostRegistered := func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "hosts.runtime.wasmcloud.dev",
+				"-n", namespace, "-o", "jsonpath={.items}")
+			output, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(output).NotTo(Equal("[]"), "no Host CR registered yet")
+		}
+		Eventually(verifyHostRegistered).WithTimeout(2 * time.Minute).Should(Succeed())
 	})
 
 	AfterEach(func() {
@@ -108,6 +127,15 @@ var _ = Describe("Messaging Subscription", Ordered, func() {
 		}
 
 		dump("Pods", "get", "pods", "-n", namespace, "-o", "wide")
+		// nats-echo-client logs are the most direct evidence of what the
+		// CLI saw — empty body, "no responders", connection error, etc.
+		// The Gomega failure message also embeds them, but pasting only
+		// part of the output is common, so dump them under their own
+		// header to make sure they always appear in the diagnostic block.
+		dump("nats-echo-client logs", "logs", "nats-echo-client",
+			"-n", namespace)
+		dump("nats-echo-client describe", "describe", "pod", "nats-echo-client",
+			"-n", namespace)
 		dump("Hostgroup logs", "logs", "-n", namespace,
 			"-l", "wasmcloud.com/name=hostgroup", "--tail=600", "--prefix=true")
 		dump("Operator logs", "logs", "-n", namespace,
