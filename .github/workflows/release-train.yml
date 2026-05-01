@@ -249,7 +249,10 @@ jobs:
             echo "no changes staged — version may already be ${NEW}" >&2
             exit 1
           fi
-          git commit -m "release: v${NEW}"
+          # --signoff appends `Signed-off-by: <committer>` so the DCO check
+          # passes. Required because branch protection on `main` enforces
+          # DCO on every commit, including bot-authored release commits.
+          git commit --signoff -m "release: v${NEW}"
           git push origin "${BRANCH}"
 
       - name: Open release PR and enable auto-merge
@@ -306,11 +309,30 @@ jobs:
         run: |
           set -euo pipefail
           echo "STAGE=wait-for-checks" >> "${GITHUB_ENV}"
-          # --watch blocks until all required checks complete and exits non-zero
-          # on failure, which we want — the failure step below pages Slack.
-          # NOTE: this only waits for *required* status checks. Configure
-          # branch protection on `main` with the relevant CI as required, or
-          # this step will return immediately and we'll happily merge red CI.
+          # `gh pr checks --watch` only tracks check runs that have already
+          # been reported. On a freshly opened PR, CI hasn't yet posted any
+          # required-check status, so an immediate `--watch --required` exits
+          # 1 with "no required checks reported on the '<branch>' branch".
+          # Poll until at least one required check appears, then hand off to
+          # --watch for the actual wait. NOTE: still depends on branch
+          # protection on `main` having required status checks configured —
+          # without that, we time out below with a clear diagnostic.
+          OUT=""
+          DEADLINE=$(( SECONDS + 600 ))  # 10 min for required checks to start reporting
+          while (( SECONDS < DEADLINE )); do
+            OUT=$(gh pr checks "${PR_URL}" --required 2>&1 || true)
+            if ! grep -qF "no required checks reported" <<<"${OUT}"; then
+              break
+            fi
+            sleep 15
+          done
+          if grep -qF "no required checks reported" <<<"${OUT}"; then
+            echo "no required status checks reported on ${PR_URL} after 10 min" >&2
+            echo "confirm branch protection on 'main' has required status checks configured" >&2
+            exit 1
+          fi
+          # --watch blocks until all required checks complete and exits
+          # non-zero on failure — the failure step below pages Slack.
           gh pr checks "${PR_URL}" --watch --fail-fast --interval 30 --required
 
       - name: Wait for PR auto-merge to complete
