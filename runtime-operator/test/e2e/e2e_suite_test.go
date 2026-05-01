@@ -71,7 +71,7 @@ var (
 	// helmChartPath points to the runtime-operator Helm chart relative to the project dir (runtime-operator/)
 	helmChartPath = "../charts/runtime-operator"
 
-	runtimeImageTag = "canary-v2"
+	runtimeImageTag = "canary"
 	// runtimeSupportsHostAliases indicates whether the runtime supports HostAliases,
 	// which is required for testing with EndpointSlices.
 	runtimeSupportsHostAliases = false

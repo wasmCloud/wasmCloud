@@ -185,7 +185,6 @@ jobs:
           fi
 
       - name: Setup Rust
-        # Only needs cargo for `cargo update --workspace`; no compilation here.
         uses: ./.github/actions/setup-rust
 
       - name: Bump versions
@@ -232,6 +231,24 @@ jobs:
           fi
           echo "--- diff ---"
           git --no-pager diff --stat -- Cargo.toml Cargo.lock charts/runtime-operator/Chart.yaml
+
+      - name: Validate wash-runtime publish manifest (dry-run)
+        # wash-runtime.yml publishes to crates.io on the v* tag push, *after*
+        # release-tag.yml has already promoted containers and cut the GitHub
+        # Release. A publish failure at that point leaves crates.io stranded
+        # behind the rest of the release. Catch the publish-only failure
+        # modes here — missing files in `include`, missing license/README,
+        # path-only deps without versions, build.rs failures during the
+        # `cargo package` verification — before we open the PR. Uses
+        # --allow-dirty because the Bump versions step left uncommitted
+        # changes (Cargo.toml, Cargo.lock, Chart.yaml) we haven't committed
+        # to the release branch yet. --dry-run does not contact the registry
+        # for the package itself, so this works whether or not the bumped
+        # version is already on crates.io.
+        run: |
+          set -euo pipefail
+          echo "STAGE=wash-runtime-dryrun" >> "${GITHUB_ENV}"
+          cargo publish --dry-run --allow-dirty -p wash-runtime
 
       - name: Create release branch and commit
         env:

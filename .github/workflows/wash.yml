@@ -186,7 +186,7 @@ jobs:
   # avoid serializing the slow cargo build behind the slow tests. With
   # `push: false`, the multi-arch digests are still pushed to ghcr (the
   # workflow always does that for caching), but the human-visible
-  # `canary-v2` tag is *not* created here — that happens in
+  # `canary` tag is *not* created here — that happens in
   # `canary-publish` below, gated on every test job passing.
   canary-build:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -199,13 +199,13 @@ jobs:
       push: false
       image: ghcr.io/wasmcloud/wash
       tags: |
-        type=raw,value=canary-v2
+        type=raw,value=canary
 
-  # Tag promotion: only move `canary-v2` once check, lint, and the
+  # Tag promotion: only move `canary` once check, lint, and the
   # runtime-operator e2e have all passed against this commit. Reads the
   # digests uploaded by canary-build and assembles the manifest list. The
   # `sha-<full-sha>` tag is what release-tag.yml pins to when it promotes
-  # this canary digest as the immutable vX.Y.Z release tag — `canary-v2`
+  # this canary digest as the immutable vX.Y.Z release tag — `canary`
   # itself moves on every subsequent main push, so we cannot rely on it.
   canary-publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -236,7 +236,7 @@ jobs:
         with:
           images: ghcr.io/wasmcloud/wash
           tags: |
-            type=raw,value=canary-v2
+            type=raw,value=canary
             type=sha,format=long,prefix=sha-
       - name: Create manifest list and push tags
         working-directory: ${{ runner.temp }}/digests

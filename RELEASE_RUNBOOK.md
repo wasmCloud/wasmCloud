@@ -153,13 +153,13 @@ All five ship from a single `vX.Y.Z` tag and are co-versioned.
 
 On every merge to `main` (no tag required):
 
-- `ghcr.io/wasmcloud/wash:canary-v2` and `ghcr.io/wasmcloud/wash:sha-<full-sha>`
+- `ghcr.io/wasmcloud/wash:canary` and `ghcr.io/wasmcloud/wash:sha-<full-sha>`
 - `ghcr.io/wasmcloud/runtime-gateway:canary` and `:sha-<full-sha>`
 - `ghcr.io/wasmcloud/runtime-operator:canary` and `:sha-<full-sha>`
 - Helm chart `runtime-operator:v2-canary`
 
-The `sha-<full-sha>` tags are the stable handles `release-tag.yml` pins to — `canary-v2` and
-`canary` move on every subsequent main push and would race the train.
+The `sha-<full-sha>` tags are the stable handles `release-tag.yml` pins to — the `canary`
+tag moves on every subsequent main push and would race the train.
 
 The `canary-binaries` matrix job in `wash.yml` runs only on merge commits whose subject starts
 with `release: v` (i.e. release-train PR merges). It produces the cross-platform `wash`
