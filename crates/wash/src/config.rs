@@ -44,6 +44,20 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new: Option<NewConfig>,
 
+    /// Workload-level configuration that describes the component being developed
+    /// (env vars, wasi:config values, outbound allowlist). Field shape mirrors
+    /// `WorkloadDeployment.spec.template.spec.components[].localResources`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workload: Option<WorkloadConfig>,
+
+    /// Named ConfigMap-equivalent sources referenced by `workload.environment.configFrom`.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub configs: HashMap<String, ConfigSource>,
+
+    /// Named Secret-equivalent sources referenced by `workload.environment.secretFrom`.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub secrets: HashMap<String, ConfigSource>,
+
     /// WIT dependency management configuration (default: empty/optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wit: Option<WitConfig>,
@@ -58,6 +72,9 @@ impl Default for Config {
             build: None,
             new: None,
             dev: None,
+            workload: None,
+            configs: HashMap::new(),
+            secrets: HashMap::new(),
             wit: None,
         }
     }
@@ -158,6 +175,67 @@ impl BuildConfig {
     }
 }
 
+/// Workload-level configuration that mirrors the `localResources` shape of a
+/// `WorkloadDeployment` component. Currently consumed by `wash dev`; the same
+/// shape is intended to round-trip to a Kubernetes `WorkloadDeployment`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkloadConfig {
+    /// Environment variables for the component (wasi:cli/env). Combines inline
+    /// values with named references to top-level `configs:` and `secrets:`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<EnvironmentLayer>,
+    /// Opaque key-value config delivered to the component (e.g. wasi:config/store).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub config: HashMap<String, String>,
+    /// Outbound HTTP allowlist. Empty means unrestricted (matches runtime
+    /// behavior in `crates/wash-runtime/src/host/http.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_hosts: Vec<String>,
+}
+
+/// One layer of environment variables. Inline values are written directly;
+/// `configFrom` / `secretFrom` reference named entries in the top-level
+/// `configs:` / `secrets:` blocks by name. On key conflicts later entries win,
+/// in order: inline → configFrom → secretFrom (matches K8s envFrom semantics).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentLayer {
+    /// Inline plain values. Suitable for non-sensitive defaults.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub config: HashMap<String, String>,
+    /// Names of entries in the top-level `configs:` block.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config_from: Vec<String>,
+    /// Names of entries in the top-level `secrets:` block.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secret_from: Vec<String>,
+}
+
+/// A source of key-value pairs for a `configs:` or `secrets:` entry. Multiple
+/// fields can be set on a single entry.. They merge last-wins in the order
+/// `inline` → `file` → `fromEnv` (matches K8s ConfigMap merge semantics).
+///
+/// Distinct types are not used for config vs secret because the schema is
+/// identical; the difference is the security posture applied at resolve time
+/// (see [`crate::workload::resolve_workload`]).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigSource {
+    /// Literal key-value entries.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub inline: HashMap<String, String>,
+    /// Path to a `.env`-format file. Relative paths resolve against the
+    /// project directory. For secrets, the file must be 0600/0400 and must
+    /// not escape the project directory via `..` or symlink.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<PathBuf>,
+    /// Names of environment variables to pull from the developer's shell.
+    /// Missing variables are an error unless `optional` is true on the ref.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub from_env: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DevVolume {
     /// Host path to mount
@@ -180,6 +258,13 @@ pub struct DevConfig {
     /// If not specified, defaults to 'build.command'.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Expected path to the built Wasm component artifact for dev mode.
+    /// Overrides `build.component_path`. Useful when `dev.command` builds a
+    /// different artifact (e.g. cargo debug profile in `target/.../debug/`
+    /// instead of `release/`). Relative paths are resolved against the project
+    /// directory. Exposed to build commands via `WASH_COMPONENT_PATH`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub component_path: Option<PathBuf>,
     /// Address for the dev server to bind to (default: "0.0.0.0:8000")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
