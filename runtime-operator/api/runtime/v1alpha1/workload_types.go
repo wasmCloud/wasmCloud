@@ -100,6 +100,12 @@ type WorkloadComponent struct {
 	MaxInvocations int32 `json:"maxInvocations,omitempty"`
 	// +kubebuilder:validation:Optional
 	LocalResources *LocalResources `json:"localResources,omitempty"`
+	// PrecompiledURL is the URL of a precompiled .cwasm for this component.
+	// Populated by the WorkloadDeployment controller when the component
+	// references an Artifact that has a matching Status.Precompiled variant.
+	// Users should not set this directly — it is overwritten by the controller.
+	// +kubebuilder:validation:Optional
+	PrecompiledURL string `json:"precompiledUrl,omitempty"`
 }
 
 // WorkloadService represents a long-running service that is part of the workload.
