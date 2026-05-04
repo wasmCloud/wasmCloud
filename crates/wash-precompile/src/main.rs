@@ -1,4 +1,5 @@
 use clap::Parser;
+use url::Url;
 
 mod output;
 mod precompile;
@@ -16,8 +17,14 @@ struct Args {
     output: String,
 }
 
-fn main() -> anyhow::Result<()> {
-    let _args = Args::parse();
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    let output_url = Url::parse(&args.output)?;
+
+    let wasm = pull::fetch(&args.image).await?;
+    let cwasm = precompile::compile(&wasm)?;
+    output::write(&output_url, &cwasm)?;
     Ok(())
 }
 

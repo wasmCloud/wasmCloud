@@ -1,10 +1,14 @@
-use wasmtime::{Config, Engine, error};
+use anyhow::Result;
+use wasmtime::{Config, Engine};
 
-pub fn compile(wasm_bytes: &[u8]) -> error::Result<Vec<u8>> {
+pub fn compile(wasm_bytes: &[u8]) -> Result<Vec<u8>> {
     let mut config = Config::new();
     config.wasm_component_model(true);
-    let engine = Engine::new(&config)?;
-    let cwasm = engine.precompile_component(wasm_bytes)?;
+    let engine = Engine::new(&config)
+        .map_err(|e| anyhow::anyhow!("Error setting up wasmtime engine: {e}"))?;
+    let cwasm = engine
+        .precompile_component(wasm_bytes)
+        .map_err(|e| anyhow::anyhow!("Error precompiling wasm component: {e}"))?;
     Ok(cwasm)
 }
 
