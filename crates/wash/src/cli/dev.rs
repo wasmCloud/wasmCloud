@@ -235,7 +235,9 @@ impl CliCommand for DevCommand {
         // Running workload ID for reloads
         let workload_id = reload_component(host.clone(), &workload, None).await?;
 
-        info!(address = %format!("{}://{}", protocol, http_addr), "listening for HTTP requests");
+        // Display 127.0.0.1 instead of 0.0.0.0 for user-friendly clickable URL
+        let display_addr = http_addr.replace("0.0.0.0", "127.0.0.1");
+        info!(address = %format!("{}://{}", protocol, display_addr), "listening for HTTP requests");
 
         select! {
             // Process a stop
