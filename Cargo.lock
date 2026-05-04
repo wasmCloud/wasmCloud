@@ -7144,6 +7144,7 @@ name = "wash-precompile"
 version = "2.0.3"
 dependencies = [
  "anyhow",
+ "async-nats",
  "clap",
  "oci-client 0.15.0",
  "oci-wasm 0.3.0",

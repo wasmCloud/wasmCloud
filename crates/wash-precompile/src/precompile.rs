@@ -17,7 +17,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[allow(unsafe_code)]
     fn precompiles_a_minimal_component() {
         let wasm = wat::parse_str("(component)").unwrap();
 

@@ -7,6 +7,7 @@ version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-nats = {workspace = true, features = ["aws-lc-rs"]}
 clap = {workspace = true, features = ["derive", "std"]}
 url = {workspace = true, features = ["std"]}
 oci-client.workspace = true
@@ -16,7 +17,7 @@ wasmtime = {workspace = true, features = ["component-model", "cranelift"]}
 
 [dev-dependencies]
 tempfile.workspace = true
-wat.workspace = true
+wat = {workspace = true, features = ["component-model"]}
 
 [lints]
 workspace = true

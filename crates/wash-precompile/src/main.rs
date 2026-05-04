@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
 
     let wasm = pull::fetch(&args.image).await?;
     let cwasm = precompile::compile(&wasm)?;
-    output::write(&output_url, &cwasm)?;
+    output::write(&output_url, &cwasm).await?;
     Ok(())
 }
 
