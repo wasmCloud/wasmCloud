@@ -7146,6 +7146,7 @@ dependencies = [
  "anyhow",
  "async-nats",
  "clap",
+ "docker_credential",
  "oci-client 0.15.0",
  "oci-wasm 0.3.0",
  "tempfile",

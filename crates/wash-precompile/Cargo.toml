@@ -14,6 +14,7 @@ oci-client.workspace = true
 oci-wasm.workspace = true
 tokio = {workspace = true, features = ["rt-multi-thread", "macros"]}
 wasmtime = {workspace = true, features = ["component-model", "cranelift"]}
+docker_credential.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

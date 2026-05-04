@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, anyhow};
+use docker_credential::{DockerCredential, get_credential};
 use oci_client::{
     Reference,
     client::{Client, ClientConfig},
@@ -15,7 +16,7 @@ pub async fn fetch(reference: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("invalid OCI reference: {reference}"))?;
 
     let client = Client::new(ClientConfig::default());
-    let auth = RegistryAuth::Anonymous;
+    let auth = resolve_auth(parsed.registry());
 
     let image = client
         .pull(
@@ -36,4 +37,11 @@ pub async fn fetch(reference: &str) -> Result<Vec<u8>> {
         .clone();
 
     Ok(bytes)
+}
+
+fn resolve_auth(registry: &str) -> RegistryAuth {
+    match get_credential(registry) {
+        Ok(DockerCredential::UsernamePassword(user, pass)) => RegistryAuth::Basic(user, pass),
+        Ok(DockerCredential::IdentityToken(_)) | Err(_) => RegistryAuth::Anonymous,
+    }
 }
