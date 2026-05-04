@@ -8,6 +8,10 @@ version.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap = {workspace = true, features = ["derive", "std"]}
+url = {workspace = true, features = ["std"]}
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

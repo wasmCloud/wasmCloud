@@ -1,5 +1,7 @@
 use clap::Parser;
 
+mod output;
+
 #[derive(Parser, Debug)]
 #[command(name = "wash-precompile")]
 struct Args {
