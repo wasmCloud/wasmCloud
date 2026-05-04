@@ -9,6 +9,9 @@ version.workspace = true
 anyhow.workspace = true
 clap = {workspace = true, features = ["derive", "std"]}
 url = {workspace = true, features = ["std"]}
+oci-client.workspace = true
+oci-wasm.workspace = true
+tokio = {workspace = true, features = ["rt-multi-thread", "macros"]}
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -1,6 +1,7 @@
 use clap::Parser;
 
 mod output;
+mod pull;
 
 #[derive(Parser, Debug)]
 #[command(name = "wash-precompile")]
