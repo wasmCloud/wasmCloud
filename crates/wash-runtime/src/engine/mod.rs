@@ -187,6 +187,18 @@ fn add_wasi_to_linker(
 
         // Sockets with our custom P3 implementation (with loopback)
         crate::sockets::add_p3_to_linker(linker)?;
+
+        // wasi:tls@0.3.0-draft (p3).
+        #[cfg(feature = "wasi-tls")]
+        wasmtime_wasi_tls::p3::add_to_linker(linker)?;
+    }
+
+    // wasi:tls@0.2.0-draft (p2).
+    #[cfg(feature = "wasi-tls")]
+    {
+        let mut tls_options = wasmtime_wasi_tls::p2::LinkOptions::default();
+        tls_options.tls(true);
+        wasmtime_wasi_tls::p2::add_to_linker(linker, &tls_options)?;
     }
 
     Ok(())

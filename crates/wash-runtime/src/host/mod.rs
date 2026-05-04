@@ -483,6 +483,10 @@ impl Host {
             "wasi:filesystem/preopens,types@0.2.0".into(),
             "wasi:random/insecure-seed,insecure,random@0.2.0".into(),
             "wasi:sockets/instance-network,ip-name-lookup,network,tcp-create-socket,tcp,udp-create-socket,udp@0.2.0".into(),
+            #[cfg(feature = "wasi-tls")]
+            "wasi:tls/types@0.2.0-draft".into(),
+            #[cfg(all(feature = "wasi-tls", feature = "wasip3"))]
+            "wasi:tls/client,types@0.3.0-draft".into(),
         ]);
 
         // Include imports and exports that plugins specify

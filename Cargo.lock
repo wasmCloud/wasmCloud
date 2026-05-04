@@ -7365,6 +7365,7 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "wasmtime-wasi-io",
+ "wasmtime-wasi-tls",
  "wat",
  "webpki-roots 0.26.11",
  "wit-component 0.247.0",
@@ -8136,6 +8137,23 @@ dependencies = [
  "futures",
  "tracing",
  "wasmtime",
+]
+
+[[package]]
+name = "wasmtime-wasi-tls"
+version = "44.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd3f3b95a775f9acbdba3388fca32ae709146b2f24d87ac81b95006299764855"
+dependencies = [
+ "bytes",
+ "cfg-if",
+ "rustls",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "wasmtime",
+ "wasmtime-wasi",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
