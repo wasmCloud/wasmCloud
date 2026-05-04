@@ -12,9 +12,11 @@ url = {workspace = true, features = ["std"]}
 oci-client.workspace = true
 oci-wasm.workspace = true
 tokio = {workspace = true, features = ["rt-multi-thread", "macros"]}
+wasmtime = {workspace = true, features = ["component-model", "cranelift"]}
 
 [dev-dependencies]
 tempfile.workspace = true
+wat.workspace = true
 
 [lints]
 workspace = true

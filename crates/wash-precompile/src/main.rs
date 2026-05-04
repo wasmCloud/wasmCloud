@@ -1,6 +1,7 @@
 use clap::Parser;
 
 mod output;
+mod precompile;
 mod pull;
 
 #[derive(Parser, Debug)]
