@@ -1,0 +1,56 @@
+name: scorecard
+
+# OpenSSF Scorecard runs a battery of supply-chain-security checks against
+# this repo (branch protection, pinned dependencies, signed releases, token
+# permissions, etc.) and uploads the results to GitHub's Security tab.
+# Results are also published to the OpenSSF Scorecard API so the score is
+# queryable via https://scorecard.dev and renderable as a README badge.
+
+on:
+  branch_protection_rule:
+  schedule:
+    # Weekly Wednesday at 09:00 UTC — different day/hour from the release
+    # train so they don't compete for runners.
+    - cron: "0 9 * * 3"
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # Upload SARIF to the Security tab.
+      security-events: write
+      # Mint OIDC token for the public Scorecard API publish.
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publish to https://api.securityscorecards.dev so the public
+          # badge stays current. Requires the repo to be public.
+          publish_results: true
+
+      - name: Upload SARIF artifact
+        # Useful for debugging Scorecard findings outside the Security tab.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload SARIF to Security tab
+        uses: github/codeql-action/upload-sarif@b2f9ef845756500b97acbdaf5c1dd4e9c1d15734 # v3.35.2
+        with:
+          sarif_file: results.sarif
