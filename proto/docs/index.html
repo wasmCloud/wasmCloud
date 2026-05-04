@@ -761,6 +761,16 @@ This information is used by the Runtime Operator to monitor the health of the Wa
                   <td><p> </p></td>
                 </tr>
               
+                <tr>
+                  <td>precompiled_url</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p>Optional URL where a precompiled .cwasm for this component lives.
+When set, the host fetches and deserializes from this URL instead
+of pulling the OCI image and compiling fresh. Empty string means
+no precompiled variant is available — host falls back to OCI. </p></td>
+                </tr>
+              
             </tbody>
           </table>
 
