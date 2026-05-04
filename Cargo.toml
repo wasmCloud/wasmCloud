@@ -115,6 +115,7 @@ wasmtime = { version = "44", default-features = false }
 wasmtime-wasi = { version = "44", default-features = false }
 wasmtime-wasi-io = { version = "44", default-features = false }
 wasmtime-wasi-http = { version = "44", default-features = false }
+wasmtime-wasi-tls = { version = "44", default-features = false }
 wit-component = { version = "0.247.0", default-features = false }
 wash-runtime = { path = "crates/wash-runtime", default-features = false }
 wat = { version = "1.247.0", default-features = false }

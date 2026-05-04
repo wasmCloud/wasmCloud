@@ -15,6 +15,8 @@ use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wasmtime_wasi_http::WasiHttpCtx;
 use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpHooks, WasiHttpView};
+#[cfg(feature = "wasi-tls")]
+use wasmtime_wasi_tls::{WasiTlsCtx, WasiTlsCtxBuilder, WasiTlsCtxView, WasiTlsView};
 
 use crate::plugin::HostPlugin;
 
@@ -107,6 +109,9 @@ pub struct Ctx {
     pub http: WasiHttpCtx,
     /// The sockets context used to provide socket functionality (with loopback support).
     pub sockets: crate::sockets::WasiSocketsCtx,
+    /// The TLS Context used to provide TLS over the HTTP functionality to the component.
+    #[cfg(feature = "wasi-tls")]
+    pub tls: WasiTlsCtx,
     /// Plugin instances stored by string ID for access during component execution.
     /// These all implement the [`HostPlugin`] trait, but they are cast as `Arc<dyn Any + Send + Sync>`
     /// to support downcasting to the specific plugin type in [`Ctx::get_plugin`]
@@ -165,6 +170,16 @@ impl WasiHttpView for SharedCtx {
             ctx: &mut self.active_ctx.http,
             table: &mut self.table,
             hooks: &mut self.active_ctx.http_hooks,
+        }
+    }
+}
+
+#[cfg(feature = "wasi-tls")]
+impl WasiTlsView for SharedCtx {
+    fn tls(&mut self) -> WasiTlsCtxView<'_> {
+        WasiTlsCtxView {
+            ctx: &mut self.active_ctx.tls,
+            table: &mut self.table,
         }
     }
 }
@@ -367,6 +382,11 @@ impl CtxBuilder {
             component_id: self.component_id,
             http: WasiHttpCtx::new(),
             sockets: self.sockets.unwrap_or_default(),
+            #[cfg(feature = "wasi-tls")]
+            tls: {
+                crate::init_crypto();
+                WasiTlsCtxBuilder::new().build()
+            },
             plugins,
             http_hooks,
             #[cfg(feature = "wasip3")]
