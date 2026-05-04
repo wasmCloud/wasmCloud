@@ -23,7 +23,7 @@ fn write_file(output: &Url, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-async fn write_nats(output: &Url, bytes: &[u8]) -> Result<()> {
+async fn write_nats(output: &Url, mut bytes: &[u8]) -> Result<()> {
     let (bucket, key) = parse_nats_url(output)?;
 
     let nats_url = env::var("NATS_URL").context("NATS_URL env var not set")?;
@@ -43,9 +43,8 @@ async fn write_nats(output: &Url, bytes: &[u8]) -> Result<()> {
             .with_context(|| format!("failed to create object store '{bucket}'"))?,
     };
 
-    let mut reader = bytes;
     store
-        .put(key.as_str(), &mut reader)
+        .put(key.as_str(), &mut bytes)
         .await
         .with_context(|| format!("failed to put '{key}' in '{bucket}'"))?;
 

@@ -18,6 +18,7 @@ wasmtime = {workspace = true, features = ["component-model", "cranelift"]}
 [dev-dependencies]
 tempfile.workspace = true
 wat = {workspace = true, features = ["component-model"]}
+testcontainers.workspace = true
 
 [lints]
 workspace = true
