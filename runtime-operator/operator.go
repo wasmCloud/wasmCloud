@@ -126,8 +126,10 @@ func NewEmbeddedOperator(
 	}
 
 	if err = (&runtime_controllers.WorkloadDeploymentReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:                    mgr.GetClient(),
+		Scheme:                    mgr.GetScheme(),
+		PrecompileTarget:          cfg.PrecompileTarget,
+		PrecompileWasmtimeVersion: cfg.PrecompileWasmtimeVersion,
 	}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}

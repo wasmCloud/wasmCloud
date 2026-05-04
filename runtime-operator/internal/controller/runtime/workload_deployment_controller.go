@@ -26,7 +26,17 @@ const (
 // WorkloadDeploymentReconciler reconciles a WorkloadReplicaSet object
 type WorkloadDeploymentReconciler struct {
 	client.Client
-	Scheme     *runtime.Scheme
+	Scheme *runtime.Scheme
+
+	// Precompile configuration. When both fields are non-empty, the
+	// reconciler treats artifact:// references as a contract for
+	// precompilation: workloads gate on the Artifact having a matching
+	// Status.Precompiled variant, and that variant's URL is stamped on
+	// the resolved Component. When either is empty, precompile gating
+	// is off — artifact:// references resolve to OCI URLs directly.
+	PrecompileTarget          string
+	PrecompileWasmtimeVersion string
+
 	reconciler condition.AnyConditionedReconciler
 }
 
