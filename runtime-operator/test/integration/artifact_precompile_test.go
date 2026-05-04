@@ -133,6 +133,10 @@ var _ = Describe("precompile pipeline", func() {
 				"--output", expectedUrl,
 			}))
 
+			g.Expect(job.Spec.Template.Spec.Volumes).To(BeEmpty())
+			g.Expect(c.VolumeMounts).To(BeEmpty())
+			g.Expect(c.Env).NotTo(ContainElement(HaveField("Name", "DOCKER_CONFIG")))
+
 			for _, want := range testArtifactStore.Env {
 				g.Expect(c.Env).To(ContainElement(want))
 			}
@@ -249,6 +253,47 @@ var _ = Describe("precompile pipeline", func() {
 
 			prog := got.Status.GetCondition(runtimev1alpha1.ArtifactConditionPrecompileProgressing)
 			g.Expect(prog.Status).To(Equal(corev1.ConditionFalse))
+		}).Should(Succeed())
+	})
+
+	It("mounts the imagePullSecret as a docker config when set", func() {
+		ctx := context.Background()
+
+		a := &runtimev1alpha1.Artifact{
+			ObjectMeta: metav1.ObjectMeta{Name: "needs-creds", Namespace: "default"},
+			Spec: runtimev1alpha1.ArtifactSpec{
+				Image:           testArtifactImage,
+				ImagePullSecret: &corev1.LocalObjectReference{Name: "ghcr-secret"},
+			},
+		}
+		Expect(k8sClient.Create(ctx, a)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			var job batchv1.Job
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default", Name: "precompile-" + a.Name,
+			}, &job)).To(Succeed())
+
+			g.Expect(job.Spec.Template.Spec.Volumes).To(HaveLen(1))
+			vol := job.Spec.Template.Spec.Volumes[0]
+			g.Expect(vol.Name).To(Equal("docker-creds"))
+			g.Expect(vol.Secret).NotTo(BeNil())
+			g.Expect(vol.Secret.SecretName).To(Equal("ghcr-secret"))
+			g.Expect(vol.Secret.Items).To(ContainElement(corev1.KeyToPath{
+				Key:  ".dockerconfigjson",
+				Path: "config.json",
+			}))
+
+			c := job.Spec.Template.Spec.Containers[0]
+			g.Expect(c.VolumeMounts).To(ContainElement(corev1.VolumeMount{
+				Name:      "docker-creds",
+				MountPath: "/etc/docker-creds",
+				ReadOnly:  true,
+			}))
+			g.Expect(c.Env).To(ContainElement(corev1.EnvVar{
+				Name:  "DOCKER_CONFIG",
+				Value: "/etc/docker-creds",
+			}))
 		}).Should(Succeed())
 	})
 

@@ -65,6 +65,41 @@ func (r *PrecompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	)
 	jobName := "precompile-" + a.Name
 
+	container := corev1.Container{
+		Name:  "precompile",
+		Image: r.WorkerImage,
+		Args: []string{
+			"--image", a.Spec.Image,
+			"--output", outputURL,
+		},
+		Env: r.ArtifactStore.Env,
+	}
+
+	var volumes []corev1.Volume
+	if a.Spec.ImagePullSecret != nil {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "DOCKER_CONFIG",
+			Value: "/etc/docker-creds",
+		})
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      "docker-creds",
+			MountPath: "/etc/docker-creds",
+			ReadOnly:  true,
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name: "docker-creds",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: a.Spec.ImagePullSecret.Name,
+					Items: []corev1.KeyToPath{{
+						Key:  ".dockerconfigjson",
+						Path: "config.json",
+					}},
+				},
+			},
+		})
+	}
+
 	desired := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
@@ -73,15 +108,8 @@ func (r *PrecompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
-					Containers: []corev1.Container{{
-						Name:  "precompile",
-						Image: r.WorkerImage,
-						Args: []string{
-							"--image", a.Spec.Image,
-							"--output", outputURL,
-						},
-						Env: r.ArtifactStore.Env,
-					}},
+					Containers:    []corev1.Container{container},
+					Volumes:       volumes,
 				},
 			},
 		},

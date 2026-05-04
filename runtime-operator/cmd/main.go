@@ -115,8 +115,8 @@ func main() {
 		"Delegates Artifact reconciliation to an external controller.",
 	)
 	flag.BoolVar(
-		&disablePrecompileController, 
-		"disable-precompile-controller", 
+		&disablePrecompileController,
+		"disable-precompile-controller",
 		false,
 		"Disable the precompile controller (no Jobs will be emitted for Artifacts).",
 	)
@@ -168,18 +168,17 @@ func main() {
 	))
 
 	operatorCfg := runtime_operator.EmbeddedOperatorConfig{
-		DisableArtifactController: disableArtifactController,
-		NatsURL:                   natsUrl,
-		HeartbeatTTL:              60 * time.Second,
-		HostCPUThreshold:          cpuBackpressureThreshold,
-		HostMemoryThreshold:       memoryBackpressureThreshold,
-		Namespace:                 os.Getenv("OPERATOR_NAMESPACE"),
+		DisableArtifactController:   disableArtifactController,
+		NatsURL:                     natsUrl,
+		HeartbeatTTL:                60 * time.Second,
+		HostCPUThreshold:            cpuBackpressureThreshold,
+		HostMemoryThreshold:         memoryBackpressureThreshold,
+		Namespace:                   os.Getenv("OPERATOR_NAMESPACE"),
 		DisablePrecompileController: disablePrecompileController,
-		PrecompileWorkerImage: precompileWorkerImage,
-		PrecompileArtifactBaseURL: precompileArtifactBaseURL,
-		PrecompileTarget: precompileTarget,
-		PrecompileWasmtimeVersion: precompileWasmtimeVersion
-		
+		PrecompileWorkerImage:       precompileWorkerImage,
+		PrecompileArtifactBaseURL:   precompileArtifactBaseURL,
+		PrecompileTarget:            precompileTarget,
+		PrecompileWasmtimeVersion:   precompileWasmtimeVersion,
 	}
 
 	if natsCreds != "" {
