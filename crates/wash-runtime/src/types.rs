@@ -66,6 +66,7 @@ pub struct Component {
     pub local_resources: LocalResources,
     pub pool_size: i32,
     pub max_invocations: i32,
+    pub is_precompiled: bool,
 }
 
 /// Resource limits and configuration for a component or service.

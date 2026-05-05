@@ -221,6 +221,7 @@ async fn test_inter_component_call() -> Result<()> {
                     },
                     pool_size: 1,
                     max_invocations: 100,
+                    is_precompiled: false,
                 },
                 Component {
                     name: "middleware".to_string(),
@@ -236,6 +237,7 @@ async fn test_inter_component_call() -> Result<()> {
                     },
                     pool_size: 2,
                     max_invocations: 100,
+                    is_precompiled: false,
                 },
                 Component {
                     name: "callee".to_string(),
@@ -251,6 +253,7 @@ async fn test_inter_component_call() -> Result<()> {
                     },
                     pool_size: 2,
                     max_invocations: 100,
+                    is_precompiled: false,
                 },
             ],
             host_interfaces: vec![

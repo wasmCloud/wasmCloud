@@ -60,6 +60,7 @@ fn allowed_hosts_workload(allowed_hosts: Vec<String>) -> WorkloadStartRequest {
                 },
                 pool_size: 1,
                 max_invocations: 100,
+                is_precompiled: false,
             }],
             host_interfaces: vec![WitInterface {
                 namespace: "wasi".to_string(),

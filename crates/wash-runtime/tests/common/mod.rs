@@ -146,6 +146,7 @@ pub fn component_workload_request(
                 local_resources,
                 pool_size: 1,
                 max_invocations: 100,
+                ..Default::default()
             }],
             host_interfaces,
             volumes: vec![],

@@ -994,6 +994,7 @@ mod tests {
                         local_resources: Default::default(),
                         pool_size: 1,
                         max_invocations: 100,
+                        is_precompiled: false,
                     }],
                     host_interfaces: vec![],
                     volumes: vec![],

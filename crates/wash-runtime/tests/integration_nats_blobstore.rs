@@ -93,6 +93,7 @@ async fn setup() -> Result<TestHarness> {
                 },
                 pool_size: 1,
                 max_invocations: 100,
+                is_precompiled: false,
             }],
             host_interfaces: vec![
                 WitInterface {
