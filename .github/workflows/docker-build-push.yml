@@ -46,6 +46,11 @@ on:
         description: "Image digest of the container that was built without the sha256: prefix"
         value: ${{ jobs.build.outputs.artifact_prefix }}
 
+# Reusable workflow: declaring `read-all` here would require every caller's
+# `uses:` job to grant the full superset of read scopes. Keep this empty
+# and let each job below request only what it needs.
+permissions: {}
+
 jobs:
   build:
     strategy:
