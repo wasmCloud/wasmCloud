@@ -271,9 +271,32 @@ jobs:
           find ./artifacts -type f | sort
 
       - name: Attest binary build provenance
+        id: attest_bins
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: "./artifacts/*/wash*"
+
+      # Stage the Sigstore bundle alongside the binaries so it is also
+      # uploaded as a GitHub Release asset. Duplicate of the Attestations
+      # API / Rekor / registry publication above. The asset form lets
+      # users without `gh` CLI verify with cosign and surfaces signing to
+      # tools that scan release assets (e.g. OpenSSF Scorecard's
+      # Signed-Releases check).
+      #
+      # Verify with:
+      #   cosign verify-blob-attestation \
+      #     --bundle wash.sigstore.json \
+      #     --certificate-identity-regexp 'https://github\.com/wasmCloud/wasmCloud/' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      #     wash-x86_64-unknown-linux-gnu
+      - name: Stage attestation bundle for release upload
+        env:
+          BUNDLE_PATH: ${{ steps.attest_bins.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts/attestations
+          cp "${BUNDLE_PATH}" ./artifacts/attestations/wash.sigstore.json
+          ls -la ./artifacts/attestations/
 
       - name: Push immutable release tag
         env:

@@ -20,6 +20,8 @@ on:
       - 'install.ps1'
       - '.github/workflows/test-install-scripts.yml'
 
+permissions: read-all
+
 jobs:
   test-bash-install:
     name: Test Bash Install Script
@@ -30,277 +32,132 @@ jobs:
       fail-fast: false
 
     steps:
-      - name: Test curl installation method (Real User Experience)
+      # Run the script from the checked-out tree rather than `curl | bash` from
+      # raw.githubusercontent.com. End-to-end coverage of the real flow is
+      # identical (the script content is what users will fetch once merged) and
+      # the script is now anchored to this workflow's git ref instead of an
+      # unverified network fetch.
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Test bash install script
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "🌐 Testing real user experience - no repository checkout"
-          echo "This tests the exact command users will run"
-
-          # Create test directory
           mkdir -p /tmp/wash-test
-          cd /tmp/wash-test
-
-          # Test the actual curl installation that users will run
-          echo "Running: curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash"
-          curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | INSTALL_DIR=/tmp/wash-test bash
-
-          # Verify installation
-          if [ -f "/tmp/wash-test/wash" ]; then
-            echo "✅ Bash installation works!"
-            chmod +x /tmp/wash-test/wash
-            /tmp/wash-test/wash --help
-          else
-            echo "❌ Bash installation failed"
-            echo "📁 Directory contents:"
+          INSTALL_DIR=/tmp/wash-test bash ./install.sh
+          if [ ! -f "/tmp/wash-test/wash" ]; then
+            echo "Bash installation failed" >&2
             ls -la /tmp/wash-test/
             exit 1
           fi
+          chmod +x /tmp/wash-test/wash
+          /tmp/wash-test/wash --help
 
-      - name: Test with signature verification
+      - name: Test bash install with signature verification
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "🔐 Testing signature verification with -v flag"
-          echo "This requires GitHub CLI to be installed"
-
-          # Create separate test directory for verification test
-          mkdir -p /tmp/wash-verify-test
-          cd /tmp/wash-verify-test
-
-          # Verify gh CLI is available
-          if command -v gh &> /dev/null; then
-            echo "✅ GitHub CLI is available"
-
-            # Test help flag first
-            echo "Testing help flag..."
-            curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- --help
-
-            # Test installation with verification flag
-            echo "Running: curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- -v"
-            if curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | INSTALL_DIR=/tmp/wash-verify-test bash -s -- -v; then
-              echo "✅ Installation with verification succeeded!"
-
-              # Verify the binary was installed
-              if [ -f "/tmp/wash-verify-test/wash" ]; then
-                echo "✅ Binary was installed and verified!"
-                chmod +x /tmp/wash-verify-test/wash
-                /tmp/wash-verify-test/wash --version
-              else
-                echo "❌ Binary not found after verification"
-                exit 1
-              fi
-            else
-              echo "❌ Installation with verification failed!"
-              echo "Possible causes:"
-              echo "- The release does not have attestations (all releases must have attestations)"
-              echo "- GitHub CLI authentication is required"
-              echo "- Network connectivity issues"
-              exit 1
-            fi
-          else
-            echo "❌ Could not install GitHub CLI - skipping verification test"
+          if ! command -v gh &> /dev/null; then
+            echo "GitHub CLI not available - skipping verification test"
+            exit 0
           fi
+          mkdir -p /tmp/wash-verify-test
+          bash ./install.sh --help
+          if ! INSTALL_DIR=/tmp/wash-verify-test bash ./install.sh -v; then
+            echo "Installation with verification failed - is the latest release attested?" >&2
+            exit 1
+          fi
+          if [ ! -f "/tmp/wash-verify-test/wash" ]; then
+            echo "Binary not found after verification" >&2
+            exit 1
+          fi
+          chmod +x /tmp/wash-verify-test/wash
+          /tmp/wash-verify-test/wash --version
 
-      - name: Test with specific version
+      - name: Test bash install with specific version
         if: ${{ inputs.test_version != '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "📦 Testing with specific version: ${{ inputs.test_version }}"
-
-          # Create test directory for version-specific test
           mkdir -p /tmp/wash-version-test
-          cd /tmp/wash-version-test
-
-          # Test installation with specific version
-          echo "Running: curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- --version ${{ inputs.test_version }}"
-          if curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | INSTALL_DIR=/tmp/wash-version-test bash -s -- --version "${{ inputs.test_version }}"; then
-            echo "✅ Version-specific installation succeeded!"
-
-            # Verify the binary was installed
-            if [ -f "/tmp/wash-version-test/wash" ]; then
-              echo "✅ Binary was installed!"
-              chmod +x /tmp/wash-version-test/wash
-              /tmp/wash-version-test/wash --version
-            else
-              echo "❌ Binary not found after installation"
-              exit 1
-            fi
-          else
-            echo "❌ Version-specific installation failed"
+          INSTALL_DIR=/tmp/wash-version-test bash ./install.sh --version "${{ inputs.test_version }}"
+          if [ ! -f "/tmp/wash-version-test/wash" ]; then
+            echo "Binary not found after version-pinned install" >&2
             exit 1
           fi
+          chmod +x /tmp/wash-version-test/wash
+          /tmp/wash-version-test/wash --version
 
   test-powershell-install:
     name: Test PowerShell Install Script
     runs-on: windows-latest
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
-      - name: Test PowerShell with PATH addition
+      - name: Test PowerShell install (default PATH modification)
         shell: powershell
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Test adding to PATH
           $testDir = "C:\temp\wash-path-test"
           New-Item -ItemType Directory -Path $testDir -Force
-
-          $env:INSTALL_DIR = $testDir
-          $env:ADD_TO_PATH = "true"
-
-          iwr -useb https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.ps1 | iex
-
+          & .\install.ps1 -InstallDir $testDir -Force
           $washPath = Join-Path $testDir "wash.exe"
-          if (Test-Path $washPath) {
-            Write-Host "PowerShell PATH installation successful"
-          } else {
-            Write-Host "PowerShell PATH installation failed"
+          if (-not (Test-Path $washPath)) {
+            Write-Host "PowerShell installation failed"
             exit 1
           }
+          Write-Host "PowerShell installation successful"
 
-      - name: Test PowerShell with signature verification
+      - name: Test PowerShell install with signature verification
         shell: powershell
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          Write-Host "Testing signature verification with -Verify flag"
-          Write-Host "This requires GitHub CLI to be installed"
-
-          # Create separate test directory for verification test
+          $ghPath = Get-Command gh -ErrorAction SilentlyContinue
+          if (-not $ghPath) {
+            Write-Host "GitHub CLI not available - skipping verification test"
+            exit 0
+          }
           $testDir = "C:\temp\wash-verify-test"
           New-Item -ItemType Directory -Path $testDir -Force
-
-          # Check if gh CLI is available
-          $ghPath = Get-Command gh -ErrorAction SilentlyContinue
-          if ($ghPath) {
-            Write-Host "GitHub CLI is available"
-
-            # Download script to a file
-            try {
-              $scriptPath = Join-Path $env:TEMP "install-verify.ps1"
-              Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.ps1" -OutFile $scriptPath
-
-              # Execute script with verification
-              & $scriptPath -InstallDir $testDir -Verify -Force
-
-              $washPath = Join-Path $testDir "wash.exe"
-              if (Test-Path $washPath) {
-                Write-Host "Binary was installed and verified!"
-                & $washPath --version
-              } else {
-                Write-Host "Binary not found after verification"
-                exit 1
-              }
-            } catch {
-              Write-Host "Installation with verification failed!"
-              Write-Host "Error: $($_.Exception.Message)"
-              Write-Host "Possible causes:"
-              Write-Host "- The release does not have attestations (all releases must have attestations)"
-              Write-Host "- GitHub CLI authentication is required"
-              Write-Host "- Network connectivity issues"
-              exit 1
-            }
-          } else {
-            Write-Host "GitHub CLI not available - skipping verification test"
+          try {
+            & .\install.ps1 -InstallDir $testDir -Verify -Force
+          } catch {
+            Write-Host "Installation with verification failed - is the latest release attested? $($_.Exception.Message)"
+            exit 1
           }
+          $washPath = Join-Path $testDir "wash.exe"
+          if (-not (Test-Path $washPath)) {
+            Write-Host "Binary not found after verification"
+            exit 1
+          }
+          & $washPath --version
 
-      - name: Test PowerShell with specific version
+      - name: Test PowerShell install with specific version
         if: ${{ inputs.test_version != '' }}
         shell: powershell
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          Write-Host "Testing with specific version: ${{ inputs.test_version }}"
-
-          # Create test directory for version-specific test
           $testDir = "C:\temp\wash-version-test"
           New-Item -ItemType Directory -Path $testDir -Force
-
-          # Download script to a file
           try {
-            $scriptPath = Join-Path $env:TEMP "install-version.ps1"
-            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.ps1" -OutFile $scriptPath
-
-            # Execute script with specific version
-            & $scriptPath -InstallDir $testDir -Version "${{ inputs.test_version }}" -Force
-
-            $washPath = Join-Path $testDir "wash.exe"
-            if (Test-Path $washPath) {
-              Write-Host "Version-specific installation succeeded!"
-              & $washPath --version
-            } else {
-              Write-Host "Binary not found after installation"
-              exit 1
-            }
+            & .\install.ps1 -InstallDir $testDir -Version "${{ inputs.test_version }}" -Force
           } catch {
-            Write-Host "Version-specific installation failed"
-            Write-Host "Error: $($_.Exception.Message)"
+            Write-Host "Version-specific installation failed: $($_.Exception.Message)"
             exit 1
           }
-
-  summarize-results:
-    name: Summarize Test Results
-    runs-on: ubuntu-latest
-    needs: [test-bash-install, test-powershell-install]
-    if: always()
-
-    steps:
-      - name: Summary
-        run: |
-          echo "## Installation Script Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Test Configuration" >> $GITHUB_STEP_SUMMARY
-          echo "- Test Version: ${{ inputs.test_version || 'latest' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Repository: wasmcloud/wasmCloud (public)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "### Results" >> $GITHUB_STEP_SUMMARY
-          echo "- Bash Install (Unix): ${NEEDS_TEST_BASH_INSTALL_RESULT}" >> $GITHUB_STEP_SUMMARY
-          echo "- PowerShell Install (Windows): ${NEEDS_TEST_POWERSHELL_INSTALL_RESULT}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${NEEDS_TEST_BASH_INSTALL_RESULT}" = "success" ] && \
-             [ "${NEEDS_TEST_POWERSHELL_INSTALL_RESULT}" = "success" ]; then
-            echo "✅ All installation script tests passed!" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ Some installation script tests failed. Check the job details above." >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Usage Instructions" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Linux/macOS:**" >> $GITHUB_STEP_SUMMARY
-          echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo '# Standard installation (latest version)' >> $GITHUB_STEP_SUMMARY
-          echo 'curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo '# With signature verification (requires GitHub CLI)' >> $GITHUB_STEP_SUMMARY
-          echo 'curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- -v' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo '# Install a specific version' >> $GITHUB_STEP_SUMMARY
-          echo 'curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- --version 1.0.0-beta.10' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo '# Install a specific version with verification' >> $GITHUB_STEP_SUMMARY
-          echo 'curl -sSL https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.sh | bash -s -- --version 1.0.0-beta.10 -v' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Windows (PowerShell):**" >> $GITHUB_STEP_SUMMARY
-          echo '```powershell' >> $GITHUB_STEP_SUMMARY
-          echo '# Standard installation (latest version)' >> $GITHUB_STEP_SUMMARY
-          echo 'iwr -useb https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.ps1 | iex' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo '# With signature verification (requires GitHub CLI)' >> $GITHUB_STEP_SUMMARY
-          echo 'Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wasmcloud/wasmCloud/main/install.ps1" -UseBasicParsing | Invoke-Expression; Install-Wash -Verify' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo '# Install a specific version' >> $GITHUB_STEP_SUMMARY
-          echo './install.ps1 -Version "1.0.0-beta.10"' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo '# Install a specific version with verification' >> $GITHUB_STEP_SUMMARY
-          echo './install.ps1 -Version "1.0.0-beta.10" -Verify' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-        env:
-          NEEDS_TEST_BASH_INSTALL_RESULT: ${{ needs.test-bash-install.result }}
-          NEEDS_TEST_POWERSHELL_INSTALL_RESULT: ${{ needs.test-powershell-install.result }}
+          $washPath = Join-Path $testDir "wash.exe"
+          if (-not (Test-Path $washPath)) {
+            Write-Host "Binary not found after installation"
+            exit 1
+          }
+          & $washPath --version
