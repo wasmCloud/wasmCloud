@@ -375,9 +375,20 @@ async fn workload_start(
         let mut pulled_components = Vec::with_capacity(wit_world.components.len());
         for component in &wit_world.components {
             if !component.precompiled_url.is_empty() {
+                tracing::info!(
+                    component = %component.name,
+                    url = %component.precompiled_url,
+                    "using precompiled component"
+                );
                 let bytes = match fetch(&component.precompiled_url).await {
                     Ok(b) => b,
                     Err(e) => {
+                        tracing::error!(
+                            component = %component.name,
+                            url = %component.precompiled_url,
+                            error = %e,
+                            "failed to fetch precompiled component"
+                        );
                         return Ok(types::v2::WorkloadStartResponse {
                             workload_status: Some(types::v2::WorkloadStatus {
                                 workload_id: workload_id.clone(),
