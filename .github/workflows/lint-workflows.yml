@@ -38,6 +38,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Required: the action uploads its findings as SARIF to the GitHub
+      # Code Scanning API. Without this, the upload step errors with
+      # "Resource not accessible by integration" and fails the job.
+      # Fork PRs auto-restrict the token to read-only; the action handles
+      # that internally and skips the upload rather than failing.
+      security-events: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -45,6 +51,6 @@ jobs:
       - name: Run zizmor
         uses: zizmorcore/zizmor-action@b1d7e1fb5de872772f31590499237e7cce841e8e # v0.5.3
         env:
-          # Read-only token; zizmor uses it for online audits (e.g. checking
-          # whether a referenced action's tag still resolves to its pinned SHA).
+          # Used by zizmor for online audits (e.g. checking whether a
+          # referenced action's tag still resolves to its pinned SHA).
           GH_TOKEN: ${{ github.token }}
