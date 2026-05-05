@@ -135,13 +135,9 @@ jobs:
         run: |
           cargo machete
 
-  # Integration gate: build the wash image from this commit, install it
-  # alongside the runtime-operator chart in a kind cluster, and run the
-  # operator's e2e suite (including the messaging round-trip from #5074)
-  # against it. The canary tag only moves if this passes. Also runs on
-  # PRs that touch wash, the chart, or the e2e suite, so regressions are
-  # caught before merge rather than after.
-  runtime-operator-e2e:
+  # Build the wash runtime image once and pass it to both the operator e2e
+  # gate and the canary publisher.
+  wash-image:
     if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -151,9 +147,37 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-go
       - name: Build wash runtime image
         run: docker build -t localhost/wasmcloud-wash:e2e .
+      - name: Save wash runtime image
+        run: docker save localhost/wasmcloud-wash:e2e -o /tmp/wash-image.tar
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wash-image
+          path: /tmp/wash-image.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  # Integration gate: install the shared wash image alongside the
+  # runtime-operator chart in a kind cluster, and run the operator's e2e
+  # suite (including the messaging round-trip from #5074) against it. The
+  # canary tag only moves if this passes. Also runs on PRs that touch wash,
+  # the chart, or the e2e suite, so regressions are caught before merge
+  # rather than after.
+  runtime-operator-e2e:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    needs: [wash-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-go
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wash-image
+          path: /tmp
+      - name: Load wash runtime image
+        run: docker load -i /tmp/wash-image.tar
       - name: Build runtime-operator image
         working-directory: runtime-operator
         run: make docker-build IMG=localhost/runtime-operator:e2e
@@ -192,37 +216,15 @@ jobs:
           kubectl get workloaddeployments.runtime.wasmcloud.dev -A -o yaml || true
           kubectl get workloads.runtime.wasmcloud.dev -A -o yaml || true
 
-  # The canary docker image is built in parallel with check/lint/e2e to
-  # avoid serializing the slow cargo build behind the slow tests. With
-  # `push: false`, the multi-arch digests are still pushed to ghcr (the
-  # workflow always does that for caching), but the human-visible
-  # `canary` tag is *not* created here — that happens in
-  # `canary-publish` below, gated on every test job passing.
-  canary-build:
-    # Runs on every main push, and on PRs labeled `canary` so that changes to
-    # this workflow or to docker-build-push.yml can be validated end-to-end
-    # (including the reusable-workflow permission handshake) before merge.
-    # `push: false` below means no canary tag moves on PR runs.
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || contains(github.event.pull_request.labels.*.name, 'canary')
-    permissions:
-      contents: write
-      packages: write
-    uses: ./.github/workflows/docker-build-push.yml
-    with:
-      push: false
-      image: ghcr.io/wasmcloud/wash
-      tags: |
-        type=raw,value=canary
-
-  # Tag promotion: only move `canary` once check, lint, and the
-  # runtime-operator e2e have all passed against this commit. Reads the
-  # digests uploaded by canary-build and assembles the manifest list. The
+  # Tag promotion: only push `canary` once check, lint, and the
+  # runtime-operator e2e have all passed against this commit. Reuses the
+  # shared single-arch wash image that the e2e gate exercised. The
   # `sha-<full-sha>` tag is what release-tag.yml pins to when it promotes
   # this canary digest as the immutable vX.Y.Z release tag — `canary`
   # itself moves on every subsequent main push, so we cannot rely on it.
   canary-publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [check, lint, runtime-operator-e2e, canary-build]
+    needs: [check, lint, runtime-operator-e2e, wash-image]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -231,12 +233,12 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - name: Download digests
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: ${{ runner.temp }}/digests
-          pattern: digests-${{ needs.canary-build.outputs.artifact_prefix }}-${{ github.run_id }}-*
-          merge-multiple: true
+          name: wash-image
+          path: /tmp
+      - name: Load wash runtime image
+        run: docker load -i /tmp/wash-image.tar
       - name: Login to ghcr.io
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
@@ -253,12 +255,23 @@ jobs:
           tags: |
             type=raw,value=canary
             type=sha,format=long,prefix=sha-
-      - name: Create manifest list and push tags
-        working-directory: ${{ runner.temp }}/digests
+      - name: Push canary tags
         run: |
-          # shellcheck disable=SC2046
-          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/wasmcloud/wash@sha256:%s ' *)
+          set -euo pipefail
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          canary_tag=""
+          for tag in "${tags[@]}"; do
+            if [[ "$tag" == *":canary" ]]; then
+              canary_tag="$tag"
+              continue
+            fi
+            docker tag localhost/wasmcloud-wash:e2e "$tag"
+            docker push "$tag"
+          done
+          if [[ -n "$canary_tag" ]]; then
+            docker tag localhost/wasmcloud-wash:e2e "$canary_tag"
+            docker push "$canary_tag"
+          fi
       - name: Inspect image
         run: |
           docker buildx imagetools inspect "ghcr.io/wasmcloud/wash:${STEPS_META_OUTPUTS_VERSION}"
