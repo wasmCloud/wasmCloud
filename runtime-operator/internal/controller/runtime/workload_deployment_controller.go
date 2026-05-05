@@ -40,8 +40,23 @@ type WorkloadDeploymentReconciler struct {
 	reconciler condition.AnyConditionedReconciler
 }
 
+type precompileMatch struct {
+	Target          string
+	WasmtimeVersion string
+}
+
 func (r *WorkloadDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	return r.reconciler.Reconcile(ctx, req)
+}
+
+func (r *WorkloadDeploymentReconciler) precompileMatch() *precompileMatch {
+	if r.PrecompileTarget == "" || r.PrecompileWasmtimeVersion == "" {
+		return nil
+	}
+	return &precompileMatch{
+		Target:          r.PrecompileTarget,
+		WasmtimeVersion: r.PrecompileWasmtimeVersion,
+	}
 }
 
 func (r *WorkloadDeploymentReconciler) reconcileArtifacts(ctx context.Context, deployment *runtimev1alpha1.WorkloadDeployment) error {
@@ -80,7 +95,7 @@ func (r *WorkloadDeploymentReconciler) reconcileSync(ctx context.Context, deploy
 	}
 
 	templateCopy := deployment.Spec.Template.DeepCopy()
-	if err := resolveArtifacts(ctx, r.Client, deployment.Namespace, templateCopy, deployment.Spec.Artifacts); err != nil {
+	if err := resolveArtifacts(ctx, r.Client, deployment.Namespace, templateCopy, deployment.Spec.Artifacts, r.precompileMatch()); err != nil {
 		return err
 	}
 	if deployment.Spec.Kubernetes != nil {
@@ -108,7 +123,7 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 	}
 
 	replicaSetTemplate := deployment.Spec.WorkloadReplicaSetSpec.DeepCopy()
-	if err := resolveArtifacts(ctx, r.Client, deployment.Namespace, &replicaSetTemplate.Template, deployment.Spec.Artifacts); err != nil {
+	if err := resolveArtifacts(ctx, r.Client, deployment.Namespace, &replicaSetTemplate.Template, deployment.Spec.Artifacts, r.precompileMatch()); err != nil {
 		return err
 	}
 
@@ -298,7 +313,7 @@ func (r *WorkloadDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		Complete(r)
 }
 
-func resolveArtifacts(ctx context.Context, kubeClient client.Client, namespace string, tpl *runtimev1alpha1.WorkloadReplicaTemplate, artifactsFrom []runtimev1alpha1.WorkloadDeploymentArtifact) error {
+func resolveArtifacts(ctx context.Context, kubeClient client.Client, namespace string, tpl *runtimev1alpha1.WorkloadReplicaTemplate, artifactsFrom []runtimev1alpha1.WorkloadDeploymentArtifact, pc *precompileMatch) error {
 	artifactMap := make(map[string]runtimev1alpha1.Artifact)
 	for _, a := range artifactsFrom {
 		artifact := &runtimev1alpha1.Artifact{}
@@ -321,6 +336,15 @@ func resolveArtifacts(ctx context.Context, kubeClient client.Client, namespace s
 			return fmt.Errorf("artifact %s not found in deployment spec", artifactName)
 		}
 		comp.Image = artifact.Status.ArtifactURL
+
+		if pc != nil {
+			variant := findMatchingVariant(artifact.Status.Precompiled, pc.Target, pc.WasmtimeVersion)
+			if variant == nil {
+				return condition.ErrStatusUnknown(fmt.Errorf("artifact %s has no precompiled variant matching %s/%s", artifactName, pc.Target, pc.WasmtimeVersion))
+			}
+			comp.PrecompiledURL = variant.ArtifactURL
+		}
+
 		tpl.Spec.Components[i] = comp
 	}
 
@@ -335,5 +359,14 @@ func resolveArtifacts(ctx context.Context, kubeClient client.Client, namespace s
 		}
 	}
 
+	return nil
+}
+
+func findMatchingVariant(precompiled []runtimev1alpha1.PrecompiledVariant, target, wasmtimeVersion string) *runtimev1alpha1.PrecompiledVariant {
+	for i := range precompiled {
+		if precompiled[i].Target == target && precompiled[i].WasmtimeVersion == wasmtimeVersion {
+			return &precompiled[i]
+		}
+	}
 	return nil
 }
