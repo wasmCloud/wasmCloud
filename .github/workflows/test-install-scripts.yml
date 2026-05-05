@@ -20,7 +20,11 @@ on:
       - 'install.ps1'
       - '.github/workflows/test-install-scripts.yml'
 
-permissions: read-all
+# Minimum needed: checkout + reading attestations from the public repo via
+# `gh attestation verify` (which the install scripts call when -v/-Verify is
+# set). Public-repo attestations are readable with the default token.
+permissions:
+  contents: read
 
 jobs:
   test-bash-install:
@@ -81,9 +85,13 @@ jobs:
         if: ${{ inputs.test_version != '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pass the user-supplied version through the environment instead of
+          # interpolating into the script body, so zizmor's template-injection
+          # check is satisfied and a hostile input can't break out of quoting.
+          TEST_VERSION: ${{ inputs.test_version }}
         run: |
           mkdir -p /tmp/wash-version-test
-          INSTALL_DIR=/tmp/wash-version-test bash ./install.sh --version "${{ inputs.test_version }}"
+          INSTALL_DIR=/tmp/wash-version-test bash ./install.sh --version "$TEST_VERSION"
           if [ ! -f "/tmp/wash-version-test/wash" ]; then
             echo "Binary not found after version-pinned install" >&2
             exit 1
@@ -146,11 +154,15 @@ jobs:
         shell: powershell
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pass the user-supplied version through the environment instead of
+          # interpolating into the script body, so zizmor's template-injection
+          # check is satisfied and a hostile input can't break out of quoting.
+          TEST_VERSION: ${{ inputs.test_version }}
         run: |
           $testDir = "C:\temp\wash-version-test"
           New-Item -ItemType Directory -Path $testDir -Force
           try {
-            & .\install.ps1 -InstallDir $testDir -Version "${{ inputs.test_version }}" -Force
+            & .\install.ps1 -InstallDir $testDir -Version $env:TEST_VERSION -Force
           } catch {
             Write-Host "Version-specific installation failed: $($_.Exception.Message)"
             exit 1
