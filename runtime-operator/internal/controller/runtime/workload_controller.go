@@ -246,6 +246,7 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 			PoolSize:        c.PoolSize,
 			MaxInvocations:  c.MaxInvocations,
 			LocalResources:  localResources,
+			PrecompiledUrl:  c.PrecompiledURL,
 		})
 	}
 
