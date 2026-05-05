@@ -189,7 +189,11 @@ jobs:
   # `canary` tag is *not* created here — that happens in
   # `canary-publish` below, gated on every test job passing.
   canary-build:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Runs on every main push, and on PRs labeled `canary` so that changes to
+    # this workflow or to docker-build-push.yml can be validated end-to-end
+    # (including the reusable-workflow permission handshake) before merge.
+    # `push: false` below means no canary tag moves on PR runs.
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || contains(github.event.pull_request.labels.*.name, 'canary')
     permissions:
       contents: write
       packages: write
