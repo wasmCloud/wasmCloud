@@ -46,8 +46,6 @@ on:
         description: "Image digest of the container that was built without the sha256: prefix"
         value: ${{ jobs.build.outputs.artifact_prefix }}
 
-permissions: read-all
-
 jobs:
   build:
     strategy:
