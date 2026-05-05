@@ -303,6 +303,21 @@ async fn create_workload(host: &Host, config: &Config, bytes: Bytes) -> anyhow::
     let mut service: Option<Service> = None;
     let mut components = Vec::new();
     if dev_config.service {
+        let service_interfaces = host
+            .intersect_interfaces(&bytes)
+            .context("failed to extract service interfaces")?;
+
+        // Merge service interfaces into host_interfaces
+        for interface in service_interfaces {
+            match host_interfaces
+                .iter()
+                .find(|i| i.namespace == interface.namespace && i.package == interface.package)
+            {
+                Some(_) => {}
+                None => host_interfaces.push(interface),
+            }
+        }
+
         service = Some(Service {
             bytes,
             digest: None,
@@ -344,6 +359,21 @@ async fn create_workload(host: &Host, config: &Config, bytes: Bytes) -> anyhow::
             let service_bytes = tokio::fs::read(service_path).await.with_context(|| {
                 format!("failed to read service file at {}", service_path.display())
             })?;
+
+            let service_interfaces = host
+                .intersect_interfaces(&service_bytes)
+                .context("failed to extract service interfaces")?;
+
+            // Merge component interfaces into host_interfaces
+            for interface in service_interfaces {
+                match host_interfaces
+                    .iter()
+                    .find(|i| i.namespace == interface.namespace && i.package == interface.package)
+                {
+                    Some(_) => {}
+                    None => host_interfaces.push(interface),
+                }
+            }
 
             service = Some(Service {
                 bytes: Bytes::from(service_bytes),
