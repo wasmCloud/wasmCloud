@@ -72,6 +72,28 @@ operator:
   # -- List of namespaces to watch. If empty, the operator watches all namespaces.
   watchNamespaces: []
 
+  precompile:
+    # -- When false, no precompile Jobs are emitted and Artifact-backed
+    # workloads compile fresh in the host (the operator runs with
+    # --disable-precompile-controller).
+    enabled: false
+    image:
+      registry: ghcr.io
+      repository: wasmcloud/wash-precompile
+      pull_policy: Always
+      # -- Defaults to the chart AppVersion when empty.
+      tag: ""
+    # -- Target triple precompiled bytes are produced for. Must match the
+    # runtime hosts' architecture/OS.
+    target: ""
+    # -- Wasmtime version the worker links against. Must match the host's
+    # wasmtime version exactly — cwasm bytes are version-specific.
+    # No default; required when precompile.enabled is true.
+    wasmtimeVersion: ""
+    # -- Scheme-qualified URL prefix where precompiled .cwasm bytes are
+    # stored.
+    artifactBaseURL: "nats://precompiled-artifacts"
+
 gateway:
   # -- DEPRECATED: runtime-gateway is being removed. HTTP routing is now handled
   # by the runtime-operator via EndpointSlices.

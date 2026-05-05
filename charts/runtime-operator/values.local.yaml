@@ -17,6 +17,16 @@
 #
 # See https://wasmcloud.com/docs/kubernetes-operator/operator-manual/helm-values
 # for the full gateway configuration reference.
+global:
+  tls:
+    enabled: false
+
+operator:
+  precompile:
+    enabled: true
+    wasmtimeVersion: "43"
+    target: "x86_64-unknown-linux-gnu"
+
 gateway:
   enabled: false
 
