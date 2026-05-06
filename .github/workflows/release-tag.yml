@@ -36,7 +36,13 @@ name: release-tag
 #   - If the git tag already exists on origin, the tag step is a no-op.
 #   - Re-running this workflow is safe: each step is idempotent.
 
-on:
+on:  # zizmor: ignore[dangerous-triggers]
+  # workflow_run is required: this workflow must fire after release-train
+  # finishes merging the release PR. The job's `if:` requires
+  # `workflow_run.conclusion == 'success'`, the verify-head step refuses
+  # to proceed unless HEAD's commit subject matches `release: vX.Y.Z`,
+  # and every downstream step is idempotent against pre-existing tags
+  # and image manifests.
   workflow_run:
     workflows: [release-train]
     types: [completed]
@@ -320,7 +326,13 @@ jobs:
         # Pre-releases (tag contains "-", e.g. v2.1.0-rc.1) are marked as
         # prerelease so `gh release list` and the GitHub UI don't surface
         # them as the "latest" release.
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        #
+        # zizmor flags this as `superfluous-actions` (could use `gh release
+        # create` directly). Keeping the action: it's SHA-pinned, and a
+        # shell equivalent has to re-implement idempotent re-run handling,
+        # release-notes generation, glob fail-on-empty, and prerelease
+        # detection — ~25 lines of bash on a release-critical step.
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0  # zizmor: ignore[superfluous-actions]
         with:
           name: ${{ steps.ver.outputs.tag }}
           tag_name: ${{ steps.ver.outputs.tag }}

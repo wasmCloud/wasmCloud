@@ -70,6 +70,8 @@ jobs:
       artifact_prefix: ${{ steps.meta.outputs.artifact_prefix }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - name: Login to ghcr.io
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
@@ -79,9 +81,11 @@ jobs:
 
       - name: Meta
         id: meta
+        env:
+          INPUTS_IMAGE: ${{ inputs.image }}
         run: |
           # Create a prefix for the artifact name by taking the image name, removing any registry and replacing / and : with _
-          ARTIFACT_PREFIX=$(echo "${{ inputs.image }}" | sed 's/.*\///; s/[\/:]/_/g')
+          ARTIFACT_PREFIX=$(echo "${INPUTS_IMAGE}" | sed 's/.*\///; s/[\/:]/_/g')
           echo "artifact_prefix=${ARTIFACT_PREFIX}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up QEMU
@@ -108,10 +112,12 @@ jobs:
 
       - name: Export digest
         id: export
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          DIGESTS_DIR: ${{ runner.temp }}/digests
         run: | #shell
-          mkdir -p "${{ runner.temp }}/digests"
-          digest="${{ steps.build.outputs.digest }}"
-          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+          mkdir -p "${DIGESTS_DIR}"
+          touch "${DIGESTS_DIR}/${BUILD_DIGEST#sha256:}"
 
       - name: Upload digest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -131,6 +137,8 @@ jobs:
       - build
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -160,8 +168,13 @@ jobs:
         run: |
           # shellcheck disable=SC2046
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ inputs.image }}@sha256:%s ' *)
+            $(printf "${INPUTS_IMAGE}@sha256:%s " *)
+        env:
+          INPUTS_IMAGE: ${{ inputs.image }}
 
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ${{ inputs.image }}:${{ steps.meta.outputs.version }}
+          docker buildx imagetools inspect "${INPUTS_IMAGE}:${STEPS_META_OUTPUTS_VERSION}"
+        env:
+          INPUTS_IMAGE: ${{ inputs.image }}
+          STEPS_META_OUTPUTS_VERSION: ${{ steps.meta.outputs.version }}
