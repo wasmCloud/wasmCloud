@@ -297,4 +297,36 @@ var _ = Describe("precompile pipeline", func() {
 		}).Should(Succeed())
 	})
 
+	It("re-runs precompile when Artifact.spec.image changes", func() {
+		ctx := context.Background()
+		a := newArtifact(ctx, "image-update")
+
+		var oldJob batchv1.Job
+		Eventually(func(g Gomega) {
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default", Name: "precompile-" + a.Name,
+			}, &oldJob)).To(Succeed())
+			g.Expect(oldJob.Spec.Template.Spec.Containers[0].Args).
+				To(ContainElement(testArtifactImage))
+		}).Should(Succeed())
+
+		var updated runtimev1alpha1.Artifact
+		Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Namespace: "default", Name: a.Name,
+		}, &updated)).To(Succeed())
+		updated.Spec.Image = "ghcr.io/example/comp:v2"
+		Expect(k8sClient.Update(ctx, &updated)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			var newJob batchv1.Job
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default", Name: "precompile-" + a.Name,
+			}, &newJob)).To(Succeed())
+			g.Expect(newJob.UID).NotTo(Equal(oldJob.UID),
+				"Job should have been recreated, not reused")
+			g.Expect(newJob.Spec.Template.Spec.Containers[0].Args).
+				To(ContainElement("ghcr.io/example/comp:v2"))
+		}).Should(Succeed())
+	})
+
 })

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -118,6 +119,23 @@ func (r *PrecompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
+	var existing batchv1.Job
+	switch err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: a.Namespace}, &existing); {
+	case err == nil:
+		if existing.DeletionTimestamp != nil {
+			return ctrl.Result{}, nil
+		}
+		if !argsMatch(&existing, desired) {
+			if delErr := r.Delete(ctx, &existing); delErr != nil && !apierrors.IsNotFound(delErr) {
+				return ctrl.Result{}, delErr
+			}
+			a.Status.Precompiled = nil
+			return ctrl.Result{}, r.Status().Update(ctx, &a)
+		}
+	case !apierrors.IsNotFound(err):
+		return ctrl.Result{}, err
+	}
+
 	if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
 		return ctrl.Result{}, err
 	}
@@ -214,4 +232,15 @@ func variantRecorded(existing []runtimev1alpha1.PrecompiledVariant, v runtimev1a
 		}
 	}
 	return false
+}
+
+func argsMatch(existing, desired *batchv1.Job) bool {
+	if len(existing.Spec.Template.Spec.Containers) == 0 ||
+		len(desired.Spec.Template.Spec.Containers) == 0 {
+		return false
+	}
+	return slices.Equal(
+		existing.Spec.Template.Spec.Containers[0].Args,
+		desired.Spec.Template.Spec.Containers[0].Args,
+	)
 }
