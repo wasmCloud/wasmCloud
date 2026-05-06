@@ -49,8 +49,10 @@ Wed–Thu as a buffer for any same-week follow-up patch.
      the merge commit to all conclude `success` — the artifact pipeline has built and tested
      this exact commit.
    - **Promotes** each canary container image: retags
-     `ghcr.io/wasmcloud/{wash,runtime-gateway,runtime-operator}:sha-<merge-sha>` as `vX.Y.Z`.
-     Same manifest digest, no rebuild — the bytes that passed canary CI are the bytes users pull.
+     `ghcr.io/wasmcloud/{wash,runtime-gateway,runtime-operator}:sha-<merge-sha>` as `X.Y.Z`
+     (OCI image tags are bare semver, no `v` prefix — that is the convention `docker pull`
+     users expect). Same manifest digest, no rebuild — the bytes that passed canary CI are
+     the bytes users pull.
    - **Re-attests** each promoted manifest digest (Sigstore-signed via Fulcio).
    - **Downloads** the canary-binaries artifacts from the wash.yml run that built them, attests
      them, and (after pushing the tag) creates the GitHub Release with those exact binaries.
@@ -112,10 +114,10 @@ matrix binary build and is what `release-tag.yml` looks for to identify a releas
    `runtime-gateway`, `charts`, plus `canary-binaries` in `wash.yml`).
 4. Re-run `release-tag.yml` from the Actions tab (**Re-run failed jobs** on the failed
    workflow_run instance) so it picks up the now-green canaries, or perform its work by hand:
-   - Promote the canary OCI images:
+   - Promote the canary OCI images (bare semver, no `v`):
      ```bash
      for img in ghcr.io/wasmcloud/{wash,runtime-gateway,runtime-operator}; do
-       docker buildx imagetools create --tag "${img}:vX.Y.Z" "${img}:sha-<MERGE_SHA>"
+       docker buildx imagetools create --tag "${img}:X.Y.Z" "${img}:sha-<MERGE_SHA>"
      done
      ```
    - Push the immutable annotated tag and the Go module tag:
@@ -137,12 +139,14 @@ Do not bypass step 3 — promoting a digest that hasn't had the canary suite pas
 
 ## Release artifacts at a glance
 
+OCI image tags use bare semver (`X.Y.Z`); the git tag, GitHub Release, and Go module tag use `vX.Y.Z`.
+
 | Component | What gets published on `vX.Y.Z` |
 |-----------|---------------------------------|
-| `wash` (CLI) | Cross-platform binaries with SLSA provenance, GitHub Release, `ghcr.io/wasmcloud/wash:vX.Y.Z`, Homebrew tap update, winget |
-| `runtime-gateway` | `ghcr.io/wasmcloud/runtime-gateway:vX.Y.Z` |
-| `runtime-operator` | `ghcr.io/wasmcloud/runtime-operator:vX.Y.Z`, Go module tag `runtime-operator/vX.Y.Z` |
-| Helm chart | `ghcr.io/wasmcloud/charts/runtime-operator:vX.Y.Z` |
+| `wash` (CLI) | Cross-platform binaries with SLSA provenance, GitHub Release, `ghcr.io/wasmcloud/wash:X.Y.Z`, Homebrew tap update, winget |
+| `runtime-gateway` | `ghcr.io/wasmcloud/runtime-gateway:X.Y.Z` |
+| `runtime-operator` | `ghcr.io/wasmcloud/runtime-operator:X.Y.Z`, Go module tag `runtime-operator/vX.Y.Z` |
+| Helm chart | `ghcr.io/wasmcloud/charts/runtime-operator:X.Y.Z` |
 
 All four ship from a single `vX.Y.Z` tag and are co-versioned. `wash-runtime` is co-versioned
 with the workspace (it ships inside the `wash` binary and the runtime-gateway / runtime-operator
@@ -171,7 +175,7 @@ GitHub Release. Skipped on every other main push to avoid burning ~7 runners on 
 The release flow is designed so that **the bytes users pull are the bytes that passed CI**:
 
 - **Container images.** Canary builds publish multi-arch manifests pinned by `sha-<full-sha>`.
-  `release-tag.yml` retags those exact digests as `vX.Y.Z` via `docker buildx imagetools
+  `release-tag.yml` retags those exact digests as `X.Y.Z` via `docker buildx imagetools
   create`. No rebuild — same manifest, same content. The release tag is then re-attested.
 - **wash binaries.** `canary-binaries` builds the matrix on the release commit (validated by
   `check`/`lint`/`runtime-operator-e2e`). `release-tag.yml` downloads those artifacts and
@@ -185,15 +189,15 @@ The release flow is designed so that **the bytes users pull are the bytes that p
 **Attestation is release-only.** Canary container pushes intentionally skip attestation —
 users only ever pull tagged releases, so attesting every main commit's canary would just be
 noise (and a pointless mint of Sigstore certificates). When `release-tag.yml` retags the
-canary digest as `vX.Y.Z`, it mints a fresh SLSA provenance attestation against the promoted
+canary digest as `X.Y.Z`, it mints a fresh SLSA provenance attestation against the promoted
 manifest digest, signed via Fulcio, linking that digest to the workflow run, source commit,
 and runner.
 
 Verify any released image with:
 ```bash
-gh attestation verify --repo wasmCloud/wasmCloud oci://ghcr.io/wasmcloud/wash:vX.Y.Z
-gh attestation verify --repo wasmCloud/wasmCloud oci://ghcr.io/wasmcloud/runtime-gateway:vX.Y.Z
-gh attestation verify --repo wasmCloud/wasmCloud oci://ghcr.io/wasmcloud/runtime-operator:vX.Y.Z
+gh attestation verify --repo wasmCloud/wasmCloud oci://ghcr.io/wasmcloud/wash:X.Y.Z
+gh attestation verify --repo wasmCloud/wasmCloud oci://ghcr.io/wasmcloud/runtime-gateway:X.Y.Z
+gh attestation verify --repo wasmCloud/wasmCloud oci://ghcr.io/wasmcloud/runtime-operator:X.Y.Z
 ```
 
 Binaries on the GitHub Release have equivalent attestations (verifiable by digest):
