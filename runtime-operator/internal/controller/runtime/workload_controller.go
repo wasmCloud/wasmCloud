@@ -124,7 +124,7 @@ func (r *WorkloadReconciler) findFreeHost(ctx context.Context, workload *runtime
 	hostList := runtimev1alpha1.HostList{}
 
 	// Every Host object lives in the operator's namespace. Tenant
-	// isolation is enforced by an indexed match on Host.Location, not by
+	// isolation is enforced by an indexed match on Host.Environment, not by
 	// Host.Namespace.
 	listOpts := []client.ListOption{
 		client.InNamespace(r.OperatorNamespace),

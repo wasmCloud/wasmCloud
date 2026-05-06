@@ -340,6 +340,226 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyNoPods).WithTimeout(2 * time.Minute).Should(Succeed())
 		})
 	})
+
+	// Tenant-namespace scenario: exercises `helm upgrade` on top of the
+	// already-installed release, adding a hostGroup whose pods land in a
+	// separate tenant namespace, and verifies that:
+	//   * the chart auto-renders per-namespace TLS Secrets, ServiceAccount,
+	//     and Pod RBAC for the tenant namespace,
+	//   * the operator's `-host-namespaces` flag is auto-derived from
+	//     `runtime.hostGroups[].namespace` via the
+	//     `runtime-operator.hostNamespaces` chart helper,
+	//   * the host pod's heartbeat carries the tenant namespace as its
+	//     `environment` field, which the operator records on the
+	//     resulting `Host` CRD,
+	//   * a WorkloadDeployment whose `spec.template.spec.environment`
+	//     matches the tenant namespace schedules onto the tenant hosts,
+	//     and the resulting `Workload.status.environment` reflects the
+	//     same value.
+	//
+	// Cleanup: AfterAll deletes the WorkloadDeployment created here;
+	// AfterSuite's `helm delete` removes the helm-managed resources in
+	// the tenant namespace. The tenant namespace itself is left behind
+	// for inspection — it is removed when the kind cluster is destroyed.
+	Context("Tenant Namespace via Helm Upgrade", Ordered, func() {
+		const (
+			tenantNamespace    = "namespace-a"
+			tenantHostGroup    = "tenant"
+			tenantWorkloadName = "hello-tenant"
+		)
+
+		var workloadFile string
+
+		AfterAll(func() {
+			By("deleting the tenant WorkloadDeployment")
+			cmd := exec.Command("kubectl", "delete", "workloaddeployment",
+				tenantWorkloadName, "-n", tenantNamespace, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+
+			if workloadFile != "" {
+				_ = os.Remove(workloadFile)
+			}
+		})
+
+		It("creates the tenant namespace", func() {
+			cmd := exec.Command("kubectl", "create", "namespace", tenantNamespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(),
+				"failed to create tenant namespace %q", tenantNamespace)
+		})
+
+		It("performs a helm upgrade adding a hostGroup in the tenant namespace", func() {
+			// Append a second hostGroup pinned to the tenant namespace.
+			// We deliberately do NOT set `operator.hostNamespaces` here
+			// — the chart's `runtime-operator.hostNamespaces` helper
+			// should auto-derive it from the hostGroup's namespace
+			// override, and we assert that below.
+			sets := append(buildBaseHelmSets(),
+				fmt.Sprintf("runtime.hostGroups[1].name=%s", tenantHostGroup),
+				fmt.Sprintf("runtime.hostGroups[1].namespace=%s", tenantNamespace),
+				"runtime.hostGroups[1].replicas=1",
+				"runtime.hostGroups[1].service.type=ClusterIP",
+				"runtime.hostGroups[1].http.enabled=true",
+				"runtime.hostGroups[1].http.port=80",
+				"runtime.hostGroups[1].webgpu.enabled=false",
+				"runtime.hostGroups[1].resources.requests.memory=64Mi",
+				"runtime.hostGroups[1].resources.requests.cpu=250m",
+				"runtime.hostGroups[1].resources.limits.memory=512Mi",
+				"runtime.hostGroups[1].resources.limits.cpu=500m",
+				fmt.Sprintf("runtime.hostGroups[1].logLevel=%s", runtimeLogLevel),
+			)
+
+			helmArgs := make([]string, 0, 5+2*len(sets)+4)
+			helmArgs = append(helmArgs, "upgrade", "--install", "-n", namespace)
+			for _, s := range sets {
+				helmArgs = append(helmArgs, "--set", s)
+			}
+			helmArgs = append(helmArgs, "--wait", "--timeout=5m",
+				"operator-e2e", helmChartPath)
+
+			cmd := exec.Command("helm", helmArgs...)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(),
+				"helm upgrade with tenant hostGroup failed")
+		})
+
+		It("renders per-namespace TLS Secrets and Pod RBAC in the tenant namespace", func() {
+			// The chart's certificates.yaml replicates runtime-tls and
+			// data-tls into every host-pod namespace; without these the
+			// host pod can't mount its volumes and stays in
+			// ContainerCreating.
+			for _, secret := range []string{"wasmcloud-runtime-tls", "wasmcloud-data-tls"} {
+				cmd := exec.Command("kubectl", "get", "secret", secret,
+					"-n", tenantNamespace)
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(),
+					"expected Secret %s in %s", secret, tenantNamespace)
+			}
+
+			// host-pod-role.yaml renders one Pod-only Role + RoleBinding
+			// per non-release host namespace.
+			for _, kind := range []string{"role", "rolebinding"} {
+				cmd := exec.Command("kubectl", "get", kind,
+					"operator-e2e-runtime-operator-host-pod",
+					"-n", tenantNamespace)
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(),
+					"expected %s operator-e2e-runtime-operator-host-pod in %s",
+					kind, tenantNamespace)
+			}
+		})
+
+		It("configures the operator with -host-namespaces including the tenant namespace", func() {
+			// The chart's runtime-operator.hostNamespaces helper unions
+			// operator.hostNamespaces with runtime.hostGroups[].namespace,
+			// so adding a tenant-namespaced hostGroup alone should be
+			// enough to flip on the per-namespace Pod cache + RBAC.
+			verifyArgs := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "deployment",
+					"runtime-operator", "-n", namespace,
+					"-o", "jsonpath={.spec.template.spec.containers[0].args}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(ContainSubstring(
+					fmt.Sprintf("-host-namespaces=%s", tenantNamespace)),
+					"operator should pass -host-namespaces=%s; got: %s",
+					tenantNamespace, output)
+			}
+			Eventually(verifyArgs).WithTimeout(2 * time.Minute).Should(Succeed())
+		})
+
+		It("brings up a host pod in the tenant namespace", func() {
+			verifyTenantHostReady := func(g Gomega) {
+				cmd := exec.Command("kubectl", "wait", "--for=condition=Ready",
+					"pod", "-l", fmt.Sprintf("wasmcloud.com/hostgroup=%s", tenantHostGroup),
+					"-n", tenantNamespace, "--timeout=10s")
+				_, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+			}
+			Eventually(verifyTenantHostReady).WithTimeout(3 * time.Minute).Should(Succeed())
+		})
+
+		It("registers a Host CRD with environment matching the tenant namespace", func() {
+			// Hosts always live in the operator's own namespace (per the
+			// namespaced-but-centrally-stored design); the heartbeat's
+			// `environment` field — sourced from the host pod's downward
+			// API namespace — is recorded verbatim on Host.spec.environment.
+			verifyHostEnv := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "hosts.runtime.wasmcloud.dev",
+					"-n", namespace,
+					"-l", fmt.Sprintf("hostgroup=%s", tenantHostGroup),
+					"-o", "jsonpath={.items[*].environment}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(ContainSubstring(tenantNamespace),
+					"expected at least one Host with environment=%s; got %q",
+					tenantNamespace, output)
+			}
+			Eventually(verifyHostEnv).WithTimeout(2 * time.Minute).Should(Succeed())
+		})
+
+		It("schedules a WorkloadDeployment with matching environment onto the tenant host", func() {
+			manifest := fmt.Sprintf(`apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  replicas: 1
+  template:
+    spec:
+      environment: %s
+      hostSelector:
+        hostgroup: %s
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            host: hello.localhost.direct
+      components:
+        - name: hello-world
+          image: ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0
+`, tenantWorkloadName, tenantNamespace, tenantNamespace, tenantHostGroup)
+
+			f, err := os.CreateTemp("", "tenant-workload-*.yaml")
+			Expect(err).NotTo(HaveOccurred())
+			workloadFile = f.Name()
+			_, err = f.WriteString(manifest)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(f.Close()).To(Succeed())
+
+			By("applying the tenant WorkloadDeployment")
+			cmd := exec.Command("kubectl", "apply", "-f", workloadFile)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for the WorkloadDeployment to become Ready")
+			verifyReady := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "workloaddeployment",
+					tenantWorkloadName, "-n", tenantNamespace,
+					"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("True"))
+			}
+			Eventually(verifyReady).WithTimeout(3 * time.Minute).Should(Succeed())
+
+			By("verifying the resulting Workload Status.Environment is the tenant namespace")
+			verifyWorkloadEnv := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
+					"-n", tenantNamespace,
+					"-o", "jsonpath={.items[*].status.environment}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(ContainSubstring(tenantNamespace),
+					"expected workload Status.Environment=%s; got %q",
+					tenantNamespace, output)
+			}
+			Eventually(verifyWorkloadEnv).WithTimeout(2 * time.Minute).Should(Succeed())
+		})
+	})
 })
 
 // verifyWorkloadDeploy applies a WorkloadDeployment manifest and verifies the

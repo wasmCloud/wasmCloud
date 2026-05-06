@@ -116,42 +116,7 @@ var _ = BeforeSuite(func() {
 	}
 
 	By("installing the runtime-operator via Helm")
-	// Build the full list of `--set key=value` values in one place; the
-	// command line is assembled below.
-	sets := []string{
-		"operator.image.registry=",
-		fmt.Sprintf("operator.image.repository=%s", operatorImageRepo),
-		fmt.Sprintf("operator.image.tag=%s", operatorImageTag),
-		"operator.image.pull_policy=Never",
-		"gateway.image.tag=canary",
-		"gateway.service.type=NodePort",
-		"gateway.service.nodePort=30950",
-		"runtime.hostGroups[0].name=default",
-		"runtime.hostGroups[0].replicas=1",
-		"runtime.hostGroups[0].service.type=ClusterIP",
-		"runtime.hostGroups[0].http.enabled=true",
-		"runtime.hostGroups[0].http.port=80",
-		"runtime.hostGroups[0].webgpu.enabled=false",
-		"runtime.hostGroups[0].resources.requests.memory=64Mi",
-		"runtime.hostGroups[0].resources.requests.cpu=250m",
-		"runtime.hostGroups[0].resources.limits.memory=512Mi",
-		"runtime.hostGroups[0].resources.limits.cpu=500m",
-		// Driven by RUNTIME_LOG_LEVEL env var; empty value leaves the
-		// chart's `{{- if .logLevel }}` guard off, so wash uses INFO.
-		fmt.Sprintf("runtime.hostGroups[0].logLevel=%s", runtimeLogLevel),
-	}
-	if buildRuntimeImage {
-		// Point at the locally-built image and disable pull so kubelet
-		// uses the kind-loaded copy.
-		sets = append(sets,
-			"runtime.image.registry=",
-			fmt.Sprintf("runtime.image.repository=%s", runtimeImageRepo),
-			fmt.Sprintf("runtime.image.tag=%s", operatorImageTag),
-			"runtime.image.pull_policy=Never",
-		)
-	} else {
-		sets = append(sets, fmt.Sprintf("runtime.image.tag=%s", runtimeImageTag))
-	}
+	sets := buildBaseHelmSets()
 
 	helmArgs := make([]string, 0, 5+2*len(sets)+4)
 	helmArgs = append(helmArgs, "upgrade", "--install", "--create-namespace", "-n", namespace)
@@ -186,6 +151,58 @@ var _ = BeforeSuite(func() {
 		}
 	}
 })
+
+// buildBaseHelmSets returns the `--set` values used to install the
+// runtime-operator chart for the e2e suite. The list intentionally
+// targets `runtime.hostGroups[0]` (the default hostGroup that the
+// existing tests exercise) and is shared by both the initial install
+// in BeforeSuite and the helm upgrade scenarios that append additional
+// hostGroups (e.g. a tenant-namespace group at `runtime.hostGroups[1]`).
+func buildBaseHelmSets() []string {
+	sets := []string{
+		"operator.image.registry=",
+		fmt.Sprintf("operator.image.repository=%s", operatorImageRepo),
+		fmt.Sprintf("operator.image.tag=%s", operatorImageTag),
+		"operator.image.pull_policy=Never",
+		"gateway.image.tag=canary",
+		"gateway.service.type=NodePort",
+		"gateway.service.nodePort=30950",
+		"runtime.hostGroups[0].name=default",
+		"runtime.hostGroups[0].replicas=1",
+		"runtime.hostGroups[0].service.type=ClusterIP",
+		"runtime.hostGroups[0].http.enabled=true",
+		"runtime.hostGroups[0].http.port=80",
+		"runtime.hostGroups[0].webgpu.enabled=false",
+		"runtime.hostGroups[0].resources.requests.memory=64Mi",
+		"runtime.hostGroups[0].resources.requests.cpu=250m",
+		"runtime.hostGroups[0].resources.limits.memory=512Mi",
+		"runtime.hostGroups[0].resources.limits.cpu=500m",
+		// Driven by RUNTIME_LOG_LEVEL env var; empty value leaves the
+		// chart's `{{- if .logLevel }}` guard off, so wash uses INFO.
+		fmt.Sprintf("runtime.hostGroups[0].logLevel=%s", runtimeLogLevel),
+	}
+	if buildRuntimeImage {
+		// Point at the locally-built image and disable pull so kubelet
+		// uses the kind-loaded copy.
+		sets = append(sets,
+			"runtime.image.registry=",
+			fmt.Sprintf("runtime.image.repository=%s", runtimeImageRepo),
+			fmt.Sprintf("runtime.image.tag=%s", operatorImageTag),
+			"runtime.image.pull_policy=Never",
+		)
+	} else {
+		// Use IfNotPresent so kubelet prefers a locally-loaded image
+		// (e.g. one built and `kind load`ed by the developer) over pulling
+		// the canary tag, which is published on every merge to main but
+		// may not be available — or may lag the local tree — in offline
+		// or pre-merge runs.
+		sets = append(sets,
+			fmt.Sprintf("runtime.image.tag=%s", runtimeImageTag),
+			"runtime.image.pull_policy=IfNotPresent",
+		)
+	}
+	return sets
+}
 
 var _ = AfterSuite(func() {
 	By("uninstalling the Helm release")
