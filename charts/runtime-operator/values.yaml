@@ -16,13 +16,13 @@ global:
     generate: true
     # -- Name of the Kubernetes Secrets holding the Private CA certificate ( NATS )
     caSecretName: wasmcloud-ca
-    # -- Name of the Kubernetes Secrets holding the TLS server certificates for NATS server (if enabled in this chart)
+    # -- Name of the Kubernetes Secret holding the TLS server certificate for the NATS server (if enabled in this chart)
     natsCertSecretName: wasmcloud-nats-tls
-    # -- Name of the Kubernetes Secrets holding the TLS client certificate for the operator
+    # -- Name of the Kubernetes Secret holding the TLS client certificate the operator presents to NATS
     operatorCertSecretName: wasmcloud-operator-tls
-    # -- Name of the Kubernetes Secrets holding the TLS server certificates for control plane
+    # -- Name of the Kubernetes Secret holding the TLS client certificate host pods present to the scheduler NATS connection
     runtimeCertSecretName: wasmcloud-runtime-tls
-    # -- Name of the Kubernetes Secrets holding the TLS server certificates for user data plane
+    # -- Name of the Kubernetes Secret holding the TLS client certificate host pods present to the data NATS connection
     dataCertSecretName: wasmcloud-data-tls
 
 # -- Values for installing a basic NATS Server with Ephemeral Storage. If you prefer to install NATS separately, set `enabled` to `false`.
@@ -73,17 +73,25 @@ operator:
   watchNamespaces: []
   # -- List of namespaces where host Pods run. The operator's Pod
   # informer cache and per-namespace Pod RBAC cover this set so
-  # HostPodReconciler can manage finalizers on host Pods. 
+  # HostPodReconciler can manage finalizers on host Pods.
   # Leave empty when host Pods only run in the operator's own namespace (the
-  #chart's default deployment topology).
+  # chart's default deployment topology).
   hostNamespaces: []
   # -- Allow WorkloadDeployments to schedule onto Hosts whose Environment
   # differs from the WorkloadDeployment's own namespace, via
-  # spec.template.spec.environment. With the default (true), behavior
-  # matches today's Cluster-scope scheduling: when no `environment` is
-  # set, the operator imposes no Environment filter. When false,
-  # scheduling is locked to the workload's own namespace and any
-  # cross-tenant `environment` is rejected with a Warning Event.
+  # spec.template.spec.environment. The default (true) preserves existing
+  # behavior where workloads with no `environment` set may schedule onto any
+  # matching host regardless of which tenant namespace the host runs in.
+  #
+  # SECURITY: This default is permissive across tenants. In a multi-tenant
+  # cluster where each tenant has its own namespace and host pods, a
+  # tenant in `namespace-a` can target hosts in `namespace-b` simply by
+  # setting `spec.template.spec.environment: namespace-b`. If your install
+  # relies on namespace boundaries for tenant isolation, set this to
+  # `false`: scheduling will then be locked to the workload's own
+  # namespace, and any cross-tenant `environment` is rejected with a
+  # `CrossEnvironmentSchedulingDenied` Warning Event and a
+  # `HostSelection=False` condition on the Workload.
   allowSharedHosts: true
 
 gateway:

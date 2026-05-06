@@ -4,6 +4,7 @@ package runtime_operator
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -60,6 +61,13 @@ func NewEmbeddedOperator(
 	mgr manager.Manager,
 	cfg EmbeddedOperatorConfig,
 ) (*EmbeddedOperator, error) {
+	// Validate before any side effects (NATS connect, controller setup).
+	// Every Host CRD is created in cfg.Namespace, and the operator's
+	// namespaced Role for Host CRUD binds there.
+	if cfg.Namespace == "" {
+		return nil, errors.New("EmbeddedOperatorConfig.Namespace is required")
+	}
+
 	nc, err := wasmbus.NatsConnect(cfg.NatsURL, cfg.NatsOptions...)
 	if err != nil {
 		return nil, err

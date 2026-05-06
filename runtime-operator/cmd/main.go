@@ -18,6 +18,7 @@ package main
 
 import (
 	"crypto/tls"
+	"errors"
 	"flag"
 	"os"
 	"strings"
@@ -156,13 +157,21 @@ func main() {
 		zapOpts...,
 	))
 
+	// OPERATOR_NAMESPACE is required: every Host CRD is created here, and
+	// the namespaced Role for Host CRUD binds to this namespace.
+	operatorNamespace := os.Getenv("OPERATOR_NAMESPACE")
+	if operatorNamespace == "" {
+		setupLog.Error(errors.New("OPERATOR_NAMESPACE is unset"), "missing required configuration")
+		os.Exit(1)
+	}
+
 	operatorCfg := runtime_operator.EmbeddedOperatorConfig{
 		DisableArtifactController: disableArtifactController,
 		NatsURL:                   natsUrl,
 		HeartbeatTTL:              60 * time.Second,
 		HostCPUThreshold:          cpuBackpressureThreshold,
 		HostMemoryThreshold:       memoryBackpressureThreshold,
-		Namespace:                 os.Getenv("OPERATOR_NAMESPACE"),
+		Namespace:                 operatorNamespace,
 		HostNamespaces:            splitCSVList(hostNamespaces),
 		AllowSharedHosts:          allowSharedHosts,
 	}
@@ -235,14 +244,8 @@ func main() {
 	// hostStatusUpdater unconditionally creates them there, regardless of
 	// where the underlying host pod runs. The Host informer cache scopes
 	// to that single namespace.
-	hostCacheNamespaces := map[string]cache.Config{}
-	if operatorCfg.Namespace != "" {
-		hostCacheNamespaces[operatorCfg.Namespace] = cache.Config{}
-	} else {
-		// Defensive fallback: if OPERATOR_NAMESPACE is unset (typical only
-		// for `make run`-style local dev), watch all namespaces so the
-		// reconciler still functions.
-		hostCacheNamespaces[cache.AllNamespaces] = cache.Config{}
+	hostCacheNamespaces := map[string]cache.Config{
+		operatorCfg.Namespace: {},
 	}
 
 	// The Pod informer cache covers the operator's own namespace plus
@@ -250,9 +253,8 @@ func main() {
 	// host Pods regardless of which namespace the platform team deploys
 	// them into. The HostPodLabel predicate keeps the working set
 	// bounded to actual host Pods.
-	podCacheNamespaces := map[string]cache.Config{}
-	if operatorCfg.Namespace != "" {
-		podCacheNamespaces[operatorCfg.Namespace] = cache.Config{}
+	podCacheNamespaces := map[string]cache.Config{
+		operatorCfg.Namespace: {},
 	}
 	for _, ns := range operatorCfg.HostNamespaces {
 		podCacheNamespaces[ns] = cache.Config{}
