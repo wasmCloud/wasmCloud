@@ -24,6 +24,10 @@ const (
 	hostHeartbeatTimeout  = 5 * time.Second
 	hostReconcileInterval = 1 * time.Minute
 	hostFinalizerName     = "runtime.wasmcloud.dev/host-finalizer"
+	// workloadByHostIDIndex indexes Workloads by their Status.HostID so
+	// the host finalizer can fan out to assigned workloads without
+	// scanning every Workload in the cluster.
+	workloadByHostIDIndex = "status.hostId"
 )
 
 // HostReconciler reconciles a Host object
@@ -36,7 +40,7 @@ type HostReconciler struct {
 	MemoryThreshold    float64
 	// OperatorNamespace is the namespace the operator itself runs in. Every
 	// Host object is created here regardless of where the underlying host
-	// pod runs; tenant attribution lives on the Host's Location field.
+	// pod runs; tenant attribution lives on the Host's Environment field.
 	OperatorNamespace string
 
 	reconciler condition.AnyConditionedReconciler
@@ -90,16 +94,19 @@ func (r *HostReconciler) reconcileReady(_ context.Context, host *runtimev1alpha1
 // waiting for the unhealthy-workload grace period to expire.
 // +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=workloads,verbs=get;list;delete
 func (r *HostReconciler) finalize(ctx context.Context, host *runtimev1alpha1.Host) error {
+	// Indexed list keyed on Status.HostID avoids scanning every Workload
+	// in the cluster when a host is finalized. The list is cluster-wide
+	// because Workloads live in tenant namespaces while Hosts live in the
+	// operator's namespace.
 	workloadList := &runtimev1alpha1.WorkloadList{}
-	if err := r.List(ctx, workloadList); err != nil {
+	if err := r.List(ctx, workloadList,
+		client.MatchingFields{workloadByHostIDIndex: host.HostID},
+	); err != nil {
 		return err
 	}
 
 	for i := range workloadList.Items {
 		workload := &workloadList.Items[i]
-		if workload.Status.HostID != host.HostID {
-			continue
-		}
 		if workload.DeletionTimestamp != nil {
 			continue
 		}
@@ -149,6 +156,24 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	// Index Workloads by Status.HostID so finalize can fan out to all
+	// workloads assigned to a host via a direct field-indexed list rather
+	// than scanning every Workload in the cluster.
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&runtimev1alpha1.Workload{},
+		workloadByHostIDIndex,
+		func(obj client.Object) []string {
+			workload, ok := obj.(*runtimev1alpha1.Workload)
+			if !ok || workload.Status.HostID == "" {
+				return nil
+			}
+			return []string{workload.Status.HostID}
+		},
+	); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.Host{}).
 		Named("workload-host").
@@ -168,10 +193,12 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 		return err
 	}
 
+	log := ctrl.LoggerFrom(ctx).WithName("host-status-updater")
+
 	subscription.Handle(func(msg *wasmbus.Message) {
 		var req runtimev2.HostHeartbeat
 		if err := protojson.Unmarshal(msg.Data, &req); err != nil {
-			fmt.Println("Failed to decode heartbeat message:", err)
+			log.Error(err, "failed to decode heartbeat message")
 			return
 		}
 
@@ -199,7 +226,7 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 			return nil
 		})
 		if err != nil {
-			fmt.Println("Failed to create or update Host resource:", err)
+			log.Error(err, "failed to create or update Host resource", "host", req.FriendlyName, "hostID", req.Id)
 			return
 		}
 
@@ -211,7 +238,7 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 		base := host.DeepCopy()
 		host.Status.LastSeen = metav1.Now()
 		if err := h.client.Status().Patch(ctx, host, client.MergeFrom(base)); err != nil {
-			fmt.Println("Failed to update Host status:", err)
+			log.Error(err, "failed to update Host status", "host", req.FriendlyName, "hostID", req.Id)
 		}
 	})
 
