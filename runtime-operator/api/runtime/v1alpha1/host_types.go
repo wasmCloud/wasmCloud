@@ -28,9 +28,10 @@ type HostStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Cluster
+// +kubebuilder:resource:scope=Namespaced
 // +kubebuilder:printcolumn:name="HOSTID",type=string,JSONPath=`.hostId`
 // +kubebuilder:printcolumn:name="HOSTGROUP",type=string,JSONPath=`.metadata.labels.hostgroup`
+// +kubebuilder:printcolumn:name="ENVIRONMENT",type=string,JSONPath=`.environment`
 // +kubebuilder:printcolumn:name="READY",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 
@@ -45,6 +46,11 @@ type Host struct {
 	Hostname string `json:"hostname"`
 	// +kubebuilder:validation:Optional
 	HTTPPort uint32 `json:"httpPort"`
+	// Environment records where the host is running. For Kubernetes host
+	// pods this is the pod's namespace; for out-of-cluster hosts it can be
+	// any operator-defined identifier (e.g. a region or data center).
+	// +kubebuilder:validation:Optional
+	Environment string `json:"environment,omitempty"`
 
 	Status HostStatus `json:"status,omitempty"`
 }

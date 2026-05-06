@@ -592,6 +592,19 @@ store::open(name) for keyvalue, create-container(name) for blobstore). </p></td>
                   <td><p>HTTP port the host is listening on </p></td>
                 </tr>
               
+                <tr>
+                  <td>environment</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p>Environment the host advertises itself as running in. For Kubernetes
+host pods this is the pod&#39;s namespace (sourced from the downward API).
+For out-of-cluster hosts registered over NATS it is whatever the
+operator passes via `--environment` to `wash host`. The
+runtime-operator records this verbatim on the resulting Host CRD&#39;s
+`spec.environment` field, and the scheduler uses it to enforce
+per-tenant isolation. </p></td>
+                </tr>
+              
             </tbody>
           </table>
 

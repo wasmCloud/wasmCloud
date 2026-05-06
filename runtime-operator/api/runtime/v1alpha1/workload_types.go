@@ -189,6 +189,17 @@ type WorkloadSpec struct {
 	// +kubebuilder:validation:Optional
 	HostID string `json:"hostId,omitempty"`
 
+	// Environment, if set, scopes scheduling to Hosts whose Environment
+	// matches this value, regardless of the Workload's own namespace.
+	// The value is matched against Host.Environment — typically a
+	// Kubernetes namespace for in-cluster host pods, or any
+	// operator-defined identifier for out-of-cluster hosts (e.g. a
+	// region or data center). Only honored when the operator is started
+	// with allowSharedHosts=true, or when Environment equals the
+	// Workload's namespace.
+	// +kubebuilder:validation:Optional
+	Environment string `json:"environment,omitempty"`
+
 	// +kubebuilder:validation:Optional
 	Components []WorkloadComponent `json:"components,omitempty"`
 	// +kubebuilder:validation:Optional
@@ -228,6 +239,12 @@ type WorkloadStatus struct {
 	condition.ConditionedStatus `json:",inline"`
 	// +kubebuilder:validation:Optional
 	HostID string `json:"hostId,omitempty"`
+	// Environment records the Environment of the Host this Workload was
+	// scheduled onto (Host.Environment). Populated by the scheduler at
+	// host-selection time; reflects where the workload is actually
+	// running, regardless of whether Spec.Environment was explicitly set.
+	// +kubebuilder:validation:Optional
+	Environment string `json:"environment,omitempty"`
 	// +kubebuilder:validation:Optional
 	WorkloadID string `json:"workloadId,omitempty"`
 }
@@ -236,6 +253,7 @@ type WorkloadStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=ww
 // +kubebuilder:printcolumn:name="HOSTID",type=string,JSONPath=".status.hostId"
+// +kubebuilder:printcolumn:name="ENVIRONMENT",type=string,JSONPath=".status.environment"
 // +kubebuilder:printcolumn:name="READY",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 

@@ -61,6 +61,15 @@ pub struct HostCommand {
     #[arg(long = "host-name")]
     pub host_name: Option<String>,
 
+    /// Environment the host advertises in its heartbeat. For Kubernetes
+    /// host pods this is typically the pod's namespace (passed by the
+    /// runtime-operator chart via the downward API). The runtime-operator
+    /// records this verbatim on the resulting Host CRD's
+    /// `spec.environment` field; scheduling uses it to enforce per-tenant
+    /// isolation.
+    #[arg(long = "environment", env = "WASMCLOUD_HOST_ENVIRONMENT")]
+    pub environment: Option<String>,
+
     /// The address on which the HTTP server will listen
     #[arg(long = "http-addr")]
     pub http_addr: Option<SocketAddr>,
@@ -185,6 +194,10 @@ impl CliCommand for HostCommand {
 
         if let Some(host_name) = &self.host_name {
             cluster_host_builder = cluster_host_builder.with_host_name(host_name);
+        }
+
+        if let Some(environment) = &self.environment {
+            cluster_host_builder = cluster_host_builder.with_environment(environment);
         }
 
         if let Some(addr) = self.http_addr {

@@ -7,11 +7,13 @@ metadata:
     {{- include "runtime-operator.labels" . | nindent 4 }}
   annotations: {}
 rules:
+  # Host CRD rules are NOT in this ClusterRole. Every Host object lives in
+  # the operator's own namespace, so Host CRUD is granted via the namespaced
+  # Role in role.yaml.
   - apiGroups:
     - runtime.wasmcloud.dev
     resources:
     - artifacts
-    - hosts
     - workloads
     - workloadreplicasets
     - workloaddeployments
@@ -27,7 +29,6 @@ rules:
     - runtime.wasmcloud.dev
     resources:
     - artifacts/status
-    - hosts/status
     - workloads/status
     - workloadreplicasets/status
     - workloaddeployments/status
@@ -40,7 +41,6 @@ rules:
     resources:
     - configmaps
     - secrets
-    - namespaces
     verbs:
     - get
     - list

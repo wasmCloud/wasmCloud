@@ -20,6 +20,9 @@ spec:
     - jsonPath: .status.hostId
       name: HOSTID
       type: string
+    - jsonPath: .status.environment
+      name: ENVIRONMENT
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: READY
       type: string
@@ -185,6 +188,17 @@ spec:
                   - name
                   type: object
                 type: array
+              environment:
+                description: |-
+                  Environment, if set, scopes scheduling to Hosts whose Environment
+                  matches this value, regardless of the Workload's own namespace.
+                  The value is matched against Host.Environment — typically a
+                  Kubernetes namespace for in-cluster host pods, or any
+                  operator-defined identifier for out-of-cluster hosts (e.g. a
+                  region or data center). Only honored when the operator is started
+                  with allowSharedHosts=true, or when Environment equals the
+                  Workload's namespace.
+                type: string
               hostId:
                 type: string
               hostInterfaces:
@@ -489,6 +503,13 @@ spec:
                   - type
                   type: object
                 type: array
+              environment:
+                description: |-
+                  Environment records the Environment of the Host this Workload was
+                  scheduled onto (Host.Environment). Populated by the scheduler at
+                  host-selection time; reflects where the workload is actually
+                  running, regardless of whether Spec.Environment was explicitly set.
+                type: string
               hostId:
                 type: string
               workloadId:

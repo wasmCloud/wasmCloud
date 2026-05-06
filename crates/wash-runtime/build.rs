@@ -252,6 +252,13 @@ fn compile_protos(workspace_dir: &Path, out_dir: &Path) {
         .map(|f| f.expect("failed to read proto file").path())
         .collect();
 
+    // Tell cargo to re-run this build script whenever any .proto file
+    // under proto/wasmcloud/runtime/v2 changes.
+    println!("cargo:rerun-if-changed={}", proto_dir.display());
+    for proto in &proto_files {
+        println!("cargo:rerun-if-changed={}", proto.display());
+    }
+
     let descriptor_file = out_dir.join("runtime.bin");
 
     tonic_prost_build::configure()

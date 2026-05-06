@@ -12,7 +12,7 @@ spec:
     listKind: HostList
     plural: hosts
     singular: host
-  scope: Cluster
+  scope: Namespaced
   versions:
   - additionalPrinterColumns:
     - jsonPath: .hostId
@@ -20,6 +20,9 @@ spec:
       type: string
     - jsonPath: .metadata.labels.hostgroup
       name: HOSTGROUP
+      type: string
+    - jsonPath: .environment
+      name: ENVIRONMENT
       type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: READY
@@ -38,6 +41,12 @@ spec:
               Servers should convert recognized schemas to the latest internal value, and
               may reject unrecognized values.
               More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          environment:
+            description: |-
+              Environment records where the host is running. For Kubernetes host
+              pods this is the pod's namespace; for out-of-cluster hosts it can be
+              any operator-defined identifier (e.g. a region or data center).
             type: string
           hostId:
             type: string

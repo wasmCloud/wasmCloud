@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -25,14 +27,30 @@ const (
 	workloadStopTimeout           = 30 * time.Second
 	workloadFinalizerName         = "runtime.wasmcloud.dev/workload-finalizer"
 	workloadSchedulableHostsIndex = "spec.isSchedulable"
+	// hostEnvironmentIndex indexes Hosts by their Environment field for
+	// O(1) lookup when scheduling enforces tenant isolation. The
+	// Environment value is whatever the host self-reported in its
+	// heartbeat (typically a namespace); the Host object itself always
+	// lives in the operator's namespace.
+	hostEnvironmentIndex = "spec.environment"
 )
 
 // WorkloadReconciler reconciles a Workload object
 type WorkloadReconciler struct {
 	client.Client
-	Scheme     *runtime.Scheme
-	Bus        wasmbus.Bus
-	reconciler condition.AnyConditionedReconciler
+	Scheme   *runtime.Scheme
+	Bus      wasmbus.Bus
+	Recorder events.EventRecorder
+	// OperatorNamespace is the namespace every Host CRD lives in. The
+	// scheduler always lists Hosts in this namespace; tenant boundaries
+	// are enforced via the Host.Environment field, not via Host.Namespace.
+	OperatorNamespace string
+	// AllowSharedHosts controls whether a Workload may schedule onto a Host
+	// whose Environment differs from the Workload's own namespace (via
+	// Spec.Environment). When false, cross-tenant scheduling is rejected
+	// and a Warning Event is recorded on the Workload.
+	AllowSharedHosts bool
+	reconciler       condition.AnyConditionedReconciler
 }
 
 func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -82,6 +100,13 @@ func (r *WorkloadReconciler) reconcileHostSelection(ctx context.Context, workloa
 	condition.ForceStatusUpdate(ctx)
 	if workload.Spec.HostID != "" {
 		workload.Status.HostID = workload.Spec.HostID
+		// Best-effort lookup of the pinned host's Environment so the
+		// ENVIRONMENT status column reflects the host's tenant. A miss
+		// here just leaves the field empty; placement will surface the
+		// real failure if the HostID is invalid.
+		if host, err := r.lookupHostByID(ctx, workload.Spec.HostID); err == nil && host != nil {
+			workload.Status.Environment = host.Environment
+		}
 		return condition.ErrSkipReconciliation()
 	}
 
@@ -90,32 +115,95 @@ func (r *WorkloadReconciler) reconcileHostSelection(ctx context.Context, workloa
 		return err
 	}
 
-	workload.Status.HostID = selectedHost
+	workload.Status.HostID = selectedHost.HostID
+	workload.Status.Environment = selectedHost.Environment
 	return condition.ErrSkipReconciliation()
 }
 
-func (r *WorkloadReconciler) findFreeHost(ctx context.Context, workload *runtimev1alpha1.Workload) (string, error) {
+func (r *WorkloadReconciler) findFreeHost(ctx context.Context, workload *runtimev1alpha1.Workload) (*runtimev1alpha1.Host, error) {
 	hostList := runtimev1alpha1.HostList{}
 
-	if err := r.List(ctx, &hostList,
+	// Every Host object lives in the operator's namespace. Tenant
+	// isolation is enforced by an indexed match on Host.Location, not by
+	// Host.Namespace.
+	listOpts := []client.ListOption{
+		client.InNamespace(r.OperatorNamespace),
 		client.MatchingLabels(workload.Spec.HostSelector),
 		client.MatchingFields{
 			workloadSchedulableHostsIndex: string(condition.ConditionTrue),
-		}); err != nil {
-		return "", err
+		},
+	}
+
+	// Resolve which Environment value the scheduler accepts per the
+	// AllowSharedHosts × Spec.Environment matrix in namespace-host.md.
+	// Default mode (AllowSharedHosts=true, Environment unset) imposes no
+	// Environment filter — every matching host is fair game, exactly
+	// preserving the legacy Cluster-scope scheduling behavior.
+	var environmentFilter string
+	switch {
+	case workload.Spec.Environment != "" && workload.Spec.Environment != workload.Namespace:
+		// Explicit cross-tenant target.
+		if !r.AllowSharedHosts {
+			if r.Recorder != nil {
+				r.Recorder.Eventf(workload, nil, corev1.EventTypeWarning,
+					"CrossEnvironmentSchedulingDenied", "Reject",
+					"Environment %q is outside %q and operator has allowSharedHosts=false",
+					workload.Spec.Environment, workload.Namespace,
+				)
+			}
+			return nil, fmt.Errorf(
+				"workload targets Environment %q but operator has allowSharedHosts=false",
+				workload.Spec.Environment,
+			)
+		}
+		environmentFilter = workload.Spec.Environment
+	case workload.Spec.Environment != "":
+		// Environment explicitly set to the workload's own namespace.
+		environmentFilter = workload.Namespace
+	case !r.AllowSharedHosts:
+		// No Environment, sharing disabled — lock to the workload's namespace.
+		environmentFilter = workload.Namespace
+	}
+
+	if environmentFilter != "" {
+		listOpts = append(listOpts, client.MatchingFields{
+			hostEnvironmentIndex: environmentFilter,
+		})
+	}
+
+	if err := r.List(ctx, &hostList, listOpts...); err != nil {
+		return nil, err
 	}
 
 	// Shuffle the host list
 	rand.Shuffle(len(hostList.Items), func(i, j int) {
 		hostList.Items[i], hostList.Items[j] = hostList.Items[j], hostList.Items[i]
 	})
-	for _, host := range hostList.Items {
+	for i := range hostList.Items {
+		host := &hostList.Items[i]
 		if host.Status.IsAvailable() {
-			return host.HostID, nil
+			return host, nil
 		}
 	}
 
-	return "", fmt.Errorf("no suitable host found")
+	return nil, fmt.Errorf("no suitable host found")
+}
+
+// lookupHostByID finds a Host CRD by HostID. Hosts always live in the
+// operator's namespace, so the lookup is namespace-scoped and indexed.
+// Returns (nil, nil) when no host matches; an error only on List failure.
+func (r *WorkloadReconciler) lookupHostByID(ctx context.Context, hostID string) (*runtimev1alpha1.Host, error) {
+	var hosts runtimev1alpha1.HostList
+	if err := r.List(ctx, &hosts,
+		client.InNamespace(r.OperatorNamespace),
+		client.MatchingFields{hostIDIndex: hostID},
+	); err != nil {
+		return nil, err
+	}
+	if len(hosts.Items) == 0 {
+		return nil, nil
+	}
+	return &hosts.Items[0], nil
 }
 
 // materializeLocalResources converts a spec-level LocalResources into the
@@ -392,6 +480,24 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return []string{}
 	})
 	if err != nil {
+		return err
+	}
+
+	// Index Hosts by their Environment field so findFreeHost can do an
+	// O(matching) indexed list when AllowSharedHosts=false or
+	// Spec.Environment pins scheduling to a specific tenant.
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&runtimev1alpha1.Host{},
+		hostEnvironmentIndex,
+		func(rawObj client.Object) []string {
+			host, ok := rawObj.(*runtimev1alpha1.Host)
+			if !ok || host.Environment == "" {
+				return nil
+			}
+			return []string{host.Environment}
+		},
+	); err != nil {
 		return err
 	}
 
