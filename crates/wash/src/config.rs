@@ -284,6 +284,14 @@ pub struct DevConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<DevVolume>,
 
+    /// Environment variables exported into the `wash dev` process before the
+    /// host is built. Surfaces values to plugins and runtime crates that read
+    /// from `std::env` (e.g. `RUST_LOG`, `OTEL_*`, libpq's `PG*` family).
+    /// Distinct from `workload.environment`, which is delivered to the
+    /// component via `wasi:cli/env`.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub environment: HashMap<String, String>,
+
     /// Host interfaces configuration
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_interfaces: Vec<WitInterface>,
@@ -544,6 +552,48 @@ pub async fn generate_example_config(path: &Path, force: bool) -> Result<()> {
     generate_config(&example_config(), path, force).await
 }
 
+/// Export `dev.environment` from the loaded wash config into the current
+/// process via `std::env::set_var`. Must be called from `main()` *before*
+/// plugins, so that values like `OTEL_*` and `RUST_LOG`
+/// configured under `dev.environment` are visible to the tracing subscriber
+/// (which reads `OTEL_*` and `RUST_LOG` at init time and never again).
+///
+/// Best-effort: if the global XDG config dir can't be determined or the
+/// project config can't be loaded, returns silently. The tracing
+/// subscriber isn't initialized at this point so we have nowhere to log.
+///
+/// # Safety
+///
+/// `std::env::set_var` is `unsafe` in the 2024 edition because it races
+/// with concurrent `getenv` from other threads. Callers MUST invoke this
+/// once, very early in `main()`, before any worker thread has begun
+/// reading env vars.
+#[allow(unsafe_code)]
+pub fn apply_dev_environment(user_config_override: Option<&Path>, project_dir: &Path) {
+    let global_config_path = match user_config_override {
+        Some(path) => path.to_path_buf(),
+        None => {
+            let Ok(strategy) = etcetera::choose_app_strategy(etcetera::AppStrategyArgs {
+                top_level_domain: "com.wasmcloud".to_string(),
+                author: "wasmCloud Team".to_string(),
+                app_name: "wash".to_string(),
+            }) else {
+                return;
+            };
+            locate_user_config(&etcetera::AppStrategy::config_dir(&strategy))
+        }
+    };
+
+    let Ok(config) = load_config::<Config>(&global_config_path, Some(project_dir), None) else {
+        return;
+    };
+
+    for (key, value) in &config.dev().environment {
+        // SAFETY: see function-level docs.
+        unsafe { std::env::set_var(key, value) };
+    }
+}
+
 async fn generate_config(config: &Config, path: &Path, force: bool) -> Result<()> {
     if path.exists() && !force {
         bail!(
@@ -631,6 +681,9 @@ pub fn example_config() -> Config {
                 ),
             ]),
         }),
+        workload: None,
+        configs: HashMap::new(),
+        secrets: HashMap::new(),
     }
 }
 
@@ -679,6 +732,32 @@ mod tests {
     }
 
     #[test]
+    fn dev_environment_deserializes_from_yaml() {
+        // Locks in the YAML contract surfaced to users:
+        //
+        //   dev:
+        //     environment:
+        //       KEY: value
+        //
+        // A regression here (e.g. someone adding `rename_all = "camelCase"`
+        // to `DevConfig`, or moving the field) would silently drop user-
+        // configured env vars at `wash dev` startup.
+        let yaml = r#"
+dev:
+  environment:
+    RUST_LOG: debug
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4317
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let env = config.dev().environment;
+        assert_eq!(env.get("RUST_LOG").map(String::as_str), Some("debug"));
+        assert_eq!(
+            env.get("OTEL_EXPORTER_OTLP_ENDPOINT").map(String::as_str),
+            Some("http://localhost:4317")
+        );
+    }
+
+    #[test]
     fn build_whitespace_command_is_err() {
         let cfg = BuildConfig {
             command: Some("   ".to_string()),
@@ -689,6 +768,44 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("build.command")
+        );
+    }
+
+    #[test]
+    fn workload_yaml_uses_camel_case_for_renamed_fields() {
+        // `WorkloadConfig`, `EnvironmentLayer`, and `ConfigSource` carry
+        // `rename_all = "camelCase"`. Users write `configFrom` / `secretFrom`
+        // / `allowedHosts` / `fromEnv` in YAML; if a refactor drops one of
+        // those `rename_all` attributes, the camelCase keys get silently
+        // dropped (parses fine, fields stay default). Pin the contract.
+        let yaml = r#"
+workload:
+  environment:
+    config:
+      INLINE_KEY: inline_value
+    configFrom:
+      - app
+    secretFrom:
+      - creds
+  config:
+    flag: "on"
+  allowedHosts:
+    - https://api.example.com
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let workload = config.workload.expect("workload should parse");
+
+        let env = workload
+            .environment
+            .expect("environment layer should parse");
+        assert_eq!(env.config.get("INLINE_KEY").unwrap(), "inline_value");
+        assert_eq!(env.config_from, vec!["app".to_string()]);
+        assert_eq!(env.secret_from, vec!["creds".to_string()]);
+
+        assert_eq!(workload.config.get("flag").unwrap(), "on");
+        assert_eq!(
+            workload.allowed_hosts,
+            vec!["https://api.example.com".to_string()]
         );
     }
 
@@ -874,5 +991,48 @@ mod tests {
             err.contains("wasi_keyvalue_redis_url"),
             "missing redis error"
         );
+    }
+
+    #[test]
+    fn configs_and_secrets_named_map_with_camel_case_source_fields() {
+        // The top-level `configs:` and `secrets:` blocks are name -> ConfigSource
+        // maps, and ConfigSource's `from_env` field is `fromEnv` in YAML.
+        // `secrets:` shares the same struct as `configs:` — pin both so a
+        // future split into separate types doesn't silently lose schema parity.
+        let yaml = r#"
+configs:
+  app:
+    inline:
+      APP_FOO: app_foo_value
+    file: ./app.env
+secrets:
+  creds:
+    fromEnv:
+      - DB_PASSWORD
+    inline:
+      DB_USER: alice
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+
+        let app = config.configs.get("app").expect("configs.app should parse");
+        assert_eq!(app.inline.get("APP_FOO").unwrap(), "app_foo_value");
+        assert_eq!(app.file.as_deref(), Some(Path::new("./app.env")));
+
+        let creds = config
+            .secrets
+            .get("creds")
+            .expect("secrets.creds should parse");
+        assert_eq!(creds.from_env, vec!["DB_PASSWORD".to_string()]);
+        assert_eq!(creds.inline.get("DB_USER").unwrap(), "alice");
+    }
+
+    #[test]
+    fn dev_environment_defaults_to_empty() {
+        // `dev.environment` is optional — a `dev:` block without it must
+        // not fail to parse, and must produce an empty map (not panic on
+        // the `set_var` loop reading a None).
+        let yaml = "dev: {}\n";
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(config.dev().environment.is_empty());
     }
 }

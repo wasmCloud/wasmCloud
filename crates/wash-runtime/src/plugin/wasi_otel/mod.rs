@@ -44,21 +44,13 @@ use bindings::wasi::otel::tracing::{SpanContext as WitSpanContext, TraceFlags as
 /// Plugin configuration
 #[derive(Clone, Debug)]
 pub struct WasiOtelConfig {
-    pub endpoint: String,
-    pub protocol: String,
     pub service_name: String,
-    pub propagate_context: bool,
-    pub batch_timeout_ms: u64,
 }
 
 impl Default for WasiOtelConfig {
     fn default() -> Self {
         Self {
-            endpoint: String::new(),
-            protocol: String::new(),
             service_name: "wasi-otel".to_string(),
-            propagate_context: true,
-            batch_timeout_ms: 5000,
         }
     }
 }
@@ -110,14 +102,21 @@ impl HostPlugin for WasiOtel {
     }
 
     async fn start(&self) -> anyhow::Result<()> {
+        // The exporter resolves its endpoint from `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
+        // then `OTEL_EXPORTER_OTLP_ENDPOINT`, falling back to the OTel gRPC default
+        // (`http://localhost:4317`). Protocol is fixed to gRPC because we use
+        // `with_tonic()` below.
+        let endpoint = std::env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+            .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
+            .unwrap_or_else(|_| "http://localhost:4317".to_string());
         tracing::info!(
-            endpoint = %self.config.endpoint,
-            protocol = %self.config.protocol,
+            endpoint = %endpoint,
+            protocol = "grpc",
             "Starting WASI OTel plugin"
         );
 
-        // TODO: Add configurable endpoints/protocols to use. This would be beneficial for when you want to have Host otel go to Platform engineering teams,
-        // And Workload otel go to a different backend for application monitoring.
+        // TODO: thread per-target endpoints (host vs workload) through `WasiOtelConfig`
+        // so platform telemetry and application telemetry can ship to different backends.
 
         // set up the grpc span exporter
         let span_exporter = SpanExporter::builder()
