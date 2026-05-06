@@ -111,6 +111,10 @@ Organization: Cosmonic
 _Covers GitHub Actions workflows, release automation, CI infrastructure, Helm charts, and deploy
 assets._
 
+Name: Aditya Salunkhe
+GitHub: @Aditya1404Sal
+Organization: Betty Blocks
+
 Name: Bailey Hayes
 GitHub: @ricochet
 Organization: Cosmonic
@@ -118,6 +122,14 @@ Organization: Cosmonic
 Name: Brooks Townsend
 GitHub: @brooksmtownsend
 Organization: Capital One
+
+Name: Jeremy Fleitz
+GitHub: @jfleitz
+Organization: Cosmonic
+
+Name: Liam Randall
+GitHub: @LiamRandall
+Organization: Cosmonic
 
 Name: Roman Volosatovs
 GitHub: @rvolosatovs
