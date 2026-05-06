@@ -56,6 +56,7 @@ impl CliCommand for DevCommand {
         .context("failed to load config for development")?;
 
         let dev_config = config.dev();
+
         let http_addr = dev_config
             .address
             .clone()
