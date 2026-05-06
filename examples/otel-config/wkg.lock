@@ -30,15 +30,6 @@ version = "0.2.0-rc.1"
 digest = "sha256:1b7f1b0fd07bb4cede16c6a6ec8852815dfb924639a78735fc7bdffdc164485d"
 
 [[packages]]
-name = "wasi:http"
-registry = "wasi.dev"
-
-[[packages.versions]]
-requirement = "=0.2.2"
-version = "0.2.2"
-digest = "sha256:a1f129cdf1fde55ec2d4ae8d998c39a7e5cf7544a8bd84a831054ac0d2ac64dd"
-
-[[packages]]
 name = "wasi:keyvalue"
 registry = "wasi.dev"
 
@@ -48,15 +39,6 @@ version = "0.2.0-draft"
 digest = "sha256:f5afa14646d3f32cee23106add8d7da53774083fef32f5648176aee7be61d36b"
 
 [[packages]]
-name = "wasi:logging"
-registry = "wasi.dev"
-
-[[packages.versions]]
-requirement = "=0.1.0-draft"
-version = "0.1.0-draft"
-digest = "sha256:09621a45b12b0a9cddc798517f778aac0e5ae4bd234077b3d70758d6cf625580"
-
-[[packages]]
 name = "wasi:otel"
 registry = "wasi.dev"
 
@@ -64,3 +46,12 @@ registry = "wasi.dev"
 requirement = "=0.2.0-rc.1"
 version = "0.2.0-rc.1"
 digest = "sha256:4f4969ab60f39ca84830fe654e51e2bf852097eafb79626f616cd2fba11fdd54"
+
+[[packages]]
+name = "wasi:random"
+registry = "wasi.dev"
+
+[[packages.versions]]
+requirement = "=0.2.2"
+version = "0.2.2"
+digest = "sha256:143e47a99fe9486672b5f03491e8e610e413a646dc575059c6ebbb354d7c941a"
