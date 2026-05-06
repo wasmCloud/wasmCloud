@@ -26,6 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-go
       - uses: ./.github/actions/lint-go
         with:
@@ -35,6 +37,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-go
       - name: Build
         working-directory: runtime-gateway
@@ -50,7 +54,6 @@ jobs:
       contents: write
       packages: write
     uses: ./.github/workflows/docker-build-push.yml
-    secrets: inherit
     with:
       working-directory: runtime-gateway
       file: runtime-gateway/Dockerfile
