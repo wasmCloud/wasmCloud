@@ -1,8 +1,0 @@
-build:
-  command: cargo build --target wasm32-wasip2 --release --locked
-  component_path: target/wasm32-wasip2/release/otel_http.wasm
-
-dev:
-  wasi_blobstore_path: tmp/blobstore
-  wasi_keyvalue_path: tmp/keyvalue
-  wasi_otel: true

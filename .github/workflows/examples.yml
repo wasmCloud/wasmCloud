@@ -40,7 +40,7 @@ env:
       {"key": "blobby",                   "workdir": "examples/blobby",                              "image": "ghcr.io/wasmcloud/components/blobby"},
       {"key": "grpc-hello-world-client",  "filter": "grpc-hello-world",   "workdir": "examples/grpc-hello-world/component-client", "image": "ghcr.io/wasmcloud/components/grpc-hello-world-client", "needs_protoc": true},
       {"key": "grpc-hello-world-server",  "filter": "grpc-hello-world",   "workdir": "examples/grpc-hello-world/component-server", "image": "ghcr.io/wasmcloud/components/grpc-hello-world-server", "needs_protoc": true},
-      {"key": "otel-http",                "workdir": "examples/otel-http",                           "image": "ghcr.io/wasmcloud/components/otel-http"},
+      {"key": "otel-config",              "workdir": "examples/otel-config",                         "image": "ghcr.io/wasmcloud/components/otel-config"},
       {"key": "qrcode",                   "workdir": "examples/qrcode",                              "image": "ghcr.io/wasmcloud/components/qrcode"}
     ]
   # When these change, every example rebuilds.

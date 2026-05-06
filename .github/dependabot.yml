@@ -9,7 +9,7 @@ updates:
       - "/"
       - "/examples/blobby"
       - "/examples/grpc-hello-world"
-      - "/examples/otel-http"
+      - "/examples/otel-config"
       - "/examples/qrcode"
       - "/templates/http-api-with-distributed-workloads"
       - "/templates/http-client"
