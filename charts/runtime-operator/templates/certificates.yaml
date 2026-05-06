@@ -1,6 +1,86 @@
 {{- if .Values.global.tls.enabled }}
 {{- if .Values.global.certificates.generate }}
-{{ $ca := genCA "wasmcloud CA" 365 }}
+{{/*
+  Cert reuse on helm upgrade
+  --------------------------
+  `genCA` and `genSignedCert` produce *fresh* key material on every render.
+  Without lookup-then-reuse, every `helm upgrade` would rotate the CA and
+  every signed cert — and pods that didn't restart would still hold the
+  old PEM in memory, breaking mTLS until they're all rolled.
+
+  Strategy:
+    - First install: lookup returns empty → mint a fresh CA + signed certs
+      and persist them in the rendered Secrets.
+    - Subsequent upgrade: lookup finds the live Secrets → re-emit the same
+      cert/key bytes so the rendered Secrets diff to a no-op for the
+      cluster, and any pod that wasn't rolled keeps its trust chain.
+    - `helm template` (CI / ArgoCD diff): lookup returns empty → fresh
+      certs are rendered but not persisted; harmless for stateless use.
+
+  When new child resources appear after the chart is installed (e.g. a new
+  hostGroup), `buildCustomCert` rebuilds the existing CA so the new cert
+  is signed by the *same* CA the running pods already trust.
+*/}}
+{{- $caSecret := lookup "v1" "Secret" .Release.Namespace .Values.global.certificates.caSecretName }}
+{{- $ca := dict }}
+{{- if and $caSecret $caSecret.data }}
+  {{/* buildCustomCert expects base64-encoded PEM (it decodes internally),
+       so pass the Secret's data values directly without b64dec. */}}
+  {{- $ca = buildCustomCert (index $caSecret.data "tls.crt") (index $caSecret.data "tls.key") }}
+{{- else }}
+  {{- $ca = genCA "wasmcloud CA" 365 }}
+{{- end }}
+
+{{/*
+  reuseOrSign: re-emit an existing TLS Secret's cert/key when found,
+  otherwise mint a new one signed by $ca. Returns a dict shaped like
+  what genSignedCert produces (.Cert / .Key are PEM strings).
+*/}}
+{{- $opSec := lookup "v1" "Secret" .Release.Namespace .Values.global.certificates.operatorCertSecretName }}
+{{- $operatorCert := dict }}
+{{- if and $opSec $opSec.data }}
+  {{- $operatorCert = dict "Cert" (index $opSec.data "tls.crt" | b64dec) "Key" (index $opSec.data "tls.key" | b64dec) }}
+{{- else }}
+  {{- $operatorCert = genSignedCert "wasmcloud-operator" nil (list "wasmcloud-operator") 365 $ca }}
+{{- end }}
+
+{{- $rtSec := lookup "v1" "Secret" .Release.Namespace .Values.global.certificates.runtimeCertSecretName }}
+{{- $runtimeCert := dict }}
+{{- if and $rtSec $rtSec.data }}
+  {{- $runtimeCert = dict "Cert" (index $rtSec.data "tls.crt" | b64dec) "Key" (index $rtSec.data "tls.key" | b64dec) }}
+{{- else }}
+  {{- $runtimeCert = genSignedCert "wasmcloud-runtime" nil (list "wasmcloud-runtime") 365 $ca }}
+{{- end }}
+
+{{- $dtSec := lookup "v1" "Secret" .Release.Namespace .Values.global.certificates.dataCertSecretName }}
+{{- $dataCert := dict }}
+{{- if and $dtSec $dtSec.data }}
+  {{- $dataCert = dict "Cert" (index $dtSec.data "tls.crt" | b64dec) "Key" (index $dtSec.data "tls.key" | b64dec) }}
+{{- else }}
+  {{- $dataCert = genSignedCert "wasmcloud-data" nil (list "wasmcloud-data") 365 $ca }}
+{{- end }}
+
+{{/*
+  NATS SANs cover every form of the in-cluster Service DNS name. The
+  bare "nats" entry preserves backward compat for anything still using
+  the unqualified name; the FQDN forms are required when host pods or
+  the operator live in a different namespace from NATS and address it
+  via `nats.<release-ns>.svc.cluster.local`.
+*/}}
+{{- $natsSANs := list
+    "nats"
+    (printf "nats.%s" .Release.Namespace)
+    (printf "nats.%s.svc" .Release.Namespace)
+    (printf "nats.%s.svc.cluster.local" .Release.Namespace)
+}}
+{{- $natsSec := lookup "v1" "Secret" .Release.Namespace .Values.global.certificates.natsCertSecretName }}
+{{- $natsCert := dict }}
+{{- if and $natsSec $natsSec.data }}
+  {{- $natsCert = dict "Cert" (index $natsSec.data "tls.crt" | b64dec) "Key" (index $natsSec.data "tls.key" | b64dec) }}
+{{- else }}
+  {{- $natsCert = genSignedCert "nats" nil $natsSANs 365 $ca }}
+{{- end }}
+---
 apiVersion: v1
 kind: Secret
 metadata:
@@ -13,7 +93,6 @@ data:
   tls.crt: {{ $ca.Cert | b64enc }}
   tls.key: {{ $ca.Key | b64enc }}
 ---
-{{ $operatorCert := genSignedCert "wasmcloud-operator" nil (list "wasmcloud-operator") 365 $ca }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -27,35 +106,6 @@ data:
   tls.key: {{ $operatorCert.Key | b64enc }}
   ca.crt: {{ $ca.Cert | b64enc }}
 ---
-{{ $runtimeCert := genSignedCert "wasmcloud-runtime" nil (list "wasmcloud-runtime") 365 $ca }}
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ .Values.global.certificates.runtimeCertSecretName }}
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "runtime-operator.labels" . | nindent 4 }}
-type: kubernetes.io/tls
-data:
-  tls.crt: {{ $runtimeCert.Cert | b64enc }}
-  tls.key: {{ $runtimeCert.Key | b64enc }}
-  ca.crt: {{ $ca.Cert | b64enc }}
----
-{{ $dataCert := genSignedCert "wasmcloud-data" nil (list "wasmcloud-data") 365 $ca }}
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ .Values.global.certificates.dataCertSecretName }}
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "runtime-operator.labels" . | nindent 4 }}
-type: kubernetes.io/tls
-data:
-  tls.crt: {{ $dataCert.Cert | b64enc }}
-  tls.key: {{ $dataCert.Key | b64enc }}
-  ca.crt: {{ $ca.Cert | b64enc }}
----
-{{ $natsCert := genSignedCert "nats" nil (list "nats" "nats.svc.cluster.local") 365 $ca }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -69,19 +119,75 @@ data:
   tls.key: {{ $natsCert.Key | b64enc }}
   ca.crt: {{ $ca.Cert | b64enc }}
 ---
+{{/*
+  Runtime + Data TLS Secrets are mounted by host pods, which may live in
+  a tenant namespace different from the chart's release namespace. Render
+  one Secret per unique host-pod namespace (release + every distinct
+  hostGroups[].namespace) so kubelet can mount them locally.
+
+  Tenant-namespace replicas reuse the same key material as the
+  release-namespace Secret (looked up above). When this template is
+  upgraded for the first time after a hostGroup is added in a new
+  namespace, the lookup for that tenant Secret returns empty and we
+  fall back to the SAME $runtimeCert / $dataCert variable that already
+  carries the release-namespace cert — so the new tenant Secret is a
+  byte-for-byte copy of the existing one rather than a fresh mint.
+*/}}
+{{- $hostNamespaces := dict }}
+{{- $_ := set $hostNamespaces .Release.Namespace true }}
+{{- range .Values.runtime.hostGroups }}
+  {{- $ns := default $.Release.Namespace .namespace }}
+  {{- $_ := set $hostNamespaces $ns true }}
+{{- end }}
+{{- range $ns, $_ := $hostNamespaces }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $.Values.global.certificates.runtimeCertSecretName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "runtime-operator.labels" $ | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $runtimeCert.Cert | b64enc }}
+  tls.key: {{ $runtimeCert.Key | b64enc }}
+  ca.crt: {{ $ca.Cert | b64enc }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $.Values.global.certificates.dataCertSecretName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "runtime-operator.labels" $ | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $dataCert.Cert | b64enc }}
+  tls.key: {{ $dataCert.Key | b64enc }}
+  ca.crt: {{ $ca.Cert | b64enc }}
+---
+{{- end }}
 {{- range .Values.runtime.hostGroups }}
 {{- if and (.http) (.http.enabled) (.http.tls) (.http.tls.enabled) }}
+{{- $ns := default $.Release.Namespace .namespace }}
 {{- $cert := .http.tls.certificate | default dict }}
 {{- $genCert := $cert.generate | default dict }}
 {{- if and (not $cert.secretName) ($genCert.enabled) }}
 {{- $cn := $genCert.commonName | default (printf "hostgroup-%s" .name) }}
-{{- $domains := $genCert.domains | default (list (printf "hostgroup-%s" .name) (printf "hostgroup-%s.%s.svc.cluster.local" .name $.Release.Namespace)) }}
-{{ $httpCert := genSignedCert $cn nil $domains ($genCert.validity | default 365 | int) $ca }}
+{{- $domains := $genCert.domains | default (list (printf "hostgroup-%s" .name) (printf "hostgroup-%s.%s.svc.cluster.local" .name $ns)) }}
+{{- $httpSecretName := printf "hostgroup-%s-http-tls" .name }}
+{{- $httpSec := lookup "v1" "Secret" $ns $httpSecretName }}
+{{- $httpCert := dict }}
+{{- if and $httpSec $httpSec.data }}
+  {{- $httpCert = dict "Cert" (index $httpSec.data "tls.crt" | b64dec) "Key" (index $httpSec.data "tls.key" | b64dec) }}
+{{- else }}
+  {{- $httpCert = genSignedCert $cn nil $domains ($genCert.validity | default 365 | int) $ca }}
+{{- end }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: hostgroup-{{ .name }}-http-tls
-  namespace: {{ $.Release.Namespace }}
+  name: {{ $httpSecretName }}
+  namespace: {{ $ns }}
   labels:
     {{- include "runtime-operator.labels" $ | nindent 4 }}
 type: kubernetes.io/tls

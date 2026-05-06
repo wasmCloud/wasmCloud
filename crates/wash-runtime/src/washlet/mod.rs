@@ -29,6 +29,7 @@ pub struct ClusterHostBuilder {
     nats_client: Option<Arc<async_nats::Client>>,
     host_group: Option<String>,
     host_name: Option<String>,
+    environment: Option<String>,
     heartbeat_interval: Option<Duration>,
     cleanup_interval: Option<Duration>,
     cleanup_age: Option<Duration>,
@@ -43,6 +44,15 @@ impl ClusterHostBuilder {
 
     pub fn with_host_name(mut self, host_name: impl AsRef<str>) -> Self {
         self.host_name = Some(host_name.as_ref().into());
+        self
+    }
+
+    /// Sets the environment the host advertises in its heartbeat. For
+    /// in-cluster host pods this is the pod's namespace (sourced from
+    /// the downward API); for external hosts it is whatever identifier
+    /// the operator wants to attribute the host to.
+    pub fn with_environment(mut self, environment: impl AsRef<str>) -> Self {
+        self.environment = Some(environment.as_ref().into());
         self
     }
 
@@ -104,6 +114,10 @@ impl ClusterHostBuilder {
 
         if let Some(host_name) = self.host_name {
             builder = builder.with_hostname(host_name)
+        }
+
+        if let Some(environment) = self.environment {
+            builder = builder.with_environment(environment);
         }
 
         if let Some(host_config) = self.host_config {
@@ -588,6 +602,7 @@ impl From<crate::types::HostHeartbeat> for types::v2::HostHeartbeat {
             labels: hb.labels,
             friendly_name: hb.friendly_name,
             http_port: hb.http_port.into(),
+            environment: hb.environment,
         }
     }
 }

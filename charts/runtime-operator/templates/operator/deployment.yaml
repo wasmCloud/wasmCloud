@@ -35,7 +35,7 @@ spec:
         - name: runtime-operator
           image: {{ if $registry }}{{ printf "%s/%s" $registry .Values.operator.image.repository }}{{ else }}{{ .Values.operator.image.repository }}{{ end }}:{{ .Values.operator.image.tag | default .Chart.AppVersion }}
           args:
-            - "-nats-url=nats://nats:4222"
+            - "-nats-url=nats://nats.{{ .Release.Namespace }}.svc.cluster.local:4222"
             {{- if $.Values.global.tls.enabled }}
             - "-nats-ca=/operator-cert/ca.crt"
             - "-nats-client-cert=/operator-cert/tls.crt"
@@ -44,6 +44,10 @@ spec:
             {{- if .Values.operator.watchNamespaces }}
             - "-watch-namespaces={{ .Values.operator.watchNamespaces | join "," }}"
             {{- end }}
+            {{- with include "runtime-operator.hostNamespaces" . }}
+            - "-host-namespaces={{ . }}"
+            {{- end }}
+            - "-allow-shared-hosts={{ .Values.operator.allowSharedHosts }}"
           env:
             - name: OPERATOR_NAMESPACE
               valueFrom:

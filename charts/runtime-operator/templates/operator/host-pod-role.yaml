@@ -1,0 +1,44 @@
+{{- if and .Values.operator.enabled .Values.operator.serviceAccount.create -}}
+{{- $hostNamespaces := include "runtime-operator.hostNamespaces" . -}}
+{{- if $hostNamespaces -}}
+# When host Pods run in namespaces other than the operator's own — either
+# explicitly via operator.hostNamespaces or implicitly via
+# runtime.hostGroups[].namespace — grant the operator a Pod-only Role in
+# each of those namespaces so HostPodReconciler can add and remove its
+# finalizer on host Pods.
+#
+# This is the ONLY cross-namespace RBAC the operator needs after the
+# Host CRD became namespaced + always-in-operator-namespace. Host CRD
+# CRUD is granted via the namespaced Role in role.yaml.
+{{- range splitList "," $hostNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "runtime-operator.fullname" $ }}-host-pod
+  namespace: {{ . }}
+  labels:
+    {{- include "runtime-operator.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "patch", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "runtime-operator.fullname" $ }}-host-pod
+  namespace: {{ . }}
+  labels:
+    {{- include "runtime-operator.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "runtime-operator.fullname" $ }}-host-pod
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "operator.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
+{{- end }}

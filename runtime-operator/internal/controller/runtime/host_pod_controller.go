@@ -41,10 +41,15 @@ const (
 // deletes all Workload objects assigned to that host. This replaces the
 // previous path where the operator waited for up to UnreachableTimeout +
 // hostReconcileInterval (≈2 min) to discover a dead host via missed heartbeats.
+//
+// Pod side may be cross-namespace: host Pods can run in any namespace listed
+// in operator.hostNamespaces. Host side is single-namespace: every Host CRD
+// lives in the operator's own namespace.
 type HostPodReconciler struct {
 	client.Client
-	Scheme    *runtime.Scheme
-	Namespace string
+	Scheme *runtime.Scheme
+	// OperatorNamespace is the namespace where Host CRDs live.
+	OperatorNamespace string
 }
 
 // Reconcile is called whenever a Pod with HostPodLabel changes.
@@ -83,11 +88,16 @@ func (r *HostPodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, r.Patch(ctx, pod, client.MergeFrom(base))
 }
 
-// deleteHostForIP deletes the Host CRD whose Hostname matches podIP.
-// Uses a field index so it does not scan all Host objects.
+// deleteHostForIP deletes the Host CRD whose Hostname matches podIP. The
+// list is always scoped to the operator's own namespace — that is the one
+// and only place Host objects live, regardless of where the underlying
+// host pod runs. Uses a field index so it does not scan every Host.
 func (r *HostPodReconciler) deleteHostForIP(ctx context.Context, podIP string) error {
 	var hosts runtimev1alpha1.HostList
-	if err := r.List(ctx, &hosts, client.MatchingFields{hostnameFieldIndex: podIP}); err != nil {
+	if err := r.List(ctx, &hosts,
+		client.InNamespace(r.OperatorNamespace),
+		client.MatchingFields{hostnameFieldIndex: podIP},
+	); err != nil {
 		return err
 	}
 	for i := range hosts.Items {

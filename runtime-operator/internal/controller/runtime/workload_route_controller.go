@@ -37,6 +37,8 @@ const (
 type WorkloadRouteReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// OperatorNamespace is where every Host CRD lives.
+	OperatorNamespace string
 }
 
 // Reconcile is keyed on namespace/service-name (not workload name) so that a
@@ -47,6 +49,28 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	serviceName := req.Name
 	namespace := req.Namespace
+
+	// An empty service name is meaningless for this controller (a Workload
+	// without spec.kubernetes.service.name should never have enqueued
+	// here). Drop early as a defensive guard.
+	if serviceName == "" {
+		return ctrl.Result{}, nil
+	}
+
+	// Fetch the Service first. If it doesn't exist there is nothing to
+	// reconcile — EndpointSlices we may have created carry an
+	// OwnerReference on the Service, so Kubernetes GC handles cleanup
+	// when the Service is deleted. Returning silently here avoids
+	// spurious "service not found" logs for Workloads that don't define
+	// a kubernetes.service block at all (their events can still reach
+	// this reconciler via stale field-index entries during deletion).
+	svc := &corev1.Service{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: serviceName}, svc); err != nil {
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("getting service %s: %w", serviceName, err)
+	}
 
 	// Collect all Workloads in this namespace that reference this service.
 	workloadList := &runtimev1alpha1.WorkloadList{}
@@ -92,16 +116,6 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if _, exists := endpoints[podIP]; !exists {
 			endpoints[podIP] = endpointInfo{podIP: podIP, httpPort: httpPort}
 		}
-	}
-
-	// Fetch the Service so we can set it as the owner of the EndpointSlice.
-	svc := &corev1.Service{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: serviceName}, svc); err != nil {
-		if errors.IsNotFound(err) {
-			log.V(1).Info("service not found, skipping EndpointSlice reconciliation")
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, fmt.Errorf("getting service %s: %w", serviceName, err)
 	}
 
 	sliceName := endpointSliceName(serviceName)
@@ -214,9 +228,14 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 }
 
 // findHostByID looks up a Host CRD by its HostID field using a field index.
+// Hosts always live in the operator's namespace, so the lookup is
+// namespace-scoped.
 func (r *WorkloadRouteReconciler) findHostByID(ctx context.Context, hostID string) (*runtimev1alpha1.Host, error) {
 	hostList := &runtimev1alpha1.HostList{}
-	if err := r.List(ctx, hostList, client.MatchingFields{hostIDIndex: hostID}); err != nil {
+	if err := r.List(ctx, hostList,
+		client.InNamespace(r.OperatorNamespace),
+		client.MatchingFields{hostIDIndex: hostID},
+	); err != nil {
 		return nil, err
 	}
 	if len(hostList.Items) == 0 {
@@ -245,6 +264,8 @@ func endpointSliceName(serviceName string) string {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Index Workloads by their KubernetesService name for efficient lookup.
+	// Workloads without a kubernetes.service block, or with an empty
+	// Service.Name, are excluded — they have no EndpointSlice to manage.
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
 		&runtimev1alpha1.Workload{},
@@ -252,6 +273,9 @@ func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		func(rawObj client.Object) []string {
 			workload, ok := rawObj.(*runtimev1alpha1.Workload)
 			if !ok || workload.Spec.Kubernetes == nil || workload.Spec.Kubernetes.Service == nil {
+				return nil
+			}
+			if workload.Spec.Kubernetes.Service.Name == "" {
 				return nil
 			}
 			return []string{workload.Spec.Kubernetes.Service.Name}
@@ -278,9 +302,15 @@ func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	// workloadToServiceRequest maps a Workload event to a reconcile request
 	// keyed on the Workload's KubernetesService (namespace/service-name).
+	// Workloads without a kubernetes.service block, or with an empty
+	// Service.Name, do not enqueue — there is nothing for this reconciler
+	// to do for them.
 	workloadToServiceRequest := func(_ context.Context, obj client.Object) []reconcile.Request {
 		workload, ok := obj.(*runtimev1alpha1.Workload)
 		if !ok || workload.Spec.Kubernetes == nil || workload.Spec.Kubernetes.Service == nil {
+			return nil
+		}
+		if workload.Spec.Kubernetes.Service.Name == "" {
 			return nil
 		}
 		return []reconcile.Request{

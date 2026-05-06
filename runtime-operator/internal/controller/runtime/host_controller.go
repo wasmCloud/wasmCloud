@@ -34,6 +34,10 @@ type HostReconciler struct {
 	UnreachableTimeout time.Duration
 	CPUThreshold       float64
 	MemoryThreshold    float64
+	// OperatorNamespace is the namespace the operator itself runs in. Every
+	// Host object is created here regardless of where the underlying host
+	// pod runs; tenant attribution lives on the Host's Location field.
+	OperatorNamespace string
 
 	reconciler condition.AnyConditionedReconciler
 }
@@ -137,8 +141,9 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.reconciler = reconciler
 
 	statusUpdater := &hostStatusUpdater{
-		bus:    r.Bus,
-		client: r.Client,
+		bus:               r.Bus,
+		client:            r.Client,
+		operatorNamespace: r.OperatorNamespace,
 	}
 	if err := mgr.Add(statusUpdater); err != nil {
 		return err
@@ -153,6 +158,8 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 type hostStatusUpdater struct {
 	bus    wasmbus.Bus
 	client client.Client
+	// operatorNamespace is the namespace every Host object is created in.
+	operatorNamespace string
 }
 
 func (h *hostStatusUpdater) Start(ctx context.Context) error {
@@ -168,21 +175,27 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 			return
 		}
 
+		// Every Host object lives in the operator's own namespace. Tenant
+		// attribution is recorded on the Host's Environment field,
+		// populated verbatim from req.Environment — the heartbeat is the
+		// source of truth and is not validated against cluster state.
 		host := &runtimev1alpha1.Host{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: req.FriendlyName,
+				Name:      req.FriendlyName,
+				Namespace: h.operatorNamespace,
 			},
 		}
 
 		// CreateOrUpdate handles spec and metadata (labels, HostID, Hostname,
-		// HTTPPort). The mutate func sets these fields so they are applied on
-		// both create and update paths (c.Get overwrites the pre-populated
-		// struct for existing objects).
+		// HTTPPort, Environment). The mutate func sets these fields so they
+		// are applied on both create and update paths (c.Get overwrites the
+		// pre-populated struct for existing objects).
 		_, err := controllerutil.CreateOrUpdate(ctx, h.client, host, func() error {
 			host.Labels = req.GetLabels()
 			host.HostID = req.Id
 			host.Hostname = req.Hostname
 			host.HTTPPort = req.HttpPort
+			host.Environment = req.GetEnvironment()
 			return nil
 		})
 		if err != nil {

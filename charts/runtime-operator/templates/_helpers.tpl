@@ -125,6 +125,34 @@ Create the name of the service account to use for NATS
 {{- end }}
 
 {{/*
+Returns the deduped, comma-separated list of namespaces where host Pods
+run, used both for the operator's `-host-namespaces` flag and for the
+per-namespace Pod RBAC rendering in host-pod-role.yaml.
+
+Sources:
+  1. Explicit operator.hostNamespaces entries.
+  2. Every distinct runtime.hostGroups[].namespace.
+
+The operator's own namespace is excluded — Pod RBAC there is granted
+by the in-namespace operator Role, and the Pod cache always covers
+operatorCfg.Namespace separately. Empty values are dropped. Result is
+sorted for stable rendering.
+
+Callers parse the comma-separated string with `splitList ","`.
+*/}}
+{{- define "runtime-operator.hostNamespaces" -}}
+{{- $set := dict }}
+{{- range .Values.operator.hostNamespaces }}
+  {{- if and . (ne . $.Release.Namespace) }}{{ $_ := set $set . true }}{{ end }}
+{{- end }}
+{{- range .Values.runtime.hostGroups }}
+  {{- $ns := default "" .namespace }}
+  {{- if and $ns (ne $ns $.Release.Namespace) }}{{ $_ := set $set $ns true }}{{ end }}
+{{- end }}
+{{- join "," (keys $set | sortAlpha) }}
+{{- end }}
+
+{{/*
 Create the imagePullSecrets section for the chart.
 */}}
 {{- define "runtime-operator.imagePullSecrets" -}}

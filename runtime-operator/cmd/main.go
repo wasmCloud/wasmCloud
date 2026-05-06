@@ -78,6 +78,8 @@ func main() {
 		memoryBackpressureThreshold float64
 		disableArtifactController   bool
 		watchNamespaces             string
+		hostNamespaces              string
+		allowSharedHosts            bool
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8081", "The address the metrics endpoint binds to. "+
@@ -113,7 +115,29 @@ func main() {
 		&watchNamespaces,
 		"watch-namespaces",
 		"",
-		"Comma-separated list of namespaces to watch. If empty, watches all namespaces.",
+		"Comma-separated list of namespaces to watch for WorkloadDeployment-side resources "+
+			"(artifacts, workloads, workloadreplicasets, workloaddeployments + the "+
+			"services/endpointslices/configmaps/secrets/events the workload reconcilers touch). "+
+			"If empty, watches all namespaces.",
+	)
+	flag.StringVar(
+		&hostNamespaces,
+		"host-namespaces",
+		"",
+		"Comma-separated list of namespaces where host Pods run. The operator's Pod informer "+
+			"cache and per-namespace Pod RBAC cover this set so HostPodReconciler can manage "+
+			"finalizers on host Pods. Does NOT affect where Host CRDs are created — every Host "+
+			"always lives in the operator's own namespace. If empty, host Pods are assumed to "+
+			"run only in the operator's own namespace.",
+	)
+	flag.BoolVar(
+		&allowSharedHosts,
+		"allow-shared-hosts",
+		true,
+		"If true (default), a WorkloadDeployment may schedule onto a Host whose Environment "+
+			"differs from the workload's own namespace via spec.template.spec.environment. "+
+			"If false, scheduling is locked to the workload's own namespace and any non-matching "+
+			"environment is rejected.",
 	)
 
 	opts := zap.Options{
@@ -139,6 +163,8 @@ func main() {
 		HostCPUThreshold:          cpuBackpressureThreshold,
 		HostMemoryThreshold:       memoryBackpressureThreshold,
 		Namespace:                 os.Getenv("OPERATOR_NAMESPACE"),
+		HostNamespaces:            splitCSVList(hostNamespaces),
+		AllowSharedHosts:          allowSharedHosts,
 	}
 
 	if natsCreds != "" {
@@ -200,31 +226,44 @@ func main() {
 	}
 	var cacheOpts cache.Options
 
-	// If watch namespaces is set, only watch the specified namespaces. Otherwise, watch all namespaces.
-	if watchNamespaces != "" {
-		namespaces := strings.Split(watchNamespaces, ",")
-		toWatchNamespaces := make(map[string]cache.Config, len(namespaces))
-		for _, ns := range namespaces {
-			ns = strings.TrimSpace(ns)
-			if ns != "" {
-				toWatchNamespaces[ns] = cache.Config{}
-			}
-		}
-		cacheOpts.DefaultNamespaces = toWatchNamespaces
+	// -watch-namespaces narrows the cache for workload-side resources
+	// (artifacts, workloads, workloaddeployments, etc.). Empty == all
+	// namespaces.
+	cacheOpts.DefaultNamespaces = parseNamespaceSet(watchNamespaces)
+
+	// Host objects always live in the operator's own namespace —
+	// hostStatusUpdater unconditionally creates them there, regardless of
+	// where the underlying host pod runs. The Host informer cache scopes
+	// to that single namespace.
+	hostCacheNamespaces := map[string]cache.Config{}
+	if operatorCfg.Namespace != "" {
+		hostCacheNamespaces[operatorCfg.Namespace] = cache.Config{}
+	} else {
+		// Defensive fallback: if OPERATOR_NAMESPACE is unset (typical only
+		// for `make run`-style local dev), watch all namespaces so the
+		// reconciler still functions.
+		hostCacheNamespaces[cache.AllNamespaces] = cache.Config{}
 	}
 
-	// Restrict the Pod cache to the operator's own namespace so the cache
-	// only requires a namespaced Role (not a ClusterRole) for Pod list/watch.
-	// ByObject overrides DefaultNamespaces for the specified type, so Pods are
-	// always scoped to the operator namespace regardless of -watch-namespaces.
+	// The Pod informer cache covers the operator's own namespace plus
+	// `-host-namespaces` so HostPodReconciler can manage finalizers on
+	// host Pods regardless of which namespace the platform team deploys
+	// them into. The HostPodLabel predicate keeps the working set
+	// bounded to actual host Pods.
+	podCacheNamespaces := map[string]cache.Config{}
 	if operatorCfg.Namespace != "" {
-		cacheOpts.ByObject = map[client.Object]cache.ByObject{
-			&corev1.Pod{}: {
-				Namespaces: map[string]cache.Config{
-					operatorCfg.Namespace: {},
-				},
-			},
-		}
+		podCacheNamespaces[operatorCfg.Namespace] = cache.Config{}
+	}
+	for _, ns := range operatorCfg.HostNamespaces {
+		podCacheNamespaces[ns] = cache.Config{}
+	}
+	if len(podCacheNamespaces) == 0 {
+		podCacheNamespaces[cache.AllNamespaces] = cache.Config{}
+	}
+
+	cacheOpts.ByObject = map[client.Object]cache.ByObject{
+		&runtimev1alpha1.Host{}: {Namespaces: hostCacheNamespaces},
+		&corev1.Pod{}:           {Namespaces: podCacheNamespaces},
 	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
@@ -276,4 +315,44 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// splitCSVList parses a comma-separated string into a trimmed, non-empty
+// slice of values. Returns nil for an empty input.
+func splitCSVList(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// parseNamespaceSet parses a comma-separated namespace list into a
+// controller-runtime cache namespace map. Returns nil for an empty input,
+// which controller-runtime interprets as "all namespaces".
+func parseNamespaceSet(raw string) map[string]cache.Config {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make(map[string]cache.Config, len(parts))
+	for _, ns := range parts {
+		ns = strings.TrimSpace(ns)
+		if ns != "" {
+			out[ns] = cache.Config{}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

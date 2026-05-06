@@ -1,11 +1,12 @@
 {{- $top := . }}
 {{- range .Values.runtime.hostGroups }}
 {{- if and (.service) (.service.type) -}}
+{{- $ns := default $top.Release.Namespace .namespace }}
 apiVersion: v1
 kind: Service
 metadata:
   name: hostgroup-{{ .name }}
-  namespace: {{ $top.Release.Namespace }}
+  namespace: {{ $ns }}
   labels:
     wasmcloud.com/name: hostgroup
     wasmcloud.com/hostgroup: {{ .name }}

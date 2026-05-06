@@ -1,11 +1,12 @@
 {{- $registry := .Values.runtime.image.registry | default .Values.global.image.registry -}}
 {{- $top := . }}
 {{- range .Values.runtime.hostGroups }}
+{{- $ns := default $top.Release.Namespace .namespace }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: hostgroup-{{ .name }}
-  namespace: {{ $top.Release.Namespace }}
+  namespace: {{ $ns }}
   labels:
     wasmcloud.com/name: hostgroup
     wasmcloud.com/hostgroup: {{ .name }}
@@ -53,6 +54,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
+            - name: WASMCLOUD_HOST_ENVIRONMENT
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           args:
             {{- if .logLevel }}
             - "--log-level={{ .logLevel }}"
@@ -60,13 +65,14 @@ spec:
             - "host"
             - "--host-name=$(WASMCLOUD_HOST_IP)"
             - "--host-group={{ .name }}"
-            - "--scheduler-nats-url=nats://nats:4222"
+            - "--environment=$(WASMCLOUD_HOST_ENVIRONMENT)"
+            - "--scheduler-nats-url=nats://nats.{{ $top.Release.Namespace }}.svc.cluster.local:4222"
             {{- if $top.Values.global.tls.enabled }}
             - "--scheduler-nats-tls-ca=/runtime-cert/ca.crt"
             - "--scheduler-nats-tls-cert=/runtime-cert/tls.crt"
             - "--scheduler-nats-tls-key=/runtime-cert/tls.key"
             {{- end }}
-            - "--data-nats-url=nats://nats:4222"
+            - "--data-nats-url=nats://nats.{{ $top.Release.Namespace }}.svc.cluster.local:4222"
             {{- if $top.Values.global.tls.enabled }}
             - "--data-nats-tls-ca=/data-cert/ca.crt"
             - "--data-nats-tls-cert=/data-cert/tls.crt"

@@ -14,4 +14,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "patch", "watch"]
+  # Host CRDs always live in the operator's own namespace, so Host
+  # CRUD is granted via this namespaced Role rather than a ClusterRole.
+  - apiGroups: ["runtime.wasmcloud.dev"]
+    resources: ["hosts", "hosts/finalizers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["runtime.wasmcloud.dev"]
+    resources: ["hosts/status"]
+    verbs: ["get", "update", "patch"]
 {{- end }}

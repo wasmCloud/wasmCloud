@@ -71,6 +71,20 @@ operator:
     annotations: {}
   # -- List of namespaces to watch. If empty, the operator watches all namespaces.
   watchNamespaces: []
+  # -- List of namespaces where host Pods run. The operator's Pod
+  # informer cache and per-namespace Pod RBAC cover this set so
+  # HostPodReconciler can manage finalizers on host Pods. 
+  # Leave empty when host Pods only run in the operator's own namespace (the
+  #chart's default deployment topology).
+  hostNamespaces: []
+  # -- Allow WorkloadDeployments to schedule onto Hosts whose Environment
+  # differs from the WorkloadDeployment's own namespace, via
+  # spec.template.spec.environment. With the default (true), behavior
+  # matches today's Cluster-scope scheduling: when no `environment` is
+  # set, the operator imposes no Environment filter. When false,
+  # scheduling is locked to the workload's own namespace and any
+  # cross-tenant `environment` is rejected with a Warning Event.
+  allowSharedHosts: true
 
 gateway:
   # -- DEPRECATED: runtime-gateway is being removed. HTTP routing is now handled
@@ -116,6 +130,12 @@ runtime:
     tag: ""
   hostGroups:
     - name: default
+      # -- Namespace to deploy this host group's Deployment, Service, generated
+      # TLS Secret, and ServiceAccount into. Empty (default) deploys to the
+      # chart release's namespace. When overridden, ensure the namespace
+      # exists and is included in `operator.hostNamespaces` so the operator
+      # has Pod RBAC + cache access to manage host Pod lifecycle there.
+      namespace: ""
       replicas: 1
       service:
         type: ClusterIP
