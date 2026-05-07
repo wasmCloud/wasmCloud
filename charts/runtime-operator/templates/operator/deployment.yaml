@@ -1,5 +1,6 @@
 {{- if .Values.operator.enabled }}
 {{- $registry := .Values.operator.image.registry | default .Values.global.image.registry -}}
+{{- $precompileRegistry := .Values.operator.precompile.image.registry | default .Values.global.image.registry -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -35,7 +36,7 @@ spec:
         - name: runtime-operator
           image: {{ if $registry }}{{ printf "%s/%s" $registry .Values.operator.image.repository }}{{ else }}{{ .Values.operator.image.repository }}{{ end }}:{{ .Values.operator.image.tag | default .Chart.AppVersion }}
           args:
-            - "-nats-url=nats://nats:4222"
+            - "-nats-url=nats://nats.{{ .Release.Namespace }}.svc.cluster.local:4222"
             {{- if $.Values.global.tls.enabled }}
             - "-nats-ca=/operator-cert/ca.crt"
             - "-nats-client-cert=/operator-cert/tls.crt"
@@ -43,6 +44,14 @@ spec:
             {{- end }}
             {{- if .Values.operator.watchNamespaces }}
             - "-watch-namespaces={{ .Values.operator.watchNamespaces | join "," }}"
+            {{- end }}
+            {{- if .Values.operator.precompile.enabled }}
+            - "-precompile-worker-image={{ if $precompileRegistry }}{{ printf "%s/%s" $precompileRegistry .Values.operator.precompile.image.repository }}{{ else }}{{ .Values.operator.precompile.image.repository }}{{ end }}:{{ .Values.operator.precompile.image.tag | default .Chart.AppVersion }}"
+            - "-precompile-artifact-base-url={{ .Values.operator.precompile.artifactBaseURL }}"
+            - "-precompile-target={{ .Values.operator.precompile.target }}"
+            - "-precompile-wasmtime-version={{ required "operator.precompile.wasmtimeVersion is required when operator.precompile.enabled is true" .Values.operator.precompile.wasmtimeVersion }}"
+            {{- else }}
+            - "-disable-precompile-controller"
             {{- end }}
           env:
             - name: OPERATOR_NAMESPACE

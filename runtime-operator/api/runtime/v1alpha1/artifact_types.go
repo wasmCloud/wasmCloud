@@ -8,6 +8,9 @@ import (
 
 const ArtifactConditionSync condition.ConditionType = "Sync"
 const ArtifactConditionPublished condition.ConditionType = "Published"
+const ArtifactConditionPrecompiled condition.ConditionType = "Precompiled"
+const ArtifactConditionPrecompileFailed condition.ConditionType = "PrecompileFailed"
+const ArtifactConditionPrecompileProgressing condition.ConditionType = "PrecompileProgressing"
 
 // ArtifactSpec defines the desired state of Artifact.
 type ArtifactSpec struct {
@@ -17,6 +20,14 @@ type ArtifactSpec struct {
 	ImagePullSecret *corev1.LocalObjectReference `json:"imagePullSecret,omitempty"`
 }
 
+// PrecompiledVariant describes one precompiled output of an Artifact
+// keyed by te (target, wasmtime-version) pair that produced it
+type PrecompiledVariant struct {
+	Target          string `json:"target"`
+	WasmtimeVersion string `json:"wasmtimeVersion"`
+	ArtifactURL     string `json:"artifactUrl"`
+}
+
 // ArtifactStatus defines the observed state of Artifact.
 type ArtifactStatus struct {
 	condition.ConditionedStatus `json:",inline"`
@@ -24,6 +35,8 @@ type ArtifactStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// +kubebuilder:validation:Optional
 	ArtifactURL string `json:"artifactUrl,omitempty"`
+	// +kubebuilder:validatoin:Optional
+	Precompiled []PrecompiledVariant `json:"precompiled,omitempty"`
 }
 
 // +kubebuilder:object:root=true

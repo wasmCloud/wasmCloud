@@ -64,6 +64,24 @@ rules:
     - get
     - list
     - watch
+  - apiGroups:
+    - batch
+    resources:
+    - jobs
+    verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+  - apiGroups:
+    - batch
+    resources:
+    - jobs/status
+    verbs:
+    - get
   {{- if not .Values.operator.watchNamespaces }}
   # If the operator is watching all namespaces, it needs permissions to manage EndpointSlices across the cluster. If it's only watching specific
   # namespaces, a more limited Role and RoleBinding will be created in each namespace instead, and this ClusterRole will not include permissions

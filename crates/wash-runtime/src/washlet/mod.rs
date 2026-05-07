@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::fetch_precompiled::fetch;
 use crate::host::{Host, HostApi, HostConfig};
 use crate::oci::{self, OciConfig};
 use crate::plugin::HostPlugin;
@@ -373,40 +374,85 @@ async fn workload_start(
     let (components, host_interfaces) = if let Some(wit_world) = wit_world {
         let mut pulled_components = Vec::with_capacity(wit_world.components.len());
         for component in &wit_world.components {
-            let oci_config = image_pull_secret_to_oci_config(config, &component.image_pull_secret);
-            let (bytes, digest) = match oci::pull_component(
-                &component.image,
-                oci_config,
-                component.image_pull_policy().into(),
-            )
-            .await
-            {
-                Ok(res) => res,
-                Err(e) => {
-                    return Ok(types::v2::WorkloadStartResponse {
-                        workload_status: Some(types::v2::WorkloadStatus {
-                            workload_id: workload_id.clone(),
-                            workload_state: types::v2::WorkloadState::Error.into(),
-                            message: format!(
-                                "failed to pull component image {}: {}",
-                                component.image, e
-                            ),
-                        }),
-                    });
-                }
-            };
-            pulled_components.push(crate::types::Component {
-                name: component.name.clone(),
-                bytes: bytes.into(),
-                digest: Some(digest),
-                local_resources: component
-                    .local_resources
-                    .clone()
-                    .map(Into::into)
-                    .unwrap_or_default(),
-                pool_size: component.pool_size,
-                max_invocations: component.max_invocations,
-            })
+            if !component.precompiled_url.is_empty() {
+                tracing::info!(
+                    component = %component.name,
+                    url = %component.precompiled_url,
+                    "using precompiled component"
+                );
+                let bytes = match fetch(&component.precompiled_url).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::error!(
+                            component = %component.name,
+                            url = %component.precompiled_url,
+                            error = %e,
+                            "failed to fetch precompiled component"
+                        );
+                        return Ok(types::v2::WorkloadStartResponse {
+                            workload_status: Some(types::v2::WorkloadStatus {
+                                workload_id: workload_id.clone(),
+                                workload_state: types::v2::WorkloadState::Error.into(),
+                                message: format!(
+                                    "failed to fetch precompiled component from {}: {}",
+                                    component.precompiled_url, e
+                                ),
+                            }),
+                        });
+                    }
+                };
+
+                pulled_components.push(crate::types::Component {
+                    name: component.name.clone(),
+                    bytes: bytes.into(),
+                    digest: None,
+                    local_resources: component
+                        .local_resources
+                        .clone()
+                        .map(Into::into)
+                        .unwrap_or_default(),
+                    pool_size: component.pool_size,
+                    max_invocations: component.max_invocations,
+                    is_precompiled: true,
+                })
+            } else {
+                let oci_config =
+                    image_pull_secret_to_oci_config(config, &component.image_pull_secret);
+                let (bytes, digest) = match oci::pull_component(
+                    &component.image,
+                    oci_config,
+                    component.image_pull_policy().into(),
+                )
+                .await
+                {
+                    Ok(res) => res,
+                    Err(e) => {
+                        return Ok(types::v2::WorkloadStartResponse {
+                            workload_status: Some(types::v2::WorkloadStatus {
+                                workload_id: workload_id.clone(),
+                                workload_state: types::v2::WorkloadState::Error.into(),
+                                message: format!(
+                                    "failed to pull component image {}: {}",
+                                    component.image, e
+                                ),
+                            }),
+                        });
+                    }
+                };
+                pulled_components.push(crate::types::Component {
+                    name: component.name.clone(),
+                    bytes: bytes.into(),
+                    digest: Some(digest),
+                    local_resources: component
+                        .local_resources
+                        .clone()
+                        .map(Into::into)
+                        .unwrap_or_default(),
+                    pool_size: component.pool_size,
+                    max_invocations: component.max_invocations,
+                    is_precompiled: false,
+                })
+            }
         }
         (
             pulled_components,

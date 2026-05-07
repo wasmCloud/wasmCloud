@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod engine;
+pub mod fetch_precompiled;
 pub mod host;
 pub mod observability;
 pub mod plugin;

@@ -93,6 +93,11 @@ message Component {
   ImagePullSecret image_pull_secret = 5;
   string name = 6;
   ImagePullPolicy image_pull_policy = 7;
+  // Optional URL where a precompiled .cwasm for this component lives.
+  // When set, the host fetches and deserializes from this URL instead
+  // of pulling the OCI image and compiling fresh. Empty string means
+  // no precompiled variant is available — host falls back to OCI.
+  string precompiled_url = 8;
 }
 
 message LocalResources {

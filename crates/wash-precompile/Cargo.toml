@@ -1,0 +1,29 @@
+[package]
+name = "wash-precompile"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-nats = {workspace = true, features = ["aws-lc-rs"]}
+clap = {workspace = true, features = ["derive", "std"]}
+url = {workspace = true, features = ["std"]}
+oci-client.workspace = true
+oci-wasm.workspace = true
+tokio = {workspace = true, features = ["rt-multi-thread", "macros"]}
+wasmtime = {workspace = true, features = ["component-model", "cranelift"]}
+docker_credential.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+wat = {workspace = true, features = ["component-model"]}
+testcontainers.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "wash-precompile"
+path = "src/main.rs"
