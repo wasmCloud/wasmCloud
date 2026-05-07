@@ -7239,7 +7239,7 @@ dependencies = [
 
 [[package]]
 name = "wash"
-version = "2.0.7"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -7282,7 +7282,7 @@ dependencies = [
 
 [[package]]
 name = "wash-runtime"
-version = "2.0.7"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "async-nats",
