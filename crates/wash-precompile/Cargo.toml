@@ -13,7 +13,7 @@ url = {workspace = true, features = ["std"]}
 oci-client.workspace = true
 oci-wasm.workspace = true
 tokio = {workspace = true, features = ["rt-multi-thread", "macros"]}
-wasmtime = {workspace = true, features = ["component-model", "cranelift"]}
+wasmtime = {workspace = true,  features = ["component-model", "cranelift", "component-model-async"]}
 docker_credential.workspace = true
 
 [dev-dependencies]
