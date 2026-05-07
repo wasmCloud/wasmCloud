@@ -169,6 +169,27 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+      - name: Prepare build outputs
+        id: prep
+        # PRs lack org-package write access; only push by digest on main so
+        # canary-publish can assemble the manifest after all gates pass.
+        # Use $GITHUB_EVENT_NAME (built-in env var) to avoid template
+        # expansion inside a shell script (zizmor).
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            {
+              echo 'outputs<<EOF'
+              echo 'type=docker,dest=/tmp/wash-image.tar,name=localhost/wasmcloud-wash:e2e'
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo 'outputs<<EOF'
+              echo 'type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true'
+              echo 'type=docker,dest=/tmp/wash-image.tar,name=localhost/wasmcloud-wash:e2e'
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
       - name: Build wash runtime image
         id: build
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
@@ -178,9 +199,7 @@ jobs:
           # staging tags, and also emit a local docker tarball so the
           # operator e2e gate (and any future arch-specific gate)
           # exercises the exact bytes that get published.
-          outputs: |
-            type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
-            type=docker,dest=/tmp/wash-image.tar,name=localhost/wasmcloud-wash:e2e
+          outputs: ${{ steps.prep.outputs.outputs }}
           # head_ref on PRs (the source branch, shared across re-pushes
           # and across PRs from the same branch); falls back to ref_name
           # on main pushes ("main"). Always falls back to the main scope
@@ -190,6 +209,7 @@ jobs:
             type=gha,scope=wash-${{ matrix.arch }}-main
           cache-to: type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }},mode=max
       - name: Export digest
+        if: github.event_name != 'pull_request'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
@@ -201,6 +221,7 @@ jobs:
           fi
           touch "/tmp/digests/${DIGEST#sha256:}"
       - name: Upload digest
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wash-image-digest-${{ matrix.arch }}
