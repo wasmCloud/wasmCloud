@@ -190,15 +190,16 @@ jobs:
             type=gha,scope=wash-${{ matrix.arch }}-main
           cache-to: type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }},mode=max
       - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          if [[ -z "$digest" ]]; then
+          if [[ -z "$DIGEST" ]]; then
             echo "no digest on build step output" >&2
             exit 1
           fi
-          touch "/tmp/digests/${digest#sha256:}"
+          touch "/tmp/digests/${DIGEST#sha256:}"
       - name: Upload digest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
