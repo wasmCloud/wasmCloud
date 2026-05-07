@@ -6,7 +6,8 @@ dev:
   wasi_blobstore_path: tmp/blobstore
   wasi_keyvalue_path: tmp/keyvalue
   wasi_otel: true
-
+  environment:
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:18889
 
 # Workload-level configuration delivered to the component at runtime.
 # - `environment.configFrom` / `environment.secretFrom` reference top-level
