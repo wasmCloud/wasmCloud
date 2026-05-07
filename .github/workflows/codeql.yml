@@ -1,0 +1,94 @@
+name: codeql
+
+# CodeQL static analysis for Rust (workspace) and Go (runtime-gateway,
+# runtime-operator). Findings are uploaded to the Security tab as code
+# scanning alerts. Complements audit.yml (cargo-audit on dependency
+# advisories) by analysing first-party code paths for vulnerable patterns.
+
+on:
+  schedule:
+    # Weekly Mondays at 09:00 UTC. Spaced apart from scorecard (Wed) and
+    # audit (daily) so a single bad runner image doesn't take all three out.
+    # CodeQL on Rust + Go matrix is ~60 min total, so we run it weekly
+    # rather than per-PR; audit.yml + cargo's own checks cover the
+    # per-commit fast-feedback layer.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analyze-rust:
+    name: CodeQL (Rust)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3.35.2
+        with:
+          languages: rust
+          # security-and-quality includes the security suite plus quality
+          # checks; security-extended is the security-only superset of the
+          # default suite. Use security-extended to keep noise down on a
+          # repo this size.
+          queries: security-extended
+
+      - name: Build
+        uses: github/codeql-action/autobuild@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3.35.2
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3.35.2
+        with:
+          category: "/language:rust"
+
+  analyze-go:
+    name: CodeQL (Go - ${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [runtime-gateway, runtime-operator]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3.35.2
+        with:
+          languages: go
+          source-root: ${{ matrix.module }}
+          queries: security-extended
+
+      - name: Build
+        uses: github/codeql-action/autobuild@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3.35.2
+        with:
+          working-directory: ${{ matrix.module }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3.35.2
+        with:
+          category: "/language:go-${{ matrix.module }}"
