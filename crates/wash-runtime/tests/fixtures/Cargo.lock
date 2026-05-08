@@ -1260,6 +1260,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tls-echo-client-p2"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.54.0",
+]
+
+[[package]]
+name = "tls-echo-client-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.54.0",
+]
+
+[[package]]
 name = "tokio"
 version = "1.51.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

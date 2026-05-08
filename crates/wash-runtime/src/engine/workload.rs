@@ -464,7 +464,7 @@ impl DerefMut for WorkloadService {
 /// A `ResolvedWorkload` contains all components that have been validated,
 /// bound to plugins, and had their dependencies resolved. This is the final
 /// state of a workload before execution.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ResolvedWorkload {
     /// The unique identifier of the workload, created with [uuid::Uuid::new_v4]
     id: Arc<str>,
@@ -481,6 +481,19 @@ pub struct ResolvedWorkload {
     service: Option<WorkloadService>,
     /// The requested host [`WitInterface`]s to resolve this workload
     host_interfaces: Vec<WitInterface>,
+    /// TLS provider override for `wasi:tls` client connections in this workload.
+    #[cfg(feature = "wasi-tls")]
+    tls_provider: Option<Arc<dyn wasmtime_wasi_tls::TlsProvider>>,
+}
+
+impl std::fmt::Debug for ResolvedWorkload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedWorkload")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("namespace", &self.namespace)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ResolvedWorkload {
@@ -1147,6 +1160,11 @@ impl ResolvedWorkload {
             ctx_builder = ctx_builder.with_plugins(plugins.clone());
         }
 
+        #[cfg(feature = "wasi-tls")]
+        if let Some(provider) = self.tls_provider.clone() {
+            ctx_builder = ctx_builder.with_tls_provider(provider);
+        }
+
         Ok(ctx_builder.build())
     }
 
@@ -1292,6 +1310,9 @@ pub struct UnresolvedWorkload {
     service: Option<WorkloadService>,
     /// All [`WorkloadComponent`]s in the workload
     components: HashMap<Arc<str>, WorkloadComponent>,
+    /// TLS provider override for `wasi:tls` client connections in this workload.
+    #[cfg(feature = "wasi-tls")]
+    tls_provider: Option<Arc<dyn wasmtime_wasi_tls::TlsProvider>>,
 }
 
 impl UnresolvedWorkload {
@@ -1329,7 +1350,20 @@ impl UnresolvedWorkload {
                 })
                 .collect(),
             host_interfaces,
+            #[cfg(feature = "wasi-tls")]
+            tls_provider: None,
         }
+    }
+
+    /// Override the TLS provider used for `wasi:tls` client connections in this workload.
+    ///
+    /// Use this to plug in an alternative TLS backend, install a custom root
+    /// certificate store (corporate CAs, certificate pinning), or integrate
+    /// with HSM-backed key material.
+    #[cfg(feature = "wasi-tls")]
+    pub fn with_tls_provider(mut self, provider: Arc<dyn wasmtime_wasi_tls::TlsProvider>) -> Self {
+        self.tls_provider = Some(provider);
+        self
     }
 
     /// Bind this workload to the host plugins based on the requested
@@ -1665,6 +1699,8 @@ impl UnresolvedWorkload {
             service: self.service,
             host_interfaces: self.host_interfaces,
             http_handler: http_handler.clone(),
+            #[cfg(feature = "wasi-tls")]
+            tls_provider: self.tls_provider,
         };
 
         // Link components before plugin resolution

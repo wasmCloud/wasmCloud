@@ -216,6 +216,7 @@ const P2_FIXTURES: &[&str] = &[
     "inter-component-call-callee",
     "inter-component-call-middleware",
     "http-allowed-hosts",
+    "tls-echo-client-p2",
 ];
 
 const P3_FIXTURES: &[&str] = &[
@@ -223,13 +224,20 @@ const P3_FIXTURES: &[&str] = &[
     "http-blobstore-p3",
     "cli-service-p3",
     "socket-test-p3",
+    "tls-echo-client-p3",
     "inter-component-call-p3-caller",
     "inter-component-call-p3-callee",
 ];
 
 // Fixtures with local-only WIT worlds (no wasi imports). Shared deps
 // would pollute their wit resolution with unneeded packages.
-const P2_SKIP_SHARED_WIT: &[&str] = &["cron-service", "cron-component"];
+// tls-echo-client manages its own wit/deps because it needs wasi:tls@0.2.0-draft
+// alongside a local wasi:io version that matches the TLS WIT.
+const P2_SKIP_SHARED_WIT: &[&str] = &["cron-service", "cron-component", "tls-echo-client-p2"];
+
+// tls-echo-client-p3 manages its own wit/deps because it needs wasi:tls@0.3.0-draft
+// alongside the standard P3 WASI packages (sockets, cli, clocks).
+const P3_SKIP_SHARED_WIT: &[&str] = &["tls-echo-client-p3"];
 
 fn build_all_fixtures(workspace_dir: &Path) {
     build_fixtures(
@@ -239,8 +247,13 @@ fn build_all_fixtures(workspace_dir: &Path) {
         P2_SKIP_SHARED_WIT,
     )
     .expect("failed to build P2 fixtures");
-    build_fixtures(workspace_dir, P3_FIXTURES, FixtureKind::P3, &[])
-        .expect("failed to build P3 fixtures");
+    build_fixtures(
+        workspace_dir,
+        P3_FIXTURES,
+        FixtureKind::P3,
+        P3_SKIP_SHARED_WIT,
+    )
+    .expect("failed to build P3 fixtures");
 }
 
 fn compile_protos(workspace_dir: &Path, out_dir: &Path) {

@@ -117,6 +117,9 @@ jobs:
       - name: Test with wasip3
         run: |
           cargo test -p wash-runtime --features wasip3
+      - name: Test with wasi-tls + wasip3
+        run: |
+          cargo test -p wash-runtime --features wasi-tls,wasip3
       - name: Build benchmarks
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -154,7 +157,7 @@ jobs:
           cargo +nightly fmt -- --check
       - name: Lint
         run: |
-          cargo clippy --workspace --features wasip3
+          cargo clippy --workspace --features wasip3,wasi-tls
       - name: Check for unused dependencies
         run: |
           cargo machete
