@@ -2,6 +2,9 @@
 
 #![allow(dead_code)]
 
+#[cfg(feature = "wasi-tls")]
+pub mod tls;
+
 use anyhow::{Context, Result};
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 use tokio::time::timeout;

@@ -1,0 +1,11 @@
+package wasmcloud:tls-echo-client-p3@0.1.0;
+
+world tls-echo-client-p3 {
+    // Server address is passed via the ECHO_ADDR environment variable.
+    import wasi:cli/stderr@0.3.0-rc-2026-03-15;
+    import wasi:sockets/types@0.3.0-rc-2026-03-15;
+    import wasi:tls/client@0.3.0-draft;
+    import wasi:tls/types@0.3.0-draft;
+
+    export wasi:cli/run@0.3.0-rc-2026-03-15;
+}
