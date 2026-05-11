@@ -221,16 +221,7 @@ fn test_tls_provider(cert_der: &[u8]) -> Result<Arc<dyn TlsProvider>> {
     Ok(Arc::new(TestTlsProvider { client_config }) as Arc<dyn TlsProvider>)
 }
 
-/// Build a P2 engine with a custom TLS provider that trusts `cert_der`.
-pub fn engine_with_tls(cert_der: &[u8]) -> Result<Engine> {
-    Engine::builder()
-        .with_tls_provider(test_tls_provider(cert_der)?)
-        .build()
-        .context("failed to build engine")
-}
-
-/// Build an engine with both P3 and a custom TLS provider that trusts
-/// `cert_der`.
+/// Build an engine with P3 and a custom TLS provider that trusts `cert_der`.
 #[cfg(feature = "wasip3")]
 pub fn engine_with_p3_and_tls(cert_der: &[u8]) -> Result<Engine> {
     Engine::builder()

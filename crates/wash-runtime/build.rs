@@ -108,17 +108,11 @@ fn componentize(core_module: &[u8], adapter: &[u8]) -> Vec<u8> {
 /// `skip_shared_wit` lists fixtures whose world uses only local
 /// interfaces (no wasi imports). Copying shared deps into those
 /// fixtures would pollute their wit resolution with unneeded packages.
-///
-/// `extra_bundles` is a per-fixture list of named subdirectories under
-/// the kind's shared dir to pull into the fixture in addition to (or
-/// instead of) the default flat copy. Used for version-pinned bundles
-/// like `tls-bundle/` whose contents conflict with the default deps.
 fn build_fixtures(
     workspace_dir: &Path,
     fixtures: &[&str],
     kind: FixtureKind,
     skip_shared_wit: &[&str],
-    extra_bundles: &[(&str, &[&str])],
 ) -> anyhow::Result<()> {
     let fixtures_dir = workspace_dir.join("crates/wash-runtime/tests/fixtures");
     let wasm_dir = workspace_dir.join("crates/wash-runtime/tests/wasm");
@@ -144,23 +138,6 @@ fn build_fixtures(
 
         if fixture_dir.join("wit").exists() && !skip_shared_wit.contains(fixture) {
             copy_shared_wit_deps(&shared_wit, &fixture_dir)?;
-        }
-
-        // Pull any extra bundles requested by this fixture.
-        for (bundle_fixture, bundle_names) in extra_bundles {
-            if bundle_fixture != fixture {
-                continue;
-            }
-            for bundle in *bundle_names {
-                let bundle_dir = shared_wit.join(bundle);
-                if !bundle_dir.exists() {
-                    anyhow::bail!(
-                        "Bundle directory {} does not exist (requested by {fixture})",
-                        bundle_dir.display()
-                    );
-                }
-                copy_shared_wit_deps(&bundle_dir, &fixture_dir)?;
-            }
         }
 
         if !run_cargo_build_wasm(&fixtures_dir, fixture, target) {
@@ -249,7 +226,6 @@ const P2_FIXTURES: &[&str] = &[
     "inter-component-call-callee",
     "inter-component-call-middleware",
     "http-allowed-hosts",
-    "tls-echo-client-p2",
 ];
 
 const P3_FIXTURES: &[&str] = &[
@@ -264,27 +240,7 @@ const P3_FIXTURES: &[&str] = &[
 
 // Fixtures with local-only WIT worlds (no wasi imports). Shared deps
 // would pollute their wit resolution with unneeded packages.
-//
-// `tls-echo-client-p2` skips the default 0.2.2-versioned shared deps and
-// instead pulls in the version-pinned `tls-bundle/` (see
-// P2_EXTRA_BUNDLES below) because the TLS draft hard-pins to
-// `wasi:io@0.2.6`, which clashes with the 0.2.2 graph.
-const P2_SKIP_SHARED_WIT: &[&str] = &["cron-service", "cron-component", "tls-echo-client-p2"];
-
-// Per-fixture extra bundle pulls.
-//
-// `tls-bundle/` exists because `wasi:tls@0.2.0-draft` hard-pins
-// `wasi:io@0.2.6` (`use wasi:io/streams@0.2.6.{...}`), which transitively
-// drags in the 0.2.6 versions of cli/clocks/sockets/random/filesystem.
-// Dropping those into the top-level `p2-wit-deps/` would force every
-// other P2 fixture (currently resolving against the 0.2.2 graph) to
-// either pick a version explicitly or break on ambiguity.
-//
-// To keep the 0.2.2 default intact we house the TLS-specific 0.2.6 set
-// plus `wasi-tls-0.2.0-draft/` itself in a sibling subdirectory
-// (`tls-bundle/`) and opt the TLS fixture in via this list. New P2
-// fixtures that want TLS just add themselves here.
-const P2_EXTRA_BUNDLES: &[(&str, &[&str])] = &[("tls-echo-client-p2", &["tls-bundle"])];
+const P2_SKIP_SHARED_WIT: &[&str] = &["cron-service", "cron-component"];
 
 fn build_all_fixtures(workspace_dir: &Path) {
     build_fixtures(
@@ -292,10 +248,9 @@ fn build_all_fixtures(workspace_dir: &Path) {
         P2_FIXTURES,
         FixtureKind::P2,
         P2_SKIP_SHARED_WIT,
-        P2_EXTRA_BUNDLES,
     )
     .expect("failed to build P2 fixtures");
-    build_fixtures(workspace_dir, P3_FIXTURES, FixtureKind::P3, &[], &[])
+    build_fixtures(workspace_dir, P3_FIXTURES, FixtureKind::P3, &[])
         .expect("failed to build P3 fixtures");
 }
 

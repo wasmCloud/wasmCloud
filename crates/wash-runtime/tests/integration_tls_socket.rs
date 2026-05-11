@@ -1,13 +1,8 @@
-//! Integration tests for wasi:sockets + wasi:tls round-trip.
+//! Integration tests for wasi:tls round-trip (P3 only).
 //!
-//! # P2 round-trip
-//! A P2 guest component opens a `wasi:sockets` TCP stream, wraps it with
-//! `wasi:tls/types/client-handshake`, and round-trips a `PING\r\n` /
-//! `PONG\r\n` exchange against a local rustls echo server started in-process.
-//!
-//! # P3 round-trip
-//! Same scenario, but using P3 streams and `wasi:tls/client::Connector`.
-//!
+//! A P3 guest component opens a `wasi:sockets` TCP stream, wraps it with
+//! `wasi:tls/client::Connector`, and round-trips a `PING\r\n` / `PONG\r\n`
+//! exchange against a local rustls echo server started in-process.
 
 #![cfg(feature = "wasi-tls")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -22,14 +17,10 @@ use wash_runtime::{
 };
 
 mod common;
-use common::tls::{
-    EchoServer, engine_with_tls, install_default_crypto_provider, start_tls_echo_server,
-};
+use common::tls::{EchoServer, install_default_crypto_provider, start_tls_echo_server};
 
 #[cfg(feature = "wasip3")]
 use common::tls::engine_with_p3_and_tls;
-
-const TLS_ECHO_CLIENT_P2_WASM: &[u8] = include_bytes!("wasm/tls_echo_client_p2.wasm");
 
 #[cfg(feature = "wasip3")]
 const TLS_ECHO_CLIENT_P3_WASM: &[u8] = include_bytes!("wasm/tls_echo_client_p3.wasm");
@@ -65,54 +56,12 @@ fn echo_client_workload_request(
     }
 }
 
-/// The tls-echo-client-p2 component opens a TCP connection, performs a TLS
-/// handshake, sends `PING\r\n`, and expects `PONG\r\n` back.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_p2_tls_tcp_round_trip() -> Result<()> {
-    install_default_crypto_provider();
-
-    let EchoServer {
-        addr: echo_addr,
-        cert_der,
-        ping_rx,
-    } = start_tls_echo_server().await?;
-
-    let engine = engine_with_tls(&cert_der)?;
-    let host = HostBuilder::new()
-        .with_engine(engine)
-        .build()?
-        .start()
-        .await?;
-
-    let req =
-        echo_client_workload_request("tls-echo-client-p2", TLS_ECHO_CLIENT_P2_WASM, echo_addr);
-
-    let resp = timeout(Duration::from_secs(15), host.workload_start(req))
-        .await
-        .context("tls round-trip test timed out")?
-        .context("workload_start failed")?;
-    assert_eq!(
-        resp.workload_status.workload_state,
-        WorkloadState::Running,
-        "expected Running, got {:?} (message: {})",
-        resp.workload_status.workload_state,
-        resp.workload_status.message,
-    );
-
-    let ping = timeout(Duration::from_secs(10), ping_rx)
-        .await
-        .context("echo server did not receive PING within timeout")?
-        .context("echo server task dropped its sender before sending PING")?;
-    assert!(
-        ping.starts_with(b"PING\r\n"),
-        "echo server received unexpected bytes from guest: {ping:?}",
-    );
-
-    Ok(())
-}
-
-/// The tls-echo-client-p3 component does the same round-trip using P3 streams
-/// and `wasi:tls/client::Connector`.
+/// `test_p3_tls_tcp_round_trip` exercises:
+///
+/// - TCP connect to a non-loopback echo server (loopback is intercepted by the runtime)
+/// - TLS handshake against a self-signed cert via the custom `TestTlsProvider`
+/// - Plaintext `PING\r\n` write through the encrypted stream
+/// - Receipt verified via oneshot channel on the server side
 #[cfg(feature = "wasip3")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_p3_tls_tcp_round_trip() -> Result<()> {
