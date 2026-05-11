@@ -1,0 +1,94 @@
+name: "Build Rust example"
+description: >
+  Lint (cargo +nightly fmt --check, cargo clippy --locked -- -D warnings),
+  build via `wash build` (which reads .wash/config.yaml's build.command
+  and fetches WIT dependencies as needed), and publish to OCI on pushes
+  to main. CI mirrors what `wash build` does locally, so a passing build
+  here is the same passing build a contributor would see. The caller must
+  invoke `./.github/actions/setup-rust-example` exactly once before
+  calling this action, plus any example-specific build tools (e.g.,
+  protoc for tonic-build).
+
+inputs:
+  working-directory:
+    description: "Directory containing the example's .wash/config.yaml."
+    required: true
+  image:
+    description: >
+      OCI image to push to, without a tag (e.g. ghcr.io/wasmcloud/components/blobby).
+      On pushes to main, publishes a single tag whose value is the Cargo
+      package version. Skips the push if that tag already exists in the
+      registry, so bump-the-version is the explicit signal to release.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Fetch WIT dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        # clippy resolves the wit_bindgen::generate! macro, so WIT deps
+        # need to be in place before clippy runs. Examples without a
+        # wit/ directory (e.g. protobuf-based ones) skip this.
+        if [[ -d wit ]]; then
+          wash wit fetch
+        fi
+
+    - name: Format check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: cargo +nightly fmt -- --check
+
+    - name: Clippy
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: cargo clippy --target wasm32-wasip2 --locked -- -D warnings
+
+    - name: Build
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: wash build
+
+    - name: Login to ghcr.io
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.repository_owner }}
+        password: ${{ github.token }}
+
+    - name: Publish or skip
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        IMAGE: ${{ inputs.image }}
+      run: |
+        COMPONENT_PATH=$(yq '.build.component_path' .wash/config.yaml)
+        if [[ -z "${COMPONENT_PATH}" || "${COMPONENT_PATH}" == "null" ]]; then
+          echo "ERROR: .wash/config.yaml is missing build.component_path" >&2
+          exit 1
+        fi
+        # Resolve the Cargo package version. cargo metadata walks up to the
+        # workspace root, which is what we want for grpc-hello-world's
+        # component-* dirs where version is inherited from [workspace.package].
+        PKG_NAME=$(yq -p toml '.package.name' Cargo.toml)
+        if [[ -z "${PKG_NAME}" || "${PKG_NAME}" == "null" ]]; then
+          echo "ERROR: package.name missing in Cargo.toml" >&2
+          exit 1
+        fi
+        VERSION=$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml \
+          | jq -r --arg name "${PKG_NAME}" '.packages[] | select(.name == $name) | .version')
+        if [[ -z "${VERSION}" || "${VERSION}" == "null" ]]; then
+          echo "ERROR: could not resolve version for package ${PKG_NAME}" >&2
+          exit 1
+        fi
+        # docker manifest inspect uses the docker login state set up by the
+        # earlier step. Exit code 0 means the tag already exists.
+        if docker manifest inspect "${IMAGE}:${VERSION}" >/dev/null 2>&1; then
+          echo "${IMAGE}:${VERSION} already exists in registry, skipping push (bump the package version to release a new build)"
+          exit 0
+        fi
+        echo "Publishing ${PKG_NAME} v${VERSION} to ${IMAGE}:${VERSION}"
+        wash oci push "${IMAGE}:${VERSION}" "${COMPONENT_PATH}"

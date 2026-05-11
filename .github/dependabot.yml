@@ -1,7 +1,15 @@
 version: 2
 updates:
+  # Each example is its own workspace (outside the root members list), so
+  # they need to be listed alongside "/" for dependabot to reach them.
+  # Grouped under all-cargo so wash + example bumps land in one PR.
   - package-ecosystem: "cargo"
-    directory: "/"
+    directories:
+      - "/"
+      - "/examples/blobby"
+      - "/examples/grpc-hello-world"
+      - "/examples/otel-http"
+      - "/examples/qrcode"
     schedule:
       interval: "weekly"
     target-branch: "main"
@@ -27,11 +35,13 @@ updates:
   - package-ecosystem: "github-actions"
     directories:
       - "/"
+      - "/.github/actions/build-rust-example"
       - "/.github/actions/helm-publish"
       - "/.github/actions/lint-go"
       - "/.github/actions/no-diff"
       - "/.github/actions/setup-go"
       - "/.github/actions/setup-rust"
+      - "/.github/actions/setup-rust-example"
     schedule:
       interval: "weekly"
     target-branch: "main"

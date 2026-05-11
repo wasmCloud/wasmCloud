@@ -1,8 +1,0 @@
-version: 2.0.0
-
-# Skip codegen during dev
-dev:
-  command: make build
-
-build:
-  command: make bindgen build
