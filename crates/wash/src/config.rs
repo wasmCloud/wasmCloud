@@ -269,13 +269,28 @@ impl DevConfig {
         }
 
         if let Some(url) = &self.wasi_keyvalue_redis_url {
-            check_url_scheme("dev.wasi_keyvalue_redis_url", url, &["redis", "rediss"], &mut errors);
+            check_url_scheme(
+                "dev.wasi_keyvalue_redis_url",
+                url,
+                &["redis", "rediss"],
+                &mut errors,
+            );
         }
         if let Some(url) = &self.wasi_keyvalue_nats_url {
-            check_url_scheme("dev.wasi_keyvalue_nats_url", url, &["nats", "tls"], &mut errors);
+            check_url_scheme(
+                "dev.wasi_keyvalue_nats_url",
+                url,
+                &["nats", "tls"],
+                &mut errors,
+            );
         }
         if let Some(url) = &self.postgres_url {
-            check_url_scheme("dev.postgres_url", url, &["postgres", "postgresql"], &mut errors);
+            check_url_scheme(
+                "dev.postgres_url",
+                url,
+                &["postgres", "postgresql"],
+                &mut errors,
+            );
         }
 
         if cfg!(target_os = "windows") && self.wasi_webgpu {
@@ -455,9 +470,25 @@ async fn generate_config(config: &Config, path: &Path, force: bool) -> Result<()
         );
     }
 
-    save_config(config, path).await?;
+    let content = match path.extension().and_then(|e| e.to_str()) {
+        Some("json") => {
+            serde_json::to_string_pretty(config).context("failed to serialize config to JSON")?
+        }
+        Some("toml") => toml::to_string(config).context("failed to serialize config to TOML")?,
+        _ => serde_yaml_ng::to_string(config).context("failed to serialize config to YAML")?,
+    };
 
-    info!(config_path = %path.display(), "Generated example configuration");
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("failed to create config directory: {}", parent.display()))?;
+    }
+
+    tokio::fs::write(path, content)
+        .await
+        .with_context(|| format!("failed to write config file: {}", path.display()))?;
+
+    info!(config_path = %path.display(), "generated configuration");
     Ok(())
 }
 
@@ -467,7 +498,7 @@ pub fn example_config() -> Config {
         version: Some(env!("CARGO_PKG_VERSION").to_string()),
         build: Some(BuildConfig {
             command: Some("cargo build --target wasm32-wasip2 --release".to_string()),
-            env: HashMap::from_iter([("RUST_LOG".to_string(), "info".to_string())]),
+            env: HashMap::new(),
             component_path: Some(PathBuf::from(format!(
                 "target/wasm32-wasip2/release/component.wasm"
             ))),

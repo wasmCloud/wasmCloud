@@ -7279,6 +7279,7 @@ dependencies = [
  "tempfile",
  "testcontainers",
  "tokio",
+ "toml 0.8.23",
  "tonic-prost-build",
  "tracing",
  "url",

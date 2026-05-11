@@ -6,12 +6,35 @@ use humansize::{BINARY, format_size};
 use tracing::{info, instrument, warn};
 
 use crate::{
-    cli::{CliCommand, CliContext, CommandOutput},
+    cli::{CONFIG_DIR_NAME, CliCommand, CliContext, CommandOutput},
     config::{
         Config, generate_default_config, generate_example_config, load_config,
-        load_config_from_file, local_config_path,
+        load_config_from_file,
     },
 };
+
+/// Output format for a generated config file.
+#[derive(Debug, Clone, Default, clap::ValueEnum)]
+pub enum ConfigFormat {
+    /// YAML (default)
+    #[default]
+    #[value(alias = "yml")]
+    Yaml,
+    /// JSON
+    Json,
+    /// TOML
+    Toml,
+}
+
+impl ConfigFormat {
+    fn extension(&self) -> &'static str {
+        match self {
+            ConfigFormat::Yaml => "yaml",
+            ConfigFormat::Json => "json",
+            ConfigFormat::Toml => "toml",
+        }
+    }
+}
 
 /// View and manage wash configuration
 #[derive(Parser, Debug, Clone)]
@@ -29,9 +52,13 @@ pub enum ConfigCommand {
         #[arg(long)]
         force: bool,
 
-        /// Generate example config
+        /// Populate the config with example values for every field
         #[arg(long)]
         example: bool,
+
+        /// Output format for the generated config file
+        #[arg(long, default_value = "yaml", value_enum)]
+        format: ConfigFormat,
     },
     /// Print the current version and local directories used by wash
     Info,
@@ -71,7 +98,9 @@ impl CliCommand for ConfigCommand {
     #[instrument(level = "debug", skip_all, name = "config")]
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
         match self {
-            ConfigCommand::Init { force, example } => cmd_init(ctx, *force, *example).await,
+            ConfigCommand::Init { force, example, format } => {
+                cmd_init(ctx, *force, *example, format).await
+            }
             ConfigCommand::Info => cmd_info(ctx),
             ConfigCommand::Show => cmd_show(ctx),
             ConfigCommand::Cleanup {
@@ -85,8 +114,16 @@ impl CliCommand for ConfigCommand {
     }
 }
 
-async fn cmd_init(ctx: &CliContext, force: bool, example: bool) -> anyhow::Result<CommandOutput> {
-    let config_path = local_config_path(ctx.project_dir());
+async fn cmd_init(
+    ctx: &CliContext,
+    force: bool,
+    example: bool,
+    format: &ConfigFormat,
+) -> anyhow::Result<CommandOutput> {
+    let config_path = ctx
+        .project_dir()
+        .join(CONFIG_DIR_NAME)
+        .join(format!("config.{}", format.extension()));
 
     if example {
         generate_example_config(&config_path, force)
