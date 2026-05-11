@@ -34,9 +34,9 @@ pub enum ConfigCommand {
         example: bool,
     },
     /// Print the current version and local directories used by wash
-    Info {},
+    Info,
     /// Print the current configuration file for wash
-    Show {},
+    Show,
     /// Remove wash cache and/or data directories
     Cleanup {
         /// Remove cache directory
@@ -71,40 +71,55 @@ impl CliCommand for ConfigCommand {
     #[instrument(level = "debug", skip_all, name = "config")]
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
         match self {
-            ConfigCommand::Init { force, example } => {
-                let config_path = local_config_path(ctx.project_dir());
+            ConfigCommand::Init { force, example } => cmd_init(ctx, *force, *example).await,
+            ConfigCommand::Info => cmd_info(ctx),
+            ConfigCommand::Show => cmd_show(ctx),
+            ConfigCommand::Cleanup {
+                cache,
+                data,
+                all,
+                dry_run,
+            } => cmd_cleanup(ctx, *cache, *data, *all, *dry_run).await,
+            ConfigCommand::Validate { file } => cmd_validate(ctx, file.as_deref()).await,
+        }
+    }
+}
 
-                if *example {
-                    generate_example_config(&config_path, *force)
-                        .await
-                        .context("failed to initialize config")?;
-                } else {
-                    generate_default_config(&config_path, *force)
-                        .await
-                        .context("failed to initialize config")?;
-                }
+async fn cmd_init(ctx: &CliContext, force: bool, example: bool) -> anyhow::Result<CommandOutput> {
+    let config_path = local_config_path(ctx.project_dir());
 
-                Ok(CommandOutput::ok(
-                    "Configuration initialized successfully.".to_string(),
-                    Some(serde_json::json!({
-                        "message": "Configuration initialized successfully.",
-                        "config_path": config_path.display().to_string(),
-                        "success": true,
-                    })),
-                ))
-            }
-            ConfigCommand::Info {} => {
-                let version = env!("CARGO_PKG_VERSION");
-                let data_dir = ctx.data_dir().display().to_string();
-                let cache_dir = ctx.cache_dir().display().to_string();
-                let user_config_dir = ctx.config_dir().display().to_string();
-                let user_config_path = ctx.user_config_path().display().to_string();
-                let project_path = ctx.project_dir();
-                let project_config_path = ctx.project_config_path().display().to_string();
+    if example {
+        generate_example_config(&config_path, force)
+            .await
+            .context("failed to initialize config")?;
+    } else {
+        generate_default_config(&config_path, force)
+            .await
+            .context("failed to initialize config")?;
+    }
 
-                Ok(CommandOutput::ok(
-                    format!(
-                        r"
+    Ok(CommandOutput::ok(
+        "Configuration initialized successfully.".to_string(),
+        Some(serde_json::json!({
+            "message": "Configuration initialized successfully.",
+            "config_path": config_path.display().to_string(),
+            "success": true,
+        })),
+    ))
+}
+
+fn cmd_info(ctx: &CliContext) -> anyhow::Result<CommandOutput> {
+    let version = env!("CARGO_PKG_VERSION");
+    let data_dir = ctx.data_dir().display().to_string();
+    let cache_dir = ctx.cache_dir().display().to_string();
+    let user_config_dir = ctx.config_dir().display().to_string();
+    let user_config_path = ctx.user_config_path().display().to_string();
+    let project_path = ctx.project_dir();
+    let project_config_path = ctx.project_config_path().display().to_string();
+
+    Ok(CommandOutput::ok(
+        format!(
+            r"
 wash version: {version}
 Data directory: {data_dir}
 Cache directory: {cache_dir}
@@ -112,131 +127,123 @@ User Config directory: {user_config_dir}
 User Config path: {user_config_path}
 Project Config path: {project_config_path}
                         "
-                    ),
-                    Some(serde_json::json!({
-                        "version": version,
-                        "data_dir": data_dir,
-                        "cache_dir": cache_dir,
-                        "user_config_dir": user_config_dir,
-                        "user_config_path": user_config_path,
-                        "project_path": project_path,
-                        "project_config_path": project_config_path,
-                    })),
-                ))
-            }
-            ConfigCommand::Show {} => {
-                let config = load_config(
-                    &ctx.user_config_path(),
-                    Some(ctx.project_dir()),
-                    None::<Config>,
-                )?;
-                Ok(CommandOutput::ok(
-                    serde_yaml_ng::to_string(&config).context("failed to serialize config")?,
-                    Some(serde_json::to_value(&config).context("failed to serialize config")?),
-                ))
-            }
-            ConfigCommand::Cleanup {
-                cache,
-                data,
-                all,
-                dry_run,
-            } => {
-                let remove_cache = *cache || *all;
-                let remove_data = *data || *all;
-                if !remove_cache && !remove_data {
-                    bail!("specify at least one of --cache, --data, or --all");
-                }
-
-                let mut targets = Vec::new();
-                if remove_cache {
-                    targets.push(("cache", ctx.cache_dir()));
-                }
-                if remove_data {
-                    targets.push(("data", ctx.data_dir()));
-                }
-
-                let mut lines = Vec::new();
-                let mut entries = Vec::new();
-                let mut total_bytes: u64 = 0;
-
-                for (kind, path) in &targets {
-                    let exists = path.exists();
-                    let size_bytes = if exists {
-                        match dir_size(path).await {
-                            Ok(b) => Some(b),
-                            Err(e) => {
-                                warn!(
-                                    kind, path = %path.display(), error = ?e,
-                                    "failed to compute directory size"
-                                );
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    };
-                    if let Some(b) = size_bytes {
-                        total_bytes = total_bytes.saturating_add(b);
-                    }
-
-                    let action = match (*dry_run, exists) {
-                        (true, true) => "would remove",
-                        (true, false) => "would skip (missing)",
-                        (false, true) => {
-                            tokio::fs::remove_dir_all(path).await.with_context(|| {
-                                format!("failed to remove {kind} directory at {}", path.display())
-                            })?;
-                            info!(
-                                kind, path = %path.display(), bytes = size_bytes.unwrap_or(0),
-                                "removed directory"
-                            );
-                            "removed"
-                        }
-                        (false, false) => "skipped (missing)",
-                    };
-
-                    let size_label = match size_bytes {
-                        Some(b) => format!(" ({})", format_size(b, BINARY)),
-                        None if exists => " (size unknown)".to_string(),
-                        None => String::new(),
-                    };
-                    lines.push(format!(
-                        "{action} {kind} directory: {}{}",
-                        path.display(),
-                        size_label
-                    ));
-                    entries.push(serde_json::json!({
-                        "kind": kind,
-                        "path": path.display().to_string(),
-                        "existed": exists,
-                        "action": action,
-                        "size_bytes": size_bytes,
-                        "size_human": size_bytes.map(|b| format_size(b, BINARY)),
-                    }));
-                }
-
-                lines.push(format!(
-                    "total{}: {}",
-                    if *dry_run { " (would free)" } else { " freed" },
-                    format_size(total_bytes, BINARY)
-                ));
-
-                Ok(CommandOutput::ok(
-                    lines.join("\n"),
-                    Some(serde_json::json!({
-                        "dry_run": *dry_run,
-                        "entries": entries,
-                        "total_bytes": total_bytes,
-                        "total_human": format_size(total_bytes, BINARY),
-                    })),
-                ))
-            }
-            ConfigCommand::Validate { file } => validate(ctx, file.as_deref()).await,
-        }
-    }
+        ),
+        Some(serde_json::json!({
+            "version": version,
+            "data_dir": data_dir,
+            "cache_dir": cache_dir,
+            "user_config_dir": user_config_dir,
+            "user_config_path": user_config_path,
+            "project_path": project_path,
+            "project_config_path": project_config_path,
+        })),
+    ))
 }
 
-async fn validate(ctx: &CliContext, file: Option<&Path>) -> anyhow::Result<CommandOutput> {
+fn cmd_show(ctx: &CliContext) -> anyhow::Result<CommandOutput> {
+    let config = load_config(
+        &ctx.user_config_path(),
+        Some(ctx.project_dir()),
+        None::<Config>,
+    )?;
+    Ok(CommandOutput::ok(
+        serde_yaml_ng::to_string(&config).context("failed to serialize config")?,
+        Some(serde_json::to_value(&config).context("failed to serialize config")?),
+    ))
+}
+
+async fn cmd_cleanup(
+    ctx: &CliContext,
+    cache: bool,
+    data: bool,
+    all: bool,
+    dry_run: bool,
+) -> anyhow::Result<CommandOutput> {
+    let remove_cache = cache || all;
+    let remove_data = data || all;
+    if !remove_cache && !remove_data {
+        bail!("specify at least one of --cache, --data, or --all");
+    }
+
+    let mut targets = Vec::new();
+    if remove_cache {
+        targets.push(("cache", ctx.cache_dir()));
+    }
+    if remove_data {
+        targets.push(("data", ctx.data_dir()));
+    }
+
+    let mut lines = Vec::new();
+    let mut entries = Vec::new();
+    let mut total_bytes: u64 = 0;
+
+    for (kind, path) in &targets {
+        let exists = path.exists();
+        let size_bytes = if exists {
+            match dir_size(path).await {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    warn!(kind, path = %path.display(), error = ?e, "failed to compute directory size");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(b) = size_bytes {
+            total_bytes = total_bytes.saturating_add(b);
+        }
+
+        let action = match (dry_run, exists) {
+            (true, true) => "would remove",
+            (true, false) => "would skip (missing)",
+            (false, true) => {
+                tokio::fs::remove_dir_all(path).await.with_context(|| {
+                    format!("failed to remove {kind} directory at {}", path.display())
+                })?;
+                info!(kind, path = %path.display(), bytes = size_bytes.unwrap_or(0), "removed directory");
+                "removed"
+            }
+            (false, false) => "skipped (missing)",
+        };
+
+        let size_label = match size_bytes {
+            Some(b) => format!(" ({})", format_size(b, BINARY)),
+            None if exists => " (size unknown)".to_string(),
+            None => String::new(),
+        };
+        lines.push(format!(
+            "{action} {kind} directory: {}{size_label}",
+            path.display()
+        ));
+        entries.push(serde_json::json!({
+            "kind": kind,
+            "path": path.display().to_string(),
+            "existed": exists,
+            "action": action,
+            "size_bytes": size_bytes,
+            "size_human": size_bytes.map(|b| format_size(b, BINARY)),
+        }));
+    }
+
+    lines.push(format!(
+        "total{}: {}",
+        if dry_run { " (would free)" } else { " freed" },
+        format_size(total_bytes, BINARY)
+    ));
+
+    Ok(CommandOutput::ok(
+        lines.join("\n"),
+        Some(serde_json::json!({
+            "dry_run": dry_run,
+            "entries": entries,
+            "total_bytes": total_bytes,
+            "total_human": format_size(total_bytes, BINARY),
+        })),
+    ))
+}
+
+async fn cmd_validate(ctx: &CliContext, file: Option<&Path>) -> anyhow::Result<CommandOutput> {
     let (config, source_label, source_existed) = match file {
         Some(path) => {
             if !path.exists() {
