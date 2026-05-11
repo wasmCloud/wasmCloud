@@ -243,17 +243,35 @@ install_wash() {
     
     if [ -z "$asset_id" ]; then
         log_error "No matching binary found for platform ${platform}"
-        log_error "Available assets:"
-        
+        log_error "Available assets for ${version}:"
+
         # Use same pattern as elsewhere for optional GitHub token
         local list_curl_args=("-s")
         if [ -n "${GITHUB_TOKEN:-}" ]; then
             list_curl_args+=(" -H" "Authorization: token ${GITHUB_TOKEN:-}")
         fi
-        
-        curl "${list_curl_args[@]}" \
-            "https://api.github.com/repos/${REPO}/releases/latest" | \
-            grep '"name"' | sed 's/.*"name": *"\([^"]*\)".*/  - \1/' >&2
+
+        # Query the release the user actually asked for, not /latest — the
+        # latest release's asset list is misleading when the failure is
+        # specifically that an older release lacks the target's binary.
+        local list_response
+        list_response=$(curl "${list_curl_args[@]}" \
+            "https://api.github.com/repos/${REPO}/releases/tags/${version}" 2>/dev/null) || true
+
+        # jq is preferred so we only list real asset names. A bare grep on
+        # "name" also matches the release object's top-level .name (e.g.,
+        # "v2.1.0"), which then appears alongside actual asset filenames
+        # and confuses the diagnostic.
+        if command -v jq >/dev/null 2>&1; then
+            echo "$list_response" | jq -r '.assets[]?.name | "  - \(.)"' 2>/dev/null >&2
+        else
+            # Fallback without jq: rely on the wash- naming convention so
+            # we skip the release-level .name field. Covers the binary
+            # assets (wash-<target>) and the signature bundle (wash.sigstore.json).
+            echo "$list_response" \
+                | grep -oE '"name": *"wash[^"]*"' \
+                | sed 's/.*"name": *"\([^"]*\)".*/  - \1/' >&2
+        fi
         exit 1
     fi
     
