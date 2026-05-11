@@ -58,7 +58,7 @@ wasip3 = [
     "wasmtime-wasi-http/p3",
     "wasmtime-wasi-http/component-model-async",
 ]
-wasi-tls = ["dep:wasmtime-wasi-tls"]
+wasi-tls = ["dep:wasmtime-wasi-tls", "wasip3"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -84,7 +84,7 @@ wasmtime = { workspace = true, features = ["anyhow", "component-model", "compone
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-io = { workspace = true }
 wasmtime-wasi-http = { workspace = true, features = ["default-send-request", "p2"] }
-wasmtime-wasi-tls = { workspace = true, optional = true, features = ["p2", "p3", "rustls"] }
+wasmtime-wasi-tls = { workspace = true, optional = true, features = ["p3", "rustls"] }
 cap-net-ext = { workspace = true }
 cap-std = { workspace = true }
 io-lifetimes = { workspace = true }
