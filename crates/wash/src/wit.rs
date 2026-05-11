@@ -39,6 +39,36 @@ pub struct WitConfig {
     pub sources: HashMap<String, String>,
 }
 
+impl WitConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let mut errors: Vec<String> = Vec::new();
+
+        for reg in &self.registries {
+            if let Err(err) = Url::parse(&reg.url) {
+                errors.push(format!(
+                    "wit.registries entry '{}' is not a valid URL: {}",
+                    reg.url, err
+                ));
+            }
+        }
+
+        for (target, source) in &self.sources {
+            if target.trim().is_empty() {
+                errors.push("wit.sources contains an entry with empty target key".to_string());
+            }
+            if source.trim().is_empty() {
+                errors.push(format!("wit.sources['{target}'] has an empty source value"));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!("{}", errors.join("\n"))
+        }
+    }
+}
+
 /// Default WIT registries (just the standard wasm.pkg registry)
 fn default_wit_registries() -> Vec<WitRegistry> {
     // TODO(#1): bring BCA + wasmcloud here.

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, bail};
 use clap::{Parser, Subcommand};
@@ -8,7 +8,8 @@ use tracing::{info, instrument, warn};
 use crate::{
     cli::{CliCommand, CliContext, CommandOutput},
     config::{
-        Config, generate_default_config, generate_example_config, load_config, local_config_path,
+        Config, generate_default_config, generate_example_config, load_config,
+        load_config_from_file, local_config_path,
     },
 };
 
@@ -51,7 +52,12 @@ pub enum ConfigCommand {
         #[arg(long = "dry-run")]
         dry_run: bool,
     },
-    // TODO(#27): validate config command
+    /// Validate the wash configuration (syntax, schema, values, and conflicts)
+    Validate {
+        /// Path to specific config file to validate (optional)
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
 }
 
 impl CliCommand for ConfigArgs {
@@ -225,6 +231,65 @@ Project Config path: {project_config_path}
                     })),
                 ))
             }
+            ConfigCommand::Validate { file } => validate(ctx, file.as_deref()).await,
+        }
+    }
+}
+
+async fn validate(ctx: &CliContext, file: Option<&Path>) -> anyhow::Result<CommandOutput> {
+    let (config, source_label, source_existed) = match file {
+        Some(path) => {
+            if !path.exists() {
+                bail!("config file does not exist: {}", path.display());
+            }
+            let cfg = load_config_from_file(path)
+                .with_context(|| format!("failed to parse {}", path.display()))?;
+            (cfg, path.display().to_string(), true)
+        }
+        None => {
+            let user_path = ctx.user_config_path();
+            let project_path = ctx.project_config_path();
+            let any_exists = user_path.exists() || project_path.exists();
+            let cfg = load_config(&user_path, Some(ctx.project_dir()), None::<Config>)
+                .context("failed to load merged configuration")?;
+            let label = format!(
+                "merged configuration (user: {}, project: {})",
+                user_path.display(),
+                project_path.display()
+            );
+            (cfg, label, any_exists)
+        }
+    };
+
+    let mut lines = Vec::new();
+    lines.push(format!("Validating: {source_label}"));
+    if !source_existed {
+        lines.push("note: no config file found on disk; validating built-in defaults".to_string());
+    }
+
+    match config.validate() {
+        Ok(()) => {
+            lines.push("Configuration is valid.".to_string());
+            Ok(CommandOutput::ok(
+                lines.join("\n"),
+                Some(serde_json::json!({
+                    "source": source_label,
+                    "valid": true,
+                })),
+            ))
+        }
+        Err(e) => {
+            for line in e.to_string().lines() {
+                lines.push(format!("ERROR: {line}"));
+            }
+            Ok(CommandOutput::error(
+                lines.join("\n"),
+                Some(serde_json::json!({
+                    "source": source_label,
+                    "errors": e.to_string().lines().collect::<Vec<_>>(),
+                    "valid": false,
+                })),
+            ))
         }
     }
 }
