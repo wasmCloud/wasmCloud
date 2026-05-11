@@ -82,6 +82,36 @@ impl Config {
     pub fn build(&self) -> BuildConfig {
         self.build.clone().unwrap_or_default()
     }
+
+    /// Validate the configuration by delegating to each section's own validator.
+    ///
+    /// All section errors are collected before returning so the caller sees every
+    /// issue in a single `Err`.
+    pub fn validate(&self) -> Result<()> {
+        let mut errors: Vec<String> = Vec::new();
+
+        if let Some(build) = &self.build {
+            if let Err(e) = build.validate() {
+                errors.extend(e.to_string().lines().map(String::from));
+            }
+        }
+        if let Some(dev) = &self.dev {
+            if let Err(e) = dev.validate() {
+                errors.extend(e.to_string().lines().map(String::from));
+            }
+        }
+        if let Some(wit) = &self.wit {
+            if let Err(e) = wit.validate() {
+                errors.extend(e.to_string().lines().map(String::from));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            bail!("{}", errors.join("\n"))
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -113,6 +143,17 @@ pub struct BuildConfig {
     /// Exposed to build commands via `WASH_COMPONENT_PATH` env var.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub component_path: Option<PathBuf>,
+}
+
+impl BuildConfig {
+    pub fn validate(&self) -> Result<()> {
+        if let Some(cmd) = &self.command
+            && cmd.trim().is_empty()
+        {
+            bail!("build.command is empty");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -205,6 +246,59 @@ pub struct DevConfig {
     pub wasip3: bool,
 }
 
+impl DevConfig {
+    pub fn validate(&self) -> Result<()> {
+        let mut errors: Vec<String> = Vec::new();
+
+        if let Some(addr) = &self.address
+            && addr.parse::<std::net::SocketAddr>().is_err()
+        {
+            errors.push(format!(
+                "dev.address '{addr}' is not a valid host:port socket address"
+            ));
+        }
+
+        match (self.tls_cert_path.is_some(), self.tls_key_path.is_some()) {
+            (true, false) => {
+                errors.push("dev.tls_cert_path is set but dev.tls_key_path is missing".to_string())
+            }
+            (false, true) => {
+                errors.push("dev.tls_key_path is set but dev.tls_cert_path is missing".to_string())
+            }
+            _ => {}
+        }
+
+        if let Some(url) = &self.wasi_keyvalue_redis_url {
+            check_url_scheme("dev.wasi_keyvalue_redis_url", url, &["redis", "rediss"], &mut errors);
+        }
+        if let Some(url) = &self.wasi_keyvalue_nats_url {
+            check_url_scheme("dev.wasi_keyvalue_nats_url", url, &["nats", "tls"], &mut errors);
+        }
+        if let Some(url) = &self.postgres_url {
+            check_url_scheme("dev.postgres_url", url, &["postgres", "postgresql"], &mut errors);
+        }
+
+        if cfg!(target_os = "windows") && self.wasi_webgpu {
+            errors.push("dev.wasi_webgpu is not supported on Windows".to_string());
+        }
+
+        for comp in &self.components {
+            if comp.name.trim().is_empty() {
+                errors.push("dev.components contains an entry with empty name".to_string());
+            }
+            if comp.file.as_os_str().is_empty() {
+                errors.push(format!("dev.components['{}'].file is empty", comp.name));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            bail!("{}", errors.join("\n"))
+        }
+    }
+}
+
 /// Load configuration with hierarchical merging
 /// Order of precedence (lowest to highest):
 /// 1. Default values
@@ -277,6 +371,16 @@ pub fn locate_user_config(dot_dir: &Path) -> PathBuf {
     }
 
     dot_dir.join(CONFIG_FILE_NAME)
+}
+
+/// Parse a single config file at `path` and deserialize it into a [`Config`].
+///
+/// Unlike [`load_config`], this does not merge defaults, other config layers, or env
+/// variables — it reflects exactly what is in the given file. Useful for validation.
+pub fn load_config_from_file(path: &Path) -> Result<Config> {
+    load_config_file(path)?
+        .extract()
+        .with_context(|| format!("failed to parse config from {}", path.display()))
 }
 
 fn load_config_file(file_path: &Path) -> Result<Figment> {
@@ -415,5 +519,17 @@ pub fn example_config() -> Config {
                 ),
             ]),
         }),
+    }
+}
+
+fn check_url_scheme(field: &str, value: &str, expected: &[&str], errors: &mut Vec<String>) {
+    match url::Url::parse(value) {
+        Ok(u) if expected.contains(&u.scheme()) => {}
+        Ok(u) => errors.push(format!(
+            "{field} '{value}' has scheme '{}', expected one of: {}",
+            u.scheme(),
+            expected.join(", ")
+        )),
+        Err(e) => errors.push(format!("{field} '{value}' is not a valid URL: {e}")),
     }
 }
