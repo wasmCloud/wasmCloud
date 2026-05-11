@@ -40,7 +40,7 @@ pub struct WitConfig {
 }
 
 impl WitConfig {
-    pub async fn validate(&self, project_dir: &Path) -> anyhow::Result<()> {
+    pub fn validate(&self, project_dir: &Path) -> anyhow::Result<()> {
         let mut errors: Vec<String> = Vec::new();
 
         for reg in &self.registries {
@@ -64,12 +64,7 @@ impl WitConfig {
 
             if let RegistryPullSource::LocalPath(_) = detect_source_type(source) {
                 let resolved = project_dir.join(source);
-                let exists = tokio::fs::try_exists(&resolved).await.with_context(|| {
-                    format!(
-                        "failed to check for WIT source path [{}]",
-                        resolved.display()
-                    )
-                })?;
+                let exists = resolved.exists();
 
                 if !exists {
                     errors.push(format!(
@@ -708,5 +703,136 @@ mod tests {
             config.sources["wasi:config"],
             "https://example.com/config.tar.gz"
         );
+    }
+
+    fn empty_wit() -> WitConfig {
+        WitConfig {
+            registries: vec![],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn wit_default_with_no_sources_is_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(empty_wit().validate(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn wit_invalid_registry_url_is_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = WitConfig {
+            registries: vec![WitRegistry {
+                url: "not a url".to_string(),
+                token: None,
+            }],
+            ..Default::default()
+        };
+        let err = cfg.validate(tmp.path()).unwrap_err().to_string();
+        assert!(err.contains("wit.registries"));
+    }
+
+    #[test]
+    fn wit_valid_registry_url_is_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = WitConfig {
+            registries: vec![WitRegistry {
+                url: "https://wasm.pkg".to_string(),
+                token: None,
+            }],
+            ..Default::default()
+        };
+        assert!(cfg.validate(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn wit_empty_source_key_is_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = empty_wit();
+        cfg.sources
+            .insert("  ".to_string(), "./local/wit".to_string());
+        let err = cfg.validate(tmp.path()).unwrap_err().to_string();
+        assert!(err.contains("empty target key"));
+    }
+
+    #[test]
+    fn wit_empty_source_value_is_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = empty_wit();
+        cfg.sources
+            .insert("wasi:http".to_string(), "  ".to_string());
+        let err = cfg.validate(tmp.path()).unwrap_err().to_string();
+        assert!(err.contains("empty source value"));
+    }
+
+    #[test]
+    fn wit_local_path_missing_is_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = empty_wit();
+        cfg.sources
+            .insert("example:local".to_string(), "./does-not-exist".to_string());
+        let err = cfg.validate(tmp.path()).unwrap_err().to_string();
+        assert!(err.contains("does not exist"));
+    }
+
+    #[test]
+    fn wit_local_path_exists_is_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wit_dir = tmp.path().join("my-wit");
+        std::fs::create_dir_all(&wit_dir).unwrap();
+        let mut cfg = empty_wit();
+        cfg.sources
+            .insert("example:local".to_string(), "my-wit".to_string());
+        assert!(cfg.validate(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn wit_http_source_not_validated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = empty_wit();
+        cfg.sources.insert(
+            "example:http".to_string(),
+            "https://example.com/nonexistent.tar.gz".to_string(),
+        );
+        assert!(cfg.validate(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn wit_git_source_not_validated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = empty_wit();
+        cfg.sources.insert(
+            "example:git".to_string(),
+            "git+https://github.com/nonexistent/repo.git".to_string(),
+        );
+        assert!(cfg.validate(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn wit_oci_source_not_validated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = empty_wit();
+        cfg.sources.insert(
+            "example:oci".to_string(),
+            "ghcr.io/nonexistent/pkg".to_string(),
+        );
+        assert!(cfg.validate(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn wit_multiple_errors_are_all_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = WitConfig {
+            registries: vec![WitRegistry {
+                url: "bad url".to_string(),
+                token: None,
+            }],
+            ..Default::default()
+        };
+        cfg.sources
+            .insert("wasi:http".to_string(), "./missing-path".to_string());
+        let err = cfg.validate(tmp.path()).unwrap_err().to_string();
+        assert!(err.contains("wit.registries"), "missing registry error");
+        assert!(err.contains("does not exist"), "missing path error");
     }
 }

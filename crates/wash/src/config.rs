@@ -102,7 +102,7 @@ impl Config {
             }
         }
         if let Some(wit) = &self.wit {
-            match wit.validate(project_dir).await {
+            match wit.validate(project_dir) {
                 Ok(()) => {}
                 Err(e) => errors.extend(e.to_string().lines().map(String::from)),
             }
@@ -558,5 +558,236 @@ fn check_url_scheme(field: &str, value: &str, expected: &[&str], errors: &mut Ve
             expected.join(", ")
         )),
         Err(e) => errors.push(format!("{field} '{value}' is not a valid URL: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_no_command_is_ok() {
+        assert!(BuildConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn build_valid_command_is_ok() {
+        let cfg = BuildConfig {
+            command: Some("cargo build".to_string()),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn build_empty_command_is_err() {
+        let cfg = BuildConfig {
+            command: Some("".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            cfg.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("build.command")
+        );
+    }
+
+    #[test]
+    fn build_whitespace_command_is_err() {
+        let cfg = BuildConfig {
+            command: Some("   ".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            cfg.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("build.command")
+        );
+    }
+
+    #[test]
+    fn dev_default_is_valid() {
+        assert!(DevConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn dev_valid_address_is_ok() {
+        let cfg = DevConfig {
+            address: Some("0.0.0.0:8080".to_string()),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn dev_invalid_address_is_err() {
+        let cfg = DevConfig {
+            address: Some("not-an-address".to_string()),
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("dev.address"));
+    }
+
+    #[test]
+    fn dev_tls_cert_without_key_is_err() {
+        let cfg = DevConfig {
+            tls_cert_path: Some("cert.pem".into()),
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("tls_cert_path"));
+    }
+
+    #[test]
+    fn dev_tls_key_without_cert_is_err() {
+        let cfg = DevConfig {
+            tls_key_path: Some("key.pem".into()),
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("tls_key_path"));
+    }
+
+    #[test]
+    fn dev_tls_both_set_is_ok() {
+        let cfg = DevConfig {
+            tls_cert_path: Some("cert.pem".into()),
+            tls_key_path: Some("key.pem".into()),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn dev_redis_wrong_scheme_is_err() {
+        let cfg = DevConfig {
+            wasi_keyvalue_redis_url: Some("http://localhost:6379".to_string()),
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("wasi_keyvalue_redis_url"));
+    }
+
+    #[test]
+    fn dev_redis_valid_scheme_is_ok() {
+        let cfg = DevConfig {
+            wasi_keyvalue_redis_url: Some("redis://127.0.0.1:6379".to_string()),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn dev_rediss_valid_scheme_is_ok() {
+        let cfg = DevConfig {
+            wasi_keyvalue_redis_url: Some("rediss://127.0.0.1:6380".to_string()),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn dev_nats_wrong_scheme_is_err() {
+        let cfg = DevConfig {
+            wasi_keyvalue_nats_url: Some("http://localhost:4222".to_string()),
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("wasi_keyvalue_nats_url"));
+    }
+
+    #[test]
+    fn dev_nats_valid_scheme_is_ok() {
+        let cfg = DevConfig {
+            wasi_keyvalue_nats_url: Some("nats://127.0.0.1:4222".to_string()),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn dev_postgres_wrong_scheme_is_err() {
+        let cfg = DevConfig {
+            postgres_url: Some("mysql://localhost/db".to_string()),
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("postgres_url"));
+    }
+
+    #[test]
+    fn dev_postgres_valid_scheme_is_ok() {
+        let cfg = DevConfig {
+            postgres_url: Some("postgres://user:pass@localhost/db".to_string()),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn dev_postgresql_valid_scheme_is_ok() {
+        let cfg = DevConfig {
+            postgres_url: Some("postgresql://user:pass@localhost/db".to_string()),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn dev_component_empty_name_is_err() {
+        let cfg = DevConfig {
+            components: vec![DevComponent {
+                name: "  ".to_string(),
+                file: "comp.wasm".into(),
+            }],
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("dev.components"));
+    }
+
+    #[test]
+    fn dev_component_empty_file_is_err() {
+        let cfg = DevConfig {
+            components: vec![DevComponent {
+                name: "sidecar".to_string(),
+                file: "".into(),
+            }],
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("file is empty"));
+    }
+
+    #[test]
+    fn dev_component_valid_is_ok() {
+        let cfg = DevConfig {
+            components: vec![DevComponent {
+                name: "sidecar".to_string(),
+                file: "sidecar.wasm".into(),
+            }],
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn dev_multiple_errors_are_all_reported() {
+        let cfg = DevConfig {
+            address: Some("bad-addr".to_string()),
+            tls_cert_path: Some("cert.pem".into()),
+            wasi_keyvalue_redis_url: Some("http://localhost".to_string()),
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("dev.address"), "missing address error");
+        assert!(err.contains("tls_cert_path"), "missing tls error");
+        assert!(
+            err.contains("wasi_keyvalue_redis_url"),
+            "missing redis error"
+        );
     }
 }
