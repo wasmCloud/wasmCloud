@@ -1,6 +1,9 @@
-use anyhow::Context as _;
+use std::path::Path;
+
+use anyhow::{Context as _, bail};
 use clap::{Parser, Subcommand};
-use tracing::instrument;
+use humansize::{BINARY, format_size};
+use tracing::{info, instrument, warn};
 
 use crate::{
     cli::{CliCommand, CliContext, CommandOutput},
@@ -33,8 +36,22 @@ pub enum ConfigCommand {
     Info {},
     /// Print the current configuration file for wash
     Show {},
+    /// Remove wash cache and/or data directories
+    Cleanup {
+        /// Remove cache directory
+        #[arg(long)]
+        cache: bool,
+        /// Remove data directory
+        #[arg(long)]
+        data: bool,
+        /// Remove all wash directories (cache + data)
+        #[arg(long)]
+        all: bool,
+        /// Show what would be removed without actually deleting
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
     // TODO(#27): validate config command
-    // TODO(#29): cleanup config command, to clean the dirs we use
 }
 
 impl CliCommand for ConfigArgs {
@@ -112,6 +129,113 @@ Project Config path: {project_config_path}
                     Some(serde_json::to_value(&config).context("failed to serialize config")?),
                 ))
             }
+            ConfigCommand::Cleanup {
+                cache,
+                data,
+                all,
+                dry_run,
+            } => {
+                let remove_cache = *cache || *all;
+                let remove_data = *data || *all;
+                if !remove_cache && !remove_data {
+                    bail!("specify at least one of --cache, --data, or --all");
+                }
+
+                let mut targets = Vec::new();
+                if remove_cache {
+                    targets.push(("cache", ctx.cache_dir()));
+                }
+                if remove_data {
+                    targets.push(("data", ctx.data_dir()));
+                }
+
+                let mut lines = Vec::new();
+                let mut entries = Vec::new();
+                let mut total_bytes: u64 = 0;
+
+                for (kind, path) in &targets {
+                    let exists = path.exists();
+                    let size_bytes = if exists {
+                        match dir_size(path).await {
+                            Ok(b) => Some(b),
+                            Err(e) => {
+                                warn!(
+                                    kind, path = %path.display(), error = ?e,
+                                    "failed to compute directory size"
+                                );
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(b) = size_bytes {
+                        total_bytes = total_bytes.saturating_add(b);
+                    }
+
+                    let action = match (*dry_run, exists) {
+                        (true, true) => "would remove",
+                        (true, false) => "would skip (missing)",
+                        (false, true) => {
+                            tokio::fs::remove_dir_all(path).await.with_context(|| {
+                                format!("failed to remove {kind} directory at {}", path.display())
+                            })?;
+                            info!(
+                                kind, path = %path.display(), bytes = size_bytes.unwrap_or(0),
+                                "removed directory"
+                            );
+                            "removed"
+                        }
+                        (false, false) => "skipped (missing)",
+                    };
+
+                    let size_label = match size_bytes {
+                        Some(b) => format!(" ({})", format_size(b, BINARY)),
+                        None if exists => " (size unknown)".to_string(),
+                        None => String::new(),
+                    };
+                    lines.push(format!(
+                        "{action} {kind} directory: {}{}",
+                        path.display(),
+                        size_label
+                    ));
+                    entries.push(serde_json::json!({
+                        "kind": kind,
+                        "path": path.display().to_string(),
+                        "existed": exists,
+                        "action": action,
+                        "size_bytes": size_bytes,
+                        "size_human": size_bytes.map(|b| format_size(b, BINARY)),
+                    }));
+                }
+
+                lines.push(format!(
+                    "total{}: {}",
+                    if *dry_run { " (would free)" } else { " freed" },
+                    format_size(total_bytes, BINARY)
+                ));
+
+                Ok(CommandOutput::ok(
+                    lines.join("\n"),
+                    Some(serde_json::json!({
+                        "dry_run": *dry_run,
+                        "entries": entries,
+                        "total_bytes": total_bytes,
+                        "total_human": format_size(total_bytes, BINARY),
+                    })),
+                ))
+            }
         }
     }
+}
+
+/// Sum the byte size of all files under `path` using `fs_extra::dir::get_size`.
+///
+/// Runs the synchronous walk on a blocking task so the async runtime is not stalled.
+async fn dir_size(path: &Path) -> anyhow::Result<u64> {
+    let owned = path.to_path_buf();
+    tokio::task::spawn_blocking(move || fs_extra::dir::get_size(&owned))
+        .await
+        .context("directory size task panicked")?
+        .with_context(|| format!("failed to compute size for {}", path.display()))
 }
