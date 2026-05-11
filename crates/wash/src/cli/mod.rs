@@ -22,9 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     CARGO_PKG_VERSION,
     cli::update::fetch_latest_release_public,
-    config::{
-        Config, generate_default_config, load_config, locate_project_config, locate_user_config,
-    },
+    config::{Config, load_config, locate_project_config, locate_user_config},
 };
 
 pub mod completion;
@@ -486,24 +484,6 @@ impl CliContext {
             Some(self.project_dir()),
             overrides,
         )
-    }
-
-    /// Fetches the wash configuration from the config file located in the XDG config directory,
-    /// creating it with default values if it does not exist.
-    pub async fn ensure_config(&self, project_dir: Option<&Path>) -> anyhow::Result<Config> {
-        let config_path = self.user_config_path();
-
-        // Check if the config file exists, if not create it with defaults
-        if !config_path.exists() {
-            debug!(
-                ?config_path,
-                "config file not found, creating with defaults"
-            );
-            generate_default_config(&config_path, false).await?;
-        }
-
-        // Load the configuration using the hierarchical configuration system
-        load_config(&self.user_config_path(), project_dir, None::<Config>)
     }
 
     pub fn request_confirmation<S>(&self, prompt: S) -> anyhow::Result<bool>
