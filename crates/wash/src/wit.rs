@@ -40,7 +40,7 @@ pub struct WitConfig {
 }
 
 impl WitConfig {
-    pub fn validate(&self) -> anyhow::Result<()> {
+    pub async fn validate(&self, project_dir: &Path) -> anyhow::Result<()> {
         let mut errors: Vec<String> = Vec::new();
 
         for reg in &self.registries {
@@ -56,8 +56,27 @@ impl WitConfig {
             if target.trim().is_empty() {
                 errors.push("wit.sources contains an entry with empty target key".to_string());
             }
+
             if source.trim().is_empty() {
                 errors.push(format!("wit.sources['{target}'] has an empty source value"));
+                continue;
+            }
+
+            if let RegistryPullSource::LocalPath(_) = detect_source_type(source) {
+                let resolved = project_dir.join(source);
+                let exists = tokio::fs::try_exists(&resolved).await.with_context(|| {
+                    format!(
+                        "failed to check for WIT source path [{}]",
+                        resolved.display()
+                    )
+                })?;
+
+                if !exists {
+                    errors.push(format!(
+                        "wit.sources['{target}'] local path '{}' does not exist",
+                        resolved.display()
+                    ));
+                }
             }
         }
 

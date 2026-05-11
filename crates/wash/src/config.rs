@@ -86,8 +86,9 @@ impl Config {
     /// Validate the configuration by delegating to each section's own validator.
     ///
     /// All section errors are collected before returning so the caller sees every
-    /// issue in a single `Err`.
-    pub fn validate(&self) -> Result<()> {
+    /// issue in a single `Err`. `project_dir` is used to resolve relative WIT source
+    /// paths during validation.
+    pub async fn validate(&self, project_dir: &Path) -> Result<()> {
         let mut errors: Vec<String> = Vec::new();
 
         if let Some(build) = &self.build {
@@ -101,8 +102,9 @@ impl Config {
             }
         }
         if let Some(wit) = &self.wit {
-            if let Err(e) = wit.validate() {
-                errors.extend(e.to_string().lines().map(String::from));
+            match wit.validate(project_dir).await {
+                Ok(()) => {}
+                Err(e) => errors.extend(e.to_string().lines().map(String::from)),
             }
         }
 
