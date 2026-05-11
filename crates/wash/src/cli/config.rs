@@ -311,7 +311,7 @@ async fn cmd_validate(ctx: &CliContext, file: Option<&Path>) -> anyhow::Result<C
         lines.push("note: no config file found on disk; validating built-in defaults".to_string());
     }
 
-    match config.validate() {
+    match config.validate(ctx.project_dir()).await {
         Ok(()) => {
             lines.push("Configuration is valid.".to_string());
             Ok(CommandOutput::ok(
