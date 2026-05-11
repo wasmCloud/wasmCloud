@@ -6,13 +6,6 @@ on:
     tags:
       - "v*"
   pull_request:
-    paths:
-      - ".github/workflows/runtime-operator.yml"
-      - "runtime-operator/**"
-      - "proto/**"
-      - "charts/runtime-operator/**"
-      - "deploy/kind/kind-config.yaml"
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -24,7 +17,33 @@ env:
   GOWORK: "off"
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - '.github/workflows/runtime-operator.yml'
+              - 'runtime-operator/**'
+              - 'proto/**'
+              - 'charts/runtime-operator/**'
+              - 'deploy/kind/kind-config.yaml'
+
   lint:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true' || contains(github.event.pull_request.labels.*.name, 'canary'))
     permissions:
       # Required: allow read access to the content for analysis.
       contents: read
@@ -39,6 +58,9 @@ jobs:
           working-directory: runtime-operator
 
   test:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true' || contains(github.event.pull_request.labels.*.name, 'canary'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -53,7 +75,9 @@ jobs:
         run: make test
 
   build:
-    needs: [lint, test]
+    needs:
+      - lint
+      - test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -71,7 +95,8 @@ jobs:
           retention-days: 1
 
   test-e2e:
-    needs: [build]
+    needs:
+      - build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -115,12 +140,33 @@ jobs:
           kubectl get workloaddeployments.runtime.wasmcloud.dev -A -o yaml || true
           kubectl get workloads.runtime.wasmcloud.dev -A -o yaml || true
 
+  gate:
+    needs:
+      - lint
+      - test
+      - build
+      - test-e2e
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require all jobs to pass or be skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          if echo "$RESULTS" | grep -qE '"(failure|cancelled)"'; then
+            exit 1
+          fi
+
   # The `sha-<full-sha>` tag is what release-tag.yml pins to when promoting
   # this canary digest as the immutable vX.Y.Z release tag. `canary` itself
   # moves on every subsequent main push.
   canary:
     if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'canary')
-    needs: [lint, test, test-e2e]
+    needs:
+      - lint
+      - test
+      - test-e2e
     permissions:
       contents: write
       packages: write

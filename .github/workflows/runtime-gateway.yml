@@ -6,11 +6,6 @@ on:
     tags:
       - "v*"
   pull_request:
-    paths:
-      - "runtime-gateway/**"
-      - "runtime-operator/**"
-      - "go.work"
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -19,7 +14,31 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'runtime-gateway/**'
+              - 'runtime-operator/**'
+              - 'go.work'
+
   lint:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
     permissions:
       # Required: allow read access to the content for analysis.
       contents: read
@@ -34,6 +53,9 @@ jobs:
           working-directory: runtime-gateway
 
   test:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -44,12 +66,30 @@ jobs:
         working-directory: runtime-gateway
         run: go build -v ./
 
+  gate:
+    needs:
+      - lint
+      - test
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require all jobs to pass or be skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          if echo "$RESULTS" | grep -qE '"(failure|cancelled)"'; then
+            exit 1
+          fi
+
   # The `sha-<full-sha>` tag is what release-tag.yml pins to when promoting
   # this canary digest as the immutable vX.Y.Z release tag. `canary` itself
   # moves on every subsequent main push.
   canary:
     if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'canary')
-    needs: [lint, test]
+    needs:
+      - lint
+      - test
     permissions:
       contents: write
       packages: write
