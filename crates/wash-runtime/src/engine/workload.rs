@@ -488,11 +488,26 @@ pub struct ResolvedWorkload {
 
 impl std::fmt::Debug for ResolvedWorkload {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResolvedWorkload")
-            .field("id", &self.id)
+        let mut s = f.debug_struct("ResolvedWorkload");
+        s.field("id", &self.id)
             .field("name", &self.name)
             .field("namespace", &self.namespace)
-            .finish_non_exhaustive()
+            .field("host_interfaces", &self.host_interfaces)
+            .field("has_service", &self.service.is_some())
+            .field(
+                "component_count",
+                &self
+                    .components
+                    .try_read()
+                    .map(|g| g.len() as isize)
+                    .unwrap_or(-1),
+            );
+        #[cfg(feature = "wasi-tls")]
+        s.field(
+            "tls_provider",
+            &self.tls_provider.as_ref().map(|_| "<TlsProvider>"),
+        );
+        s.finish_non_exhaustive()
     }
 }
 

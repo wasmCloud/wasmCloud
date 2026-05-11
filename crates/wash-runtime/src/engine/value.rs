@@ -270,6 +270,9 @@ mod tests {
     use crate::engine::ctx::Ctx;
 
     fn make_store() -> wasmtime::Store<SharedCtx> {
+        #[cfg(feature = "wasi-tls")]
+        crate::init_crypto();
+
         let mut config = wasmtime::Config::new();
         config.wasm_component_model(true);
         let engine = wasmtime::Engine::new(&config).unwrap();
