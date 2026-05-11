@@ -4,7 +4,9 @@ use tracing::instrument;
 
 use crate::{
     cli::{CliCommand, CliContext, CommandOutput},
-    config::{Config, generate_default_config, load_config, local_config_path},
+    config::{
+        Config, generate_default_config, generate_example_config, load_config, local_config_path,
+    },
 };
 
 /// View and manage wash configuration
@@ -22,9 +24,10 @@ pub enum ConfigCommand {
         /// Overwrite existing configuration
         #[arg(long)]
         force: bool,
-        /// Overwrite global configuration instead of project
+
+        /// Generate example config
         #[arg(long)]
-        global: bool,
+        example: bool,
     },
     /// Print the current version and local directories used by wash
     Info {},
@@ -45,16 +48,18 @@ impl CliCommand for ConfigCommand {
     #[instrument(level = "debug", skip_all, name = "config")]
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
         match self {
-            ConfigCommand::Init { force, global } => {
-                let config_path = if *global {
-                    ctx.user_config_path()
-                } else {
-                    local_config_path(ctx.project_dir())
-                };
+            ConfigCommand::Init { force, example } => {
+                let config_path = local_config_path(ctx.project_dir());
 
-                generate_default_config(&config_path, *force)
-                    .await
-                    .context("failed to initialize config")?;
+                if *example {
+                    generate_example_config(&config_path, *force)
+                        .await
+                        .context("failed to initialize config")?;
+                } else {
+                    generate_default_config(&config_path, *force)
+                        .await
+                        .context("failed to initialize config")?;
+                }
 
                 Ok(CommandOutput::ok(
                     "Configuration initialized successfully.".to_string(),

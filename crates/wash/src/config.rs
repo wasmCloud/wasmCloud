@@ -3,7 +3,7 @@
 //! with explicit defaults.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -333,10 +333,17 @@ pub fn local_config_path(project_dir: &Path) -> PathBuf {
     project_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME)
 }
 
-/// Generate a default configuration file with all explicit defaults
-/// This is useful for `wash config init` command
 pub async fn generate_default_config(path: &Path, force: bool) -> Result<()> {
-    // Don't overwrite existing config unless force is specified
+    generate_config(&Config::default(), path, force).await
+}
+
+/// Generate an example configuration file with illustrative build/dev/wit sections,
+/// useful for the `wash config init` command.
+pub async fn generate_example_config(path: &Path, force: bool) -> Result<()> {
+    generate_config(&example_config(), path, force).await
+}
+
+async fn generate_config(config: &Config, path: &Path, force: bool) -> Result<()> {
     if path.exists() && !force {
         bail!(
             "Configuration file already exists at {}. Use --force to overwrite",
@@ -344,8 +351,69 @@ pub async fn generate_default_config(path: &Path, force: bool) -> Result<()> {
         );
     }
 
-    save_config(&Config::default(), path).await?;
+    save_config(config, path).await?;
 
-    info!(config_path = %path.display(), "Generated default configuration");
+    info!(config_path = %path.display(), "Generated example configuration");
     Ok(())
+}
+
+/// Build an example [`Config`] populated with sensible build, dev, and wit values.
+pub fn example_config() -> Config {
+    Config {
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        build: Some(BuildConfig {
+            command: Some("cargo build --target wasm32-wasip2 --release".to_string()),
+            env: HashMap::from_iter([("RUST_LOG".to_string(), "info".to_string())]),
+            component_path: Some(PathBuf::from(format!(
+                "target/wasm32-wasip2/release/component.wasm"
+            ))),
+        }),
+        dev: Some(DevConfig {
+            address: Some("0.0.0.0:8000".to_string()),
+            service_file: Some(PathBuf::from("example/path/to/service.wasm")),
+            components: vec![DevComponent {
+                name: "example-sidecar".to_string(),
+                file: PathBuf::from("example/path/to/sidecar.wasm"),
+            }],
+            volumes: vec![DevVolume {
+                host_path: PathBuf::from("./data"),
+                guest_path: PathBuf::from("/data"),
+            }],
+            host_interfaces: vec![WitInterface {
+                namespace: "wasi".to_string(),
+                package: "http".to_string(),
+                interfaces: HashSet::from_iter(["incoming-handler".to_string()]),
+                version: Some(semver::Version::new(0, 2, 0)),
+                config: HashMap::new(),
+                name: None,
+            }],
+            wasi_keyvalue_redis_url: Some("redis://127.0.0.1:6379".to_string()),
+            wasi_keyvalue_path: Some(PathBuf::from("./data/keyvalue")),
+            wasi_keyvalue_nats_url: Some("nats://127.0.0.1:4222".to_string()),
+            wasi_blobstore_path: Some(PathBuf::from("./data/blobstore")),
+            postgres_url: Some("postgres://user:pass@127.0.0.1:5432".to_string()),
+            ..Default::default()
+        }),
+        new: None,
+        wit: Some(WitConfig {
+            registries: vec![],
+            skip_fetch: false,
+            wit_dir: Some(PathBuf::from("wit")),
+            sources: HashMap::from_iter([
+                ("example:local".to_string(), "./local/wit".to_string()),
+                (
+                    "example:http".to_string(),
+                    "https://example.com/wit.tar.gz".to_string(),
+                ),
+                (
+                    "example:git".to_string(),
+                    "git+https://github.com/user/repo.git".to_string(),
+                ),
+                (
+                    "example:oci".to_string(),
+                    "ghcr.io/user/package".to_string(),
+                ),
+            ]),
+        }),
+    }
 }
