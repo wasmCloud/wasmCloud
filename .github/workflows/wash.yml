@@ -4,17 +4,6 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - ".github/workflows/wash.yml"
-      - "crates/**"
-      - "src/**"
-      - "tests/**"
-      - "Cargo.*"
-      - "rust-toolchain.toml"
-      - "rustfmt.toml"
-      - "runtime-operator/test/e2e/**"
-      - "charts/runtime-operator/**"
-      - "deploy/kind/kind-config.yaml"
   push:
     branches:
       - main
@@ -32,7 +21,39 @@ concurrency:
 permissions: {}
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - '.github/workflows/wash.yml'
+              - 'crates/**'
+              - 'src/**'
+              - 'tests/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'rustfmt.toml'
+              - 'runtime-operator/test/e2e/**'
+              - 'charts/runtime-operator/**'
+              - 'deploy/kind/kind-config.yaml'
+
   check:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     permissions:
@@ -102,6 +123,9 @@ jobs:
           cargo bench -p wash-runtime --features wasip3 --no-run
 
   lint:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -143,7 +167,9 @@ jobs:
   # `vX.Y.Z`). arm64 builds on every PR too so Dockerfile regressions are
   # caught before merge.
   wash-image:
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     permissions:
       contents: read
       packages: write
@@ -243,7 +269,8 @@ jobs:
   # the chart, or the e2e suite, so regressions are caught before merge
   # rather than after.
   runtime-operator-e2e:
-    needs: [wash-image]
+    needs:
+      - wash-image
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -297,6 +324,24 @@ jobs:
           kubectl get workloaddeployments.runtime.wasmcloud.dev -A -o yaml || true
           kubectl get workloads.runtime.wasmcloud.dev -A -o yaml || true
 
+  gate:
+    needs:
+      - check
+      - lint
+      - wash-image
+      - runtime-operator-e2e
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require all jobs to pass or be skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          if echo "$RESULTS" | grep -qE '"(failure|cancelled)"'; then
+            exit 1
+          fi
+
   # Tag promotion: only push `canary` once check, lint, and the
   # runtime-operator e2e have all passed against this commit. Assembles
   # the multi-arch manifest list from the per-arch digests that
@@ -307,7 +352,11 @@ jobs:
   # rely on it.
   canary-publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [check, lint, runtime-operator-e2e, wash-image]
+    needs:
+      - check
+      - lint
+      - runtime-operator-e2e
+      - wash-image
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -376,7 +425,10 @@ jobs:
   # commit by hand and this job fires.
   canary-binaries:
     if: "github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release: v')"
-    needs: [check, lint, runtime-operator-e2e]
+    needs:
+      - check
+      - lint
+      - runtime-operator-e2e
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
