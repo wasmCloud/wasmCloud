@@ -96,18 +96,16 @@ async fn main(request: Request<Body>) -> Result<Response<Body>, wstd::http::Erro
 }
 
 fn ensure_container(name: &str) -> Result<Container, wstd::http::Error> {
-    if !blobstore::container_exists(name).map_err(|e| wstd::http::Error::msg(e))? {
-        blobstore::create_container(name).map_err(|e| wstd::http::Error::msg(e))
+    if !blobstore::container_exists(name).map_err(wstd::http::Error::msg)? {
+        blobstore::create_container(name).map_err(wstd::http::Error::msg)
     } else {
-        blobstore::get_container(name).map_err(|e| wstd::http::Error::msg(e))
+        blobstore::get_container(name).map_err(wstd::http::Error::msg)
     }
 }
 
 fn list_objects(container: &Container) -> Result<Vec<String>, wstd::http::Error> {
     let mut names = Vec::new();
-    let object_list = container
-        .list_objects()
-        .map_err(|e| wstd::http::Error::msg(e))?;
+    let object_list = container.list_objects().map_err(wstd::http::Error::msg)?;
 
     while let Ok((list, end)) = object_list.read_stream_object_names(100) {
         names.extend(list);
