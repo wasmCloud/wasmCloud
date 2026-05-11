@@ -59,6 +59,10 @@ pub enum ConfigCommand {
         /// Output format for the generated config file
         #[arg(long, default_value = "yaml", value_enum)]
         format: ConfigFormat,
+
+        /// Deprecated
+        #[arg(long)]
+        global: bool,
     },
     /// Print the current version and local directories used by wash
     Info,
@@ -98,7 +102,18 @@ impl CliCommand for ConfigCommand {
     #[instrument(level = "debug", skip_all, name = "config")]
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
         match self {
-            ConfigCommand::Init { force, example, format } => {
+            ConfigCommand::Init {
+                force,
+                example,
+                format,
+                global,
+            } => {
+                if *global {
+                    warn!(
+                        "--global is deprecated and has no effect; `wash config init` always writes to the project-local .wash/ directory"
+                    );
+                }
+
                 cmd_init(ctx, *force, *example, format).await
             }
             ConfigCommand::Info => cmd_info(ctx),
@@ -343,8 +358,28 @@ async fn cmd_validate(ctx: &CliContext, file: Option<&Path>) -> anyhow::Result<C
 /// Runs the synchronous walk on a blocking task so the async runtime is not stalled.
 async fn dir_size(path: &Path) -> anyhow::Result<u64> {
     let owned = path.to_path_buf();
-    tokio::task::spawn_blocking(move || fs_extra::dir::get_size(&owned))
-        .await
-        .context("directory size task panicked")?
-        .with_context(|| format!("failed to compute size for {}", path.display()))
+    tokio::task::spawn_blocking(move || {
+        let mut total = 0u64;
+        let mut stack = vec![owned];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir)
+                .with_context(|| format!("failed to read directory {}", dir.display()))?
+            {
+                let entry =
+                    entry.with_context(|| format!("failed to read entry in {}", dir.display()))?;
+                let meta = entry
+                    .metadata()
+                    .with_context(|| format!("failed to stat {}", entry.path().display()))?;
+
+                if meta.is_dir() && !meta.is_symlink() {
+                    stack.push(entry.path());
+                } else {
+                    total = total.saturating_add(meta.len());
+                }
+            }
+        }
+        Ok(total)
+    })
+    .await
+    .context("directory size task panicked")?
 }

@@ -7262,7 +7262,6 @@ dependencies = [
  "etcetera 0.10.0",
  "figment",
  "flate2",
- "fs_extra",
  "http",
  "http-body-util",
  "humansize",

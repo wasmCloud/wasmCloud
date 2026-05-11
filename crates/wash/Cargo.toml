@@ -41,7 +41,6 @@ dialoguer = { workspace = true, features = ["editor", "password", "zeroize", "fu
 etcetera = { workspace = true }
 figment = { workspace = true, features = ["json", "env", "yaml", "toml"] }
 flate2 = { workspace = true, features = ["rust_backend"] }
-fs_extra = { workspace = true }
 humansize = { workspace = true }
 humantime = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
