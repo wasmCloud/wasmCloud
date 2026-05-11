@@ -449,11 +449,6 @@ pub async fn save_config(config: &Config, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Get the local project configuration file path
-pub fn local_config_path(project_dir: &Path) -> PathBuf {
-    project_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME)
-}
-
 pub async fn generate_default_config(path: &Path, force: bool) -> Result<()> {
     generate_config(&Config::default(), path, force).await
 }
@@ -537,7 +532,6 @@ pub fn example_config() -> Config {
             skip_fetch: false,
             wit_dir: Some(PathBuf::from("wit")),
             sources: HashMap::from_iter([
-                ("example:local".to_string(), "./local/wit".to_string()),
                 (
                     "example:http".to_string(),
                     "https://example.com/wit.tar.gz".to_string(),
