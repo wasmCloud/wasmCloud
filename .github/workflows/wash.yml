@@ -332,7 +332,6 @@ jobs:
       - runtime-operator-e2e
     if: always()
     runs-on: ubuntu-latest
-    permissions: {}
     steps:
       - name: Require all jobs to pass or be skipped
         env:
