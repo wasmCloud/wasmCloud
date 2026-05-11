@@ -1,0 +1,63 @@
+{{- if and .Values.operator.enabled .Values.operator.serviceAccount.create .Values.operator.watchNamespaces -}}
+# When operator.watchNamespaces is set, the operator only ever reads
+# configmaps/secrets/services and records events in those namespaces — every
+# Get on these resources is keyed by the workload's own namespace, and the
+# informer cache is scoped via cacheOpts.DefaultNamespaces. Granting these
+# rules cluster-wide is therefore broader than what the code uses, so the
+# rules move from the main ClusterRole to a per-namespace RoleBinding here.
+# When watchNamespaces is empty (watch all namespaces), these rules stay on
+# the main ClusterRole instead.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "runtime-operator.fullname" . }}-workload-namespace
+  labels:
+    {{- include "runtime-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+    - ""
+    resources:
+    - configmaps
+    - secrets
+    verbs:
+    - get
+    - list
+    - watch
+  - apiGroups:
+    - ""
+    resources:
+    - events
+    verbs:
+    - create
+    - get
+    - list
+    - patch
+    - update
+    - watch
+  - apiGroups:
+    - ""
+    resources:
+    - services
+    verbs:
+    - get
+    - list
+    - watch
+{{- range .Values.operator.watchNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "runtime-operator.fullname" $ }}-workload-namespace
+  namespace: {{ . }}
+  labels:
+    {{- include "runtime-operator.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "runtime-operator.fullname" $ }}-workload-namespace
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "operator.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
