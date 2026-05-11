@@ -5,11 +5,17 @@
 #![cfg(feature = "wasi-tls")]
 #![allow(dead_code)]
 
-use anyhow::{Context, Result};
-use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc};
+use anyhow::{Context, Result, bail};
+use std::{
+    future::Future,
+    net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
+    pin::Pin,
+    sync::Arc,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
+    sync::oneshot,
 };
 use tokio_rustls::{
     TlsAcceptor,
@@ -21,6 +27,21 @@ use tokio_rustls::{
 use wasmtime_wasi_tls::{Error as TlsError, TlsProvider, TlsStream, TlsTransport};
 
 use wash_runtime::engine::Engine;
+
+/// Returns the outbound IPv4 via a UDP routing-table lookup (no packets sent).
+/// Returns `Ok(None)` if no non-loopback IPv4 interface is available.
+pub fn detect_non_loopback_ipv4() -> Result<Option<Ipv4Addr>> {
+    let sock = UdpSocket::bind("0.0.0.0:0").context("failed to bind discovery UDP socket")?;
+    if sock.connect("192.0.2.1:80").is_err() {
+        return Ok(None);
+    }
+    match sock.local_addr() {
+        Ok(SocketAddr::V4(v4)) if !v4.ip().is_loopback() && !v4.ip().is_unspecified() => {
+            Ok(Some(*v4.ip()))
+        }
+        _ => Ok(None),
+    }
+}
 
 /// Generate a self-signed certificate for `localhost` and return the rustls
 /// `ServerConfig` together with the DER-encoded certificate bytes (used to
@@ -43,24 +64,42 @@ fn server_tls_config() -> Result<(ServerConfig, Vec<u8>)> {
     Ok((config, cert_der_bytes))
 }
 
-/// Start a TLS echo server on a random port on 127.0.0.1.
-///
-/// For every accepted connection the server reads bytes until it sees `\r\n`
-/// and echoes back `PONG\r\n`.
-pub async fn start_tls_echo_server() -> Result<(SocketAddr, Vec<u8>)> {
+pub struct EchoServer {
+    pub addr: SocketAddr,
+    pub cert_der: Vec<u8>,
+    /// Fires with the bytes received before the server writes `PONG\r\n`.
+    pub ping_rx: oneshot::Receiver<Vec<u8>>,
+}
+
+/// Start a TLS echo server on a non-loopback IPv4 interface (required so
+/// wash-runtime's loopback interception doesn't swallow the connection).
+pub async fn start_tls_echo_server() -> Result<EchoServer> {
+    let Some(ip) = detect_non_loopback_ipv4()? else {
+        bail!(
+            "no non-loopback IPv4 interface available on this host; \
+             cannot run a TLS round-trip test against the real network stack"
+        );
+    };
+
     let (server_config, cert_der) = server_tls_config()?;
     let acceptor = TlsAcceptor::from(Arc::new(server_config));
 
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(ip), 0))
+        .await
+        .with_context(|| format!("failed to bind echo server on {ip}:0"))?;
     let addr = listener.local_addr()?;
 
+    let (ping_tx, ping_rx) = oneshot::channel::<Vec<u8>>();
+
     tokio::spawn(async move {
+        let mut ping_tx = Some(ping_tx);
         loop {
             let (stream, _) = match listener.accept().await {
                 Ok(s) => s,
                 Err(_) => break,
             };
             let acceptor = acceptor.clone();
+            let ping_slot = ping_tx.take();
             tokio::spawn(async move {
                 let mut tls_stream = match acceptor.accept(stream).await {
                     Ok(s) => s,
@@ -80,13 +119,20 @@ pub async fn start_tls_echo_server() -> Result<(SocketAddr, Vec<u8>)> {
                         Err(_) => return,
                     }
                 }
+                if let Some(tx) = ping_slot {
+                    let _ = tx.send(received);
+                }
                 let _ = tls_stream.write_all(b"PONG\r\n").await;
                 let _ = tls_stream.flush().await;
             });
         }
     });
 
-    Ok((addr, cert_der))
+    Ok(EchoServer {
+        addr,
+        cert_der,
+        ping_rx,
+    })
 }
 
 /// A [`TlsProvider`] that uses a custom `rustls` `ClientConfig`.

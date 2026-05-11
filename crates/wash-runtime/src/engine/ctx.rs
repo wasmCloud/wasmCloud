@@ -426,10 +426,15 @@ impl CtxBuilder {
             sockets: self.sockets.unwrap_or_default(),
             #[cfg(feature = "wasi-tls")]
             tls: {
-                crate::init_crypto();
                 let mut builder = WasiTlsCtxBuilder::new();
                 if let Some(provider) = self.tls_provider {
                     builder = builder.provider(Box::new(ArcTlsProvider(provider)));
+                } else {
+                    tracing::warn!(
+                        "wasi-tls is enabled but no TLS provider was set; \
+                         falling back to wasmtime-wasi-tls default — \
+                         set one via EngineBuilder::with_tls_provider"
+                    );
                 }
                 builder.build()
             },
@@ -445,8 +450,14 @@ impl CtxBuilder {
 mod tests {
     use super::*;
 
+    fn setup() {
+        #[cfg(feature = "wasi-tls")]
+        crate::init_crypto();
+    }
+
     #[test]
     fn ctx_builder_sets_ids() {
+        setup();
         let ctx = Ctx::builder("wk-1", "comp-1").build();
         assert_eq!(ctx.workload_id.as_ref(), "wk-1");
         assert_eq!(ctx.component_id.as_ref(), "comp-1");
@@ -454,6 +465,7 @@ mod tests {
 
     #[test]
     fn ctx_builder_generates_uuid_id() {
+        setup();
         let ctx = Ctx::builder("wk", "comp").build();
         // id should be a valid UUID v4 string
         assert!(uuid::Uuid::parse_str(&ctx.id).is_ok());
@@ -461,12 +473,14 @@ mod tests {
 
     #[test]
     fn ctx_builder_uses_default_wasi_ctx_when_none_provided() {
+        setup();
         // Should not panic — proves default WasiCtx is created
         let _ctx = Ctx::builder("wk", "comp").build();
     }
 
     #[test]
     fn shared_ctx_new_sets_active_ctx() {
+        setup();
         let ctx = Ctx::builder("wk", "comp-a").build();
         let shared = SharedCtx::new(ctx);
         assert_eq!(shared.active_ctx.component_id.as_ref(), "comp-a");
@@ -475,6 +489,7 @@ mod tests {
 
     #[test]
     fn set_active_ctx_swaps_context() {
+        setup();
         let ctx_a = Ctx::builder("wk", "comp-a").build();
         let ctx_b = Ctx::builder("wk", "comp-b").build();
         let comp_b_id: Arc<str> = Arc::from("comp-b");
@@ -494,6 +509,7 @@ mod tests {
 
     #[test]
     fn set_active_ctx_returns_error_for_unknown_id() {
+        setup();
         let ctx = Ctx::builder("wk", "comp-a").build();
         let mut shared = SharedCtx::new(ctx);
         let unknown: Arc<str> = Arc::from("nonexistent");
@@ -504,6 +520,7 @@ mod tests {
 
     #[test]
     fn set_active_ctx_is_noop_when_already_active() {
+        setup();
         let ctx = Ctx::builder("wk", "comp-a").build();
         let mut shared = SharedCtx::new(ctx);
         let comp_a: Arc<str> = Arc::from("comp-a");

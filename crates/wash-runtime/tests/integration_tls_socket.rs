@@ -7,6 +7,7 @@
 //!
 //! # P3 round-trip
 //! Same scenario, but using P3 streams and `wasi:tls/client::Connector`.
+//!
 
 #![cfg(feature = "wasi-tls")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -17,11 +18,13 @@ use tokio::time::timeout;
 
 use wash_runtime::{
     host::{HostApi, HostBuilder},
-    types::{LocalResources, Service, Workload, WorkloadStartRequest},
+    types::{LocalResources, Service, Workload, WorkloadStartRequest, WorkloadState},
 };
 
 mod common;
-use common::tls::{engine_with_tls, install_default_crypto_provider, start_tls_echo_server};
+use common::tls::{
+    EchoServer, engine_with_tls, install_default_crypto_provider, start_tls_echo_server,
+};
 
 #[cfg(feature = "wasip3")]
 use common::tls::engine_with_p3_and_tls;
@@ -68,7 +71,11 @@ fn echo_client_workload_request(
 async fn test_p2_tls_tcp_round_trip() -> Result<()> {
     install_default_crypto_provider();
 
-    let (echo_addr, cert_der) = start_tls_echo_server().await?;
+    let EchoServer {
+        addr: echo_addr,
+        cert_der,
+        ping_rx,
+    } = start_tls_echo_server().await?;
 
     let engine = engine_with_tls(&cert_der)?;
     let host = HostBuilder::new()
@@ -80,12 +87,26 @@ async fn test_p2_tls_tcp_round_trip() -> Result<()> {
     let req =
         echo_client_workload_request("tls-echo-client-p2", TLS_ECHO_CLIENT_P2_WASM, echo_addr);
 
-    timeout(Duration::from_secs(15), host.workload_start(req))
+    let resp = timeout(Duration::from_secs(15), host.workload_start(req))
         .await
         .context("tls round-trip test timed out")?
         .context("workload_start failed")?;
+    assert_eq!(
+        resp.workload_status.workload_state,
+        WorkloadState::Running,
+        "expected Running, got {:?} (message: {})",
+        resp.workload_status.workload_state,
+        resp.workload_status.message,
+    );
 
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    let ping = timeout(Duration::from_secs(10), ping_rx)
+        .await
+        .context("echo server did not receive PING within timeout")?
+        .context("echo server task dropped its sender before sending PING")?;
+    assert!(
+        ping.starts_with(b"PING\r\n"),
+        "echo server received unexpected bytes from guest: {ping:?}",
+    );
 
     Ok(())
 }
@@ -97,7 +118,11 @@ async fn test_p2_tls_tcp_round_trip() -> Result<()> {
 async fn test_p3_tls_tcp_round_trip() -> Result<()> {
     install_default_crypto_provider();
 
-    let (echo_addr, cert_der) = start_tls_echo_server().await?;
+    let EchoServer {
+        addr: echo_addr,
+        cert_der,
+        ping_rx,
+    } = start_tls_echo_server().await?;
 
     let engine = engine_with_p3_and_tls(&cert_der)?;
     let host = HostBuilder::new()
@@ -109,12 +134,26 @@ async fn test_p3_tls_tcp_round_trip() -> Result<()> {
     let req =
         echo_client_workload_request("tls-echo-client-p3", TLS_ECHO_CLIENT_P3_WASM, echo_addr);
 
-    timeout(Duration::from_secs(15), host.workload_start(req))
+    let resp = timeout(Duration::from_secs(15), host.workload_start(req))
         .await
         .context("P3 tls round-trip test timed out")?
         .context("workload_start failed")?;
+    assert_eq!(
+        resp.workload_status.workload_state,
+        WorkloadState::Running,
+        "expected Running, got {:?} (message: {})",
+        resp.workload_status.workload_state,
+        resp.workload_status.message,
+    );
 
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    let ping = timeout(Duration::from_secs(10), ping_rx)
+        .await
+        .context("echo server did not receive PING within timeout")?
+        .context("echo server task dropped its sender before sending PING")?;
+    assert!(
+        ping.starts_with(b"PING\r\n"),
+        "echo server received unexpected bytes from guest: {ping:?}",
+    );
 
     Ok(())
 }

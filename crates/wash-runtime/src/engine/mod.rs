@@ -257,7 +257,15 @@ pub struct Engine {
 
 impl std::fmt::Debug for Engine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Engine").finish_non_exhaustive()
+        let mut s = f.debug_struct("Engine");
+        #[cfg(feature = "wasip3")]
+        s.field("wasip3", &self.wasip3);
+        #[cfg(feature = "wasi-tls")]
+        s.field(
+            "tls_provider",
+            &self.tls_provider.as_ref().map(|_| "<TlsProvider>"),
+        );
+        s.finish_non_exhaustive()
     }
 }
 
@@ -713,6 +721,9 @@ impl EngineBuilder {
     /// # Errors
     /// Returns an error if the wasmtime engine creation fails.
     pub fn build(mut self) -> anyhow::Result<Engine> {
+        #[cfg(feature = "wasi-tls")]
+        crate::init_crypto();
+
         // If a custom config was provided, use it as-is
         let config = if let Some(cfg) = self.config.take() {
             if self.max_instances.is_some() || self.use_pooling_allocator.is_some() {
