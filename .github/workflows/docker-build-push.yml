@@ -29,6 +29,11 @@ on:
         description: "Build and Push Image. Default=false"
         required: false
         default: false
+      push-by-digest:
+        type: boolean
+        description: "Push image by digest to the registry (required for manifest assembly). Set false to build locally without pushing, e.g. on pull-request runs where the token lacks org-package write access. Default=true"
+        required: false
+        default: true
       build-contexts:
         type: string
         required: false
@@ -102,7 +107,7 @@ jobs:
           context: ${{ inputs.working-directory }}
           tags: ${{ inputs.image }}
           build-contexts: ${{ inputs.build-contexts }}
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,push-by-digest=${{ inputs.push-by-digest }},name-canonical=true,push=${{ inputs.push-by-digest }}
           build-args: ${{ inputs.build-args }}
           cache-from: |
             type=gha,scope=buildx-${{ steps.meta.outputs.artifact_prefix }}-${{ matrix.arch }}-${{ github.ref_name }}
@@ -112,6 +117,7 @@ jobs:
 
       - name: Export digest
         id: export
+        if: ${{ inputs.push-by-digest }}
         env:
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
           DIGESTS_DIR: ${{ runner.temp }}/digests
@@ -120,6 +126,7 @@ jobs:
           touch "${DIGESTS_DIR}/${BUILD_DIGEST#sha256:}"
 
       - name: Upload digest
+        if: ${{ inputs.push-by-digest }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: digests-${{ steps.meta.outputs.artifact_prefix }}-${{ github.run_id }}-linux-${{ matrix.arch }}

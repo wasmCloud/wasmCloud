@@ -56,10 +56,6 @@ trap cleanup EXIT
 # distros (Ubuntu, Fedora, Arch, RHEL, ...) and is required for dlopen'ing
 # system libraries like GPU drivers.
 is_musl_linux() {
-    # Alpine and other musl systems ship /lib/ld-musl-<arch>.so.1
-    if compgen -G "/lib/ld-musl-*.so.1" >/dev/null 2>&1; then
-        return 0
-    fi
     # ldd --version prints "musl libc" on musl systems (to stderr, exit 1)
     if ldd --version 2>&1 | grep -qi musl; then
         return 0

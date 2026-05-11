@@ -122,7 +122,7 @@ jobs:
           rust-toolchain: nightly
           rust-components: rustfmt
       - name: Install cargo-machete
-        uses: taiki-e/install-action@51cd0b8c0499559d9a4d75c0f5c67bec3a894ec8 # v2.75.28
+        uses: taiki-e/install-action@3fa6878dc4ae603f73960271565a082bf196ab96 # v2.77.2
         with:
           tool: cargo-machete@0.8.0
       - name: Format
@@ -135,14 +135,115 @@ jobs:
         run: |
           cargo machete
 
-  # Integration gate: build the wash image from this commit, install it
-  # alongside the runtime-operator chart in a kind cluster, and run the
-  # operator's e2e suite (including the messaging round-trip from #5074)
-  # against it. The canary tag only moves if this passes. Also runs on
-  # PRs that touch wash, the chart, or the e2e suite, so regressions are
-  # caught before merge rather than after.
-  runtime-operator-e2e:
+  # Build the wash runtime image per-arch with the buildx GHA cache, push
+  # each arch by digest, and export a docker tarball per arch. The operator
+  # e2e gate loads the amd64 tarball, so the bytes exercised in e2e are the
+  # same bytes canary-publish later assembles into the multi-arch manifest
+  # list (`canary`, `sha-<full-sha>`, and via release-tag.yml the released
+  # `vX.Y.Z`). arm64 builds on every PR too so Dockerfile regressions are
+  # caught before merge.
+  wash-image:
     if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Login to ghcr.io
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+      - name: Prepare build outputs
+        id: prep
+        # PRs lack org-package write access; only push by digest on main so
+        # canary-publish can assemble the manifest after all gates pass.
+        # Use $GITHUB_EVENT_NAME (built-in env var) to avoid template
+        # expansion inside a shell script (zizmor).
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            {
+              echo 'outputs<<EOF'
+              echo 'type=docker,dest=/tmp/wash-image.tar,name=localhost/wasmcloud-wash:e2e'
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo 'outputs<<EOF'
+              echo 'type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true'
+              echo 'type=docker,dest=/tmp/wash-image.tar,name=localhost/wasmcloud-wash:e2e'
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build wash runtime image
+        id: build
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          # Push by digest so the registry doesn't accumulate per-commit
+          # staging tags, and also emit a local docker tarball so the
+          # operator e2e gate (and any future arch-specific gate)
+          # exercises the exact bytes that get published.
+          outputs: ${{ steps.prep.outputs.outputs }}
+          # head_ref on PRs (the source branch, shared across re-pushes
+          # and across PRs from the same branch); falls back to ref_name
+          # on main pushes ("main"). Always falls back to the main scope
+          # for cold-cache reads on first push.
+          cache-from: |
+            type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-${{ matrix.arch }}-main
+          cache-to: type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }},mode=max
+      - name: Export digest
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          if [[ -z "$DIGEST" ]]; then
+            echo "no digest on build step output" >&2
+            exit 1
+          fi
+          touch "/tmp/digests/${DIGEST#sha256:}"
+      - name: Upload digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wash-image-digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload image tarball
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wash-image-tarball-${{ matrix.arch }}
+          path: /tmp/wash-image.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  # Integration gate: install the shared wash image alongside the
+  # runtime-operator chart in a kind cluster, and run the operator's e2e
+  # suite (including the messaging round-trip from #5074) against it. The
+  # canary tag only moves if this passes. Also runs on PRs that touch wash,
+  # the chart, or the e2e suite, so regressions are caught before merge
+  # rather than after.
+  runtime-operator-e2e:
+    needs: [wash-image]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -152,8 +253,12 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-go
-      - name: Build wash runtime image
-        run: docker build -t localhost/wasmcloud-wash:e2e .
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wash-image-tarball-amd64
+          path: /tmp
+      - name: Load wash runtime image
+        run: docker load -i /tmp/wash-image.tar
       - name: Build runtime-operator image
         working-directory: runtime-operator
         run: make docker-build IMG=localhost/runtime-operator:e2e
@@ -192,37 +297,17 @@ jobs:
           kubectl get workloaddeployments.runtime.wasmcloud.dev -A -o yaml || true
           kubectl get workloads.runtime.wasmcloud.dev -A -o yaml || true
 
-  # The canary docker image is built in parallel with check/lint/e2e to
-  # avoid serializing the slow cargo build behind the slow tests. With
-  # `push: false`, the multi-arch digests are still pushed to ghcr (the
-  # workflow always does that for caching), but the human-visible
-  # `canary` tag is *not* created here — that happens in
-  # `canary-publish` below, gated on every test job passing.
-  canary-build:
-    # Runs on every main push, and on PRs labeled `canary` so that changes to
-    # this workflow or to docker-build-push.yml can be validated end-to-end
-    # (including the reusable-workflow permission handshake) before merge.
-    # `push: false` below means no canary tag moves on PR runs.
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || contains(github.event.pull_request.labels.*.name, 'canary')
-    permissions:
-      contents: write
-      packages: write
-    uses: ./.github/workflows/docker-build-push.yml
-    with:
-      push: false
-      image: ghcr.io/wasmcloud/wash
-      tags: |
-        type=raw,value=canary
-
-  # Tag promotion: only move `canary` once check, lint, and the
-  # runtime-operator e2e have all passed against this commit. Reads the
-  # digests uploaded by canary-build and assembles the manifest list. The
-  # `sha-<full-sha>` tag is what release-tag.yml pins to when it promotes
-  # this canary digest as the immutable vX.Y.Z release tag — `canary`
-  # itself moves on every subsequent main push, so we cannot rely on it.
+  # Tag promotion: only push `canary` once check, lint, and the
+  # runtime-operator e2e have all passed against this commit. Assembles
+  # the multi-arch manifest list from the per-arch digests that
+  # wash-image already pushed (amd64 was also exercised by the e2e gate).
+  # The `sha-<full-sha>` tag is what release-tag.yml pins to when it
+  # promotes this canary digest as the immutable vX.Y.Z release tag —
+  # `canary` itself moves on every subsequent main push, so we cannot
+  # rely on it.
   canary-publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [check, lint, runtime-operator-e2e, canary-build]
+    needs: [check, lint, runtime-operator-e2e, wash-image]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -234,8 +319,8 @@ jobs:
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: ${{ runner.temp }}/digests
-          pattern: digests-${{ needs.canary-build.outputs.artifact_prefix }}-${{ github.run_id }}-*
+          path: /tmp/digests
+          pattern: wash-image-digest-*
           merge-multiple: true
       - name: Login to ghcr.io
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
@@ -254,11 +339,29 @@ jobs:
             type=raw,value=canary
             type=sha,format=long,prefix=sha-
       - name: Create manifest list and push tags
-        working-directory: ${{ runner.temp }}/digests
+        working-directory: /tmp/digests
         run: |
-          # shellcheck disable=SC2046
-          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/wasmcloud/wash@sha256:%s ' *)
+          set -euo pipefail
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          if (( ${#tags[@]} == 0 )); then
+            echo "No tags from docker meta. Refusing to push" >&2
+            exit 1
+          fi
+          shopt -s nullglob
+          digests=( * )
+          shopt -u nullglob
+          if (( ${#digests[@]} == 0 )); then
+            echo "No digests downloaded. Refusing to push" >&2
+            exit 1
+          fi
+          args=()
+          for tag in "${tags[@]}"; do
+            args+=(-t "$tag")
+          done
+          for d in "${digests[@]}"; do
+            args+=("ghcr.io/wasmcloud/wash@sha256:$d")
+          done
+          docker buildx imagetools create "${args[@]}"
       - name: Inspect image
         run: |
           docker buildx imagetools inspect "ghcr.io/wasmcloud/wash:${STEPS_META_OUTPUTS_VERSION}"
