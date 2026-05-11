@@ -84,7 +84,6 @@ jobs:
       - zizmor
     if: always()
     runs-on: ubuntu-latest
-    permissions: {}
     steps:
       - name: Require all jobs to pass or be skipped
         env:

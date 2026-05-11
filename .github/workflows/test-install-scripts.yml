@@ -19,8 +19,7 @@ on:
 # Minimum needed: checkout + reading attestations from the public repo via
 # `gh attestation verify` (which the install scripts call when -v/-Verify is
 # set). Public-repo attestations are readable with the default token.
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   changes:
@@ -50,6 +49,8 @@ jobs:
     if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
     name: Test Bash Install Script
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -125,6 +126,8 @@ jobs:
     if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
     name: Test PowerShell Install Script
     runs-on: windows-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -203,7 +206,6 @@ jobs:
       - test-powershell-install
     if: always()
     runs-on: ubuntu-latest
-    permissions: {}
     steps:
       - name: Require all jobs to pass or be skipped
         env:
