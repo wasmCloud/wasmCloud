@@ -1,5 +1,5 @@
 build:
-  command: cargo build --target wasm32-wasip2 --release
+  command: cargo build --target wasm32-wasip2 --release --locked
   component_path: target/wasm32-wasip2/release/otel_http.wasm
 
 dev:

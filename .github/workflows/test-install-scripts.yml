@@ -8,10 +8,6 @@ on:
         required: false
         default: ""
   pull_request:
-    paths:
-      - 'install.sh'
-      - 'install.ps1'
-      - '.github/workflows/test-install-scripts.yml'
   push:
     branches:
       - main
@@ -23,13 +19,38 @@ on:
 # Minimum needed: checkout + reading attestations from the public repo via
 # `gh attestation verify` (which the install scripts call when -v/-Verify is
 # set). Public-repo attestations are readable with the default token.
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'install.sh'
+              - 'install.ps1'
+              - '.github/workflows/test-install-scripts.yml'
+
   test-bash-install:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
     name: Test Bash Install Script
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -100,8 +121,13 @@ jobs:
           /tmp/wash-version-test/wash --version
 
   test-powershell-install:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
     name: Test PowerShell Install Script
     runs-on: windows-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -173,3 +199,18 @@ jobs:
             exit 1
           }
           & $washPath --version
+
+  gate:
+    needs:
+      - test-bash-install
+      - test-powershell-install
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all jobs to pass or be skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          if echo "$RESULTS" | grep -qE '"(failure|cancelled)"'; then
+            exit 1
+          fi

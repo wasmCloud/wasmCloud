@@ -3,9 +3,6 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - '.github/workflows/**'
-      - '.github/actions/**'
   push:
     branches:
       - main
@@ -16,7 +13,30 @@ on:
 permissions: {}
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - '.github/workflows/**'
+              - '.github/actions/**'
+
   actionlint:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
     name: actionlint
     runs-on: ubuntu-latest
     permissions:
@@ -34,6 +54,9 @@ jobs:
         run: actionlint -color
 
   zizmor:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
     name: zizmor
     runs-on: ubuntu-latest
     permissions:
@@ -54,3 +77,18 @@ jobs:
           # Used by zizmor for online audits (e.g. checking whether a
           # referenced action's tag still resolves to its pinned SHA).
           GH_TOKEN: ${{ github.token }}
+
+  gate:
+    needs:
+      - actionlint
+      - zizmor
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all jobs to pass or be skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          if echo "$RESULTS" | grep -qE '"(failure|cancelled)"'; then
+            exit 1
+          fi

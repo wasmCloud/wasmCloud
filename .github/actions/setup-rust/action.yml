@@ -37,6 +37,6 @@ runs:
         version: 0.13.0
     - name: Install cargo zigbuild
       if: ${{ inputs.install-zigbuild == 'true' }}
-      uses: taiki-e/install-action@51cd0b8c0499559d9a4d75c0f5c67bec3a894ec8 # v2.75.28
+      uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
       with:
         tool: cargo-zigbuild

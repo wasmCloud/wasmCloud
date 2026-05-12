@@ -36,6 +36,12 @@ rules:
     - get
     - update
     - patch
+  {{- if not .Values.operator.watchNamespaces }}
+  # When operator.watchNamespaces is empty the operator watches all namespaces, so
+  # configmaps/secrets/services/events and endpointslices are granted cluster-wide.
+  # When watchNamespaces is set, these grants move to a per-namespace ClusterRole +
+  # RoleBindings (see workload-namespace-role.yaml and endpointslice-role.yaml).
+  # See https://wasmcloud.com/docs/kubernetes-operator/operator-manual/roles-and-rolebindings/#restricting-access-of-the-operator-to-namespaces
   - apiGroups:
     - ""
     resources:
@@ -64,11 +70,6 @@ rules:
     - get
     - list
     - watch
-  {{- if not .Values.operator.watchNamespaces }}
-  # If the operator is watching all namespaces, it needs permissions to manage EndpointSlices across the cluster. If it's only watching specific
-  # namespaces, a more limited Role and RoleBinding will be created in each namespace instead, and this ClusterRole will not include permissions
-  # for EndpointSlices. See https://wasmcloud.com/docs/kubernetes-operator/operator-manual/roles-and-rolebindings/#restricting-access-of-the-operator-to-namespaces
-  # for more details.
   - apiGroups:
     - discovery.k8s.io
     resources:

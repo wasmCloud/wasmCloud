@@ -32,7 +32,8 @@ async fn main(req: Request<Body>) -> Result<Response<Body>, wstd::http::Error> {
     // wstd body → Full<Bytes> for tonic
     let (parts, wstd_body) = req.into_parts();
     let collected = wstd_body.into_boxed_body().collect().await?;
-    let http_req = http::Request::from_parts(parts, http_body_util::Full::new(collected.to_bytes()));
+    let http_req =
+        http::Request::from_parts(parts, http_body_util::Full::new(collected.to_bytes()));
 
     // Dispatch through tonic server
     let mut svc = GreeterServer::new(MyGreeter);
@@ -41,5 +42,8 @@ async fn main(req: Request<Body>) -> Result<Response<Body>, wstd::http::Error> {
     // tonic BoxBody → wstd Body (map tonic::Status error to anyhow)
     let (resp_parts, tonic_body) = http_resp.into_parts();
     let mapped = tonic_body.map_err(|s| anyhow::anyhow!("tonic: {s}"));
-    Ok(http::Response::from_parts(resp_parts, Body::from_http_body(mapped)))
+    Ok(http::Response::from_parts(
+        resp_parts,
+        Body::from_http_body(mapped),
+    ))
 }
