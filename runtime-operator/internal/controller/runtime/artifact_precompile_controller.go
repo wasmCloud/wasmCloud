@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -107,7 +108,7 @@ func jobFailed(j *batchv1.Job) (bool, string) {
 
 func variantRecorded(existing []runtimev1alpha1.PrecompiledVariant, v runtimev1alpha1.PrecompiledVariant) bool {
 	for _, e := range existing {
-		if e.Target == v.Target && e.WasmtimeVersion == v.WasmtimeVersion {
+		if e.Target == v.Target && e.WasmtimeVersion == v.WasmtimeVersion && e.ImageRef == v.ImageRef {
 			return true
 		}
 	}
@@ -125,10 +126,15 @@ func argsMatch(existing, desired *batchv1.Job) bool {
 	)
 }
 
+func sanitizeImageRef(image string) string {
+	return strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace(image)
+}
+
 func (r *PrecompileReconciler) outputURLOf(a *runtimev1alpha1.Artifact) string {
-	return fmt.Sprintf("%s/%s/%s-%s.cwasm",
+	return fmt.Sprintf("%s/%s/%s/%s-%s.cwasm",
 		r.ArtifactStore.BaseURL,
 		a.Name,
+		sanitizeImageRef(a.Spec.Image),
 		r.Target,
 		r.WasmtimeVersion,
 	)
@@ -198,6 +204,7 @@ func (r *PrecompileReconciler) handleSuccessfulJob(
 		Target:          r.Target,
 		WasmtimeVersion: r.WasmtimeVersion,
 		ArtifactURL:     r.outputURLOf(a),
+		ImageRef:        a.Spec.Image,
 	}
 	if variantRecorded(a.Status.Precompiled, variant) {
 		return ctrl.Result{}, nil

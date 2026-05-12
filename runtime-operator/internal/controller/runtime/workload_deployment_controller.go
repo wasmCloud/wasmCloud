@@ -338,7 +338,11 @@ func resolveArtifacts(ctx context.Context, kubeClient client.Client, namespace s
 		comp.Image = artifact.Status.ArtifactURL
 
 		if pc != nil {
-			variant := findMatchingVariant(artifact.Status.Precompiled, pc.Target, pc.WasmtimeVersion)
+			variant := findMatchingVariant(
+				artifact.Status.Precompiled,
+				pc.Target,
+				pc.WasmtimeVersion,
+				artifact.Spec.Image)
 			if variant == nil {
 				return condition.ErrStatusUnknown(fmt.Errorf("artifact %s has no precompiled variant matching %s/%s", artifactName, pc.Target, pc.WasmtimeVersion))
 			}
@@ -362,9 +366,10 @@ func resolveArtifacts(ctx context.Context, kubeClient client.Client, namespace s
 	return nil
 }
 
-func findMatchingVariant(precompiled []runtimev1alpha1.PrecompiledVariant, target, wasmtimeVersion string) *runtimev1alpha1.PrecompiledVariant {
+func findMatchingVariant(precompiled []runtimev1alpha1.PrecompiledVariant, target, wasmtimeVersion string, image string) *runtimev1alpha1.PrecompiledVariant {
 	for i := range precompiled {
-		if precompiled[i].Target == target && precompiled[i].WasmtimeVersion == wasmtimeVersion {
+		v := &precompiled[i]
+		if v.Target == target && v.WasmtimeVersion == wasmtimeVersion && v.ImageRef == image {
 			return &precompiled[i]
 		}
 	}

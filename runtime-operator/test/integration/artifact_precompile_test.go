@@ -116,7 +116,7 @@ var _ = Describe("precompile pipeline", func() {
 		ctx := context.Background()
 		a := newArtifact(ctx, "img-check")
 
-		expectedUrl := fmt.Sprintf("%s/%s/%s-%s.cwasm",
+		expectedUrl := fmt.Sprintf("%s/%s/ghcr.io_example_comp_v1/%s-%s.cwasm",
 			testArtifactStore.BaseURL, a.Name, testTarget, testWasmtimeVersion)
 
 		Eventually(func(g Gomega) {
@@ -162,7 +162,7 @@ var _ = Describe("precompile pipeline", func() {
 		}}
 		Expect(k8sClient.Status().Update(ctx, &job)).To(Succeed())
 
-		expectedURL := fmt.Sprintf("%s/%s/%s-%s.cwasm",
+		expectedURL := fmt.Sprintf("%s/%s/ghcr.io_example_comp_v1/%s-%s.cwasm",
 			testArtifactStore.BaseURL, a.Name, testTarget, testWasmtimeVersion)
 
 		Eventually(func(g Gomega) {
@@ -176,6 +176,7 @@ var _ = Describe("precompile pipeline", func() {
 			g.Expect(got.Status.Precompiled[0].ArtifactURL).To(Equal(expectedURL))
 			g.Expect(got.Status.Precompiled[0].Target).To(Equal(testTarget))
 			g.Expect(got.Status.Precompiled[0].WasmtimeVersion).To(Equal(testWasmtimeVersion))
+			g.Expect(got.Status.Precompiled[0].ImageRef).To(Equal(testArtifactImage))
 
 			cond := got.Status.GetCondition(runtimev1alpha1.ArtifactConditionPrecompiled)
 			g.Expect(cond.Status).To(Equal(corev1.ConditionTrue))

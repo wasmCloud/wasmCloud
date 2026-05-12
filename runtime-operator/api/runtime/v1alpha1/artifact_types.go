@@ -26,6 +26,7 @@ type PrecompiledVariant struct {
 	Target          string `json:"target"`
 	WasmtimeVersion string `json:"wasmtimeVersion"`
 	ArtifactURL     string `json:"artifactUrl"`
+	ImageRef        string `json:"imageRef"`
 }
 
 // ArtifactStatus defines the observed state of Artifact.

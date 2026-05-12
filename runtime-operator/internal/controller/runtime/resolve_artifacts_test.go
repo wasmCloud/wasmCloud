@@ -42,6 +42,7 @@ func newArtifact() *runtimev1alpha1.Artifact {
 				Target:          "x86_64-unknown-linux-gnu",
 				WasmtimeVersion: "27.0.0",
 				ArtifactURL:     "nats://store/comp/x86_64-unknown-linux-gnu-27.0.0.cwasm",
+				ImageRef:        "ghcr.io/x/y:v1",
 			}},
 		},
 	}
@@ -99,6 +100,26 @@ var _ = Describe("resolveArtifacts", func() {
 		tpl := newWorkloadReplicaTemplate()
 		pc := &precompileMatch{
 			Target: "aarch64-apple-darwin", WasmtimeVersion: "27.0.0",
+		}
+
+		err := resolveArtifacts(ctx, c, "default", tpl, newWorkloadDeploymentArtifact(), pc)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("status unknown"))
+		Expect(err.Error()).To(ContainSubstring("no precompiled variant matching"))
+	})
+
+	It("returns status unknown when the only variant is for an old image", func() {
+		ctx := context.Background()
+		art := newArtifact()
+
+		art.Spec.Image = "ghcr.io/x/y:v2"
+		art.Status.ArtifactURL = "ghcr.io/x/y:v2"
+		art.Status.Precompiled[0].ImageRef = "ghcr.io/x/y:v1"
+		c := newTestClient(art)
+		tpl := newWorkloadReplicaTemplate()
+		pc := &precompileMatch{
+			Target:          "x86_64-unknown-linux-gnu",
+			WasmtimeVersion: "27.0.0",
 		}
 
 		err := resolveArtifacts(ctx, c, "default", tpl, newWorkloadDeploymentArtifact(), pc)

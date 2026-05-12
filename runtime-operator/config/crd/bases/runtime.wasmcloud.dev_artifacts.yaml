@@ -119,12 +119,15 @@ spec:
                   properties:
                     artifactUrl:
                       type: string
+                    imageRef:
+                      type: string
                     target:
                       type: string
                     wasmtimeVersion:
                       type: string
                   required:
                   - artifactUrl
+                  - imageRef
                   - target
                   - wasmtimeVersion
                   type: object
