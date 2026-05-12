@@ -349,3 +349,62 @@ pub async fn generate_default_config(path: &Path, force: bool) -> Result<()> {
     info!(config_path = %path.display(), "Generated default configuration");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn load_config_preserves_local_dev_config_when_cli_override_disables_wit_fetch() -> Result<()> {
+        let project_dir = tempfile::tempdir()?;
+        let wash_dir = project_dir.path().join(CONFIG_DIR_NAME);
+        fs::create_dir_all(&wash_dir)?;
+        fs::write(
+            wash_dir.join(CONFIG_FILE_NAME),
+            r#"
+dev:
+  address: 127.0.0.1:8090
+  postgres_url: postgres://user:pass@localhost:5432
+  host_interfaces:
+    - namespace: wasmcloud
+      package: postgres
+      interfaces: [query, types]
+      version: 0.1.1-draft
+      config:
+        database: mydb
+"#,
+        )?;
+
+        let config = load_config(
+            &project_dir.path().join("missing-global-config.yaml"),
+            Some(project_dir.path()),
+            Some(Config {
+                version: None,
+                dev: None,
+                wit: Some(WitConfig {
+                    skip_fetch: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        )?;
+
+        let dev = config.dev();
+        assert_eq!(dev.address.as_deref(), Some("127.0.0.1:8090"));
+        assert_eq!(
+            dev.postgres_url.as_deref(),
+            Some("postgres://user:pass@localhost:5432")
+        );
+        assert_eq!(dev.host_interfaces.len(), 1);
+        assert!(
+            config
+                .wit
+                .as_ref()
+                .is_some_and(|wit_config| wit_config.skip_fetch)
+        );
+
+        Ok(())
+    }
+}
