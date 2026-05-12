@@ -5,9 +5,9 @@ description: >
   and fetches WIT dependencies as needed), and publish to OCI on pushes
   to main. CI mirrors what `wash build` does locally, so a passing build
   here is the same passing build a contributor would see. The caller must
-  invoke `./.github/actions/setup-rust-example` exactly once before
-  calling this action, plus any example-specific build tools (e.g.,
-  protoc for tonic-build).
+  invoke `./.github/actions/setup-rust` (with `install-nightly: "true"`
+  and `install-wash: "true"`) exactly once before calling this action,
+  plus any example-specific build tools (e.g., protoc for tonic-build).
 
 inputs:
   working-directory:

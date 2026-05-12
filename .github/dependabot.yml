@@ -41,7 +41,6 @@ updates:
       - "/.github/actions/no-diff"
       - "/.github/actions/setup-go"
       - "/.github/actions/setup-rust"
-      - "/.github/actions/setup-rust-example"
     schedule:
       interval: "weekly"
     target-branch: "main"

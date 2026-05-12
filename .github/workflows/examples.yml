@@ -38,22 +38,22 @@ jobs:
             blobby:
               - 'examples/blobby/**'
               - '.github/actions/build-rust-example/**'
-              - '.github/actions/setup-rust-example/**'
+              - '.github/actions/setup-rust/**'
               - '.github/workflows/examples.yml'
             grpc-hello-world:
               - 'examples/grpc-hello-world/**'
               - '.github/actions/build-rust-example/**'
-              - '.github/actions/setup-rust-example/**'
+              - '.github/actions/setup-rust/**'
               - '.github/workflows/examples.yml'
             otel-http:
               - 'examples/otel-http/**'
               - '.github/actions/build-rust-example/**'
-              - '.github/actions/setup-rust-example/**'
+              - '.github/actions/setup-rust/**'
               - '.github/workflows/examples.yml'
             qrcode:
               - 'examples/qrcode/**'
               - '.github/actions/build-rust-example/**'
-              - '.github/actions/setup-rust-example/**'
+              - '.github/actions/setup-rust/**'
               - '.github/workflows/examples.yml'
 
   blobby:
@@ -69,7 +69,10 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-rust-example
+      - uses: ./.github/actions/setup-rust
+        with:
+          install-nightly: "true"
+          install-wash: "true"
       - uses: ./.github/actions/build-rust-example
         with:
           working-directory: examples/blobby
@@ -90,7 +93,10 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-rust-example
+      - uses: ./.github/actions/setup-rust
+        with:
+          install-nightly: "true"
+          install-wash: "true"
       - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
           version: "29.x"
@@ -117,7 +123,10 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-rust-example
+      - uses: ./.github/actions/setup-rust
+        with:
+          install-nightly: "true"
+          install-wash: "true"
       - uses: ./.github/actions/build-rust-example
         with:
           working-directory: examples/otel-http
@@ -136,7 +145,10 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-rust-example
+      - uses: ./.github/actions/setup-rust
+        with:
+          install-nightly: "true"
+          install-wash: "true"
       - uses: ./.github/actions/build-rust-example
         with:
           working-directory: examples/qrcode

@@ -1,5 +1,10 @@
 name: "Rust: Setup"
-description: This action installs Rust tools
+description: >
+  Install Rust toolchains for wasmCloud builds. Wraps `rustup` directly so
+  the toolchain surface doesn't depend on dtolnay/rust-toolchain@master,
+  which has no versioned releases. Optionally installs nightly (for
+  `cargo +nightly fmt`), the wash CLI, and Zig/cargo-zigbuild for
+  cross-compilation.
 inputs:
   rust-toolchain:
     description: "Rust toolchain"
@@ -12,31 +17,67 @@ inputs:
   rust-components:
     description: "Comma separated list of additional components"
     required: false
-    default: "clippy, rustfmt"
+    default: "clippy,rustfmt"
+  install-nightly:
+    description: "Install the nightly toolchain with rustfmt (for `cargo +nightly fmt --check`)"
+    required: false
+    default: "false"
+  install-wash:
+    description: "Install the wasmCloud wash CLI"
+    required: false
+    default: "false"
   install-zigbuild:
-    description: "Install Zig compiler"
+    description: "Install Zig and cargo-zigbuild for cross-compilation"
     required: false
     default: "false"
 
 runs:
   using: "composite"
   steps:
-    # Rust Setup
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
-      with:
-        toolchain: ${{ inputs.rust-toolchain }}
-        targets: ${{ inputs.rust-targets }}
-        # rust-src is required when using cargo-zigbuild for cross-compilation
-        components: ${{ inputs.install-zigbuild == 'true' && format('{0}, rust-src', inputs.rust-components) || inputs.rust-components }}
+    - name: Install Rust toolchain
+      shell: bash
+      env:
+        TOOLCHAIN: ${{ inputs.rust-toolchain }}
+        TARGETS: ${{ inputs.rust-targets }}
+        # rust-src is required when using cargo-zigbuild for cross-compilation.
+        COMPONENTS: ${{ inputs.install-zigbuild == 'true' && format('{0},rust-src', inputs.rust-components) || inputs.rust-components }}
+      run: |
+        set -euo pipefail
+        # Accept either `clippy, rustfmt` or `clippy,rustfmt` for compatibility
+        # with the previous dtolnay/rust-toolchain input format.
+        COMPONENTS="${COMPONENTS// /}"
+        TARGETS="${TARGETS// /}"
+        rustup toolchain install "${TOOLCHAIN}" \
+          --profile minimal \
+          --component "${COMPONENTS}" \
+          --target "${TARGETS}" \
+          --no-self-update
+        rustup default "${TOOLCHAIN}"
+
+    - name: Install nightly toolchain
+      if: ${{ inputs.install-nightly == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        rustup toolchain install nightly \
+          --profile minimal \
+          --component rustfmt \
+          --no-self-update
+
     - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
     - name: Install Zig for zigbuild
       if: ${{ inputs.install-zigbuild == 'true' }}
       uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
       with:
         version: 0.13.0
-    - name: Install cargo zigbuild
+
+    - name: Install cargo-zigbuild
       if: ${{ inputs.install-zigbuild == 'true' }}
       uses: taiki-e/install-action@3fa6878dc4ae603f73960271565a082bf196ab96 # v2.77.2
       with:
         tool: cargo-zigbuild
+
+    - name: Install wash CLI
+      if: ${{ inputs.install-wash == 'true' }}
+      uses: wasmcloud/setup-wash-action@47756fa211cc82f392c57e39504f43ef46fc0b3e # v2.1.0
