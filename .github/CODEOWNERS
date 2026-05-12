@@ -10,16 +10,30 @@
 # wash CLI and runtime
 /crates/wash/           @wasmCloud/wash-maintainers
 /crates/wash-runtime/   @wasmCloud/wash-maintainers
+/Cargo.toml             @wasmCloud/wash-maintainers
+/Cargo.lock             @wasmCloud/wash-maintainers
+/rust-toolchain.toml    @wasmCloud/wash-maintainers
+/rustfmt.toml           @wasmCloud/wash-maintainers
 
 # Go-based runtime components
 /runtime-gateway/       @wasmCloud/go-maintainers
 /runtime-operator/      @wasmCloud/go-maintainers
 /proto/                 @wasmCloud/go-maintainers
+/go.work                @wasmCloud/go-maintainers
+/go.work.sum            @wasmCloud/go-maintainers
+/buf.gen.yaml           @wasmCloud/go-maintainers
+/buf.yaml               @wasmCloud/go-maintainers
+/Makefile               @wasmCloud/go-maintainers
+/charts/                @wasmCloud/go-maintainers @wasmCloud/ci-maintainers
+/deploy/                @wasmCloud/go-maintainers @wasmCloud/ci-maintainers
 
-# CI, release automation, charts, and deploy assets
+# CI, release automation
 /.github/               @wasmCloud/ci-maintainers
-/charts/                @wasmCloud/ci-maintainers
-/deploy/                @wasmCloud/ci-maintainers
+/install.sh             @wasmCloud/ci-maintainers
+/install.ps1            @wasmCloud/ci-maintainers
+/Dockerfile             @wasmCloud/ci-maintainers
+/.dockerignore          @wasmCloud/ci-maintainers
+/RELEASE_RUNBOOK.md     @wasmCloud/ci-maintainers
 
 # Examples and project templates
 /examples/              @wasmCloud/examples-maintainers
