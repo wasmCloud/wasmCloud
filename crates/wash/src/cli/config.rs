@@ -353,7 +353,7 @@ async fn cmd_validate(ctx: &CliContext, file: Option<&Path>) -> anyhow::Result<C
     }
 }
 
-/// Sum the byte size of all files under `path` using `fs_extra::dir::get_size`.
+/// Sum the byte size of all files under `path`.
 ///
 /// Runs the synchronous walk on a blocking task so the async runtime is not stalled.
 async fn dir_size(path: &Path) -> anyhow::Result<u64> {
