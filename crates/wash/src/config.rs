@@ -91,16 +91,14 @@ impl Config {
     pub async fn validate(&self, project_dir: &Path) -> Result<()> {
         let mut errors: Vec<String> = Vec::new();
 
-        if let Some(build) = &self.build {
-            if let Err(e) = build.validate() {
+        if let Some(build) = &self.build
+            && let Err(e) = build.validate() {
                 errors.extend(e.to_string().lines().map(String::from));
             }
-        }
-        if let Some(dev) = &self.dev {
-            if let Err(e) = dev.validate() {
+        if let Some(dev) = &self.dev
+            && let Err(e) = dev.validate() {
                 errors.extend(e.to_string().lines().map(String::from));
             }
-        }
         if let Some(wit) = &self.wit {
             match wit.validate(project_dir) {
                 Ok(()) => {}
@@ -496,9 +494,7 @@ pub fn example_config() -> Config {
         build: Some(BuildConfig {
             command: Some("cargo build --target wasm32-wasip2 --release".to_string()),
             env: HashMap::new(),
-            component_path: Some(PathBuf::from(format!(
-                "target/wasm32-wasip2/release/component.wasm"
-            ))),
+            component_path: Some(PathBuf::from("target/wasm32-wasip2/release/component.wasm".to_string())),
         }),
         dev: Some(DevConfig {
             address: Some("0.0.0.0:8000".to_string()),
