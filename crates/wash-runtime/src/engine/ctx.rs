@@ -25,23 +25,24 @@ use crate::plugin::HostPlugin;
 /// per-component contexts without re-creating the underlying provider.
 #[cfg(feature = "wasi-tls")]
 struct ArcTlsProvider(Arc<dyn wasmtime_wasi_tls::TlsProvider>);
-
+/// Concrete return type of [`wasmtime_wasi_tls::TlsProvider::connect`]. The
+/// upstream alias (`BoxFutureTlsStream`) is `pub(crate)`, so we re-declare an
+/// equivalent here to keep the impl signature readable.
+#[cfg(feature = "wasi-tls")]
+type TlsConnectFuture = std::pin::Pin<
+    Box<
+        dyn std::future::Future<
+                Output = Result<Box<dyn wasmtime_wasi_tls::TlsStream>, wasmtime_wasi_tls::Error>,
+            > + Send,
+    >,
+>;
 #[cfg(feature = "wasi-tls")]
 impl wasmtime_wasi_tls::TlsProvider for ArcTlsProvider {
     fn connect(
         &self,
         server_name: String,
         transport: Box<dyn wasmtime_wasi_tls::TlsTransport>,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<
-                        Box<dyn wasmtime_wasi_tls::TlsStream>,
-                        wasmtime_wasi_tls::Error,
-                    >,
-                > + Send,
-        >,
-    > {
+    ) -> TlsConnectFuture {
         self.0.connect(server_name, transport)
     }
 }

@@ -109,7 +109,7 @@ pub async fn start_tls_echo_server() -> Result<EchoServer> {
                 let mut received = Vec::new();
                 loop {
                     match tls_stream.read(&mut buf).await {
-                        Ok(0) => break,
+                        Ok(0) => return,
                         Ok(n) => {
                             received.extend_from_slice(&buf[..n]);
                             if received.windows(2).any(|w| w == b"\r\n") {
