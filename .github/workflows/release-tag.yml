@@ -67,9 +67,10 @@ concurrency:
 
 jobs:
   promote:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    needs: gate
+    if: needs.gate.outputs.run == 'true' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     permissions:
       contents: write
       packages: write
@@ -148,9 +149,10 @@ jobs:
           # we'll repackage on tag (charts).
           REQUIRED=("wash" "runtime-operator" "runtime-gateway" "charts")
           # Global deadline across all required workflows. wash.yml's matrix
-          # check is the long pole at ~45 min/runner; canary-publish runs
-          # after it. 90 min gives headroom for queue + retries.
-          DEADLINE=$(( SECONDS + 5400 ))
+          # check is ~45 min and canary-binaries is capped at 90 min, so
+          # the longest serial path on the merge commit's wash run is ~135
+          # min. 150 min gives headroom for queue + retries on top of that.
+          DEADLINE=$(( SECONDS + 9000 ))
           for WF in "${REQUIRED[@]}"; do
             echo "waiting for ${WF} on ${MERGE_SHA}..."
             while (( SECONDS < DEADLINE )); do
@@ -445,3 +447,35 @@ jobs:
           curl -sSf -X POST -H 'Content-Type: application/json' \
             --data "$(jq -nc --arg text "${TEXT}" '{text: $text}')" \
             "${SLACK_WEBHOOK_URL}"
+
+  gate:
+    # Mirror release-train's ISO-week parity gate. workflow_run fires on
+    # every release-train completion — including off-cycle weeks where
+    # release-train's own gate skipped the release job (skipped jobs roll
+    # up as `success`, so workflow_run still triggers). Without this gate,
+    # release-tag fires every Tuesday and fails noisily in verify-head.
+    # workflow_dispatch always proceeds (recovery hatch).
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: ISO-week parity gate
+        id: gate
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "manual dispatch — bypassing every-two-weeks gate"
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          # Keep TRAIN_PARITY in sync with release-train.yml. To re-anchor
+          # (e.g. to dodge a holiday), flip both files together.
+          TRAIN_PARITY=1 # 1 = odd ISO weeks; 0 = even ISO weeks
+          WEEK=$(date -u +%V)
+          if (( WEEK % 2 == TRAIN_PARITY )); then
+            echo "ISO week ${WEEK} matches parity ${TRAIN_PARITY} — release-tag runs"
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "ISO week ${WEEK} does not match parity ${TRAIN_PARITY} — skipping (every-two-weeks cadence)"
+            echo "run=false" >> "${GITHUB_OUTPUT}"
+          fi
