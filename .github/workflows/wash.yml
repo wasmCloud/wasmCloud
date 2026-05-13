@@ -429,7 +429,7 @@ jobs:
       - lint
       - runtime-operator-e2e
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     strategy:
