@@ -7,7 +7,7 @@
 //! It also exposes the type aliases used at the P3 outgoing-request boundary
 //! ([`P3Body`], [`P3RequestErrorFuture`], [`P3SendFuture`]). The
 //! outgoing-request egress policy itself lives on the unified
-//! [`crate::host::http::OutgoingHandler`] trait via its `send_p3` method.
+//! [`crate::host::http::OutgoingHandler`] trait via its `send_request_p3` method.
 
 use crate::engine::ctx::SharedCtx;
 use crate::observability::FuelConsumptionMeter;
@@ -31,7 +31,7 @@ pub type P3SendResult = Result<
     wasmtime_wasi::TrappableError<ErrorCode>,
 >;
 
-/// Future returned by [`crate::host::http::OutgoingHandler::send_p3`].
+/// Future returned by [`crate::host::http::OutgoingHandler::send_request_p3`].
 pub type P3SendFuture = Box<dyn std::future::Future<Output = P3SendResult> + Send>;
 
 /// Handle an HTTP request using the WASIP3 `wasi:http/handler` interface.
