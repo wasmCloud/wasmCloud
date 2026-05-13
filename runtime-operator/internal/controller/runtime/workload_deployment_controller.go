@@ -16,6 +16,9 @@ import (
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 const (
@@ -309,8 +312,42 @@ func (r *WorkloadDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.WorkloadDeployment{}).
 		Owns(&runtimev1alpha1.WorkloadReplicaSet{}).
+		Watches(&runtimev1alpha1.Artifact{}, handler.EnqueueRequestsFromMapFunc(r.getAffectedWorkloads)).
 		Named("workload-deployment").
 		Complete(r)
+}
+
+func (r *WorkloadDeploymentReconciler) workloadDeploymentsReferencing(ctx context.Context, art *runtimev1alpha1.Artifact) ([]runtimev1alpha1.WorkloadDeployment, error) {
+	var wds runtimev1alpha1.WorkloadDeploymentList
+	if err := r.List(ctx, &wds, client.InNamespace(art.Namespace)); err != nil {
+		return nil, err
+	}
+	var out []runtimev1alpha1.WorkloadDeployment
+	for _, wd := range wds.Items {
+		for _, a := range wd.Spec.Artifacts {
+			if a.ArtifactFrom.Name == art.Name {
+				out = append(out, wd)
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (r *WorkloadDeploymentReconciler) getAffectedWorkloads(ctx context.Context, obj client.Object) []reconcile.Request {
+	art := obj.(*runtimev1alpha1.Artifact)
+	wds, err := r.workloadDeploymentsReferencing(ctx, art)
+	if err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list WorkloadDeployments for Artifact watch", "artifact", art.Name, "namespace", art.Namespace)
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, wd := range wds {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: wd.Namespace, Name: wd.Name},
+		})
+	}
+	return reqs
 }
 
 func resolveArtifacts(ctx context.Context, kubeClient client.Client, namespace string, tpl *runtimev1alpha1.WorkloadReplicaTemplate, artifactsFrom []runtimev1alpha1.WorkloadDeploymentArtifact, pc *precompileMatch) error {
