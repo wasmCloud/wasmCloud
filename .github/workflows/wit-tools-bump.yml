@@ -1,0 +1,92 @@
+name: wit-tools-bump
+
+# Opens a PR when bytecodealliance/wasm-tools publishes a new stable
+# GitHub release. The pinned version lives in wit.yml's top-level
+# `env:` block — this workflow is the only thing that edits it.
+#
+# Why this exists: Dependabot's `github-actions` ecosystem tracks `uses:`
+# refs (the action SHA), not arbitrary `with:` inputs. The tool version
+# installed by `bytecodealliance/actions/wasm-tools/setup` is therefore
+# invisible to Dependabot, so we maintain it with a small custom updater.
+#
+# wash is installed via wasmcloud/setup-wash-action (which defaults to
+# the latest wash release) and is not tracked here.
+#
+# Caveat: PRs opened by GITHUB_TOKEN do not trigger downstream workflow
+# runs (GitHub's recursion guard), so `wit.yml` won't auto-run on the
+# bump PR. Close-and-reopen the PR (or push an empty commit) to validate.
+# To remove that step, swap GITHUB_TOKEN here for a PAT or GitHub App
+# token stored as a repo secret.
+
+on:
+  schedule:
+    # Monday 14:00 UTC.
+    - cron: '0 14 * * 1'
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve latest wasm-tools version and apply bump
+        id: update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          FILE=.github/workflows/wit.yml
+          # `releases/latest` returns the most recent non-prerelease,
+          # non-draft release. Strip the leading `v` to match wit.yml's
+          # bare-semver format.
+          LATEST=$(gh api repos/bytecodealliance/wasm-tools/releases/latest --jq '.tag_name' | sed -E 's/^v//')
+          # The regex is anchored to the two-space indent that the
+          # workflow-level env: block uses; if the indent changes, this
+          # extractor must be updated too.
+          CURRENT=$(grep -E "^  WASM_TOOLS_VERSION: " "${FILE}" | sed -E "s/.*'([^']+)'.*/\\1/")
+          if [[ "${CURRENT}" == "${LATEST}" ]]; then
+            echo "wasm-tools is already at ${LATEST} — nothing to do"
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          sed -i -E "s/^(  WASM_TOOLS_VERSION: )'[^']+'/\\1'${LATEST}'/" "${FILE}"
+          {
+            echo "changed=true"
+            echo "body=- wasm-tools \`${CURRENT}\` → \`${LATEST}\` ([release notes](https://github.com/bytecodealliance/wasm-tools/releases/tag/v${LATEST}))"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Open / update PR
+        if: steps.update.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          branch: bump/wit-tools
+          delete-branch: true
+          title: 'ci(wit): bump pinned wasm-tools version'
+          commit-message: |
+            ci(wit): bump pinned wasm-tools version
+
+            ${{ steps.update.outputs.body }}
+          labels: |
+            dependencies
+            github-actions
+          body: |
+            Bumps the wit pipeline's pinned wasm-tools version to upstream's latest stable release.
+
+            ${{ steps.update.outputs.body }}
+
+            > [!NOTE]
+            > GitHub doesn't trigger downstream workflows for PRs opened by `GITHUB_TOKEN`,
+            > so `wit.yml` will not auto-run here. Close-and-reopen this PR (or push
+            > an empty commit) to validate.
