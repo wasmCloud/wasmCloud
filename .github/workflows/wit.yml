@@ -90,10 +90,12 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
       - name: Setup wasm-tools
         uses: bytecodealliance/actions/wasm-tools/setup@9152e710e9f7182e4c29ad218e4f335a7b203613 # v1.1.3
         with:
           version: ${{ env.WASM_TOOLS_VERSION }}
+
       - uses: wasmcloud/setup-wash-action@47756fa211cc82f392c57e39504f43ef46fc0b3e # v2.1.0
 
       - name: Build and validate each WIT package
@@ -122,8 +124,8 @@ jobs:
             echo "no WIT packages under wit/ — nothing to validate"
             exit 0
           fi
-          mkdir -p .wit-build/.roundtrip
-          BUILD_ABS="$(pwd)/.wit-build"
+          mkdir -p wit-build/.roundtrip
+          BUILD_ABS="$(pwd)/wit-build"
           for pkg in "${PKGS[@]}"; do
             name=$(basename "${pkg}")
             wit_dir="${pkg}wit"
@@ -159,6 +161,7 @@ jobs:
             done
             echo "::endgroup::"
           done
+
       - name: Verify wkg.lock files are committed and in sync
         # `wash wit build` writes wkg.lock at each package root (via the
         # wasm-pkg-tools library — same file format as `wkg wit build`).
@@ -172,9 +175,10 @@ jobs:
           PORCELAIN=$(git status --porcelain -- 'wit/*/wkg.lock')
           if [[ -n "${PORCELAIN}" ]]; then
             echo "${PORCELAIN}" >&2
-            echo "wit/<pkg>/wkg.lock is out of sync (untracked or modified) — commit the lock file(s)" >&2
+            echo "one or more wkg.lock files are out of sync (untracked or modified) — commit the lock file(s)" >&2
             exit 1
           fi
+
       - name: Build publish matrix from built wasms
         id: list
         # Extracts the package id from each built wasm artifact via
@@ -182,67 +186,17 @@ jobs:
         # component and re-emits the WIT — the package header is the
         # parsed/canonical form, so this is immune to source-file comment
         # or whitespace edge cases that grep over *.wit would hit.
-        # The non-recursive `.wit-build/*.wasm` glob deliberately excludes
-        # the .wit-build/.roundtrip/ decoys.
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          ARTS=(.wit-build/*.wasm)
-          items=()
-          for art in "${ARTS[@]}"; do
-            HEADER=$(wasm-tools component wit "${art}" | grep -E '^package ' | head -n1)
-            if [[ -z "${HEADER}" ]]; then
-              echo "no package header in ${art} — refusing to publish" >&2
-              exit 1
-            fi
-            namespace=$(echo "${HEADER}" | sed -E 's/^package ([^:]+):.*/\1/')
-            name=$(echo "${HEADER}" | sed -E 's/^package [^:]+:([^@]+)@.*/\1/')
-            version=$(echo "${HEADER}" | sed -E 's/^package [^@]+@([^;]+);.*/\1/')
-            # Guard: the publish job pushes to ghcr.io/wasmcloud/interfaces/<name>
-            # (the repo owner's GHCR namespace, hardcoded below). Refuse
-            # any package whose WIT namespace isn't `wasmcloud` so a
-            # typo or mistaken header doesn't silently publish into the
-            # wrong place. If a non-wasmcloud namespace is genuinely
-            # needed, update this check and the `ref=` line together.
-            if [[ "${namespace}" != "wasmcloud" ]]; then
-              echo "package ${art} declares namespace '${namespace}' but this workflow only publishes 'wasmcloud:*' packages" >&2
-              exit 1
-            fi
-            artifact_name=$(basename "${art}")
-            ref="ghcr.io/wasmcloud/interfaces/${name}:${version}"
-            items+=("{\"name\":\"${name}\",\"version\":\"${version}\",\"ref\":\"${ref}\",\"artifact\":\"${artifact_name}\"}")
-          done
-          if (( ${#items[@]} == 0 )); then
-            echo "matrix={\"include\":[]}" >> "${GITHUB_OUTPUT}"
-            echo "has_packages=false" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          joined=$(IFS=,; echo "${items[*]}")
-          echo "matrix={\"include\":[${joined}]}" >> "${GITHUB_OUTPUT}"
-          echo "has_packages=true" >> "${GITHUB_OUTPUT}"
-          echo "--- matrix ---"
-          echo "{\"include\":[${joined}]}"
+        # Implementation lives in build-wit-matrix.mjs (JSON construction
+        # is easier to get right in JS than in bash string-concat).
+        run: node .github/scripts/build-wit-matrix.mjs
+
       - name: Upload built wasm bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wit-build
-          path: .wit-build/*.wasm
+          path: wit-build/*.wasm
           if-no-files-found: error
           retention-days: 7
-
-  gate:
-    needs:
-      - validate
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require all jobs to pass or be skipped
-        env:
-          RESULTS: ${{ toJSON(needs.*.result) }}
-        run: |
-          if echo "$RESULTS" | grep -qE '"(failure|cancelled)"'; then
-            exit 1
-          fi
 
   publish:
     # Matrix-fans across the packages discovered by validate. Each job
@@ -273,23 +227,27 @@ jobs:
       # exist" probe. (oras is preinstalled on ubuntu-22.04 but not on
       # 24.04 / ubuntu-latest, so we install it explicitly.)
       - uses: wasmcloud/setup-wash-action@47756fa211cc82f392c57e39504f43ef46fc0b3e # v2.1.0
+
       - uses: oras-project/setup-oras@38de303aac69abb66f3e6255b7198bff35f323e3 # v2.0.0
+
       - name: Login to ghcr.io
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ github.token }}
+
       - name: Download built wasm bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: wit-build
-          path: .wit-build
+          path: wit-build
+
       - name: Push and attest
         id: push
         env:
           REF: ${{ matrix.ref }}
-          ARTIFACT: .wit-build/${{ matrix.artifact }}
+          ARTIFACT: wit-build/${{ matrix.artifact }}
           VERSION: ${{ matrix.version }}
         run: |
           set -euo pipefail
@@ -318,6 +276,7 @@ jobs:
           fi
           echo "digest=${DIGEST}" >> "${GITHUB_OUTPUT}"
           echo "skipped=false" >> "${GITHUB_OUTPUT}"
+
       - name: Attest pushed manifest
         if: steps.push.outputs.skipped == 'false'
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
@@ -325,3 +284,24 @@ jobs:
           subject-name: ghcr.io/wasmcloud/interfaces/${{ matrix.name }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+  # Single pass/fail signal for required-check enforcement. Sits at the
+  # bottom so the dependency list mirrors the visual job order, and
+  # `if: always()` ensures it runs whether upstream jobs passed, failed,
+  # or got skipped (e.g. publish skips on PR events — that's "skipped",
+  # not failure). The bash check rejects only failure/cancelled.
+  gate:
+    needs:
+      - changes
+      - validate
+      - publish
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all jobs to pass or be skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          if echo "$RESULTS" | grep -qE '"(failure|cancelled)"'; then
+            exit 1
+          fi
