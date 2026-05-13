@@ -148,7 +148,7 @@ pub trait Router: Send + Sync + 'static {
         &self,
         _workload_id: &str,
         request: &hyper::Request<crate::host::http_p3::P3Body>,
-        _options: &Option<wasmtime_wasi_http::p3::RequestOptions>,
+        _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
         allowed_hosts: &[String],
     ) -> anyhow::Result<()> {
         check_allowed_hosts(request, allowed_hosts)
@@ -263,17 +263,6 @@ impl Router for DynamicRouter {
         check_allowed_hosts(request, allowed_hosts)
     }
 
-    #[cfg(feature = "wasip3")]
-    fn allow_outgoing_request_p3(
-        &self,
-        _workload_id: &str,
-        request: &hyper::Request<crate::host::http_p3::P3Body>,
-        _options: &Option<wasmtime_wasi_http::p3::RequestOptions>,
-        allowed_hosts: &[String],
-    ) -> anyhow::Result<()> {
-        check_allowed_hosts(request, allowed_hosts)
-    }
-
     /// Pick a workload ID based on the incoming request
     fn route_incoming_request(
         &self,
@@ -309,6 +298,7 @@ impl Router for DynamicRouter {
 /// Trait for custom outgoing HTTP egress. gRPC requests (P2 and P3) are
 /// handled by the runtime before this trait is called.
 pub trait OutgoingHandler: Send + Sync + 'static {
+    /// Send a P2 outgoing HTTP request for the given `workload_id`.
     fn send_request(
         &self,
         workload_id: &str,
@@ -316,6 +306,15 @@ pub trait OutgoingHandler: Send + Sync + 'static {
         config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
     ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>;
 
+    /// Send a P3 outgoing HTTP request for the given `workload_id`.
+    ///
+    /// `fut` is a future provided by the WASI runtime to communicate
+    /// request-side processing errors back to the guest (for example, a
+    /// connection reset that occurs while the request body is being uploaded,
+    /// before or while the response arrives). Most implementations can ignore
+    /// it (`_fut`). It is provided so that custom transports with out-of-band
+    /// error channels can still deliver upload errors to the component after
+    /// the response has been returned.
     #[cfg(feature = "wasip3")]
     fn send_request_p3(
         &self,
@@ -409,7 +408,7 @@ impl Router for DevRouter {
         &self,
         _workload_id: &str,
         _request: &hyper::Request<crate::host::http_p3::P3Body>,
-        _options: &Option<wasmtime_wasi_http::p3::RequestOptions>,
+        _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
         _allowed_hosts: &[String],
     ) -> anyhow::Result<()> {
         Ok(())
@@ -474,7 +473,7 @@ pub trait HostHandler: Send + Sync + 'static {
     #[cfg(feature = "wasip3")]
     fn outgoing_request_p3(
         &self,
-        _workload_id: &str,
+        workload_id: &str,
         request: hyper::Request<crate::host::http_p3::P3Body>,
         options: Option<wasmtime_wasi_http::p3::RequestOptions>,
         // Response-side body-error sink: unused here because hyper's response
@@ -484,7 +483,7 @@ pub trait HostHandler: Send + Sync + 'static {
     ) -> crate::host::http_p3::P3SendFuture {
         if let Err(e) = check_allowed_hosts(&request, allowed_hosts) {
             use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-            warn!(err = %e, "outgoing request denied by allowed_hosts policy");
+            warn!(workload_id = %workload_id, err = %e, "outgoing request denied by allowed_hosts policy");
             return Box::new(async move {
                 Err(wasmtime_wasi::TrappableError::from(
                     ErrorCode::HttpRequestDenied,
@@ -546,9 +545,23 @@ impl HostHandler for NullServer {
             wasmtime::format_err!("http client not available"),
         ))
     }
-    // P3 outgoing requests fall through to the trait default
-    // (wasmtime_wasi_http::p3::default_send_request). NullServer has nothing
-    // workload-specific to enforce.
+
+    #[cfg(feature = "wasip3")]
+    fn outgoing_request_p3(
+        &self,
+        _workload_id: &str,
+        _request: hyper::Request<crate::host::http_p3::P3Body>,
+        _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+        _fut: crate::host::http_p3::P3RequestErrorFuture,
+        _allowed_hosts: &[String],
+    ) -> crate::host::http_p3::P3SendFuture {
+        use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
+        Box::new(async {
+            Err(wasmtime_wasi::TrappableError::from(
+                ErrorCode::InternalError(Some("http client not available".to_string())),
+            ))
+        })
+    }
 }
 
 /// A map from host header to resolved workload handles and their associated component id
@@ -592,9 +605,9 @@ impl<T: Router, O: OutgoingHandler> std::fmt::Debug for HttpServer<T, O> {
 /// TLS configuration for [`HttpServerBuilder::tls`] / [`HttpServer::new_with_tls`].
 #[derive(Debug, Clone)]
 pub struct TlsConfig {
-    pub cert_path: std::path::PathBuf,
-    pub key_path: std::path::PathBuf,
-    pub ca_path: Option<std::path::PathBuf>,
+    cert_path: std::path::PathBuf,
+    key_path: std::path::PathBuf,
+    ca_path: Option<std::path::PathBuf>,
 }
 
 impl TlsConfig {
@@ -853,7 +866,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
     ) -> crate::host::http_p3::P3SendFuture {
         if let Err(e) =
             self.router
-                .allow_outgoing_request_p3(workload_id, &request, &options, allowed_hosts)
+                .allow_outgoing_request_p3(workload_id, &request, options, allowed_hosts)
         {
             warn!(workload_id = %workload_id, err = %e, "P3 outgoing request denied by allowed_hosts policy");
             use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
@@ -1425,6 +1438,9 @@ async fn send_grpc_request_p3_handler(
     let first_byte_timeout = options
         .and_then(|o| o.first_byte_timeout)
         .unwrap_or(Duration::from_secs(600));
+    let between_bytes_timeout = options
+        .and_then(|o| o.between_bytes_timeout)
+        .unwrap_or(Duration::from_secs(600));
 
     let use_tls = request.uri().scheme() == Some(&hyper::http::uri::Scheme::HTTPS);
 
@@ -1520,8 +1536,49 @@ async fn send_grpc_request_p3_handler(
         .map_err(ErrorCode::from_hyper_request_error)?
         .map(|body| {
             use http_body_util::BodyExt;
-            body.map_err(ErrorCode::from_hyper_request_error)
-                .boxed_unsync()
+            use std::pin::Pin;
+            use std::task::{Context, Poll, ready};
+            struct TimedBody {
+                inner: hyper::body::Incoming,
+                interval: tokio::time::Interval,
+            }
+            impl hyper::body::Body for TimedBody {
+                type Data = bytes::Bytes;
+                type Error = ErrorCode;
+                fn poll_frame(
+                    mut self: Pin<&mut Self>,
+                    cx: &mut Context<'_>,
+                ) -> Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>>
+                {
+                    match Pin::new(&mut self.as_mut().inner).poll_frame(cx) {
+                        Poll::Ready(None) => Poll::Ready(None),
+                        Poll::Ready(Some(Err(err))) => {
+                            Poll::Ready(Some(Err(ErrorCode::from_hyper_request_error(err))))
+                        }
+                        Poll::Ready(Some(Ok(frame))) => {
+                            self.interval.reset();
+                            Poll::Ready(Some(Ok(frame)))
+                        }
+                        Poll::Pending => {
+                            ready!(self.interval.poll_tick(cx));
+                            Poll::Ready(Some(Err(ErrorCode::ConnectionReadTimeout)))
+                        }
+                    }
+                }
+                fn is_end_stream(&self) -> bool {
+                    self.inner.is_end_stream()
+                }
+                fn size_hint(&self) -> hyper::body::SizeHint {
+                    self.inner.size_hint()
+                }
+            }
+            let mut interval = tokio::time::interval(between_bytes_timeout);
+            interval.reset();
+            TimedBody {
+                inner: body,
+                interval,
+            }
+            .boxed_unsync()
         });
 
     let io: crate::host::http_p3::P3RequestErrorFuture = Box::new(async move { Ok(()) });
@@ -1532,6 +1589,7 @@ async fn send_grpc_request_p3_handler(
 mod tests {
     use super::*;
     use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
+    use wasmtime_wasi_http::p2::types::OutgoingRequestConfig;
 
     fn build_request(uri: &str) -> hyper::Request<HyperOutgoingBody> {
         hyper::Request::builder()
@@ -1605,5 +1663,108 @@ mod tests {
     fn error_response_returns_correct_status() {
         assert_eq!(error_response(404).status(), 404);
         assert_eq!(error_response(500).status(), 500);
+    }
+
+    // --- OutgoingHandler delegation tests ---
+
+    fn dummy_config() -> OutgoingRequestConfig {
+        OutgoingRequestConfig {
+            use_tls: false,
+            connect_timeout: Duration::from_secs(30),
+            first_byte_timeout: Duration::from_secs(30),
+            between_bytes_timeout: Duration::from_secs(30),
+        }
+    }
+
+    struct SpyHandler {
+        called: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl OutgoingHandler for SpyHandler {
+        fn send_request(
+            &self,
+            _workload_id: &str,
+            _request: hyper::Request<HyperOutgoingBody>,
+            _config: OutgoingRequestConfig,
+        ) -> wasmtime_wasi_http::p2::HttpResult<
+            wasmtime_wasi_http::p2::types::HostFutureIncomingResponse,
+        > {
+            self.called.store(true, std::sync::atomic::Ordering::SeqCst);
+            Err(wasmtime_wasi_http::p2::HttpError::trap(
+                wasmtime::format_err!("spy: no real request"),
+            ))
+        }
+
+        #[cfg(feature = "wasip3")]
+        fn send_request_p3(
+            &self,
+            _workload_id: &str,
+            _request: hyper::Request<crate::host::http_p3::P3Body>,
+            _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+            _fut: crate::host::http_p3::P3RequestErrorFuture,
+        ) -> crate::host::http_p3::P3SendFuture {
+            unimplemented!("spy does not implement P3")
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_outgoing_handler_is_invoked() {
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server = HttpServer::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
+            .outgoing_handler(SpyHandler {
+                called: called.clone(),
+            })
+            .build()
+            .await
+            .unwrap();
+        let request = build_request("http://example.com/");
+        let _ = server.outgoing_request("test-workload", request, dummy_config(), &[]);
+        assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// gRPC requests must bypass the OutgoingHandler and go directly to
+    /// send_grpc_request, so the spy must NOT be called.
+    #[tokio::test]
+    async fn grpc_requests_bypass_outgoing_handler() {
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server = HttpServer::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
+            .outgoing_handler(SpyHandler {
+                called: called.clone(),
+            })
+            .build()
+            .await
+            .unwrap();
+        let request = hyper::Request::builder()
+            .uri("http://example.com/")
+            .header(hyper::header::CONTENT_TYPE, "application/grpc")
+            .body(HyperOutgoingBody::default())
+            .unwrap();
+        let _ = server.outgoing_request("test-workload", request, dummy_config(), &[]);
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// NullServer must deny P3 outgoing requests with an internal error,
+    /// matching its P2 behaviour of returning "http client not available".
+    #[cfg(feature = "wasip3")]
+    #[tokio::test]
+    async fn null_server_denies_p3_outgoing_request() {
+        use crate::host::http_p3::{P3Body, P3RequestErrorFuture};
+        use http_body_util::BodyExt;
+
+        let server = NullServer::default();
+        let body: P3Body = http_body_util::Empty::new()
+            .map_err(|never| match never {})
+            .boxed_unsync();
+        let request = hyper::Request::builder()
+            .uri("http://example.com/")
+            .body(body)
+            .unwrap();
+        let fut: P3RequestErrorFuture = Box::new(async { Ok(()) });
+        let result =
+            Box::into_pin(server.outgoing_request_p3("test", request, None, fut, &[])).await;
+        assert!(
+            result.is_err(),
+            "NullServer P3 outgoing request should return an error"
+        );
     }
 }
