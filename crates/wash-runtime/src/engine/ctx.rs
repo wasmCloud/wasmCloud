@@ -20,11 +20,12 @@ use wasmtime_wasi_tls::{WasiTlsCtx, WasiTlsCtxBuilder, WasiTlsCtxView, WasiTlsVi
 
 use crate::plugin::HostPlugin;
 
-/// Adapts a shareable `Arc<dyn TlsProvider>` into the owned `Box<dyn TlsProvider>`
-/// that `WasiTlsCtxBuilder::provider` requires. The same `Arc` can back many
-/// per-component contexts without re-creating the underlying provider.
+/// Adapts a shareable [`super::SharedTlsProvider`] into the owned
+/// `Box<dyn TlsProvider>` that `WasiTlsCtxBuilder::provider` requires. The
+/// same `Arc` can back many per-component contexts without re-creating the
+/// underlying provider.
 #[cfg(feature = "wasi-tls")]
-struct ArcTlsProvider(Arc<dyn wasmtime_wasi_tls::TlsProvider>);
+struct SharedProvider(super::SharedTlsProvider);
 /// Concrete return type of [`wasmtime_wasi_tls::TlsProvider::connect`]. The
 /// upstream alias (`BoxFutureTlsStream`) is `pub(crate)`, so we re-declare an
 /// equivalent here to keep the impl signature readable.
@@ -36,8 +37,9 @@ type TlsConnectFuture = std::pin::Pin<
             > + Send,
     >,
 >;
+
 #[cfg(feature = "wasi-tls")]
-impl wasmtime_wasi_tls::TlsProvider for ArcTlsProvider {
+impl wasmtime_wasi_tls::TlsProvider for SharedProvider {
     fn connect(
         &self,
         server_name: String,
@@ -331,7 +333,7 @@ pub struct CtxBuilder {
     allowed_hosts: Arc<[String]>,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
-    tls_provider: Option<Arc<dyn wasmtime_wasi_tls::TlsProvider>>,
+    tls_provider: Option<super::SharedTlsProvider>,
 }
 
 impl CtxBuilder {
@@ -356,7 +358,7 @@ impl CtxBuilder {
     /// certificate store (corporate CAs, certificate pinning), or integrate
     /// with HSM-backed key material.
     #[cfg(feature = "wasi-tls")]
-    pub fn with_tls_provider(mut self, provider: Arc<dyn wasmtime_wasi_tls::TlsProvider>) -> Self {
+    pub fn with_tls_provider(mut self, provider: super::SharedTlsProvider) -> Self {
         self.tls_provider = Some(provider);
         self
     }
@@ -427,15 +429,12 @@ impl CtxBuilder {
             sockets: self.sockets.unwrap_or_default(),
             #[cfg(feature = "wasi-tls")]
             tls: {
+                // EngineBuilder::build already warns once if no provider was
+                // set; just fall through to the wasmtime-wasi-tls default
+                // here when none is provided.
                 let mut builder = WasiTlsCtxBuilder::new();
                 if let Some(provider) = self.tls_provider {
-                    builder = builder.provider(Box::new(ArcTlsProvider(provider)));
-                } else {
-                    tracing::warn!(
-                        "wasi-tls is enabled but no TLS provider was set; \
-                         falling back to wasmtime-wasi-tls default — \
-                         set one via EngineBuilder::with_tls_provider"
-                    );
+                    builder = builder.provider(Box::new(SharedProvider(provider)));
                 }
                 builder.build()
             },

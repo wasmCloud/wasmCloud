@@ -229,6 +229,11 @@ pub mod ctx;
 mod value;
 pub mod workload;
 
+/// A shareable handle to a `wasi:tls` provider. Kept as an `Arc` so the same
+/// provider can back many per-component contexts without re-creating it.
+#[cfg(feature = "wasi-tls")]
+pub(crate) type SharedTlsProvider = Arc<dyn wasmtime_wasi_tls::TlsProvider>;
+
 /// The core WebAssembly engine for executing components and workloads.
 ///
 /// The `Engine` is responsible for compiling WebAssembly components, managing
@@ -244,7 +249,7 @@ pub struct Engine {
     wasip3: bool,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
-    pub(crate) tls_provider: Option<Arc<dyn wasmtime_wasi_tls::TlsProvider>>,
+    pub(crate) tls_provider: Option<SharedTlsProvider>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -253,10 +258,7 @@ impl std::fmt::Debug for Engine {
         #[cfg(feature = "wasip3")]
         s.field("wasip3", &self.wasip3);
         #[cfg(feature = "wasi-tls")]
-        s.field(
-            "tls_provider",
-            &self.tls_provider.as_ref().map(|_| "<TlsProvider>"),
-        );
+        s.field("tls_provider", &self.tls_provider.is_some());
         s.finish_non_exhaustive()
     }
 }
@@ -412,11 +414,7 @@ impl Engine {
         );
 
         #[cfg(feature = "wasi-tls")]
-        let workload = if let Some(provider) = self.tls_provider.clone() {
-            workload.with_tls_provider(provider)
-        } else {
-            workload
-        };
+        let workload = workload.maybe_with_tls_provider(self.tls_provider.clone());
 
         Ok(workload)
     }
@@ -626,7 +624,7 @@ pub struct EngineBuilder {
     wasip3: bool,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
-    tls_provider: Option<Arc<dyn wasmtime_wasi_tls::TlsProvider>>,
+    tls_provider: Option<SharedTlsProvider>,
 }
 
 impl EngineBuilder {
@@ -694,7 +692,7 @@ impl EngineBuilder {
     /// certificate store (corporate CAs, certificate pinning), or integrate
     /// with HSM-backed key material.
     #[cfg(feature = "wasi-tls")]
-    pub fn with_tls_provider(mut self, provider: Arc<dyn wasmtime_wasi_tls::TlsProvider>) -> Self {
+    pub fn with_tls_provider(mut self, provider: SharedTlsProvider) -> Self {
         self.tls_provider = Some(provider);
         self
     }
@@ -714,7 +712,16 @@ impl EngineBuilder {
     /// Returns an error if the wasmtime engine creation fails.
     pub fn build(mut self) -> anyhow::Result<Engine> {
         #[cfg(feature = "wasi-tls")]
-        crate::init_crypto();
+        {
+            crate::init_crypto();
+            if self.tls_provider.is_none() {
+                tracing::warn!(
+                    "wasi-tls is enabled but no TLS provider was set; \
+                     falling back to wasmtime-wasi-tls default — \
+                     set one via EngineBuilder::with_tls_provider"
+                );
+            }
+        }
 
         // If a custom config was provided, use it as-is
         let config = if let Some(cfg) = self.config.take() {

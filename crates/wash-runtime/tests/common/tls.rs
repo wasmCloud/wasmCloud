@@ -222,7 +222,6 @@ fn test_tls_provider(cert_der: &[u8]) -> Result<Arc<dyn TlsProvider>> {
 }
 
 /// Build an engine with P3 and a custom TLS provider that trusts `cert_der`.
-#[cfg(feature = "wasip3")]
 pub fn engine_with_p3_and_tls(cert_der: &[u8]) -> Result<Engine> {
     Engine::builder()
         .with_wasip3(true)
@@ -233,8 +232,11 @@ pub fn engine_with_p3_and_tls(cert_der: &[u8]) -> Result<Engine> {
 
 /// Install the default `aws-lc-rs` rustls crypto provider exactly once.
 ///
-/// Required when both `aws-lc-rs` and `ring` features are enabled (no
-/// unambiguous default). Safe to call repeatedly.
+/// `EngineBuilder::build` already runs `wash_runtime::init_crypto` when
+/// `wasi-tls` is enabled, but the test's TLS *server* (rustls `ServerConfig`,
+/// rcgen cert generation) needs a provider installed *before* the engine is
+/// built. Tests call this up-front so both sides agree on the provider; the
+/// install is idempotent and safe to call repeatedly.
 pub fn install_default_crypto_provider() {
-    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
+    wash_runtime::init_crypto();
 }
