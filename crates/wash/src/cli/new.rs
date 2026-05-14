@@ -1,5 +1,6 @@
 //! CLI command for creating new component projects from git repositories
 
+use std::path::Path;
 use std::process::Stdio;
 
 use anyhow::{Context, bail};
@@ -79,37 +80,7 @@ impl CliCommand for NewCommand {
                 new_cmd
             ))?
         {
-            let (cmd_bin, first_arg) = {
-                #[cfg(not(windows))]
-                {
-                    ("sh".to_string(), "-c".to_string())
-                }
-
-                #[cfg(windows)]
-                {
-                    ("cmd".to_string(), "/c".to_string())
-                }
-            };
-
-            let cmd_args = vec![first_arg, new_cmd.clone()];
-
-            info!(command = new_cmd, "executing new command");
-            let mut cmd = Command::new(cmd_bin)
-                .args(cmd_args)
-                .stderr(Stdio::inherit())
-                .stdout(Stdio::inherit())
-                .current_dir(&output_dir)
-                .spawn()
-                .context("failed to execute new command")?;
-
-            let exit_status = cmd
-                .wait()
-                .await
-                .context("failed to wait for new command to complete")?;
-
-            if !exit_status.success() {
-                bail!("new command '{}' failed", new_cmd);
-            }
+            run_new_command(&new_cmd, &output_dir).await?;
         }
 
         Ok(CommandOutput::ok(
@@ -149,5 +120,68 @@ impl NewCommand {
                 .trim_end_matches(".git")
                 .to_string()
         }
+    }
+}
+
+/// Execute a template's `new.command` shell command in `working_dir`.
+/// Returns an error if the command exits non-zero.
+async fn run_new_command(new_cmd: &str, working_dir: &Path) -> anyhow::Result<()> {
+    let (cmd_bin, first_arg) = {
+        #[cfg(not(windows))]
+        {
+            ("sh", "-c")
+        }
+
+        #[cfg(windows)]
+        {
+            ("cmd", "/c")
+        }
+    };
+
+    info!(command = new_cmd, "executing new command");
+    let mut cmd = Command::new(cmd_bin)
+        .args([first_arg, new_cmd])
+        .stderr(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .current_dir(working_dir)
+        .spawn()
+        .context("failed to execute new command")?;
+
+    let exit_status = cmd
+        .wait()
+        .await
+        .context("failed to wait for new command to complete")?;
+
+    if !exit_status.success() {
+        bail!("new command '{new_cmd}' failed");
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `exit N` is a builtin in both POSIX `sh` and Windows `cmd`, so these tests
+    // exercise the same code path that production uses on each platform.
+    #[tokio::test]
+    async fn run_new_command_bails_on_non_zero_exit() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let err = run_new_command("exit 1", tempdir.path())
+            .await
+            .expect_err("non-zero exit should propagate as Err");
+        assert!(
+            err.to_string().contains("exit 1"),
+            "error should name the failing command, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_new_command_succeeds_on_zero_exit() {
+        let tempdir = tempfile::tempdir().unwrap();
+        run_new_command("exit 0", tempdir.path())
+            .await
+            .expect("zero-exit command should succeed");
     }
 }

@@ -486,14 +486,51 @@ impl CliContext {
         )
     }
 
+    /// Prompt the user for a yes/no confirmation, returning the default answer (`true`)
+    /// when running in non-interactive mode.
     pub fn request_confirmation<S>(&self, prompt: S) -> anyhow::Result<bool>
     where
         S: Into<String>,
     {
+        if self.non_interactive {
+            return Ok(true);
+        }
+
         Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt(prompt)
             .default(true)
             .interact()
             .context("failed to read user confirmation")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn request_confirmation_returns_true_in_non_interactive_mode() {
+        // CliContext::builder().build() mutates the process cwd; restore it before
+        // the tempdir drops so other parallel tests that read std::env::current_dir()
+        // don't see a deleted path.
+        let orig_cwd = std::env::current_dir().expect("get cwd");
+        let _restore = scopeguard::guard(orig_cwd, |c| {
+            let _ = std::env::set_current_dir(c);
+        });
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let ctx = CliContext::builder()
+            .non_interactive(true)
+            .project_dir(tempdir.path().to_path_buf())
+            .build()
+            .await
+            .unwrap();
+
+        // Must not touch stdin: in CI / piped contexts the dialoguer call would
+        // error with "not a terminal", which is exactly the bug fix we're locking in.
+        assert!(
+            ctx.request_confirmation("would prompt the user")
+                .expect("non-interactive path should not read stdin")
+        );
     }
 }
