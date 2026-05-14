@@ -1,0 +1,45 @@
+name: bench-host-checks
+
+# Monthly upstream-version checks for the wasmCloud bench host. Today
+# this only covers the GitHub Actions self-hosted runner; new checks
+# (e.g. valgrind, iai-callgrind-runner, Node LTS) can be added as
+# additional jobs alongside `runner-version`.
+#
+# Jobs run on hosted ubuntu-latest — they do NOT touch the bench host
+# itself. The output of each job is a tracking issue (opened, updated,
+# or auto-closed) that a maintainer follows up on at the next
+# bench-host maintenance window. See scripts/bench/README.md §15 for
+# the recommended cadence.
+
+on:
+  schedule:
+    # 09:00 UTC on the 1st of each month. Time is intentionally office-
+    # hours-friendly across NA + EU; the day is the 1st so the new
+    # tracking issue lands at the same time as other start-of-month
+    # housekeeping.
+    - cron: '0 9 1 * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  runner-version:
+    name: actions/runner version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # The script opens / updates / closes a single tracking issue.
+      issues: write
+    steps:
+      - name: checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: check pinned vs upstream
+        env:
+          # github.token inherits the job's permissions block — narrowest
+          # path to issues:write, no PAT or GH App needed.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/bench-check-runner-version.mjs
