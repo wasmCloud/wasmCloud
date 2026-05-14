@@ -1,0 +1,30 @@
+# Hetzner installimage autosetup TEMPLATE for the wasmCloud bench server.
+#
+# Rendered by stage-hetzner.sh: the literal string __BENCH_HOSTNAME__ is
+# substituted with the operator's $BENCH_HOSTNAME at upload time. The actual
+# IP and hostname are kept out of the repo — see scripts/bench/README.md §1
+# and 1Password ("wasmCloud Bench Host (Hetzner)").
+#
+# Hardware target (reproducible via `lscpu`, `lsblk`, `free -h` on the box):
+#   CPU:  AMD Ryzen 5 3600 (6c/12t)
+#   RAM:  62 GiB, no swap
+#   Disk: 2x NVMe (~480 GiB each)
+#   Boot: legacy BIOS
+#
+# Layout: software RAID1 across both NVMes, ext4 root, no swap (bench host).
+# OS:     Ubuntu 24.04 LTS (Noble) amd64 base.
+
+DRIVE1 /dev/nvme0n1
+DRIVE2 /dev/nvme1n1
+
+SWRAID 1
+SWRAIDLEVEL 1
+
+BOOTLOADER grub
+
+HOSTNAME __BENCH_HOSTNAME__
+
+PART /boot ext4 1024M
+PART /     ext4 all
+
+IMAGE /root/.oldroot/nfs/install/../images/Ubuntu-2404-noble-amd64-base.tar.gz
