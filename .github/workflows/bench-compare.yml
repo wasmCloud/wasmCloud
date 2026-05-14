@@ -1,0 +1,104 @@
+name: bench-compare
+
+# Pair-bench the same bench against two refs back-to-back on the bench
+# host and post the delta to the run's step summary.
+#
+# Trigger: workflow_dispatch only.
+#
+# Earlier drafts of this workflow also had a `pull_request_target /
+# labeled` entry point (apply `bench:run` to a PR → auto-compare base vs
+# head, post the delta as a PR comment). We deliberately do NOT do that:
+#
+#   - `pull_request_target` runs the workflow file from the base ref but
+#     gives the job access to base-repo secrets and a self-hosted runner.
+#     The bench job has to `git checkout` the PR head to run the bench,
+#     at which point any helper script on disk (run-bench.sh, the bench
+#     fixtures, build.rs in dependencies, etc.) comes from the PR head.
+#     That's untrusted code touching a long-lived bench host with cargo
+#     caches and rustup state.
+#   - Even gated on `author_association` ∈ {OWNER,MEMBER,COLLABORATOR},
+#     the model trusts every member's PR equally with merged code, which
+#     is a higher bar than we want for a single workflow's plumbing.
+#   - Maintainers who want a PR comparison can run this workflow manually
+#     with `ref_a = main`, `ref_b = <PR head sha>` — same delta, no new
+#     attack surface.
+#
+# Comparison runs do NOT push to S3 or update history.json. They are
+# ephemeral by design — for "did this PR move the numbers?" only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bench:
+        description: which bench to compare
+        type: choice
+        default: iai_callgrind
+        options:
+          - http_invoke
+          - iai_callgrind
+          - wasmtime_baseline
+          - wasmtime_serve
+      ref_a:
+        description: baseline ref (branch, tag, or sha)
+        type: string
+        default: main
+      ref_b:
+        description: candidate ref (branch, tag, or sha) — required
+        type: string
+        required: true
+
+# Comparison runs share the bench-host concurrency group with the main bench
+# workflow so we never have two cargo bench processes on the host at once.
+concurrency:
+  group: bench-host
+  cancel-in-progress: false
+
+# Workflow-level permissions are the floor; the job below stays at this
+# floor — comparison runs don't write to S3, don't post comments, and
+# don't need the GITHUB_TOKEN for anything beyond the checkout.
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: ${{ inputs.bench }}
+    runs-on: [self-hosted, bench, hetzner]
+    timeout-minutes: 120
+    env:
+      CARGO_TARGET_DIR: /var/lib/bench/target
+      CARGO_INCREMENTAL: "0"
+      WASMCLOUD_BENCH_NAME: ${{ inputs.bench }}
+      WASMCLOUD_BENCH_REF_A: ${{ inputs.ref_a }}
+      WASMCLOUD_BENCH_REF_B: ${{ inputs.ref_b }}
+      WASMCLOUD_BENCH_COMPARE_DIR: /tmp/bench-compare-${{ github.run_id }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          # Don't leave the GITHUB_TOKEN in .git/config; the host runs
+          # cargo bench (which builds + runs build-script and proc-macro
+          # code from the comparison refs) and we don't want it to read
+          # or use the token.
+          persist-credentials: false
+
+      - name: pre-flight host checks
+        env:
+          WASMCLOUD_BENCH_HOSTNAME: ${{ vars.WASMCLOUD_BENCH_HOSTNAME }}
+        run: node .github/scripts/bench-preflight.mjs
+
+      - name: compare-bench
+        run: ./scripts/bench/compare-bench.sh "${WASMCLOUD_BENCH_NAME}" "${WASMCLOUD_BENCH_REF_A}" "${WASMCLOUD_BENCH_REF_B}"
+
+      - name: append delta to step summary
+        if: always()
+        run: |
+          if [ -f "${WASMCLOUD_BENCH_COMPARE_DIR}/delta.md" ]; then
+            cat "${WASMCLOUD_BENCH_COMPARE_DIR}/delta.md" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "_no delta.md produced — see job logs_" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: clean compare working dir
+        if: always()
+        run: rm -rf "${WASMCLOUD_BENCH_COMPARE_DIR}"

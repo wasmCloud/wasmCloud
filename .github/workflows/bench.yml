@@ -1,0 +1,161 @@
+name: bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      bench:
+        description: which bench to run
+        type: choice
+        default: http_invoke
+        options:
+          - http_invoke
+          - iai_callgrind
+          - wasmtime_baseline
+          - wasmtime_serve
+      ref:
+        description: git ref to bench (branch, tag, or sha; default = the workflow ref)
+        type: string
+        default: ""
+  # Auto-populate the releases timeline: when a tag is published, run the
+  # subset of benches that actually track wash-runtime regressions against
+  # that exact tag. The site filters rows by `ref` to render the
+  # semver-ordered releases view.
+  #
+  # The release subset is intentionally narrower than the `inputs.bench`
+  # choice list — see RELEASE_BENCHES below.
+  release:
+    types: [published]
+
+defaults:
+  run:
+    shell: bash
+
+# Only one bench workflow can run on the host at a time. Queue rather than
+# cancel so an in-flight bench is never interrupted partway through criterion
+# sampling. Matrix jobs within a single run also serialize naturally because
+# the host has exactly one self-hosted runner.
+concurrency:
+  group: bench-host
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  # Compute the matrix shape from the trigger:
+  #   - workflow_dispatch: a one-element matrix (just inputs.bench)
+  #   - release:           a matrix of $RELEASE_BENCHES (the reference
+  #                        subset we track on the releases timeline)
+  # The dispatch path keeps the one-bench UX so a maintainer can compare
+  # an arbitrary bench (incl. wasmtime_*) against a ref; the release path
+  # restricts to benches that actually move with wash-runtime changes so
+  # a published tag doesn't tie up the bench host for ~4h.
+  matrix:
+    name: build matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      benches: ${{ steps.set.outputs.benches }}
+      ref: ${{ steps.set.outputs.ref }}
+    env:
+      # Subset of inputs.bench.options to run automatically on `release:
+      # published`. wasmtime_* are reference baselines for wasmtime itself
+      # and don't shift with our changes — run them on demand via
+      # workflow_dispatch when wasmtime is upgraded.
+      RELEASE_BENCHES: '["http_invoke","iai_callgrind"]'
+    steps:
+      - id: set
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_BENCH: ${{ inputs.bench }}
+          INPUT_REF: ${{ inputs.ref }}
+          DEFAULT_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "release" ]; then
+            echo "benches=${RELEASE_BENCHES}" >> "$GITHUB_OUTPUT"
+            echo "ref=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "benches=[\"${INPUT_BENCH}\"]" >> "$GITHUB_OUTPUT"
+            ref="${INPUT_REF:-${DEFAULT_REF}}"
+            echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          fi
+
+  bench:
+    needs: matrix
+    name: ${{ matrix.bench }}
+    runs-on: [self-hosted, bench, hetzner]
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write   # OIDC token for AWS role assumption
+    strategy:
+      fail-fast: false
+      # Redundant with the single-runner serialization, but documents intent.
+      max-parallel: 1
+      matrix:
+        bench: ${{ fromJSON(needs.matrix.outputs.benches) }}
+    env:
+      WASMCLOUD_BENCH_NAME: ${{ matrix.bench }}
+      # Persist the cargo build cache outside $GITHUB_WORKSPACE so
+      # actions/checkout's clean step doesn't blow it away every run.
+      CARGO_TARGET_DIR: /var/lib/bench/target
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.matrix.outputs.ref }}
+          fetch-depth: 0
+          # Don't leave the GITHUB_TOKEN in .git/config; the bench host
+          # then runs untrusted user code (the bench under test) and we
+          # don't want it to be able to read or use the token.
+          persist-credentials: false
+
+      - name: pre-flight host checks
+        env:
+          # Expected hostname of the dedicated bench host. Set as a repo
+          # variable (Settings → Secrets and variables → Actions → Variables).
+          # Kept out of the repo so the box's identity isn't broadcast.
+          WASMCLOUD_BENCH_HOSTNAME: ${{ vars.WASMCLOUD_BENCH_HOSTNAME }}
+        run: node .github/scripts/bench-preflight.mjs
+
+      - name: run cargo bench
+        id: run
+        run: ./scripts/bench/run-bench.sh "${WASMCLOUD_BENCH_NAME}"
+
+      # Subsequent steps inherit the implicit `if: success()` — they only
+      # run when every preceding step succeeded.
+      - name: render markdown summary
+        run: |
+          # Each `run:` step gets a fresh shell — PATH from previous steps
+          # doesn't persist — so re-source rustup's env shim before cargo.
+          # shellcheck disable=SC1091
+          . "$HOME/.cargo/env"
+          cargo run -p bench-tools --quiet -- summary --bench "${WASMCLOUD_BENCH_NAME}" \
+            >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: upload bench artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-${{ matrix.bench }}-${{ github.run_id }}
+          # criterion benches write to target/criterion/, iai-callgrind benches
+          # (iai_callgrind) write to target/iai/. A genuinely-empty run is a
+          # bug worth flagging loudly — fail rather than warn.
+          path: |
+            ${{ env.CARGO_TARGET_DIR }}/criterion/
+            ${{ env.CARGO_TARGET_DIR }}/iai/
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885 # v6.1.1
+        with:
+          role-to-assume: ${{ secrets.WASMCLOUD_BENCH_AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.WASMCLOUD_BENCH_S3_REGION }}
+
+      - name: push results to s3 + invalidate CloudFront
+        env:
+          WASMCLOUD_BENCH_S3_BUCKET: ${{ secrets.WASMCLOUD_BENCH_S3_BUCKET }}
+          WASMCLOUD_BENCH_CF_DISTRIBUTION_ID: ${{ secrets.WASMCLOUD_BENCH_CF_DISTRIBUTION_ID }}
+        run: node .github/scripts/bench-push-results.mjs
