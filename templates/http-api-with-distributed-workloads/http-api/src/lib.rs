@@ -8,12 +8,9 @@ mod bindings {
 
 use anyhow::Context as _;
 use bindings::wasmcloud::messaging::consumer;
-
 use serde::Deserialize;
-use wstd::{
-    http::{Body, Request, Response, StatusCode},
-    time::Duration,
-};
+use wstd::http::{Body, Request, Response, StatusCode};
+use wstd::time::Duration;
 
 static UI_HTML: &str = include_str!("../ui.html");
 

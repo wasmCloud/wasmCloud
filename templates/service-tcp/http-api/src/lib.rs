@@ -1,5 +1,4 @@
 use anyhow::Context as _;
-
 use serde::Deserialize;
 use wstd::future::FutureExt as _;
 use wstd::http::{Body, Request, Response, StatusCode};
