@@ -196,7 +196,8 @@ fn copy_shared_wit_deps(shared_wit_dir: &Path, fixture_dir: &Path) -> anyhow::Re
             continue;
         }
         let wit_files: Vec<_> = fs::read_dir(entry.path())?
-            .filter_map(|f| f.ok())
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
             .filter(|f| f.path().extension().and_then(|s| s.to_str()) == Some("wit"))
             .collect();
         if wit_files.is_empty() {

@@ -17,12 +17,10 @@ use wash_runtime::{
 };
 
 mod common;
-use common::tls::{EchoServer, install_default_crypto_provider, start_tls_echo_server};
+use common::tls::{
+    EchoServer, engine_with_p3_and_tls, install_default_crypto_provider, start_tls_echo_server,
+};
 
-#[cfg(feature = "wasip3")]
-use common::tls::engine_with_p3_and_tls;
-
-#[cfg(feature = "wasip3")]
 const TLS_ECHO_CLIENT_P3_WASM: &[u8] = include_bytes!("wasm/tls_echo_client_p3.wasm");
 
 fn echo_client_workload_request(

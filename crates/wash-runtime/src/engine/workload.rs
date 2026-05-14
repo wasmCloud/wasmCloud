@@ -483,7 +483,7 @@ pub struct ResolvedWorkload {
     host_interfaces: Vec<WitInterface>,
     /// TLS provider override for `wasi:tls` client connections in this workload.
     #[cfg(feature = "wasi-tls")]
-    tls_provider: Option<Arc<dyn wasmtime_wasi_tls::TlsProvider>>,
+    tls_provider: Option<super::SharedTlsProvider>,
 }
 
 impl std::fmt::Debug for ResolvedWorkload {
@@ -503,10 +503,7 @@ impl std::fmt::Debug for ResolvedWorkload {
                     .unwrap_or(-1),
             );
         #[cfg(feature = "wasi-tls")]
-        s.field(
-            "tls_provider",
-            &self.tls_provider.as_ref().map(|_| "<TlsProvider>"),
-        );
+        s.field("tls_provider", &self.tls_provider.is_some());
         s.finish_non_exhaustive()
     }
 }
@@ -1327,7 +1324,7 @@ pub struct UnresolvedWorkload {
     components: HashMap<Arc<str>, WorkloadComponent>,
     /// TLS provider override for `wasi:tls` client connections in this workload.
     #[cfg(feature = "wasi-tls")]
-    tls_provider: Option<Arc<dyn wasmtime_wasi_tls::TlsProvider>>,
+    tls_provider: Option<super::SharedTlsProvider>,
 }
 
 impl UnresolvedWorkload {
@@ -1376,9 +1373,18 @@ impl UnresolvedWorkload {
     /// certificate store (corporate CAs, certificate pinning), or integrate
     /// with HSM-backed key material.
     #[cfg(feature = "wasi-tls")]
-    pub fn with_tls_provider(mut self, provider: Arc<dyn wasmtime_wasi_tls::TlsProvider>) -> Self {
+    pub fn with_tls_provider(mut self, provider: super::SharedTlsProvider) -> Self {
         self.tls_provider = Some(provider);
         self
+    }
+
+    /// Apply an optional TLS provider override. No-op when `None`.
+    #[cfg(feature = "wasi-tls")]
+    pub fn maybe_with_tls_provider(self, provider: Option<super::SharedTlsProvider>) -> Self {
+        match provider {
+            Some(p) => self.with_tls_provider(p),
+            None => self,
+        }
     }
 
     /// Bind this workload to the host plugins based on the requested
