@@ -39,7 +39,7 @@ struct Cli {
     #[arg(long = "verbose", global = true)]
     verbose: bool,
 
-    /// Run in non-interactive mode (skip terminal checks for host exec). Automatically enabled when stdin is not a TTY
+    /// Run in non-interactive mode: skip terminal checks for host exec and accept the default answer for any confirmation prompts. Automatically enabled when stdin is not a TTY
     #[arg(long = "non-interactive", global = true)]
     non_interactive: bool,
 
