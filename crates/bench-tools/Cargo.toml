@@ -1,0 +1,25 @@
+[package]
+name = "bench-tools"
+description = "Internal CLI for processing wasmCloud bench output (criterion + iai-callgrind)."
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "bench-tools"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true, default-features = true }
+clap = { workspace = true, default-features = true }
+serde = { workspace = true, default-features = true, features = ["derive"] }
+serde_json = { workspace = true, default-features = true }
+# `macros` so the RFC 3339 format description is validated at compile time;
+# `formatting` + `std` (default) for OffsetDateTime::now_utc() + .format().
+time = { version = "0.3", default-features = false, features = ["formatting", "macros", "std"] }
+walkdir = "2.5"

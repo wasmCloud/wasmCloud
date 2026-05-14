@@ -2,6 +2,7 @@
 resolver = "3"
 default-members = ["crates/wash"]
 members = [
+    "crates/bench-tools",
     "crates/wash-runtime",
     "crates/wash",
 ]
