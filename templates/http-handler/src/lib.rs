@@ -1,9 +1,7 @@
-use axum::{
-    Json, Router,
-    extract::Query,
-    http::StatusCode,
-    routing::{get, post},
-};
+use axum::extract::Query;
+use axum::http::StatusCode;
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 #[wstd_axum::http_server]

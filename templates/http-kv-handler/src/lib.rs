@@ -4,16 +4,11 @@ mod bindings {
     });
 }
 
-use bindings::{
-    exports::wasi::http::incoming_handler::Guest,
-    wasi::{
-        http::types::{
-            Fields, IncomingBody, IncomingRequest, Method, OutgoingBody, OutgoingResponse,
-            ResponseOutparam,
-        },
-        keyvalue::store::open,
-    },
+use bindings::exports::wasi::http::incoming_handler::Guest;
+use bindings::wasi::http::types::{
+    Fields, IncomingBody, IncomingRequest, Method, OutgoingBody, OutgoingResponse, ResponseOutparam,
 };
+use bindings::wasi::keyvalue::store::open;
 
 struct Component;
 
@@ -29,8 +24,8 @@ struct Component;
 /// | `"nats"`       | `wasi_keyvalue_nats_url: nats://...`         |
 /// | `"redis"`      | `wasi_keyvalue_redis_url: redis://...`       |
 ///
-/// Change this constant and uncomment the matching section in `.wash/config.yaml`
-/// to switch backends.
+/// Change this constant and uncomment the matching section in
+/// `.wash/config.yaml` to switch backends.
 const BACKEND: &str = "in_memory";
 
 impl Guest for Component {
@@ -53,7 +48,8 @@ impl Guest for Component {
 }
 
 /// Handle `POST /` with a JSON body `{"key": "...", "value": "..."}`.
-/// Stores the key-value pair in the configured backend under the `BACKEND` bucket.
+/// Stores the key-value pair in the configured backend under the `BACKEND`
+/// bucket.
 fn handle_post(request: IncomingRequest) -> (u16, String) {
     let body_bytes = match read_body(request) {
         Ok(b) => b,
@@ -62,7 +58,12 @@ fn handle_post(request: IncomingRequest) -> (u16, String) {
 
     let payload: KvPayload = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
-        Err(e) => return (400, format!("Invalid JSON (expected {{\"key\":\"...\",\"value\":\"...\"}}): {e}\n")),
+        Err(e) => {
+            return (
+                400,
+                format!("Invalid JSON (expected {{\"key\":\"...\",\"value\":\"...\"}}): {e}\n"),
+            );
+        }
     };
 
     let bucket = match open(BACKEND) {
@@ -92,7 +93,10 @@ fn handle_get(request: IncomingRequest) -> (u16, String) {
     };
 
     match bucket.get(&key) {
-        Ok(Some(bytes)) => (200, format!("[{BACKEND}] {}\n", String::from_utf8_lossy(&bytes))),
+        Ok(Some(bytes)) => (
+            200,
+            format!("[{BACKEND}] {}\n", String::from_utf8_lossy(&bytes)),
+        ),
         Ok(None) => (404, format!("[{BACKEND}] Key '{key}' not found\n")),
         Err(e) => (500, format!("[{BACKEND}] Failed to get key: {e:?}\n")),
     }
@@ -126,7 +130,7 @@ fn read_body(request: IncomingRequest) -> Result<Vec<u8>, String> {
 }
 
 fn parse_query_param(path_and_query: &str, param: &str) -> Option<String> {
-    let query = path_and_query.splitn(2, '?').nth(1)?;
+    let query = path_and_query.split_once('?')?.1;
     for pair in query.split('&') {
         let mut parts = pair.splitn(2, '=');
         if parts.next()? == param {
