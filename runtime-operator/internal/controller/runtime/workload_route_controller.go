@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"net"
 	"reflect"
 	"sort"
 
@@ -109,9 +110,28 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			continue
 		}
 
-		// Hostname is actually the pod IP of the host's Pod, so we can use it directly as the
-		// Endpoint address without needing to fetch the Pod object
+		// host.Hostname is the heartbeat's req.Hostname — documented as
+		// the host pod's IP (see HostPodLabel comment in
+		// host_pod_controller.go). EndpointSlice.AddressType=IPv4 (set
+		// below) rejects non-IP entries with `Invalid value: "<x>":
+		// must be a valid IPv4 address`, leaving the Service with zero
+		// endpoints. When the host process reports its OS hostname
+		// instead (default pod template, or any pod that pins
+		// spec.hostname), translate hostname → pod IP via a Pod
+		// lookup.
 		podIP := host.Hostname
+		if net.ParseIP(podIP) == nil {
+			pod, err := r.findPodByHostname(ctx, host.Hostname)
+			if err != nil {
+				log.V(1).Info("pod lookup failed for non-IP host.Hostname, skipping workload", "hostID", workload.Status.HostID, "hostname", host.Hostname, "err", err)
+				continue
+			}
+			if pod.Status.PodIP == "" {
+				log.V(1).Info("matching pod has no PodIP yet, skipping workload", "hostID", workload.Status.HostID, "pod", pod.Name)
+				continue
+			}
+			podIP = pod.Status.PodIP
+		}
 		httpPort := int32(host.HTTPPort)
 		if _, exists := endpoints[podIP]; !exists {
 			endpoints[podIP] = endpointInfo{podIP: podIP, httpPort: httpPort}
@@ -227,6 +247,28 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return ctrl.Result{}, nil
 }
 
+// findPodByHostname locates the HostPodLabel-bearing Pod whose OS hostname
+// matches the given hostname, matching first on Spec.Hostname (pinned pod
+// templates), then on metadata.Name (default — pod name is also the
+// container's OS hostname). The cluster-wide List is cache-bounded to
+// the operator + host namespaces via ByObject in cmd/main.go.
+func (r *WorkloadRouteReconciler) findPodByHostname(ctx context.Context, hostname string) (*corev1.Pod, error) {
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList); err != nil {
+		return nil, fmt.Errorf("listing pods: %w", err)
+	}
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if _, ok := pod.Labels[HostPodLabel]; !ok {
+			continue
+		}
+		if pod.Spec.Hostname == hostname || pod.Name == hostname {
+			return pod, nil
+		}
+	}
+	return nil, fmt.Errorf("no pod labelled %q matches hostname %q", HostPodLabel, hostname)
+}
+
 // findHostByID looks up a Host CRD by its HostID field using a field index.
 // Hosts always live in the operator's namespace, so the lookup is
 // namespace-scoped.
@@ -262,6 +304,7 @@ func endpointSliceName(serviceName string) string {
 // SetupWithManager sets up the controller with the Manager.
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=create;delete;get;list;patch;update;watch
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Index Workloads by their KubernetesService name for efficient lookup.
 	// Workloads without a kubernetes.service block, or with an empty
