@@ -2,12 +2,13 @@ name: "Build Rust example"
 description: >
   Lint (cargo +nightly fmt --check, cargo clippy --locked -- -D warnings),
   build via `wash build` (which reads .wash/config.yaml's build.command
-  and fetches WIT dependencies as needed), and publish to OCI on pushes
-  to main. CI mirrors what `wash build` does locally, so a passing build
-  here is the same passing build a contributor would see. The caller must
-  invoke `./.github/actions/setup-rust` (with `install-nightly: "true"`
-  and `install-wash: "true"`) exactly once before calling this action,
-  plus any example-specific build tools (e.g., protoc for tonic-build).
+  and fetches WIT dependencies as needed), and (optionally) publish to
+  OCI on pushes to main. CI mirrors what `wash build` does locally, so a
+  passing build here is the same passing build a contributor would see.
+  The caller must invoke `./.github/actions/setup-rust` (with
+  `install-nightly: "true"` and `install-wash: "true"`) exactly once
+  before calling this action, plus any example-specific build tools
+  (e.g., protoc for tonic-build).
 
 inputs:
   working-directory:
@@ -19,7 +20,9 @@ inputs:
       On pushes to main, publishes a single tag whose value is the Cargo
       package version. Skips the push if that tag already exists in the
       registry, so bump-the-version is the explicit signal to release.
-    required: true
+      Omit (or pass empty) to skip the publish steps entirely.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -51,7 +54,7 @@ runs:
       run: wash build
 
     - name: Login to ghcr.io
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.image != ''
       uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
       with:
         registry: ghcr.io
@@ -59,7 +62,7 @@ runs:
         password: ${{ github.token }}
 
     - name: Publish or skip
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.image != ''
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:

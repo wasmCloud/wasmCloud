@@ -1,5 +1,21 @@
 name: examples
 
+# Validates and (on push to main) publishes the Rust components under
+# examples/. Pipeline:
+#   plan      dorny/paths-filter → plan-matrix.mjs picks the matrix for
+#             this event (PR = intersection with changed paths, push or
+#             examples-canary label = everything).
+#   coverage  coverage-matrix.mjs asserts ITEMS matches examples/ on
+#             disk (every dir with .wash/config.yaml + Cargo.toml is
+#             enrolled; every top-level example has a README.md).
+#   build     matrix-fans over plan.outputs.matrix; each cell runs
+#             build-rust-example (fmt + clippy + wash build, plus
+#             OCI publish on pushes to main when `image` is set).
+#
+# Multi-component example (grpc-hello-world): one ITEMS entry per
+# component, both sharing `filter: grpc-hello-world` so a change anywhere
+# under examples/grpc-hello-world/** rebuilds both client and server.
+
 on:
   pull_request:
     branches:
@@ -15,149 +31,66 @@ concurrency:
 
 permissions: {}
 
+env:
+  # omit image to skip publish
+  # filter, when present, points at the paths-filter group that gates this
+  # item so that multiple items can share a `filter`. e.g. examples/grpc-hello-world/**
+  ITEMS: |
+    [
+      {"key": "blobby",                   "workdir": "examples/blobby",                              "image": "ghcr.io/wasmcloud/components/blobby"},
+      {"key": "grpc-hello-world-client",  "filter": "grpc-hello-world",   "workdir": "examples/grpc-hello-world/component-client", "image": "ghcr.io/wasmcloud/components/grpc-hello-world-client", "needs_protoc": true},
+      {"key": "grpc-hello-world-server",  "filter": "grpc-hello-world",   "workdir": "examples/grpc-hello-world/component-server", "image": "ghcr.io/wasmcloud/components/grpc-hello-world-server", "needs_protoc": true},
+      {"key": "otel-http",                "workdir": "examples/otel-http",                           "image": "ghcr.io/wasmcloud/components/otel-http"},
+      {"key": "qrcode",                   "workdir": "examples/qrcode",                              "image": "ghcr.io/wasmcloud/components/qrcode"}
+    ]
+  # When these change, every example rebuilds.
+  SHARED_PATHS: |
+    [
+      ".github/actions/build-rust-example/**",
+      ".github/actions/setup-rust/**",
+      ".github/scripts/plan-matrix.mjs",
+      ".github/scripts/coverage-matrix.mjs",
+      ".github/scripts/gen-filters.mjs",
+      ".github/workflows/examples.yml"
+    ]
+
 jobs:
-  changes:
-    if: github.event_name == 'pull_request'
+  plan:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
     outputs:
-      blobby: ${{ steps.filter.outputs.blobby }}
-      grpc-hello-world: ${{ steps.filter.outputs.grpc-hello-world }}
-      otel-http: ${{ steps.filter.outputs.otel-http }}
-      qrcode: ${{ steps.filter.outputs.qrcode }}
+      matrix: ${{ steps.compute.outputs.matrix }}
+      has_items: ${{ steps.compute.outputs.has_items }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Generate paths-filter config from ITEMS
+        if: github.event_name == 'pull_request'
+        env:
+          ITEMS: ${{ env.ITEMS }}
+          SHARED_PATHS: ${{ env.SHARED_PATHS }}
+          OUTPUT: ${{ runner.temp }}/filters.yml
+        run: node .github/scripts/gen-filters.mjs
+
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
         id: filter
+        if: github.event_name == 'pull_request'
         with:
-          filters: |
-            blobby:
-              - 'examples/blobby/**'
-              - '.github/actions/build-rust-example/**'
-              - '.github/actions/setup-rust/**'
-              - '.github/workflows/examples.yml'
-            grpc-hello-world:
-              - 'examples/grpc-hello-world/**'
-              - '.github/actions/build-rust-example/**'
-              - '.github/actions/setup-rust/**'
-              - '.github/workflows/examples.yml'
-            otel-http:
-              - 'examples/otel-http/**'
-              - '.github/actions/build-rust-example/**'
-              - '.github/actions/setup-rust/**'
-              - '.github/workflows/examples.yml'
-            qrcode:
-              - 'examples/qrcode/**'
-              - '.github/actions/build-rust-example/**'
-              - '.github/actions/setup-rust/**'
-              - '.github/workflows/examples.yml'
+          filters: ${{ runner.temp }}/filters.yml
 
-  blobby:
-    needs:
-      - changes
-    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.blobby == 'true' || contains(github.event.pull_request.labels.*.name, 'examples-canary'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-rust
-        with:
-          install-nightly: "true"
-          install-wash: "true"
-      - uses: ./.github/actions/build-rust-example
-        with:
-          working-directory: examples/blobby
-          image: ghcr.io/wasmcloud/components/blobby
+      - name: Compute build matrix
+        id: compute
+        env:
+          ITEMS: ${{ env.ITEMS }}
+          CHANGED: ${{ steps.filter.outputs.changes }}
+          EVENT_NAME: ${{ github.event_name }}
+          CANARY: ${{ contains(github.event.pull_request.labels.*.name, 'examples-canary') }}
+        run: node .github/scripts/plan-matrix.mjs
 
-  # grpc-hello-world is one Cargo workspace with two components; each has
-  # its own .wash/config.yaml so we invoke build-rust-example per component.
-  grpc-hello-world:
-    needs:
-      - changes
-    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.grpc-hello-world == 'true' || contains(github.event.pull_request.labels.*.name, 'examples-canary'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-rust
-        with:
-          install-nightly: "true"
-          install-wash: "true"
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: "29.x"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: ./.github/actions/build-rust-example
-        with:
-          working-directory: examples/grpc-hello-world/component-client
-          image: ghcr.io/wasmcloud/components/grpc-hello-world-client
-      - uses: ./.github/actions/build-rust-example
-        with:
-          working-directory: examples/grpc-hello-world/component-server
-          image: ghcr.io/wasmcloud/components/grpc-hello-world-server
-
-  otel-http:
-    needs:
-      - changes
-    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.otel-http == 'true' || contains(github.event.pull_request.labels.*.name, 'examples-canary'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-rust
-        with:
-          install-nightly: "true"
-          install-wash: "true"
-      - uses: ./.github/actions/build-rust-example
-        with:
-          working-directory: examples/otel-http
-          image: ghcr.io/wasmcloud/components/otel-http
-
-  qrcode:
-    needs:
-      - changes
-    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.qrcode == 'true' || contains(github.event.pull_request.labels.*.name, 'examples-canary'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-rust
-        with:
-          install-nightly: "true"
-          install-wash: "true"
-      - uses: ./.github/actions/build-rust-example
-        with:
-          working-directory: examples/qrcode
-          image: ghcr.io/wasmcloud/components/qrcode
-
-  # Coverage check: every Rust example (directory with .wash/config.yaml
-  # AND Cargo.toml) must have a CI job here, and every top-level Rust
-  # example must have a README.md. Scoped to Rust because this workflow
-  # is Rust-only. Cheap enough to always run.
   coverage:
     runs-on: ubuntu-latest
     permissions:
@@ -166,63 +99,58 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - name: Verify every Rust example has a CI job
-        run: |
-          set -euo pipefail
-          fs_examples=$(find examples -path '*/.wash/config.yaml' -print0 \
-            | xargs -0 -n1 dirname \
-            | xargs -n1 dirname \
-            | sort -u)
-          if [[ -z "${fs_examples}" ]]; then
-            echo "ERROR: no examples with .wash/config.yaml found" >&2
-            exit 1
-          fi
-          missing=()
-          while IFS= read -r dir; do
-            # Skip non-Rust examples — this workflow is Rust-only.
-            [[ -f "${dir}/Cargo.toml" ]] || continue
-            # Anchor the match so working-directory: examples/foo does not
-            # falsely satisfy a check for working-directory: examples/foo/bar.
-            if ! grep -qE "working-directory: ${dir}( |$)" .github/workflows/examples.yml; then
-              missing+=("${dir}")
-            fi
-          done <<< "${fs_examples}"
-          if [[ ${#missing[@]} -gt 0 ]]; then
-            {
-              echo "ERROR: Rust example(s) have .wash/config.yaml but no job in examples.yml:"
-              printf '  %s\n' "${missing[@]}"
-              echo "Add a job whose working-directory points at each path above."
-            } >&2
-            exit 1
-          fi
-          echo "All Rust examples covered."
-      - name: Verify every top-level Rust example has a README.md
-        run: |
-          set -euo pipefail
-          missing=()
-          for dir in examples/*/; do
-            # Skip non-Rust examples — this workflow is Rust-only.
-            [[ -f "${dir}Cargo.toml" ]] || continue
-            if [[ ! -f "${dir}README.md" ]]; then
-              missing+=("${dir}")
-            fi
-          done
-          if [[ ${#missing[@]} -gt 0 ]]; then
-            {
-              echo "ERROR: Rust example(s) missing README.md:"
-              printf '  %s\n' "${missing[@]}"
-              echo "Every top-level Rust example must have a README.md describing what it does and how to run it."
-            } >&2
-            exit 1
-          fi
+      - name: Assert ITEMS matches examples/ on disk
+        env:
+          ITEMS: ${{ env.ITEMS }}
+          DISCOVERY_ROOT: examples
+          # Scoped to Rust because this workflow is Rust-only — a
+          # non-Rust subdirectory under examples/ wouldn't have a
+          # Cargo.toml and is silently ignored by the disk scan.
+          REQUIRE_FILES: '["Cargo.toml"]'
+          REQUIRE_README: "true"
+        run: node .github/scripts/coverage-matrix.mjs
+
+  build:
+    needs:
+      - plan
+    if: needs.plan.outputs.has_items == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # Required so build-rust-example's OCI publish step can push to ghcr
+      # on push events. PRs (including forks) get the token in read-only
+      # mode, so the publish step is a no-op there even with this set.
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          install-nightly: "true"
+          install-wash: "true"
+
+      - if: matrix.needs_protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "29.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: ./.github/actions/build-rust-example
+        with:
+          working-directory: ${{ matrix.workdir }}
+          image: ${{ matrix.image }}
 
   gate:
     needs:
-      - blobby
-      - grpc-hello-world
-      - otel-http
-      - qrcode
+      - plan
       - coverage
+      - build
     if: always()
     runs-on: ubuntu-latest
     steps:

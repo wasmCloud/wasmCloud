@@ -1,0 +1,178 @@
+name: templates
+
+# Validates the templates under templates/ by scaffolding each one via
+# `wash new` against the local checkout and running it through the
+# same fmt + clippy + build pipeline as examples.
+#
+# Pipeline:
+#   plan      dorny/paths-filter → plan-matrix.mjs picks the matrix for
+#             this event (PR = intersection with changed paths, push or
+#             canary label = everything).
+#   coverage  coverage-matrix.mjs asserts ITEMS matches templates/ on
+#             disk, so a new/removed template can't silently bypass CI.
+#   build     matrix-fans over plan.outputs.matrix; each cell scaffolds
+#             with `wash new file://$GITHUB_WORKSPACE` and reuses
+#             build-rust-example without an `image:` so the action's
+#             publish steps no-op.
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+env:
+  # To add a template: drop the directory under templates/, then append to this list.
+  ITEMS: |
+    [
+      {"key": "http-api-with-distributed-workloads", "workdir": "templates/http-api-with-distributed-workloads"},
+      {"key": "http-client",                          "workdir": "templates/http-client"},
+      {"key": "http-handler",                         "workdir": "templates/http-handler"},
+      {"key": "http-hello-world",                     "workdir": "templates/http-hello-world"},
+      {"key": "http-kv-handler",                      "workdir": "templates/http-kv-handler"},
+      {"key": "service-tcp",                          "workdir": "templates/service-tcp"}
+    ]
+  # When these change, every template rebuilds.
+  SHARED_PATHS: |
+    [
+      ".github/actions/build-rust-example/**",
+      ".github/actions/setup-rust/**",
+      ".github/scripts/plan-matrix.mjs",
+      ".github/scripts/coverage-matrix.mjs",
+      ".github/scripts/gen-filters.mjs",
+      ".github/workflows/templates.yml"
+    ]
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      matrix: ${{ steps.compute.outputs.matrix }}
+      has_items: ${{ steps.compute.outputs.has_items }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Generate paths-filter config from ITEMS
+        if: github.event_name == 'pull_request'
+        env:
+          ITEMS: ${{ env.ITEMS }}
+          SHARED_PATHS: ${{ env.SHARED_PATHS }}
+          OUTPUT: ${{ runner.temp }}/filters.yml
+        run: node .github/scripts/gen-filters.mjs
+
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          filters: ${{ runner.temp }}/filters.yml
+
+      - name: Compute build matrix
+        id: compute
+        env:
+          ITEMS: ${{ env.ITEMS }}
+          CHANGED: ${{ steps.filter.outputs.changes }}
+          EVENT_NAME: ${{ github.event_name }}
+          CANARY: ${{ contains(github.event.pull_request.labels.*.name, 'templates-canary') }}
+        run: node .github/scripts/plan-matrix.mjs
+
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Assert ITEMS matches templates/ on disk
+        env:
+          ITEMS: ${{ env.ITEMS }}
+          DISCOVERY_ROOT: templates
+          REQUIRE_FILES: '["Cargo.toml"]'
+          REQUIRE_README: "true"
+        run: node .github/scripts/coverage-matrix.mjs
+
+  build:
+    needs:
+      - plan
+    if: needs.plan.outputs.has_items == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          # On PRs, actions/checkout defaults to refs/pull/N/merge (a
+          # detached HEAD). `wash new file://$GITHUB_WORKSPACE` performs
+          # a `git clone` from the workspace; pinning the SHA makes the
+          # clone source a regular commit instead of detached HEAD.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          install-nightly: "true"
+
+      - uses: wasmcloud/setup-wash-action@47756fa211cc82f392c57e39504f43ef46fc0b3e # v2.1.0
+
+      - name: Scaffold via `wash new` from local checkout
+        working-directory: ${{ runner.temp }}
+        env:
+          WORKSPACE: ${{ github.workspace }}
+          TEMPLATE: ${{ matrix.key }}
+          SUBFOLDER: ${{ matrix.workdir }}
+        run: |
+          # file:// → wash new does a local git clone of the workspace at
+          # HEAD (the SHA pinned by checkout above). No remote round-trip
+          # for the template content.
+          #
+          # `--non-interactive` covers only wash-host-exec confirmations;
+          # if the template's .wash/config.yaml has a `new.command`
+          # (e.g. `cargo fetch`), wash still prompts before running it
+          # and dies with `not a terminal` when stdin isn't a TTY. Wrap
+          # in script(1) to supply a PTY, and feed a bounded handful of
+          # y's so the prompt (if any) auto-accepts.
+          #
+          # Bounded matters: `yes | script …` deadlocks at job timeout
+          # because yes keeps producing after wash exits — script never
+          # sees EOF on its stdin and never returns. `printf` is finite;
+          # the pipe closes once it's drained, script exits with the
+          # child's status.
+          printf 'y\ny\ny\n' | script -qec "wash new 'file://${WORKSPACE}' --subfolder '${SUBFOLDER}' --name '${TEMPLATE}' --non-interactive" /dev/null
+
+      - uses: ./.github/actions/build-rust-example
+        with:
+          working-directory: ${{ runner.temp }}/${{ matrix.key }}
+
+  gate:
+    needs:
+      - plan
+      - coverage
+      - build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all jobs to pass or be skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          if echo "$RESULTS" | grep -qE '"(failure|cancelled)"'; then
+            exit 1
+          fi
