@@ -35,16 +35,33 @@ impl Guest for Component {
             Method::Get => handle_get(request),
             _ => (405u16, "Method Not Allowed\n".to_string()),
         };
-
-        let response = OutgoingResponse::new(Fields::new());
-        response.set_status_code(status).unwrap();
-        let out_body = response.body().unwrap();
-        ResponseOutparam::set(response_out, Ok(response));
-        let stream = out_body.write().unwrap();
-        stream.blocking_write_and_flush(body.as_bytes()).unwrap();
-        drop(stream);
-        OutgoingBody::finish(out_body, None).unwrap();
+        if let Err(e) = write_response(response_out, status, &body) {
+            eprintln!("failed to write response: {e}");
+        }
     }
+}
+
+/// Send the response back through `response_out`, returning the first error
+/// encountered (so the caller can log it). Returning `Result` rather than
+/// `.unwrap()`ing keeps us inside the workspace's clippy::unwrap_used deny.
+fn write_response(response_out: ResponseOutparam, status: u16, body: &str) -> Result<(), String> {
+    let response = OutgoingResponse::new(Fields::new());
+    response
+        .set_status_code(status)
+        .map_err(|()| format!("invalid status code: {status}"))?;
+    let out_body = response
+        .body()
+        .map_err(|()| "failed to take response body".to_string())?;
+    ResponseOutparam::set(response_out, Ok(response));
+    let stream = out_body
+        .write()
+        .map_err(|()| "failed to open body stream".to_string())?;
+    stream
+        .blocking_write_and_flush(body.as_bytes())
+        .map_err(|e| format!("write failed: {e:?}"))?;
+    drop(stream);
+    OutgoingBody::finish(out_body, None).map_err(|e| format!("finish failed: {e:?}"))?;
+    Ok(())
 }
 
 /// Handle `POST /` with a JSON body `{"key": "...", "value": "..."}`.
@@ -140,4 +157,8 @@ fn parse_query_param(path_and_query: &str, param: &str) -> Option<String> {
     None
 }
 
-bindings::export!(Component with_types_in bindings);
+#[allow(unsafe_code)] // bindings::export! emits unsafe FFI shims
+mod export {
+    use super::{Component, bindings};
+    bindings::export!(Component with_types_in bindings);
+}

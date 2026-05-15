@@ -43,10 +43,10 @@ async fn main(request: Request<Body>) -> Result<Response<Body>, wstd::http::Erro
                     .map_err(|e| wstd::http::Error::msg(e.to_string()))?;
                 Ok(Response::new(json.into()))
             }
-            _ => Ok(Response::builder()
+            _ => Response::builder()
                 .status(StatusCode::METHOD_NOT_ALLOWED)
                 .body("Method not allowed".into())
-                .unwrap()),
+                .map_err(Into::into),
         };
     }
 
@@ -55,10 +55,10 @@ async fn main(request: Request<Body>) -> Result<Response<Body>, wstd::http::Erro
     match parts.method {
         Method::GET => match get_object(&container, &file_name) {
             Ok(stream) => Ok(Response::new(Body::from(stream))),
-            Err(e) => Ok(Response::builder()
+            Err(e) => Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(e.into())
-                .unwrap()),
+                .map_err(Into::into),
         },
         Method::POST | Method::PUT => {
             let content_length: u64 = parts
@@ -69,29 +69,29 @@ async fn main(request: Request<Body>) -> Result<Response<Body>, wstd::http::Erro
                 .ok_or_else(|| wstd::http::Error::msg("Content-Length header is required"))?;
 
             match put_object(&container, &file_name, &mut body, content_length).await {
-                Ok(_) => Ok(Response::builder()
+                Ok(_) => Response::builder()
                     .status(StatusCode::CREATED)
                     .body(format!("Wrote {file_name} to blobstore successfully").into())
-                    .unwrap()),
-                Err(e) => Ok(Response::builder()
+                    .map_err(Into::into),
+                Err(e) => Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
                     .body(e.into())
-                    .unwrap()),
+                    .map_err(Into::into),
             }
         }
         Method::DELETE => match container.delete_object(&file_name) {
             Ok(_) => Ok(Response::new(
                 format!("Deleted {file_name} from blobstore successfully").into(),
             )),
-            Err(e) => Ok(Response::builder()
+            Err(e) => Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(e.into())
-                .unwrap()),
+                .map_err(Into::into),
         },
-        _ => Ok(Response::builder()
+        _ => Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
             .body("Method not allowed".into())
-            .unwrap()),
+            .map_err(Into::into),
     }
 }
 

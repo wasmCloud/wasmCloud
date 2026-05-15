@@ -1,19 +1,25 @@
-wit_bindgen::generate!({
-    path: "../wit",
-    world: "task",
-    generate_all,
-});
+mod bindings {
+    wit_bindgen::generate!({
+        path: "../wit",
+        world: "task",
+        generate_all,
+    });
+}
 
-use wasmcloud::messaging::consumer;
+use bindings::wasmcloud::messaging::consumer;
+use bindings::wasmcloud::messaging::types::BrokerMessage;
 #[allow(unused)]
 use wstd::prelude::*;
 
-use crate::wasmcloud::messaging::types::BrokerMessage;
-
 struct Component;
-export!(Component);
 
-impl exports::wasmcloud::messaging::handler::Guest for Component {
+#[allow(unsafe_code)] // bindings::export! emits unsafe FFI shims
+mod export {
+    use super::{Component, bindings};
+    bindings::export!(Component with_types_in bindings);
+}
+
+impl bindings::exports::wasmcloud::messaging::handler::Guest for Component {
     fn handle_message(msg: BrokerMessage) -> Result<(), String> {
         let Some(subject) = msg.reply_to else {
             return Err("missing reply_to".to_string());

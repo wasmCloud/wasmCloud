@@ -61,7 +61,7 @@ async fn handle_task(mut req: Request<Body>) -> anyhow::Result<Response<Body>> {
                     "connection closed before response was complete",
                 ));
             }
-            for &byte in &buf[..n] {
+            for &byte in buf.get(..n).unwrap_or_default() {
                 if byte == b'\n' {
                     return Ok(String::from_utf8_lossy(&resp_buf).to_string());
                 }
