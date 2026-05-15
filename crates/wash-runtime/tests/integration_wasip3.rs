@@ -162,10 +162,7 @@ async fn test_p2_http_component_works_with_p3_enabled() -> Result<()> {
                         ("test_key".to_string(), "test_value".to_string()),
                         ("counter_enabled".to_string(), "true".to_string()),
                     ]),
-                    environment: HashMap::new(),
-                    volume_mounts: vec![],
-                    // http-counter calls example.com — empty-list default would deny.
-                    allowed_hosts: vec!["example.com".parse().unwrap()].into(),
+                    ..Default::default()
                 },
                 pool_size: 1,
                 max_invocations: 100,

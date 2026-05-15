@@ -214,10 +214,7 @@ async fn test_inter_component_call() -> Result<()> {
                     local_resources: LocalResources {
                         memory_limit_mb: 128,
                         cpu_limit: 1,
-                        config: HashMap::new(),
-                        environment: HashMap::new(),
-                        volume_mounts: vec![],
-                        allowed_hosts: Default::default(),
+                        ..Default::default()
                     },
                     pool_size: 1,
                     max_invocations: 100,
@@ -229,10 +226,7 @@ async fn test_inter_component_call() -> Result<()> {
                     local_resources: LocalResources {
                         memory_limit_mb: 256,
                         cpu_limit: 2,
-                        config: HashMap::new(),
-                        environment: HashMap::new(),
-                        volume_mounts: vec![],
-                        allowed_hosts: Default::default(),
+                        ..Default::default()
                     },
                     pool_size: 2,
                     max_invocations: 100,
@@ -244,10 +238,7 @@ async fn test_inter_component_call() -> Result<()> {
                     local_resources: LocalResources {
                         memory_limit_mb: 256,
                         cpu_limit: 2,
-                        config: HashMap::new(),
-                        environment: HashMap::new(),
-                        volume_mounts: vec![],
-                        allowed_hosts: Default::default(),
+                        ..Default::default()
                     },
                     pool_size: 2,
                     max_invocations: 100,

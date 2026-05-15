@@ -48,10 +48,7 @@ async fn test_http_counter_integration() -> Result<()> {
                 ("test_key".to_string(), "test_value".to_string()),
                 ("counter_enabled".to_string(), "true".to_string()),
             ]),
-            environment: HashMap::new(),
-            volume_mounts: vec![],
-            // http-counter calls example.com
-            allowed_hosts: vec!["example.com".parse().unwrap()].into(),
+            ..Default::default()
         },
     );
 

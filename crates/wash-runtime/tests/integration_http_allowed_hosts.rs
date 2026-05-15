@@ -71,10 +71,8 @@ fn allowed_hosts_workload(allowed_hosts: Vec<String>) -> WorkloadStartRequest {
                 local_resources: LocalResources {
                     memory_limit_mb: 128,
                     cpu_limit: 1,
-                    config: HashMap::new(),
-                    environment: HashMap::new(),
-                    volume_mounts: vec![],
-                    allowed_hosts: parsed.into(),
+                    allowed_hosts: allowed_hosts.into(),
+                    ..Default::default()
                 },
                 pool_size: 1,
                 max_invocations: 100,

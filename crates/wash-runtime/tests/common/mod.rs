@@ -163,10 +163,7 @@ pub fn default_counter_resources() -> LocalResources {
     LocalResources {
         memory_limit_mb: 256,
         cpu_limit: 1,
-        config: HashMap::new(),
-        environment: HashMap::new(),
-        volume_mounts: vec![],
-        allowed_hosts: vec!["example.com".parse().unwrap()].into(),
+        ..Default::default()
     }
 }
 
