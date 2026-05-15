@@ -18,6 +18,8 @@ use wasmtime::component::{
 use wasmtime_wasi::p2::bindings::CommandPre;
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
+#[cfg(feature = "wasi-tls")]
+use crate::engine::ctx::SharedTlsProvider;
 use crate::{
     engine::{
         ctx::{Ctx, SharedCtx},
@@ -483,7 +485,7 @@ pub struct ResolvedWorkload {
     host_interfaces: Vec<WitInterface>,
     /// TLS provider override for `wasi:tls` client connections in this workload.
     #[cfg(feature = "wasi-tls")]
-    tls_provider: Option<super::SharedTlsProvider>,
+    tls_provider: Option<SharedTlsProvider>,
 }
 
 impl std::fmt::Debug for ResolvedWorkload {
@@ -1324,7 +1326,7 @@ pub struct UnresolvedWorkload {
     components: HashMap<Arc<str>, WorkloadComponent>,
     /// TLS provider override for `wasi:tls` client connections in this workload.
     #[cfg(feature = "wasi-tls")]
-    tls_provider: Option<super::SharedTlsProvider>,
+    tls_provider: Option<SharedTlsProvider>,
 }
 
 impl UnresolvedWorkload {
@@ -1373,14 +1375,14 @@ impl UnresolvedWorkload {
     /// certificate store (corporate CAs, certificate pinning), or integrate
     /// with HSM-backed key material.
     #[cfg(feature = "wasi-tls")]
-    pub fn with_tls_provider(mut self, provider: super::SharedTlsProvider) -> Self {
+    pub fn with_tls_provider(mut self, provider: SharedTlsProvider) -> Self {
         self.tls_provider = Some(provider);
         self
     }
 
     /// Apply an optional TLS provider override. No-op when `None`.
     #[cfg(feature = "wasi-tls")]
-    pub fn maybe_with_tls_provider(self, provider: Option<super::SharedTlsProvider>) -> Self {
+    pub fn maybe_with_tls_provider(self, provider: Option<SharedTlsProvider>) -> Self {
         match provider {
             Some(p) => self.with_tls_provider(p),
             None => self,

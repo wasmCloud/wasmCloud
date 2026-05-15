@@ -50,6 +50,8 @@ use wasmtime::PoolingAllocationConfig;
 use wasmtime::component::{Component, Linker};
 
 use crate::engine::ctx::SharedCtx;
+#[cfg(feature = "wasi-tls")]
+use crate::engine::ctx::SharedTlsProvider;
 use crate::engine::workload::{UnresolvedWorkload, WorkloadComponent, WorkloadService};
 use crate::types::{EmptyDirVolume, HostPathVolume, VolumeType, Workload};
 use std::env;
@@ -228,11 +230,6 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
 pub mod ctx;
 mod value;
 pub mod workload;
-
-/// A shareable handle to a `wasi:tls` provider. Kept as an `Arc` so the same
-/// provider can back many per-component contexts without re-creating it.
-#[cfg(feature = "wasi-tls")]
-pub(crate) type SharedTlsProvider = Arc<dyn wasmtime_wasi_tls::TlsProvider>;
 
 /// The core WebAssembly engine for executing components and workloads.
 ///

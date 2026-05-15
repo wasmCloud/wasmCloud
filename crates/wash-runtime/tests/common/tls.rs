@@ -26,7 +26,7 @@ use tokio_rustls::{
 };
 use wasmtime_wasi_tls::{Error as TlsError, TlsProvider, TlsStream, TlsTransport};
 
-use wash_runtime::engine::Engine;
+use wash_runtime::engine::{Engine, ctx::SharedTlsProvider};
 
 /// Returns the outbound IPv4 via a UDP routing-table lookup (no packets sent).
 /// Returns `Ok(None)` if no non-loopback IPv4 interface is available.
@@ -215,10 +215,10 @@ fn client_config_with_cert(cert_der: &[u8]) -> Result<ClientConfig> {
     Ok(config)
 }
 
-/// Wrap `cert_der` into an `Arc<dyn TlsProvider>` that trusts only that cert.
-fn test_tls_provider(cert_der: &[u8]) -> Result<Arc<dyn TlsProvider>> {
+/// Wrap `cert_der` into a [`SharedTlsProvider`] that trusts only that cert.
+fn test_tls_provider(cert_der: &[u8]) -> Result<SharedTlsProvider> {
     let client_config = Arc::new(client_config_with_cert(cert_der)?);
-    Ok(Arc::new(TestTlsProvider { client_config }) as Arc<dyn TlsProvider>)
+    Ok(SharedTlsProvider::new(TestTlsProvider { client_config }))
 }
 
 /// Build an engine with P3 and a custom TLS provider that trusts `cert_der`.
