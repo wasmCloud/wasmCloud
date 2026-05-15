@@ -10,6 +10,7 @@ import (
 	. "github.com/onsi/gomega"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -296,6 +297,47 @@ var _ = Describe("precompile pipeline", func() {
 				Value: "/etc/docker-creds",
 			}))
 		}).Should(Succeed())
+	})
+
+	It("does not re-create a Job when the variant is already recorded", func() {
+		ctx := context.Background()
+		a := newArtifact(ctx, "no-rerun-on-job-delete")
+
+		var job batchv1.Job
+		Eventually(func(g Gomega) {
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default", Name: "precompile-" + a.Name,
+			}, &job)).To(Succeed())
+		}).Should(Succeed())
+
+		job.Status.Succeeded = 1
+		job.Status.Conditions = []batchv1.JobCondition{{
+			Type:   batchv1.JobComplete,
+			Status: corev1.ConditionTrue,
+		}}
+		Expect(k8sClient.Status().Update(ctx, &job)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			var got runtimev1alpha1.Artifact
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default", Name: a.Name,
+			}, &got)).To(Succeed())
+			g.Expect(got.Status.Precompiled).To(HaveLen(1))
+		}).Should(Succeed())
+
+		Expect(k8sClient.Delete(ctx, &job,
+			client.PropagationPolicy(metav1.DeletePropagationBackground),
+			client.GracePeriodSeconds(0),
+		)).To(Succeed())
+
+		Consistently(func(g Gomega) {
+			var probe batchv1.Job
+			err := k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: "default", Name: "precompile-" + a.Name,
+			}, &probe)
+			g.Expect(apierrors.IsNotFound(err)).To(BeTrue(),
+				"expected Job to stay absent after variant is recorded, got err=%v", err)
+		}, "2s", "200ms").Should(Succeed())
 	})
 
 	It("re-runs precompile when Artifact.spec.image changes", func() {

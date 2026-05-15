@@ -64,6 +64,15 @@ func (r *PrecompileReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
+	if variantRecorded(a.Status.Precompiled, runtimev1alpha1.PrecompiledVariant{
+		Target:          r.Target,
+		WasmtimeVersion: r.WasmtimeVersion,
+		ArtifactURL:     r.outputURLOf(&a),
+		ImageRef:        a.Spec.Image,
+	}) {
+		return ctrl.Result{}, nil
+	}
+
 	if res, err, done := r.handleImageChange(ctx, &a, desired); done {
 		return res, err
 	}
