@@ -28,7 +28,7 @@ impl WasiGrpcService {
     }
 }
 
-impl tower_service::Service<http::Request<tonic::body::BoxBody>> for WasiGrpcService {
+impl tower_service::Service<http::Request<tonic::body::Body>> for WasiGrpcService {
     type Response =
         http::Response<http_body_util::combinators::UnsyncBoxBody<bytes::Bytes, tonic::Status>>;
     type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -39,7 +39,7 @@ impl tower_service::Service<http::Request<tonic::body::BoxBody>> for WasiGrpcSer
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: http::Request<tonic::body::BoxBody>) -> Self::Future {
+    fn call(&mut self, req: http::Request<tonic::body::Body>) -> Self::Future {
         let base_uri = self.base_uri.clone();
 
         Box::pin(async move {
@@ -119,8 +119,8 @@ struct GreetRequest {
 async fn greet(mut req: Request<Body>) -> Result<Response<Body>, wstd::http::Error> {
     let js_req: GreetRequest = req.body_mut().json().await?;
 
-    // Create the gRPC client
-    let svc = WasiGrpcService::new("http://localhost:50051".parse().unwrap());
+    // Create the gRPC client.
+    let svc = WasiGrpcService::new(http::Uri::from_static("http://localhost:50051"));
     let mut client = GreeterClient::new(svc);
 
     // Make the gRPC call

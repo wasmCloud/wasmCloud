@@ -156,40 +156,47 @@ fn kv_num(key: &str, value: impl std::fmt::Display) -> otel::types::KeyValue {
 
 impl Guest for Component {
     fn handle(_request: IncomingRequest, response_out: ResponseOutparam) {
-        match handle_request() {
+        let (status, body) = match handle_request() {
             Ok(count) => {
                 log(
                     Level::Info,
                     "",
                     &format!("Successfully processed request, count: {count}"),
                 );
-                let response = OutgoingResponse::new(Fields::new());
-                response.set_status_code(200).unwrap();
-                let body = response.body().unwrap();
-                ResponseOutparam::set(response_out, Ok(response));
-
-                let stream = body.write().unwrap();
-                stream.blocking_write_and_flush(count.as_bytes()).unwrap();
-                drop(stream);
-                OutgoingBody::finish(body, None).unwrap();
+                (200, count)
             }
             Err(e) => {
                 log(Level::Error, "", &format!("Error processing request: {e}"));
-                let response = OutgoingResponse::new(Fields::new());
-                response.set_status_code(500).unwrap();
-                let body = response.body().unwrap();
-                ResponseOutparam::set(response_out, Ok(response));
-
-                let error_msg = format!("Internal server error: {e}");
-                let stream = body.write().unwrap();
-                stream
-                    .blocking_write_and_flush(error_msg.as_bytes())
-                    .unwrap();
-                drop(stream);
-                OutgoingBody::finish(body, None).unwrap();
+                (500, format!("Internal server error: {e}"))
             }
+        };
+        if let Err(e) = write_response(response_out, status, &body) {
+            log(Level::Error, "", &format!("Failed to write response: {e}"));
         }
     }
+}
+
+/// Send the response back through `response_out`, returning the first error
+/// encountered (so the caller can log it). Returning `Result` rather than
+/// `.unwrap()`ing keeps us inside the workspace's clippy::unwrap_used deny.
+fn write_response(response_out: ResponseOutparam, status: u16, body: &str) -> Result<(), String> {
+    let response = OutgoingResponse::new(Fields::new());
+    response
+        .set_status_code(status)
+        .map_err(|()| format!("invalid status code: {status}"))?;
+    let body_out = response
+        .body()
+        .map_err(|()| "failed to take response body".to_string())?;
+    ResponseOutparam::set(response_out, Ok(response));
+    let stream = body_out
+        .write()
+        .map_err(|()| "failed to open body stream".to_string())?;
+    stream
+        .blocking_write_and_flush(body.as_bytes())
+        .map_err(|e| format!("write failed: {e:?}"))?;
+    drop(stream);
+    OutgoingBody::finish(body_out, None).map_err(|e| format!("finish failed: {e:?}"))?;
+    Ok(())
 }
 
 fn handle_request() -> Result<String> {
@@ -513,4 +520,8 @@ fn increment_counter() -> Result<u64> {
     Ok(new_count)
 }
 
-bindings::export!(Component with_types_in bindings);
+#[allow(unsafe_code)] // bindings::export! emits unsafe FFI shims
+mod export {
+    use super::{bindings, Component};
+    bindings::export!(Component with_types_in bindings);
+}

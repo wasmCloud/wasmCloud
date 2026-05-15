@@ -3,11 +3,41 @@ name = "otel-http"
 edition = "2021"
 version = "0.1.0"
 
+[lints]
+workspace = true
+
 [workspace]
+
+[workspace.lints.rust]
+warnings = "deny"
+unsafe_code = "deny"
+unused_extern_crates = "warn"
+trivial_numeric_casts = "warn"
+unstable_features = "warn"
+unused_import_braces = "warn"
+unused-lifetimes = "warn"
+unused-macro-rules = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = 'deny'
+expect_used = 'deny'
+panic = 'deny'
+indexing_slicing = 'deny'
+dbg_macro = 'deny'
+join_absolute_paths = 'deny'
+needless_collect = 'deny'
+option_env_unwrap = 'deny'
+panicking_unwrap = 'deny'
+serde_api_misuse = 'deny'
+transmute_ptr_to_ref = 'deny'
+transmute_undefined_repr = 'deny'
+trivially_copy_pass_by_ref = 'deny'
+uninit_vec = 'deny'
+unnecessary_box_returns = 'deny'
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
 anyhow = "1.0"
-wit-bindgen = "0.41.0"
+wit-bindgen = "0.57.1"

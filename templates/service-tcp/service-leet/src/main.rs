@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
                     break;
                 }
 
-                for &byte in &buf[..n] {
+                for &byte in buf.get(..n).unwrap_or_default() {
                     if byte == b'\n' {
                         let line = String::from_utf8_lossy(&line_buf);
                         let response = to_leet_speak(&line);

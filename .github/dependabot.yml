@@ -1,8 +1,9 @@
 version: 2
 updates:
-  # Each example is its own workspace (outside the root members list), so
-  # they need to be listed alongside "/" for dependabot to reach them.
-  # Grouped under all-cargo so wash + example bumps land in one PR.
+  # Each example and template is its own workspace (outside the root
+  # members list), so they need to be listed alongside "/" for dependabot
+  # to reach them. Grouped under all-cargo so wash + example + template
+  # bumps land in one PR.
   - package-ecosystem: "cargo"
     directories:
       - "/"
@@ -10,6 +11,12 @@ updates:
       - "/examples/grpc-hello-world"
       - "/examples/otel-http"
       - "/examples/qrcode"
+      - "/templates/http-api-with-distributed-workloads"
+      - "/templates/http-client"
+      - "/templates/http-handler"
+      - "/templates/http-hello-world"
+      - "/templates/http-kv-handler"
+      - "/templates/service-tcp"
     schedule:
       interval: "weekly"
     target-branch: "main"
