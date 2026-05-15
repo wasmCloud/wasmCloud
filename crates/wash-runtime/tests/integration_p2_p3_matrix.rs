@@ -587,9 +587,7 @@ async fn test_p2_regression_with_p3_enabled() -> Result<()> {
                         ("test_key".to_string(), "test_value".to_string()),
                         ("counter_enabled".to_string(), "true".to_string()),
                     ]),
-                    environment: HashMap::new(),
-                    volume_mounts: vec![],
-                    allowed_hosts: Default::default(),
+                    ..Default::default()
                 },
                 pool_size: 1,
                 max_invocations: 100,

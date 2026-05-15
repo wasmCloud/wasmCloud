@@ -60,9 +60,7 @@ fn http_counter_request(host_header: &str) -> WorkloadStartRequest {
                 ("test_key".to_string(), "test_value".to_string()),
                 ("counter_enabled".to_string(), "true".to_string()),
             ]),
-            environment: HashMap::new(),
-            volume_mounts: vec![],
-            allowed_hosts: Default::default(),
+            ..Default::default()
         },
         http_counter_host_interfaces(host_header),
     )

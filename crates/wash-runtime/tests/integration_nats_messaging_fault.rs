@@ -223,10 +223,7 @@ async fn setup(latency: Duration) -> Result<TestHarness> {
                 local_resources: LocalResources {
                     memory_limit_mb: 256,
                     cpu_limit: 1,
-                    config: HashMap::new(),
-                    environment: HashMap::new(),
-                    volume_mounts: vec![],
-                    allowed_hosts: Default::default(),
+                    ..Default::default()
                 },
                 pool_size: 1,
                 max_invocations: 100,
