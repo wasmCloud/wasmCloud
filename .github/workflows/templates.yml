@@ -143,18 +143,12 @@ jobs:
           # HEAD (the SHA pinned by checkout above). No remote round-trip
           # for the template content.
           #
-          # `--non-interactive` covers only wash-host-exec confirmations;
-          # if the template's .wash/config.yaml has a `new.command`
-          # (e.g. `cargo fetch`), wash still prompts before running it
-          # and dies with `not a terminal` when stdin isn't a TTY. Wrap
-          # in script(1) to supply a PTY, and feed a bounded handful of
-          # y's so the prompt (if any) auto-accepts.
-          #
-          # Bounded matters: `yes | script …` deadlocks at job timeout
-          # because yes keeps producing after wash exits — script never
-          # sees EOF on its stdin and never returns. `printf` is finite;
-          # the pipe closes once it's drained, script exits with the
-          # child's status.
+          # Workaround for #5152: `--non-interactive` doesn't suppress
+          # the `new.command` confirmation, and wash dies with "not a
+          # terminal" off-TTY. script(1) supplies a PTY; the bounded
+          # printf auto-accepts. (Unbounded `yes |` deadlocks at job
+          # timeout because yes never closes the pipe.)
+          # TODO: drop once a wash release with the #5152 fix is out.
           printf 'y\ny\ny\n' | script -qec "wash new 'file://${WORKSPACE}' --subfolder '${SUBFOLDER}' --name '${TEMPLATE}' --non-interactive" /dev/null
 
       - uses: ./.github/actions/build-rust-example

@@ -23,19 +23,13 @@
 
 import { writeFileSync, writeSync } from 'node:fs';
 
-const items = JSON.parse(process.env.ITEMS);
-const sharedPaths = JSON.parse(process.env.SHARED_PATHS);
-const output = process.env.OUTPUT;
-
-const groups = new Map();
-for (const it of items) {
-  if (!it.key || !it.workdir) {
-    console.error(`ITEMS entry must have key + workdir: ${JSON.stringify(it)}`);
+function requireEnv(name) {
+  const v = process.env[name];
+  if (v === undefined || v === '') {
+    console.error(`${name} env var is required`);
     process.exit(1);
   }
-  const name = it.filter || it.key;
-  if (!groups.has(name)) groups.set(name, []);
-  groups.get(name).push(it.workdir);
+  return v;
 }
 
 function commonPath(paths) {
@@ -55,19 +49,38 @@ function commonPath(paths) {
   return common.join('/');
 }
 
-const lines = [];
-for (const [name, workdirs] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
-  lines.push(`${name}:`);
-  lines.push(`  - '${commonPath(workdirs)}/**'`);
-  for (const p of sharedPaths) {
-    lines.push(`  - '${p}'`);
+async function main() {
+  const items = JSON.parse(requireEnv('ITEMS'));
+  const sharedPaths = JSON.parse(requireEnv('SHARED_PATHS'));
+  const output = process.env.OUTPUT;
+
+  const groups = new Map();
+  for (const it of items) {
+    if (!it.key || !it.workdir) {
+      console.error(`ITEMS entry must have key + workdir: ${JSON.stringify(it)}`);
+      process.exit(1);
+    }
+    const name = it.filter || it.key;
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(it.workdir);
+  }
+
+  const lines = [];
+  for (const [name, workdirs] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
+    lines.push(`${name}:`);
+    lines.push(`  - '${commonPath(workdirs)}/**'`);
+    for (const p of sharedPaths) {
+      lines.push(`  - '${p}'`);
+    }
+  }
+  const yaml = lines.join('\n') + '\n';
+
+  if (output) {
+    writeFileSync(output, yaml);
+    console.error(`wrote ${groups.size} filter group(s) to ${output}`);
+  } else {
+    writeSync(1, yaml);
   }
 }
-const yaml = lines.join('\n') + '\n';
 
-if (output) {
-  writeFileSync(output, yaml);
-  console.log(`wrote ${groups.size} filter group(s) to ${output}`);
-} else {
-  writeSync(1, yaml);
-}
+await main();
