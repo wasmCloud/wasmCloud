@@ -6,6 +6,7 @@ use super::util::{
     set_send_buffer_size, set_unicast_hop_limit, tcp_bind,
 };
 use super::{DEFAULT_TCP_BACKLOG, SocketAddressFamily, WasiSocketsCtx};
+use crate::types::{SocketTunnelMode, SocketTunnelPolicy};
 use io_lifetimes::AsSocketlike as _;
 use io_lifetimes::views::SocketlikeView;
 use rustix::io::Errno;
@@ -886,6 +887,12 @@ pub enum TcpSocket {
 pub enum ConnectingTcpSocket {
     Network(tokio::net::TcpSocket),
     Loopback(tokio::sync::mpsc::Sender<super::loopback::TcpConn>),
+    /// Like `Network`, but the connect destination is rewritten to `host_addr`
+    /// (used for explicit `socket_tunnels` rules in Strict mode).
+    NetworkTunnel {
+        socket: tokio::net::TcpSocket,
+        host_addr: SocketAddr,
+    },
 }
 
 pub enum ConnectingTcpStream {
@@ -897,6 +904,10 @@ impl ConnectingTcpSocket {
     pub async fn connect(self, addr: SocketAddr) -> io::Result<ConnectingTcpStream> {
         match self {
             Self::Network(socket) => socket.connect(addr).await.map(ConnectingTcpStream::Network),
+            Self::NetworkTunnel { socket, host_addr } => socket
+                .connect(host_addr)
+                .await
+                .map(ConnectingTcpStream::Network),
             Self::Loopback(tx) => match tx.reserve_owned().await {
                 Ok(tx) => Ok(ConnectingTcpStream::Loopback(tx)),
                 Err(..) => Err(std::io::ErrorKind::ConnectionRefused.into()),
@@ -944,18 +955,35 @@ impl TcpSocket {
                     SocketAddr::V4(addr) => addr.set_ip(Ipv4Addr::LOCALHOST),
                     SocketAddr::V6(addr) => addr.set_ip(Ipv6Addr::LOCALHOST),
                 }
-            }
-            socket.start_bind(addr)?;
-            if !ip.is_unspecified() {
+                if addr.port() == 0 {
+                    // Need OS bind to get an ephemeral port assigned, then re-read it.
+                    socket.start_bind(addr)?;
+                    let TcpState::BindStarted(sock) = &socket.tcp_state else {
+                        unreachable!();
+                    };
+                    addr = sock.local_addr()?;
+                    match &mut addr {
+                        SocketAddr::V4(a) => a.set_ip(Ipv4Addr::LOCALHOST),
+                        SocketAddr::V6(a) => a.set_ip(Ipv6Addr::LOCALHOST),
+                    }
+                } else {
+                    // Specific port: skip the OS bind — the sandbox may deny it, and
+                    // the in-process loopback is the only listener needed for
+                    // wasm-to-wasm comms. Advance the state manually to BindStarted so
+                    // finish_bind sees the expected state.
+                    let sock = match mem::replace(&mut socket.tcp_state, TcpState::Closed) {
+                        TcpState::Default(s) => s,
+                        other => {
+                            socket.tcp_state = other;
+                            return Err(ErrorCode::InvalidState);
+                        }
+                    };
+                    socket.tcp_state = TcpState::BindStarted(sock);
+                }
+            } else {
+                // Non-loopback, non-unspecified address: bind on the real OS and return.
+                socket.start_bind(addr)?;
                 return Ok(());
-            }
-            let TcpState::BindStarted(sock) = &socket.tcp_state else {
-                unreachable!();
-            };
-            addr = sock.local_addr()?;
-            match &mut addr {
-                SocketAddr::V4(addr) => addr.set_ip(Ipv4Addr::LOCALHOST),
-                SocketAddr::V6(addr) => addr.set_ip(Ipv6Addr::LOCALHOST),
             }
         }
         let addr = loopback.bind_tcp(addr)?;
@@ -996,6 +1024,7 @@ impl TcpSocket {
         &mut self,
         addr: &SocketAddr,
         loopback: &mut super::loopback::Network,
+        socket_tunnels: Option<&SocketTunnelPolicy>,
     ) -> Result<ConnectingTcpSocket, ErrorCode> {
         if let Self::Network(socket) | Self::Unspecified { net: socket, .. } = self {
             match socket.tcp_state {
@@ -1060,46 +1089,86 @@ impl TcpSocket {
                 *self = Self::Network(socket);
                 res
             }
-            (Self::Network(socket), true) => {
+            (Self::Network(mut socket), true) => {
                 if let TcpState::Bound(..) = socket.tcp_state {
                     *self = Self::Network(socket);
                     // socket wasn't bound to loopback
                     return Err(ErrorCode::InvalidState);
                 }
 
-                let mut local_address = *addr;
-                local_address.set_port(0);
-                let local_address = match loopback.bind_tcp(local_address) {
-                    Ok(addr) => addr,
-                    Err(err) => {
-                        *self = Self::Network(socket);
-                        return Err(err);
-                    }
-                };
+                // Try to route through the in-process loopback first (for wash
+                // services listening on loopback).
+                if loopback.connect_tcp(addr).is_ok() {
+                    let mut local_address = *addr;
+                    local_address.set_port(0);
+                    let local_address = match loopback.bind_tcp(local_address) {
+                        Ok(addr) => addr,
+                        Err(err) => {
+                            *self = Self::Network(socket);
+                            return Err(err);
+                        }
+                    };
 
-                let tx = match loopback.connect_tcp(addr) {
-                    Ok(tx) => tx,
-                    Err(err) => {
-                        *self = Self::Network(socket);
-                        return Err(err);
-                    }
-                };
+                    let tx = match loopback.connect_tcp(addr) {
+                        Ok(tx) => tx,
+                        Err(err) => {
+                            *self = Self::Network(socket);
+                            return Err(err);
+                        }
+                    };
 
-                match super::loopback::TcpSocket::new(
-                    &socket,
-                    super::loopback::TcpState::Connecting {
-                        local_address,
-                        remote_address: *addr,
-                        future: None,
-                    },
-                ) {
-                    Ok(socket) => {
-                        *self = Self::Loopback(socket);
-                        Ok(ConnectingTcpSocket::Loopback(tx.clone()))
+                    match super::loopback::TcpSocket::new(
+                        &socket,
+                        super::loopback::TcpState::Connecting {
+                            local_address,
+                            remote_address: *addr,
+                            future: None,
+                        },
+                    ) {
+                        Ok(socket) => {
+                            *self = Self::Loopback(socket);
+                            return Ok(ConnectingTcpSocket::Loopback(tx.clone()));
+                        }
+                        Err(err) => {
+                            *self = Self::Network(socket);
+                            return Err(err);
+                        }
                     }
-                    Err(err) => {
+                }
+
+                // Not a wash service. Behavior depends on the socket-tunnel policy mode.
+                let mode = socket_tunnels.map(|p| p.mode).unwrap_or_default();
+                match mode {
+                    SocketTunnelMode::AllowAll => {
+                        // Opt-out: pass straight through to the OS, tunnels ignored.
+                        let res = socket.start_connect().map(ConnectingTcpSocket::Network);
                         *self = Self::Network(socket);
-                        Err(err)
+                        res
+                    }
+                    SocketTunnelMode::DenyAll => {
+                        // The permission gate should have already denied this; defend in depth.
+                        *self = Self::Network(socket);
+                        Err(ErrorCode::ConnectionRefused)
+                    }
+                    SocketTunnelMode::Strict => {
+                        if let Some(policy) = socket_tunnels
+                            && let Some(&host_addr) = policy.rules.get(&addr.port())
+                        {
+                            let os_socket = match socket.start_connect() {
+                                Ok(s) => s,
+                                Err(err) => {
+                                    *self = Self::Network(socket);
+                                    return Err(err);
+                                }
+                            };
+                            *self = Self::Network(socket);
+                            return Ok(ConnectingTcpSocket::NetworkTunnel {
+                                socket: os_socket,
+                                host_addr,
+                            });
+                        }
+                        *self = Self::Network(socket);
+                        Err(ErrorCode::ConnectionRefused)
                     }
                 }
             }

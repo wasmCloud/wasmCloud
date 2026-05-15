@@ -5,6 +5,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::component::{HasData, ResourceTable};
 
+use crate::types::SocketTunnelPolicy;
+
 pub(crate) mod host_instance_network;
 pub(crate) mod host_ip_name_lookup;
 pub(crate) mod host_network;
@@ -50,6 +52,9 @@ pub struct WasiSocketsCtx {
     pub(crate) socket_addr_check: SocketAddrCheck,
     pub(crate) allowed_network_uses: AllowedNetworkUses,
     pub(crate) loopback: Arc<std::sync::Mutex<loopback::Network>>,
+    /// Outbound TCP policy. `None` is treated as the strict default
+    /// (`SocketTunnelPolicy::default()` → mode = Strict, no rules).
+    pub(crate) socket_tunnels: Option<Arc<SocketTunnelPolicy>>,
 }
 
 pub struct WasiSocketsCtxView<'a> {
