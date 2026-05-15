@@ -92,6 +92,7 @@ async fn wasi_blobstore_handlers_emit_namespaced_spans() -> Result<()> {
                     environment: HashMap::new(),
                     volume_mounts: vec![],
                     allowed_hosts: Default::default(),
+                    socket_tunnels: None,
                 },
                 pool_size: 1,
                 max_invocations: 100,

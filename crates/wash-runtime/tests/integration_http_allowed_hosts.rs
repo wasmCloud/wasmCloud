@@ -71,7 +71,7 @@ fn allowed_hosts_workload(allowed_hosts: Vec<String>) -> WorkloadStartRequest {
                 local_resources: LocalResources {
                     memory_limit_mb: 128,
                     cpu_limit: 1,
-                    allowed_hosts: allowed_hosts.into(),
+                    allowed_hosts: parsed.into(),
                     ..Default::default()
                 },
                 pool_size: 1,

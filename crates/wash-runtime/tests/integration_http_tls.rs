@@ -64,6 +64,7 @@ fn http_counter_request(host_header: &str) -> WorkloadStartRequest {
             volume_mounts: vec![],
             // http-counter calls example.com
             allowed_hosts: vec!["example.com".parse().unwrap()].into(),
+            socket_tunnels: None,
         },
         http_counter_host_interfaces(host_header),
     )

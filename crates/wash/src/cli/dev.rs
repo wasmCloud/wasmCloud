@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    net::SocketAddr,
     sync::Arc,
 };
 
@@ -313,25 +314,6 @@ async fn create_workload(
 ) -> anyhow::Result<Workload> {
     let dev_config = config.dev();
 
-    let mut volumes = Vec::<Volume>::new();
-    let mut volume_mounts = Vec::<VolumeMount>::new();
-
-    dev_config.volumes.iter().for_each(|cfg_volume| {
-        let name = uuid::Uuid::new_v4().to_string();
-        volumes.push(Volume {
-            name: name.clone(),
-            volume_type: VolumeType::HostPath(HostPathVolume {
-                local_path: cfg_volume.host_path.to_string_lossy().to_string(),
-            }),
-        });
-
-        volume_mounts.push(VolumeMount {
-            name,
-            mount_path: cfg_volume.guest_path.to_string_lossy().to_string(),
-            read_only: false,
-        });
-    });
-
     // Build the socket-tunnel policy from config. `None` means "use the default
     // strict policy" (block-by-default). For each rule:
     //   - if host_addr is omitted, default to `127.0.0.1:<sandbox_port>`
@@ -383,99 +365,12 @@ async fn create_workload(
         None
     };
 
-    // Extract both imports and exports from the component
-    // This populates host_interfaces which is checked bidirectionally during plugin binding
-    let mut host_interfaces = dev_config.host_interfaces.clone();
-
-    let mut service: Option<Service> = None;
-    let mut components = Vec::new();
-    if dev_config.service {
-        let service_interfaces = host
-            .intersect_interfaces(&bytes)
-            .context("failed to extract service interfaces")?;
-
-        // Merge service interfaces into host_interfaces
-        for interface in service_interfaces {
-            match host_interfaces
-                .iter()
-                .find(|i| i.namespace == interface.namespace && i.package == interface.package)
-            {
-                Some(_) => {}
-                None => host_interfaces.push(interface),
-            }
-        }
-
-        service = Some(Service {
-            bytes,
-            digest: None,
-            max_restarts: 0,
-            local_resources: LocalResources {
-                volume_mounts: volume_mounts.clone(),
-                socket_tunnels: socket_tunnels.clone(),
-                ..Default::default()
-            },
-        })
-    } else {
-        let component_interfaces = host
-            .intersect_interfaces(&bytes)
-            .context("failed to extract component interfaces")?;
-
-        // Merge component interfaces into host_interfaces
-        for interface in component_interfaces {
-            match host_interfaces
-                .iter()
-                .find(|i| i.namespace == interface.namespace && i.package == interface.package)
-            {
-                Some(_) => {}
-                None => host_interfaces.push(interface),
-            }
-        }
-
-        components.push(Component {
-            name: "wash-dev-component".to_string(),
-            bytes,
-            digest: None,
-            local_resources: LocalResources {
-                volume_mounts: volume_mounts.clone(),
-                socket_tunnels: socket_tunnels.clone(),
-                ..Default::default()
-            },
-            pool_size: -1,
-            max_invocations: -1,
-        });
-
-        if let Some(service_path) = &dev_config.service_file {
-            let service_bytes = tokio::fs::read(service_path).await.with_context(|| {
-                format!("failed to read service file at {}", service_path.display())
-            })?;
-
-            let service_interfaces = host
-                .intersect_interfaces(&service_bytes)
-                .context("failed to extract service interfaces")?;
-
-            // Merge component interfaces into host_interfaces
-            for interface in service_interfaces {
-                match host_interfaces
-                    .iter()
-                    .find(|i| i.namespace == interface.namespace && i.package == interface.package)
-                {
-                    Some(_) => {}
-                    None => host_interfaces.push(interface),
-                }
-            }
-
-            service = Some(Service {
-                bytes: Bytes::from(service_bytes),
-                digest: None,
-                max_restarts: 0,
-                local_resources: LocalResources {
-                    volume_mounts: volume_mounts.clone(),
-                    socket_tunnels: socket_tunnels.clone(),
-                    ..Default::default()
-                },
-            });
-        }
-    }
+    // Extract both imports and exports from the dev component. These are
+    // checked bidirectionally during plugin binding; `build_workload` merges
+    // them (plus each sidecar's interfaces) into the workload host_interfaces.
+    let dev_interfaces = host
+        .intersect_interfaces(&bytes)
+        .context("failed to extract dev-component interfaces")?;
 
     let mut sidecars = Vec::with_capacity(dev_config.components.len());
     for dev_component in &dev_config.components {
@@ -512,6 +407,7 @@ async fn create_workload(
         dev_interfaces,
         sidecars,
         service_file_bytes,
+        socket_tunnels,
         resolved_workload,
     ))
 }
@@ -537,6 +433,7 @@ fn build_workload(
     dev_interfaces: HashSet<WitInterface>,
     sidecars: Vec<LoadedComponent>,
     service_file_bytes: Option<Bytes>,
+    socket_tunnels: Option<SocketTunnelPolicy>,
     resolved_workload: &ResolvedWorkload,
 ) -> Workload {
     let mut volumes = Vec::<Volume>::new();
@@ -571,6 +468,7 @@ fn build_workload(
 
     let dev_local_resources = || LocalResources {
         volume_mounts: volume_mounts.clone(),
+        socket_tunnels: socket_tunnels.clone(),
         environment: resolved_workload.environment.clone(),
         config: resolved_workload.config.clone(),
         allowed_hosts: resolved_workload.allowed_hosts.clone().into(),
@@ -579,6 +477,7 @@ fn build_workload(
 
     let default_local_resources = || LocalResources {
         volume_mounts: volume_mounts.clone(),
+        socket_tunnels: socket_tunnels.clone(),
         ..Default::default()
     };
 
@@ -806,6 +705,7 @@ mod tests {
             HashSet::new(),
             sidecars,
             None,
+            None,
             &resolved,
         );
 
@@ -843,6 +743,7 @@ mod tests {
             HashSet::new(),
             Vec::new(),
             None,
+            None,
             &resolved,
         );
 
@@ -873,6 +774,7 @@ mod tests {
             HashSet::new(),
             Vec::new(),
             Some(fake_bytes("svc-sidecar")),
+            None,
             &resolved,
         );
 
@@ -912,6 +814,7 @@ mod tests {
             HashSet::new(),
             sidecars,
             Some(fake_bytes("svc")),
+            None,
             &ResolvedWorkload::default(),
         );
 
@@ -958,6 +861,7 @@ mod tests {
             HashSet::from([iface("wasi", "http")]),
             sidecars,
             None,
+            None,
             &resolved,
         );
 
@@ -997,6 +901,7 @@ mod tests {
             fake_bytes("dev"),
             HashSet::new(),
             sidecars,
+            None,
             None,
             &ResolvedWorkload::default(),
         );

@@ -633,7 +633,7 @@ impl TryFrom<types::v2::LocalResources> for crate::types::LocalResources {
             allowed_hosts,
             environment: lr.environment,
             socket_tunnels: None,
-        }
+        })
     }
 }
 
