@@ -14,8 +14,9 @@ use wash_runtime::{
     observability::Meters,
     plugin::{self},
     types::{
-        Component, HostPathVolume, LocalResources, Service, Volume, VolumeMount, VolumeType,
-        Workload, WorkloadStartRequest, WorkloadState, WorkloadStopRequest,
+        Component, HostPathVolume, LocalResources, Service, SocketTunnelMode, SocketTunnelPolicy,
+        Volume, VolumeMount, VolumeType, Workload, WorkloadStartRequest, WorkloadState,
+        WorkloadStopRequest,
     },
     wit::WitInterface,
 };
@@ -312,9 +313,169 @@ async fn create_workload(
 ) -> anyhow::Result<Workload> {
     let dev_config = config.dev();
 
-    let dev_interfaces = host
-        .intersect_interfaces(&bytes)
-        .context("failed to extract component interfaces")?;
+    let mut volumes = Vec::<Volume>::new();
+    let mut volume_mounts = Vec::<VolumeMount>::new();
+
+    dev_config.volumes.iter().for_each(|cfg_volume| {
+        let name = uuid::Uuid::new_v4().to_string();
+        volumes.push(Volume {
+            name: name.clone(),
+            volume_type: VolumeType::HostPath(HostPathVolume {
+                local_path: cfg_volume.host_path.to_string_lossy().to_string(),
+            }),
+        });
+
+        volume_mounts.push(VolumeMount {
+            name,
+            mount_path: cfg_volume.guest_path.to_string_lossy().to_string(),
+            read_only: false,
+        });
+    });
+
+    // Build the socket-tunnel policy from config. `None` means "use the default
+    // strict policy" (block-by-default). For each rule:
+    //   - if host_addr is omitted, default to `127.0.0.1:<sandbox_port>`
+    //   - if host_addr is set, accept a bare `IP:port` or resolve a hostname
+    //     via the OS resolver (e.g. "mydb.example.com:3306").
+    let socket_tunnels: Option<SocketTunnelPolicy> = if let Some(cfg) = &dev_config.socket_tunnels {
+        let mode = match cfg.mode {
+            crate::config::SocketTunnelMode::Strict => SocketTunnelMode::Strict,
+            crate::config::SocketTunnelMode::AllowAll => SocketTunnelMode::AllowAll,
+            crate::config::SocketTunnelMode::DenyAll => SocketTunnelMode::DenyAll,
+        };
+        if matches!(mode, SocketTunnelMode::AllowAll) && !cfg.rules.is_empty() {
+            warn!("socket_tunnels.mode = allow-all; declared rules are ignored");
+        }
+        let mut rules: HashMap<u16, SocketAddr> = HashMap::new();
+        for r in &cfg.rules {
+            let addr = match &r.host_addr {
+                None => SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, r.sandbox_port)),
+                Some(host_addr) => {
+                    if let Ok(addr) = host_addr.parse::<SocketAddr>() {
+                        addr
+                    } else {
+                        match tokio::net::lookup_host(host_addr).await {
+                            Ok(mut addrs) => match addrs.next() {
+                                Some(addr) => {
+                                    debug!(sandbox_port = r.sandbox_port, host_addr = %host_addr,
+                                        resolved = %addr, "resolved socket_tunnels rule hostname");
+                                    addr
+                                }
+                                None => {
+                                    warn!(sandbox_port = r.sandbox_port, host_addr = %host_addr,
+                                        "socket_tunnels rule hostname resolved to no addresses, skipping");
+                                    continue;
+                                }
+                            },
+                            Err(e) => {
+                                warn!(sandbox_port = r.sandbox_port, host_addr = %host_addr,
+                                    "socket_tunnels rule hostname resolution failed: {e}, skipping");
+                                continue;
+                            }
+                        }
+                    }
+                }
+            };
+            rules.insert(r.sandbox_port, addr);
+        }
+        Some(SocketTunnelPolicy { mode, rules })
+    } else {
+        None
+    };
+
+    // Extract both imports and exports from the component
+    // This populates host_interfaces which is checked bidirectionally during plugin binding
+    let mut host_interfaces = dev_config.host_interfaces.clone();
+
+    let mut service: Option<Service> = None;
+    let mut components = Vec::new();
+    if dev_config.service {
+        let service_interfaces = host
+            .intersect_interfaces(&bytes)
+            .context("failed to extract service interfaces")?;
+
+        // Merge service interfaces into host_interfaces
+        for interface in service_interfaces {
+            match host_interfaces
+                .iter()
+                .find(|i| i.namespace == interface.namespace && i.package == interface.package)
+            {
+                Some(_) => {}
+                None => host_interfaces.push(interface),
+            }
+        }
+
+        service = Some(Service {
+            bytes,
+            digest: None,
+            max_restarts: 0,
+            local_resources: LocalResources {
+                volume_mounts: volume_mounts.clone(),
+                socket_tunnels: socket_tunnels.clone(),
+                ..Default::default()
+            },
+        })
+    } else {
+        let component_interfaces = host
+            .intersect_interfaces(&bytes)
+            .context("failed to extract component interfaces")?;
+
+        // Merge component interfaces into host_interfaces
+        for interface in component_interfaces {
+            match host_interfaces
+                .iter()
+                .find(|i| i.namespace == interface.namespace && i.package == interface.package)
+            {
+                Some(_) => {}
+                None => host_interfaces.push(interface),
+            }
+        }
+
+        components.push(Component {
+            name: "wash-dev-component".to_string(),
+            bytes,
+            digest: None,
+            local_resources: LocalResources {
+                volume_mounts: volume_mounts.clone(),
+                socket_tunnels: socket_tunnels.clone(),
+                ..Default::default()
+            },
+            pool_size: -1,
+            max_invocations: -1,
+        });
+
+        if let Some(service_path) = &dev_config.service_file {
+            let service_bytes = tokio::fs::read(service_path).await.with_context(|| {
+                format!("failed to read service file at {}", service_path.display())
+            })?;
+
+            let service_interfaces = host
+                .intersect_interfaces(&service_bytes)
+                .context("failed to extract service interfaces")?;
+
+            // Merge component interfaces into host_interfaces
+            for interface in service_interfaces {
+                match host_interfaces
+                    .iter()
+                    .find(|i| i.namespace == interface.namespace && i.package == interface.package)
+                {
+                    Some(_) => {}
+                    None => host_interfaces.push(interface),
+                }
+            }
+
+            service = Some(Service {
+                bytes: Bytes::from(service_bytes),
+                digest: None,
+                max_restarts: 0,
+                local_resources: LocalResources {
+                    volume_mounts: volume_mounts.clone(),
+                    socket_tunnels: socket_tunnels.clone(),
+                    ..Default::default()
+                },
+            });
+        }
+    }
 
     let mut sidecars = Vec::with_capacity(dev_config.components.len());
     for dev_component in &dev_config.components {

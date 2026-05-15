@@ -632,7 +632,8 @@ impl TryFrom<types::v2::LocalResources> for crate::types::LocalResources {
             volume_mounts: lr.volume_mounts.into_iter().map(Into::into).collect(),
             allowed_hosts,
             environment: lr.environment,
-        })
+            socket_tunnels: None,
+        }
     }
 }
 

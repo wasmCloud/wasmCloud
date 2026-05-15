@@ -102,7 +102,11 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
             .lock()
             .map_err(|e| super::network::SocketError::trap(wasmtime::format_err!("{e}")))?;
         let future = socket
-            .start_connect(&remote_address, &mut loopback)
+            .start_connect(
+                &remote_address,
+                &mut loopback,
+                self.ctx.socket_tunnels.as_deref(),
+            )
             .map_err(se)?
             .connect(remote_address);
         socket.set_pending_connect(future).map_err(se)?;

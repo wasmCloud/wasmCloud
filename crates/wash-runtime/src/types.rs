@@ -15,7 +15,7 @@
 //!   [`EmptyDirVolume`], [`HostPathVolume`]
 
 use bytes::Bytes;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use crate::host::allowed_hosts::AllowedHost;
 use crate::wit::WitInterface;
@@ -69,6 +69,34 @@ pub struct Component {
     pub max_invocations: i32,
 }
 
+/// Policy mode for outbound TCP socket access from a sandboxed component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SocketTunnelMode {
+    /// Block all TCP connects except (a) loopback connects to in-process wash
+    /// services and (b) loopback connects matching a declared tunnel rule
+    /// (rewritten to the rule's host address). This is the secure default.
+    #[default]
+    Strict,
+    /// Allow every TCP connect to pass through to the OS as-is. Tunnel rules
+    /// are ignored. Intended as an explicit opt-out for development scenarios
+    /// that don't require sandboxing.
+    AllowAll,
+    /// Block every TCP connect, including escapes via tunnel rules. The
+    /// in-process wash loopback registry is still consulted first for
+    /// service-to-service traffic.
+    DenyAll,
+}
+
+/// A sandbox→host TCP tunnel: traffic the component sends to `127.0.0.1:sandbox_port`
+/// is rewritten to dial `host_addr` on the real OS network.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SocketTunnelPolicy {
+    pub mode: SocketTunnelMode,
+    /// Map from sandbox-side loopback port → real host `SocketAddr` to dial.
+    /// Only consulted when `mode == Strict`.
+    pub rules: HashMap<u16, SocketAddr>,
+}
+
 /// Resource limits and configuration for a component or service.
 /// Defines memory, CPU limits, configuration values, and volume mounts.
 #[derive(Debug, Clone, PartialEq)]
@@ -93,6 +121,10 @@ pub struct LocalResources {
     /// wire (proto / wash YAML) are parsed at conversion time, so the
     /// request hot path matches against the typed enum directly.
     pub allowed_hosts: Arc<[AllowedHost]>,
+    /// Explicit policy for outbound TCP from this workload. `None` is treated
+    /// the same as `Some(SocketTunnelPolicy::default())` (strict + no rules)
+    /// so callers that don't care can omit the field entirely.
+    pub socket_tunnels: Option<SocketTunnelPolicy>,
 }
 
 impl Default for LocalResources {
@@ -104,6 +136,7 @@ impl Default for LocalResources {
             environment: HashMap::new(),
             volume_mounts: Vec::new(),
             allowed_hosts: Default::default(),
+            socket_tunnels: None,
         }
     }
 }

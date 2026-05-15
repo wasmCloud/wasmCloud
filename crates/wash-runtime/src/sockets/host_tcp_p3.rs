@@ -272,7 +272,11 @@ impl HostTcpSocketWithStore for WasiSockets {
                 .lock()
                 .map_err(|e| SocketError::trap(wasmtime::format_err!("{e}")))?;
             let connecting = socket_ref
-                .start_connect(&remote_address, &mut loopback)
+                .start_connect(
+                    &remote_address,
+                    &mut loopback,
+                    view.ctx.socket_tunnels.as_deref(),
+                )
                 .map_err(se)?;
             SocketResult::Ok(connecting)
         })?;

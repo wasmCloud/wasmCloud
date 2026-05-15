@@ -335,6 +335,152 @@ pub struct DevComponent {
     pub file: PathBuf,
 }
 
+/// Outbound TCP policy mode for a workload's components.
+///
+/// - `strict` (default): block all TCP connects except (a) loopback connects to
+///   in-process wash services and (b) loopback connects matching a declared
+///   tunnel rule (rewritten to the rule's `host_addr`).
+/// - `allow-all`: pass every TCP connect straight to the OS. Tunnel rules are
+///   ignored. Intended as an explicit opt-out for development convenience.
+/// - `deny-all`: block every TCP connect, even tunnel rules. The in-process
+///   wash loopback registry is still honored for service-to-service traffic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SocketTunnelMode {
+    #[default]
+    Strict,
+    AllowAll,
+    DenyAll,
+}
+
+/// A single tunnel rule: traffic the component sends to `127.0.0.1:sandbox_port`
+/// is rewritten to dial `host_addr` on the real OS network.
+///
+/// `host_addr` is optional. When omitted, it defaults to
+/// `127.0.0.1:<sandbox_port>` — the simplest "let this port escape the sandbox
+/// as-is" case. Provide it explicitly only when the destination host or port
+/// differs from the sandbox view.
+///
+/// # Behavior
+///
+/// - **`sandbox_port` is the routing key, not the wire port.** It's only the
+///   loopback port the component must dial to match this rule. The actual TCP
+///   connection goes to the address and port encoded in `host_addr` — the two
+///   ports are completely independent. Example: `sandbox_port: 8080,
+///   host_addr: "example.com:443"` makes a component dialing `127.0.0.1:8080`
+///   end up with a TCP connection to `example.com` on port 443.
+///
+/// - **Only the connect destination is rewritten.** The component's payload
+///   (TLS SNI, HTTP `Host` header, etc.) is never modified. If the upstream
+///   needs `Host: example.com` or SNI `example.com`, the component must
+///   produce that itself. The component still "thinks" it's talking to
+///   `127.0.0.1:<sandbox_port>` and will set headers / SNI accordingly unless
+///   you configure its client to use the real upstream name.
+///
+/// - **Hostnames are resolved once at workload start** via the OS resolver.
+///   The first resolved address wins. There is no per-connection re-resolution
+///   and no fallback to subsequent addresses if the first fails.
+///
+/// # Scenarios
+///
+/// ## 1. Same host, same port — the shorthand
+/// Use case: dev has a local MySQL at `127.0.0.1:3306` and the component dials
+/// `127.0.0.1:3306`. No rewrite needed, just allow escape.
+/// ```yaml
+/// socket_tunnels:
+///   rules:
+///     - sandbox_port: 3306
+/// ```
+///
+/// ## 2. Same port, different host
+/// Use case: the component is written against a "standard" port but the real
+/// service lives somewhere else (managed DB, sidecar, etc.).
+/// ```yaml
+/// socket_tunnels:
+///   rules:
+///     - sandbox_port: 3306
+///       host_addr: "db.internal:3306"
+/// ```
+///
+/// ## 3. Same host, different port
+/// Use case: managed service on a non-standard port; the component uses the
+/// well-known port for its driver/library.
+/// ```yaml
+/// socket_tunnels:
+///   rules:
+///     - sandbox_port: 5432
+///       host_addr: "127.0.0.1:25060"
+/// ```
+///
+/// ## 4. Fan-in: multiple sandbox ports → different backends
+/// Use case: the component talks to a primary and a replica using different
+/// loopback ports as routing keys.
+/// ```yaml
+/// socket_tunnels:
+///   rules:
+///     - sandbox_port: 3306
+///       host_addr: "primary-db.internal:3306"
+///     - sandbox_port: 3307
+///       host_addr: "replica-db.internal:3306"
+/// ```
+///
+/// ## 5. Hostname resolution
+/// `host_addr` accepts either `IP:port` or `hostname:port`. Hostnames are
+/// resolved once at workload start via the OS resolver.
+/// ```yaml
+/// socket_tunnels:
+///   rules:
+///     - sandbox_port: 3306
+///       host_addr: "tramway.proxy.rlwy.net:43086"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DevSocketTunnel {
+    /// The loopback port number that wasm components connect to.
+    pub sandbox_port: u16,
+    /// The real host address (host:port) to dial. When omitted, defaults to
+    /// `127.0.0.1:<sandbox_port>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_addr: Option<String>,
+}
+
+/// Outbound TCP policy block for a workload.
+///
+/// # Examples
+///
+/// Strict (the default — also what you get if you omit the `socket_tunnels`
+/// block entirely): block every TCP connect except in-process wash service
+/// traffic and ports declared in `rules`.
+/// ```yaml
+/// dev:
+///   socket_tunnels:
+///     rules:
+///       - sandbox_port: 3306                    # → 127.0.0.1:3306 (shorthand)
+///       - sandbox_port: 5432
+///         host_addr: "db.internal:25060"        # rewrite host and port
+/// ```
+///
+/// Allow-all (explicit opt-out for dev convenience). Rules are ignored.
+/// ```yaml
+/// dev:
+///   socket_tunnels:
+///     mode: allow-all
+/// ```
+///
+/// Deny-all (strictest — even tunnel rules are blocked). In-process wash
+/// service-to-service traffic still works.
+/// ```yaml
+/// dev:
+///   socket_tunnels:
+///     mode: deny-all
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DevSocketTunnels {
+    #[serde(default)]
+    pub mode: SocketTunnelMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<DevSocketTunnel>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DevConfig {
     /// Command to run the component in dev mode
@@ -422,6 +568,11 @@ pub struct DevConfig {
     /// Enable WASIP3 support for components that target wasi@0.3 interfaces
     #[serde(default)]
     pub wasip3: bool,
+
+    /// Outbound TCP policy. Omit the block entirely to get the strict default
+    /// (block all TCP connects except in-process wash service traffic).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket_tunnels: Option<DevSocketTunnels>,
 }
 
 impl DevConfig {

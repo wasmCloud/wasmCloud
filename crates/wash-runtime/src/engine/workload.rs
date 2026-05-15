@@ -1128,24 +1128,62 @@ impl ResolvedWorkload {
             .inherit_stdout()
             .inherit_stderr();
 
+        // Build the socket-tunnel policy from the workload's declared rules.
+        // `None` is treated as the strict default — block-by-default.
+        let socket_tunnels: Option<Arc<crate::types::SocketTunnelPolicy>> = metadata
+            .local_resources
+            .socket_tunnels
+            .clone()
+            .map(Arc::new);
+        let socket_tunnels_check = socket_tunnels.clone();
+        let loopback_check = Arc::clone(&metadata.loopback);
+
         // Build our custom sockets context with loopback support
         let sockets_ctx = sockets::WasiSocketsCtx {
             socket_addr_check: sockets::SocketAddrCheck::new(move |addr, reason| {
+                let socket_tunnels_check = socket_tunnels_check.clone();
+                let loopback_check = Arc::clone(&loopback_check);
                 Box::pin(async move {
                     match reason {
-                        SocketAddrUse::TcpBind if is_service => addr.ip().is_loopback(),
+                        SocketAddrUse::TcpBind if is_service => {
+                            addr.ip().is_loopback() || addr.ip().is_unspecified()
+                        }
                         SocketAddrUse::TcpBind => false,
                         SocketAddrUse::UdpBind => {
                             // NOTE: Outbound UDP requires an explicit bind in `wasi:sockets`
                             addr.ip().is_loopback() || addr.ip().is_unspecified()
                         }
-                        SocketAddrUse::TcpConnect
-                        | SocketAddrUse::UdpConnect
-                        | SocketAddrUse::UdpOutgoingDatagram => true,
+                        SocketAddrUse::TcpConnect => {
+                            use crate::types::SocketTunnelMode;
+                            let mode = socket_tunnels_check
+                                .as_deref()
+                                .map(|p| p.mode)
+                                .unwrap_or_default();
+                            match mode {
+                                SocketTunnelMode::AllowAll => true,
+                                SocketTunnelMode::DenyAll => false,
+                                SocketTunnelMode::Strict => {
+                                    if !addr.ip().is_loopback() {
+                                        return false;
+                                    }
+                                    if let Some(p) = socket_tunnels_check.as_deref()
+                                        && p.rules.contains_key(&addr.port())
+                                    {
+                                        return true;
+                                    }
+                                    loopback_check
+                                        .lock()
+                                        .map(|lo| lo.has_tcp_listener(&addr))
+                                        .unwrap_or(false)
+                                }
+                            }
+                        }
+                        SocketAddrUse::UdpConnect | SocketAddrUse::UdpOutgoingDatagram => true,
                     }
                 })
             }),
             loopback: Arc::clone(&metadata.loopback),
+            socket_tunnels,
             ..Default::default()
         };
 
