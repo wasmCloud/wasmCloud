@@ -37,33 +37,41 @@
 
 import { appendFileSync } from 'node:fs';
 
-const githubOutput = process.env.GITHUB_OUTPUT;
-if (!githubOutput) {
-  console.error('GITHUB_OUTPUT env var is not set');
-  process.exit(1);
-}
-
-const items = JSON.parse(process.env.ITEMS);
-const changed = new Set(JSON.parse(process.env.CHANGED || '[]'));
-const isPR = process.env.EVENT_NAME === 'pull_request';
-const canary = process.env.CANARY === 'true';
-
-for (const it of items) {
-  if (!it.key) {
-    console.error(`ITEMS entry missing 'key': ${JSON.stringify(it)}`);
+function requireEnv(name) {
+  const v = process.env[name];
+  if (v === undefined || v === '') {
+    console.error(`${name} env var is required`);
     process.exit(1);
   }
+  return v;
 }
 
-const toBuild = !isPR || canary
-  ? items
-  : items.filter((it) => changed.has(it.filter || it.key));
+async function main() {
+  const githubOutput = requireEnv('GITHUB_OUTPUT');
+  const items = JSON.parse(requireEnv('ITEMS'));
+  const changed = new Set(JSON.parse(process.env.CHANGED || '[]'));
+  const isPR = process.env.EVENT_NAME === 'pull_request';
+  const canary = process.env.CANARY === 'true';
 
-const matrix = { include: toBuild };
+  for (const it of items) {
+    if (!it.key) {
+      console.error(`ITEMS entry missing 'key': ${JSON.stringify(it)}`);
+      process.exit(1);
+    }
+  }
 
-console.log(`event=${process.env.EVENT_NAME} canary=${canary}`);
-console.log(`changed=${JSON.stringify([...changed])}`);
-console.log(`to_build=${JSON.stringify(toBuild.map((it) => it.key))}`);
+  const toBuild = !isPR || canary
+    ? items
+    : items.filter((it) => changed.has(it.filter || it.key));
 
-appendFileSync(githubOutput, `matrix=${JSON.stringify(matrix)}\n`);
-appendFileSync(githubOutput, `has_items=${toBuild.length > 0}\n`);
+  const matrix = { include: toBuild };
+
+  console.error(`event=${process.env.EVENT_NAME} canary=${canary}`);
+  console.error(`changed=${JSON.stringify([...changed])}`);
+  console.error(`to_build=${JSON.stringify(toBuild.map((it) => it.key))}`);
+
+  appendFileSync(githubOutput, `matrix=${JSON.stringify(matrix)}\n`);
+  appendFileSync(githubOutput, `has_items=${toBuild.length > 0}\n`);
+}
+
+await main();

@@ -26,14 +26,13 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-const items = JSON.parse(process.env.ITEMS);
-const root = process.env.DISCOVERY_ROOT;
-const requireFiles = JSON.parse(process.env.REQUIRE_FILES || '[]');
-const requireReadme = process.env.REQUIRE_README === 'true';
-
-if (!root) {
-  console.error('DISCOVERY_ROOT env var is not set');
-  process.exit(1);
+function requireEnv(name) {
+  const v = process.env[name];
+  if (v === undefined || v === '') {
+    console.error(`${name} env var is required`);
+    process.exit(1);
+  }
+  return v;
 }
 
 function walk(dir, out = []) {
@@ -49,48 +48,57 @@ function walk(dir, out = []) {
   return out;
 }
 
-const onDisk = walk(root).filter((d) => {
-  if (!existsSync(join(d, '.wash', 'config.yaml'))) return false;
-  return requireFiles.every((f) => existsSync(join(d, f)));
-});
+async function main() {
+  const items = JSON.parse(requireEnv('ITEMS'));
+  const root = requireEnv('DISCOVERY_ROOT');
+  const requireFiles = JSON.parse(process.env.REQUIRE_FILES || '[]');
+  const requireReadme = process.env.REQUIRE_README === 'true';
 
-const onDiskSet = new Set(onDisk);
-const itemDirs = new Set(items.map((it) => it.workdir));
+  const onDisk = walk(root).filter((d) => {
+    if (!existsSync(join(d, '.wash', 'config.yaml'))) return false;
+    return requireFiles.every((f) => existsSync(join(d, f)));
+  });
 
-const missing = [...onDiskSet].filter((d) => !itemDirs.has(d)).sort();
-const stale = items
-  .filter((it) => !onDiskSet.has(it.workdir))
-  .map((it) => `${it.workdir} (key=${it.key})`)
-  .sort();
+  const onDiskSet = new Set(onDisk);
+  const itemDirs = new Set(items.map((it) => it.workdir));
 
-const errors = [];
-if (missing.length) {
-  errors.push(`dirs under ${root}/ with .wash/config.yaml not enrolled in ITEMS:`);
-  missing.forEach((m) => errors.push(`  ${m}`));
-}
-if (stale.length) {
-  errors.push("ITEMS entries whose workdir is missing on disk (or lacks required sibling files):");
-  stale.forEach((s) => errors.push(`  ${s}`));
-}
-
-if (requireReadme) {
-  // Only check top-level dirs that actually contain an enrolled workdir.
-  // Avoids false positives if DISCOVERY_ROOT also holds unrelated subdirs.
-  const enrolledTopDirs = new Set(
-    [...onDiskSet].map((d) => d.split('/').slice(0, 2).join('/')),
-  );
-  const missingReadme = [...enrolledTopDirs]
-    .filter((d) => !existsSync(join(d, 'README.md')))
+  const missing = [...onDiskSet].filter((d) => !itemDirs.has(d)).sort();
+  const stale = items
+    .filter((it) => !onDiskSet.has(it.workdir))
+    .map((it) => `${it.workdir} (key=${it.key})`)
     .sort();
-  if (missingReadme.length) {
-    errors.push('top-level dirs missing README.md:');
-    missingReadme.forEach((d) => errors.push(`  ${d}/README.md`));
+
+  const errors = [];
+  if (missing.length) {
+    errors.push(`dirs under ${root}/ with .wash/config.yaml not enrolled in ITEMS:`);
+    missing.forEach((m) => errors.push(`  ${m}`));
   }
+  if (stale.length) {
+    errors.push('ITEMS entries whose workdir is missing on disk (or lacks required sibling files):');
+    stale.forEach((s) => errors.push(`  ${s}`));
+  }
+
+  if (requireReadme) {
+    // Only check top-level dirs that actually contain an enrolled workdir.
+    // Avoids false positives if DISCOVERY_ROOT also holds unrelated subdirs.
+    const enrolledTopDirs = new Set(
+      [...onDiskSet].map((d) => d.split('/').slice(0, 2).join('/')),
+    );
+    const missingReadme = [...enrolledTopDirs]
+      .filter((d) => !existsSync(join(d, 'README.md')))
+      .sort();
+    if (missingReadme.length) {
+      errors.push('top-level dirs missing README.md:');
+      missingReadme.forEach((d) => errors.push(`  ${d}/README.md`));
+    }
+  }
+
+  if (errors.length) {
+    errors.forEach((e) => console.error(e));
+    process.exit(1);
+  }
+
+  console.error(`coverage OK: ${onDisk.length} dirs under ${root}/ enrolled (${items.length} items)`);
 }
 
-if (errors.length) {
-  errors.forEach((e) => console.error(e));
-  process.exit(1);
-}
-
-console.log(`coverage OK: ${onDisk.length} dirs under ${root}/ enrolled (${items.length} items)`);
+await main();
