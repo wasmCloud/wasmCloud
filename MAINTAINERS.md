@@ -167,6 +167,18 @@ Name: Lucas Fontes
 GitHub: @lxfontes
 Organization: Independent
 
+Name: Eric Gregory
+GitHub: @ericgregory
+Organization: Cosmonic
+
+Name: Jeremy Fleitz
+GitHub: @jfleitz
+Organization: Cosmonic
+
+Name: Aditya Salunkhe
+GitHub: @Aditya1404Sal
+Organization: Betty Blocks
+
 ## @wasmCloud/triage-maintainers
 
 _Contributors with triage privileges — can label, assign, and close issues and PRs._
