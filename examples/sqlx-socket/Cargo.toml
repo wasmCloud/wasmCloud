@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+package.edition = "2024"
+package.authors = ["The wasmCloud Team"]
+members = ["service-leet", "http-api"]
+
+[workspace.dependencies]
+wstd = "0.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+sqlx = { git = "https://github.com/Aditya1404Sal/sqlx", branch = "latest/wasip3", default-features = false, features = ["mysql", "runtime-tokio", "macros"] }
+tokio = { version = "1.20.0", features = ["rt"] }
+wasip3 = "0.5.0"
+
+[profile.release]
+# Optimize for small code size
+lto = true
+opt-level = "s"
+strip = true

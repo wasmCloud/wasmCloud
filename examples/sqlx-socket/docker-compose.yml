@@ -1,0 +1,30 @@
+services:
+  mysql:
+    image: mysql:8
+    container_name: todos-mysql
+    restart: unless-stopped
+    ports:
+      # Host 3307 → container 3306. The component still dials
+      # 127.0.0.1:3306 (its DATABASE_URL is unchanged); the socket_tunnels
+      # rule in .wash/config.yaml rewrites the destination to 127.0.0.1:3307
+      # at the OS layer, which docker then forwards to MySQL inside.
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: Password123!
+      MYSQL_USER: mysql
+      MYSQL_PASSWORD: Password123!
+      MYSQL_DATABASE: todos
+    volumes:
+      - todos-data:/var/lib/mysql
+    healthcheck:
+      # `mysqladmin ping` returns 0 once the server accepts connections; the
+      # service is only considered "healthy" after that, so anything depending
+      # on it (e.g. `wash dev` started from a script) can wait it out.
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-pPassword123!"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  todos-data:

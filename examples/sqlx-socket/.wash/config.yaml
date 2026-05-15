@@ -1,0 +1,19 @@
+version: 2.0.0
+
+build:
+  command: cargo build --workspace --target wasm32-wasip2 --release
+  component_path: target/wasm32-wasip2/release/http_api.wasm
+
+dev:
+  wasip3 : true
+  service_file: target/wasm32-wasip2/release/service_leet.wasm
+  socket_tunnels:
+    rules:
+      # Component dials 127.0.0.1:3306 (sandbox view, unchanged in source);
+      # wash rewrites the real connection to 127.0.0.1:3307 where MySQL is
+      # exposed by docker-compose. This is the host_addr rewrite in action.
+      - sandbox_port: 3306
+        host_addr: "127.0.0.1:3307"
+
+new:
+  command: cargo fetch

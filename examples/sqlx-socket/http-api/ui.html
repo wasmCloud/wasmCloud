@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SQLx Todos · wasmCloud</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --aqua: #00c389;
+        --aqua-dark: #00a374;
+        --gray: #768692;
+        --yellow: #ffb600;
+        --blue: #002e5d;
+        --blue-deep: #00132b;
+        --gunmetal: #253746;
+        --gainsboro: #d9e1e2;
+        --surface: #ffffff;
+        --danger: #ff6b6b;
+        --danger-dark: #e04848;
+      }
+      * { box-sizing: border-box; }
+      html, body { min-height: 100%; }
+      html {
+        background:
+          radial-gradient(ellipse 80% 60% at 50% 0%, rgba(0, 195, 137, 0.08), transparent 70%),
+          linear-gradient(180deg, var(--blue-deep) 0%, var(--blue) 60%, #001a3d 100%);
+        background-attachment: fixed;
+      }
+      /* Star fields — three layers at different sizes/densities for depth. */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        pointer-events: none;
+        background-image:
+          /* tiny distant stars */
+          radial-gradient(1px 1px at 23px 47px, rgba(255, 255, 255, 0.85), transparent),
+          radial-gradient(1px 1px at 67px 19px, rgba(255, 255, 255, 0.6), transparent),
+          radial-gradient(1px 1px at 113px 92px, rgba(255, 255, 255, 0.7), transparent),
+          radial-gradient(1px 1px at 178px 41px, rgba(255, 255, 255, 0.5), transparent),
+          radial-gradient(1px 1px at 142px 138px, rgba(255, 255, 255, 0.8), transparent),
+          radial-gradient(1px 1px at 49px 173px, rgba(255, 255, 255, 0.55), transparent),
+          radial-gradient(1px 1px at 91px 124px, rgba(255, 255, 255, 0.65), transparent),
+          radial-gradient(1px 1px at 197px 187px, rgba(255, 255, 255, 0.75), transparent),
+          /* slightly larger mid stars */
+          radial-gradient(1.5px 1.5px at 31px 96px, rgba(217, 225, 226, 0.9), transparent),
+          radial-gradient(1.5px 1.5px at 158px 73px, rgba(217, 225, 226, 0.85), transparent),
+          radial-gradient(1.5px 1.5px at 79px 211px, rgba(217, 225, 226, 0.8), transparent);
+        background-repeat: repeat;
+        background-size: 240px 240px;
+        animation: twinkle 6s ease-in-out infinite alternate;
+      }
+      /* a sparser, slower-twinkling layer of brighter stars on top */
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        pointer-events: none;
+        background-image:
+          radial-gradient(2px 2px at 87px 53px, rgba(255, 255, 255, 1), transparent),
+          radial-gradient(2px 2px at 211px 134px, rgba(0, 195, 137, 0.9), transparent),
+          radial-gradient(2px 2px at 311px 211px, rgba(255, 182, 0, 0.85), transparent),
+          radial-gradient(2px 2px at 411px 67px, rgba(255, 255, 255, 1), transparent);
+        background-repeat: repeat;
+        background-size: 480px 320px;
+        animation: twinkle 9s ease-in-out infinite alternate-reverse;
+      }
+      @keyframes twinkle {
+        0%, 100% { opacity: 0.55; }
+        50% { opacity: 1; }
+      }
+      body {
+        font-family: "Lexend", Arial, sans-serif;
+        font-size: 17px;
+        max-width: 720px;
+        margin: 56px auto;
+        padding: 28px;
+        color: var(--gainsboro);
+        line-height: 1.55;
+        position: relative;
+      }
+      header { margin-bottom: 36px; }
+      h1 {
+        color: #ffffff;
+        font-weight: 700;
+        font-size: 42px;
+        margin: 0 0 8px;
+        letter-spacing: -0.015em;
+        text-shadow: 0 0 24px rgba(0, 195, 137, 0.25);
+      }
+      h1 .accent { color: var(--aqua); }
+      .sub {
+        color: rgba(217, 225, 226, 0.7);
+        font-size: 16px;
+        font-weight: 400;
+      }
+      form { display: flex; gap: 12px; margin-bottom: 28px; }
+      input[type="text"] {
+        flex: 1;
+        padding: 14px 18px;
+        border: 1px solid rgba(217, 225, 226, 0.18);
+        border-radius: 8px;
+        font-size: 17px;
+        font-family: inherit;
+        color: #ffffff;
+        background: rgba(0, 19, 43, 0.5);
+        backdrop-filter: blur(8px);
+        transition: border-color 120ms ease, box-shadow 120ms ease;
+      }
+      input[type="text"]::placeholder { color: rgba(217, 225, 226, 0.4); }
+      input[type="text"]:focus {
+        outline: none;
+        border-color: var(--aqua);
+        box-shadow: 0 0 0 3px rgba(0, 195, 137, 0.25);
+      }
+      button {
+        background: var(--aqua);
+        color: var(--blue-deep);
+        border: none;
+        padding: 13px 22px;
+        border-radius: 8px;
+        font-size: 16px;
+        font-family: inherit;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 120ms ease, box-shadow 120ms ease;
+        box-shadow: 0 0 20px rgba(0, 195, 137, 0.3);
+      }
+      button:hover {
+        background: var(--aqua-dark);
+        box-shadow: 0 0 28px rgba(0, 195, 137, 0.5);
+      }
+      button:focus-visible {
+        outline: 2px solid var(--aqua);
+        outline-offset: 2px;
+      }
+      button.ghost {
+        background: transparent;
+        color: var(--gainsboro);
+        border: 1px solid rgba(217, 225, 226, 0.2);
+        padding: 8px 16px;
+        font-size: 15px;
+        font-weight: 500;
+        box-shadow: none;
+      }
+      button.ghost:hover {
+        background: rgba(0, 195, 137, 0.12);
+        color: var(--aqua);
+        border-color: var(--aqua);
+      }
+      button.danger {
+        background: transparent;
+        color: var(--danger);
+        border: 1px solid rgba(217, 225, 226, 0.2);
+        padding: 8px 16px;
+        font-size: 15px;
+        font-weight: 500;
+        box-shadow: none;
+      }
+      button.danger:hover {
+        background: rgba(255, 107, 107, 0.15);
+        color: var(--danger);
+        border-color: var(--danger);
+      }
+      ul { list-style: none; padding: 0; margin: 0; }
+      li {
+        background: rgba(0, 19, 43, 0.55);
+        border: 1px solid rgba(217, 225, 226, 0.12);
+        border-left: 4px solid var(--aqua);
+        border-radius: 8px;
+        padding: 16px 20px;
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        backdrop-filter: blur(8px);
+        transition: border-left-color 120ms ease, background 120ms ease;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+      }
+      li:hover { background: rgba(0, 19, 43, 0.7); }
+      li.done {
+        border-left-color: var(--yellow);
+        background: rgba(255, 182, 0, 0.06);
+      }
+      li.done .desc {
+        text-decoration: line-through;
+        color: rgba(217, 225, 226, 0.5);
+      }
+      .desc { flex: 1; font-size: 17px; color: var(--gainsboro); }
+      .id {
+        color: rgba(217, 225, 226, 0.45);
+        font-size: 13px;
+        font-weight: 500;
+        min-width: 44px;
+        font-variant-numeric: tabular-nums;
+      }
+      #status {
+        margin-top: 24px;
+        font-size: 14px;
+        color: rgba(217, 225, 226, 0.6);
+        font-weight: 500;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+      #status.error { color: var(--danger); text-transform: none; letter-spacing: 0; }
+      footer {
+        margin-top: 40px;
+        padding-top: 20px;
+        border-top: 1px solid rgba(217, 225, 226, 0.12);
+        font-size: 13px;
+        color: rgba(217, 225, 226, 0.55);
+        text-align: center;
+      }
+      footer a { color: var(--aqua); text-decoration: none; }
+      footer a:hover { color: var(--aqua-dark); text-shadow: 0 0 12px rgba(0, 195, 137, 0.4); }
+
+      /* Tag chips on cards */
+      .tag-list { display: flex; flex-wrap: wrap; gap: 6px; }
+      .tag {
+        display: inline-block;
+        padding: 3px 9px;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--aqua);
+        background: rgba(0, 195, 137, 0.1);
+        border: 1px solid rgba(0, 195, 137, 0.3);
+        border-radius: 999px;
+        letter-spacing: 0.02em;
+      }
+
+      /* Filter chip cloud above the list */
+      .filter-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 18px;
+        align-items: center;
+      }
+      .filter-label {
+        font-size: 12px;
+        font-weight: 500;
+        color: rgba(217, 225, 226, 0.55);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-right: 4px;
+      }
+      .filter-chip {
+        padding: 6px 14px;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: inherit;
+        color: rgba(217, 225, 226, 0.75);
+        background: rgba(0, 19, 43, 0.5);
+        border: 1px solid rgba(217, 225, 226, 0.15);
+        border-radius: 999px;
+        cursor: pointer;
+        transition: all 120ms ease;
+      }
+      .filter-chip .count {
+        margin-left: 6px;
+        font-size: 11px;
+        color: rgba(217, 225, 226, 0.45);
+        font-variant-numeric: tabular-nums;
+      }
+      .filter-chip:hover {
+        border-color: var(--aqua);
+        color: var(--aqua);
+      }
+      .filter-chip.active {
+        background: rgba(0, 195, 137, 0.18);
+        border-color: var(--aqua);
+        color: var(--aqua);
+        box-shadow: 0 0 16px rgba(0, 195, 137, 0.25);
+      }
+      .filter-chip.active .count { color: var(--aqua); }
+
+      /* Tag input on the new-todo form */
+      input[type="text"].tag-input {
+        max-width: 220px;
+        flex: 0 1 220px;
+      }
+
+      /* Toolbar above the list (status + view toggle + live indicator) */
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 24px;
+        margin-bottom: 12px;
+      }
+      .live-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        background: var(--aqua);
+        border-radius: 50%;
+        margin-right: 8px;
+        box-shadow: 0 0 8px var(--aqua);
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 0.35; }
+        50% { opacity: 1; }
+      }
+      .toggle-btn {
+        background: transparent;
+        color: rgba(217, 225, 226, 0.75);
+        border: 1px solid rgba(217, 225, 226, 0.2);
+        padding: 7px 14px;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: inherit;
+        cursor: pointer;
+        border-radius: 6px;
+        box-shadow: none;
+        transition: all 120ms ease;
+      }
+      .toggle-btn:hover {
+        border-color: var(--aqua);
+        color: var(--aqua);
+      }
+
+      /* Raw-table view */
+      .raw-table-wrap {
+        background: rgba(0, 19, 43, 0.55);
+        border: 1px solid rgba(217, 225, 226, 0.12);
+        border-radius: 8px;
+        padding: 4px;
+        backdrop-filter: blur(8px);
+        overflow-x: auto;
+      }
+      table.raw {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+        color: var(--gainsboro);
+      }
+      table.raw th {
+        text-align: left;
+        font-weight: 600;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--aqua);
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(0, 195, 137, 0.3);
+      }
+      table.raw td {
+        padding: 11px 14px;
+        border-bottom: 1px solid rgba(217, 225, 226, 0.06);
+        font-variant-numeric: tabular-nums;
+      }
+      table.raw tr:last-child td { border-bottom: none; }
+      table.raw .col-id { color: rgba(217, 225, 226, 0.45); width: 60px; }
+      table.raw .col-done.true { color: var(--yellow); }
+      table.raw .col-tags { color: var(--aqua); font-size: 12px; }
+      .hidden { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>SQLx <span class="accent">Todos</span></h1>
+      <div class="sub">
+        HTTP component → TCP → long-lived service holding a MySqlPool.
+      </div>
+    </header>
+
+    <form id="newForm">
+      <input id="desc" type="text" placeholder="What needs doing?" autofocus />
+      <input id="tags" type="text" class="tag-input" placeholder="tags (comma-separated)" />
+      <button type="submit">Add</button>
+    </form>
+
+    <div id="filterBar" class="filter-bar"></div>
+
+    <div class="toolbar">
+      <div id="status"><span class="live-dot"></span>loading…</div>
+      <button id="viewToggle" class="toggle-btn" type="button">view raw table</button>
+    </div>
+
+    <ul id="list"></ul>
+    <div id="rawTable" class="raw-table-wrap hidden"></div>
+
+    <footer>
+      powered by <a href="https://wasmcloud.com" target="_blank" rel="noopener">wasmCloud</a>
+    </footer>
+
+    <script>
+      const list = document.getElementById("list");
+      const rawTable = document.getElementById("rawTable");
+      const status = document.getElementById("status");
+      const form = document.getElementById("newForm");
+      const descInput = document.getElementById("desc");
+      const tagsInput = document.getElementById("tags");
+      const filterBar = document.getElementById("filterBar");
+      const viewToggle = document.getElementById("viewToggle");
+
+      // UI state. `activeTag` is null = "All"; otherwise a tag name.
+      let activeTag = null;
+      let viewMode = "cards"; // "cards" | "raw"
+
+      async function api(path, body) {
+        const opts = { method: body ? "POST" : "GET" };
+        if (body) {
+          opts.headers = { "Content-Type": "application/json" };
+          opts.body = JSON.stringify(body);
+        }
+        const r = await fetch(path, opts);
+        const json = await r.json();
+        if (!r.ok || json.ok === false) {
+          throw new Error(json.error || `HTTP ${r.status}`);
+        }
+        return json;
+      }
+
+      function setStatus(msg, isError) {
+        const dot = isError ? "" : '<span class="live-dot"></span>';
+        status.innerHTML = `${dot}${msg || ""}`;
+        status.className = isError ? "error" : "";
+      }
+
+      function parseTagsInput(value) {
+        return value
+          .split(",")
+          .map((t) => t.trim())
+          .filter((t) => t.length > 0);
+      }
+
+      function renderFilterBar(tags) {
+        const chips = [
+          `<span class="filter-label">filter</span>`,
+          `<button type="button" class="filter-chip ${activeTag === null ? "active" : ""}" data-tag="">all<span class="count">${tags.reduce((n, t) => n + t.count, 0) ? "" : " · 0"}</span></button>`,
+          ...tags.map(
+            (t) =>
+              `<button type="button" class="filter-chip ${activeTag === t.name ? "active" : ""}" data-tag="${escapeAttr(t.name)}">${escapeHtml(t.name)}<span class="count">${t.count}</span></button>`
+          ),
+        ];
+        filterBar.innerHTML = chips.join("");
+        for (const btn of filterBar.querySelectorAll(".filter-chip")) {
+          btn.onclick = () => {
+            const t = btn.dataset.tag;
+            activeTag = t === "" ? null : t;
+            refresh();
+          };
+        }
+      }
+
+      function renderCards(todos) {
+        list.innerHTML = "";
+        for (const t of todos) {
+          const li = document.createElement("li");
+          if (t.done) li.classList.add("done");
+          const tagsHtml = (t.tags || [])
+            .map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`)
+            .join("");
+          li.innerHTML = `
+            <span class="id">#${t.id}</span>
+            <span class="desc"></span>
+            <span class="tag-list">${tagsHtml}</span>
+            <button class="ghost" data-act="done">Done</button>
+            <button class="danger" data-act="del">Delete</button>
+          `;
+          li.querySelector(".desc").textContent = t.description;
+          li.querySelector('[data-act="done"]').onclick = () => act("/todos/done", t.id);
+          li.querySelector('[data-act="del"]').onclick = () => act("/todos/delete", t.id);
+          list.appendChild(li);
+        }
+      }
+
+      function renderRawTable(todos) {
+        if (todos.length === 0) {
+          rawTable.innerHTML = `<table class="raw"><thead><tr><th>id</th><th>description</th><th>done</th><th>tags</th></tr></thead><tbody><tr><td colspan="4" style="padding:24px;text-align:center;color:rgba(217,225,226,0.5)">(empty)</td></tr></tbody></table>`;
+          return;
+        }
+        const rows = todos
+          .map(
+            (t) => `
+              <tr>
+                <td class="col-id">${t.id}</td>
+                <td>${escapeHtml(t.description)}</td>
+                <td class="col-done ${t.done}">${t.done ? "✓" : "·"}</td>
+                <td class="col-tags">${(t.tags || []).map(escapeHtml).join(", ")}</td>
+              </tr>`
+          )
+          .join("");
+        rawTable.innerHTML = `
+          <table class="raw">
+            <thead>
+              <tr><th>id</th><th>description</th><th>done</th><th>tags</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>`;
+      }
+
+      async function refresh() {
+        try {
+          const path =
+            activeTag === null
+              ? "/todos"
+              : `/todos?tag=${encodeURIComponent(activeTag)}`;
+          const [{ todos }, { tags }] = await Promise.all([api(path), api("/tags")]);
+
+          renderFilterBar(tags);
+          if (viewMode === "cards") {
+            renderCards(todos);
+          } else {
+            renderRawTable(todos);
+          }
+
+          const filterMsg = activeTag ? ` · filter: ${activeTag}` : "";
+          setStatus(
+            `${todos.length} todo${todos.length === 1 ? "" : "s"} · live · refreshes every 3s${filterMsg}`
+          );
+        } catch (err) {
+          setStatus(`Failed to load: ${err.message}`, true);
+        }
+      }
+
+      async function act(path, id) {
+        try {
+          await api(path, { id });
+          await refresh();
+        } catch (err) {
+          setStatus(err.message, true);
+        }
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+      function escapeAttr(s) {
+        return escapeHtml(s).replace(/"/g, "&quot;");
+      }
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const description = descInput.value.trim();
+        if (!description) return;
+        const tags = parseTagsInput(tagsInput.value);
+        try {
+          await api("/todos", { description, tags });
+          descInput.value = "";
+          tagsInput.value = "";
+          await refresh();
+        } catch (err) {
+          setStatus(err.message, true);
+        }
+      });
+
+      viewToggle.addEventListener("click", () => {
+        viewMode = viewMode === "cards" ? "raw" : "cards";
+        viewToggle.textContent = viewMode === "cards" ? "view raw table" : "view cards";
+        list.classList.toggle("hidden", viewMode !== "cards");
+        rawTable.classList.toggle("hidden", viewMode !== "raw");
+        refresh();
+      });
+
+      // Initial render + live polling every 3s so external mutations
+      // (sqlx CLI, another tab, the DB itself) surface in the UI.
+      refresh();
+      setInterval(refresh, 3000);
+    </script>
+  </body>
+</html>
