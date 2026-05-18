@@ -20,6 +20,11 @@ updates:
     schedule:
       interval: "weekly"
     target-branch: "main"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
     groups:
       all-cargo:
         patterns:
@@ -33,6 +38,11 @@ updates:
     schedule:
       interval: "weekly"
     target-branch: "main"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
     groups:
       all-go:
         patterns:
@@ -51,6 +61,11 @@ updates:
     schedule:
       interval: "weekly"
     target-branch: "main"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
     groups:
       all-github-actions:
         patterns:
@@ -65,6 +80,11 @@ updates:
     schedule:
       interval: "weekly"
     target-branch: "main"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
     groups:
       all-docker:
         patterns:
