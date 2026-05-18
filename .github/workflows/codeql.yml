@@ -26,6 +26,8 @@ jobs:
       security-events: write
       contents: read
       actions: read
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -39,14 +41,27 @@ jobs:
         uses: github/codeql-action/init@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4.35.5
         with:
           languages: rust
+          # Pull the newest CodeQL bundle at runtime rather than the version
+          # shipped with this action pin — keeps the Rust extractor (and its
+          # bundled rust-analyzer) current without bumping the action SHA.
+          tools: latest
           # security-and-quality includes the security suite plus quality
           # checks; security-extended is the security-only superset of the
           # default suite. Use security-extended to keep noise down on a
           # repo this size.
           queries: security-extended
+          # Reuse the same CARGO_TARGET_DIR for the extractor's internal cargo
+          # invocation so it picks up the proc-macro artifacts built below;
+          # without warm proc-macros, rust-analyzer fails to expand
+          # tracing::*, anyhow::*, and std macros like vec!/format!, which
+          # tanks the "calls with resolved target" quality metric.
+          config: |
+            extraction:
+              rust:
+                cargo_target_dir: ${{ github.workspace }}/target
 
-      - name: Build
-        uses: github/codeql-action/autobuild@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4.35.5
+      - name: Build workspace
+        run: cargo build --workspace --all-targets --locked
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4.35.5
