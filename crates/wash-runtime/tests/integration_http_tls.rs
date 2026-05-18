@@ -62,7 +62,8 @@ fn http_counter_request(host_header: &str) -> WorkloadStartRequest {
             ]),
             environment: HashMap::new(),
             volume_mounts: vec![],
-            allowed_hosts: Default::default(),
+            // http-counter calls example.com
+            allowed_hosts: vec!["example.com".parse().unwrap()].into(),
         },
         http_counter_host_interfaces(host_header),
     )

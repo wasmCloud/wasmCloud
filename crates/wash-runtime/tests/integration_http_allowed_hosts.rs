@@ -39,6 +39,10 @@ async fn start_host(addr: &str) -> Result<(std::net::SocketAddr, impl HostApi)> 
 }
 
 fn allowed_hosts_workload(allowed_hosts: Vec<String>) -> WorkloadStartRequest {
+    let parsed: Vec<wash_runtime::host::allowed_hosts::AllowedHost> = allowed_hosts
+        .iter()
+        .map(|s| s.parse().expect("test gave invalid allowed_hosts entry"))
+        .collect();
     WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
@@ -56,7 +60,7 @@ fn allowed_hosts_workload(allowed_hosts: Vec<String>) -> WorkloadStartRequest {
                     config: HashMap::new(),
                     environment: HashMap::new(),
                     volume_mounts: vec![],
-                    allowed_hosts: allowed_hosts.into(),
+                    allowed_hosts: parsed.into(),
                 },
                 pool_size: 1,
                 max_invocations: 100,
@@ -191,20 +195,20 @@ async fn test_allowed_hosts_wildcard() -> Result<()> {
     Ok(())
 }
 
-/// When allowed_hosts is empty, all outgoing requests should be permitted.
+/// Literal `*` (AllowedHost::Any) lets every host through, same as
+/// an empty list but exercises the explicit `Any` variant rather than
+/// the empty-list shortcut. Important because the wash config layer
+/// resolves missing `allowed_hosts` to `[Any]` rather than an empty list.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_empty_allowed_hosts_permits_all() -> Result<()> {
+async fn test_star_any_permits_all() -> Result<()> {
     let (addr, host) = start_host("127.0.0.1:0").await?;
 
-    // Empty allowed_hosts = no restrictions
-    let req = allowed_hosts_workload(vec![]);
+    let req = allowed_hosts_workload(vec!["*".to_string()]);
     host.workload_start(req)
         .await
         .context("Failed to start workload")?;
 
     let client = reqwest::Client::new();
-
-    // Both routes should be permitted (not blocked by policy)
     for path in ["/wiki", "/example"] {
         let response = timeout(
             Duration::from_secs(10),
@@ -217,11 +221,80 @@ async fn test_empty_allowed_hosts_permits_all() -> Result<()> {
         .context(format!("{path} request timed out"))?
         .context(format!("Failed to make {path} request"))?;
 
-        let status = response.status();
         assert_ne!(
-            status.as_u16(),
+            response.status().as_u16(),
             500,
-            "With empty allowed_hosts, {path} should not be blocked by policy"
+            "With allowed_hosts=['*'], {path} should not be blocked by policy"
+        );
+    }
+    Ok(())
+}
+
+/// URL-form policy pins scheme. `/example` hits `http://example.com`; the
+/// policy below allows `https://example.com` only. The request should be
+/// blocked because the schemes differ — the host alone isn't enough.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_url_policy_pins_scheme() -> Result<()> {
+    let (addr, host) = start_host("127.0.0.1:0").await?;
+
+    let req = allowed_hosts_workload(vec!["https://example.com".to_string()]);
+    host.workload_start(req)
+        .await
+        .context("Failed to start workload")?;
+
+    let client = reqwest::Client::new();
+    let response = timeout(
+        Duration::from_secs(10),
+        client
+            .get(format!("http://{addr}/example"))
+            .header("HOST", "test")
+            .send(),
+    )
+    .await
+    .context("Example request timed out")?
+    .context("Failed to make example request")?;
+
+    assert_eq!(
+        response.status().as_u16(),
+        500,
+        "http://example.com should be blocked when policy is https://example.com"
+    );
+    Ok(())
+}
+
+/// An empty `allowed_hosts` list denies all outgoing requests.
+/// Callers that want unrestricted egress must use the explicit `["*"]` form,
+/// which the wash config layer applies automatically when `allowedHosts` is
+/// omitted from YAML (see [`test_star_any_permits_all`]).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_empty_allowed_hosts_denies_all() -> Result<()> {
+    let (addr, host) = start_host("127.0.0.1:0").await?;
+
+    // Empty allowed_hosts = deny all egress.
+    let req = allowed_hosts_workload(vec![]);
+    host.workload_start(req)
+        .await
+        .context("Failed to start workload")?;
+
+    let client = reqwest::Client::new();
+
+    // Both routes should be BLOCKED by the empty-list deny-all policy.
+    for path in ["/wiki", "/example"] {
+        let response = timeout(
+            Duration::from_secs(10),
+            client
+                .get(format!("http://{addr}{path}"))
+                .header("HOST", "test")
+                .send(),
+        )
+        .await
+        .context(format!("{path} request timed out"))?
+        .context(format!("Failed to make {path} request"))?;
+
+        assert_eq!(
+            response.status().as_u16(),
+            500,
+            "Empty allowed_hosts should deny all egress; {path} unexpectedly succeeded"
         );
     }
 
