@@ -93,9 +93,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         &mut self,
         name: ContainerName,
     ) -> wasmtime::Result<Result<Resource<ContainerData>, BlobstoreError>> {
-        let Some(plugin) = self.get_plugin::<FilesystemBlobstore>(PLUGIN_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<FilesystemBlobstore>(PLUGIN_BLOBSTORE_ID)?;
 
         let root = lock_root(&plugin.root, &name)
             .map_err(|e| wasmtime::format_err!("invalid container name: {e}"))?;
@@ -118,9 +116,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         &mut self,
         name: ContainerName,
     ) -> wasmtime::Result<Result<Resource<ContainerData>, BlobstoreError>> {
-        let Some(plugin) = self.get_plugin::<FilesystemBlobstore>(PLUGIN_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<FilesystemBlobstore>(PLUGIN_BLOBSTORE_ID)?;
 
         let Ok(root) = lock_root(&plugin.root, &name) else {
             return Ok(Err("invalid container name".to_string()));
@@ -144,9 +140,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         &mut self,
         name: ContainerName,
     ) -> wasmtime::Result<Result<(), BlobstoreError>> {
-        let Some(plugin) = self.get_plugin::<FilesystemBlobstore>(PLUGIN_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<FilesystemBlobstore>(PLUGIN_BLOBSTORE_ID)?;
 
         let Ok(path) = lock_root(&plugin.root, &name) else {
             return Ok(Err("invalid container name".to_string()));
@@ -167,9 +161,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         &mut self,
         name: ContainerName,
     ) -> wasmtime::Result<Result<bool, BlobstoreError>> {
-        let Some(plugin) = self.get_plugin::<FilesystemBlobstore>(PLUGIN_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<FilesystemBlobstore>(PLUGIN_BLOBSTORE_ID)?;
 
         let Ok(path) = lock_root(&plugin.root, &name) else {
             return Ok(Err("invalid container name".to_string()));
@@ -184,9 +176,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         src: ObjectId,
         dest: ObjectId,
     ) -> wasmtime::Result<Result<(), BlobstoreError>> {
-        let Some(plugin) = self.get_plugin::<FilesystemBlobstore>(PLUGIN_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<FilesystemBlobstore>(PLUGIN_BLOBSTORE_ID)?;
 
         let Ok(read_container) = lock_root(&plugin.root, &src.container) else {
             return Ok(Err("invalid source container name".to_string()));
@@ -225,9 +215,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         src: ObjectId,
         dest: ObjectId,
     ) -> wasmtime::Result<Result<(), BlobstoreError>> {
-        let Some(plugin) = self.get_plugin::<FilesystemBlobstore>(PLUGIN_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<FilesystemBlobstore>(PLUGIN_BLOBSTORE_ID)?;
 
         let Ok(read_container) = lock_root(&plugin.root, &src.container) else {
             return Ok(Err("invalid source container name".to_string()));

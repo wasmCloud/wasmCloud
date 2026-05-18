@@ -48,9 +48,7 @@ impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
         context: String,
         message: String,
     ) -> wasmtime::Result<()> {
-        let Some(plugin) = self.get_plugin::<TracingLogger>(PLUGIN_LOGGING_ID) else {
-            bail!("TracingLogger plugin not found in context");
-        };
+        let plugin = self.try_get_plugin::<TracingLogger>(PLUGIN_LOGGING_ID)?;
 
         let workloads = plugin.components.read().await;
         let Some(ComponentInfo {

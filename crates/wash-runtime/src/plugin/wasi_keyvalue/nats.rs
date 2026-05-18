@@ -84,11 +84,8 @@ impl<'a> bindings::wasi::keyvalue::store::Host for ActiveCtx<'a> {
         &mut self,
         identifier: String,
     ) -> wasmtime::Result<Result<Resource<BucketHandle>, StoreError>> {
-        let Some(plugin) = self.get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID)?;
+
         plugin.record_operation("open");
 
         let kv = match plugin.client.get_key_value(&identifier).await {
@@ -119,11 +116,8 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         bucket: Resource<BucketHandle>,
         key: String,
     ) -> wasmtime::Result<Result<Option<Vec<u8>>, StoreError>> {
-        let Some(plugin) = self.get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID)?;
+
         plugin.record_operation("get");
 
         let bucket_handle = self.table.get(&bucket)?;
@@ -149,11 +143,8 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         key: String,
         value: Vec<u8>,
     ) -> wasmtime::Result<Result<(), StoreError>> {
-        let Some(plugin) = self.get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID)?;
+
         plugin.record_operation("set");
 
         let bucket_handle = self.table.get(&bucket)?;
@@ -173,11 +164,8 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         bucket: Resource<BucketHandle>,
         key: String,
     ) -> wasmtime::Result<Result<(), StoreError>> {
-        let Some(plugin) = self.get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID)?;
+
         plugin.record_operation("delete");
 
         let bucket_handle = self.table.get(&bucket)?;
@@ -197,11 +185,8 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         bucket: Resource<BucketHandle>,
         key: String,
     ) -> wasmtime::Result<Result<bool, StoreError>> {
-        let Some(plugin) = self.get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID)?;
+
         plugin.record_operation("exists");
 
         let bucket_handle = self.table.get(&bucket)?;
@@ -222,11 +207,8 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         bucket: Resource<BucketHandle>,
         cursor: Option<u64>,
     ) -> wasmtime::Result<Result<KeyResponse, StoreError>> {
-        let Some(plugin) = self.get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID)?;
+
         plugin.record_operation("list_keys");
 
         let bucket_handle = self.table.get(&bucket)?;
@@ -283,11 +265,8 @@ impl<'a> bindings::wasi::keyvalue::atomics::Host for ActiveCtx<'a> {
         key: String,
         delta: u64,
     ) -> wasmtime::Result<Result<u64, StoreError>> {
-        let Some(plugin) = self.get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID)?;
+
         plugin.record_operation("increment");
 
         let bucket_handle = self.table.get(&bucket)?;
@@ -345,11 +324,8 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
         bucket: Resource<BucketHandle>,
         keys: Vec<String>,
     ) -> wasmtime::Result<Result<Vec<Option<(String, Vec<u8>)>>, StoreError>> {
-        let Some(plugin) = self.get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID)?;
+
         plugin.record_operation("get_many");
 
         let bucket_handle = self.table.get(&bucket)?;
@@ -385,11 +361,8 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
         bucket: Resource<BucketHandle>,
         key_values: Vec<(String, Vec<u8>)>,
     ) -> wasmtime::Result<Result<(), StoreError>> {
-        let Some(plugin) = self.get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID)?;
+
         plugin.record_operation("set_many");
 
         let bucket_handle = self.table.get(&bucket)?;
@@ -428,11 +401,8 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
         bucket: Resource<BucketHandle>,
         keys: Vec<String>,
     ) -> wasmtime::Result<Result<(), StoreError>> {
-        let Some(plugin) = self.get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<NatsKeyValue>(PLUGIN_KEYVALUE_ID)?;
+
         plugin.record_operation("delete_many");
 
         let bucket_handle = self.table.get(&bucket)?;

@@ -295,7 +295,7 @@ impl<'a> bindings::wasi::otel::logs::Host for ActiveCtx<'a> {
         data: bindings::wasi::otel::logs::LogRecord,
     ) -> wasmtime::Result<()> {
         tracing::info!(?data, "emitting log record");
-        if let Some(plugin) = self.ctx.get_plugin::<WasiOtel>(WASI_OTEL_ID) {
+        if let Ok(plugin) = self.ctx.try_get_plugin::<WasiOtel>(WASI_OTEL_ID) {
             let service_name = plugin.config.service_name.clone();
             let provider = plugin.logger_provider.read().await;
 
@@ -316,7 +316,7 @@ impl<'a> bindings::wasi::otel::metrics::Host for ActiveCtx<'a> {
         &mut self,
         resource_metrics: bindings::wasi::otel::metrics::ResourceMetrics,
     ) -> wasmtime::Result<Result<(), bindings::wasi::otel::metrics::Error>> {
-        if let Some(plugin) = self.ctx.get_plugin::<WasiOtel>(WASI_OTEL_ID) {
+        if let Ok(plugin) = self.ctx.try_get_plugin::<WasiOtel>(WASI_OTEL_ID) {
             // Summarize incoming metrics for logging
             let summary = summarize_resource_metrics(&resource_metrics);
             tracing::info!(
@@ -398,7 +398,7 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
         &mut self,
         span_data: bindings::wasi::otel::tracing::SpanData,
     ) -> wasmtime::Result<()> {
-        if let Some(plugin) = self.ctx.get_plugin::<WasiOtel>(WASI_OTEL_ID) {
+        if let Ok(plugin) = self.ctx.try_get_plugin::<WasiOtel>(WASI_OTEL_ID) {
             let summary = summarize_span_data(&span_data);
             tracing::info!(
                 name = %summary.name,

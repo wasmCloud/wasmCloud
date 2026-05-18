@@ -148,9 +148,7 @@ impl<'a> Host for ActiveCtx<'a> {
         body: Vec<u8>,
         timeout_ms: u32,
     ) -> wasmtime::Result<Result<types::BrokerMessage, String>> {
-        let Some(plugin) = self.get_plugin::<InMemoryMessaging>(PLUGIN_MESSAGING_MEMORY_ID) else {
-            return Ok(Err("plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryMessaging>(PLUGIN_MESSAGING_MEMORY_ID)?;
 
         let workload_id = self.ctx.workload_id.to_string();
 
@@ -210,9 +208,7 @@ impl<'a> Host for ActiveCtx<'a> {
 
     #[instrument(name = "wasmcloud.messaging.publish", skip_all, fields(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>")))]
     async fn publish(&mut self, msg: types::BrokerMessage) -> wasmtime::Result<Result<(), String>> {
-        let Some(plugin) = self.get_plugin::<InMemoryMessaging>(PLUGIN_MESSAGING_MEMORY_ID) else {
-            return Ok(Err("plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryMessaging>(PLUGIN_MESSAGING_MEMORY_ID)?;
 
         let workload_id = self.ctx.workload_id.to_string();
         let pending_requests = {

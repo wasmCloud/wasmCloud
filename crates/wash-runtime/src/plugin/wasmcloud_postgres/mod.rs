@@ -184,11 +184,7 @@ impl<'a> query::Host for ActiveCtx<'a> {
         q: String,
         params: Vec<PgValue>,
     ) -> wasmtime::Result<Result<Vec<query::ResultRow>, QueryError>> {
-        let Some(plugin) = self.get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID) else {
-            return Ok(Err(QueryError::Unexpected(
-                "postgres plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID)?;
 
         let component_id = self.component_id.to_string();
         let database = match plugin.database_for_component(&component_id).await {
@@ -245,11 +241,7 @@ impl<'a> query::Host for ActiveCtx<'a> {
 
     #[instrument(name = "wasmcloud.postgres.query_batch", skip_all, fields(query = %q))]
     async fn query_batch(&mut self, q: String) -> wasmtime::Result<Result<(), QueryError>> {
-        let Some(plugin) = self.get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID) else {
-            return Ok(Err(QueryError::Unexpected(
-                "postgres plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID)?;
 
         let component_id = self.component_id.to_string();
         let database = match plugin.database_for_component(&component_id).await {
@@ -294,11 +286,7 @@ impl<'a> prepared::Host for ActiveCtx<'a> {
         &mut self,
         statement: String,
     ) -> wasmtime::Result<Result<String, StatementPrepareError>> {
-        let Some(plugin) = self.get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID) else {
-            return Ok(Err(StatementPrepareError::Unexpected(
-                "postgres plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID)?;
 
         let component_id = self.component_id.to_string();
         let database = match plugin.database_for_component(&component_id).await {
@@ -359,11 +347,7 @@ impl<'a> prepared::Host for ActiveCtx<'a> {
         stmt_token: String,
         params: Vec<PgValue>,
     ) -> wasmtime::Result<Result<u64, PreparedStatementExecError>> {
-        let Some(plugin) = self.get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID) else {
-            return Ok(Err(PreparedStatementExecError::Unexpected(
-                "postgres plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID)?;
 
         let entry = {
             let stmts = plugin.prepared_statements.read().await;
