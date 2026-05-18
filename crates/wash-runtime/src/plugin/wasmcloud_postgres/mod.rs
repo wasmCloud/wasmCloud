@@ -13,7 +13,7 @@ use url::Url;
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
-use crate::plugin::HostPlugin;
+use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
 
 use conversions::into_result_row;
@@ -454,17 +454,15 @@ impl HostPlugin for WasmcloudPostgres {
     async fn on_workload_item_bind<'a>(
         &self,
         component_handle: &mut WorkloadItem<'a>,
-        interfaces: HashSet<WitInterface>,
+        interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let database = match interfaces
-            .iter()
-            .find(|i| i.namespace == "wasmcloud" && i.package == "postgres")
-        {
-            Some(i) => match i.config.get("database").cloned() {
-                Some(db) => db,
-                None => bail!("wasmcloud:postgres requires a 'database' config parameter"),
-            },
+        let database = match interfaces.get("wasmcloud", "postgres", &["database"]) {
+            Some(i) => i.config.get("database"),
             None => return Ok(()),
+        };
+
+        let Some(database) = database.cloned() else {
+            bail!("wasmcloud:postgres requires a 'database' config parameter")
         };
 
         let component_id = component_handle.id().to_string();
@@ -502,7 +500,7 @@ impl HostPlugin for WasmcloudPostgres {
     async fn on_workload_unbind(
         &self,
         workload_id: &str,
-        _interfaces: HashSet<WitInterface>,
+        _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         tracing::debug!(workload_id = %workload_id, "Unbinding postgres plugin from workload");
 

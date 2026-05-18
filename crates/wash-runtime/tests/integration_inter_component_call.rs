@@ -29,7 +29,9 @@ use wash_runtime::{
         HostApi, HostBuilder,
         http::{DevRouter, HttpServer},
     },
-    plugin::{HostPlugin, wasi_config::DynamicConfig, wasi_keyvalue::InMemoryKeyValue},
+    plugin::{
+        HostPlugin, WitInterfaces, wasi_config::DynamicConfig, wasi_keyvalue::InMemoryKeyValue,
+    },
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
     wit::{WitInterface, WitWorld},
 };
@@ -119,18 +121,10 @@ impl HostPlugin for CustomLogging {
     async fn on_workload_item_bind<'a>(
         &self,
         workload_handle: &mut WorkloadItem<'a>,
-        interfaces: std::collections::HashSet<wash_runtime::wit::WitInterface>,
+        interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         // Ensure exactly one interface: "wasi:logging/logging"
-        let mut iter = interfaces.iter();
-        let Some(interface) = iter.next() else {
-            anyhow::bail!("No interfaces provided; expected wasi:logging/logging");
-        };
-        if iter.next().is_some()
-            || interface.namespace != "wasi"
-            || interface.package != "logging"
-            || !interface.interfaces.contains("logging")
-        {
+        if interfaces.contains("wasi", "logging", &["logging"]) {
             anyhow::bail!(
                 "Expected exactly one interface: wasi:logging/logging, got: {interfaces:?}"
             );

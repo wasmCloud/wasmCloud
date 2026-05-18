@@ -27,7 +27,7 @@ use tokio::sync::RwLock;
 use opentelemetry_otlp::{LogExporter, MetricExporter, SpanExporter};
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
-use crate::plugin::{HostPlugin, WorkloadItem, WorkloadTracker};
+use crate::plugin::{HostPlugin, WitInterfaces, WorkloadItem, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
 const WASI_OTEL_ID: &str = "wasi-otel";
@@ -211,7 +211,7 @@ impl HostPlugin for WasiOtel {
     async fn on_workload_item_bind<'a>(
         &self,
         component_handle: &mut WorkloadItem<'a>,
-        _interfaces: HashSet<WitInterface>,
+        _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         // Add all wasi:otel interfaces to linker
         bindings::wasi::otel::types::add_to_linker::<_, SharedCtx>(
@@ -257,7 +257,7 @@ impl HostPlugin for WasiOtel {
     async fn on_workload_unbind(
         &self,
         workload_id: &str,
-        _interfaces: HashSet<WitInterface>,
+        _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         self.tracker
             .write()

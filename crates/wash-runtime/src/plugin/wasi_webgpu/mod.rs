@@ -9,7 +9,7 @@ const WASI_WEBGPU_ID: &str = "wasi-webgpu";
 
 use crate::{
     engine::{ctx::SharedCtx, workload::WorkloadItem},
-    plugin::HostPlugin,
+    plugin::{HostPlugin, WitInterfaces},
     wit::{WitInterface, WitWorld},
 };
 
@@ -112,14 +112,10 @@ impl HostPlugin for WebGpu {
     async fn on_workload_item_bind<'a>(
         &self,
         component_handle: &mut WorkloadItem<'a>,
-        interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         // Check if any of the interfaces are wasi:webgpu related
-        let has_webgpu = interfaces
-            .iter()
-            .any(|i| i.namespace == "wasi" && i.package == "webgpu");
-
-        if !has_webgpu {
+        if !interfaces.contains("wasi", "webgpu", &[]) {
             tracing::warn!(
                 "WasiWebgpu plugin requested for non-wasi:webgpu interface(s): {:?}",
                 interfaces

@@ -29,7 +29,7 @@ use crate::{
         ctx::{ActiveCtx, SharedCtx, extract_active_ctx},
         workload::WorkloadItem,
     },
-    plugin::HostPlugin,
+    plugin::{HostPlugin, WitInterfaces},
     wit::{WitInterface, WitWorld},
 };
 
@@ -121,12 +121,10 @@ impl HostPlugin for DynamicConfig {
     async fn on_workload_item_bind<'a>(
         &self,
         component_handle: &mut WorkloadItem<'a>,
-        interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         // Find the "wasi:config/store" interface, if present
-        let Some(interface) = interfaces.iter().find(|i| {
-            i.namespace == "wasi" && i.package == "config" && i.interfaces.contains("store")
-        }) else {
+        let Some(interface) = interfaces.get("wasi", "config", &["store"]) else {
             // Log a warning if the requested interfaces are not wasi:config/store
             tracing::warn!(
                 "WasiConfig plugin requested for non-wasi:config/store interface(s): {:?}",
