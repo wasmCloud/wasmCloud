@@ -75,7 +75,25 @@ type LocalResources struct {
 	Environment *ConfigLayer `json:"environment,omitempty"`
 	// +kubebuilder:validation:Optional
 	Config map[string]string `json:"config,omitempty"`
+	// AllowedHosts is the outbound egress allowlist for this component.
+	//
+	// Each entry must match one of:
+	//   - "*"                       (allow all)
+	//   - "host[:port]"             e.g. "example.com" or "example.com:8443"
+	//   - "scheme://host[:port][/]" e.g. "https://api.example.com" or "https://api.example.com/"
+	//   - "*.suffix[:port]"         e.g. "*.example.com" or "*.example.com:8443"
+	//   - "scheme://*.suffix[:port][/]" e.g. "https://*.example.com"
+	//
+	// This is a hosts policy, not a URL policy: entries must not include a
+	// path (beyond bare `/`), query string, or fragment. The wildcard must
+	// be `*.<rest>` (leading dot required); a bare `*foo` is rejected.
+	//
+	// Empty or absent allowedHosts denies all outgoing requests
+	// (fail-closed). To opt into unrestricted egress, set `allowedHosts:
+	// ["*"]` explicitly. Final validation runs in the runtime. This regex
+	// is an admission-time guard, not the source of truth.
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:items:Pattern=`^\*$|^([A-Za-z][A-Za-z0-9+.-]*://)(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(:[0-9]{1,5})?/?$|^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(:[0-9]{1,5})?$`
 	AllowedHosts []string `json:"allowedHosts,omitempty"`
 }
 
