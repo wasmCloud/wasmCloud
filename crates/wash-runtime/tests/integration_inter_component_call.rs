@@ -71,9 +71,7 @@ impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
         context: String,
         message: String,
     ) -> wasmtime::Result<()> {
-        let plugin = self
-            .get_plugin::<CustomLogging>("logging")
-            .ok_or_else(|| wasmtime::format_err!("failed to get plugin"))?;
+        let plugin = self.try_get_plugin::<CustomLogging>("logging")?;
 
         let per_component_info = plugin
             .tracker

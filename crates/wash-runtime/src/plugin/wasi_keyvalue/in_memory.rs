@@ -65,11 +65,7 @@ impl<'a> bindings::wasi::keyvalue::store::Host for ActiveCtx<'a> {
         &mut self,
         identifier: String,
     ) -> wasmtime::Result<Result<Resource<BucketHandle>, StoreError>> {
-        let Some(plugin) = self.get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let mut storage = plugin.storage.write().await;
         let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
@@ -97,11 +93,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<Option<Vec<u8>>, StoreError>> {
         let bucket_name = self.table.get(&bucket)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let storage = plugin.storage.read().await;
         let empty_map = HashMap::new();
@@ -129,11 +121,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<(), StoreError>> {
         let bucket_name = self.table.get(&bucket)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let mut storage = plugin.storage.write().await;
         let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
@@ -157,11 +145,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<(), StoreError>> {
         let bucket_name = self.table.get(&bucket)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let mut storage = plugin.storage.write().await;
         let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
@@ -185,11 +169,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<bool, StoreError>> {
         let bucket_name = self.table.get(&bucket)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let storage = plugin.storage.read().await;
         let empty_map = HashMap::new();
@@ -213,11 +193,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<KeyResponse, StoreError>> {
         let bucket_name = self.table.get(&bucket)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let storage = plugin.storage.read().await;
         let empty_map = HashMap::new();
@@ -281,11 +257,7 @@ impl<'a> bindings::wasi::keyvalue::atomics::Host for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<u64, StoreError>> {
         let bucket_name = self.table.get(&bucket)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let mut storage = plugin.storage.write().await;
         let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
@@ -333,11 +305,7 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<Vec<Option<(String, Vec<u8>)>>, StoreError>> {
         let bucket_name = self.table.get(&bucket)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let storage = plugin.storage.read().await;
         let empty_map = HashMap::new();
@@ -373,11 +341,7 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<(), StoreError>> {
         let bucket_name = self.table.get(&bucket)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let mut storage = plugin.storage.write().await;
         let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
@@ -403,11 +367,7 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<(), StoreError>> {
         let bucket_name = self.table.get(&bucket)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID) else {
-            return Ok(Err(StoreError::Other(
-                "keyvalue plugin not available".to_string(),
-            )));
-        };
+        let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let mut storage = plugin.storage.write().await;
         let workload_storage = storage.entry(self.workload_id.to_string()).or_default();

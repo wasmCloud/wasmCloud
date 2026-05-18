@@ -164,8 +164,29 @@ pub struct Ctx {
 
 impl Ctx {
     /// Get a plugin by its string ID and downcast to the expected type
-    pub fn get_plugin<T: HostPlugin + 'static>(&self, plugin_id: &str) -> Option<Arc<T>> {
-        self.plugins.get(plugin_id)?.clone().downcast().ok()
+    ///
+    /// **Panics** if the plugin is not found or does not match the expected type.
+    pub fn get_plugin<T: HostPlugin + 'static>(&self, plugin_id: &str) -> Arc<T> {
+        self.try_get_plugin::<T>(plugin_id)
+            .expect("plugin not found")
+    }
+
+    /// Get a plugin by its string ID and downcast to the expected type, if it exists
+    pub fn try_get_plugin<T: HostPlugin + 'static>(
+        &self,
+        plugin_id: &str,
+    ) -> wasmtime::Result<Arc<T>> {
+        self.plugins
+            .get(plugin_id)
+            .ok_or_else(|| wasmtime::format_err!("plugin {plugin_id} not found"))?
+            .downcast_ref()
+            .ok_or_else(|| {
+                wasmtime::format_err!(
+                    "failed to downcast plugin to type {}",
+                    std::any::type_name::<T>()
+                )
+            })
+            .cloned()
     }
 
     /// Create a new [`CtxBuilder`] to construct a [`Ctx`]

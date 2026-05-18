@@ -121,9 +121,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         &mut self,
         name: ContainerName,
     ) -> wasmtime::Result<Result<Resource<String>, BlobstoreError>> {
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let mut storage = plugin.storage.write().await;
         let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
@@ -148,9 +146,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         &mut self,
         name: ContainerName,
     ) -> wasmtime::Result<Result<Resource<String>, BlobstoreError>> {
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let storage = plugin.storage.read().await;
         let empty_map = HashMap::new();
@@ -171,9 +167,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         &mut self,
         name: ContainerName,
     ) -> wasmtime::Result<Result<(), BlobstoreError>> {
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let mut storage = plugin.storage.write().await;
         let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
@@ -187,9 +181,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         &mut self,
         name: ContainerName,
     ) -> wasmtime::Result<Result<bool, BlobstoreError>> {
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let storage = plugin.storage.read().await;
         let empty_map = HashMap::new();
@@ -206,9 +198,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         src: ObjectId,
         dest: ObjectId,
     ) -> wasmtime::Result<Result<(), BlobstoreError>> {
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let mut storage = plugin.storage.write().await;
         let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
@@ -265,9 +255,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         // First copy the object
         let _ = self.copy_object(src.clone(), dest).await?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         // Then delete the source
         let mut storage = plugin.storage.write().await;
@@ -297,9 +285,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<ContainerMetadata, ContainerError>> {
         let container_name = self.table.get(&container)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let storage = plugin.storage.read().await;
         let empty_map = HashMap::new();
@@ -335,10 +321,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
             "Getting object data from container"
         );
 
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            tracing::error!("blobstore plugin not available for get_data");
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let storage = plugin.storage.read().await;
         let empty_map = HashMap::new();
@@ -406,10 +389,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
             "Initiating write_data for object"
         );
 
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            tracing::error!("blobstore plugin not available for write_data");
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         // Verify the container exists
         let storage = plugin.storage.read().await;
@@ -449,9 +429,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<Resource<StreamObjectNamesHandle>, ContainerError>> {
         let container_name = self.table.get(&container)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let storage = plugin.storage.read().await;
         let empty_map = HashMap::new();
@@ -481,9 +459,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<(), ContainerError>> {
         let container_name = self.table.get(&container)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let mut storage = plugin.storage.write().await;
         let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
@@ -505,9 +481,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<(), ContainerError>> {
         let container_name = self.table.get(&container)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let mut storage = plugin.storage.write().await;
         let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
@@ -531,9 +505,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<bool, ContainerError>> {
         let container_name = self.table.get(&container)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let storage = plugin.storage.read().await;
         let empty_map = HashMap::new();
@@ -555,9 +527,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<ObjectMetadata, ContainerError>> {
         let container_name = self.table.get(&container)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let storage = plugin.storage.read().await;
         let empty_map = HashMap::new();
@@ -586,9 +556,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<(), ContainerError>> {
         let container_name = self.table.get(&container)?;
 
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            return Ok(Err("blobstore plugin not available".to_string()));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let mut storage = plugin.storage.write().await;
         let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
@@ -677,10 +645,7 @@ impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
     async fn new_outgoing_value(&mut self) -> wasmtime::Result<Resource<OutgoingValueHandle>> {
         tracing::debug!(workload_id = self.id, "Creating new OutgoingValue");
 
-        let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-            tracing::error!("blobstore plugin not available in new_outgoing_value");
-            return Err(wasmtime::format_err!("blobstore plugin not available"));
-        };
+        let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let handle = OutgoingValueHandle {
             pipe: MemoryOutputPipe::new(plugin.max_object_size),
@@ -793,10 +758,7 @@ impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
         if let (Some(container_name), Some(object_name)) =
             (&handle.container_name, &handle.object_name)
         {
-            let Some(plugin) = self.get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID) else {
-                tracing::error!("blobstore plugin not available in finish()");
-                return Ok(Err("blobstore plugin not available".to_string()));
-            };
+            let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
             // Get the data from the pipe
             let data_bytes = handle.pipe.contents();

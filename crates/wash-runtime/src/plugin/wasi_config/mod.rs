@@ -82,9 +82,8 @@ impl<'a> bindings::wasi::config::store::Host for ActiveCtx<'a> {
         &mut self,
         key: String,
     ) -> wasmtime::Result<Result<Option<String>, bindings::wasi::config::store::Error>> {
-        let Some(plugin) = self.get_plugin::<DynamicConfig>(WASI_CONFIG_ID) else {
-            return Ok(Ok(None));
-        };
+        let plugin = self.try_get_plugin::<DynamicConfig>(WASI_CONFIG_ID)?;
+
         let config_guard = plugin.config.read().await;
         config_guard
             .get(&*self.component_id)
@@ -96,9 +95,8 @@ impl<'a> bindings::wasi::config::store::Host for ActiveCtx<'a> {
     async fn get_all(
         &mut self,
     ) -> wasmtime::Result<Result<Vec<(String, String)>, bindings::wasi::config::store::Error>> {
-        let Some(plugin) = self.get_plugin::<DynamicConfig>(WASI_CONFIG_ID) else {
-            return Ok(Ok(vec![]));
-        };
+        let plugin = self.try_get_plugin::<DynamicConfig>(WASI_CONFIG_ID)?;
+
         let config_guard = plugin.config.read().await;
         let entries = config_guard
             .get(&*self.component_id)
