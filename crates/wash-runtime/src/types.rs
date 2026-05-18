@@ -17,6 +17,7 @@
 use bytes::Bytes;
 use std::{collections::HashMap, sync::Arc};
 
+use crate::host::allowed_hosts::AllowedHost;
 use crate::wit::WitInterface;
 
 /// Represents a deployable workload containing one or more WebAssembly components.
@@ -78,10 +79,20 @@ pub struct LocalResources {
     /// Allows passing arbitrary configuration values to influence implementation behavior for all component interfaces.
     /// Example: tracing=disable
     pub config: HashMap<String, String>,
-    // wasi:cli/env variables, copied to WasiCtxBuilder
+    /// `wasi:cli/env` variables, copied to `WasiCtxBuilder` at component
+    /// instantiation.
     pub environment: HashMap<String, String>,
     pub volume_mounts: Vec<VolumeMount>,
-    pub allowed_hosts: Arc<[String]>,
+    /// Parsed outbound allowlist.
+    /// **Empty = deny all outgoing requests**. See
+    /// [`crate::host::http::check_allowed_hosts`]). To opt into
+    /// unrestricted egress, pass an explicit `[AllowedHost::Any]`. The
+    /// wash config layer substitutes `[Any]` when `allowedHosts` is
+    /// omitted from YAML, so workloads coming through `wash dev` never
+    /// land here with an unintentionally-empty list. Strings from the
+    /// wire (proto / wash YAML) are parsed at conversion time, so the
+    /// request hot path matches against the typed enum directly.
+    pub allowed_hosts: Arc<[AllowedHost]>,
 }
 
 impl Default for LocalResources {

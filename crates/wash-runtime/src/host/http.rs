@@ -26,6 +26,7 @@ use std::{
     time::Duration,
 };
 
+use crate::host::allowed_hosts::AllowedHost;
 use crate::wit::WitInterface;
 use crate::{engine::ctx::SharedCtx, observability::Meters};
 use crate::{engine::workload::ResolvedWorkload, observability::FuelConsumptionMeter};
@@ -76,8 +77,8 @@ fn is_valid_hostname(host: &str) -> bool {
 /// Why a request could not be routed to a workload.
 #[derive(Debug)]
 pub enum RouteError {
-    /// Request had no `Host` header a
-    /// genuinely malformed client request. Maps to 400.
+    /// Request had no `Host` header which is a genuinely malformed client
+    /// request. Maps to 400.
     MissingHost,
     /// No workload is currently bound to the host.
     /// `DynamicRouter` passes the offending host header; `DevRouter` is
@@ -139,7 +140,7 @@ pub trait Router: Send + Sync + 'static {
         workload_id: &str,
         request: &hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
         config: &wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
-        _allowed_hosts: &[String],
+        _allowed_hosts: &[AllowedHost],
     ) -> anyhow::Result<()>;
 
     /// Determine if a P3 outgoing request is allowed.
@@ -149,7 +150,7 @@ pub trait Router: Send + Sync + 'static {
         _workload_id: &str,
         request: &hyper::Request<crate::host::http_p3::P3Body>,
         _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-        allowed_hosts: &[String],
+        allowed_hosts: &[AllowedHost],
     ) -> anyhow::Result<()> {
         check_allowed_hosts(request, allowed_hosts)
     }
@@ -258,7 +259,7 @@ impl Router for DynamicRouter {
         _workload_id: &str,
         request: &hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
         _config: &wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
-        allowed_hosts: &[String],
+        allowed_hosts: &[AllowedHost],
     ) -> anyhow::Result<()> {
         check_allowed_hosts(request, allowed_hosts)
     }
@@ -396,23 +397,15 @@ impl Router for DevRouter {
     fn allow_outgoing_request(
         &self,
         _workload_id: &str,
-        _request: &hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+        request: &hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
         _config: &wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
-        _allowed_hosts: &[String],
+        allowed_hosts: &[AllowedHost],
     ) -> anyhow::Result<()> {
-        Ok(())
+        check_allowed_hosts(request, allowed_hosts)
     }
 
-    #[cfg(feature = "wasip3")]
-    fn allow_outgoing_request_p3(
-        &self,
-        _workload_id: &str,
-        _request: &hyper::Request<crate::host::http_p3::P3Body>,
-        _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-        _allowed_hosts: &[String],
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
+    // `allow_outgoing_request_p3` deliberately not overridden — the trait
+    // default calls `check_allowed_hosts`, matching the P2 behavior above.
 
     /// Pick a workload ID based on the incoming request
     fn route_incoming_request(
@@ -461,7 +454,7 @@ pub trait HostHandler: Send + Sync + 'static {
         workload_id: &str,
         request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
         config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
-        allowed_hosts: &[String],
+        allowed_hosts: &[AllowedHost],
     ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>;
 
     /// Handle a P3 outgoing request, enforcing `allowed_hosts` policy and
@@ -479,7 +472,7 @@ pub trait HostHandler: Send + Sync + 'static {
         // Response-side body-error sink: unused here because hyper's response
         // body already reports body errors through its `Stream` impl.
         _fut: crate::host::http_p3::P3RequestErrorFuture,
-        allowed_hosts: &[String],
+        allowed_hosts: &[AllowedHost],
     ) -> crate::host::http_p3::P3SendFuture {
         if let Err(e) = check_allowed_hosts(&request, allowed_hosts) {
             use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
@@ -538,7 +531,7 @@ impl HostHandler for NullServer {
         _workload_id: &str,
         _request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
         _config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
-        _allowed_hosts: &[String],
+        _allowed_hosts: &[AllowedHost],
     ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
     {
         Err(wasmtime_wasi_http::p2::HttpError::trap(
@@ -553,7 +546,7 @@ impl HostHandler for NullServer {
         _request: hyper::Request<crate::host::http_p3::P3Body>,
         _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
         _fut: crate::host::http_p3::P3RequestErrorFuture,
-        _allowed_hosts: &[String],
+        _allowed_hosts: &[AllowedHost],
     ) -> crate::host::http_p3::P3SendFuture {
         use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
         Box::new(async {
@@ -836,7 +829,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
         workload_id: &str,
         request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
         config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
-        allowed_hosts: &[String],
+        allowed_hosts: &[AllowedHost],
     ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
     {
         if let Err(e) =
@@ -862,7 +855,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
         request: hyper::Request<crate::host::http_p3::P3Body>,
         options: Option<wasmtime_wasi_http::p3::RequestOptions>,
         fut: crate::host::http_p3::P3RequestErrorFuture,
-        allowed_hosts: &[String],
+        allowed_hosts: &[AllowedHost],
     ) -> crate::host::http_p3::P3SendFuture {
         if let Err(e) =
             self.router
@@ -1235,36 +1228,40 @@ async fn load_tls_config(
     Ok(config)
 }
 
-/// Check if an outgoing request's host is permitted by the allowed_hosts list.
+/// Checks whether an outgoing request is permitted by the `allowed_hosts`
+/// policy.
 ///
-/// If `allowed_hosts` is empty, all requests are allowed.
-/// Supports wildcard patterns like `*.example.com` which match any subdomain.
+/// **Empty list = deny all.** A workload with no entries cannot
+/// reach any outbound host. Callers that want unrestricted egress must pass
+/// an explicit `[AllowedHost::Any]`. The wash config layer enforces this by
+/// substituting `[Any]` when `allowedHosts` is omitted from the YAML
+/// (see `wash::workload::resolve_workload`), so runtime callers that come
+/// through wash never see an empty list.
+///
+/// Otherwise the request's host (and, when the policy entry specifies them,
+/// scheme and port) must satisfy at least one [`AllowedHost`] entry. See
+/// [`AllowedHost::matches`] for per-variant semantics.
+///
+/// # Errors
+///
+/// Returns an error when the request has no host, when `allowed_hosts` is
+/// empty, or when no policy entry matches.
 pub fn check_allowed_hosts<B>(
     request: &hyper::Request<B>,
-    allowed_hosts: &[String],
+    allowed_hosts: &[AllowedHost],
 ) -> anyhow::Result<()> {
+    let uri = request.uri();
+    let request_host = uri.host().context("outgoing request has no host")?;
+
     if allowed_hosts.is_empty() {
-        return Ok(());
+        anyhow::bail!(
+            "outgoing request to host '{}' denied: allowed_hosts policy is empty (deny-all)",
+            request_host
+        );
     }
 
-    let request_host = request
-        .uri()
-        .host()
-        .context("outgoing request has no host")?;
-
-    let request_host_lower = request_host.to_ascii_lowercase();
-    for pattern in allowed_hosts {
-        if let Some(suffix) = pattern.strip_prefix('*') {
-            // Wildcard: *.example.com matches foo.example.com but not example.com
-            let suffix_lower = suffix.to_ascii_lowercase();
-            if let Some(prefix) = request_host_lower.strip_suffix(suffix_lower.as_str())
-                && !prefix.is_empty()
-            {
-                return Ok(());
-            }
-        } else if request_host.eq_ignore_ascii_case(pattern) {
-            return Ok(());
-        }
+    if allowed_hosts.iter().any(|entry| entry.matches(uri)) {
+        return Ok(());
     }
 
     anyhow::bail!(
@@ -1600,61 +1597,79 @@ mod tests {
 
     // --- check_allowed_hosts tests ---
 
+    fn hosts(entries: &[&str]) -> Vec<AllowedHost> {
+        entries.iter().map(|s| s.parse().unwrap()).collect()
+    }
+
     #[test]
-    fn empty_allowed_hosts_permits_any() {
+    fn empty_allowed_hosts_denies_all() {
+        // An empty policy means no egress. To opt into allow-all
+        // the caller must pass an explicit `[AllowedHost::Any]`.
         let req = build_request("http://anything.example.com/path");
-        assert!(check_allowed_hosts(&req, &[]).is_ok());
+        let err = check_allowed_hosts(&req, &[]).unwrap_err();
+        assert!(err.to_string().contains("deny-all"), "{}", err.to_string());
+    }
+
+    #[test]
+    fn explicit_any_permits_anything() {
+        let req = build_request("http://anything.example.com/path");
+        assert!(check_allowed_hosts(&req, &hosts(&["*"])).is_ok());
     }
 
     #[test]
     fn exact_match_works() {
         let req = build_request("http://example.com/path");
-        let hosts = vec!["example.com".to_string()];
-        assert!(check_allowed_hosts(&req, &hosts).is_ok());
+        assert!(check_allowed_hosts(&req, &hosts(&["example.com"])).is_ok());
     }
 
     #[test]
     fn exact_match_is_case_insensitive() {
         let req = build_request("http://example.com/path");
-        let hosts = vec!["Example.COM".to_string()];
-        assert!(check_allowed_hosts(&req, &hosts).is_ok());
+        assert!(check_allowed_hosts(&req, &hosts(&["Example.COM"])).is_ok());
     }
 
     #[test]
     fn wildcard_matches_subdomain() {
         let req = build_request("http://sub.example.com/path");
-        let hosts = vec!["*.example.com".to_string()];
-        assert!(check_allowed_hosts(&req, &hosts).is_ok());
+        assert!(check_allowed_hosts(&req, &hosts(&["*.example.com"])).is_ok());
     }
 
     #[test]
     fn wildcard_does_not_match_bare_domain() {
         let req = build_request("http://example.com/path");
-        let hosts = vec!["*.example.com".to_string()];
-        assert!(check_allowed_hosts(&req, &hosts).is_err());
+        assert!(check_allowed_hosts(&req, &hosts(&["*.example.com"])).is_err());
     }
 
     #[test]
     fn wildcard_is_case_insensitive() {
         let req = build_request("http://sub.example.com/path");
-        let hosts = vec!["*.Example.COM".to_string()];
-        assert!(check_allowed_hosts(&req, &hosts).is_ok());
+        assert!(check_allowed_hosts(&req, &hosts(&["*.Example.COM"])).is_ok());
     }
 
     #[test]
     fn non_matching_host_is_rejected() {
         let req = build_request("http://evil.com/path");
-        let hosts = vec!["example.com".to_string()];
-        let err = check_allowed_hosts(&req, &hosts).unwrap_err();
+        let err = check_allowed_hosts(&req, &hosts(&["example.com"])).unwrap_err();
         assert!(err.to_string().contains("not allowed"));
     }
 
     #[test]
     fn request_with_no_host_returns_error() {
         let req = build_request("/path-only");
-        let hosts = vec!["example.com".to_string()];
-        let err = check_allowed_hosts(&req, &hosts).unwrap_err();
+        let err = check_allowed_hosts(&req, &hosts(&["example.com"])).unwrap_err();
         assert!(err.to_string().contains("no host"));
+    }
+
+    #[test]
+    fn star_any_matches_everything() {
+        let req = build_request("http://anything.example.com/path");
+        assert!(check_allowed_hosts(&req, &hosts(&["*"])).is_ok());
+    }
+
+    #[test]
+    fn url_policy_pins_scheme() {
+        let req = build_request("http://api.example.com/path");
+        assert!(check_allowed_hosts(&req, &hosts(&["https://api.example.com"])).is_err());
     }
 
     // --- error_response tests ---
@@ -1718,7 +1733,10 @@ mod tests {
             .await
             .unwrap();
         let request = build_request("http://example.com/");
-        let _ = server.outgoing_request("test-workload", request, dummy_config(), &[]);
+        // Explicit `[Any]` policy so the deny-all-on-empty default doesn't
+        // short-circuit before reaching the spy.
+        let allow_any = [AllowedHost::Any];
+        let _ = server.outgoing_request("test-workload", request, dummy_config(), &allow_any);
         assert!(called.load(std::sync::atomic::Ordering::SeqCst));
     }
 
@@ -1739,7 +1757,11 @@ mod tests {
             .header(hyper::header::CONTENT_TYPE, "application/grpc")
             .body(HyperOutgoingBody::default())
             .unwrap();
-        let _ = server.outgoing_request("test-workload", request, dummy_config(), &[]);
+        // `[Any]` lets the policy check pass so the test actually verifies
+        // the gRPC dispatch path. With `&[]` (deny-all), the spy would
+        // appear "not called" because policy denied — for the wrong reason.
+        let allow_any = [AllowedHost::Any];
+        let _ = server.outgoing_request("test-workload", request, dummy_config(), &allow_any);
         assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
     }
 

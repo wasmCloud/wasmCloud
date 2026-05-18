@@ -64,10 +64,12 @@ wasi-tls = ["dep:wasmtime-wasi-tls", "wasip3"]
 anyhow = { workspace = true }
 async-nats = { workspace = true, features = ["aws-lc-rs"] }
 async-trait = { workspace = true }
+bon = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 hostname = { workspace = true }
+http = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio", "server-auto"] }

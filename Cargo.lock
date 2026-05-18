@@ -758,6 +758,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "bon"
+version = "3.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f47dbe92550676ee653353c310dfb9cf6ba17ee70396e1f7cf0a2020ad49b2fe"
+dependencies = [
+ "bon-macros",
+ "rustversion",
+]
+
+[[package]]
+name = "bon-macros"
+version = "3.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "519bd3116aeeb42d5372c29d982d16d0170d3d4a5ed85fc7dd91642ffff3c67c"
+dependencies = [
+ "darling 0.23.0",
+ "ident_case",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7252,6 +7277,7 @@ version = "2.2.1"
 dependencies = [
  "anyhow",
  "async-nats",
+ "bon",
  "bytes",
  "chrono",
  "clap",
@@ -7266,6 +7292,8 @@ dependencies = [
  "http-body-util",
  "humansize",
  "humantime",
+ "hyper",
+ "libc",
  "pbjson-build 0.8.0",
  "rcgen",
  "reqwest",
@@ -7300,6 +7328,7 @@ dependencies = [
  "async-trait",
  "bigdecimal 0.4.10",
  "bit-vec 0.6.3",
+ "bon",
  "bytes",
  "cap-net-ext",
  "cap-std",
@@ -7312,6 +7341,7 @@ dependencies = [
  "gag",
  "geo-types",
  "hostname",
+ "http",
  "http-body-util",
  "hyper",
  "hyper-util",

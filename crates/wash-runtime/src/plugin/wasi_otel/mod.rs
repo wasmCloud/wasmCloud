@@ -32,6 +32,12 @@ use crate::wit::{WitInterface, WitWorld};
 
 const WASI_OTEL_ID: &str = "wasi-otel";
 
+/// OTel gRPC default per the OTLP/gRPC spec. Matches what
+/// `opentelemetry_otlp::SpanExporter::builder().with_tonic()` falls back to
+/// when no `OTEL_EXPORTER_OTLP_*_ENDPOINT` is set; duplicated here only so
+/// the log line at plugin start reflects what the exporter actually used.
+const DEFAULT_OTLP_GRPC_ENDPOINT: &str = "http://localhost:4317";
+
 mod bindings {
     wasmtime::component::bindgen!({
         world: "otel",
@@ -41,17 +47,33 @@ mod bindings {
 
 use bindings::wasi::otel::tracing::{SpanContext as WitSpanContext, TraceFlags as WitTraceFlags};
 
-/// Plugin configuration
-#[derive(Clone, Debug)]
+/// Configuration for the [`WasiOtel`] plugin.
+///
+/// Construct via [`WasiOtelConfig::builder`] (or [`Default::default`]) to
+/// stay forward-compatible with new fields.
+///
+/// # Examples
+///
+/// ```
+/// use wash_runtime::plugin::wasi_otel::WasiOtelConfig;
+///
+/// let cfg = WasiOtelConfig::builder()
+///     .service_name("my-service")
+///     .build();
+/// assert_eq!(cfg.service_name, "my-service");
+/// ```
+#[derive(Clone, Debug, bon::Builder)]
+#[non_exhaustive]
 pub struct WasiOtelConfig {
+    /// `service.name` resource attribute attached to all exported spans,
+    /// metrics, and logs. Defaults to the plugin id (`wasi-otel`).
+    #[builder(default = WASI_OTEL_ID.to_string(), into)]
     pub service_name: String,
 }
 
 impl Default for WasiOtelConfig {
     fn default() -> Self {
-        Self {
-            service_name: "wasi-otel".to_string(),
-        }
+        Self::builder().build()
     }
 }
 
@@ -104,11 +126,12 @@ impl HostPlugin for WasiOtel {
     async fn start(&self) -> anyhow::Result<()> {
         // The exporter resolves its endpoint from `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
         // then `OTEL_EXPORTER_OTLP_ENDPOINT`, falling back to the OTel gRPC default
-        // (`http://localhost:4317`). Protocol is fixed to gRPC because we use
-        // `with_tonic()` below.
+        // ([`DEFAULT_OTLP_GRPC_ENDPOINT`]). Protocol is fixed to gRPC because we use
+        // `with_tonic()` below; tracking richer per-target endpoint configuration as a
+        // follow-up to this PR (see TODO below).
         let endpoint = std::env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
             .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
-            .unwrap_or_else(|_| "http://localhost:4317".to_string());
+            .unwrap_or_else(|_| DEFAULT_OTLP_GRPC_ENDPOINT.to_string());
         tracing::info!(
             endpoint = %endpoint,
             protocol = "grpc",

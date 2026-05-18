@@ -62,6 +62,7 @@ use crate::wit::{WitInterface, WitWorld};
 mod sysinfo;
 use sysinfo::SystemMonitor;
 
+pub mod allowed_hosts;
 pub mod http;
 #[cfg(feature = "wasip3")]
 pub mod http_p3;
