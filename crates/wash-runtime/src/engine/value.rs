@@ -133,9 +133,9 @@ pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> wasmtime
                 }
             }
         }
-        &Val::Future(_) | &Val::Stream(_) | &Val::ErrorContext(_) => {
-            wasmtime::bail!("async not supported")
-        }
+        Val::Future(v) => Ok(Val::Future(v.clone())),
+        Val::Stream(v) => Ok(Val::Stream(v.clone())),
+        Val::ErrorContext(v) => Ok(Val::ErrorContext(v.clone())),
     }
 }
 
@@ -258,9 +258,9 @@ pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> wasmtime::
                 ))
             }
         }
-        Val::Future(_) | Val::Stream(_) | Val::ErrorContext(_) => {
-            wasmtime::bail!("async not supported")
-        }
+        Val::Future(v) => Ok(Val::Future(v)),
+        Val::Stream(v) => Ok(Val::Stream(v)),
+        Val::ErrorContext(v) => Ok(Val::ErrorContext(v)),
     }
 }
 

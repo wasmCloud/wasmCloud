@@ -1056,14 +1056,24 @@ async fn invoke_component_handler(
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
     // Create a new store for this request with plugin contexts
-    let store = workload_handle.new_store(component_id).await?;
+    let mut store = workload_handle.new_store(component_id).await?;
 
     // Check if this component targets WASIP3 and dispatch accordingly
     #[cfg(feature = "wasip3")]
     if crate::engine::targets_wasip3_http(instance_pre.component()) {
-        let resp =
-            crate::host::http_p3::handle_component_request_p3(store, instance_pre, req, fuel_meter)
-                .await?;
+        workload_handle
+            .pre_instantiate_linked_components_for_component(&mut store, component_id)
+            .await?;
+        let store_id = store.data().active_ctx.store_id.clone();
+        let resp = crate::host::http_p3::handle_component_request_p3(
+            store,
+            instance_pre,
+            req,
+            fuel_meter,
+        )
+        .await;
+        workload_handle.clear_exporter_instances_for_store(&store_id);
+        let resp = resp?;
         // Convert P3 response to a compatible HyperOutgoingBody response
         let (parts, body) = resp.into_parts();
         let body = HyperOutgoingBody::new(
