@@ -36,6 +36,10 @@ jobs:
 
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
+        with:
+          # wash-runtime's build.rs invokes prost-build, so the workspace
+          # build below needs protoc on PATH.
+          install-protoc: "true"
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4.35.5
