@@ -23,7 +23,7 @@ use crate::{
         ctx::{ActiveCtx, SharedCtx, extract_active_ctx},
         workload::WorkloadItem,
     },
-    plugin::HostPlugin,
+    plugin::{HostPlugin, WitInterfaces},
     wit::{WitInterface, WitWorld},
 };
 
@@ -914,14 +914,10 @@ impl HostPlugin for InMemoryBlobstore {
     async fn on_workload_item_bind<'a>(
         &self,
         component_handle: &mut WorkloadItem<'a>,
-        interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         // Check if any of the interfaces are wasi:blobstore related
-        let has_blobstore = interfaces
-            .iter()
-            .any(|i| i.namespace == "wasi" && i.package == "blobstore");
-
-        if !has_blobstore {
+        if !interfaces.contains("wasi", "blobstore", &[]) {
             tracing::warn!(
                 "WasiBlobstore plugin requested for non-wasi:blobstore interface(s): {:?}",
                 interfaces
@@ -965,7 +961,7 @@ impl HostPlugin for InMemoryBlobstore {
     async fn on_workload_unbind(
         &self,
         workload_id: &str,
-        _interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         // Clean up storage for this workload
         let mut storage = self.storage.write().await;

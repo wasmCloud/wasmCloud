@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
-use crate::plugin::WorkloadTracker;
 use crate::plugin::{HostPlugin, lock_root};
+use crate::plugin::{WitInterfaces, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
 use tokio::sync::RwLock;
@@ -726,14 +726,11 @@ impl HostPlugin for FilesystemBlobstore {
     async fn on_workload_item_bind<'a>(
         &self,
         component_handle: &mut WorkloadItem<'a>,
-        interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let Some(_interface) = interfaces
-            .iter()
-            .find(|i| i.namespace == "wasi" && i.package == "blobstore")
-        else {
+        if !interfaces.contains("wasi", "package", &[]) {
             return Ok(());
-        };
+        }
 
         tracing::debug!(
             workload_id = component_handle.workload_id(),
@@ -761,14 +758,11 @@ impl HostPlugin for FilesystemBlobstore {
     async fn on_workload_bind(
         &self,
         workload: &crate::engine::workload::UnresolvedWorkload,
-        host_interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        host_interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let Some(_interface) = host_interfaces
-            .iter()
-            .find(|i| i.namespace == "wasi" && i.package == "blobstore")
-        else {
+        if !host_interfaces.contains("wasi", "package", &[]) {
             return Ok(());
-        };
+        }
 
         self.tracker.write().await.add_unresolved_workload(
             workload,
@@ -783,7 +777,7 @@ impl HostPlugin for FilesystemBlobstore {
     async fn on_workload_unbind(
         &self,
         workload_id: &str,
-        _interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         let workload_cleanup = |workload_data: Option<WorkloadData>| async {
             if let Some(data) = workload_data {

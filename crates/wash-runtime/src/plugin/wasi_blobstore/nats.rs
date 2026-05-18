@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
-use crate::plugin::HostPlugin;
 use crate::plugin::WorkloadTracker;
+use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
 use async_nats::jetstream::object_store::{self, List, Object, ObjectStore};
 use bytes::Bytes;
@@ -815,14 +815,11 @@ impl HostPlugin for NatsBlobstore {
     async fn on_workload_item_bind<'a>(
         &self,
         component_handle: &mut WorkloadItem<'a>,
-        interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let Some(_interface) = interfaces
-            .iter()
-            .find(|i| i.namespace == "wasi" && i.package == "blobstore")
-        else {
+        if !interfaces.contains("wasi", "blobstore", &[]) {
             return Ok(());
-        };
+        }
 
         tracing::debug!(
             workload_id = component_handle.workload_id(),
@@ -850,12 +847,9 @@ impl HostPlugin for NatsBlobstore {
     async fn on_workload_bind(
         &self,
         workload: &crate::engine::workload::UnresolvedWorkload,
-        host_interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        host_interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let Some(interface) = host_interfaces
-            .iter()
-            .find(|i| i.namespace == "wasi" && i.package == "blobstore")
-        else {
+        let Some(interface) = host_interfaces.get("wasi", "blobstore", &[]) else {
             return Ok(());
         };
 
@@ -884,7 +878,7 @@ impl HostPlugin for NatsBlobstore {
     async fn on_workload_unbind(
         &self,
         workload_id: &str,
-        _interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         let workload_cleanup = |workload_data: Option<WorkloadData>| async {
             if let Some(data) = workload_data {

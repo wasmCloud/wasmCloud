@@ -55,6 +55,34 @@ pub mod wasmcloud_messaging;
 #[cfg(all(feature = "wasi-webgpu", not(target_os = "windows")))]
 pub mod wasi_webgpu;
 
+#[derive(Debug)]
+pub struct WitInterfaces<'a> {
+    pub inner: &'a std::collections::HashSet<crate::wit::WitInterface>,
+}
+
+impl<'a> WitInterfaces<'a> {
+    pub fn get(
+        &self,
+        namespace: &str,
+        package: &str,
+        interfaces: &[&str],
+    ) -> Option<&crate::wit::WitInterface> {
+        for interface in self.inner.iter() {
+            if interface.namespace == namespace
+                && interface.package == package
+                && interfaces.iter().all(|i| interface.interfaces.contains(*i))
+            {
+                return Some(interface);
+            }
+        }
+        None
+    }
+
+    pub fn contains(&self, namespace: &str, package: &str, interfaces: &[&str]) -> bool {
+        self.get(namespace, package, interfaces).is_some()
+    }
+}
+
 /// The [`HostPlugin`] trait provides an interface for implementing built-in plugins for the host.
 /// A plugin is primarily responsible for implementing a specific [`WitWorld`] as a collection of
 /// imports and exports that will be directly linked to the workload's [`wasmtime::component::Linker`].
@@ -139,7 +167,7 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     async fn on_workload_bind(
         &self,
         _workload: &UnresolvedWorkload,
-        _interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -162,7 +190,7 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     async fn on_workload_item_bind<'a>(
         &self,
         _item: &mut WorkloadItem<'a>,
-        _interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -210,7 +238,7 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     async fn on_workload_unbind(
         &self,
         _workload_id: &str,
-        _interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         Ok(())
     }

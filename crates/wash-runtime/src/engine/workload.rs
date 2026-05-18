@@ -8,7 +8,10 @@ use std::{
     time::Duration,
 };
 
-use crate::sockets::{self, SocketAddrUse, loopback};
+use crate::{
+    plugin::WitInterfaces,
+    sockets::{self, SocketAddrUse, loopback},
+};
 use anyhow::{Context as _, bail, ensure};
 use tokio::{sync::RwLock, task::JoinHandle, time::timeout};
 use tracing::{Instrument, debug, error, info, instrument, trace, warn};
@@ -1274,7 +1277,15 @@ impl ResolvedWorkload {
                         .cloned()
                         .collect::<std::collections::HashSet<_>>();
 
-                    if let Err(e) = plugin.on_workload_unbind(self.id(), bound_interfaces).await {
+                    if let Err(e) = plugin
+                        .on_workload_unbind(
+                            self.id(),
+                            WitInterfaces {
+                                inner: &bound_interfaces,
+                            },
+                        )
+                        .await
+                    {
                         warn!(
                             plugin_id,
                             component_id = component.id(),
@@ -1530,7 +1541,12 @@ impl UnresolvedWorkload {
 
                 // Call on_workload_bind with the workload and all matched interfaces
                 if let Err(e) = p
-                    .on_workload_bind(self, plugin_matched_interfaces.clone())
+                    .on_workload_bind(
+                        self,
+                        WitInterfaces {
+                            inner: &plugin_matched_interfaces,
+                        },
+                    )
                     .instrument(bind_span)
                     .await
                 {
@@ -1548,7 +1564,12 @@ impl UnresolvedWorkload {
                             "calling on_workload_unbind for cleanup after bind failure"
                         );
                         if let Err(cleanup_err) = bound_plugin
-                            .on_workload_unbind(self.id(), bound_interfaces.clone())
+                            .on_workload_unbind(
+                                self.id(),
+                                WitInterfaces {
+                                    inner: bound_interfaces,
+                                },
+                            )
                             .await
                         {
                             warn!(
@@ -1592,7 +1613,12 @@ impl UnresolvedWorkload {
                         plugin_id = plugin_id,
                     );
                     if let Err(e) = p
-                        .on_workload_item_bind(&mut workload_item, matching_interfaces.clone())
+                        .on_workload_item_bind(
+                            &mut workload_item,
+                            WitInterfaces {
+                                inner: &matching_interfaces,
+                            },
+                        )
                         .instrument(item_bind_span)
                         .await
                     {
@@ -1611,7 +1637,12 @@ impl UnresolvedWorkload {
                                 "calling on_workload_unbind for cleanup after component bind failure"
                             );
                             if let Err(cleanup_err) = bound_plugin
-                                .on_workload_unbind(self.id(), bound_interfaces.clone())
+                                .on_workload_unbind(
+                                    self.id(),
+                                    WitInterfaces {
+                                        inner: bound_interfaces,
+                                    },
+                                )
                                 .await
                             {
                                 warn!(
@@ -2037,14 +2068,14 @@ mod tests {
         async fn on_workload_bind(
             &self,
             _workload: &UnresolvedWorkload,
-            interfaces: HashSet<WitInterface>,
+            interfaces: WitInterfaces<'_>,
         ) -> anyhow::Result<()> {
             self.on_workload_bind_count.fetch_add(1, Ordering::SeqCst);
             self.call_records.lock().unwrap().push(CallRecord {
                 plugin_id: self.id.to_string(),
                 method: "on_workload_bind".to_string(),
                 component_id: None,
-                interfaces: interfaces.iter().map(|i| i.to_string()).collect(),
+                interfaces: interfaces.inner.iter().map(|i| i.to_string()).collect(),
             });
             Ok(())
         }
@@ -2052,7 +2083,7 @@ mod tests {
         async fn on_workload_item_bind<'a>(
             &self,
             item: &mut WorkloadItem<'a>,
-            interfaces: HashSet<WitInterface>,
+            interfaces: WitInterfaces<'_>,
         ) -> anyhow::Result<()> {
             self.on_workload_item_bind_count
                 .fetch_add(1, Ordering::SeqCst);
@@ -2060,7 +2091,7 @@ mod tests {
                 plugin_id: self.id.to_string(),
                 method: "on_workload_item_bind".to_string(),
                 component_id: Some(item.id().to_string()),
-                interfaces: interfaces.iter().map(|i| i.to_string()).collect(),
+                interfaces: interfaces.inner.iter().map(|i| i.to_string()).collect(),
             });
             Ok(())
         }

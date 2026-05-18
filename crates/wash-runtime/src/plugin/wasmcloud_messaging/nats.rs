@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::{ResolvedWorkload, WorkloadItem};
 use crate::observability::Meters;
-use crate::plugin::HostPlugin;
+use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
 use async_nats::Subscriber;
 use futures::stream::StreamExt;
@@ -168,14 +168,11 @@ impl HostPlugin for NatsMessaging {
     async fn on_workload_item_bind<'a>(
         &self,
         component_handle: &mut WorkloadItem<'a>,
-        interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let Some(interface) = interfaces
-            .iter()
-            .find(|i| i.namespace == "wasmcloud" && i.package == "messaging")
-        else {
+        if !interfaces.contains("wasmcloud", "messaging", &[]) {
             return Ok(());
-        };
+        }
 
         // Subscriptions come from this component's own `LocalResources.config`
         // (so workers in one workload can subscribe to different subjects),
@@ -418,7 +415,7 @@ impl HostPlugin for NatsMessaging {
     async fn on_workload_unbind(
         &self,
         workload_id: &str,
-        _interfaces: HashSet<crate::wit::WitInterface>,
+        _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         let workload_cleanup = |_| async {};
         let component_cleanup = |component_data: ComponentData| async move {

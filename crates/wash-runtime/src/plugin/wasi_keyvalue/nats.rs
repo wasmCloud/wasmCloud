@@ -12,7 +12,7 @@ use bytes::{Buf, Bytes};
 const PLUGIN_KEYVALUE_ID: &str = "wasi-keyvalue";
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
-use crate::plugin::HostPlugin;
+use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
 use futures::StreamExt;
 use tracing::instrument;
@@ -477,14 +477,10 @@ impl HostPlugin for NatsKeyValue {
     async fn on_workload_item_bind<'a>(
         &self,
         component_handle: &mut WorkloadItem<'a>,
-        interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         // Check if any of the interfaces are wasi:keyvalue related
-        let has_keyvalue = interfaces
-            .iter()
-            .any(|i| i.namespace == "wasi" && i.package == "keyvalue");
-
-        if !has_keyvalue {
+        if !interfaces.contains("wasi", "keyvalue", &[]) {
             tracing::warn!(
                 "WasiKeyvalue plugin requested for non-wasi:keyvalue interface(s): {:?}",
                 interfaces
@@ -519,7 +515,7 @@ impl HostPlugin for NatsKeyValue {
     async fn on_workload_unbind(
         &self,
         workload_id: &str,
-        _interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         tracing::debug!("WasiKeyvalue plugin unbound from workload '{workload_id}'");
 

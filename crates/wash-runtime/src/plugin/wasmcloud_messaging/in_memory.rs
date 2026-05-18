@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::{ResolvedWorkload, UnresolvedWorkload, WorkloadItem};
 use crate::observability::Meters;
-use crate::plugin::HostPlugin;
+use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
 use anyhow::Context;
 use opentelemetry::KeyValue;
@@ -265,14 +265,11 @@ impl HostPlugin for InMemoryMessaging {
     async fn on_workload_bind(
         &self,
         workload: &UnresolvedWorkload,
-        interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let Some(_interface) = interfaces
-            .iter()
-            .find(|i| i.namespace == "wasmcloud" && i.package == "messaging")
-        else {
+        if !interfaces.contains("wasmcloud", "messaging", &[]) {
             return Ok(());
-        };
+        }
 
         self.tracker
             .write()
@@ -284,14 +281,11 @@ impl HostPlugin for InMemoryMessaging {
     async fn on_workload_item_bind<'a>(
         &self,
         component_handle: &mut WorkloadItem<'a>,
-        interfaces: std::collections::HashSet<crate::wit::WitInterface>,
+        interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let Some(_interface) = interfaces
-            .iter()
-            .find(|i| i.namespace == "wasmcloud" && i.package == "messaging")
-        else {
+        if !interfaces.contains("wasmcloud", "messaging", &[]) {
             return Ok(());
-        };
+        }
 
         bindings::wasmcloud::messaging::types::add_to_linker::<_, SharedCtx>(
             component_handle.linker(),
@@ -461,7 +455,7 @@ impl HostPlugin for InMemoryMessaging {
     async fn on_workload_unbind(
         &self,
         workload_id: &str,
-        _interfaces: HashSet<crate::wit::WitInterface>,
+        _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         // Clean up tracker
         let workload_cleanup = |_| async {};
