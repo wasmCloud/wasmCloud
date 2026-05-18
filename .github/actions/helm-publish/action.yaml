@@ -62,8 +62,10 @@ runs:
         shell: bash
         env:
           CHART_PATH: ${{ format('charts/{0}', inputs.chart-name)}}
+          CHART_APP_VERSION: ${{ inputs.chart-app-version }}
+          CHART_VERSION: ${{ inputs.chart-version }}
         run: |
-          helm package --app-version "${{ inputs.chart-app-version }}" --version "${{ inputs.chart-version }}" ${{ env.CHART_PATH }} -d .helm-charts
+          helm package --app-version "${CHART_APP_VERSION}" --version "${CHART_VERSION}" "${CHART_PATH}" -d .helm-charts
 
       - name: Use Git version
         if: inputs.chart-app-version == '' && inputs.chart-version == ''
@@ -73,7 +75,7 @@ runs:
         run: |
           VERSION=${GITHUB_REF_NAME#v}
           echo "VERSION=${VERSION}"
-          helm package --app-version "$VERSION" --version "$VERSION" ${{ env.CHART_PATH }} -d .helm-charts
+          helm package --app-version "$VERSION" --version "$VERSION" "${CHART_PATH}" -d .helm-charts
 
       - name: Publish
         shell: bash
@@ -84,5 +86,5 @@ runs:
             if [ -z "${chart:-}" ]; then
               break
             fi
-            helm push "${chart}" "${{ env.CHART_REMOTE }}"
+            helm push "${chart}" "${CHART_REMOTE}"
           done

@@ -20,7 +20,7 @@ runs:
       working-directory: "${{ inputs.working-directory }}"
       run: "go mod tidy"
     - name: "Verify Go Mod Tidy"
-      uses: "wasmCloud/wasmCloud/.github/actions/no-diff@main"
+      uses: ./.github/actions/no-diff
       with:
         fixup-command: "go mod tidy"
     - uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0

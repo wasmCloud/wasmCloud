@@ -21,9 +21,13 @@ runs:
   steps:
     - name: Verify No Diffs
       shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+        FIXUP_COMMAND: ${{ inputs.fixup-command }}
+        REPO: ${{ github.repository }}
       run: |
         set -e
-        pushd "${GITHUB_WORKSPACE}/${{ inputs.path }}" || exit 1
+        pushd "${GITHUB_WORKSPACE}/${INPUT_PATH}" || exit 1
 
         # From: https://backreference.org/2009/12/23/how-to-match-newlines-in-sed/
         # This is to leverage this workaround:
@@ -46,21 +50,21 @@ runs:
         # Untracked (new) files
         if [[ $(git ls-files --others --exclude-standard) ]]; then
             for x in $(git ls-files --others --exclude-standard); do
-              echo "::error file=$x::Please run ${{ inputs.fixup-command }}.%0A$x"
+              echo "::error file=$x::Please run ${FIXUP_COMMAND}.%0A$x"
             done
-            echo "${{ github.repository }} has untracked files. Please run ${{ inputs.fixup-command }}."
+            echo "${REPO} has untracked files. Please run ${FIXUP_COMMAND}."
             exit 1
         fi
 
         # Modified files
         if [[ $(git diff-index --name-only HEAD --) ]]; then
             for x in $(git diff-index --name-only HEAD --); do
-              echo "::error file=$x::Please run ${{ inputs.fixup-command }}.%0A$(git diff $x | urlencode)"
+              echo "::error file=$x::Please run ${FIXUP_COMMAND}.%0A$(git diff "$x" | urlencode)"
             done
-            echo "${{ github.repository }} is incorrectly formatted. Please run ${{ inputs.fixup-command }}."
+            echo "${REPO} is incorrectly formatted. Please run ${FIXUP_COMMAND}."
             exit 1
         fi
-        echo "${{ github.repository }} is formatted correctly."
+        echo "${REPO} is formatted correctly."
         popd
     - name: Generate patch
       if: failure()
