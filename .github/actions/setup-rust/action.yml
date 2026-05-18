@@ -30,6 +30,13 @@ inputs:
     description: "Install Zig and cargo-zigbuild for cross-compilation"
     required: false
     default: "false"
+  install-protoc:
+    description: >
+      Install protoc (protobuf-compiler) for crates whose build.rs calls
+      prost-build / tonic-build (e.g. wash-runtime). Linux and macOS only;
+      Windows callers should install protoc separately.
+    required: false
+    default: "false"
 
 runs:
   using: "composite"
@@ -81,3 +88,23 @@ runs:
     - name: Install wash CLI
       if: ${{ inputs.install-wash == 'true' }}
       uses: wasmcloud/setup-wash-action@47756fa211cc82f392c57e39504f43ef46fc0b3e # v2.1.0
+
+    - name: Install protoc
+      if: ${{ inputs.install-protoc == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${RUNNER_OS}" in
+          Linux)
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends protobuf-compiler
+            ;;
+          macOS)
+            brew install protobuf
+            ;;
+          *)
+            echo "install-protoc is only supported on Linux and macOS runners (got ${RUNNER_OS:-unknown})" >&2
+            exit 1
+            ;;
+        esac
+        protoc --version
