@@ -81,8 +81,11 @@ impl CliCommand for DevCommand {
         // `wasi:config/store::get`, so values from `workload.environment` are
         // visible to the component as both env vars and wasi:config entries
         // without further plumbing.
-        host_builder =
-            host_builder.with_plugin(Arc::new(plugin::wasi_config::DynamicConfig::new(true)))?;
+        host_builder = host_builder.with_plugin(Arc::new(
+            plugin::wasi_config::DynamicConfig::builder()
+                .copy_environment(true)
+                .build(),
+        ))?;
 
         // Enable wasmcloud:messaging
         host_builder = host_builder.with_plugin(Arc::new(
@@ -616,10 +619,6 @@ mod tests {
         workload.components.iter().find(|c| c.name == name)
     }
 
-    // ---------------------------------------------------------------------
-    // Tests for `build_workload` used by `wash dev`
-    // ---------------------------------------------------------------------
-
     #[test]
     fn build_workload_lands_workload_values_on_dev_component_only() {
         // The dev component (when not running as a service) is the one
@@ -628,7 +627,7 @@ mod tests {
         let resolved = ResolvedWorkload {
             environment: HashMap::from([("LOG".into(), "debug".into())]),
             config: HashMap::from([("flag".into(), "on".into())]),
-            allowed_hosts: vec!["https://api.example.com".into()],
+            allowed_hosts: vec!["https://api.example.com".parse().unwrap()],
         };
         let dev_cfg = DevConfig {
             components: vec![dev_component_named("sidecar-a")],
@@ -654,7 +653,7 @@ mod tests {
         assert_eq!(dev.local_resources.config.get("flag").unwrap(), "on");
         assert_eq!(
             &dev.local_resources.allowed_hosts[..],
-            &["https://api.example.com".to_string()]
+            &["https://api.example.com".parse().unwrap()]
         );
 
         let sidecar = find_component(&workload, "sidecar-a").unwrap();

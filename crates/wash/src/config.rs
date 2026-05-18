@@ -3,7 +3,7 @@
 //! with explicit defaults.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -14,6 +14,7 @@ use figment::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::info;
+use wash_runtime::host::allowed_hosts::AllowedHost;
 use wash_runtime::wit::WitInterface;
 
 use crate::{
@@ -51,12 +52,24 @@ pub struct Config {
     pub workload: Option<WorkloadConfig>,
 
     /// Named ConfigMap-equivalent sources referenced by `workload.environment.configFrom`.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub configs: HashMap<String, ConfigSource>,
+    ///
+    /// `BTreeMap` so iteration / serialization order is deterministic.
+    #[serde(
+        default,
+        rename = "configs",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub config_sources: BTreeMap<String, ConfigSource>,
 
     /// Named Secret-equivalent sources referenced by `workload.environment.secretFrom`.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub secrets: HashMap<String, ConfigSource>,
+    ///
+    /// `BTreeMap` so iteration / serialization order is deterministic.
+    #[serde(
+        default,
+        rename = "secrets",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub secret_sources: BTreeMap<String, SecretSource>,
 
     /// WIT dependency management configuration (default: empty/optional)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -73,8 +86,8 @@ impl Default for Config {
             new: None,
             dev: None,
             workload: None,
-            configs: HashMap::new(),
-            secrets: HashMap::new(),
+            config_sources: BTreeMap::new(),
+            secret_sources: BTreeMap::new(),
             wit: None,
         }
     }
@@ -175,11 +188,25 @@ impl BuildConfig {
     }
 }
 
+/// Serde default for [`WorkloadConfig::allowed_hosts`]: a single
+/// [`AllowedHost::Any`] entry (allow-all). Fires only when the YAML
+/// omits `allowedHosts` entirely — an explicit `allowedHosts: []` stays
+/// empty (deny-all in the runtime).
+fn default_allow_all_hosts() -> Vec<AllowedHost> {
+    vec![AllowedHost::Any]
+}
+
 /// Workload-level configuration that mirrors the `localResources` shape of a
-/// `WorkloadDeployment` component. Currently consumed by `wash dev`; the same
-/// shape is intended to round-trip to a Kubernetes `WorkloadDeployment`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// `WorkloadDeployment` component.
+///
+/// Currently consumed by `wash dev`; the same shape is intended to round-trip
+/// to a Kubernetes `WorkloadDeployment`.
+///
+/// Use [`WorkloadConfig::builder`] to construct so future fields don't break
+/// callers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, bon::Builder)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct WorkloadConfig {
     /// Environment variables for the component (wasi:cli/env). Combines inline
     /// values with named references to top-level `configs:` and `secrets:`.
@@ -188,18 +215,38 @@ pub struct WorkloadConfig {
     /// Opaque key-value config delivered to the component (e.g. wasi:config/store).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub config: HashMap<String, String>,
-    /// Outbound HTTP allowlist. Empty means unrestricted (matches runtime
-    /// behavior in `crates/wash-runtime/src/host/http.rs`).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_hosts: Vec<String>,
+    /// Outbound HTTP allowlist. Each entry parses into a typed
+    /// [`AllowedHost`]; YAML/JSON callers continue to write plain strings.
+    ///
+    /// Default resolution distinguishes "field omitted" from "explicit
+    /// empty":
+    ///
+    /// - **Missing from YAML** → serde default fires →
+    ///   `[AllowedHost::Any]` (allow-all). Keeps `wash dev` ergonomic for
+    ///   users who haven't thought about egress.
+    /// - **`allowedHosts: []` in YAML** → empty `Vec` is preserved.
+    ///   `resolve_workload` passes it through unchanged; the runtime
+    ///   (`wash-runtime::host::http::check_allowed_hosts`) treats empty
+    ///   as deny-all. Explicit user intent is respected.
+    /// - **`WorkloadConfig::default()` (Rust API)** → empty `Vec`
+    ///   (derived `Default`), which the runtime treats as deny-all
+    ///   — fail-closed for programmatic construction.
+    ///
+    /// The serialization side does NOT skip empty lists, so a round-trip
+    /// preserves the explicit-empty intent.
+    #[serde(default = "default_allow_all_hosts")]
+    pub allowed_hosts: Vec<AllowedHost>,
 }
 
-/// One layer of environment variables. Inline values are written directly;
-/// `configFrom` / `secretFrom` reference named entries in the top-level
-/// `configs:` / `secrets:` blocks by name. On key conflicts later entries win,
-/// in order: inline → configFrom → secretFrom (matches K8s envFrom semantics).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// One layer of environment variables.
+///
+/// Inline values are written directly; `configFrom` / `secretFrom` reference
+/// named entries in the top-level `configs:` / `secrets:` blocks by name. On
+/// key conflicts later entries win, in order: inline → configFrom → secretFrom
+/// (matches K8s `envFrom` semantics).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, bon::Builder)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EnvironmentLayer {
     /// Inline plain values. Suitable for non-sensitive defaults.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -212,26 +259,62 @@ pub struct EnvironmentLayer {
     pub secret_from: Vec<String>,
 }
 
-/// A source of key-value pairs for a `configs:` or `secrets:` entry. Multiple
-/// fields can be set on a single entry.. They merge last-wins in the order
-/// `inline` → `file` → `fromEnv` (matches K8s ConfigMap merge semantics).
+/// A source of non-sensitive key-value pairs for a `configs:` entry.
 ///
-/// Distinct types are not used for config vs secret because the schema is
-/// identical; the difference is the security posture applied at resolve time
-/// (see [`crate::workload::resolve_workload`]).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Multiple fields can be set on a single entry. They merge last-wins in the
+/// order `inline` → `file` → `fromEnv` (matches K8s ConfigMap merge
+/// semantics). Resolution lives in [`crate::workload`] as
+/// [`ConfigSource::resolve`].
+///
+/// See [`SecretSource`] for the sibling type that carries the stricter
+/// posture (file-mode check, in-repo-tree warning, etc.). The two share
+/// today's wire schema but are deliberately distinct types so secret
+/// handling can never be applied to a config and vice versa.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, bon::Builder)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ConfigSource {
-    /// Literal key-value entries.
+    /// Literal key-value entries supplied inline.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub inline: HashMap<String, String>,
     /// Path to a `.env`-format file. Relative paths resolve against the
-    /// project directory. For secrets, the file must be 0600/0400 and must
-    /// not escape the project directory via `..` or symlink.
+    /// project directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<PathBuf>,
     /// Names of environment variables to pull from the developer's shell.
-    /// Missing variables are an error unless `optional` is true on the ref.
+    /// Each name is read at resolve time via [`std::env::var`]; a missing
+    /// variable is a hard error.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub from_env: Vec<String>,
+}
+
+/// A source of sensitive key-value pairs for a `secrets:` entry.
+///
+/// Same wire shape as [`ConfigSource`] today, but a distinct Rust type so
+/// the stricter resolve-time posture (Unix file mode `0600`/`0400`,
+/// `O_NOFOLLOW` open + `fstat` perm check, in-repo-tree warning, no value
+/// snippets in error / log output) can only be applied here. Resolution
+/// lives in [`crate::workload`] as [`SecretSource::resolve`].
+///
+/// The two types may diverge in the future (e.g. a future `rotation`
+/// field that only makes sense for secrets) — keeping them separate now
+/// avoids retrofitting the type split later.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, bon::Builder)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct SecretSource {
+    /// Literal key-value entries supplied inline. Convenient for dev /
+    /// test; do not commit production secrets this way.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub inline: HashMap<String, String>,
+    /// Path to a `.env`-format file. Relative paths resolve against the
+    /// project directory. The file must be Unix mode `0600` or `0400`
+    /// and must not escape the project directory via `..` or symlink.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<PathBuf>,
+    /// Names of environment variables to pull from the developer's shell.
+    /// Each name is read at resolve time via [`std::env::var`]; a missing
+    /// variable is a hard error.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub from_env: Vec<String>,
 }
@@ -682,8 +765,8 @@ pub fn example_config() -> Config {
             ]),
         }),
         workload: None,
-        configs: HashMap::new(),
-        secrets: HashMap::new(),
+        config_sources: BTreeMap::new(),
+        secret_sources: BTreeMap::new(),
     }
 }
 
@@ -805,7 +888,7 @@ workload:
         assert_eq!(workload.config.get("flag").unwrap(), "on");
         assert_eq!(
             workload.allowed_hosts,
-            vec!["https://api.example.com".to_string()]
+            vec!["https://api.example.com".parse().unwrap()]
         );
     }
 
@@ -1014,12 +1097,15 @@ secrets:
 "#;
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
 
-        let app = config.configs.get("app").expect("configs.app should parse");
+        let app = config
+            .config_sources
+            .get("app")
+            .expect("configs.app should parse");
         assert_eq!(app.inline.get("APP_FOO").unwrap(), "app_foo_value");
         assert_eq!(app.file.as_deref(), Some(Path::new("./app.env")));
 
         let creds = config
-            .secrets
+            .secret_sources
             .get("creds")
             .expect("secrets.creds should parse");
         assert_eq!(creds.from_env, vec!["DB_PASSWORD".to_string()]);
