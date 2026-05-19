@@ -7377,12 +7377,16 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "rcgen",
  "reqwest",
  "semver",
  "tokio",
+ "tokio-rustls",
  "uuid",
  "wash-runtime",
  "wasi-preview1-component-adapter-provider",
+ "wasmtime",
+ "wasmtime-wasi-tls",
  "wit-component 0.247.0",
 ]
 

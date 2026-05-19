@@ -2,7 +2,6 @@
 
 #![allow(dead_code)]
 
-#[cfg(feature = "wasi-tls")]
 pub mod tls;
 
 use anyhow::{Context, Result};

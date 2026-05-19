@@ -10,12 +10,16 @@ path = "lib.rs"
 
 [dependencies]
 anyhow = { workspace = true, default-features = true }
-tokio = { workspace = true, features = ["full"] }
-wash-runtime = { path = "../../", features = ["wasip3"] }
-semver = { workspace = true }
-reqwest = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
 bytes = { workspace = true }
+rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
+reqwest = { workspace = true }
+semver = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-rustls = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+wash-runtime = { path = "../../", features = ["wasip3", "wasi-tls"] }
+wasmtime = { workspace = true, features = ["anyhow", "component-model", "component-model-async", "cranelift", "pooling-allocator", "gc", "gc-null"] }
+wasmtime-wasi-tls = { workspace = true, features = ["p3", "rustls"] }
 
 [build-dependencies]
 anyhow = { workspace = true, default-features = true }

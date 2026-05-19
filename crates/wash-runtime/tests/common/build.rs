@@ -256,9 +256,6 @@ fn build_all_fixtures(workspace_dir: &Path) {
 }
 
 fn main() {
-    let out_dir = PathBuf::from(
-        env::var("OUT_DIR").expect("failed to look up `OUT_DIR` from environment variables"),
-    );
     let workspace_dir = workspace_dir().expect("failed to get workspace dir");
 
     build_all_fixtures(&workspace_dir);
