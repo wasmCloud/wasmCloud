@@ -65,6 +65,24 @@ runs:
           --no-self-update
 
     - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      with:
+        # Only save the cache on main pushes; PR runs restore but never save.
+        # Tar+zstd of `target/` over the GHA cache API runs a very long time on
+        # Windows runners and was timing out the `check (windows-latest)` job.
+        # Main builds keep refreshing the cache PRs read from, so PR runs
+        # don't need to save anything themselves.
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+        # Drop `target/` from the cache on Windows. Git's tar.exe + zstd
+        # over the GHA cache API is the slow path, and target/ is the bulk
+        # of what gets tarred. Windows builds will recompile deps from the
+        # cached registry source instead of restoring artifacts, which still
+        # finishes well inside the job timeout. Linux/macOS keep target/
+        # caching because their tar throughput handles it fine.
+        cache-targets: ${{ runner.os != 'Windows' }}
+        # Don't cache .cargo/bin.. rustup re-installs the toolchain on every
+        # run regardless (it's idempotent and fast), and taiki-e/install-action
+        # callers handle their own binary caching. Nothing else lands here.
+        cache-bin: false
 
     - name: Install Zig for zigbuild
       if: ${{ inputs.install-zigbuild == 'true' }}
