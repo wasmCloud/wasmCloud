@@ -62,7 +62,15 @@ jobs:
           fi
 
   canary:
-    if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'canary')
+    # `always()` is required to break the skipped-`changes` propagation
+    # that otherwise marks this job skipped even when `test` succeeded.
+    # Original intent (main push or PR with `canary` label) preserved as
+    # the second clause; per-need success gate restores the implicit
+    # success() check that `always()` disables.
+    if: |
+      always() &&
+      (github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'canary')) &&
+      needs.test.result == 'success'
     needs:
       - test
     permissions:
@@ -84,7 +92,11 @@ jobs:
           registry-namespace: wasmcloud/charts
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Same skipped-`changes` propagation footgun: on a tag push, `changes`
+    # is skipped (only fires on PR), and without `always()` GHA marks
+    # this skipped even when `test` succeeded. That would silently break
+    # the chart release on every `vX.Y.Z` tag push.
+    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.test.result == 'success'
     needs:
       - test
     permissions:

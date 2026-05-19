@@ -86,7 +86,17 @@ jobs:
   # this canary digest as the immutable vX.Y.Z release tag. `canary` itself
   # moves on every subsequent main push.
   canary:
-    if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'canary')
+    # `always()` is required to break the skipped-`changes` propagation
+    # that otherwise marks this job skipped even when its direct needs
+    # all succeed. The original intent — run on main pushes or PRs with
+    # the `canary` label — is preserved as the second clause; the
+    # per-need `result == 'success'` gates restore the implicit success()
+    # check that `always()` disables.
+    if: |
+      always() &&
+      (github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'canary')) &&
+      needs.lint.result == 'success' &&
+      needs.test.result == 'success'
     needs:
       - lint
       - test
