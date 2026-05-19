@@ -7385,7 +7385,6 @@ dependencies = [
  "uuid",
  "wash-runtime",
  "wasi-preview1-component-adapter-provider",
- "wasmtime",
  "wasmtime-wasi-tls",
  "wit-component 0.247.0",
 ]
