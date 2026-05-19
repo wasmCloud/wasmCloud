@@ -1,0 +1,63 @@
+# Helm values for the bench-time runtime-operator install. Differs from
+# values.local.yaml (developer-laptop friendly) in a few load-test ways:
+#
+#   - 1 host replica (more cleanly attributable than the 3 in local.yaml)
+#   - http port 9191 (default; no port collision concerns on the bench
+#     host since k3s is the only kube on the box)
+#   - resources sized for the hello-world component, not Blobby/etc.
+#   - tls disabled — k6 runs on the same host as k3s, so the loopback
+#     hop doesn't need encryption and TLS handshakes would dominate the
+#     numbers we're trying to measure
+#   - operator.allowSharedHosts=false — every workload must target its
+#     own namespace's host group, removing one source of variance from
+#     the scheduler
+#
+# The chart's `runtime.image.tag` is left as the default ("canary"
+# published per merge to main) so a bench against a dev branch is
+# measuring *that branch's* wash-runtime, not whatever stable tag
+# happens to be in values.yaml at chart bump time. CI overrides this
+# via --set when the workflow knows the right tag (e.g. on a release).
+
+global:
+  tls:
+    enabled: false
+  certificates:
+    generate: false
+
+nats:
+  enabled: true
+
+operator:
+  allowSharedHosts: false
+
+gateway:
+  enabled: false
+
+runtime:
+  hostGroups:
+    - name: bench
+      # No explicit `namespace:` — the host group lands in the chart's
+      # release namespace (helm `--namespace wasmcloud-bench` in
+      # run-k6-bench.sh). Setting an explicit namespace here would also
+      # require `operator.hostNamespaces: [wasmcloud-bench]` so the
+      # operator's RBAC + Pod-informer cache cover it; keeping
+      # everything in the release namespace removes that coupling.
+      replicas: 1
+      service:
+        type: ClusterIP
+      webgpu:
+        enabled: false
+      wasip3:
+        enabled: false
+      http:
+        enabled: true
+        port: 9191
+        tls:
+          enabled: false
+      resources:
+        requests:
+          memory: "128Mi"
+          cpu: "500m"
+        limits:
+          memory: "1Gi"
+          cpu: "2000m"
