@@ -185,7 +185,7 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -198,37 +198,16 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
-      - name: Prepare build outputs
-        id: prep
-        # PRs lack org-package write access; only push by digest on main so
-        # canary-publish can assemble the manifest after all gates pass.
-        # Use $GITHUB_EVENT_NAME (built-in env var) to avoid template
-        # expansion inside a shell script (zizmor).
-        run: |
-          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-            {
-              echo 'outputs<<EOF'
-              echo 'type=docker,dest=/tmp/wash-image.tar,name=localhost/wasmcloud-wash:e2e'
-              echo 'EOF'
-            } >> "$GITHUB_OUTPUT"
-          else
-            {
-              echo 'outputs<<EOF'
-              echo 'type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true'
-              echo 'type=docker,dest=/tmp/wash-image.tar,name=localhost/wasmcloud-wash:e2e'
-              echo 'EOF'
-            } >> "$GITHUB_OUTPUT"
-          fi
-      - name: Build wash runtime image
-        id: build
+      # Split into two single-output builds: dual `type=image`+`type=docker`
+      # on one call confuses `digest` output (last write to
+      # `containerimage.digest` wins → docker-tarball envelope, not
+      # registry). The second call hits the cache the first wrote.
+      - name: Build wash runtime image (tarball for operator-e2e)
+        id: build_tar
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
-          # Push by digest so the registry doesn't accumulate per-commit
-          # staging tags, and also emit a local docker tarball so the
-          # operator e2e gate (and any future arch-specific gate)
-          # exercises the exact bytes that get published.
-          outputs: ${{ steps.prep.outputs.outputs }}
+          outputs: type=docker,dest=/tmp/wash-image.tar,name=localhost/wasmcloud-wash:e2e
           # head_ref on PRs (the source branch, shared across re-pushes
           # and across PRs from the same branch); falls back to ref_name
           # on main pushes ("main"). Always falls back to the main scope
@@ -237,10 +216,23 @@ jobs:
             type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
             type=gha,scope=wash-${{ matrix.arch }}-main
           cache-to: type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }},mode=max
+      - name: Push wash runtime image to GHCR by digest (main only)
+        # PRs lack org-package write access; only push on main so
+        # canary-publish can assemble the manifest after all gates pass.
+        # No `cache-to` here — the first build already wrote it.
+        if: github.event_name != 'pull_request'
+        id: build_push
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          outputs: type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
+          cache-from: |
+            type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-${{ matrix.arch }}-main
       - name: Export digest
         if: github.event_name != 'pull_request'
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.build_push.outputs.digest }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/digests
