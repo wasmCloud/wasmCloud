@@ -14,6 +14,13 @@ on:
     # per-commit fast-feedback layer.
     - cron: "0 9 * * 1"
   workflow_dispatch:
+  # Validate the analysis on PRs that touch the workflow itself or the
+  # setup-rust composite action it depends on — otherwise a breakage only
+  # surfaces on the weekly cron and we lose a week of coverage.
+  pull_request:
+    paths:
+      - ".github/workflows/codeql.yml"
+      - ".github/actions/setup-rust/**"
 
 permissions: read-all
 
@@ -26,20 +33,23 @@ jobs:
       security-events: write
       contents: read
       actions: read
-    env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
+      - name: Setup protoc
+        # wash-runtime's build.rs invokes prost-build / tonic-build, which
+        # needs protoc plus the well-known .proto includes on PATH. Matches
+        # the version pinned by wash.yml and examples.yml.
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "29.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
-        with:
-          # wash-runtime's build.rs invokes prost-build, so the workspace
-          # build below needs protoc on PATH.
-          install-protoc: "true"
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4.35.5
@@ -54,11 +64,16 @@ jobs:
           # default suite. Use security-extended to keep noise down on a
           # repo this size.
           queries: security-extended
-          # Reuse the same CARGO_TARGET_DIR for the extractor's internal cargo
-          # invocation so it picks up the proc-macro artifacts built below;
-          # without warm proc-macros, rust-analyzer fails to expand
-          # tracing::*, anyhow::*, and std macros like vec!/format!, which
-          # tanks the "calls with resolved target" quality metric.
+          # Point the extractor at cargo's default target dir (workspace
+          # root = ${{ github.workspace }}) so it picks up the proc-macro
+          # artifacts built below; without warm proc-macros, rust-analyzer
+          # fails to expand tracing::*, anyhow::*, and std macros like
+          # vec!/format!, which tanks the "calls with resolved target"
+          # quality metric. We deliberately do NOT set CARGO_TARGET_DIR as
+          # a job env: that env var propagates into any child `cargo build`
+          # invoked from a build script (e.g. wash-runtime's fixture
+          # builds), redirecting their outputs and breaking their
+          # post-build artifact lookups.
           config: |
             extraction:
               rust:
