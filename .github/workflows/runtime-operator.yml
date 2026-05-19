@@ -79,6 +79,13 @@ jobs:
     needs:
       - lint
       - test
+    # `lint`/`test` use `if: always() && (changes.skipped || ...)` so they
+    # run on main pushes where `changes` is skipped. Without `always()`
+    # here, GHA propagates `changes`'s skipped state through the chain and
+    # marks `build` skipped even when lint/test both succeeded — which
+    # then cascades into `test-e2e` and `canary`. Explicit per-need
+    # success gates are the documented workaround.
+    if: always() && needs.lint.result == 'success' && needs.test.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -100,6 +107,10 @@ jobs:
   test-e2e:
     needs:
       - build
+    # `build` overrides default with `always()` to bypass the skipped
+    # `changes` upstream; this job needs the same override so the skip
+    # state from `changes` doesn't propagate further.
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -166,7 +177,18 @@ jobs:
   # this canary digest as the immutable vX.Y.Z release tag. `canary` itself
   # moves on every subsequent main push.
   canary:
-    if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'canary')
+    # `always()` is required to break the skipped-`changes` propagation
+    # that otherwise marks this job skipped even when its direct needs
+    # all succeed. The original intent — run on main pushes or PRs with
+    # the `canary` label — is preserved as the second clause; the
+    # per-need `result == 'success'` gates restore the implicit success()
+    # check that `always()` disables.
+    if: |
+      always() &&
+      (github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'canary')) &&
+      needs.lint.result == 'success' &&
+      needs.test.result == 'success' &&
+      needs.test-e2e.result == 'success'
     needs:
       - lint
       - test
