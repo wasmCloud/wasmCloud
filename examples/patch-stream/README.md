@@ -8,9 +8,9 @@ hands that stream straight through as the body of an HTTP response.
 ```
 ┌────────┐  GET /            ┌──────────────────────────┐  patches.subscribe()    ┌──────────────────┐
 │ curl   │ ────────────────▶ │ patch-consumer           │ ──────────────────────▶ │ patch-producer   │
-│        │ ◀──────────────── │ (wasi:http/handler@0.3)  │ ◀── stream<u8> NDJSON ──│                  │
-└────────┘  NDJSON body      │                          │                         │ spawns async     │
-                             │ pipes stream straight    │                         │ writer task that │
+│  -N    │ ◀── chunked ───── │ (wasi:http/handler@0.3)  │ ◀── stream<u8> NDJSON ──│                  │
+└────────┘  one HTTP chunk   │                          │                         │ spawns async     │
+            per patch line   │ pipes stream straight    │                         │ writer task that │
                              │ into the response body   │                         │ paces 20 patches │
                              │ (zero-copy, no parsing)  │                         │ at 120 ms cadence│
                              └──────────────────────────┘                         └──────────────────┘
@@ -51,25 +51,22 @@ $ curl -N http://localhost:8000/
 ```
 
 The 120 ms spacing in the prefixes is the producer's per-write
-`wait-for`. The end-to-end response takes ~2.4 s.
+`wait-for`. The end-to-end response takes ~2.4 s, and **curl
+renders each line as it arrives** — the response uses HTTP/1.1
+`Transfer-Encoding: chunked` end-to-end:
 
-### Streaming caveat — wash currently buffers the egress
+```
+$ curl -sN -i http://localhost:8000/ | head -3
+HTTP/1.1 200 OK
+content-type: application/x-ndjson
+transfer-encoding: chunked
+```
 
-`curl -N` still receives the *entire* body in one flush at the end of
-the ~2.4 s window, not progressively. That's not a bug in the
-cross-component stream — the timestamps prove the producer→consumer
-hop is incremental — it's wash's HTTP egress layer collecting the
-body before sending headers. Specifically,
-[`crates/wash-runtime/src/host/http_p3.rs`](../../crates/wash-runtime/src/host/http_p3.rs)
-calls `body.collect().await` inside `Store::run_concurrent` because
-the wasi:http body stream needs the concurrent runtime to pump it,
-and exiting `run_concurrent` ends the pump. Making this truly
-progressive (SSE-style) requires keeping `run_concurrent` alive for
-the body's lifetime (via a `oneshot`-signaled body wrapper and a
-spawned task). Tracked as a follow-up below; the example is
-correct without it because the producer-stamped timestamps preserve
-the order-of-arrival information regardless of when curl actually
-sees the bytes.
+This works because wash hands the wasi:http response body straight
+through to hyper as a streaming `http_body::Body` (no `collect()`
+buffering), and keeps `Store::run_concurrent` alive for the body's
+full lifetime via a oneshot-signaled body wrapper — see patch #4
+under "wash-runtime patches required to reach this point".
 
 ## What's actually being exercised
 
@@ -97,6 +94,12 @@ sees the bytes.
   consumer's HTTP handler. The `[t+NNNms]` prefix is captured at
   the moment of `write_all`, so the response visibly records the
   producer's rhythm.
+- **End-to-end chunked egress.** The response is sent as
+  `Transfer-Encoding: chunked`; each `writer.write_all(line)` in
+  the producer becomes one HTTP chunk on the wire, flushed by
+  hyper as soon as the wasi:http pipe consumer hands it over.
+  No collect, no Content-Length, no buffering between guest and
+  client — `curl -N` shows lines arrive at the producer's cadence.
 
 ## Why the timestamps are stamped in the producer, not the consumer
 
@@ -202,7 +205,7 @@ up multi-component runtime linking.
 
 ## wash-runtime patches required to reach this point
 
-This example would not run on stock wash; it requires three changes
+This example would not run on stock wash; it requires four changes
 in `crates/wash-runtime/`:
 
 1. **[`engine/value.rs`](../../crates/wash-runtime/src/engine/value.rs)** —
@@ -228,6 +231,19 @@ in `crates/wash-runtime/`:
    HTTP handler (both of which permanently flip the store into
    async-required state and prevent the linker bridge from
    instantiating exporters itself).
+
+4. **[`host/http_p3.rs`](../../crates/wash-runtime/src/host/http_p3.rs)** —
+   Stream the wasi:http response body straight through to hyper
+   instead of `body.collect().await`-ing it. The handler future is
+   spawned onto tokio; inside its `Store::run_concurrent`, we hand
+   hyper a `StreamingBody` wrapper via a `oneshot` and then await a
+   completion signal from the wrapper's `Drop` / final
+   `poll_frame -> None`. That keeps the concurrent runtime alive
+   for the body's lifetime so the wasi-http pipe consumer keeps
+   pumping chunks into the body's mpsc. Hyper sees an unbounded
+   `size_hint` and picks `Transfer-Encoding: chunked` on its own —
+   no flag, no config — and curl renders each patch as it arrives
+   at the producer's ~120ms cadence.
 
 ## Layout
 
@@ -260,15 +276,6 @@ peer of the entry consumer (the build target).
   type in both components has matching `T` at matching
   `TypeStreamTableIndex` slots. NDJSON `stream<u8>` is the easiest
   way to satisfy that.
-- **Make wash's HTTP egress actually stream.** `host/http_p3.rs`
-  collects the entire body inside `Store::run_concurrent` before
-  returning the response, so `curl -N` only flushes at the end. The
-  fix is to keep `run_concurrent` alive for the body's lifetime —
-  spawn the request future, send the response (with a streaming
-  body wrapper) out via `oneshot`, and signal completion from the
-  wrapper's `Drop` / final `poll_frame` so the spawned task exits
-  cleanly. ~50 LOC of wash-runtime; would let the producer's 120 ms
-  cadence be visible at the curl side too.
 - **Expose multiple `wit_stream` vtables in wit-bindgen-generated
   bindings, or let the guest pick one explicitly.** Today, if a
   consumer's world declares more than one `stream<T>` for the same
