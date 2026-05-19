@@ -274,6 +274,13 @@ jobs:
   runtime-operator-e2e:
     needs:
       - wash-image
+    # `wash-image` runs via `if: always() && ...` to bypass the skipped
+    # `changes` job on main pushes. Without an explicit `if:` here, GHA
+    # propagates the skipped state of that indirect upstream through and
+    # marks this job skipped even though `wash-image` itself succeeded.
+    # Result: canary-publish never fires on main. Explicit gate on
+    # wash-image's actual result is the documented workaround.
+    if: always() && needs.wash-image.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -353,10 +360,21 @@ jobs:
   # `canary` itself moves on every subsequent main push, so we cannot
   # rely on it.
   canary-publish:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Gate canary on the things that actually exercise the published bytes:
+    # `wash-image` is what gets pushed by digest, and `runtime-operator-e2e`
+    # loads that exact image into kind and runs the suite. `check`/`lint`
+    # are workspace-level signals that have no bearing on the image we're
+    # promoting, so they intentionally aren't gates here. `always()` is
+    # required to break the chained-skip propagation from the path-filter
+    # `changes` job (skipped on main) which would otherwise mark this job
+    # skipped before evaluating the explicit gate.
+    if: |
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.wash-image.result == 'success' &&
+      needs.runtime-operator-e2e.result == 'success'
     needs:
-      - check
-      - lint
       - runtime-operator-e2e
       - wash-image
     runs-on: ubuntu-latest
