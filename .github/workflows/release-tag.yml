@@ -24,16 +24,15 @@ name: release-tag
 #   - release-train.yml waits for the PR to actually merge before exiting,
 #     so by the time this workflow fires the merge commit is on main.
 #
-# workflow_dispatch is a recovery hatch: if release-train.yml fails late
-# (e.g. DCO bounces and a human finishes the merge manually), the train
-# run's conclusion is `failure` and this workflow stays skipped. Dispatch
-# manually with `sha=<merge-sha>` once canary builds on that SHA are green
-# — when sha is passed, verify-head reads the version from Cargo.toml at
-# that sha and skips the commit-subject match, so the recovery path works
-# against any SHA whose Cargo.toml carries the version we want to release
-# (useful when the original release commit has been pushed off main HEAD
-# by follow-up commits, or when re-tagging an arbitrary sha). Every
-# downstream step is idempotent against pre-existing tags and manifests.
+# workflow_dispatch is a recovery hatch. Dispatch manually with
+# `sha=<merge-sha>` once canary builds on that SHA are green — when sha
+# is passed, verify-head reads the version from Cargo.toml at that sha
+# and skips the version-bump check, so the recovery path works against
+# any SHA whose Cargo.toml carries the version we want to release. The
+# automatic path (workflow_run from release-train) instead requires
+# HEAD's Cargo.toml workspace version to differ from HEAD~1's, which is
+# the canonical "this commit is a release" signal. Every downstream
+# step is idempotent against pre-existing tags and manifests.
 #
 # Idempotency:
 #   - If an X.Y.Z OCI tag already exists at GHCR, the retag step skips it
@@ -108,38 +107,42 @@ jobs:
         run: |
           set -euo pipefail
           echo "STAGE=verify-head" >> "${GITHUB_ENV}"
-          SUBJECT=$(git log -1 --pretty=%s)
           MERGE_SHA=$(git rev-parse HEAD)
-          WS_VERSION=$(awk -F'"' '
-            /^\[workspace\.package\]/ { in_pkg = 1; next }
-            /^\[/ && !/^\[workspace\.package\]/ { in_pkg = 0 }
-            in_pkg && /^version = "/ { print $2; exit }
-          ' Cargo.toml)
+          read_ws_version() {
+            local src="$1"
+            if [[ "${src}" == "HEAD" ]]; then
+              cat Cargo.toml
+            else
+              git show "${src}:Cargo.toml"
+            fi | awk -F'"' '
+              /^\[workspace\.package\]/ { in_pkg = 1; next }
+              /^\[/ && !/^\[workspace\.package\]/ { in_pkg = 0 }
+              in_pkg && /^version = "/ { print $2; exit }
+            '
+          }
+          WS_VERSION=$(read_ws_version HEAD)
+          if [[ -z "${WS_VERSION}" ]]; then
+            echo "could not read [workspace.package] version from Cargo.toml at HEAD" >&2
+            exit 1
+          fi
           if [[ -n "${INPUT_SHA}" ]]; then
             # Manual recovery dispatch — caller explicitly chose this sha
-            # (e.g., re-tagging an older release after a downstream step
-            # failed mid-promotion). Trust them: take the version straight
-            # from Cargo.toml at that sha and skip the subject check. The
-            # release-train automatic path still hits the strict check
-            # below because workflow_run never sets inputs.sha.
-            echo "manual dispatch with sha=${INPUT_SHA} — using Cargo.toml v${WS_VERSION} (subject check skipped)"
+            # (re-tagging an older release after a downstream step failed
+            # mid-promotion, or finalizing a release whose canary build
+            # was driven via workflow_dispatch on wash.yml). Trust them.
+            echo "manual dispatch with sha=${INPUT_SHA} — using Cargo.toml v${WS_VERSION}"
             VERSION="${WS_VERSION}"
           else
-            # release-train uses rebase-merge so the subject is exactly
-            # "release: vX.Y.Z" or "release: vX.Y.Z-rc.N", with no PR ref
-            # appended. The optional "(#NNN)" group is defensive in case
-            # someone manually squash-merges in the offline-train path (the
-            # runbook still says to rebase-merge, but humans).
-            if [[ ! "${SUBJECT}" =~ ^release:\ v([0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9.-]*)?)([[:space:]]\(#[0-9]+\))?$ ]]; then
-              echo "HEAD subject is not a release commit: ${SUBJECT}" >&2
-              echo "abort — release-tag will not tag a non-release HEAD" >&2
+            # Automatic path (workflow_run from release-train). Require
+            # HEAD to bump the workspace version vs its parent — that's
+            # the canonical "this commit is a release" signal, replacing
+            # the older "subject starts with release: v" convention.
+            PREV_VERSION=$(read_ws_version HEAD~1 2>/dev/null || true)
+            if [[ "${WS_VERSION}" == "${PREV_VERSION}" ]]; then
+              echo "HEAD does not bump [workspace.package].version (still ${PREV_VERSION}) — refusing to tag" >&2
               exit 1
             fi
-            VERSION="${BASH_REMATCH[1]}"
-            if [[ "${VERSION}" != "${WS_VERSION}" ]]; then
-              echo "commit subject says v${VERSION} but Cargo.toml says ${WS_VERSION}" >&2
-              exit 1
-            fi
+            VERSION="${WS_VERSION}"
           fi
           {
             echo "version=${VERSION}"
