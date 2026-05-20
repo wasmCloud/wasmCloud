@@ -231,7 +231,7 @@ jobs:
   wash-image:
     needs:
       - changes
-    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'))
     permissions:
       contents: read
       packages: write
@@ -440,7 +440,7 @@ jobs:
     # skipped before evaluating the explicit gate.
     if: |
       always() &&
-      github.event_name == 'push' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/main' &&
       needs.wash-image.result == 'success' &&
       needs.runtime-operator-e2e.result == 'success'
