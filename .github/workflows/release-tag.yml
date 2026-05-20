@@ -281,7 +281,15 @@ jobs:
             exit 1
           fi
           mkdir -p ./artifacts
-          gh run download "${RUN_ID}" --dir ./artifacts --pattern 'wash-*'
+          # Narrow patterns to the per-target binary artifacts only.
+          # A bare `wash-*` also matches `wash-image-tarball-*` /
+          # `wash-image-digest-*` (kept around for canary-publish), and
+          # those include 0-byte digest marker files that GH's release-
+          # asset API rejects with "size must be greater than or equal
+          # to 1" when the GitHub Release upload step runs them through.
+          gh run download "${RUN_ID}" --dir ./artifacts \
+            --pattern 'wash-x86_64-*' \
+            --pattern 'wash-aarch64-*'
           echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
           echo "--- downloaded ---"
           find ./artifacts -type f | sort
