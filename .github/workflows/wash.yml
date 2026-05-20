@@ -436,7 +436,17 @@ jobs:
   # every commit. Manual fallback (train offline): push a `release: vX.Y.Z`
   # commit by hand and this job fires.
   canary-binaries:
-    if: "github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release: v')"
+    # `always()` is required to break the skipped-`changes` propagation
+    # that otherwise marks this skipped even when every need succeeded.
+    # See the same pattern on runtime-operator-e2e / canary-publish above.
+    if: |
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      startsWith(github.event.head_commit.message, 'release: v') &&
+      needs.check.result == 'success' &&
+      needs.lint.result == 'success' &&
+      needs.runtime-operator-e2e.result == 'success'
     needs:
       - check
       - lint

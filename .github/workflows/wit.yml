@@ -203,7 +203,16 @@ jobs:
     # publishes exactly one package using the wasm bytes validate built —
     # not a rebuild — so the attestation we record covers the same bits
     # that passed validation.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.validate.outputs.has_packages == 'true'
+    # `always()` is required to break the skipped-`changes` propagation
+    # through `validate` (which uses `always()` itself to bypass the
+    # PR-only `changes` gate). Without it, this job silently skips on
+    # every main push even when `validate` succeeded.
+    if: |
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.validate.result == 'success' &&
+      needs.validate.outputs.has_packages == 'true'
     needs:
       - validate
     runs-on: ubuntu-latest
