@@ -232,10 +232,12 @@ jobs:
           )
           for KEY in wash gateway operator; do
             IMG="${IMAGES[${KEY}]}"
-            if docker buildx imagetools inspect "${IMG}:${IMAGE_TAG}" >/dev/null 2>&1; then
+            # Three outcomes: tag exists (skip), manifest unknown
+            # (promote), any other error (abort with the captured stderr).
+            if INSPECT_OUT=$(docker buildx imagetools inspect "${IMG}:${IMAGE_TAG}" --format '{{json .Manifest}}' 2>&1); then
               echo "${IMG}:${IMAGE_TAG} already exists — skipping (immutable)"
-              DST=$(docker buildx imagetools inspect "${IMG}:${IMAGE_TAG}" --format '{{json .Manifest}}' | jq -r .digest)
-            else
+              DST=$(echo "${INSPECT_OUT}" | jq -r .digest)
+            elif echo "${INSPECT_OUT}" | grep -qiE 'manifest unknown|no such manifest|not found|MANIFEST_UNKNOWN'; then
               SRC="${IMG}:sha-${MERGE_SHA}"
               echo "promoting ${SRC} -> ${IMG}:${IMAGE_TAG}"
               SRC_DIGEST=$(docker buildx imagetools inspect "${SRC}" --format '{{json .Manifest}}' | jq -r .digest)
@@ -244,6 +246,10 @@ jobs:
               if [[ "${DST}" != "${SRC_DIGEST}" ]]; then
                 echo "WARN: retag digest (${DST}) differs from canary source (${SRC_DIGEST}) — same content, different manifest envelope. Attestation below covers ${DST}." >&2
               fi
+            else
+              echo "destination check for ${IMG}:${IMAGE_TAG} failed — refusing to promote" >&2
+              echo "${INSPECT_OUT}" >&2
+              exit 1
             fi
             echo "${KEY}_digest=${DST}" >> "${GITHUB_OUTPUT}"
           done
@@ -278,6 +284,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           echo "STAGE=download-binaries" >> "${GITHUB_ENV}"
@@ -293,6 +300,21 @@ jobs:
             --jq 'map(select(.status == "completed" and .conclusion == "success")) | .[0].databaseId // empty')
           if [[ -z "${RUN_ID}" ]]; then
             echo "no successful wash.yml run found for ${MERGE_SHA}" >&2
+            exit 1
+          fi
+          # Require every canary-binaries matrix entry to be success.
+          # The wash.yml run conclusion can be "success" even when
+          # canary-binaries was skipped — confirm via the jobs API.
+          JOBS_JSON=$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}/jobs" --paginate)
+          TOTAL=$(echo "${JOBS_JSON}" | jq -r '[.jobs[] | select(.name | startswith("canary-binaries"))] | length')
+          OK=$(echo "${JOBS_JSON}" | jq -r '[.jobs[] | select(.name | startswith("canary-binaries") and .conclusion == "success")] | length')
+          if (( TOTAL == 0 )); then
+            echo "wash.yml run ${RUN_ID} has no canary-binaries jobs — was the commit a 'release: v…' commit?" >&2
+            exit 1
+          fi
+          if (( OK != TOTAL )); then
+            echo "wash.yml run ${RUN_ID}: only ${OK}/${TOTAL} canary-binaries matrix entries succeeded" >&2
+            echo "${JOBS_JSON}" | jq '.jobs[] | select(.name | startswith("canary-binaries")) | {name, conclusion}' >&2
             exit 1
           fi
           mkdir -p ./artifacts

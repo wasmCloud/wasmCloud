@@ -332,14 +332,33 @@ jobs:
       - lint
       - wash-image
       - runtime-operator-e2e
+      - canary-publish
+      - canary-binaries
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Require all jobs to pass or be skipped
         env:
           RESULTS: ${{ toJSON(needs.*.result) }}
+          CANARY_PUBLISH_RESULT: ${{ needs.canary-publish.result }}
+          CANARY_BINARIES_RESULT: ${{ needs.canary-binaries.result }}
+          REF: ${{ github.ref }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
+          set -euo pipefail
           if echo "$RESULTS" | grep -qE '"(failure|cancelled)"'; then
+            exit 1
+          fi
+          # Main pushes must publish canary.
+          if [[ "${REF}" == "refs/heads/main" ]] && [[ "${CANARY_PUBLISH_RESULT}" != "success" ]]; then
+            echo "canary-publish result=${CANARY_PUBLISH_RESULT} on main push; expected success" >&2
+            exit 1
+          fi
+          # Release commits must also build per-target binaries that
+          # release-tag.yml attaches to the GH Release.
+          if [[ "${REF}" == "refs/heads/main" ]] && [[ "${COMMIT_MESSAGE}" == "release: v"* ]] \
+             && [[ "${CANARY_BINARIES_RESULT}" != "success" ]]; then
+            echo "canary-binaries result=${CANARY_BINARIES_RESULT} on release commit; expected success" >&2
             exit 1
           fi
 
