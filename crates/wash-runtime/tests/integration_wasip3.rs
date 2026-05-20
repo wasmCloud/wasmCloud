@@ -164,7 +164,8 @@ async fn test_p2_http_component_works_with_p3_enabled() -> Result<()> {
                     ]),
                     environment: HashMap::new(),
                     volume_mounts: vec![],
-                    allowed_hosts: Default::default(),
+                    // http-counter calls example.com — empty-list default would deny.
+                    allowed_hosts: vec!["example.com".parse().unwrap()].into(),
                 },
                 pool_size: 1,
                 max_invocations: 100,
@@ -217,7 +218,11 @@ async fn test_p2_concurrent_requests_with_p3_enabled() -> Result<()> {
                 name: "http-counter.wasm".to_string(),
                 digest: None,
                 bytes: bytes::Bytes::from_static(HTTP_COUNTER_WASM),
-                local_resources: LocalResources::default(),
+                local_resources: LocalResources {
+                    // http-counter calls example.com.
+                    allowed_hosts: vec!["example.com".parse().unwrap()].into(),
+                    ..Default::default()
+                },
                 pool_size: 1,
                 max_invocations: 100,
             }],

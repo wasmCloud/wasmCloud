@@ -49,20 +49,29 @@ type ConfigMap = HashMap<Arc<str>, HashMap<String, String>>;
 /// This plugin implements the WASI config interface, allowing components to
 /// retrieve configuration values and environment variables at runtime. Each
 /// component gets isolated access to its own configuration scope.
-#[derive(Clone, Default)]
+///
+/// Construct via [`DynamicConfig::builder`] (or [`Default::default`]) so new
+/// optional knobs land without breaking callers.
+///
+/// # Examples
+///
+/// ```
+/// use wash_runtime::plugin::wasi_config::DynamicConfig;
+///
+/// let _plugin = DynamicConfig::builder().copy_environment(true).build();
+/// ```
+#[derive(Clone, Default, bon::Builder)]
 pub struct DynamicConfig {
+    /// When `true`, the component's `LocalResources.environment` is merged
+    /// into the per-component `wasi:config/store` view at bind time,
+    /// surfacing workload env vars to components as both env vars and
+    /// config entries without further plumbing.
+    #[builder(default)]
     copy_environment: bool,
-    /// A map of configuration from component id to key-value pairs
+    /// Per-component-id key-value store. Always starts empty; not part of
+    /// the builder surface.
+    #[builder(skip)]
     config: Arc<RwLock<ConfigMap>>,
-}
-
-impl DynamicConfig {
-    pub fn new(copy_environment: bool) -> Self {
-        Self {
-            copy_environment,
-            ..Default::default()
-        }
-    }
 }
 
 impl<'a> bindings::wasi::config::store::Host for ActiveCtx<'a> {

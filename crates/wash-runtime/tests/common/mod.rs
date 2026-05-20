@@ -157,13 +157,16 @@ pub fn component_workload_request(
 }
 
 pub fn default_counter_resources() -> LocalResources {
+    // http-counter calls example.com — encode that exact host in the
+    // policy so the deny-all default doesn't block it AND the test
+    // documents which upstream the fixture talks to.
     LocalResources {
         memory_limit_mb: 256,
         cpu_limit: 1,
         config: HashMap::new(),
         environment: HashMap::new(),
         volume_mounts: vec![],
-        allowed_hosts: Default::default(),
+        allowed_hosts: vec!["example.com".parse().unwrap()].into(),
     }
 }
 

@@ -172,7 +172,11 @@ impl CliCommand for HostCommand {
             .with_host_config(host_config)
             .with_nats_client(Arc::new(scheduler_nats_client))
             .with_host_group(self.host_group.clone())
-            .with_plugin(Arc::new(plugin::wasi_config::DynamicConfig::new(true)))?
+            .with_plugin(Arc::new(
+                plugin::wasi_config::DynamicConfig::builder()
+                    .copy_environment(true)
+                    .build(),
+            ))?
             .with_plugin(Arc::new(plugin::wasi_logging::TracingLogger::default()))?
             .with_plugin(Arc::new(plugin::wasi_blobstore::NatsBlobstore::new(
                 &data_nats_client,

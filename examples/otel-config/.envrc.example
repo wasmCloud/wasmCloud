@@ -1,0 +1,3 @@
+# Copy to `.envrc` and run `direnv allow` to auto-export when entering this dir.
+# `.envrc` is gitignored so real values stay out of the repo.
+export UPSTREAM_API_TOKEN=demo-token-12345

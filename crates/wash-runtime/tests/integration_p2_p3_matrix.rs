@@ -589,7 +589,8 @@ async fn test_p2_regression_with_p3_enabled() -> Result<()> {
                     ]),
                     environment: HashMap::new(),
                     volume_mounts: vec![],
-                    allowed_hosts: Default::default(),
+                    // http-counter calls example.com
+                    allowed_hosts: vec!["example.com".parse().unwrap()].into(),
                 },
                 pool_size: 1,
                 max_invocations: 100,
