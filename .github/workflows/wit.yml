@@ -230,14 +230,11 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.validate.outputs.matrix) }}
     steps:
-      # wash performs the push and emits the OCI manifest digest in its
-      # JSON output (see "Push and attest" below). oras stays for the
-      # immutability pre-check — wash has no equivalent "does this tag
-      # exist" probe. (oras is preinstalled on ubuntu-22.04 but not on
-      # 24.04 / ubuntu-latest, so we install it explicitly.)
+      # wash pushes and emits the OCI manifest digest in its JSON output
+      # (see "Push and attest" below). The destination-exists check uses
+      # `docker manifest inspect` so it shares credentials with
+      # docker/login-action.
       - uses: wasmcloud/setup-wash-action@47756fa211cc82f392c57e39504f43ef46fc0b3e # v2.1.0
-
-      - uses: oras-project/setup-oras@38de303aac69abb66f3e6255b7198bff35f323e3 # v2.0.0
 
       - name: Login to ghcr.io
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
@@ -265,20 +262,28 @@ jobs:
           # skip the push entirely. SemVer build metadata (`+build.42`)
           # is correctly treated as stable. Pre-release tags (-rc.N,
           # -draft, etc.) may be moved by re-running this workflow.
+          # Distinguish three outcomes: tag exists (skip), manifest
+          # unknown (proceed), any other error from the inspect (abort).
           if [[ ! "${VERSION}" =~ - ]]; then
-            if oras manifest fetch "${REF}" >/dev/null 2>&1; then
+            if INSPECT_ERR=$(docker manifest inspect "${REF}" 2>&1 >/dev/null); then
               echo "${REF} already exists at the destination and version is stable — skipping (immutable)"
               echo "skipped=true" >> "${GITHUB_OUTPUT}"
               exit 0
+            elif echo "${INSPECT_ERR}" | grep -qiE 'manifest unknown|no such manifest|not found'; then
+              echo "${REF} not yet published — proceeding with push"
+            else
+              echo "destination check for ${REF} failed — refusing to push" >&2
+              echo "${INSPECT_ERR}" >&2
+              exit 1
             fi
           fi
-          # `wash -o json oci push` emits a single JSON object whose
-          # `digest` field is the OCI manifest digest we need to attest.
-          # We capture stdout, fail loudly if the field is missing, and
-          # mirror the human-readable output to the workflow log.
+          # `wash -o json oci push` wraps the response as
+          # `{ "success": true, "data": { "digest": "sha256:…" } }`.
+          # `.digest` fallback is for older wash builds that emitted
+          # the unwrapped form.
           PUSH_OUT=$(wash -o json oci push "${REF}" "${ARTIFACT}")
           echo "${PUSH_OUT}"
-          DIGEST=$(echo "${PUSH_OUT}" | jq -r '.digest // empty')
+          DIGEST=$(echo "${PUSH_OUT}" | jq -r '.data.digest // .digest // empty')
           if [[ -z "${DIGEST}" ]]; then
             echo "wash oci push did not report a manifest digest for ${REF}" >&2
             exit 1
