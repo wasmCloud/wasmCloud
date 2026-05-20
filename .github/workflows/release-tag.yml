@@ -307,7 +307,7 @@ jobs:
           # canary-binaries was skipped — confirm via the jobs API.
           JOBS_JSON=$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}/jobs" --paginate)
           TOTAL=$(echo "${JOBS_JSON}" | jq -r '[.jobs[] | select(.name | startswith("canary-binaries"))] | length')
-          OK=$(echo "${JOBS_JSON}" | jq -r '[.jobs[] | select(.name | startswith("canary-binaries") and .conclusion == "success")] | length')
+          OK=$(echo "${JOBS_JSON}" | jq -r '[.jobs[] | select((.name | startswith("canary-binaries")) and .conclusion == "success")] | length')
           if (( TOTAL == 0 )); then
             echo "wash.yml run ${RUN_ID} has no canary-binaries jobs — was the commit a 'release: v…' commit?" >&2
             exit 1
