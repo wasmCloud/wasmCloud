@@ -28,10 +28,12 @@ name: release-tag
 # (e.g. DCO bounces and a human finishes the merge manually), the train
 # run's conclusion is `failure` and this workflow stays skipped. Dispatch
 # manually with `sha=<merge-sha>` once canary builds on that SHA are green
-# — verify-head reads the version from that SHA's commit subject, and
-# every downstream step is idempotent. Pinning to a SHA matters because
-# follow-up commits (like merging this recovery hatch itself) push the
-# release commit out of HEAD on main.
+# — when sha is passed, verify-head reads the version from Cargo.toml at
+# that sha and skips the commit-subject match, so the recovery path works
+# against any SHA whose Cargo.toml carries the version we want to release
+# (useful when the original release commit has been pushed off main HEAD
+# by follow-up commits, or when re-tagging an arbitrary sha). Every
+# downstream step is idempotent against pre-existing tags and manifests.
 #
 # Idempotency:
 #   - If an X.Y.Z OCI tag already exists at GHCR, the retag step skips it
@@ -99,32 +101,45 @@ jobs:
           git config user.name "wasmcloud-bot"
           git config user.email "wasmcloud-bot@users.noreply.github.com"
 
-      - name: Verify HEAD is a release commit and read version
+      - name: Verify HEAD and read version
         id: ver
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
         run: |
           set -euo pipefail
           echo "STAGE=verify-head" >> "${GITHUB_ENV}"
           SUBJECT=$(git log -1 --pretty=%s)
           MERGE_SHA=$(git rev-parse HEAD)
-          # release-train uses rebase-merge so the subject is exactly
-          # "release: vX.Y.Z" or "release: vX.Y.Z-rc.N", with no PR ref
-          # appended. The optional "(#NNN)" group is defensive in case
-          # someone manually squash-merges in the offline-train path (the
-          # runbook still says to rebase-merge, but humans).
-          if [[ ! "${SUBJECT}" =~ ^release:\ v([0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9.-]*)?)([[:space:]]\(#[0-9]+\))?$ ]]; then
-            echo "HEAD subject is not a release commit: ${SUBJECT}" >&2
-            echo "abort — release-tag will not tag a non-release HEAD" >&2
-            exit 1
-          fi
-          VERSION="${BASH_REMATCH[1]}"
           WS_VERSION=$(awk -F'"' '
             /^\[workspace\.package\]/ { in_pkg = 1; next }
             /^\[/ && !/^\[workspace\.package\]/ { in_pkg = 0 }
             in_pkg && /^version = "/ { print $2; exit }
           ' Cargo.toml)
-          if [[ "${VERSION}" != "${WS_VERSION}" ]]; then
-            echo "commit subject says v${VERSION} but Cargo.toml says ${WS_VERSION}" >&2
-            exit 1
+          if [[ -n "${INPUT_SHA}" ]]; then
+            # Manual recovery dispatch — caller explicitly chose this sha
+            # (e.g., re-tagging an older release after a downstream step
+            # failed mid-promotion). Trust them: take the version straight
+            # from Cargo.toml at that sha and skip the subject check. The
+            # release-train automatic path still hits the strict check
+            # below because workflow_run never sets inputs.sha.
+            echo "manual dispatch with sha=${INPUT_SHA} — using Cargo.toml v${WS_VERSION} (subject check skipped)"
+            VERSION="${WS_VERSION}"
+          else
+            # release-train uses rebase-merge so the subject is exactly
+            # "release: vX.Y.Z" or "release: vX.Y.Z-rc.N", with no PR ref
+            # appended. The optional "(#NNN)" group is defensive in case
+            # someone manually squash-merges in the offline-train path (the
+            # runbook still says to rebase-merge, but humans).
+            if [[ ! "${SUBJECT}" =~ ^release:\ v([0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9.-]*)?)([[:space:]]\(#[0-9]+\))?$ ]]; then
+              echo "HEAD subject is not a release commit: ${SUBJECT}" >&2
+              echo "abort — release-tag will not tag a non-release HEAD" >&2
+              exit 1
+            fi
+            VERSION="${BASH_REMATCH[1]}"
+            if [[ "${VERSION}" != "${WS_VERSION}" ]]; then
+              echo "commit subject says v${VERSION} but Cargo.toml says ${WS_VERSION}" >&2
+              exit 1
+            fi
           fi
           {
             echo "version=${VERSION}"
