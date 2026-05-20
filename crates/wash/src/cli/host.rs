@@ -223,7 +223,7 @@ impl CliCommand for HostCommand {
         }
 
         // Enable WASI WebGPU if requested
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(feature = "wasi-webgpu", not(target_os = "windows")))]
         if self.wasi_webgpu {
             tracing::info!("WASI WebGPU support enabled");
             cluster_host_builder = cluster_host_builder

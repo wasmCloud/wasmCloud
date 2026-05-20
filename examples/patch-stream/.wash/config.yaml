@@ -9,6 +9,8 @@ dev:
   components:
     - name: patch-producer
       file: target/wasm32-wasip2/release/patch_producer.wasm
+    - name: meta-json
+      file: target/wasm32-wasip2/release/meta_json.wasm
 
 new:
   command: cargo fetch

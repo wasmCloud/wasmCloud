@@ -24,20 +24,21 @@ interface patches {
     use types.{patch};
 
     /// Subscribe to the patch stream. Returns NDJSON-encoded bytes
-    /// (`stream<u8>`) rather than a typed `stream<patch>` to dodge a
-    /// wash-runtime gap: wash's dynamic linker can't supply the
-    /// per-stream canonical-ABI builtins (`[stream-read-0]subscribe`,
-    /// `[stream-write-0]subscribe`, etc.) the component model normally
-    /// auto-synthesizes during composition. Using the same payload
-    /// type the consumer already uses for its HTTP body stream
-    /// (`stream<u8>`) keeps the builtins type-compatible. Switch back
-    /// to `stream<patch>` once wash either composes the workload or
-    /// exposes a host-side stream bridge.
-    ///
-    /// Declared `async func` so wit-bindgen lowers via the p3 async
-    /// canonical ABI on both sides, matching wash's
+    /// (`stream<u8>`) rather than a typed `stream<patch>` — see README
+    /// for the wasmtime cross-component-types bug that blocks the
+    /// typed form. Declared `async func` so wit-bindgen lowers via
+    /// the p3 async canonical ABI on both sides, matching wash's
     /// `func_new_concurrent` linker bridge.
     subscribe: async func() -> stream<u8>;
+}
+
+/// Stream sink: a downstream component takes ownership of a
+/// cross-component `stream<u8>` and is responsible for draining it.
+/// In this example, `meta-json` exports this interface and logs each
+/// NDJSON patch line to stderr; the consumer (commander) hands the
+/// patches stream off and forgets about it.
+interface sink {
+    send-stream: async func(s: stream<u8>) -> result;
 }
 
 world patch-producer {
@@ -48,10 +49,15 @@ world patch-producer {
 
 world patch-consumer {
     import patches;
+    import sink;
 
     import wasi:http/types@0.3.0-rc-2026-03-15;
     import wasi:clocks/types@0.3.0-rc-2026-03-15;
     import wasi:random/random@0.3.0-rc-2026-03-15;
 
     export wasi:http/handler@0.3.0-rc-2026-03-15;
+}
+
+world meta-json {
+    export sink;
 }

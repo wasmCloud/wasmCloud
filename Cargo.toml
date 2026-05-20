@@ -113,11 +113,11 @@ wasm-pkg-client = { version = "0.10.0", default-features = false }
 wasm-pkg-core = { version = "0.10.0", default-features = false }
 wasm-metadata = { version = "0.247.0", default-features = false, features = ["oci"] }
 wasmcloud = { path = "crates/wasmcloud", default-features = false }
-wasmtime = { version = "44", default-features = false }
-wasmtime-wasi = { version = "44", default-features = false }
-wasmtime-wasi-io = { version = "44", default-features = false }
-wasmtime-wasi-http = { version = "44", default-features = false }
-wasmtime-wasi-tls = { version = "44", default-features = false }
+wasmtime = { version = "46", default-features = false }
+wasmtime-wasi = { version = "46", default-features = false }
+wasmtime-wasi-io = { version = "46", default-features = false }
+wasmtime-wasi-http = { version = "46", default-features = false }
+wasmtime-wasi-tls = { version = "46", default-features = false }
 wit-component = { version = "0.247.0", default-features = false }
 wash-runtime = { path = "crates/wash-runtime", default-features = false }
 wat = { version = "1.247.0", default-features = false }
@@ -153,5 +153,11 @@ ignored = [
 ]
 
 [patch.crates-io]
+wasmtime = { git = "https://github.com/Aditya1404Sal/wasmtime", branch = "fix-cross-component-stream-copy" }
+wasmtime-wasi = { git = "https://github.com/Aditya1404Sal/wasmtime", branch = "fix-cross-component-stream-copy" }
+wasmtime-wasi-io = { git = "https://github.com/Aditya1404Sal/wasmtime", branch = "fix-cross-component-stream-copy" }
+wasmtime-wasi-http = { git = "https://github.com/Aditya1404Sal/wasmtime", branch = "fix-cross-component-stream-copy" }
+wasmtime-wasi-tls = { git = "https://github.com/Aditya1404Sal/wasmtime", branch = "fix-cross-component-stream-copy" }
+
 # Pinned for async component support (fixes #187). Remove after https://github.com/bytecodealliance/rust-oci-wasm/issues/28
 oci-wasm = { git = "https://github.com/bytecodealliance/rust-oci-wasm", rev = "5ee16fa1" }

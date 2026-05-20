@@ -5,6 +5,7 @@ mod bindings {
         generate_all,
         async: [
             "import:wasmcloud:patch-stream/patches@0.1.0#subscribe",
+            "import:wasmcloud:patch-stream/sink@0.1.0#send-stream",
             "export:wasi:http/handler@0.3.0-rc-2026-03-15#handle",
         ],
     });
@@ -12,7 +13,7 @@ mod bindings {
 
 use bindings::exports::wasi::http::handler::Guest as Handler;
 use bindings::wasi::http::types::{ErrorCode, Fields, Request, Response};
-use bindings::wasmcloud::patch_stream::patches;
+use bindings::wasmcloud::patch_stream::{patches, sink};
 
 struct Component;
 
@@ -21,19 +22,24 @@ impl Handler for Component {
         let headers = Fields::new();
         let _ = headers.append(
             &"content-type".to_string(),
-            &b"application/x-ndjson".to_vec(),
+            &b"text/plain; charset=utf-8".to_vec(),
         );
 
-        // Both `patches::subscribe` and `wasi:http/handler` use stream<u8>,
-        // so hand the patches stream straight to the response body — no
-        // copy task needed. The `[t+NNNms]` prefix on each line is
-        // baked in by the producer.
+        // Kick off the producer and hand the resulting stream off to
+        // meta-json. We don't keep a reader for ourselves — the
+        // commander's job is to dispatch, meta-json is responsible
+        // for persisting / logging the result.
         let patches_rx = patches::subscribe().await;
-        let (_trailers_tx, trailers_rx) = bindings::wit_future::new(|| Ok(None));
+        let result = sink::send_stream(patches_rx).await;
 
-        let (response, _result) = Response::new(headers, Some(patches_rx), trailers_rx);
+        let (_trailers_tx, trailers_rx) = bindings::wit_future::new(|| Ok(None));
+        let (response, _result) = Response::new(headers, None, trailers_rx);
+        let status = match result {
+            Ok(()) => 200,
+            Err(()) => 502,
+        };
         response
-            .set_status_code(200)
+            .set_status_code(status)
             .map_err(|()| ErrorCode::InternalError(Some("set_status failed".into())))?;
         Ok(response)
     }
