@@ -77,7 +77,7 @@ impl Default for InMemoryMessaging {
 }
 
 impl<'a> Host for ActiveCtx<'a> {
-    #[instrument(skip_all, fields(subject = %subject, timeout_ms))]
+    #[instrument(name = "wasmcloud.messaging.request", skip_all, fields(subject = %subject, timeout_ms))]
     async fn request(
         &mut self,
         subject: String,
@@ -162,7 +162,7 @@ impl<'a> Host for ActiveCtx<'a> {
         }
     }
 
-    #[instrument(skip_all, fields(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>")))]
+    #[instrument(name = "wasmcloud.messaging.publish", skip_all, fields(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>")))]
     async fn publish(&mut self, msg: types::BrokerMessage) -> wasmtime::Result<Result<(), String>> {
         let Some(plugin) = self.get_plugin::<InMemoryMessaging>(PLUGIN_MESSAGING_MEMORY_ID) else {
             return Ok(Err("plugin not available".to_string()));
