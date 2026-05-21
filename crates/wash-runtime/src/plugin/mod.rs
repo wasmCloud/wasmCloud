@@ -52,6 +52,8 @@ pub mod wasi_otel;
 
 pub mod wasmcloud_messaging;
 
+pub mod wasmcloud_stream_broker;
+
 #[cfg(all(feature = "wasi-webgpu", not(target_os = "windows")))]
 pub mod wasi_webgpu;
 

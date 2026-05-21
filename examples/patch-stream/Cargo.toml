@@ -2,7 +2,7 @@
 resolver = "3"
 package.edition = "2024"
 package.authors = ["The wasmCloud Team"]
-members = ["patch-producer", "patch-consumer", "meta-json"]
+members = ["page-agent", "commander", "meta-json"]
 
 [workspace.dependencies]
 anyhow = "1.0"

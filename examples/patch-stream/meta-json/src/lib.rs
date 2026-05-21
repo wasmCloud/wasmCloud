@@ -6,14 +6,15 @@ mod bindings {
         async: [
             "export:wasmcloud:patch-stream/sink@0.1.0#send-stream",
             "export:wasmcloud:websocket/handler@0.1.0#handle",
-            "import:wasmcloud:patch-stream/patches@0.1.0#subscribe",
+            "import:wasmcloud:patch-stream/broker@0.1.0#wait-message",
+            "import:wasmcloud:patch-stream/broker@0.1.0#publish-message",
         ],
     });
 }
 
 use bindings::exports::wasmcloud::patch_stream::sink::Guest as SinkGuest;
 use bindings::exports::wasmcloud::websocket::handler::Guest as WsGuest;
-use bindings::wasmcloud::patch_stream::patches;
+use bindings::wasmcloud::patch_stream::broker;
 use bindings::wasmcloud::websocket::types::{Frame, UpgradeRequest};
 use wit_bindgen::StreamReader;
 
@@ -31,10 +32,11 @@ impl SinkGuest for Component {
             bytes += 1;
             if byte == b'\n' {
                 lines += 1;
-                eprintln!(
-                    "meta-json: [{lines:>3}] {}",
-                    String::from_utf8_lossy(&line)
-                );
+                let text = String::from_utf8_lossy(&line).into_owned();
+                eprintln!("meta-json: [{lines:>3}] {text}");
+                broker::publish_message(text).await.map_err(|err| {
+                    eprintln!("meta-json: broker publish failed: {err}");
+                })?;
                 line.clear();
             } else {
                 line.push(byte);
@@ -42,10 +44,13 @@ impl SinkGuest for Component {
         }
         if !line.is_empty() {
             lines += 1;
+            let text = String::from_utf8_lossy(&line).into_owned();
             eprintln!(
-                "meta-json: [{lines:>3}] {} (no trailing newline)",
-                String::from_utf8_lossy(&line)
+                "meta-json: [{lines:>3}] {text} (no trailing newline)",
             );
+            broker::publish_message(text).await.map_err(|err| {
+                eprintln!("meta-json: broker publish failed: {err}");
+            })?;
         }
         eprintln!("meta-json: stream closed after {bytes} bytes / {lines} patches");
         Ok(())
@@ -88,29 +93,18 @@ impl WsGuest for Component {
             eprintln!("meta-json[ws]: incoming stream closed");
         });
 
-        // Forward each NDJSON line from the patches stream as one text
-        // frame. Patches stream closes when the producer drops its
-        // writer; dropping our outgoing tx then signals the host to
-        // close the WS cleanly.
+        // Keep the websocket open and forward messages published by
+        // the sink entrypoint. This bridges separate incoming
+        // requests: websocket connects first, then commander later
+        // invokes sink::send-stream over HTTP.
         wit_bindgen::spawn(async move {
-            let mut patches_rx = patches::subscribe().await;
-            let mut line: Vec<u8> = Vec::with_capacity(256);
+            let client_id = broker::register();
             let mut lines: u64 = 0;
-            while let Some(byte) = patches_rx.next().await {
-                if byte == b'\n' {
-                    lines += 1;
-                    let text = String::from_utf8_lossy(&line).into_owned();
-                    outgoing_tx.write_all(vec![Frame::Text(text)]).await;
-                    line.clear();
-                } else {
-                    line.push(byte);
-                }
-            }
-            if !line.is_empty() {
+            while let Some(text) = broker::wait_message(client_id).await {
                 lines += 1;
-                let text = String::from_utf8_lossy(&line).into_owned();
                 outgoing_tx.write_all(vec![Frame::Text(text)]).await;
             }
+            broker::unregister(client_id);
             eprintln!("meta-json[ws]: sent {lines} text frames; closing");
             // outgoing_tx drops here → host closes WS with 1000.
         });

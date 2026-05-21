@@ -2000,23 +2000,18 @@ impl UnresolvedWorkload {
         // Components that export `wasmcloud:websocket/handler@0.1` also
         // bind to the HTTP server — WS upgrades arrive as HTTP requests
         // and are routed to the WS dispatch branch based on the Upgrade
-        // header (see `host::http::is_websocket_upgrade`). If wasi:http
-        // already matched a component, prefer that one and skip the WS
-        // registration; the wash HTTP dispatch picks between paths per
-        // request, not per workload.
+        // header (see `host::http::is_websocket_upgrade`). A workload may
+        // have both a wasi:http component and a websocket component sharing
+        // the same listener; the HTTP server stores both entrypoints and
+        // chooses per request.
         #[cfg(feature = "wasip3")]
-        let incoming_ws_component = if incoming_http_component.is_some() {
-            None
-        } else {
-            self.components
-                .values()
-                .find(|component| component.exports_websocket())
-                .map(|c| c.id().to_string())
-        };
+        let incoming_ws_component = self
+            .components
+            .values()
+            .find(|component| component.exports_websocket())
+            .map(|c| c.id().to_string());
         #[cfg(not(feature = "wasip3"))]
         let incoming_ws_component: Option<String> = None;
-
-        let incoming_http_component = incoming_http_component.or(incoming_ws_component);
 
         // Resolve the workload
         let mut resolved_workload = ResolvedWorkload {
@@ -2069,18 +2064,29 @@ impl UnresolvedWorkload {
             }
         }
 
-        if let Some(component_id) = incoming_http_component
-            && let Err(e) = http_handler
+        let mut incoming_components = Vec::new();
+        if let Some(component_id) = incoming_http_component {
+            incoming_components.push(component_id);
+        }
+        if let Some(component_id) = incoming_ws_component
+            && !incoming_components.contains(&component_id)
+        {
+            incoming_components.push(component_id);
+        }
+
+        for component_id in incoming_components {
+            if let Err(e) = http_handler
                 .on_workload_resolved(&resolved_workload, &component_id)
                 .await
-        {
-            warn!(
-                component_id = component_id,
-                error = ?e,
-                "failed to notify HTTP handler of resolved workload, unbinding all plugins"
-            );
-            let _ = resolved_workload.unbind_all_plugins().await;
-            bail!(e);
+            {
+                warn!(
+                    component_id = component_id,
+                    error = ?e,
+                    "failed to notify HTTP handler of resolved workload, unbinding all plugins"
+                );
+                let _ = resolved_workload.unbind_all_plugins().await;
+                bail!(e);
+            }
         }
 
         Ok(resolved_workload)

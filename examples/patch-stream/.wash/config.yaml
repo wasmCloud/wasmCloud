@@ -2,13 +2,15 @@ version: 2.0.0
 
 build:
   command: cargo +nightly build --workspace --target wasm32-wasip2 --release
-  component_path: target/wasm32-wasip2/release/meta_json.wasm
+  component_path: target/wasm32-wasip2/release/commander.wasm
 
 dev:
   wasip3: true
   components:
-    - name: patch-producer
-      file: target/wasm32-wasip2/release/patch_producer.wasm
+    - name: page-agent
+      file: target/wasm32-wasip2/release/page_agent.wasm
+    - name: meta-json
+      file: target/wasm32-wasip2/release/meta_json.wasm
 
 new:
   command: cargo fetch

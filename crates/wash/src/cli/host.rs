@@ -180,6 +180,9 @@ impl CliCommand for HostCommand {
             .with_plugin(Arc::new(plugin::wasmcloud_messaging::NatsMessaging::new(
                 data_nats_client.clone(),
             )))?
+            .with_plugin(Arc::new(
+                plugin::wasmcloud_stream_broker::StreamBroker::default(),
+            ))?
             .with_plugin(Arc::new(plugin::wasi_keyvalue::NatsKeyValue::new(
                 &data_nats_client,
             )))?
