@@ -1,5 +1,22 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
+# Enable OwnerReferencesPermissionEnforcement on the apiserver. Without this
+# plugin (opt-in upstream but on by default on GKE/AKS/OpenShift and most
+# hardened distros), the operator's RBAC gaps around `<owner>/finalizers`
+# go undetected in e2e — any caller can stamp `blockOwnerDeletion: true`
+# regardless of whether they hold `update` on the owner's `/finalizers`
+# subresource. NodeRestriction is re-listed because
+# `--enable-admission-plugins` overrides kubeadm's default set.
+#
+# extraArgs is a map[string]string here because kind generates a
+# kubeadm.k8s.io/v1beta3 base ClusterConfiguration; v1beta4 (list-form) will
+# require switching to `- name: …, value: …` entries.
+kubeadmConfigPatches:
+  - |
+    kind: ClusterConfiguration
+    apiServer:
+      extraArgs:
+        enable-admission-plugins: NodeRestriction,OwnerReferencesPermissionEnforcement
 nodes:
   - role: control-plane
     extraPortMappings:

@@ -73,8 +73,10 @@ var (
 
 	// canary is published on every merge to main
 	runtimeImageTag = "canary"
-	// runtimeSupportsHostAliases indicates whether the runtime supports HostAliases,
-	// which is required for testing with EndpointSlices.
+	// runtimeSupportsHostAliases gates the HTTP traffic assertion in the
+	// EndpointSlice context. That test relies on the wash runtime
+	// resolving the Service hostname via /etc/hosts. EndpointSlice
+	// creation itself is exercised regardless of this flag.
 	runtimeSupportsHostAliases = false
 )
 
