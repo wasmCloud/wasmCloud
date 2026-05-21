@@ -1,0 +1,58 @@
+package wasmcloud:websocket@0.1.0;
+
+interface types {
+    /// Close information for a WebSocket connection.
+    /// `code` follows RFC 6455 §7.4 (e.g. 1000 normal, 1001 going away).
+    record close-info {
+        code: u16,
+        reason: string,
+    }
+
+    /// A single WebSocket message. Mirrors the protocol's text/binary
+    /// split and adds an explicit close so the component can signal
+    /// shutdown by writing one and dropping the outgoing stream.
+    variant frame {
+        text(string),
+        binary(list<u8>),
+        close(close-info),
+    }
+
+    /// Snapshot of the upgrade request handed to the component once the
+    /// 101 handshake has completed. The host owns the response side of
+    /// the handshake — components negotiate protocol/headers via the
+    /// stream contents, not via WIT-level response objects.
+    record upgrade-request {
+        path: string,
+        query: string,
+        headers: list<tuple<string, list<u8>>>,
+        /// `Sec-WebSocket-Protocol` values from the client, in order.
+        subprotocols: list<string>,
+    }
+}
+
+interface handler {
+    use types.{frame, upgrade-request};
+
+    /// Invoked once per accepted WebSocket connection, after the host
+    /// has completed the HTTP upgrade.
+    ///
+    /// `incoming` yields decoded frames from the client and closes
+    /// when the peer disconnects.
+    ///
+    /// The returned stream supplies frames to send to the client.
+    /// Dropping the returned stream's writer (component-side) ends the
+    /// session and the host sends a normal close (1000). Returning
+    /// `Err` causes the host to close with 1011 (internal error) and
+    /// the error string is logged host-side.
+    ///
+    /// This shape (handler returns the outbound stream) maps directly
+    /// to wasmtime's `StreamReader::new` / `StreamReader::pipe` host
+    /// API: the host produces frames into `incoming` and consumes
+    /// frames from the returned reader. Symmetric two-parameter shapes
+    /// would require a host-side stream-writer abstraction wasmtime
+    /// does not currently expose.
+    handle: async func(
+        req: upgrade-request,
+        incoming: stream<frame>,
+    ) -> result<stream<frame>, string>;
+}

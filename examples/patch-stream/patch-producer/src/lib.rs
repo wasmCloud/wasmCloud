@@ -16,10 +16,9 @@ use wit_bindgen::StreamReader;
 
 struct Component;
 
-/// 120ms between patches — slow enough for `curl -N` to visibly render each
-/// line on its own flush, fast enough that the full sequence finishes in
-/// under three seconds.
-const TICK_NS: u64 = 120_000_000;
+/// 500ms between patches — slow enough for `curl -N` to visibly render each
+/// line on its own flush while debugging host-side buffering.
+const TICK_NS: u64 = 500_000_000;
 
 /// One edit session against a tiny task-list document. Each entry is a
 /// complete RFC 6902 JSON Patch operation, NDJSON-framed by the writer.

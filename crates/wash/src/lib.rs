@@ -1,4 +1,5 @@
 #![doc = include_str!("../../../README.md")]
+#![recursion_limit = "512"]
 
 /// The current version of the wash package, set at build time
 pub const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");

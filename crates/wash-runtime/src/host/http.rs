@@ -972,6 +972,43 @@ async fn run_http_server<T: Router>(
 /// Build an error response with the given status code.
 /// Building HTTP responses with valid status codes is infallible.
 #[allow(clippy::expect_used)]
+/// True iff this request is a syntactically valid RFC 6455 WebSocket
+/// upgrade. We check `Upgrade`, `Connection`, and `Sec-WebSocket-Version`
+/// here — `Sec-WebSocket-Key` is validated later by the WS handler when
+/// it computes the accept hash. Method must be GET per the spec.
+#[cfg(feature = "wasip3")]
+fn is_websocket_upgrade(req: &hyper::Request<hyper::body::Incoming>) -> bool {
+    if req.method() != hyper::Method::GET {
+        return false;
+    }
+    let upgrade_ws = req
+        .headers()
+        .get(hyper::header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false);
+    if !upgrade_ws {
+        return false;
+    }
+    let conn_upgrade = req
+        .headers()
+        .get(hyper::header::CONNECTION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| {
+            s.split(',')
+                .any(|t| t.trim().eq_ignore_ascii_case("upgrade"))
+        })
+        .unwrap_or(false);
+    if !conn_upgrade {
+        return false;
+    }
+    req.headers()
+        .get(hyper::header::SEC_WEBSOCKET_VERSION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim() == "13")
+        .unwrap_or(false)
+}
+
 fn error_response(status: u16) -> hyper::Response<HyperOutgoingBody> {
     hyper::Response::builder()
         .status(status)
@@ -1056,7 +1093,26 @@ async fn invoke_component_handler(
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
     // Create a new store for this request with plugin contexts
+    #[allow(unused_mut)]
     let mut store = workload_handle.new_store(component_id).await?;
+
+    // WebSocket upgrade requests bypass the wasi:http handler entirely:
+    // the host completes the 101 handshake and bridges decoded frames to
+    // the component's `wasmcloud:websocket/handler` export.
+    #[cfg(feature = "wasip3")]
+    if is_websocket_upgrade(&req) && crate::engine::targets_websocket(instance_pre.component()) {
+        workload_handle
+            .pre_instantiate_linked_components_for_component(&mut store, component_id)
+            .await?;
+        return crate::host::websocket::handle_websocket_request(
+            workload_handle,
+            store,
+            instance_pre,
+            req,
+            fuel_meter,
+        )
+        .await;
+    }
 
     // Check if this component targets WASIP3 and dispatch accordingly
     #[cfg(feature = "wasip3")]
@@ -1065,13 +1121,9 @@ async fn invoke_component_handler(
             .pre_instantiate_linked_components_for_component(&mut store, component_id)
             .await?;
         let store_id = store.data().active_ctx.store_id.clone();
-        let resp = crate::host::http_p3::handle_component_request_p3(
-            store,
-            instance_pre,
-            req,
-            fuel_meter,
-        )
-        .await;
+        let resp =
+            crate::host::http_p3::handle_component_request_p3(store, instance_pre, req, fuel_meter)
+                .await;
         workload_handle.clear_exporter_instances_for_store(&store_id);
         let resp = resp?;
         // Convert P3 response to a compatible HyperOutgoingBody response

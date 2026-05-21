@@ -12,10 +12,10 @@ use crate::sockets::{self, SocketAddrUse, loopback};
 use anyhow::{Context as _, bail, ensure};
 use tokio::{sync::RwLock, task::JoinHandle, time::timeout};
 use tracing::{Instrument, debug, error, info, instrument, trace, warn};
+use wasmtime::AsContextMut;
 use wasmtime::component::{
     Component, Instance, InstancePre, Linker, ResourceAny, ResourceType, Val, types::ComponentItem,
 };
-use wasmtime::AsContextMut;
 use wasmtime_wasi::p2::bindings::CommandPre;
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
@@ -157,6 +157,14 @@ impl WorkloadMetadata {
 
     pub fn exports_wasi_http(&self) -> bool {
         crate::engine::exports_wasi_http(&self.component)
+    }
+
+    /// True iff this component exports the `wasmcloud:websocket/handler@0.1`
+    /// interface. Such components are bound to the HTTP server alongside
+    /// wasi:http handlers so they can receive `Upgrade: websocket` requests.
+    #[cfg(feature = "wasip3")]
+    pub fn exports_websocket(&self) -> bool {
+        crate::engine::targets_websocket(&self.component)
     }
 
     /// Returns whether this component targets WASIP3 and the engine has P3 enabled.
@@ -1975,20 +1983,40 @@ impl UnresolvedWorkload {
 
         let incoming_http_component = {
             let http_iface = WitInterface::from("wasi:http/incoming-handler");
-            match self
+            let wasi_http_match = self
                 .host_interfaces
                 .iter()
-                .any(|hi| hi.contains(&http_iface))
-            {
-                // http was not part of the requested interfaces
-                false => None,
-                true => self
-                    .components
+                .any(|hi| hi.contains(&http_iface));
+            if wasi_http_match {
+                self.components
                     .values()
                     .find(|component| component.exports_wasi_http())
-                    .map(|c| c.id().to_string()),
+                    .map(|c| c.id().to_string())
+            } else {
+                None
             }
         };
+
+        // Components that export `wasmcloud:websocket/handler@0.1` also
+        // bind to the HTTP server — WS upgrades arrive as HTTP requests
+        // and are routed to the WS dispatch branch based on the Upgrade
+        // header (see `host::http::is_websocket_upgrade`). If wasi:http
+        // already matched a component, prefer that one and skip the WS
+        // registration; the wash HTTP dispatch picks between paths per
+        // request, not per workload.
+        #[cfg(feature = "wasip3")]
+        let incoming_ws_component = if incoming_http_component.is_some() {
+            None
+        } else {
+            self.components
+                .values()
+                .find(|component| component.exports_websocket())
+                .map(|c| c.id().to_string())
+        };
+        #[cfg(not(feature = "wasip3"))]
+        let incoming_ws_component: Option<String> = None;
+
+        let incoming_http_component = incoming_http_component.or(incoming_ws_component);
 
         // Resolve the workload
         let mut resolved_workload = ResolvedWorkload {

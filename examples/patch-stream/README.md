@@ -1,9 +1,22 @@
 # patch-stream
 
-Proof-of-concept that two wasmCloud components can communicate over a
-wasip3 cross-component `stream`, where a producer emits JSON Patch
-records (RFC 6902, NDJSON-encoded) into a `stream<u8>` and a consumer
-hands that stream straight through as the body of an HTTP response.
+Proof-of-concept that wasmCloud components can communicate over a
+wasip3 cross-component `stream` and surface the result either as a
+chunked HTTP body **or** as a stream of WebSocket text frames.
+
+A producer component emits JSON Patch records (RFC 6902, NDJSON-
+encoded) into a `stream<u8>`. Two front-end components consume that
+stream:
+
+- **patch-consumer** exports `wasi:http/handler@0.3` and pipes the
+  stream straight through as the body of a `GET /` HTTP response
+  (chunked, no copying).
+- **meta-json** exports `wasmcloud:websocket/handler@0.1` and emits
+  each NDJSON line as a WebSocket text frame to clients that open a
+  WS connection to the same port.
+
+Both front-ends are built; the build target picks which one wash dev
+serves (see `.wash/config.yaml`).
 
 ```
 ┌────────┐  GET /            ┌──────────────────────────┐  patches.subscribe()    ┌──────────────────┐
@@ -12,7 +25,7 @@ hands that stream straight through as the body of an HTTP response.
 └────────┘  one HTTP chunk   │                          │                         │ spawns async     │
             per patch line   │ pipes stream straight    │                         │ writer task that │
                              │ into the response body   │                         │ paces 20 patches │
-                             │ (zero-copy, no parsing)  │                         │ at 120 ms cadence│
+                             │ (zero-copy, no parsing)  │                         │ at 500ms cadence │
                              └──────────────────────────┘                         └──────────────────┘
                                   exports wasi:http/handler                       exports patches
                                   imports patches                                 (interface)
@@ -21,7 +34,7 @@ hands that stream straight through as the body of an HTTP response.
 ```
 
 The producer runs through a scripted 20-edit session against a tiny
-JSON document, sleeping `wasi:clocks/monotonic-clock::wait-for(120ms)`
+JSON document, sleeping `wasi:clocks/monotonic-clock::wait-for(500ms)`
 between writes and stamping each line with the elapsed wall time at
 the moment it's produced (`[t+NNNms]`). That gives the response a
 visible time axis end-to-end.
@@ -42,16 +55,16 @@ Then:
 ```sh
 $ curl -N http://localhost:8000/
 [t+   0ms] {"op":"add","path":"/title","value":"\"Untitled\""}
-[t+ 120ms] {"op":"add","path":"/version","value":"0"}
-[t+ 240ms] {"op":"add","path":"/items","value":"[]"}
-[t+ 360ms] {"op":"add","path":"/tags","value":"[]"}
-[t+ 480ms] {"op":"replace","path":"/title","value":"\"Streaming demo\""}
-... (15 more lines, ~120 ms apart) ...
-[t+2400ms] {"op":"replace","path":"/version","value":"4"}
+[t+ 500ms] {"op":"add","path":"/version","value":"0"}
+[t+1000ms] {"op":"add","path":"/items","value":"[]"}
+[t+1500ms] {"op":"add","path":"/tags","value":"[]"}
+[t+2000ms] {"op":"replace","path":"/title","value":"\"Streaming demo\""}
+... (15 more lines, ~500 ms apart) ...
+[t+9500ms] {"op":"replace","path":"/version","value":"4"}
 ```
 
-The 120 ms spacing in the prefixes is the producer's per-write
-`wait-for`. The end-to-end response takes ~2.4 s, and **curl
+The 500 ms spacing in the prefixes is the producer's per-write
+`wait-for`. The end-to-end response takes ~9.5 s, and **curl
 renders each line as it arrives** — the response uses HTTP/1.1
 `Transfer-Encoding: chunked` end-to-end:
 
@@ -67,6 +80,117 @@ through to hyper as a streaming `http_body::Body` (no `collect()`
 buffering), and keeps `Store::run_concurrent` alive for the body's
 full lifetime via a oneshot-signaled body wrapper — see patch #4
 under "wash-runtime patches required to reach this point".
+
+## WebSocket egress (meta-json)
+
+The same producer feeds a WebSocket front-end. `meta-json` exports
+`wasmcloud:websocket/handler@0.1` and, on each connection, subscribes
+to `patches`, splits the NDJSON bytes on `\n`, and emits each line as
+a `Frame::Text(...)` on the outbound stream.
+
+```
+┌────────┐  GET / Upgrade:    ┌─────────────────────────────┐  patches.subscribe()    ┌──────────────────┐
+│ wscat  │  websocket ──────▶ │ meta-json                   │ ──────────────────────▶ │ patch-producer   │
+│        │ ◀── WS text ────── │ (wasmcloud:websocket/handler│ ◀── stream<u8> NDJSON ──│                  │
+└────────┘  frames, one per   │  @0.1.0)                    │                         │ (same as above)  │
+            patch line, paced │                             │                         │                  │
+            at producer rate  │ buffers bytes by '\n',      │                         │                  │
+                              │ writes Frame::Text per line │                         │                  │
+                              └─────────────────────────────┘                         └──────────────────┘
+                                exports websocket/handler
+                                imports patches
+```
+
+Switch `build.component_path` in `.wash/config.yaml` between
+`patch_consumer.wasm` and `meta_json.wasm` to flip between the HTTP
+and WebSocket front-ends. Both worlds keep producer as a peer.
+
+### Try it
+
+Handshake-only smoke test (works on any `curl`):
+
+```sh
+curl -sv --http1.1 \
+  -H 'Connection: Upgrade' \
+  -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' \
+  -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  http://localhost:8000/ 2>&1 | head -20
+```
+
+Expected response (the `accept` value is the canonical RFC 6455 test
+vector — exact match means the host's SHA1 + base64 is correct):
+
+```
+HTTP/1.1 101 Switching Protocols
+connection: Upgrade
+upgrade: websocket
+sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+```
+
+For the full demo with proper frame parsing, use a real WS client
+(`websocat`, `wscat`, or a browser):
+
+```sh
+websocat ws://localhost:8000/
+# or
+wscat -c ws://localhost:8000/
+```
+
+Expected output: 20 lines, one per WS text frame, ~500 ms apart:
+
+```
+[t+   0ms] {"op":"add","path":"/title","value":"\"Untitled\""}
+[t+ 503ms] {"op":"add","path":"/version","value":"0"}
+[t+1006ms] {"op":"add","path":"/items","value":"[]"}
+...
+[t+9500ms] {"op":"replace","path":"/version","value":"4"}
+```
+
+Then the host closes the connection with code 1000 (the producer's
+writer drops → meta-json's outgoing stream ends → host sends a normal
+WS close).
+
+### What's exercised by the WS path on top of the HTTP path
+
+- **Host detects WS upgrades from HTTP.** `host/http.rs::is_websocket_upgrade`
+  checks `Upgrade`, `Connection`, and `Sec-WebSocket-Version: 13`;
+  `engine::targets_websocket` checks the component for a
+  `wasmcloud:websocket/*@0.1` export. Both true → request branches
+  into `host/websocket.rs` instead of the wasi:http handler.
+- **101 handshake is hyper-native.** The host computes
+  `Sec-WebSocket-Accept` (SHA1 of the client key + the RFC 6455
+  magic GUID, base64-encoded), captures hyper's `OnUpgrade` future
+  *before* returning the 101, then awaits the upgrade in a detached
+  task to get the raw `TokioIo<Upgraded>`. tokio-tungstenite's
+  `WebSocketStream::from_raw_socket(.., Role::Server, None)` takes
+  over from there — no second handshake.
+- **Typed frame bridging.** WS messages are bridged to/from the
+  component as `stream<frame>` (a variant of text/binary/close)
+  using wasmtime's `StreamProducer` / `StreamConsumer` traits.
+  `WsReadProducer` pulls `Message`s from the tungstenite read half
+  and yields `Frame`s into the guest's `incoming` stream;
+  `WsWriteConsumer` pulls `Frame`s out of the guest's returned
+  outgoing stream and writes `Message`s back. This sidesteps the
+  intra-component `host_copy` guard that blocks `stream<record>` on
+  the cross-component bridge — wasmtime's host-IO path doesn't go
+  through that guard.
+- **Single component, but linked to a peer for data.** meta-json
+  itself only imports `patches`; the WS handler call goes through
+  `pre_instantiate_linked_components_for_component` first so the
+  patch-producer instance is available for meta-json's
+  `patches::subscribe().await` to invoke.
+
+### WS-handling code lives in
+
+- WIT: [`wit/deps/wasmcloud-websocket-0.1.0/package.wit`](wit/deps/wasmcloud-websocket-0.1.0/package.wit)
+  (vendored from `crates/wash-runtime/wit/deps/`).
+- Host: [`crates/wash-runtime/src/host/websocket.rs`](../../crates/wash-runtime/src/host/websocket.rs).
+- Dispatch branch: [`crates/wash-runtime/src/host/http.rs`](../../crates/wash-runtime/src/host/http.rs)
+  (`is_websocket_upgrade` + the WS arm in `invoke_component_handler`).
+- Workload binding: [`crates/wash-runtime/src/engine/workload.rs`](../../crates/wash-runtime/src/engine/workload.rs)
+  — `resolve` now also registers WS-exporting components with the
+  HTTP server so they receive incoming upgrade requests.
 
 ## What's actually being exercised
 
@@ -88,7 +212,7 @@ under "wash-runtime patches required to reach this point".
   Some(patches_rx), trailers_rx)` hands the patches stream straight
   in as the HTTP body — no copy task on the consumer side.
 - **The producer paces and timestamps writes.** Between writes the
-  producer awaits `wasi:clocks/monotonic-clock::wait-for(120ms)` —
+  producer awaits `wasi:clocks/monotonic-clock::wait-for(500ms)` —
   that's an `async func` import on a wasip3 host interface, and the
   await actually suspends the writer task without blocking the
   consumer's HTTP handler. The `[t+NNNms]` prefix is captured at
@@ -243,21 +367,26 @@ in `crates/wash-runtime/`:
    pumping chunks into the body's mpsc. Hyper sees an unbounded
    `size_hint` and picks `Transfer-Encoding: chunked` on its own —
    no flag, no config — and curl renders each patch as it arrives
-   at the producer's ~120ms cadence.
+   at the producer's ~500ms cadence.
 
 ## Layout
 
 ```
 examples/patch-stream/
-├── Cargo.toml                # workspace: [patch-producer, patch-consumer]
-├── .wash/config.yaml         # wash dev: wasip3 on, patch-producer as peer component
+├── Cargo.toml                # workspace: [patch-producer, patch-consumer, meta-json]
+├── .wash/config.yaml         # wash dev: wasip3 on, patch-producer as peer component;
+│                             # build.component_path selects the front-end (consumer | meta-json)
 ├── wit/
-│   ├── world.wit             # patches interface + two worlds
-│   └── deps/                 # wasi:http@0.3 + clocks@0.3 + transitive deps
+│   ├── world.wit             # patches + sink + three worlds (producer, consumer, meta-json)
+│   └── deps/                 # wasi:http@0.3 + clocks@0.3 + wasmcloud:websocket@0.1 + ...
 ├── patch-producer/           # exports patches.subscribe; imports wasi:clocks/monotonic-clock@0.3
-│                             # writes 20 timestamped NDJSON patches with 120 ms wait-for between
-└── patch-consumer/           # exports wasi:http/handler@0.3, imports patches
-                              # handle() = subscribe + zero-copy hand-off into Response::new
+│                             # writes 20 timestamped NDJSON patches with 500 ms wait-for between
+├── patch-consumer/           # exports wasi:http/handler@0.3, imports patches + sink
+│                             # handle() = subscribe + hand off via sink::send-stream
+└── meta-json/                # exports wasmcloud:patch-stream/sink AND
+                              # wasmcloud:websocket/handler@0.1; imports patches.
+                              # WS path: subscribe + emit each line as Frame::Text.
+                              # sink path: drain stream<u8> + eprintln each line.
 ```
 
 `.wash/config.yaml` sets `dev.wasip3: true` and lists

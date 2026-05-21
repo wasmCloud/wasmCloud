@@ -117,8 +117,7 @@ pub async fn handle_component_request_p3(
         .await
         .map_err(|e| anyhow::anyhow!(e).context("failed to instantiate P3 service"))?;
 
-    let (resp_tx, resp_rx) =
-        oneshot::channel::<anyhow::Result<hyper::Response<P3Body>>>();
+    let (resp_tx, resp_rx) = oneshot::channel::<anyhow::Result<hyper::Response<P3Body>>>();
 
     tokio::spawn(async move {
         let result = store
@@ -159,8 +158,8 @@ pub async fn handle_component_request_p3(
                             Ok(())
                         }
                         Err(e) => {
-                            let _ = resp_tx
-                                .send(Err(anyhow::anyhow!(e).context("P3 handler trap")));
+                            let _ =
+                                resp_tx.send(Err(anyhow::anyhow!(e).context("P3 handler trap")));
                             Ok(())
                         }
                     }

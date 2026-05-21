@@ -59,5 +59,7 @@ world patch-consumer {
 }
 
 world meta-json {
+    import patches;
     export sink;
+    export wasmcloud:websocket/handler@0.1.0;
 }

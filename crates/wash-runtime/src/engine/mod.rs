@@ -227,6 +227,17 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
             .any(|(name, _)| name.starts_with("wasi:http") && name.contains("@0.3"))
 }
 
+/// Detect whether a component exports the `wasmcloud:websocket/handler@0.1`
+/// interface. Used to branch HTTP `Upgrade: websocket` requests away from
+/// the wasi:http handler path and into the WebSocket bridge.
+#[cfg(feature = "wasip3")]
+pub fn targets_websocket(component: &Component) -> bool {
+    let ty = component.component_type();
+    let engine = component.engine();
+    ty.exports(engine)
+        .any(|(name, _)| name.starts_with("wasmcloud:websocket/") && name.contains("@0.1"))
+}
+
 pub mod ctx;
 mod value;
 pub mod workload;
