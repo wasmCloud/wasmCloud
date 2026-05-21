@@ -71,7 +71,7 @@ jobs:
     needs:
       - lint
       - test
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Require all jobs to pass or be skipped

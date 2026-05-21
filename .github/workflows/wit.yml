@@ -301,15 +301,18 @@ jobs:
 
   # Single pass/fail signal for required-check enforcement. Sits at the
   # bottom so the dependency list mirrors the visual job order, and
-  # `if: always()` ensures it runs whether upstream jobs passed, failed,
-  # or got skipped (e.g. publish skips on PR events — that's "skipped",
-  # not failure). The bash check rejects only failure/cancelled.
+  # `if: !cancelled()` ensures it runs whether upstream jobs passed,
+  # failed, or got skipped (e.g. publish skips on PR events — that's
+  # "skipped", not failure). The bash check rejects only failure/cancelled.
+  # Workflow-level cancellation (e.g. concurrency cancel-in-progress)
+  # skips the gate entirely so it doesn't post a phantom failure when a
+  # newer run will report the real verdict on the same SHA.
   gate:
     needs:
       - changes
       - validate
       - publish
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Require all jobs to pass or be skipped
