@@ -44,3 +44,7 @@ world otel {
     import wasi:otel/metrics@0.2.0-rc.1;
     import wasi:otel/logs@0.2.0-rc.1;
 }
+
+world websocket {
+    export wasmcloud:websocket/handler@0.1.0;
+}

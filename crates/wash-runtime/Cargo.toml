@@ -57,6 +57,9 @@ wasip3 = [
     "wasmtime-wasi/p3",
     "wasmtime-wasi-http/p3",
     "wasmtime-wasi-http/component-model-async",
+    "dep:tokio-tungstenite",
+    "dep:sha1",
+    "dep:base64",
 ]
 wasi-tls = ["dep:wasmtime-wasi-tls", "wasip3"]
 
@@ -79,6 +82,9 @@ sysinfo = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["sync", "net", "macros"] }
+tokio-tungstenite = { workspace = true, optional = true }
+sha1 = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
 tracing = { workspace = true }
 wasmtime = { workspace = true, features = ["anyhow", "component-model", "component-model-async", "cranelift", "pooling-allocator", "gc", "gc-null"] }
 wasmtime-wasi = { workspace = true }

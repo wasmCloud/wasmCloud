@@ -12,6 +12,7 @@ use crate::sockets::{self, SocketAddrUse, loopback};
 use anyhow::{Context as _, bail, ensure};
 use tokio::{sync::RwLock, task::JoinHandle, time::timeout};
 use tracing::{Instrument, debug, error, info, instrument, trace, warn};
+use wasmtime::AsContextMut;
 use wasmtime::component::{
     Component, Instance, InstancePre, Linker, ResourceAny, ResourceType, Val, types::ComponentItem,
 };
@@ -37,6 +38,8 @@ type BoundPluginWithInterfaces = (
     HashSet<WitInterface>,
     Vec<String>,
 );
+
+type ExporterInstanceKey = (Arc<str>, String);
 
 /// Metadata associated with components and services within a workload.
 #[derive(Clone)]
@@ -154,6 +157,14 @@ impl WorkloadMetadata {
 
     pub fn exports_wasi_http(&self) -> bool {
         crate::engine::exports_wasi_http(&self.component)
+    }
+
+    /// True iff this component exports the `wasmcloud:websocket/handler@0.1`
+    /// interface. Such components are bound to the HTTP server alongside
+    /// wasi:http handlers so they can receive `Upgrade: websocket` requests.
+    #[cfg(feature = "wasip3")]
+    pub fn exports_websocket(&self) -> bool {
+        crate::engine::targets_websocket(&self.component)
     }
 
     /// Returns whether this component targets WASIP3 and the engine has P3 enabled.
@@ -483,6 +494,9 @@ pub struct ResolvedWorkload {
     service: Option<WorkloadService>,
     /// The requested host [`WitInterface`]s to resolve this workload
     host_interfaces: Vec<WitInterface>,
+    /// Per-store cache of exporter instances used by async canonical-ABI
+    /// cross-component calls.
+    exporter_instances: Arc<std::sync::RwLock<HashMap<ExporterInstanceKey, Instance>>>,
     /// TLS provider override for `wasi:tls` client connections in this workload.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -574,6 +588,20 @@ impl ResolvedWorkload {
             } else {
                 bail!("service unexpectedly missing during execution");
             };
+            let linked_component_ids = if let Some(service) = self.service.as_ref() {
+                service
+                    .metadata
+                    .linked_components
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            self.pre_instantiate_linked_component_ids(&mut store, linked_component_ids)
+                .await?;
+            let store_id = store.data().active_ctx.store_id.clone();
+            let exporter_instances = self.exporter_instances.clone();
 
             let handle = tokio::spawn(async move {
                 loop {
@@ -611,6 +639,11 @@ impl ResolvedWorkload {
                     }
                     max_restarts = max_restarts.saturating_sub(1);
                 }
+
+                exporter_instances
+                    .write()
+                    .expect("exporter instance cache poisoned")
+                    .retain(|(_, cached_store_id), _| cached_store_id != &store_id);
             });
 
             let handle = Arc::new(handle);
@@ -642,6 +675,74 @@ impl ResolvedWorkload {
 
     pub fn host_interfaces(&self) -> &Vec<WitInterface> {
         &self.host_interfaces
+    }
+
+    #[cfg(feature = "wasip3")]
+    pub(crate) fn clear_exporter_instances_for_store(&self, store_id: &str) {
+        self.exporter_instances
+            .write()
+            .expect("exporter instance cache poisoned")
+            .retain(|(_, cached_store_id), _| cached_store_id != store_id);
+    }
+
+    async fn pre_instantiate_linked_component_ids(
+        &self,
+        store: &mut wasmtime::Store<SharedCtx>,
+        linked_component_ids: Vec<Arc<str>>,
+    ) -> anyhow::Result<()> {
+        let store_id = store.data().active_ctx.store_id.clone();
+
+        for linked_component_id in linked_component_ids {
+            let key = (linked_component_id.clone(), store_id.clone());
+            if self
+                .exporter_instances
+                .read()
+                .expect("exporter instance cache poisoned")
+                .contains_key(&key)
+            {
+                continue;
+            }
+
+            let pre = self.instantiate_pre(linked_component_id.as_ref()).await?;
+            let prev_component_id = store.data().active_ctx.component_id.clone();
+            store.data_mut().set_active_ctx(&linked_component_id)?;
+            let instantiate_result = pre.instantiate_async(&mut *store).await;
+            store.data_mut().set_active_ctx(&prev_component_id)?;
+            let instance = instantiate_result.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to instantiate linked component '{linked_component_id}': {e}"
+                )
+            })?;
+
+            self.exporter_instances
+                .write()
+                .expect("exporter instance cache poisoned")
+                .insert(key, instance);
+        }
+
+        Ok(())
+    }
+
+    pub async fn pre_instantiate_linked_components_for_component(
+        &self,
+        store: &mut wasmtime::Store<SharedCtx>,
+        component_id: &str,
+    ) -> anyhow::Result<()> {
+        let linked_component_ids = {
+            let components = self.components.read().await;
+            let component = components
+                .get(component_id)
+                .context("component ID not found in workload")?;
+            component
+                .metadata
+                .linked_components
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+
+        self.pre_instantiate_linked_component_ids(store, linked_component_ids)
+            .await
     }
 
     #[instrument(name="link_components", skip_all, fields(workload.id = self.id.as_ref(), workload.name = self.name.as_ref(), workload.namespace = self.namespace.as_ref()))]
@@ -856,7 +957,7 @@ impl ResolvedWorkload {
                         import_instance_ty.exports(plugin_component.metadata.component.engine())
                     {
                         match export_ty {
-                            ComponentItem::ComponentFunc(_func_ty) => {
+                            ComponentItem::ComponentFunc(func_ty) => {
                                 let (item, func_idx) = match plugin_component
                                     .metadata
                                     .component
@@ -885,116 +986,297 @@ impl ResolvedWorkload {
                                 let export_name: Arc<str> = export_name.into();
                                 let pre = pre.clone();
                                 let instance = instance.clone();
+                                let exporter_instances = self.exporter_instances.clone();
                                 let plugin_component_id = plugin_component.id.clone();
+                                let export_is_async = func_ty.async_();
 
                                 linked_components.insert(plugin_component_id.clone());
 
-                                linker_instance
-                                    .func_new_async(
-                                        &export_name.clone(),
-                                        move |mut store, _func, params, results| {
-                                            // TODO(#103): some kind of store data hashing mechanism
-                                            // to detect a diff store to drop the old one
-                                            let import_name = import_name.clone();
-                                            let export_name = export_name.clone();
-                                            let pre = pre.clone();
-                                            let plugin_component_id = plugin_component_id.clone();
-                                            let instance = instance.clone();
-                                            Box::new(async move {
-                                                let prev_id =
-                                                    store.data().active_ctx.component_id.clone();
+                                if export_is_async {
+                                    linker_instance
+                                        .func_new_concurrent(
+                                            &export_name.clone(),
+                                            move |accessor, _func, params, results| {
+                                                let import_name = import_name.clone();
+                                                let export_name = export_name.clone();
+                                                let exporter_instances =
+                                                    exporter_instances.clone();
+                                                let plugin_component_id =
+                                                    plugin_component_id.clone();
+                                                Box::pin(async move {
+                                                    let (prev_id, func, params_buf): (
+                                                        Arc<str>,
+                                                        wasmtime::component::Func,
+                                                        Vec<Val>,
+                                                    ) = accessor.with(
+                                                        |mut access| -> wasmtime::Result<_> {
+                                                            let prev_id = access
+                                                                .data_mut()
+                                                                .active_ctx
+                                                                .component_id
+                                                                .clone();
+                                                            access
+                                                                .data_mut()
+                                                                .set_active_ctx(
+                                                                    &plugin_component_id,
+                                                                )?;
 
-                                                store
-                                                    .data_mut()
-                                                    .set_active_ctx(&plugin_component_id)?;
+                                                            let result = (|| {
+                                                                let store_id = access
+                                                                    .data_mut()
+                                                                    .active_ctx
+                                                                    .store_id
+                                                                    .clone();
+                                                                let instance = exporter_instances
+                                                                    .read()
+                                                                    .expect(
+                                                                        "exporter instance cache poisoned",
+                                                                    )
+                                                                    .get(&(
+                                                                        plugin_component_id
+                                                                            .clone(),
+                                                                        store_id,
+                                                                    ))
+                                                                    .cloned()
+                                                                    .ok_or_else(|| {
+                                                                        wasmtime::format_err!(
+                                                                            "linked component instance '{plugin_component_id}' was not pre-instantiated for this store"
+                                                                        )
+                                                                    })?;
+                                                                let func = instance
+                                                                    .get_func(
+                                                                        &mut access,
+                                                                        func_idx,
+                                                                    )
+                                                                    .ok_or_else(|| {
+                                                                        wasmtime::format_err!(
+                                                                            "function not found"
+                                                                        )
+                                                                    })?;
+                                                                trace!(
+                                                                    name = %import_name,
+                                                                    fn_name = %export_name,
+                                                                    ?params,
+                                                                    "lowering params"
+                                                                );
+                                                                let mut params_buf =
+                                                                    Vec::with_capacity(
+                                                                        params.len(),
+                                                                    );
+                                                                for v in params {
+                                                                    params_buf.push(lower(
+                                                                        &mut access
+                                                                            .as_context_mut(),
+                                                                        v,
+                                                                    )?);
+                                                                }
 
-                                                let existing_instance = instance.read().await;
-                                                let store_id = store.data().active_ctx.id.clone();
-                                                let instance = if let Some((id, instance)) =
-                                                    existing_instance.clone()
-                                                    && id == store_id
-                                                {
-                                                    drop(existing_instance);
-                                                    instance
-                                                } else {
-                                                    // Likely unnecessary, but explicit drop of the read lock
-                                                    let new_instance =
-                                                        pre.instantiate_async(&mut store).await?;
-                                                    drop(existing_instance);
-                                                    *instance.write().await =
-                                                        Some((store_id, new_instance));
-                                                    new_instance
-                                                };
+                                                                Ok((func, params_buf))
+                                                            })();
 
-                                                let func = instance
-                                                    .get_func(&mut store, func_idx)
-                                                    .ok_or_else(|| {
-                                                        wasmtime::format_err!("function not found")
-                                                    })?;
-                                                trace!(
-                                                    name = %import_name,
-                                                    fn_name = %export_name,
-                                                    ?params,
-                                                    "lowering params"
-                                                );
-                                                let mut params_buf =
-                                                    Vec::with_capacity(params.len());
-                                                for v in params {
-                                                    params_buf.push(lower(&mut store, v)?);
-                                                }
-                                                trace!(
-                                                    name = %import_name,
-                                                    fn_name = %export_name,
-                                                    ?params_buf,
-                                                    "invoking dynamic export"
-                                                );
+                                                            if result.is_err() {
+                                                                access
+                                                                    .data_mut()
+                                                                    .set_active_ctx(&prev_id)?;
+                                                            }
 
-                                                let mut results_buf =
-                                                    vec![Val::Bool(false); results.len()];
+                                                            result.map(|(func, params_buf)| {
+                                                                (prev_id, func, params_buf)
+                                                            })
+                                                        },
+                                                    )?;
 
-                                                // Enforce a timeout on this call to prevent hanging indefinitely
-                                                const CALL_TIMEOUT: Duration =
-                                                    Duration::from_secs(30);
-                                                timeout(
-                                                    CALL_TIMEOUT,
-                                                    func.call_async(
-                                                        &mut store,
-                                                        &params_buf,
-                                                        &mut results_buf,
-                                                    ),
-                                                )
-                                                .await
-                                                .map_err(|e| wasmtime::format_err!(
-                                                    "function call timed out after 30 seconds: {e}",
-                                                ))??;
+                                                    trace!(
+                                                        name = %import_name,
+                                                        fn_name = %export_name,
+                                                        ?params_buf,
+                                                        "invoking dynamic export"
+                                                    );
 
-                                                trace!(
-                                                    name = %import_name,
-                                                    fn_name = %export_name,
-                                                    ?results_buf,
-                                                    "lifting results"
-                                                );
-                                                for (i, v) in results_buf.into_iter().enumerate() {
-                                                    *results.get_mut(i).ok_or_else(|| {
-                                                        wasmtime::format_err!(
-                                                            "result index out of bounds"
+                                                    let mut results_buf =
+                                                        vec![Val::Bool(false); results.len()];
+
+                                                    const CALL_TIMEOUT: Duration =
+                                                        Duration::from_secs(30);
+                                                    let call_result = timeout(
+                                                        CALL_TIMEOUT,
+                                                        func.call_concurrent(
+                                                            accessor,
+                                                            &params_buf,
+                                                            &mut results_buf,
+                                                        ),
+                                                    )
+                                                    .await
+                                                    .map_err(|e| wasmtime::format_err!(
+                                                        "function call timed out after 30 seconds: {e}",
+                                                    ))?;
+
+                                                    let lift_result = if call_result.is_ok() {
+                                                        trace!(
+                                                            name = %import_name,
+                                                            fn_name = %export_name,
+                                                            ?results_buf,
+                                                            "lifting results"
+                                                        );
+                                                        accessor.with(
+                                                            |mut access| -> wasmtime::Result<_> {
+                                                                for (i, v) in results_buf
+                                                                    .into_iter()
+                                                                    .enumerate()
+                                                                {
+                                                                    *results.get_mut(i).ok_or_else(
+                                                                        || {
+                                                                            wasmtime::format_err!(
+                                                                                "result index out of bounds"
+                                                                            )
+                                                                        },
+                                                                    )? = lift(
+                                                                        &mut access
+                                                                            .as_context_mut(),
+                                                                        v,
+                                                                    )?;
+                                                                }
+
+                                                                Ok(())
+                                                            },
                                                         )
-                                                    })? = lift(&mut store, v)?;
-                                                }
-                                                trace!(
-                                                    name = %import_name,
-                                                    fn_name = %export_name,
-                                                    ?results,
-                                                    "invoked dynamic export"
-                                                );
+                                                    } else {
+                                                        Ok(())
+                                                    };
 
-                                                store.data_mut().set_active_ctx(&prev_id)?;
+                                                    accessor.with(
+                                                        |mut access| -> wasmtime::Result<_> {
+                                                            access
+                                                                .data_mut()
+                                                                .set_active_ctx(&prev_id)
+                                                        },
+                                                    )?;
 
-                                                Ok(())
-                                            })
-                                        },
-                                    )
-                                    .map_err(|e| e.context("failed to create async func"))?;
+                                                    call_result?;
+                                                    lift_result?;
+
+                                                    trace!(
+                                                        name = %import_name,
+                                                        fn_name = %export_name,
+                                                        ?results,
+                                                        "invoked dynamic export"
+                                                    );
+
+                                                    Ok(())
+                                                })
+                                            },
+                                        )
+                                        .map_err(|e| {
+                                            e.context("failed to create concurrent func")
+                                        })?;
+                                } else {
+                                    linker_instance
+                                        .func_new_async(
+                                            &export_name.clone(),
+                                            move |mut store, _func, params, results| {
+                                                // TODO(#103): some kind of store data hashing mechanism
+                                                // to detect a diff store to drop the old one
+                                                let import_name = import_name.clone();
+                                                let export_name = export_name.clone();
+                                                let pre = pre.clone();
+                                                let plugin_component_id = plugin_component_id.clone();
+                                                let instance = instance.clone();
+                                                Box::new(async move {
+                                                    let prev_id =
+                                                        store.data().active_ctx.component_id.clone();
+
+                                                    store
+                                                        .data_mut()
+                                                        .set_active_ctx(&plugin_component_id)?;
+
+                                                    let existing_instance = instance.read().await;
+                                                    let store_id = store.data().active_ctx.store_id.clone();
+                                                    let instance = if let Some((id, instance)) =
+                                                        existing_instance.clone()
+                                                        && id == store_id
+                                                    {
+                                                        drop(existing_instance);
+                                                        instance
+                                                    } else {
+                                                        // Likely unnecessary, but explicit drop of the read lock
+                                                        let new_instance =
+                                                            pre.instantiate_async(&mut store).await?;
+                                                        drop(existing_instance);
+                                                        *instance.write().await =
+                                                            Some((store_id, new_instance));
+                                                        new_instance
+                                                    };
+
+                                                    let func = instance
+                                                        .get_func(&mut store, func_idx)
+                                                        .ok_or_else(|| {
+                                                            wasmtime::format_err!("function not found")
+                                                        })?;
+                                                    trace!(
+                                                        name = %import_name,
+                                                        fn_name = %export_name,
+                                                        ?params,
+                                                        "lowering params"
+                                                    );
+                                                    let mut params_buf =
+                                                        Vec::with_capacity(params.len());
+                                                    for v in params {
+                                                        params_buf.push(lower(&mut store, v)?);
+                                                    }
+                                                    trace!(
+                                                        name = %import_name,
+                                                        fn_name = %export_name,
+                                                        ?params_buf,
+                                                        "invoking dynamic export"
+                                                    );
+
+                                                    let mut results_buf =
+                                                        vec![Val::Bool(false); results.len()];
+
+                                                    // Enforce a timeout on this call to prevent hanging indefinitely
+                                                    const CALL_TIMEOUT: Duration =
+                                                        Duration::from_secs(30);
+                                                    timeout(
+                                                        CALL_TIMEOUT,
+                                                        func.call_async(
+                                                            &mut store,
+                                                            &params_buf,
+                                                            &mut results_buf,
+                                                        ),
+                                                    )
+                                                    .await
+                                                    .map_err(|e| wasmtime::format_err!(
+                                                        "function call timed out after 30 seconds: {e}",
+                                                    ))??;
+
+                                                    trace!(
+                                                        name = %import_name,
+                                                        fn_name = %export_name,
+                                                        ?results_buf,
+                                                        "lifting results"
+                                                    );
+                                                    for (i, v) in results_buf.into_iter().enumerate() {
+                                                        *results.get_mut(i).ok_or_else(|| {
+                                                            wasmtime::format_err!(
+                                                                "result index out of bounds"
+                                                            )
+                                                        })? = lift(&mut store, v)?;
+                                                    }
+                                                    trace!(
+                                                        name = %import_name,
+                                                        fn_name = %export_name,
+                                                        ?results,
+                                                        "invoked dynamic export"
+                                                    );
+
+                                                    store.data_mut().set_active_ctx(&prev_id)?;
+
+                                                    Ok(())
+                                                })
+                                            },
+                                        )
+                                        .map_err(|e| e.context("failed to create async func"))?;
+                                }
                             }
                             ComponentItem::Resource(resource_ty) => {
                                 let (item, _idx) = match plugin_component
@@ -1201,11 +1483,14 @@ impl ResolvedWorkload {
         metadata: &WorkloadMetadata,
         is_service: bool,
     ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
-        let active_ctx = self.new_ctx_from_metadata(metadata, is_service).await?;
+        let store_id = uuid::Uuid::new_v4().to_string();
+        let mut active_ctx = self.new_ctx_from_metadata(metadata, is_service).await?;
+        active_ctx.store_id = store_id.clone();
         let mut shared_ctx = SharedCtx::new(active_ctx);
 
         for linked_component_id in metadata.linked_components.iter() {
-            let linked_component_ctx = self.new_ctx(linked_component_id).await?;
+            let mut linked_component_ctx = self.new_ctx(linked_component_id).await?;
+            linked_component_ctx.store_id = store_id.clone();
             shared_ctx
                 .contexts
                 .insert(linked_component_id.clone(), linked_component_ctx);
@@ -1698,20 +1983,35 @@ impl UnresolvedWorkload {
 
         let incoming_http_component = {
             let http_iface = WitInterface::from("wasi:http/incoming-handler");
-            match self
+            let wasi_http_match = self
                 .host_interfaces
                 .iter()
-                .any(|hi| hi.contains(&http_iface))
-            {
-                // http was not part of the requested interfaces
-                false => None,
-                true => self
-                    .components
+                .any(|hi| hi.contains(&http_iface));
+            if wasi_http_match {
+                self.components
                     .values()
                     .find(|component| component.exports_wasi_http())
-                    .map(|c| c.id().to_string()),
+                    .map(|c| c.id().to_string())
+            } else {
+                None
             }
         };
+
+        // Components that export `wasmcloud:websocket/handler@0.1` also
+        // bind to the HTTP server — WS upgrades arrive as HTTP requests
+        // and are routed to the WS dispatch branch based on the Upgrade
+        // header (see `host::http::is_websocket_upgrade`). A workload may
+        // have both a wasi:http component and a websocket component sharing
+        // the same listener; the HTTP server stores both entrypoints and
+        // chooses per request.
+        #[cfg(feature = "wasip3")]
+        let incoming_ws_component = self
+            .components
+            .values()
+            .find(|component| component.exports_websocket())
+            .map(|c| c.id().to_string());
+        #[cfg(not(feature = "wasip3"))]
+        let incoming_ws_component: Option<String> = None;
 
         // Resolve the workload
         let mut resolved_workload = ResolvedWorkload {
@@ -1722,6 +2022,7 @@ impl UnresolvedWorkload {
             service: self.service,
             host_interfaces: self.host_interfaces,
             http_handler: http_handler.clone(),
+            exporter_instances: Arc::default(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
         };
@@ -1763,18 +2064,29 @@ impl UnresolvedWorkload {
             }
         }
 
-        if let Some(component_id) = incoming_http_component
-            && let Err(e) = http_handler
+        let mut incoming_components = Vec::new();
+        if let Some(component_id) = incoming_http_component {
+            incoming_components.push(component_id);
+        }
+        if let Some(component_id) = incoming_ws_component
+            && !incoming_components.contains(&component_id)
+        {
+            incoming_components.push(component_id);
+        }
+
+        for component_id in incoming_components {
+            if let Err(e) = http_handler
                 .on_workload_resolved(&resolved_workload, &component_id)
                 .await
-        {
-            warn!(
-                component_id = component_id,
-                error = ?e,
-                "failed to notify HTTP handler of resolved workload, unbinding all plugins"
-            );
-            let _ = resolved_workload.unbind_all_plugins().await;
-            bail!(e);
+            {
+                warn!(
+                    component_id = component_id,
+                    error = ?e,
+                    "failed to notify HTTP handler of resolved workload, unbinding all plugins"
+                );
+                let _ = resolved_workload.unbind_all_plugins().await;
+                bail!(e);
+            }
         }
 
         Ok(resolved_workload)

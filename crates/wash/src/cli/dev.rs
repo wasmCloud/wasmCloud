@@ -79,6 +79,12 @@ impl CliCommand for DevCommand {
             plugin::wasmcloud_messaging::InMemoryMessaging::default(),
         ))?;
 
+        // Enable wasmcloud:patch-stream/broker for local multi-entrypoint
+        // websocket demos.
+        host_builder = host_builder.with_plugin(Arc::new(
+            plugin::wasmcloud_stream_broker::StreamBroker::default(),
+        ))?;
+
         // Add blobstore plugin
         if let Some(blobstore_path) = &dev_config.wasi_blobstore_path {
             host_builder = host_builder.with_plugin(Arc::new(
@@ -194,7 +200,7 @@ impl CliCommand for DevCommand {
         }
 
         // Enable WASI WebGPU if requested
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(feature = "wasi-webgpu", not(target_os = "windows")))]
         if dev_config.wasi_webgpu {
             host_builder =
                 host_builder.with_plugin(Arc::new(plugin::wasi_webgpu::WebGpu::default()))?;

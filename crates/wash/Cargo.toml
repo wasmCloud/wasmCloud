@@ -13,6 +13,7 @@ version.workspace = true
 
 [features]
 wasip3 = ["wash-runtime/wasip3"]
+wasi-webgpu = ["wash-runtime/wasi-webgpu"]
 
 [lints]
 workspace = true
@@ -60,12 +61,6 @@ wasm-pkg-client = { workspace = true }
 wasm-pkg-core = { workspace = true }
 wash-runtime = { workspace = true, features = ["washlet", "oci", "wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "wasi-otel"] }
 wit-component = { workspace = true }
-
-# Enable WebGPU support on non-Windows platforms
-# WebGPU is disabled on Windows due to dependency version conflicts with the windows crate
-[target.'cfg(not(target_os = "windows"))'.dependencies]
-wash-runtime = { workspace = true, features = ["wasi-webgpu"] }
-
 
 [build-dependencies]
 anyhow = { workspace = true, default-features = true }

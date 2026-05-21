@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+package.edition = "2024"
+package.authors = ["The wasmCloud Team"]
+members = ["page-agent", "commander", "meta-json"]
+
+[workspace.dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wstd = "0.6"
+wit-bindgen = { version = "0.54.0", default-features = false, features = [
+    "macros",
+    "async-spawn",
+    "inter-task-wakeup",
+] }
+
+[profile.release]
+lto = true
+opt-level = "s"
+strip = true

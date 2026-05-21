@@ -1,0 +1,5 @@
+# Local wit/deps already contains both p2 (0.2.x) and p3 (0.3.x) wasi
+# packages — wash's wit-deps resolver picks the right version per import
+# without overrides. The wkg fetch must be skipped (and is when
+# `wash build --skip-fetch` is used) so it doesn't try to pull mismatched
+# upstream versions.

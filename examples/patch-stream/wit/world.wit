@@ -1,0 +1,84 @@
+package wasmcloud:patch-stream@0.1.0;
+
+interface types {
+    variant op {
+        add,
+        remove,
+        replace,
+        move-op,
+        copy-op,
+        test,
+    }
+
+    /// One JSON Patch entry (RFC 6902). `value` is JSON-encoded so we
+    /// don't have to model arbitrary JSON in WIT. For move / copy ops,
+    /// `value` holds the source path.
+    record patch {
+        op: op,
+        path: string,
+        value: string,
+    }
+}
+
+interface page-generation {
+    use types.{patch};
+
+    /// Generate a page-edit stream for the supplied prompt. Returns
+    /// NDJSON-encoded bytes (`stream<u8>`) rather than a typed
+    /// `stream<patch>` so the output can be forwarded directly to
+    /// MetaJson / websocket clients.
+    generate-page: async func(prompt: string) -> stream<u8>;
+}
+
+/// Stream sink: a downstream component takes ownership of a
+/// cross-component `stream<u8>` and is responsible for draining it.
+/// In this example, `meta-json` exports this interface and logs each
+/// NDJSON patch line to stderr; the commander hands the
+/// PageAgent stream off and forgets about it.
+interface sink {
+    send-stream: async func(s: stream<u8>) -> result;
+}
+
+interface broker {
+    /// Allocate a subscriber slot. `register` and `unregister` are
+    /// synchronous because they only touch the broker's in-memory
+    /// table and never block.
+    register: func() -> u64;
+    unregister: func(client-id: u64);
+
+    /// Wait for the next message addressed to `client-id`. Suspends
+    /// the caller via the p3 async canonical ABI; returns `none` when
+    /// the broker closes the subscription (e.g. shutdown).
+    wait-message: async func(client-id: u64) -> option<string>;
+
+    /// Publish `message` to every registered subscriber. Async so
+    /// publishers can pace themselves against slow consumers without
+    /// blocking the host scheduler.
+    publish-message: async func(message: string) -> result<_, string>;
+}
+
+world page-agent {
+    import wasi:cli/environment@0.3.0-rc-2026-03-15;
+    import wasi:clocks/monotonic-clock@0.3.0-rc-2026-03-15;
+    import wasi:http/types@0.3.0-rc-2026-03-15;
+    import wasi:http/client@0.3.0-rc-2026-03-15;
+
+    export page-generation;
+}
+
+world commander {
+    import page-generation;
+    import sink;
+
+    import wasi:http/types@0.3.0-rc-2026-03-15;
+    import wasi:clocks/types@0.3.0-rc-2026-03-15;
+    import wasi:random/random@0.3.0-rc-2026-03-15;
+
+    export wasi:http/handler@0.3.0-rc-2026-03-15;
+}
+
+world meta-json {
+    import broker;
+    export sink;
+    export wasmcloud:websocket/handler@0.1.0;
+}
