@@ -88,7 +88,7 @@ impl NatsMessaging {
 }
 
 impl<'a> Host for ActiveCtx<'a> {
-    #[instrument(skip_all, fields(subject = %subject, timeout_ms))]
+    #[instrument(name = "wasmcloud.messaging.request", skip_all, fields(subject = %subject, timeout_ms))]
     async fn request(
         &mut self,
         subject: String,
@@ -121,7 +121,7 @@ impl<'a> Host for ActiveCtx<'a> {
         }))
     }
 
-    #[instrument(skip_all, fields(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>")))]
+    #[instrument(name = "wasmcloud.messaging.publish", skip_all, fields(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>")))]
     async fn publish(&mut self, msg: types::BrokerMessage) -> wasmtime::Result<Result<(), String>> {
         let Some(plugin) = self.get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID) else {
             return Ok(Err("plugin not available".to_string()));
@@ -218,7 +218,7 @@ impl HostPlugin for NatsMessaging {
         Ok(())
     }
 
-    #[instrument(skip_all, fields(component_id = %component_id, workload.id = %workload.id()))]
+    #[instrument(name = "wasmcloud.messaging.on_workload_resolved", skip_all, fields(component_id = %component_id, workload.id = %workload.id()))]
     async fn on_workload_resolved(
         &self,
         workload: &ResolvedWorkload,

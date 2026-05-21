@@ -12,6 +12,7 @@ use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::HostPlugin;
 use crate::wit::{WitInterface, WitWorld};
+use tracing::instrument;
 use wasmtime::bail;
 
 const PLUGIN_LOGGING_ID: &str = "wasi-logging";
@@ -40,6 +41,7 @@ struct ComponentInfo {
 }
 
 impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
+    #[instrument(name = "wasi.logging.log", skip(self, message))]
     async fn log(
         &mut self,
         level: Level,

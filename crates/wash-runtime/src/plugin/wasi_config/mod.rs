@@ -66,7 +66,7 @@ impl DynamicConfig {
 }
 
 impl<'a> bindings::wasi::config::store::Host for ActiveCtx<'a> {
-    #[instrument(skip(self))]
+    #[instrument(name = "wasi.config.get", skip(self))]
     async fn get(
         &mut self,
         key: String,
@@ -81,7 +81,7 @@ impl<'a> bindings::wasi::config::store::Host for ActiveCtx<'a> {
             .map_or(Ok(Ok(None)), |v| Ok(Ok(Some(v))))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(name = "wasi.config.get_all", skip(self))]
     async fn get_all(
         &mut self,
     ) -> wasmtime::Result<Result<Vec<(String, String)>, bindings::wasi::config::store::Error>> {
