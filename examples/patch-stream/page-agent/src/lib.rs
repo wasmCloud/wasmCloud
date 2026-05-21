@@ -11,6 +11,8 @@ mod bindings {
     });
 }
 
+const OPENAI_API_KEY: &str = ""; //put the key here since wash dev does not support  env variable passing yet
+
 use bindings::exports::wasmcloud::patch_stream::page_generation::Guest;
 use bindings::wasi::cli::environment;
 use bindings::wasi::clocks::monotonic_clock;
@@ -49,11 +51,7 @@ impl Guest for Component {
 }
 
 async fn stream_openai_chat(prompt: &str, writer: &mut StreamWriter<u8>) -> Result<(), String> {
-    let api_key = env("PAGE_AGENT_OPENAI_API_KEY")
-        .or_else(|| env("OPENAI_API_KEY"))
-        .ok_or_else(|| {
-            "OPENAI_API_KEY not configured; using deterministic PageAgent demo".to_string()
-        })?;
+    let api_key = OPENAI_API_KEY;
 
     let model = env("PAGE_AGENT_OPENAI_MODEL")
         .or_else(|| env("OPENAI_MODEL"))
@@ -68,11 +66,6 @@ async fn stream_openai_chat(prompt: &str, writer: &mut StreamWriter<u8>) -> Resu
         _ => Scheme::Https,
     };
 
-    let headers = Fields::new();
-    append_header(&headers, "content-type", "application/json")?;
-    append_header(&headers, "accept", "text/event-stream")?;
-    append_header(&headers, "authorization", &format!("Bearer {api_key}"))?;
-
     let body = json!({
         "model": model,
         "stream": true,
@@ -83,6 +76,12 @@ async fn stream_openai_chat(prompt: &str, writer: &mut StreamWriter<u8>) -> Resu
     })
     .to_string()
     .into_bytes();
+
+    let headers = Fields::new();
+    append_header(&headers, "content-type", "application/json")?;
+    append_header(&headers, "accept", "text/event-stream")?;
+    append_header(&headers, "content-length", &body.len().to_string())?;
+    append_header(&headers, "authorization", &format!("Bearer {api_key}"))?;
 
     let (mut body_tx, body_rx) = bindings::wit_stream::new::<u8>();
     let (_trailers_tx, trailers_rx) = bindings::wit_future::new(|| Ok(None));
@@ -103,6 +102,7 @@ async fn stream_openai_chat(prompt: &str, writer: &mut StreamWriter<u8>) -> Resu
 
     wit_bindgen::spawn(async move {
         body_tx.write_all(body).await;
+        drop(body_tx);
     });
 
     let response = client::send(request)

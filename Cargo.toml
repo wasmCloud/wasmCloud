@@ -155,6 +155,10 @@ ignored = [
 ]
 
 [patch.crates-io]
+# Local-path override for live debugging of wasmtime. Flip back to the
+# git URLs (commented below) once we're done iterating on tracing /
+# bug-fixes in `~/Desktop/wasmtime/`.
+
 wasmtime = { git = "https://github.com/Aditya1404Sal/wasmtime", branch = "fix-cross-component-stream-copy" }
 wasmtime-wasi = { git = "https://github.com/Aditya1404Sal/wasmtime", branch = "fix-cross-component-stream-copy" }
 wasmtime-wasi-io = { git = "https://github.com/Aditya1404Sal/wasmtime", branch = "fix-cross-component-stream-copy" }

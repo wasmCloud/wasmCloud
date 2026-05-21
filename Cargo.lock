@@ -1275,7 +1275,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64"
 version = "0.133.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cranelift-assembler-x64-meta 0.133.0",
 ]
@@ -1292,7 +1292,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64-meta"
 version = "0.133.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cranelift-srcgen 0.133.0",
 ]
@@ -1310,7 +1310,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bforest"
 version = "0.133.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cranelift-entity 0.133.0",
  "wasmtime-internal-core 46.0.0",
@@ -1330,7 +1330,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bitset"
 version = "0.133.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "serde",
  "serde_derive",
@@ -1368,7 +1368,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen"
 version = "0.133.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "bumpalo",
  "cranelift-assembler-x64 0.133.0",
@@ -1408,7 +1408,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-meta"
 version = "0.133.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cranelift-assembler-x64-meta 0.133.0",
  "cranelift-codegen-shared 0.133.0",
@@ -1426,7 +1426,7 @@ checksum = "833eb9fc89326cd072cc19e96892f09b5692c0dfe17cd4da2858ba30c2cd85c0"
 [[package]]
 name = "cranelift-codegen-shared"
 version = "0.133.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 
 [[package]]
 name = "cranelift-control"
@@ -1440,7 +1440,7 @@ dependencies = [
 [[package]]
 name = "cranelift-control"
 version = "0.133.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "arbitrary",
 ]
@@ -1460,7 +1460,7 @@ dependencies = [
 [[package]]
 name = "cranelift-entity"
 version = "0.133.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cranelift-bitset 0.133.0",
  "serde",
@@ -1483,7 +1483,7 @@ dependencies = [
 [[package]]
 name = "cranelift-frontend"
 version = "0.133.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cranelift-codegen 0.133.0",
  "hashbrown 0.17.0",
@@ -1501,7 +1501,7 @@ checksum = "02c51975ed217b4e8e5a7fd11e9ec83a96104bdff311dddcb505d1d8a9fd7fc6"
 [[package]]
 name = "cranelift-isle"
 version = "0.133.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 
 [[package]]
 name = "cranelift-native"
@@ -1517,7 +1517,7 @@ dependencies = [
 [[package]]
 name = "cranelift-native"
 version = "0.133.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cranelift-codegen 0.133.0",
  "libc",
@@ -1533,7 +1533,7 @@ checksum = "d5a8f82fd5124f009f72167e60139245cd3b56cfd4b53050f22110c48c5f4da1"
 [[package]]
 name = "cranelift-srcgen"
 version = "0.133.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 
 [[package]]
 name = "crc32fast"
@@ -5125,7 +5125,7 @@ dependencies = [
 [[package]]
 name = "pulley-interpreter"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cranelift-bitset 0.133.0",
  "log",
@@ -5147,7 +5147,7 @@ dependencies = [
 [[package]]
 name = "pulley-macros"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8094,7 +8094,7 @@ dependencies = [
 [[package]]
 name = "wasmtime"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "addr2line",
  "async-trait",
@@ -8168,7 +8168,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-environ"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "anyhow",
  "cpp_demangle",
@@ -8233,7 +8233,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-component-macro"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "anyhow",
  "proc-macro2",
@@ -8253,7 +8253,7 @@ checksum = "49df3d3b4fa2119c6fd161e475b4e21aaefb51d082353b922b433bea37facc65"
 [[package]]
 name = "wasmtime-internal-component-util"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 
 [[package]]
 name = "wasmtime-internal-core"
@@ -8270,7 +8270,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-core"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "anyhow",
  "hashbrown 0.17.0",
@@ -8308,7 +8308,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-cranelift"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cfg-if",
  "cranelift-codegen 0.133.0",
@@ -8349,7 +8349,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-fiber"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cc",
  "cfg-if",
@@ -8375,7 +8375,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-jit-debug"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cc",
  "wasmtime-internal-versioned-export-macros 46.0.0",
@@ -8396,7 +8396,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-jit-icache-coherence"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cfg-if",
  "libc",
@@ -8420,7 +8420,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-unwinder"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cfg-if",
  "cranelift-codegen 0.133.0",
@@ -8443,7 +8443,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-versioned-export-macros"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8470,7 +8470,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-winch"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cranelift-codegen 0.133.0",
  "gimli",
@@ -8499,7 +8499,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-wit-bindgen"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "anyhow",
  "bitflags",
@@ -8541,7 +8541,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-wasi"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "async-trait",
  "bitflags",
@@ -8569,7 +8569,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-wasi-http"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "async-trait",
  "bytes",
@@ -8605,7 +8605,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-wasi-io"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "async-trait",
  "bytes",
@@ -8617,7 +8617,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-wasi-tls"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "bytes",
  "cfg-if",
@@ -8950,7 +8950,7 @@ dependencies = [
 [[package]]
 name = "winch-codegen"
 version = "46.0.0"
-source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#344902e811b6c8107b41f16297f8205def835049"
+source = "git+https://github.com/Aditya1404Sal/wasmtime?branch=fix-cross-component-stream-copy#5d5f015614394ed2a04b2fd3f2de2c18d4350b15"
 dependencies = [
  "cranelift-assembler-x64 0.133.0",
  "cranelift-codegen 0.133.0",

@@ -490,10 +490,24 @@ pub trait HostHandler: Send + Sync + 'static {
                 ))
             });
         }
+        tracing::info!(
+            workload_id = %workload_id,
+            method = %request.method(),
+            uri = %request.uri(),
+            "p3 outgoing: dispatching default_send_request",
+        );
         Box::new(async move {
-            let (res, io) = wasmtime_wasi_http::p3::default_send_request(request, options).await?;
-            let io: crate::host::http_p3::P3RequestErrorFuture = Box::new(io);
-            Ok((res.map(BodyExt::boxed_unsync), io))
+            match wasmtime_wasi_http::p3::default_send_request(request, options).await {
+                Ok((res, io)) => {
+                    tracing::info!(status = %res.status(), "p3 outgoing: default_send_request returned");
+                    let io: crate::host::http_p3::P3RequestErrorFuture = Box::new(io);
+                    Ok((res.map(BodyExt::boxed_unsync), io))
+                }
+                Err(err) => {
+                    tracing::warn!(err = ?err, "p3 outgoing: default_send_request errored");
+                    Err(wasmtime_wasi::TrappableError::from(err))
+                }
+            }
         })
     }
 }
