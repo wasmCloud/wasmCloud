@@ -15,7 +15,7 @@
 
 use anyhow::Result;
 use futures::future::join_all;
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 use tokio::time::timeout;
 
 use wash_runtime::{
@@ -50,10 +50,7 @@ fn http_handler_p2_request(host_header: &str) -> WorkloadStartRequest {
         LocalResources {
             memory_limit_mb: 128,
             cpu_limit: 1,
-            config: HashMap::new(),
-            environment: HashMap::new(),
-            volume_mounts: vec![],
-            allowed_hosts: Default::default(),
+            ..Default::default()
         },
         http_only_host_interfaces(host_header),
     )

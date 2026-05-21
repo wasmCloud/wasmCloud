@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use anyhow::{Context as _, bail, ensure};
 use bytes::Bytes;
@@ -11,8 +11,9 @@ use wash_runtime::{
     observability::Meters,
     plugin::{self},
     types::{
-        Component, HostPathVolume, LocalResources, Service, Volume, VolumeMount, VolumeType,
-        Workload, WorkloadStartRequest, WorkloadState, WorkloadStopRequest,
+        Component, HostPathVolume, LocalResources, Service, SocketTunnelMode, SocketTunnelPolicy,
+        Volume, VolumeMount, VolumeType, Workload, WorkloadStartRequest, WorkloadState,
+        WorkloadStopRequest,
     },
 };
 
@@ -298,6 +299,57 @@ async fn create_workload(host: &Host, config: &Config, bytes: Bytes) -> anyhow::
         });
     });
 
+    // Build the socket-tunnel policy from config. `None` means "use the default
+    // strict policy" (block-by-default). For each rule:
+    //   - if host_addr is omitted, default to `127.0.0.1:<sandbox_port>`
+    //   - if host_addr is set, accept a bare `IP:port` or resolve a hostname
+    //     via the OS resolver (e.g. "mydb.example.com:3306").
+    let socket_tunnels: Option<SocketTunnelPolicy> = if let Some(cfg) = &dev_config.socket_tunnels {
+        let mode = match cfg.mode {
+            crate::config::SocketTunnelMode::Strict => SocketTunnelMode::Strict,
+            crate::config::SocketTunnelMode::AllowAll => SocketTunnelMode::AllowAll,
+            crate::config::SocketTunnelMode::DenyAll => SocketTunnelMode::DenyAll,
+        };
+        if matches!(mode, SocketTunnelMode::AllowAll) && !cfg.rules.is_empty() {
+            warn!("socket_tunnels.mode = allow-all; declared rules are ignored");
+        }
+        let mut rules: HashMap<u16, SocketAddr> = HashMap::new();
+        for r in &cfg.rules {
+            let addr = match &r.host_addr {
+                None => SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, r.sandbox_port)),
+                Some(host_addr) => {
+                    if let Ok(addr) = host_addr.parse::<SocketAddr>() {
+                        addr
+                    } else {
+                        match tokio::net::lookup_host(host_addr).await {
+                            Ok(mut addrs) => match addrs.next() {
+                                Some(addr) => {
+                                    debug!(sandbox_port = r.sandbox_port, host_addr = %host_addr,
+                                        resolved = %addr, "resolved socket_tunnels rule hostname");
+                                    addr
+                                }
+                                None => {
+                                    warn!(sandbox_port = r.sandbox_port, host_addr = %host_addr,
+                                        "socket_tunnels rule hostname resolved to no addresses, skipping");
+                                    continue;
+                                }
+                            },
+                            Err(e) => {
+                                warn!(sandbox_port = r.sandbox_port, host_addr = %host_addr,
+                                    "socket_tunnels rule hostname resolution failed: {e}, skipping");
+                                continue;
+                            }
+                        }
+                    }
+                }
+            };
+            rules.insert(r.sandbox_port, addr);
+        }
+        Some(SocketTunnelPolicy { mode, rules })
+    } else {
+        None
+    };
+
     // Extract both imports and exports from the component
     // This populates host_interfaces which is checked bidirectionally during plugin binding
     let mut host_interfaces = dev_config.host_interfaces.clone();
@@ -326,6 +378,7 @@ async fn create_workload(host: &Host, config: &Config, bytes: Bytes) -> anyhow::
             max_restarts: 0,
             local_resources: LocalResources {
                 volume_mounts: volume_mounts.clone(),
+                socket_tunnels: socket_tunnels.clone(),
                 ..Default::default()
             },
         })
@@ -351,6 +404,7 @@ async fn create_workload(host: &Host, config: &Config, bytes: Bytes) -> anyhow::
             digest: None,
             local_resources: LocalResources {
                 volume_mounts: volume_mounts.clone(),
+                socket_tunnels: socket_tunnels.clone(),
                 ..Default::default()
             },
             pool_size: -1,
@@ -383,6 +437,7 @@ async fn create_workload(host: &Host, config: &Config, bytes: Bytes) -> anyhow::
                 max_restarts: 0,
                 local_resources: LocalResources {
                     volume_mounts: volume_mounts.clone(),
+                    socket_tunnels: socket_tunnels.clone(),
                     ..Default::default()
                 },
             });
@@ -420,6 +475,7 @@ async fn create_workload(host: &Host, config: &Config, bytes: Bytes) -> anyhow::
             digest: None,
             local_resources: LocalResources {
                 volume_mounts: volume_mounts.clone(),
+                socket_tunnels: socket_tunnels.clone(),
                 ..Default::default()
             },
             pool_size: -1,

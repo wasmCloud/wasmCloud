@@ -96,6 +96,16 @@ impl Network {
         Ok((addr, rx))
     }
 
+    /// Returns true if a loopback TCP listener is registered for `addr`.
+    /// Unlike `connect_tcp`, this does not require `&mut self`.
+    pub fn has_tcp_listener(&self, addr: &SocketAddr) -> bool {
+        let net = self.get_tcp_net(addr.ip());
+        let Some(port) = NonZeroU16::new(addr.port()) else {
+            return false;
+        };
+        matches!(net.get(&port), Some(TcpEndpoint::Listening(_)))
+    }
+
     pub fn connect_tcp(&mut self, addr: &SocketAddr) -> Result<&mpsc::Sender<TcpConn>, ErrorCode> {
         let net = self.get_tcp_net(addr.ip());
         let Some(port) = NonZeroU16::new(addr.port()) else {
