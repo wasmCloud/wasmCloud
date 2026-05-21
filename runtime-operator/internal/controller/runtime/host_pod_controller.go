@@ -1,3 +1,6 @@
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;patch;watch
+// +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=hosts,verbs=get;list;delete
+
 package runtime
 
 import (
@@ -53,9 +56,7 @@ type HostPodReconciler struct {
 }
 
 // Reconcile is called whenever a Pod with HostPodLabel changes.
-//
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;patch;watch
-// +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=hosts,verbs=get;list;delete
+// RBAC markers for this controller are at the top of the file — see header comment.
 func (r *HostPodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	pod := &corev1.Pod{}
 	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {

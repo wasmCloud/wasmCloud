@@ -1,3 +1,7 @@
+// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=create;delete;get;list;patch;update;watch
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+
 package runtime
 
 import (
@@ -302,9 +306,9 @@ func endpointSliceName(serviceName string) string {
 }
 
 // SetupWithManager sets up the controller with the Manager.
-// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=create;delete;get;list;patch;update;watch
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// RBAC markers for this controller are declared at package level at the top
+// of the file — see https://github.com/kubernetes-sigs/controller-tools for
+// why declaration-attached markers can be silently skipped on some files.
 func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Index Workloads by their KubernetesService name for efficient lookup.
 	// Workloads without a kubernetes.service block, or with an empty
