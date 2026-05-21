@@ -35,6 +35,12 @@ rules:
   - patch
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - services/finalizers
+  verbs:
+  - update
+- apiGroups:
   - discovery.k8s.io
   resources:
   - endpointslices
