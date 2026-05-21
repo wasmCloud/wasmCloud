@@ -519,17 +519,23 @@ jobs:
     # release-train's own gate skipped the release job (skipped jobs roll
     # up as `success`, so workflow_run still triggers). Without this gate,
     # release-tag fires every Tuesday and fails noisily in verify-head.
-    # workflow_dispatch always proceeds (recovery hatch).
+    # workflow_dispatch always proceeds — both when release-tag itself is
+    # dispatched (recovery hatch) and when the triggering release-train
+    # was dispatched (off-cycle patch). The latter is the only signal we
+    # have that the upstream was a manual run; without it, an off-cycle
+    # dispatch on an even-parity week would silently skip promote.
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.gate.outputs.run }}
     steps:
       - name: ISO-week parity gate
         id: gate
+        env:
+          UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "manual dispatch — bypassing every-two-weeks gate"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "${UPSTREAM_EVENT}" == "workflow_dispatch" ]]; then
+            echo "manual dispatch (this workflow or upstream release-train) — bypassing every-two-weeks gate"
             echo "run=true" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
