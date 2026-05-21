@@ -444,6 +444,23 @@ jobs:
             -f event_type=brew-formula-update \
             -f "client_payload[tag_version]=${VERSION}"
 
+      - name: Dispatch docs version bump
+        # Notifies wasmCloud/wasmcloud.com to bump WASMCLOUD_VERSION in
+        # src/wasmcloud-version.ts and open a PR. Skipped for pre-releases
+        # — the docs always reflect the latest stable. Mirrors the
+        # Homebrew dispatch pattern above; the receiving workflow is
+        # update-version.yml in wasmCloud/wasmcloud.com.
+        if: ${{ !contains(steps.ver.outputs.tag, '-') }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          echo "STAGE=docs-version-bump" >> "${GITHUB_ENV}"
+          gh api repos/wasmCloud/wasmcloud.com/dispatches \
+            -f event_type=wasmcloud-release \
+            -f "client_payload[version]=${VERSION}"
+
       - name: Set stage — winget
         if: ${{ !contains(steps.ver.outputs.tag, '-') }}
         run: echo "STAGE=winget" >> "${GITHUB_ENV}"
