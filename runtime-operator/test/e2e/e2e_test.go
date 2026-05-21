@@ -221,10 +221,13 @@ var _ = Describe("Manager", Ordered, func() {
 	})
 
 	Context("Workload Lifecycle", func() {
-		const sampleDeployment = "config/samples/deployment.yaml"
+		const (
+			sampleDeployment = "config/samples/deployment.yaml"
+			deploymentName   = "hello"
+		)
 
 		It("should deploy a workload and become ready", func() {
-			verifyWorkloadDeploy(sampleDeployment)
+			verifyWorkloadDeploy(sampleDeployment, deploymentName)
 		})
 
 		It("should serve HTTP traffic through the gateway", func() {
@@ -242,7 +245,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 		It("should clean up workload resources on delete", func() {
 			By("deleting the WorkloadDeployment")
-			cmd := exec.Command("kubectl", "delete", "workloaddeployment", "hello",
+			cmd := exec.Command("kubectl", "delete", "workloaddeployment", deploymentName,
 				"-n", namespace)
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
@@ -261,13 +264,10 @@ var _ = Describe("Manager", Ordered, func() {
 	})
 
 	Context("Workload w/Service Lifecycle", func() {
-		BeforeEach(func() {
-			if !runtimeSupportsHostAliases {
-				Skip("runtime does not support HostAliases, skipping EndpointSlice tests")
-			}
-		})
-
-		const sampleDeployment = "config/samples/service_deployment.yaml"
+		const (
+			sampleDeployment = "config/samples/service_deployment.yaml"
+			deploymentName   = "hello-workload"
+		)
 
 		// Delete runtime-gateway Service and Deployment before tests in this context
 		// to ensure we're testing the Service with EndpointSlices.
@@ -284,10 +284,49 @@ var _ = Describe("Manager", Ordered, func() {
 		})
 
 		It("should deploy a workload and become ready", func() {
-			verifyWorkloadDeploy(sampleDeployment)
+			verifyWorkloadDeploy(sampleDeployment, deploymentName)
+		})
+
+		// The route controller stamps an EndpointSlice with a Service
+		// ownerRef + blockOwnerDeletion=true once a referencing Workload is
+		// Ready. EndpointSlice creation is independent of whether the wash
+		// runtime supports HostAliases, and missing RBAC on
+		// services/finalizers (under OwnerReferencesPermissionEnforcement)
+		// surfaces only via this assertion. Workload readiness reports
+		// success even when the route controller's Create is denied.
+		It("should create an EndpointSlice for the workload service", func() {
+			verifyEndpointSlice := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "endpointslices",
+					"-n", namespace,
+					"-l", "kubernetes.io/service-name=hello-workload,wasmcloud.dev/route-manager=true",
+					"-o", "jsonpath={.items}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).NotTo(Equal("[]"), "no operator-managed EndpointSlice for hello-workload")
+			}
+			Eventually(verifyEndpointSlice).WithTimeout(30 * time.Second).Should(Succeed())
+		})
+
+		// Catch admission denials the operator has tried-and-logged but that
+		// don't surface via a specific resource assertion. The Kubernetes API
+		// formats all RBAC rejections as `<resource>.<group> "<name>" is
+		// forbidden: <reason>`, so a substring grep on the operator log is a
+		// reliable generic signal.
+		It("should not have logged any forbidden errors", func() {
+			cmd := exec.Command("kubectl", "logs",
+				"-n", namespace,
+				"-l", "wasmcloud.com/name=runtime-operator",
+				"--tail=500")
+			output, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).NotTo(ContainSubstring("is forbidden"),
+				"operator log contains an admission-denied error — likely a missing RBAC rule")
 		})
 
 		It("should serve HTTP traffic through the gateway", func() {
+			if !runtimeSupportsHostAliases {
+				Skip("runtime does not support HostAliases, skipping HTTP traffic test")
+			}
 			verifyHTTP := func(g Gomega) {
 				cmd := exec.Command("curl", "-s", "-o", "/dev/null",
 					"-w", "%{http_code}",
@@ -301,8 +340,13 @@ var _ = Describe("Manager", Ordered, func() {
 		})
 
 		It("should clean up workload resources on delete", func() {
-			By("deleting the WorkloadDeployment")
-			cmd := exec.Command("kubectl", "delete", "workloaddeployment", "hello",
+			// Delete via the manifest so the hello-workload Service (which
+			// claimed nodePort 30950 once the gateway was removed) is also
+			// torn down — otherwise the next context's `helm upgrade`,
+			// which re-creates the gateway Service on the same port, fails
+			// with "provided port is already allocated".
+			By("deleting the sample manifest")
+			cmd := exec.Command("kubectl", "delete", "-f", sampleDeployment,
 				"-n", namespace)
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
@@ -564,7 +608,9 @@ spec:
 
 // verifyWorkloadDeploy applies a WorkloadDeployment manifest and verifies the
 // deployment becomes ready, along with its ReplicaSet and Workload CRs.
-func verifyWorkloadDeploy(sampleDeployment string) {
+// deploymentName is the metadata.name of the WorkloadDeployment in the sample
+// manifest — needed so the Ready check targets the right CR.
+func verifyWorkloadDeploy(sampleDeployment, deploymentName string) {
 	By("applying the sample WorkloadDeployment")
 	cmd := exec.Command("kubectl", "apply", "-n", namespace, "-f", sampleDeployment)
 	_, err := utils.Run(cmd)
@@ -572,7 +618,7 @@ func verifyWorkloadDeploy(sampleDeployment string) {
 
 	By("waiting for WorkloadDeployment to become Ready")
 	verifyWorkloadReady := func(g Gomega) {
-		cmd := exec.Command("kubectl", "get", "workloaddeployment", "hello",
+		cmd := exec.Command("kubectl", "get", "workloaddeployment", deploymentName,
 			"-n", namespace,
 			"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}")
 		output, err := utils.Run(cmd)
