@@ -83,6 +83,15 @@ rules:
     - get
     - list
     - watch
+  # The route controller stamps EndpointSlices with a Service ownerRef +
+  # blockOwnerDeletion=true, so the GC admission plugin requires `update`
+  # on services/finalizers.
+  - apiGroups:
+    - ""
+    resources:
+    - services/finalizers
+    verbs:
+    - update
   - apiGroups:
     - discovery.k8s.io
     resources:
