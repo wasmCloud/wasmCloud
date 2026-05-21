@@ -15,6 +15,7 @@ use crate::plugin::HostPlugin;
 use crate::wit::{WitInterface, WitWorld};
 use futures::StreamExt;
 use redis::AsyncCommands;
+use tracing::instrument;
 use wasmtime::component::Resource;
 
 const LIST_KEYS_BATCH_SIZE: usize = 1000;
@@ -90,6 +91,7 @@ impl RedisKeyValue {
 
 // Implementation for the store interface
 impl<'a> bindings::wasi::keyvalue::store::Host for ActiveCtx<'a> {
+    #[instrument(name = "wasi.keyvalue.open", skip(self))]
     async fn open(
         &mut self,
         identifier: String,
@@ -123,6 +125,7 @@ impl<'a> bindings::wasi::keyvalue::store::Host for ActiveCtx<'a> {
 
 // Resource host trait implementations for bucket
 impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
+    #[instrument(name = "wasi.keyvalue.get", skip(self, bucket))]
     async fn get(
         &mut self,
         bucket: Resource<BucketHandle>,
@@ -148,6 +151,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         }
     }
 
+    #[instrument(name = "wasi.keyvalue.set", skip(self, bucket, value))]
     async fn set(
         &mut self,
         bucket: Resource<BucketHandle>,
@@ -174,6 +178,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         }
     }
 
+    #[instrument(name = "wasi.keyvalue.delete", skip(self, bucket))]
     async fn delete(
         &mut self,
         bucket: Resource<BucketHandle>,
@@ -199,6 +204,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         }
     }
 
+    #[instrument(name = "wasi.keyvalue.exists", skip(self, bucket))]
     async fn exists(
         &mut self,
         bucket: Resource<BucketHandle>,
@@ -224,6 +230,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         }
     }
 
+    #[instrument(name = "wasi.keyvalue.list_keys", skip(self, bucket))]
     async fn list_keys(
         &mut self,
         bucket: Resource<BucketHandle>,
@@ -291,6 +298,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
 // Atomics use Redis' native INCRBY for atomic increment, storing values as
 // Redis integer strings rather than big-endian bytes.
 impl<'a> bindings::wasi::keyvalue::atomics::Host for ActiveCtx<'a> {
+    #[instrument(name = "wasi.keyvalue.increment", skip(self, bucket))]
     async fn increment(
         &mut self,
         bucket: Resource<BucketHandle>,
@@ -322,6 +330,8 @@ impl<'a> bindings::wasi::keyvalue::atomics::Host for ActiveCtx<'a> {
 
 // Implementation for the batch interface
 impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
+    #[instrument(name = "wasi.keyvalue.get_many", skip(self, bucket, keys))]
+    #[allow(clippy::type_complexity)]
     async fn get_many(
         &mut self,
         bucket: Resource<BucketHandle>,
@@ -360,6 +370,7 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
         Ok(Ok(result))
     }
 
+    #[instrument(name = "wasi.keyvalue.set_many", skip(self, bucket, key_values))]
     async fn set_many(
         &mut self,
         bucket: Resource<BucketHandle>,
@@ -393,6 +404,7 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
         }
     }
 
+    #[instrument(name = "wasi.keyvalue.delete_many", skip(self, bucket, keys))]
     async fn delete_many(
         &mut self,
         bucket: Resource<BucketHandle>,
