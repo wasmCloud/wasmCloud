@@ -2,7 +2,6 @@
 //! [`TlsProvider`] that trusts a self-signed certificate, and engine
 //! builders wired up with that provider.
 
-#![cfg(feature = "wasi-tls")]
 #![allow(dead_code)]
 
 use anyhow::{Context, Result, bail};

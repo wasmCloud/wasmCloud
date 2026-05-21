@@ -1,0 +1,27 @@
+[package]
+name = "wash-runtime-test-helper"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[lib]
+name = "wash_runtime_test_helper"
+path = "lib.rs"
+
+[dependencies]
+anyhow = { workspace = true, default-features = true }
+bytes = { workspace = true }
+rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
+reqwest = { workspace = true }
+semver = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-rustls = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+wash-runtime = { path = "../../", features = ["wasip3", "wasi-tls"] }
+wasmtime-wasi-tls = { workspace = true, features = ["p3", "rustls"] }
+
+[build-dependencies]
+anyhow = { workspace = true, default-features = true }
+wasi-preview1-component-adapter-provider = "43"
+wit-component = { workspace = true, default-features = false }
+

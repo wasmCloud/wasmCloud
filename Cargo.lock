@@ -7358,8 +7358,8 @@ dependencies = [
  "ulid",
  "url",
  "uuid",
+ "wash-runtime-test-helper",
  "wasi-graphics-context-wasmtime",
- "wasi-preview1-component-adapter-provider",
  "wasi-webgpu-wasmtime",
  "wasmtime",
  "wasmtime-wasi",
@@ -7368,6 +7368,24 @@ dependencies = [
  "wasmtime-wasi-tls",
  "wat",
  "webpki-roots 0.26.11",
+ "wit-component 0.247.0",
+]
+
+[[package]]
+name = "wash-runtime-test-helper"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "rcgen",
+ "reqwest",
+ "semver",
+ "tokio",
+ "tokio-rustls",
+ "uuid",
+ "wash-runtime",
+ "wasi-preview1-component-adapter-provider",
+ "wasmtime-wasi-tls",
  "wit-component 0.247.0",
 ]
 

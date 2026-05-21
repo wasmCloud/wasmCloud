@@ -22,7 +22,6 @@ use wash_runtime::{
     wit::WitInterface,
 };
 
-mod common;
 use common::{
     http_blobstore_host_interfaces as p3_http_blobstore_host_interfaces,
     http_counter_host_interfaces, http_only_host_interfaces as p3_http_host_interfaces,

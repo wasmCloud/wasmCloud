@@ -16,7 +16,6 @@ use wash_runtime::{
     types::{LocalResources, Service, Workload, WorkloadStartRequest, WorkloadState},
 };
 
-mod common;
 use common::tls::{
     EchoServer, engine_with_p3_and_tls, install_default_crypto_provider, start_tls_echo_server,
 };

@@ -17,7 +17,6 @@ use wash_runtime::{
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
 };
 
-mod common;
 use common::{http_counter_host_interfaces, start_host_with_p3};
 
 const HTTP_COUNTER_WASM: &[u8] = include_bytes!("wasm/http_counter.wasm");
