@@ -374,7 +374,7 @@ impl WkgFetcher {
 
 /// Detect source type from string format
 fn detect_source_type(source: &str) -> RegistryPullSource {
-    if source.starts_with("git+") || source.contains(".git") {
+    if is_git_source(source) {
         RegistryPullSource::RemoteGit(source.to_string())
     } else if source.starts_with("http://") || source.starts_with("https://") {
         RegistryPullSource::RemoteHttp(source.to_string())
@@ -385,6 +385,21 @@ fn detect_source_type(source: &str) -> RegistryPullSource {
         // Default to local path
         RegistryPullSource::LocalPath(source.to_string())
     }
+}
+
+/// Heuristic for detecting a Git source URL.
+///
+/// A bare `.contains(".git")` is too eager — it misclassifies OCI registries
+/// whose hostname happens to include `.git`, such as `registry.gitlab.com`.
+/// Treat a source as Git only when it uses a Git-specific scheme/form or its
+/// resource path ends with `.git` (optionally followed by a `#<ref>` fragment).
+fn is_git_source(source: &str) -> bool {
+    if source.starts_with("git+") || source.starts_with("git@") {
+        return true;
+    }
+    // Strip any `#<ref>` fragment and trailing slash, then look for a `.git` suffix.
+    let without_fragment = source.split('#').next().unwrap_or(source);
+    without_fragment.trim_end_matches('/').ends_with(".git")
 }
 
 /// Parse a WIT package name into namespace, packages, and version
@@ -641,7 +656,29 @@ mod tests {
             RegistryPullSource::RemoteGit(_)
         ));
         assert!(matches!(
+            detect_source_type("git@github.com:user/repo.git"),
+            RegistryPullSource::RemoteGit(_)
+        ));
+        assert!(matches!(
+            detect_source_type("https://github.com/user/repo.git"),
+            RegistryPullSource::RemoteGit(_)
+        ));
+        assert!(matches!(
+            detect_source_type("https://github.com/user/repo.git#main"),
+            RegistryPullSource::RemoteGit(_)
+        ));
+        assert!(matches!(
             detect_source_type("ghcr.io/user/package"),
+            RegistryPullSource::RemoteOci(_)
+        ));
+        // Regression: OCI registries whose hostname contains `.git` must not be
+        // misclassified as Git sources (see wasmCloud/wasmCloud#5194).
+        assert!(matches!(
+            detect_source_type("registry.gitlab.com/group/project/wasm-component:1.0.0"),
+            RegistryPullSource::RemoteOci(_)
+        ));
+        assert!(matches!(
+            detect_source_type("registry.gitlab.com/group/project/wasm-component"),
             RegistryPullSource::RemoteOci(_)
         ));
     }
