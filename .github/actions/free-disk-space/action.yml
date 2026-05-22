@@ -1,0 +1,41 @@
+name: "Free disk space"
+description: >
+  Reclaim disk space on ubuntu-latest GitHub-hosted runners so heavy Rust
+  builds (workspace clippy, cargo test --workspace, cargo bench --no-run)
+  don't ENOSPC partway through. Combines the rm -rf list from
+  https://dev.to/mathio/squeezing-disk-space-from-github-actions-runners-an-engineers-guide-3pjg
+  with the apt-purge and swap-off steps from jlumbroso/free-disk-space.
+  Leaves /opt/hostedtoolcache intact so setup-go, setup-tinygo, setup-protoc,
+  etc. don't re-download their tools.
+
+runs:
+  using: "composite"
+  steps:
+    - name: Free disk space
+      shell: bash
+      run: |
+        set -eux
+        sudo apt-get remove -y --fix-missing '^aspnetcore-.*' || true
+        sudo apt-get remove -y --fix-missing '^dotnet-.*' || true
+        sudo apt-get remove -y --fix-missing '^llvm-.*' || true
+        sudo apt-get remove -y --fix-missing 'php.*' || true
+        sudo apt-get remove -y --fix-missing '^mongodb-.*' || true
+        sudo apt-get remove -y --fix-missing '^mysql-.*' || true
+        sudo apt-get remove -y --fix-missing azure-cli google-chrome-stable firefox powershell mono-devel libgl1-mesa-dri || true
+        sudo apt-get remove -y --fix-missing google-cloud-sdk google-cloud-cli || true
+        sudo apt-get autoremove -y || true
+        sudo apt-get clean || true
+        sudo rm -rf /usr/lib/jvm
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/share/swift
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/.ghcup
+        sudo rm -rf /usr/local/julia*
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /usr/local/share/chromium
+        sudo rm -rf /opt/microsoft /opt/google
+        sudo rm -rf /opt/az
+        sudo rm -rf /usr/local/share/powershell
+        sudo swapoff -a || true
+        sudo rm -f /mnt/swapfile || true
+        df -h /
