@@ -1,0 +1,6 @@
+# Custom self-hosted runner labels used in this repo's workflows.
+# Without this config, actionlint flags these as unknown.
+self-hosted-runner:
+  labels:
+    - bench
+    - hetzner

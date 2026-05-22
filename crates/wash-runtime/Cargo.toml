@@ -64,10 +64,12 @@ wasi-tls = ["dep:wasmtime-wasi-tls", "wasip3"]
 anyhow = { workspace = true }
 async-nats = { workspace = true, features = ["aws-lc-rs"] }
 async-trait = { workspace = true }
+bon = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 hostname = { workspace = true }
+http = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio", "server-auto"] }
@@ -156,9 +158,19 @@ gag = "1.0"
 rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
 testcontainers = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
+# Pinned to match the iai-callgrind-runner version the bench host's
+# Ansible playbook installs (scripts/bench/ansible/provision.yml).
+# iai-callgrind enforces equality between this crate version and the
+# runner binary at run time.
+iai-callgrind = "0.16.1"
 
 [[bench]]
 name = "http_invoke"
+harness = false
+required-features = ["wasip3"]
+
+[[bench]]
+name = "iai_callgrind"
 harness = false
 required-features = ["wasip3"]
 

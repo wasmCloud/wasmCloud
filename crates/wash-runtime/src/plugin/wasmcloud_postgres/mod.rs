@@ -178,7 +178,7 @@ fn extract_tls_requirement(url: &Url) -> bool {
 impl<'a> types::Host for ActiveCtx<'a> {}
 
 impl<'a> query::Host for ActiveCtx<'a> {
-    #[instrument(skip_all, fields(query = %q))]
+    #[instrument(name = "wasmcloud.postgres.query", skip_all, fields(query = %q))]
     async fn query(
         &mut self,
         q: String,
@@ -243,7 +243,7 @@ impl<'a> query::Host for ActiveCtx<'a> {
         Ok(Ok(result))
     }
 
-    #[instrument(skip_all, fields(query = %q))]
+    #[instrument(name = "wasmcloud.postgres.query_batch", skip_all, fields(query = %q))]
     async fn query_batch(&mut self, q: String) -> wasmtime::Result<Result<(), QueryError>> {
         let Some(plugin) = self.get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID) else {
             return Ok(Err(QueryError::Unexpected(
@@ -289,7 +289,7 @@ impl<'a> query::Host for ActiveCtx<'a> {
 }
 
 impl<'a> prepared::Host for ActiveCtx<'a> {
-    #[instrument(skip_all)]
+    #[instrument(name = "wasmcloud.postgres.prepare", skip_all)]
     async fn prepare(
         &mut self,
         statement: String,
@@ -353,7 +353,7 @@ impl<'a> prepared::Host for ActiveCtx<'a> {
         Ok(Ok(token))
     }
 
-    #[instrument(skip_all, fields(stmt_token = %stmt_token))]
+    #[instrument(name = "wasmcloud.postgres.exec", skip_all, fields(stmt_token = %stmt_token))]
     async fn exec(
         &mut self,
         stmt_token: String,

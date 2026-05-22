@@ -1,0 +1,26 @@
+# Inventory for the wasmCloud bench host.
+#
+# Values come from the operator's environment, not from the repo, so the
+# host's identity stays out of git. Export from 1Password (item:
+# "wasmCloud Bench Host (Hetzner)") before running:
+#
+#   export WASMCLOUD_BENCH_HOST_IP=<ip>
+#   export WASMCLOUD_BENCH_HOSTNAME=<hostname>            # used by playbook assertions
+#   # SSH_KEY defaults to ~/.ssh/hetzner_bench; override if your keypair
+#   # lives elsewhere.
+#
+# Then:
+#   cd scripts/bench/ansible
+#   ansible-playbook provision.yml
+#
+# A single host is enumerated here. If we ever add a second machine, group
+# them under `bench:` and parameterise the playbook to act per-host.
+
+all:
+  children:
+    bench:
+      hosts:
+        bench-host:
+          ansible_host: "{{ lookup('env', 'WASMCLOUD_BENCH_HOST_IP') }}"
+          ansible_user: root
+          ansible_ssh_private_key_file: "{{ lookup('env', 'SSH_KEY') | default(lookup('env', 'HOME') + '/.ssh/hetzner_bench', true) }}"

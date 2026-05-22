@@ -1,0 +1,290 @@
+---
+# Provision the wasmCloud bench host AFTER Ubuntu is installed.
+#
+# The chroot phase (kernel cmdline + RAID + partitioning) lives in
+# stage-hetzner.sh + hetzner-postinstall.sh because Ansible needs a
+# running system with SSH, which we don't have during installimage.
+#
+# Idempotent. Re-running applies any drift: a new iai-callgrind-runner
+# version pinned below, a new apt dep, a kernel-cmdline change, etc.
+#
+# Run from scripts/bench/ansible/ with the env vars from inventory.yml's
+# header exported. Useful invocations:
+#
+#   ansible-playbook provision.yml                  # everything
+#   ansible-playbook provision.yml --tags kernel    # just the GRUB drop-in
+#   ansible-playbook provision.yml --tags toolchain # apt + rustup + iai
+#   ansible-playbook provision.yml --check          # dry-run
+#
+# After --tags kernel changes, a reboot is required for the new cmdline
+# to take effect; the playbook prints a notice but does NOT reboot for
+# you (rebooting the bench host mid-CI-run would be bad).
+
+- name: Provision wasmCloud bench host
+  hosts: bench
+  gather_facts: true
+
+  vars:
+    expected_hostname: "{{ lookup('env', 'WASMCLOUD_BENCH_HOSTNAME') }}"
+    repo_url: "https://github.com/wasmCloud/wasmCloud.git"
+    repo_dir: /opt/wasmcloud
+    # iai-callgrind enforces equality between the runner binary version and
+    # the iai-callgrind crate version pinned in
+    # crates/wash-runtime/Cargo.toml. Bump both together.
+    iai_callgrind_version: "0.16.1"
+    # CPU index reserved by isolcpus / nohz_full / rcu_nocbs. Must match
+    # WASMCLOUD_BENCH_ISOLATED_CPU in scripts/bench/run-bench.sh.
+    isolated_cpu: 5
+    # Node major version installed from NodeSource. Bump to the current
+    # active LTS line (https://nodejs.org/en/about/previous-releases) at
+    # each quarterly bench-host maintenance window. Ubuntu 24.04 ships
+    # Node 18 in `main`, which is past EOL; NodeSource gives us a current
+    # LTS without competing with the OS package.
+    node_lts_major: 22
+
+  pre_tasks:
+    - name: Refuse to run if WASMCLOUD_BENCH_HOSTNAME isn't exported
+      ansible.builtin.assert:
+        that: expected_hostname | length > 0
+        fail_msg: |
+          WASMCLOUD_BENCH_HOSTNAME not set. Export from 1Password
+          (item: "wasmCloud Bench Host (Hetzner)") before running.
+      tags: always
+
+    - name: Refuse to run on Hetzner rescue
+      ansible.builtin.assert:
+        that: ansible_facts['hostname'] != 'rescue'
+        fail_msg: |
+          Host is in Hetzner rescue. Run scripts/bench/stage-hetzner.sh from
+          rescue first to install Ubuntu, then re-run this playbook.
+      tags: always
+
+    - name: Refuse to run on the wrong host
+      ansible.builtin.assert:
+        that: ansible_facts['hostname'] == expected_hostname
+        fail_msg: |
+          Host hostname is {{ ansible_facts['hostname'] }}, expected {{ expected_hostname }}.
+          Either the bench host got renamed or the inventory points at the
+          wrong machine.
+      tags: always
+
+  tasks:
+    # ── Toolchain + deps ──────────────────────────────────────────────────
+    - name: Apt — bench build deps
+      ansible.builtin.apt:
+        name:
+          # Rust + C toolchain for the bench compile.
+          - build-essential
+          - pkg-config
+          - libssl-dev
+          - clang
+          - cmake
+          # Utilities run by the bench pipeline.
+          - git
+          - curl
+          - jq
+          - ca-certificates
+          # `protobuf-compiler` is the protoc binary, needed by
+          # wash-runtime/build.rs. `libprotobuf-dev` provides the
+          # well-known .proto includes (timestamp.proto etc.) — without
+          # it, protoc finds the binary but fails to import.
+          - protobuf-compiler
+          - libprotobuf-dev
+          # Valgrind is the measurement engine for iai_callgrind.
+          - valgrind
+          # zstd for criterion.tar.zst archiving; AWS CLI installed
+          # separately by install-runner.sh (apt's awscli is v1).
+          - zstd
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      tags: [toolchain, apt]
+
+    - name: Install rustup (root user)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+          | sh -s -- -y --default-toolchain stable --no-modify-path
+      args:
+        # `creates:` makes this a no-op once rustup is in place. We install
+        # `stable` as the default toolchain so out-of-tree `cargo install`
+        # invocations (e.g. iai-callgrind-runner below) have something to
+        # pick. Inside the wasmCloud workspace the repo's
+        # rust-toolchain.toml still wins — it also pins `stable` today, so
+        # there's no drift between the default and the workspace toolchain.
+        creates: /root/.cargo/bin/rustup
+        executable: /bin/bash
+      tags: [toolchain, rustup]
+
+    # Defense in depth: if the host was previously provisioned with rustup
+    # but no default toolchain (earlier versions of this playbook used
+    # `--default-toolchain none`), the `creates:` guard above will skip the
+    # install task and rustup will still have no default — making any later
+    # `cargo install` fail. `rustup default stable` is idempotent: a no-op
+    # when stable is already the default, downloads + sets stable when it
+    # isn't. Hence `changed_when: false` — we don't care whether it
+    # actually had to act, only that the post-condition holds.
+    - name: Ensure rustup default toolchain is stable
+      ansible.builtin.command: /root/.cargo/bin/rustup default stable
+      changed_when: false
+      tags: [toolchain, rustup]
+
+    # ── Node.js (for .github/scripts/*.mjs in CI) ──────────────────────────
+    # Self-hosted runners do NOT put their bundled Node on the PATH for
+    # `run:` steps — the actions-runner agent uses its own Node only to
+    # execute actions, not user shell commands. Our CI workflow does
+    # `run: node .github/scripts/bench-*.mjs`, which needs an OS-level
+    # `node`. Install the current LTS from NodeSource (the Ubuntu apt
+    # `nodejs` package is on Node 18, which is EOL).
+    - name: NodeSource — apt keyring dir
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+      tags: [toolchain, nodejs]
+
+    - name: NodeSource — install signing key
+      ansible.builtin.get_url:
+        url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+        dest: /etc/apt/keyrings/nodesource.asc
+        mode: "0644"
+      tags: [toolchain, nodejs]
+
+    - name: NodeSource — apt source for Node {{ node_lts_major }}.x
+      ansible.builtin.apt_repository:
+        # `nodistro` is NodeSource's intentional placeholder; their apt
+        # tree is keyed on Node major version, not Ubuntu release.
+        repo: "deb [signed-by=/etc/apt/keyrings/nodesource.asc] https://deb.nodesource.com/node_{{ node_lts_major }}.x nodistro main"
+        state: present
+        filename: nodesource
+        update_cache: true
+      tags: [toolchain, nodejs]
+
+    - name: Apt — install nodejs (from NodeSource)
+      ansible.builtin.apt:
+        name: nodejs
+        state: present
+      tags: [toolchain, nodejs]
+
+    - name: List cargo-installed binaries (root)
+      ansible.builtin.command: /root/.cargo/bin/cargo install --list
+      register: cargo_installed
+      changed_when: false
+      tags: [toolchain, iai]
+
+    - name: Install or upgrade iai-callgrind-runner
+      ansible.builtin.shell: |
+        set -euo pipefail
+        . "$HOME/.cargo/env"
+        cargo install iai-callgrind-runner --version {{ iai_callgrind_version }}
+      args:
+        executable: /bin/bash
+      # `cargo install --list` is the canonical way to query installed
+      # binaries. Each crate's entry has the shape `<name> v<version>:`
+      # on its own line — the trailing colon disambiguates `0.16.1` from
+      # `0.16.10` etc., so a plain substring check is safe here (no
+      # regex, no split/last on a possibly-empty value).
+      when: ('iai-callgrind-runner v' ~ iai_callgrind_version ~ ':') not in cargo_installed.stdout
+      tags: [toolchain, iai]
+
+    # ── Repo clone for ad-hoc / manual benches ────────────────────────────
+    - name: Clone wasmCloud repo to {{ repo_dir }}
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ repo_dir }}"
+        depth: 1
+        version: main
+        force: true
+        # Refuses to overwrite changes in the working tree, which is
+        # what we want for a CI-style host — manual edits there shouldn't
+        # block provisioning.
+      tags: [repo]
+
+    # ── Kernel tweaks (require reboot to take effect) ─────────────────────
+    - name: GRUB drop-in for nosmt + CPU isolation
+      ansible.builtin.copy:
+        dest: /etc/default/grub.d/zz-bench.cfg
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # wasmCloud bench host: append the bench-time kernel tweaks.
+          #   nosmt         - disable SMT/hyperthreading entirely.
+          #   isolcpus      - remove CPU from general scheduler load-balancing.
+          #   nohz_full     - stop the periodic scheduler tick on that CPU when
+          #                   only one runnable task is on it (kills timer-driven
+          #                   measurement jitter).
+          #   rcu_nocbs     - offload RCU callbacks off that CPU to a kthread.
+          GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} nosmt isolcpus={{ isolated_cpu }} nohz_full={{ isolated_cpu }} rcu_nocbs={{ isolated_cpu }}"
+      notify: regenerate grub config
+      tags: [kernel]
+
+    # ── cpu-performance governor (no reboot needed) ───────────────────────
+    - name: Install cpu-performance systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/cpu-performance.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Pin all CPUs to the performance scaling_governor (bench host)
+          After=multi-user.target
+          ConditionPathExists=/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/sh -c 'for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$g"; done'
+
+          [Install]
+          WantedBy=multi-user.target
+      notify:
+        - reload systemd
+        - enable cpu-performance
+      tags: [governor]
+
+    # ── Provisioning marker ───────────────────────────────────────────────
+    - name: Stamp /etc/wasmcloud-bench-stage
+      ansible.builtin.copy:
+        dest: /etc/wasmcloud-bench-stage
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          wasmcloud-bench provisioned (ansible)
+          stamp: {{ ansible_facts['date_time']['iso8601'] }}
+          kernel-tweak: nosmt isolcpus={{ isolated_cpu }} nohz_full={{ isolated_cpu }} rcu_nocbs={{ isolated_cpu }}
+          cpufreq-governor: performance
+          isolated-cpu: {{ isolated_cpu }}
+          iai-callgrind-runner: {{ iai_callgrind_version }}
+          node-lts-major: {{ node_lts_major }}
+      tags: [marker]
+
+  handlers:
+    - name: regenerate grub config
+      ansible.builtin.command: update-grub
+      listen: regenerate grub config
+
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+      listen: reload systemd
+
+    - name: enable cpu-performance
+      ansible.builtin.systemd:
+        name: cpu-performance.service
+        enabled: true
+      listen: enable cpu-performance
+
+  post_tasks:
+    - name: Note pending reboot if cmdline changed
+      ansible.builtin.debug:
+        msg: |
+          GRUB cmdline changed. Reboot the bench host to pick it up:
+            ssh -i ~/.ssh/hetzner_bench root@$WASMCLOUD_BENCH_HOST_IP reboot
+          Verify after reboot with:
+            cat /sys/devices/system/cpu/isolated   # expect: {{ isolated_cpu }}
+      when: >
+        ansible_run_tags is defined
+        and ('kernel' in ansible_run_tags or 'all' in ansible_run_tags)

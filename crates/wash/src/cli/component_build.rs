@@ -92,7 +92,23 @@ pub async fn build_dev_component(
             .command
             .ok_or(anyhow!("build.command is required in wash config"))?
     };
-    perform_component_build(ctx, config, &build_command).await
+
+    // `dev.component_path` overrides `build.component_path` so the shared
+    // build path looks for the artifact in the right place. Needed when
+    // `dev.command` produces a different output than `build.command` (e.g.
+    // cargo debug vs release). Build-time env vars stay on `build.env`;
+    // workload-runtime env vars belong on `workload.environment`, not here.
+    let config = if let Some(component_path) = dev_config.component_path {
+        let mut config = config.clone();
+        let mut build = config.build.clone().unwrap_or_default();
+        build.component_path = Some(component_path);
+        config.build = Some(build);
+        config
+    } else {
+        config.clone()
+    };
+
+    perform_component_build(ctx, &config, &build_command).await
 }
 
 /// Build a component at the specified project path
@@ -338,7 +354,7 @@ impl ComponentBuilder {
         Ok(())
     }
 
-    /// Placeholder for post-build hook  
+    /// Placeholder for post-build hook
     async fn run_post_build_hook(&self) -> anyhow::Result<()> {
         trace!("running post-build hook (placeholder)");
         Ok(())

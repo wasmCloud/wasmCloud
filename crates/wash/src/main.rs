@@ -147,6 +147,18 @@ async fn main() {
 
     let (mut stdout, mut stderr) = (Box::new(std::io::stdout()), Box::new(std::io::stderr()));
 
+    // For `wash dev`, export `dev.environment` from the project config into the
+    // wash process before observability initializes. The tracing subscriber reads
+    // `RUST_LOG` and the OTel exporter checks for `OTEL_*` once during
+    // `initialize_observability`. Neither honors changes made later, so values
+    // set inside `DevCommand::handle()` arrive too late.
+    if matches!(global_args.command, Some(WashCliCommand::Dev(_))) {
+        wash::config::apply_dev_environment(
+            global_args.user_config.as_deref(),
+            &global_args.project_path,
+        );
+    }
+
     // Initialize observability as early as possible, with the specified log level
     let observability_shutdown = wash_runtime::observability::initialize_observability(
         global_args.log_level,

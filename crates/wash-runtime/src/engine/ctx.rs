@@ -18,6 +18,7 @@ use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpHooks, WasiHttpView};
 #[cfg(feature = "wasi-tls")]
 use wasmtime_wasi_tls::{WasiTlsCtx, WasiTlsCtxBuilder, WasiTlsCtxView, WasiTlsView};
 
+use crate::host::allowed_hosts::AllowedHost;
 use crate::plugin::HostPlugin;
 
 /// A shareable, cloneable `wasi:tls` provider. Wraps an `Arc<dyn TlsProvider>`
@@ -238,7 +239,7 @@ impl wasmtime_wasi_http::p3::WasiHttpView for SharedCtx {
 struct CtxHttpHooks {
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
     workload_id: Arc<str>,
-    allowed_hosts: Arc<[String]>,
+    allowed_hosts: Arc<[AllowedHost]>,
 }
 
 impl WasiHttpHooks for CtxHttpHooks {
@@ -267,7 +268,7 @@ impl WasiHttpHooks for CtxHttpHooks {
 struct CtxHttpHooksP3 {
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
     workload_id: Arc<str>,
-    allowed_hosts: Arc<[String]>,
+    allowed_hosts: Arc<[AllowedHost]>,
 }
 
 #[cfg(feature = "wasip3")]
@@ -339,7 +340,7 @@ pub struct CtxBuilder {
     sockets: Option<crate::sockets::WasiSocketsCtx>,
     plugins: HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>,
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
-    allowed_hosts: Arc<[String]>,
+    allowed_hosts: Arc<[AllowedHost]>,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -399,7 +400,7 @@ impl CtxBuilder {
         self
     }
 
-    pub fn with_allowed_hosts(mut self, allowed_hosts: Arc<[String]>) -> Self {
+    pub fn with_allowed_hosts(mut self, allowed_hosts: Arc<[AllowedHost]>) -> Self {
         self.allowed_hosts = allowed_hosts;
         self
     }

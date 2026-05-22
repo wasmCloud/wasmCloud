@@ -35,6 +35,14 @@
 /.dockerignore          @wasmCloud/ci-maintainers
 /RELEASE_RUNBOOK.md     @wasmCloud/ci-maintainers
 
+# Benchmarking pipeline: host provisioning, bench scripts, the bench
+# crate's benches/, and the bench-tools data-processing binary are owned
+# jointly so wash maintainers retain context on the bench code itself
+# while ci maintainers gate the runner + pipeline.
+/scripts/bench/                         @wasmCloud/ci-maintainers
+/crates/bench-tools/                    @wasmCloud/ci-maintainers @wasmCloud/wash-maintainers
+/crates/wash-runtime/benches/           @wasmCloud/ci-maintainers @wasmCloud/wash-maintainers
+
 # Examples and project templates
 /examples/              @wasmCloud/examples-maintainers
 /templates/             @wasmCloud/examples-maintainers

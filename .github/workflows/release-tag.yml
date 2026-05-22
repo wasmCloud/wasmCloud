@@ -398,6 +398,19 @@ jobs:
           git tag -a "${GO_TAG}" "${MERGE_SHA}" -m "Release ${GO_TAG}"
           git push origin "${GO_TAG}"
 
+      - name: Generate release notes
+        # Picks the previous wasmCloud release tag and pins it as
+        # `previous_tag_name` on the generate-notes API call, so the
+        # auto-detect doesn't pull in tags from unrelated namespaces
+        # (wash-cli-v…, runtime-operator/v…, control-interface-v…).
+        # Body is written to release-notes.md and passed via body_path
+        # below. See .github/scripts/generate-release-notes.mjs.
+        env:
+          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          MERGE_SHA: ${{ steps.ver.outputs.sha }}
+        run: node .github/scripts/generate-release-notes.mjs
+
       - name: Set stage — create-release
         run: echo "STAGE=create-release" >> "${GITHUB_ENV}"
 
@@ -408,21 +421,25 @@ jobs:
         # prerelease so `gh release list` and the GitHub UI don't surface
         # them as the "latest" release.
         #
+        # `body_path` points at the notes computed above; `generate_release_notes`
+        # would auto-pick previous_tag from across every tag namespace in
+        # the repo, which is wrong for this repo's tag layout.
+        #
         # zizmor flags this as `superfluous-actions` (could use `gh release
         # create` directly). Keeping the action: it's SHA-pinned, and a
         # shell equivalent has to re-implement idempotent re-run handling,
-        # release-notes generation, glob fail-on-empty, and prerelease
-        # detection — ~25 lines of bash on a release-critical step.
+        # glob fail-on-empty, and prerelease detection — ~25 lines of bash
+        # on a release-critical step.
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0  # zizmor: ignore[superfluous-actions]
         with:
           name: ${{ steps.ver.outputs.tag }}
           tag_name: ${{ steps.ver.outputs.tag }}
           target_commitish: ${{ steps.ver.outputs.sha }}
+          body_path: release-notes.md
           files: |
             ./artifacts/*/*
           token: ${{ secrets.WASMCLOUD_BOT_PAT }}
           prerelease: ${{ contains(steps.ver.outputs.tag, '-') }}
-          generate_release_notes: true
           fail_on_unmatched_files: true
 
       # Package-manager publishing (homebrew + winget) is best-effort: the
@@ -519,17 +536,23 @@ jobs:
     # release-train's own gate skipped the release job (skipped jobs roll
     # up as `success`, so workflow_run still triggers). Without this gate,
     # release-tag fires every Tuesday and fails noisily in verify-head.
-    # workflow_dispatch always proceeds (recovery hatch).
+    # workflow_dispatch always proceeds — both when release-tag itself is
+    # dispatched (recovery hatch) and when the triggering release-train
+    # was dispatched (off-cycle patch). The latter is the only signal we
+    # have that the upstream was a manual run; without it, an off-cycle
+    # dispatch on an even-parity week would silently skip promote.
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.gate.outputs.run }}
     steps:
       - name: ISO-week parity gate
         id: gate
+        env:
+          UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "manual dispatch — bypassing every-two-weeks gate"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "${UPSTREAM_EVENT}" == "workflow_dispatch" ]]; then
+            echo "manual dispatch (this workflow or upstream release-train) — bypassing every-two-weeks gate"
             echo "run=true" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
