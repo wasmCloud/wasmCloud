@@ -62,6 +62,10 @@ spec:
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .otel.endpoint }}
             {{- end }}
+            {{- range .extraEnv }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
           args:
             {{- if .logLevel }}
             - "--log-level={{ .logLevel }}"
@@ -98,6 +102,9 @@ spec:
             {{- end }}
             {{- if and (.otel) (.otel.enabled) }}
             - "--wasi-otel"
+            {{- end }}
+            {{- range .extraArgs }}
+            - "{{ . }}"
             {{- end }}
           imagePullPolicy: {{ $top.Values.runtime.image.pull_policy }}
           volumeMounts:

@@ -175,6 +175,18 @@ runtime:
               # -- List of DNS Subject Alternative Names (SANs) for the generated TLS certificate.
               # Example: ["myapp.example.com", "myapp.default.svc.cluster.local"]
               domains: []
+        # Additional args to pass host process
+        # E.g.
+        # extrArgs:
+        #   - "--verbose"
+        #   - "--allow-insecure-registries"
+        extraArgs: []
+        # Additional environment variables to set in the host container
+        # E.g. 
+        # extraEnv:
+        #   - name: MY_ENV_VAR
+        #     value: my-value
+        extraEnv: []
       resources:
         requests:
           memory: "64Mi"
