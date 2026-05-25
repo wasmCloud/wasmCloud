@@ -151,6 +151,9 @@ runtime:
         enabled: false
       wasip3:
         enabled: false
+      otel:
+        enabled: false
+        endpoint: ""
       http:
         enabled: true
         port: 9191
