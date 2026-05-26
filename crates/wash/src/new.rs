@@ -48,36 +48,24 @@ pub(crate) async fn clone_template(
     output_dir: &Path,
     git_ref: Option<&str>,
 ) -> anyhow::Result<()> {
-    debug!(
-        url,
-        output_dir = %output_dir.display(),
-        "cloning repository",
-    );
+    debug!(url, output_dir = %output_dir.display(), git_ref, "cloning repository");
 
     info!(url, "cloning git repository");
+    run_git(
+        ["clone", url, &output_dir.to_string_lossy()],
+        None,
+        "git clone failed",
+    )
+    .await?;
 
-    let mut cmd = Command::new("git");
-    let mut args = vec!["clone".to_string(), url.to_string()];
-
-    // Add branch/tag reference if specified
     if let Some(git_ref) = git_ref {
-        args.insert(1, "--branch".to_string());
-        args.insert(2, git_ref.to_string());
         info!("Using git reference: {}", git_ref);
-    }
-
-    args.push(output_dir.to_string_lossy().to_string());
-    cmd.args(&args);
-
-    let output = cmd
-        .output()
-        .await
-        .context("failed to execute git clone command")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        error!(stderr = %stderr, "Git clone failed");
-        bail!("Git clone failed: {stderr}");
+        run_git(
+            ["checkout", git_ref],
+            Some(output_dir),
+            "git checkout failed",
+        )
+        .await?;
     }
 
     info!(output_dir = %output_dir.display(), "Successfully cloned repository");
@@ -92,6 +80,35 @@ pub(crate) async fn clone_template(
     }
 
     Ok(())
+}
+
+async fn run_git<I, S>(
+    args: I,
+    current_dir: Option<&Path>,
+    failure_message: &str,
+) -> anyhow::Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut cmd = Command::new("git");
+    cmd.args(args);
+    if let Some(current_dir) = current_dir {
+        cmd.current_dir(current_dir);
+    }
+
+    let output = cmd
+        .output()
+        .await
+        .with_context(|| format!("failed to execute git command: {failure_message}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        error!(stderr = %stderr, failure_message);
+        bail!("{failure_message}: {stderr}");
+    }
 }
 
 /// Recursively copy a directory using tokio::fs. Note that the boxing is necessary to allow for async recursion.
@@ -154,4 +171,137 @@ pub(crate) fn copy_dir_recursive<'a>(
 
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::clone_template;
+    use tokio::process::Command;
+
+    async fn run_git_in_repo(repo: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .await
+            .expect("git command should run");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    async fn current_commit(repo: &Path) -> String {
+        String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(repo)
+                .output()
+                .await
+                .expect("rev-parse should run")
+                .stdout,
+        )
+        .expect("commit should be utf-8")
+        .trim()
+        .to_string()
+    }
+
+    async fn init_test_repo() -> (tempfile::TempDir, PathBuf, String, String) {
+        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+        let repo = tempdir.path().join("template");
+        tokio::fs::create_dir(&repo)
+            .await
+            .expect("repo directory should be created");
+
+        run_git_in_repo(&repo, &["init"]).await;
+        run_git_in_repo(&repo, &["config", "user.name", "test"]).await;
+        run_git_in_repo(&repo, &["config", "user.email", "test@example.com"]).await;
+
+        let readme = repo.join("README.md");
+        tokio::fs::write(&readme, "first\n")
+            .await
+            .expect("first revision should be written");
+        run_git_in_repo(&repo, &["add", "README.md"]).await;
+        run_git_in_repo(&repo, &["commit", "-m", "first"]).await;
+
+        let first_commit = current_commit(&repo).await;
+        run_git_in_repo(&repo, &["tag", "v1.0.0"]).await;
+
+        tokio::fs::write(&readme, "second\n")
+            .await
+            .expect("second revision should be written");
+        run_git_in_repo(&repo, &["commit", "-am", "second"]).await;
+
+        let second_commit = current_commit(&repo).await;
+        run_git_in_repo(&repo, &["branch", "feature/test-ref"]).await;
+
+        (tempdir, repo, first_commit, second_commit)
+    }
+
+    #[tokio::test]
+    async fn clone_template_supports_commit_refs() {
+        let (_tempdir, repo, first_commit, second_commit) = init_test_repo().await;
+        let clone_dir = repo
+            .parent()
+            .expect("repo should have parent")
+            .join("clone-by-commit");
+
+        clone_template(&repo.to_string_lossy(), &clone_dir, Some(&first_commit))
+            .await
+            .expect("cloning by commit SHA should succeed");
+
+        let readme = tokio::fs::read_to_string(clone_dir.join("README.md"))
+            .await
+            .expect("cloned README should exist");
+        assert_eq!(readme, "first\n");
+        assert_ne!(first_commit, second_commit);
+        assert!(!clone_dir.join(".git").exists());
+    }
+
+    #[tokio::test]
+    async fn clone_template_supports_branch_refs() {
+        let (_tempdir, repo, _first_commit, _second_commit) = init_test_repo().await;
+        let clone_dir = repo
+            .parent()
+            .expect("repo should have parent")
+            .join("clone-by-branch");
+
+        clone_template(
+            &repo.to_string_lossy(),
+            &clone_dir,
+            Some("feature/test-ref"),
+        )
+        .await
+        .expect("cloning by branch should succeed");
+
+        let readme = tokio::fs::read_to_string(clone_dir.join("README.md"))
+            .await
+            .expect("cloned README should exist");
+        assert_eq!(readme, "second\n");
+        assert!(!clone_dir.join(".git").exists());
+    }
+
+    #[tokio::test]
+    async fn clone_template_supports_tag_refs() {
+        let (_tempdir, repo, first_commit, _second_commit) = init_test_repo().await;
+        let clone_dir = repo
+            .parent()
+            .expect("repo should have parent")
+            .join("clone-by-tag");
+
+        clone_template(&repo.to_string_lossy(), &clone_dir, Some("v1.0.0"))
+            .await
+            .expect("cloning by tag should succeed");
+
+        let readme = tokio::fs::read_to_string(clone_dir.join("README.md"))
+            .await
+            .expect("cloned README should exist");
+        assert_eq!(readme, "first\n");
+        assert_eq!(first_commit.len(), 40);
+        assert!(!clone_dir.join(".git").exists());
+    }
 }
