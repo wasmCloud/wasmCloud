@@ -58,9 +58,13 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            {{- if and (.otel) (.otel.enabled) }}
+            {{- if and (and (.otel) (.otel.enabled)) (.otel.endpoint) }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .otel.endpoint }}
+            {{- end }}
+            {{- if and (and (.otel) (.otel.enabled)) (.otel.protocol) }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ .otel.protocol }}
             {{- end }}
             {{- range .extraEnv }}
             - name: {{ .name }}

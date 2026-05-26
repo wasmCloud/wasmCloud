@@ -154,6 +154,7 @@ runtime:
       otel:
         enabled: false
         endpoint: ""
+        protocol: ""
       http:
         enabled: true
         port: 9191
