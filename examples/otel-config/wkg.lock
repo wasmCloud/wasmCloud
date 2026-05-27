@@ -43,9 +43,9 @@ name = "wasi:otel"
 registry = "wasi.dev"
 
 [[packages.versions]]
-requirement = "=0.2.0-rc.1"
-version = "0.2.0-rc.1"
-digest = "sha256:4f4969ab60f39ca84830fe654e51e2bf852097eafb79626f616cd2fba11fdd54"
+requirement = "=0.2.0-rc.2"
+version = "0.2.0-rc.2"
+digest = "sha256:cd1c073a1875e04072951871a2c29d1725d15d0e824a9e4c2ae730810eab1c54"
 
 [[packages]]
 name = "wasi:random"

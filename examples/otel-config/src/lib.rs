@@ -1,20 +1,18 @@
 //! `OTel` config example.
 //!
-//! Handles an incoming HTTP request, fetches `https://example.com`, stashes
+//! Handles an incoming HTTP request, fetches the configured upstream, stashes
 //! the body in a blob, increments a request counter, and exports the whole
 //! flow through `wasi:otel/{tracing,logs,metrics}`, including W3C trace
 //! context propagation on the outbound call. The OTel `Resource` is built
 //! from `wasi:config` (`otel.resource.*` keys).
 //!
-//! The reusable OTel scaffolding (cached resource/scope, [`otel_log`],
-//! [`ActiveSpan`] RAII guard) lives in [`mod@otel`].
+//! The reusable OTel scaffolding (cached resource/scope, [`otel::otel_log`],
+//! [`otel::ActiveSpan`] RAII guard, and all `wasi:otel` bindings re-exports)
+//! lives in [`mod@otel`]. Per-capability helpers live in their own modules
+//! (`config`, `outbound`, `blobstore`, `keyvalue`, `metrics`, `ui`).
 
-use std::collections::BTreeMap;
-use std::sync::OnceLock;
-
-use anyhow::{Context, Result, anyhow, bail};
-use wstd::http::{Body, Client, HeaderValue, Request, Response, StatusCode};
-use wstd::time::Duration;
+use anyhow::{Error, Result};
+use wstd::http::{Body, Request, Response, StatusCode};
 
 mod bindings {
     wit_bindgen::generate!({
@@ -24,106 +22,64 @@ mod bindings {
     });
 }
 
+mod blobstore;
+mod config;
+mod keyvalue;
+mod metrics;
 mod otel;
+mod outbound;
+mod ui;
 
-use bindings::wasi::blobstore::{
-    blobstore::{create_container, get_container},
-    types::OutgoingValue,
-};
-use bindings::wasi::config::store::get_all;
-use bindings::wasi::keyvalue::{atomics::increment, store::open};
-use bindings::wasi::otel as otel_bindings;
+use blobstore::{CONTAINER_NAME, OBJECT_KEY, store_response_in_blobstore};
+use config::{app_config, log_runtime_config, otlp_endpoint};
+use keyvalue::{COUNTER_KEY, increment_counter};
+use metrics::export_metrics;
 use otel::{
-    ActiveSpan, Event, SpanKind, TraceFlags, component_start, kv_num, kv_str, new_trace_id, now,
-    otel_log, outer_span_context, resource, scope, traceparent,
+    ActiveSpan, Event, SpanKind, TraceFlags, kv_num, kv_str, new_trace_id, now, otel_log,
+    outer_span_context,
 };
+use outbound::make_outgoing_request;
 
-const CONTAINER_NAME: &str = "http-responses";
-const OBJECT_KEY: &str = "example-com-response";
-const COUNTER_KEY: &str = "request-count";
-
-// Defaults applied if the corresponding `wasi:config` key is absent.
-const DEFAULT_OUTBOUND_HOST: &str = "example.com";
-const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 5_000;
-
-/// Per-request app config sourced from `wasi:config/store` (populated by
-/// `workload.environment.{configFrom,secretFrom}` in `.wash/config.yaml`).
-/// Built once on the first request and cached.
-struct AppConfig {
+/// Everything the response renderer needs to draw the demo page.
+struct Outcome {
+    count: u64,
+    response_len: usize,
     outbound_url: String,
-    request_timeout: Duration,
-    upstream_api_token: Option<String>,
-}
-
-static APP_CONFIG: OnceLock<AppConfig> = OnceLock::new();
-
-fn app_config() -> &'static AppConfig {
-    APP_CONFIG.get_or_init(build_app_config)
-}
-
-fn build_app_config() -> AppConfig {
-    let mut entries: BTreeMap<String, String> = BTreeMap::new();
-    if let Ok(config) = get_all() {
-        for (k, v) in config {
-            entries.insert(k, v);
-        }
-    }
-    let outbound_host = entries
-        .get("OUTBOUND_HOST")
-        .map(String::as_str)
-        .unwrap_or(DEFAULT_OUTBOUND_HOST);
-    let timeout_ms = entries
-        .get("request_timeout_ms")
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS);
-    AppConfig {
-        outbound_url: format!("https://{outbound_host}/"),
-        request_timeout: Duration::from_millis(timeout_ms),
-        upstream_api_token: entries.get("UPSTREAM_API_TOKEN").cloned(),
-    }
-}
-
-/// One-shot startup audit: emit a single OTel log line listing every
-/// `wasi:config/store` key visible to the component. **Keys only**,
-/// values are deliberately not included because secret values
-/// (`workload.environment.secretFrom` entries) land in this same map.
-fn log_runtime_config(trace_id: &str, span_id: &str, flags: TraceFlags) {
-    static LOGGED: OnceLock<()> = OnceLock::new();
-    LOGGED.get_or_init(|| {
-        let keys: Vec<String> = match get_all() {
-            Ok(entries) => entries.into_iter().map(|(k, _)| k).collect(),
-            Err(e) => {
-                eprintln!("warning: failed to read wasi:config/store: {e:?}");
-                return;
-            }
-        };
-        otel_log(
-            &format!("wasi:config keys: {}", keys.join(", ")),
-            trace_id,
-            span_id,
-            flags,
-        );
-    });
+    trace_id: String,
+    request_span_id: String,
 }
 
 #[wstd::http_server]
 async fn main(_request: Request<Body>) -> Result<Response<Body>, wstd::http::Error> {
-    match handle_request().await {
-        Ok(count) => Response::builder()
-            .status(StatusCode::OK)
-            .body(Body::from(count))
-            .map_err(Into::into),
+    let (status, body) = match handle_request().await {
+        Ok(outcome) => {
+            let page = ui::render_page(&ui::PageData {
+                count: outcome.count,
+                response_len: outcome.response_len,
+                outbound_url: &outcome.outbound_url,
+                trace_id: &outcome.trace_id,
+                span_id: &outcome.request_span_id,
+                otlp_endpoint: otlp_endpoint(),
+            });
+            (StatusCode::OK, page)
+        }
         Err(e) => {
             eprintln!("error processing request: {e:?}");
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from(format!("Internal server error: {e}")))
-                .map_err(Into::into)
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ui::render_error(&format!("{e:#}")),
+            )
         }
-    }
+    };
+
+    Response::builder()
+        .status(status)
+        .header("content-type", "text/html; charset=utf-8")
+        .body(Body::from(body))
+        .map_err(Into::into)
 }
 
-async fn handle_request() -> Result<String> {
+async fn handle_request() -> Result<Outcome> {
     // Continue the host-provided trace if there is one; otherwise root a fresh
     // trace. Inherit the upstream sampling decision so we don't override a
     // host that asked us not to record.
@@ -152,205 +108,130 @@ async fn handle_request() -> Result<String> {
         flags,
     );
 
+    match handle_request_steps(&trace_id, &request_span_id, flags).await {
+        Ok((count, response_len, outbound_url)) => {
+            // Parent SERVER span carries summary attributes + a completion event.
+            request_span.finish_ok_with(
+                vec![kv_num("request.count", count)],
+                vec![Event {
+                    name: "request.completed".into(),
+                    time: now(),
+                    attributes: vec![kv_num("response.bytes", response_len)],
+                }],
+            );
+
+            otel_log(
+                &format!("request complete, count: {count}"),
+                &trace_id,
+                &request_span_id,
+                flags,
+            );
+
+            export_metrics(count, response_len, &outbound_url);
+            Ok(Outcome {
+                count,
+                response_len,
+                outbound_url,
+                trace_id,
+                request_span_id,
+            })
+        }
+        Err(e) => {
+            request_span.finish_err(format!("{e:#}"));
+            Err(e)
+        }
+    }
+}
+
+/// Inner workhorse: runs the http → blob → keyvalue chain, marking each
+/// child span as either `Ok` or `Err(message)` so the trace carries the real
+/// cause instead of the generic "exited via early return" message.
+async fn handle_request_steps(
+    trace_id: &str,
+    parent_span_id: &str,
+    flags: TraceFlags,
+) -> Result<(u64, usize, String)> {
+    let outbound_url = app_config().outbound_url.clone();
+
     // Outgoing http child CLIENT span, traceparent injected on the wire.
-    let outbound_url = &app_config().outbound_url;
     let http_span = ActiveSpan::start(
-        &trace_id,
+        trace_id,
         flags,
-        &request_span_id,
+        parent_span_id,
         SpanKind::Client,
         "outgoing http",
     );
     let http_span_id = http_span.span_id().to_owned();
-    let body_bytes = make_outgoing_request(&trace_id, &http_span_id, flags).await?;
+    let body_bytes = finish_span_with_result(
+        http_span,
+        make_outgoing_request(trace_id, &http_span_id, flags).await,
+        |b| {
+            vec![
+                kv_str("http.request.method", "GET"),
+                kv_str("url.full", &outbound_url),
+                kv_num("http.response.body.size", b.len()),
+            ]
+        },
+    )?;
     let response_len = body_bytes.len();
-    http_span.finish_ok(vec![
-        kv_str("http.request.method", "GET"),
-        kv_str("url.full", outbound_url),
-        kv_num("http.response.body.size", response_len),
-    ]);
 
     otel_log(
         &format!("retrieved {response_len} bytes from {outbound_url}"),
-        &trace_id,
-        &request_span_id,
+        trace_id,
+        parent_span_id,
         flags,
     );
 
     // Blobstore write — child CLIENT span.
     let blob_span = ActiveSpan::start(
-        &trace_id,
+        trace_id,
         flags,
-        &request_span_id,
+        parent_span_id,
         SpanKind::Client,
         "blobstore write",
     );
-    store_response_in_blobstore(&body_bytes)?;
-    blob_span.finish_ok(vec![
-        kv_str("blobstore.container", CONTAINER_NAME),
-        kv_str("blobstore.object", OBJECT_KEY),
-        kv_num("blobstore.object.size", response_len),
-    ]);
+    finish_span_with_result(blob_span, store_response_in_blobstore(&body_bytes), |()| {
+        vec![
+            kv_str("blobstore.container", CONTAINER_NAME),
+            kv_str("blobstore.object", OBJECT_KEY),
+            kv_num("blobstore.object.size", response_len),
+        ]
+    })?;
 
     // Keyvalue increment child CLIENT span.
     let kv_span = ActiveSpan::start(
-        &trace_id,
+        trace_id,
         flags,
-        &request_span_id,
+        parent_span_id,
         SpanKind::Client,
         "keyvalue increment",
     );
-    let count = increment_counter()?;
-    kv_span.finish_ok(vec![
-        kv_str("keyvalue.key", COUNTER_KEY),
-        kv_num("keyvalue.result", count),
-    ]);
-
-    // Parent SERVER span carries summary attributes + a completion event.
-    request_span.finish_ok_with(
-        vec![kv_num("request.count", count)],
-        vec![Event {
-            name: "request.completed".into(),
-            time: now(),
-            attributes: vec![kv_num("response.bytes", response_len)],
-        }],
-    );
-
-    otel_log(
-        &format!("request complete, count: {count}"),
-        &trace_id,
-        &request_span_id,
-        flags,
-    );
-
-    export_metrics(count, response_len);
-    Ok(count.to_string())
-}
-
-fn export_metrics(count: u64, response_len: usize) {
-    use otel_bindings::metrics::{
-        Gauge, GaugeDataPoint, Metric, MetricData, MetricNumber, ResourceMetrics, ScopeMetrics,
-        Sum, SumDataPoint, Temporality, export,
-    };
-
-    let metric_time = now();
-    let start_time = component_start();
-    let _ = export(&ResourceMetrics {
-        resource: resource().clone(),
-        scope_metrics: vec![ScopeMetrics {
-            scope: scope().clone(),
-            metrics: vec![
-                Metric {
-                    name: "http.server.request_count".into(),
-                    description: "Total number of HTTP requests handled".into(),
-                    unit: "{request}".into(),
-                    data: MetricData::U64Sum(Sum {
-                        data_points: vec![SumDataPoint {
-                            attributes: vec![],
-                            value: MetricNumber::U64(count),
-                            exemplars: vec![],
-                        }],
-                        // Per OTel spec, the first cumulative observation may
-                        // legitimately carry start_time == time; subsequent
-                        // exports keep the same start_time.
-                        start_time,
-                        time: metric_time,
-                        temporality: Temporality::Cumulative,
-                        is_monotonic: true,
-                    }),
-                },
-                Metric {
-                    name: "http.server.response_body.size".into(),
-                    description: "Size of the fetched HTTP response body".into(),
-                    unit: "By".into(),
-                    data: MetricData::U64Gauge(Gauge {
-                        data_points: vec![GaugeDataPoint {
-                            attributes: vec![kv_str("http.target", &app_config().outbound_url)],
-                            value: MetricNumber::U64(response_len as u64),
-                            exemplars: vec![],
-                        }],
-                        start_time: Some(start_time),
-                        time: metric_time,
-                    }),
-                },
-            ],
-        }],
-    });
-}
-
-async fn make_outgoing_request(
-    trace_id: &str,
-    span_id: &str,
-    flags: TraceFlags,
-) -> Result<Vec<u8>> {
-    let cfg = app_config();
-    let mut client = Client::new();
-    client.set_first_byte_timeout(cfg.request_timeout);
-    client.set_between_bytes_timeout(cfg.request_timeout);
-
-    let header = traceparent(trace_id, span_id, flags);
-    let mut builder = Request::get(&cfg.outbound_url).header(
-        "traceparent",
-        HeaderValue::from_str(&header).context("invalid traceparent header")?,
-    );
-
-    // Attach the upstream API token from `secrets.upstream-credentials`.
-    // Missing-token paths still work but skip the auth header so the example
-    // is exercisable without setting `UPSTREAM_API_TOKEN`.
-    if let Some(token) = cfg.upstream_api_token.as_deref() {
-        builder = builder.header(
-            "authorization",
-            HeaderValue::from_str(&format!("Bearer {token}"))
-                .context("invalid authorization header")?,
-        );
-    }
-
-    let request = builder
-        .body(Body::empty())
-        .context("failed to build outgoing request")?;
-
-    let response = client
-        .send(request)
-        .await
-        .context("outgoing request failed")?;
-
-    let status = response.status();
-    if !status.is_success() {
-        bail!("non-success status from {}: {status}", cfg.outbound_url);
-    }
-
-    let mut body = response.into_body();
-    let bytes = body
-        .contents()
-        .await
-        .context("failed to read response body")?
-        .to_vec();
-    Ok(bytes)
-}
-
-fn store_response_in_blobstore(body: &[u8]) -> Result<()> {
-    let container = get_container(CONTAINER_NAME).or_else(|_| {
-        create_container(CONTAINER_NAME)
-            .map_err(|e| anyhow!("failed to create blobstore container {CONTAINER_NAME}: {e}"))
+    let count = finish_span_with_result(kv_span, increment_counter(), |count| {
+        vec![
+            kv_str("keyvalue.key", COUNTER_KEY),
+            kv_num("keyvalue.result", *count),
+        ]
     })?;
 
-    let outgoing = OutgoingValue::new_outgoing_value();
-    let stream = outgoing
-        .outgoing_value_write_body()
-        .map_err(|()| anyhow!("failed to open blobstore output stream"))?;
-    stream
-        .blocking_write_and_flush(body)
-        .context("failed to write blob bytes")?;
-    drop(stream);
-
-    container
-        .write_data(OBJECT_KEY, &outgoing)
-        .map_err(|e| anyhow!("failed to write blob {OBJECT_KEY}: {e}"))?;
-    OutgoingValue::finish(outgoing).map_err(|e| anyhow!("failed to finish blob value: {e}"))?;
-    Ok(())
+    Ok((count, response_len, outbound_url))
 }
 
-fn increment_counter() -> Result<u64> {
-    let bucket = open("").map_err(|e| anyhow!("failed to open keyvalue bucket: {e:?}"))?;
-    increment(&bucket, COUNTER_KEY, 1).context("failed to increment counter")
+/// Settle `span` based on `result`: on `Ok`, attach `ok_attrs(&value)` and
+/// mark `Status::Ok`; on `Err`, record the error message on the span before
+/// returning the error to the caller.
+fn finish_span_with_result<T>(
+    span: ActiveSpan,
+    result: Result<T>,
+    ok_attrs: impl FnOnce(&T) -> Vec<otel::KeyValue>,
+) -> Result<T> {
+    match result {
+        Ok(v) => {
+            span.finish_ok(ok_attrs(&v));
+            Ok(v)
+        }
+        Err(e) => {
+            span.finish_err(format!("{e:#}"));
+            Err::<T, Error>(e)
+        }
+    }
 }
