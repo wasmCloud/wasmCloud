@@ -12,7 +12,7 @@ Looking for examples in other languages? Checkout our docs at [wasmcloud.com/doc
 | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | [blobby](./blobby/)                                                | Simple file server demonstrating CRUD operations against the `wasi:blobstore` interface.                                                   |
 | [grpc-hello-world](./grpc-hello-world/)                            | gRPC client and server components showing how to make and serve gRPC calls from a wasmCloud component.                                     |
-| [otel-http](./otel-http/)                                          | HTTP counter service instrumented with OpenTelemetry tracing, logging, and metrics via `wasi:otel`, plus blobstore and key-value backends. |
+| [otel-config](./otel-config/)                                      | HTTP service instrumented with OpenTelemetry tracing, logs, and metrics via `wasi:otel`, with the OTel `Resource` built from `wasi:config`. |
 | [qrcode](./qrcode/)                                                | HTTP service that generates QR codes.                                                                                                      |
 
 ## Running an example

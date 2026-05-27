@@ -1,0 +1,39 @@
+build:
+  command: cargo build --target wasm32-wasip2 --release
+  component_path: target/wasm32-wasip2/release/otel_config.wasm
+
+dev:
+  wasi_blobstore_path: tmp/blobstore
+  wasi_keyvalue_path: tmp/keyvalue
+  wasi_otel: true
+  environment:
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:18889
+
+# Workload-level configuration delivered to the component at runtime.
+# - `environment.configFrom` / `environment.secretFrom` reference top-level
+#   `configs:` / `secrets:` entries below.
+# - `config` is opaque key-value injected into wasi:config/store. Any
+#   `otel.resource.*` key here gets merged into the OTel Resource attributes
+#   by `src/otel.rs::build_resource` (mirrors OTEL_RESOURCE_ATTRIBUTES).
+# - `allowedHosts` constrains outbound HTTP from this component.
+workload:
+  environment:
+    configFrom:
+      - app-defaults
+    secretFrom:
+      - upstream-credentials
+  config:
+    otel.resource.service.name: otel-config-dev
+    otel.resource.deployment.environment: local
+    otel.resource.cloud.region: dev
+  allowedHosts:
+    - example.com
+
+configs:
+  app-defaults:
+    file: ./config/defaults.env
+
+secrets:
+  upstream-credentials:
+    fromEnv:
+      - UPSTREAM_API_TOKEN
