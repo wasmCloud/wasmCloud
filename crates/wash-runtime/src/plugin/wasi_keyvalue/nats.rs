@@ -131,8 +131,8 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         let entry = match bucket_handle.kv.get(key).await {
             Ok(entry) => entry,
             Err(e) => {
-                tracing::error!("JetStream error getting key: {}", e);
-                return Ok(Err(StoreError::Other(format!("JetStream error: {}", e))));
+                tracing::error!("JetStream error getting key: {e}");
+                return Ok(Err(StoreError::Other(format!("JetStream error: {e}"))));
             }
         };
 
@@ -161,8 +161,8 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         match bucket_handle.kv.put(key, value.into()).await {
             Ok(_) => Ok(Ok(())),
             Err(e) => {
-                tracing::error!("JetStream error setting key: {}", e);
-                Ok(Err(StoreError::Other(format!("JetStream error: {}", e))))
+                tracing::error!("JetStream error setting key: {e}");
+                Ok(Err(StoreError::Other(format!("JetStream error: {e}"))))
             }
         }
     }
@@ -185,8 +185,8 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         match bucket_handle.kv.delete(key).await {
             Ok(_) => Ok(Ok(())),
             Err(e) => {
-                tracing::error!("JetStream error deleting key: {}", e);
-                Ok(Err(StoreError::Other(format!("JetStream error: {}", e))))
+                tracing::error!("JetStream error deleting key: {e}");
+                Ok(Err(StoreError::Other(format!("JetStream error: {e}"))))
             }
         }
     }
@@ -210,8 +210,8 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
             Ok(Some(_)) => Ok(Ok(true)),
             Ok(None) => Ok(Ok(false)),
             Err(e) => {
-                tracing::error!("JetStream error getting key: {}", e);
-                Ok(Err(StoreError::Other(format!("JetStream error: {}", e))))
+                tracing::error!("JetStream error getting key: {e}");
+                Ok(Err(StoreError::Other(format!("JetStream error: {e}"))))
             }
         }
     }
@@ -234,8 +234,8 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         let keys_iter = match bucket_handle.kv.keys().await {
             Ok(i) => i,
             Err(e) => {
-                tracing::error!("JetStream error getting key: {}", e);
-                return Ok(Err(StoreError::Other(format!("JetStream error: {}", e))));
+                tracing::error!("JetStream error getting key: {e}");
+                return Ok(Err(StoreError::Other(format!("JetStream error: {e}"))));
             }
         };
 
@@ -300,8 +300,8 @@ impl<'a> bindings::wasi::keyvalue::atomics::Host for ActiveCtx<'a> {
             }
             Ok(None) => (None, 0),
             Err(e) => {
-                tracing::error!("JetStream error getting key entry: {}", e);
-                return Ok(Err(StoreError::Other(format!("JetStream error: {}", e))));
+                tracing::error!("JetStream error getting key entry: {e}");
+                return Ok(Err(StoreError::Other(format!("JetStream error: {e}"))));
             }
         };
 
@@ -317,8 +317,8 @@ impl<'a> bindings::wasi::keyvalue::atomics::Host for ActiveCtx<'a> {
                 match res {
                     Ok(_) => Ok(Ok(new_value)),
                     Err(e) => {
-                        tracing::error!("JetStream error updating key: {}", e);
-                        Ok(Err(StoreError::Other(format!("JetStream error: {}", e))))
+                        tracing::error!("JetStream error updating key: {e}");
+                        Ok(Err(StoreError::Other(format!("JetStream error: {e}"))))
                     }
                 }
             }
@@ -327,8 +327,8 @@ impl<'a> bindings::wasi::keyvalue::atomics::Host for ActiveCtx<'a> {
                 match res {
                     Ok(_) => Ok(Ok(new_value)),
                     Err(e) => {
-                        tracing::error!("JetStream error putting key: {}", e);
-                        Ok(Err(StoreError::Other(format!("JetStream error: {}", e))))
+                        tracing::error!("JetStream error putting key: {e}");
+                        Ok(Err(StoreError::Other(format!("JetStream error: {e}"))))
                     }
                 }
             }
@@ -359,8 +359,8 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
                 Ok(Some(entry)) => Ok(Some((key.clone(), entry.to_vec()))),
                 Ok(None) => Ok(None),
                 Err(e) => {
-                    tracing::error!("JetStream error getting key: {}", e);
-                    Err(StoreError::Other(format!("JetStream error: {}", e)))
+                    tracing::error!("JetStream error getting key: {e}");
+                    Err(StoreError::Other(format!("JetStream error: {e}")))
                 }
             }
         }))
@@ -403,8 +403,8 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
                 {
                     Ok(_) => Ok(()),
                     Err(e) => {
-                        tracing::error!("JetStream error putting key: {}", e);
-                        Err(StoreError::Other(format!("JetStream error: {}", e)))
+                        tracing::error!("JetStream error putting key: {e}");
+                        Err(StoreError::Other(format!("JetStream error: {e}")))
                     }
                 }
             },
@@ -441,8 +441,8 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
             match bucket_handle.kv.delete(key.clone()).await {
                 Ok(_) => Ok(()),
                 Err(e) => {
-                    tracing::error!("JetStream error deleting key: {}", e);
-                    Err(StoreError::Other(format!("JetStream error: {}", e)))
+                    tracing::error!("JetStream error deleting key: {e}");
+                    Err(StoreError::Other(format!("JetStream error: {e}")))
                 }
             }
         }))
