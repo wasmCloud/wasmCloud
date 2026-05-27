@@ -5,18 +5,21 @@
 //! - `/org`     makes an outgoing request to `example.org` (unrelated domain)
 //! - `/www`     makes an outgoing request to `www.example.com` (subdomain)
 //!
-//! All three targets are IANA-reserved (RFC 2606), so tests don't depend on
-//! third-party bot-detection or rate limits. Having three lets us cover the
-//! three distinct match outcomes:
+//! [`FakeOutgoingHandler`] intercepts the egress, so these three names are
+//! never actually resolved or dialed — they exist purely as distinct authorities
+//! that exercise the three match outcomes the policy matcher distinguishes:
 //! - exact host match           (`/example` vs policy `example.com`)
 //! - unrelated host             (`/org`     vs policy `example.com`)
 //! - subdomain of policy host   (`/www`     vs policy `example.com` or `*.example.com`)
 //!
 //! The fixture reports the policy outcome via its own status, not the
 //! upstream's:
-//! - 200 OK          — upstream was reached (whatever upstream returned)
+//! - 200 OK          — request was permitted by policy and reached the
+//!                     outgoing handler (which the tests stub to a synthetic
+//!                     200 — see [`FakeOutgoingHandler`] — so the real network
+//!                     is never touched and runs are deterministic)
 //! - 403 Forbidden   — denied by the host's allowed_hosts policy
-//! - 502 Bad Gateway — DNS/network/TLS failure (treated as "egress unavailable")
+//! - 502 Bad Gateway — any other client error from the fixture's perspective
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -24,11 +27,19 @@ use anyhow::{Context, Result};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::time::timeout;
 
+use bytes::Bytes;
+use http_body_util::{BodyExt, Empty};
+use wasmtime_wasi_http::p2::{
+    HttpResult,
+    body::{HyperIncomingBody, HyperOutgoingBody},
+    types::{HostFutureIncomingResponse, IncomingResponse, OutgoingRequestConfig},
+};
+
 use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        http::{DynamicRouter, HttpServer},
+        http::{DynamicRouter, HttpServer, OutgoingHandler},
     },
     plugin::{wasi_config::DynamicConfig, wasi_logging::TracingLogger},
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
@@ -37,9 +48,69 @@ use wash_runtime::{
 
 const HTTP_ALLOWED_HOSTS_WASM: &[u8] = include_bytes!("wasm/http_allowed_hosts.wasm");
 
+/// Test [`OutgoingHandler`] that synthesizes a 200 OK without dialing the
+/// network. The runtime checks `allowed_hosts` *before* invoking the handler,
+/// so denied requests never reach here — they short-circuit with
+/// `HttpRequestDenied`, which the fixture maps to 403. That makes the
+/// allowed-vs-denied distinction the only thing the upstream affects, and
+/// removes external connectivity from the loop.
+///
+/// The request body is drained before responding: the wasi-side outgoing-body
+/// writer is the sender for a channel whose receiver lives inside the request
+/// we were handed, so dropping the request immediately would close the channel
+/// and the guest's body-write would fail with `StreamError::Closed`, surfacing
+/// as a non-policy error in the fixture.
+struct FakeOutgoingHandler;
+
+impl OutgoingHandler for FakeOutgoingHandler {
+    fn send_request(
+        &self,
+        _workload_id: &str,
+        request: hyper::Request<HyperOutgoingBody>,
+        _config: OutgoingRequestConfig,
+    ) -> HttpResult<HostFutureIncomingResponse> {
+        let handle = wasmtime_wasi::runtime::spawn(async move {
+            let (_parts, body) = request.into_parts();
+            // Surface drain errors so future tests sending non-empty bodies
+            // don't silently mask a guest-side body-stream bug behind a 200.
+            if let Err(e) = body.collect().await {
+                tracing::warn!(error = ?e, "FakeOutgoingHandler: draining request body failed");
+            }
+
+            let body: HyperIncomingBody = Empty::<Bytes>::new()
+                .map_err(|never| match never {})
+                .boxed_unsync();
+            let resp = hyper::Response::builder()
+                .status(hyper::StatusCode::OK)
+                .body(body)
+                .expect("static response is well-formed");
+            Ok(Ok(IncomingResponse {
+                resp,
+                worker: None,
+                between_bytes_timeout: Duration::from_secs(1),
+            }))
+        });
+        Ok(HostFutureIncomingResponse::pending(handle))
+    }
+
+    #[cfg(feature = "wasip3")]
+    fn send_request_p3(
+        &self,
+        _workload_id: &str,
+        _request: hyper::Request<wash_runtime::host::http_p3::P3Body>,
+        _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+        _fut: wash_runtime::host::http_p3::P3RequestErrorFuture,
+    ) -> wash_runtime::host::http_p3::P3SendFuture {
+        unimplemented!("fixture targets wasip2; P3 path is unused by these tests")
+    }
+}
+
 async fn start_host(addr: &str) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let engine = Engine::builder().build()?;
-    let http_server = HttpServer::new(DynamicRouter::default(), addr.parse()?).await?;
+    let http_server = HttpServer::builder(DynamicRouter::default(), addr.parse()?)
+        .outgoing_handler(FakeOutgoingHandler)
+        .build()
+        .await?;
     let bound_addr = http_server.addr();
     let host = HostBuilder::new()
         .with_engine(engine)
@@ -152,14 +223,10 @@ async fn test_allowed_hosts_blocks_denied_host() -> Result<()> {
     .context("Example request timed out")?
     .context("Failed to make example request")?;
 
-    let status = example_response.status();
-    // example.com is in the allowlist, so 200 (upstream reached) is the
-    // success case. 502 covers CI runs where egress is unavailable — still
-    // a pass since the host didn't reject the request on policy grounds.
-    assert!(
-        status.as_u16() == 200 || status.as_u16() == 502,
-        "Request to example.com should be allowed (got {})",
-        status
+    assert_eq!(
+        example_response.status().as_u16(),
+        200,
+        "example.com should be allowed by policy `[example.com]`"
     );
 
     Ok(())
@@ -191,11 +258,10 @@ async fn test_allowed_hosts_wildcard() -> Result<()> {
     .context("www request timed out")?
     .context("Failed to make www request")?;
 
-    let status = www_response.status();
-    assert!(
-        status.as_u16() == 200 || status.as_u16() == 502,
-        "Request to www.example.com should be allowed by *.example.com wildcard (got {})",
-        status
+    assert_eq!(
+        www_response.status().as_u16(),
+        200,
+        "www.example.com should be allowed by wildcard `[*.example.com]`"
     );
 
     for (path, why) in [
@@ -252,11 +318,10 @@ async fn test_star_any_permits_all() -> Result<()> {
         .context(format!("{path} request timed out"))?
         .context(format!("Failed to make {path} request"))?;
 
-        let status = response.status();
-        assert!(
-            status.as_u16() == 200 || status.as_u16() == 502,
-            "With allowed_hosts=['*'], {path} should not be blocked by policy (got {})",
-            status
+        assert_eq!(
+            response.status().as_u16(),
+            200,
+            "With allowed_hosts=['*'], {path} should be allowed"
         );
     }
     Ok(())

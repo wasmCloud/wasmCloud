@@ -151,9 +151,14 @@ wit-component = { workspace = true, default-features = false }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }
 wat = { workspace = true, features = ["component-model"] }
+bytes = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+wasmtime-wasi-http = { workspace = true, features = ["p2"] }
 gag = "1.0"
 rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
 testcontainers = { workspace = true }
