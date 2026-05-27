@@ -200,7 +200,7 @@ pub async fn run_cluster_host(
                 _ = oci_cleanup_timer.tick() => {
                     if let Some(cache_dir) = host.config().oci_cache_dir.as_ref() &&
                     let Err(e) = oci::cleanup_cache(cache_dir, cluster_host.cleanup_age).await {
-                        error!("Error during OCI cache cleanup: {}", e);
+                        error!("error during OCI cache cleanup: {e}");
                     }
                 }
                 // Send heartbeat
@@ -220,7 +220,7 @@ pub async fn run_cluster_host(
                             }
                         }
                         Err(e) => {
-                            eprintln!("Error handling command: {}", e);
+                            error!("error handling command: {e}");
                         }
                     }
                 }
