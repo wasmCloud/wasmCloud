@@ -1,6 +1,6 @@
 //! # WASI OpenTelemetry Plugin
 //! This module implements an OpenTelemetry plugin for the wasmCloud runtime,
-//! providing the `wasi:otel@0.2.0-rc.1` interfaces.
+//! providing the `wasi:otel@0.2.0-rc.2` interfaces.
 
 mod convert;
 
@@ -117,7 +117,7 @@ impl HostPlugin for WasiOtel {
     fn world(&self) -> WitWorld {
         WitWorld {
             imports: HashSet::from([WitInterface::from(
-                "wasi:otel/types,tracing,metrics,logs@0.2.0-rc.1",
+                "wasi:otel/types,tracing,metrics,logs@0.2.0-rc.2",
             )]),
             ..Default::default()
         }
