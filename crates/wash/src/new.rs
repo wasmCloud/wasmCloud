@@ -51,12 +51,17 @@ pub(crate) async fn clone_template(
     debug!(url, output_dir = %output_dir.display(), git_ref, "cloning repository");
 
     info!(url, "cloning git repository");
-    run_git(
-        ["clone", url, &output_dir.to_string_lossy()],
-        None,
-        "git clone failed",
-    )
-    .await?;
+    let output_dir_str = output_dir.to_string_lossy();
+    let mut clone_args = vec!["clone"];
+    // When no ref is requested, a shallow clone is enough and much faster.
+    // When a ref is requested it may be a commit SHA that isn't at the tip
+    // of the default branch, so the full history is fetched and resolved by
+    // the checkout below.
+    if git_ref.is_none() {
+        clone_args.extend(["--depth", "1"]);
+    }
+    clone_args.extend([url, &output_dir_str]);
+    run_git(clone_args, None, "git clone failed").await?;
 
     if let Some(git_ref) = git_ref {
         info!("Using git reference: {}", git_ref);
@@ -93,6 +98,8 @@ where
 {
     let mut cmd = Command::new("git");
     cmd.args(args);
+    // Prevent git from prompting for credentials, which would hang in non-interactive environments.
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
     if let Some(current_dir) = current_dir {
         cmd.current_dir(current_dir);
     }
@@ -217,9 +224,18 @@ mod tests {
             .await
             .expect("repo directory should be created");
 
-        run_git_in_repo(&repo, &["init"]).await;
+        run_git_in_repo(&repo, &["init", "-b", "main"]).await;
         run_git_in_repo(&repo, &["config", "user.name", "test"]).await;
         run_git_in_repo(&repo, &["config", "user.email", "test@example.com"]).await;
+
+        // Prevent git from rewriting line endings on Windows where
+        // `core.autocrlf=true` is the default, so cloned file contents
+        // match the bytes we committed.
+        tokio::fs::write(repo.join(".gitattributes"), "* -text\n")
+            .await
+            .expect(".gitattributes should be written");
+        run_git_in_repo(&repo, &["add", ".gitattributes"]).await;
+        run_git_in_repo(&repo, &["commit", "-m", "gitattributes"]).await;
 
         let readme = repo.join("README.md");
         tokio::fs::write(&readme, "first\n")
@@ -302,6 +318,25 @@ mod tests {
             .expect("cloned README should exist");
         assert_eq!(readme, "first\n");
         assert_eq!(first_commit.len(), 40);
+        assert!(!clone_dir.join(".git").exists());
+    }
+
+    #[tokio::test]
+    async fn clone_template_without_ref_clones_default_branch_tip() {
+        let (_tempdir, repo, _first_commit, _second_commit) = init_test_repo().await;
+        let clone_dir = repo
+            .parent()
+            .expect("repo should have parent")
+            .join("clone-no-ref");
+
+        clone_template(&repo.to_string_lossy(), &clone_dir, None)
+            .await
+            .expect("cloning without a ref should succeed");
+
+        let readme = tokio::fs::read_to_string(clone_dir.join("README.md"))
+            .await
+            .expect("cloned README should exist");
+        assert_eq!(readme, "second\n");
         assert!(!clone_dir.join(".git").exists());
     }
 }
