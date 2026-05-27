@@ -16,9 +16,14 @@ use crate::bindings::wasi::{
     clocks::wall_clock, config::store::get_all, otel, random::random::get_random_bytes,
 };
 
+pub(crate) use crate::bindings::wasi::otel::metrics::{
+    Gauge, GaugeDataPoint, Metric, MetricData, MetricNumber, ResourceMetrics, ScopeMetrics, Sum,
+    SumDataPoint, Temporality, export as export_metrics_bindings,
+};
 pub(crate) use crate::bindings::wasi::otel::tracing::{
     Event, SpanKind, TraceFlags, outer_span_context,
 };
+pub(crate) use crate::bindings::wasi::otel::types::KeyValue;
 
 const PKG_NAME: &str = env!("CARGO_PKG_NAME");
 const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -220,6 +225,14 @@ impl ActiveSpan {
         self.attributes = attributes;
         self.events = events;
         self.status = otel::tracing::Status::Ok;
+    }
+
+    /// Mark the span as failed with `msg` before it ends. Use this on the
+    /// error arm of a fallible call so the span carries the real cause instead
+    /// of the generic "span exited via early return" message that Drop would
+    /// otherwise apply.
+    pub(crate) fn finish_err(mut self, msg: impl Into<String>) {
+        self.status = otel::tracing::Status::Error(msg.into());
     }
 }
 

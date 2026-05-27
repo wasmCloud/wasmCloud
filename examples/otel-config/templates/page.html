@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>otel-config · wasmCloud</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #0a0a0a 0%, #1a0f2e 50%, #0a0a0a 100%);
+      min-height: 100vh;
+      padding: 2rem;
+      color: #1a1a1a;
+    }
+    .container { max-width: 880px; margin: 0 auto; }
+
+    .header { text-align: center; margin-bottom: 2rem; }
+    h1 {
+      color: white;
+      font-size: 2.5rem;
+      margin-bottom: 1rem;
+      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+    }
+    .powered-by {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 0.9rem;
+    }
+    .wasmcloud-logo { height: 24px; width: auto; vertical-align: middle; }
+
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 2rem;
+      margin-bottom: 2rem;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    }
+    h2 {
+      color: #1a1a1a;
+      margin-bottom: 1.5rem;
+      font-size: 1.5rem;
+      border-bottom: 2px solid #685bc7;
+      padding-bottom: 0.5rem;
+    }
+    p { color: #444; line-height: 1.6; margin-bottom: 1rem; }
+    p:last-child { margin-bottom: 0; }
+    p a { color: #685bc7; text-decoration: none; font-weight: 600; }
+    p a:hover { text-decoration: underline; }
+    code.inline {
+      background: #f8f7ff;
+      color: #4c1d95;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.9em;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
+    }
+    .stat {
+      background: #f8f7ff;
+      border-left: 4px solid #685bc7;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+    }
+    .stat .label {
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #685bc7;
+      font-weight: 700;
+      margin-bottom: 0.4rem;
+    }
+    .stat .value {
+      font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+      font-size: 1rem;
+      color: #1a1a1a;
+      word-break: break-all;
+    }
+    .stat .value.big { font-size: 2rem; color: #4c1d95; font-weight: 700; }
+
+    .trace-row { margin-top: 1rem; }
+    .trace-row:first-of-type { margin-top: 0; }
+
+    .pill {
+      display: inline-block;
+      margin-left: 0.5rem;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      background: #ede9fe;
+      color: #4c1d95;
+      border: 1px solid #685bc7;
+      vertical-align: middle;
+      font-weight: 600;
+    }
+
+    pre {
+      background: #1a0f2e;
+      color: #ede9fe;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      overflow-x: auto;
+      font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.85rem;
+      line-height: 1.55;
+      margin-bottom: 1rem;
+      box-shadow: inset 0 0 0 1px rgba(104, 91, 199, 0.4);
+    }
+    pre .c { color: #8b7fd8; }
+    pre:last-child { margin-bottom: 0; }
+
+    .footer {
+      text-align: center;
+      padding: 1.5rem;
+      color: rgba(255, 255, 255, 0.8);
+      font-size: 0.85rem;
+    }
+    .footer a { color: white; text-decoration: none; font-weight: 600; }
+    .footer a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>otel-config</h1>
+      <div class="powered-by">
+        Built with
+        <img
+          src="https://cdn.prod.website-files.com/68e941b736876afc9468db2b/68e941b736876afc9468dcda_Wasmcloud.Logo-Hrztl_Color.png"
+          alt="CNCF wasmCloud"
+          class="wasmcloud-logo"
+        />
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Request handled</h2>
+      <p>This component fetched <code class="inline">{outbound_url}</code>, stashed the body in <code class="inline">wasi:blobstore</code>, bumped a counter in <code class="inline">wasi:keyvalue</code>, and emitted spans / logs / metrics through <code class="inline">wasi:otel</code>.</p>
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="label">Total requests</div>
+          <div class="value big">{count}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Last response size</div>
+          <div class="value">{response_len} bytes</div>
+        </div>
+        <div class="stat">
+          <div class="label">Upstream</div>
+          <div class="value">{outbound_url}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Trace context <span class="pill">w3c</span></h2>
+      <p>Search your OTel backend for this trace to see the full timeline: <code class="inline">handle-request</code> → <code class="inline">outgoing http</code> → <code class="inline">blobstore write</code> → <code class="inline">keyvalue increment</code>.</p>
+      <div class="stat trace-row">
+        <div class="label">trace_id</div>
+        <div class="value">{trace_id}</div>
+      </div>
+      <div class="stat trace-row">
+        <div class="label">request span_id</div>
+        <div class="value">{span_id}</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Run a local OTel dashboard <span class="pill">docker</span></h2>
+      <p>Telemetry from this component ships via OTLP gRPC to <code class="inline">{otlp_endpoint}</code>. The <a href="https://learn.microsoft.com/en-us/dotnet/aspire/fundamentals/dashboard/standalone" target="_blank" rel="noopener">.NET Aspire dashboard</a> is a standalone OTLP-compatible viewer that ships as a single Docker image — start it with one command:</p>
+      <pre><span class="c"># Aspire dashboard: UI on :18888, OTLP gRPC ingest on :18889.</span>
+docker run --rm -it \
+  -p 18888:18888 \
+  -p 18889:18889 \
+  -e DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS=true \
+  --name aspire-dashboard \
+  mcr.microsoft.com/dotnet/aspire-dashboard:latest</pre>
+      <p>This example's <code class="inline">.wash/config.yaml</code> already points <code class="inline">OTEL_EXPORTER_OTLP_ENDPOINT</code> at <code class="inline">http://localhost:18889</code>, so once the container is up the next request lands in the dashboard.</p>
+      <p>Open <a href="http://localhost:18888" target="_blank" rel="noopener">http://localhost:18888</a>, then explore <b>Traces</b> for the <code class="inline">handle-request</code> tree, <b>Structured logs</b> for the trace-correlated <code class="inline">INFO</code> lines, and <b>Metrics</b> for <code class="inline">http.server.request_count</code> / <code class="inline">http.server.response_body.size</code>.</p>
+    </div>
+
+    <div class="footer">
+      Built with
+      <a href="https://wasmcloud.com" target="_blank" rel="noopener">wasmCloud</a>, a CNCF Incubating project
+      &nbsp;·&nbsp; <code style="color: rgba(255,255,255,0.6);">wasi:otel@0.2.0-rc.2</code>
+      &nbsp;·&nbsp; refresh to bump the counter
+    </div>
+  </div>
+</body>
+</html>

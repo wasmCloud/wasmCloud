@@ -3,10 +3,14 @@ build:
   component_path: target/wasm32-wasip2/release/otel_config.wasm
 
 dev:
+  address: 0.0.0.0:8001
   wasi_blobstore_path: tmp/blobstore
   wasi_keyvalue_path: tmp/keyvalue
   wasi_otel: true
   environment:
+    # Matches the .NET Aspire standalone dashboard's OTLP gRPC port (18889).
+    # See the demo page rendered by this component for a one-line
+    # `docker run` recipe.
     OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:18889
 
 # Workload-level configuration delivered to the component at runtime.

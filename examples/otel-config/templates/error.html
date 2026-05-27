@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>otel-config · error</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #0a0a0a 0%, #1a0f2e 50%, #0a0a0a 100%);
+      min-height: 100vh;
+      padding: 2rem;
+    }
+    .container { max-width: 720px; margin: 0 auto; }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 2rem;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+      border-left: 6px solid #ef4444;
+    }
+    h1 { color: #991b1b; font-size: 1.75rem; margin-bottom: 1rem; }
+    p { color: #444; margin-bottom: 1rem; line-height: 1.55; }
+    pre {
+      background: #1a0f2e;
+      color: #ede9fe;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      overflow-x: auto;
+      font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>Internal server error</h1>
+      <p>The component failed to handle the request. Check <code>wash dev</code> stderr for the full <code>anyhow</code> chain.</p>
+      <pre>{message}</pre>
+    </div>
+  </div>
+</body>
+</html>
