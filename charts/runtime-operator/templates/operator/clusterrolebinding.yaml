@@ -1,4 +1,8 @@
-{{- if and .Values.operator.enabled .Values.operator.serviceAccount.create -}}
+{{- if and .Values.operator.enabled .Values.operator.serviceAccount.create (not .Values.operator.watchNamespaces) -}}
+# Only bound when watchNamespaces is empty (watch-all). When watchNamespaces is
+# set, the operator's permissions are granted via per-namespace RoleBindings
+# instead (see workload-crd-role.yaml, workload-namespace-role.yaml,
+# endpointslice-role.yaml), so this cluster-wide binding is omitted.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

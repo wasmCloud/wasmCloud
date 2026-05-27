@@ -1,0 +1,76 @@
+{{- if and .Values.operator.enabled .Values.operator.serviceAccount.create .Values.operator.watchNamespaces -}}
+# When operator.watchNamespaces is set, the operator's workload-side CRD access
+# (artifacts / workloads / workloadreplicasets / workloaddeployments, plus their
+# /status and /finalizers subresources) is scoped to each watched namespace via a
+# Role + RoleBinding rather than the cluster-wide ClusterRole in clusterrole.yaml.
+# The informer cache is likewise scoped to these namespaces via
+# cacheOpts.DefaultNamespaces (see runtime-operator/cmd/main.go), so namespaced
+# RBAC is sufficient for the controllers' list/watch.
+#
+# Host CRDs are intentionally excluded — Host objects always live in the
+# operator's own namespace and are granted via the namespaced Role in role.yaml.
+{{- range .Values.operator.watchNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "runtime-operator.fullname" $ }}-workload-crd
+  namespace: {{ . }}
+  labels:
+    {{- include "runtime-operator.labels" $ | nindent 4 }}
+rules:
+  - apiGroups:
+    - runtime.wasmcloud.dev
+    resources:
+    - artifacts
+    - workloads
+    - workloadreplicasets
+    - workloaddeployments
+    verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+  - apiGroups:
+    - runtime.wasmcloud.dev
+    resources:
+    - artifacts/status
+    - workloads/status
+    - workloadreplicasets/status
+    - workloaddeployments/status
+    verbs:
+    - get
+    - update
+    - patch
+  # Required so the operator can stamp ownerReferences with blockOwnerDeletion=true
+  # on child objects — the GC admission plugin checks `update` on <owner>/finalizers.
+  - apiGroups:
+    - runtime.wasmcloud.dev
+    resources:
+    - artifacts/finalizers
+    - workloads/finalizers
+    - workloadreplicasets/finalizers
+    - workloaddeployments/finalizers
+    verbs:
+    - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "runtime-operator.fullname" $ }}-workload-crd
+  namespace: {{ . }}
+  labels:
+    {{- include "runtime-operator.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "runtime-operator.fullname" $ }}-workload-crd
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "operator.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}

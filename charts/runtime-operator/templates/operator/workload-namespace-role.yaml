@@ -2,17 +2,20 @@
 # When operator.watchNamespaces is set, the operator only ever reads
 # configmaps/secrets/services and records events in those namespaces — every
 # Get on these resources is keyed by the workload's own namespace, and the
-# informer cache is scoped via cacheOpts.DefaultNamespaces. Granting these
-# rules cluster-wide is therefore broader than what the code uses, so the
-# rules move from the main ClusterRole to a per-namespace RoleBinding here.
-# When watchNamespaces is empty (watch all namespaces), these rules stay on
-# the main ClusterRole instead.
+# informer cache is scoped via cacheOpts.DefaultNamespaces. These permissions
+# are granted with a namespaced Role + RoleBinding per watched namespace (rather
+# than a ClusterRole) so that installing in watchNamespaces mode requires no
+# cluster-scoped RBAC. When watchNamespaces is empty (watch all namespaces),
+# these rules live on the main ClusterRole instead.
+{{- range .Values.operator.watchNamespaces }}
+---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
-  name: {{ include "runtime-operator.fullname" . }}-workload-namespace
+  name: {{ include "runtime-operator.fullname" $ }}-workload-namespace
+  namespace: {{ . }}
   labels:
-    {{- include "runtime-operator.labels" . | nindent 4 }}
+    {{- include "runtime-operator.labels" $ | nindent 4 }}
 rules:
   - apiGroups:
     - ""
@@ -51,7 +54,6 @@ rules:
     - services/finalizers
     verbs:
     - update
-{{- range .Values.operator.watchNamespaces }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -62,7 +64,7 @@ metadata:
     {{- include "runtime-operator.labels" $ | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
+  kind: Role
   name: {{ include "runtime-operator.fullname" $ }}-workload-namespace
 subjects:
   - kind: ServiceAccount
