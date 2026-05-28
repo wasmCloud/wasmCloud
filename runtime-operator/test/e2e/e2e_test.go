@@ -227,7 +227,7 @@ var _ = Describe("Manager", Ordered, func() {
 		)
 
 		It("should deploy a workload and become ready", func() {
-			verifyWorkloadDeploy(sampleDeployment, deploymentName)
+			verifyWorkloadDeploy(sampleDeployment, deploymentName, namespace)
 		})
 
 		It("should serve HTTP traffic through the gateway", func() {
@@ -284,7 +284,7 @@ var _ = Describe("Manager", Ordered, func() {
 		})
 
 		It("should deploy a workload and become ready", func() {
-			verifyWorkloadDeploy(sampleDeployment, deploymentName)
+			verifyWorkloadDeploy(sampleDeployment, deploymentName, namespace)
 		})
 
 		// The route controller stamps an EndpointSlice with a Service
@@ -604,22 +604,380 @@ spec:
 			Eventually(verifyWorkloadEnv).WithTimeout(2 * time.Minute).Should(Succeed())
 		})
 	})
+
+	// Scoped-install scenario: switches the operator release into
+	// watchNamespaces mode via `helm upgrade --reset-values`, then verifies:
+	//   * the workload-side ClusterRole/ClusterRoleBinding are GC'd by Helm;
+	//   * per-namespace `workload-crd`, `workload-namespace`, and
+	//     `endpointslice` Roles + RoleBindings exist in the watched namespace
+	//     and are bound to the operator SA;
+	//   * a WorkloadDeployment in the watched namespace reconciles to Ready
+	//     — covers create/update of the CRDs, their `/status`, and the
+	//     `<owner>/finalizers` stamp the GC admission plugin requires on
+	//     child ownerRefs;
+	//   * a WorkloadDeployment in an unwatched namespace is NOT reconciled
+	//     (Consistently over 30s — proves informer scoping holds);
+	//   * the operator log has no `is forbidden` admission denial — catch-all
+	//     for any controller path that missed a per-namespace permission;
+	//   * deleting the scoped WorkloadDeployment walks the full delete
+	//     reconcile cleanly under the per-namespace Role.
+	//
+	// Cleanup: AfterAll deletes both WorkloadDeployments, restores the
+	// release to watch-all mode (so later specs that assume it aren't broken
+	// by the scope switch), and tears down the two scoped namespaces.
+	// AfterSuite's `helm delete` removes the helm-managed resources.
+	Context("Scoped Install via watchNamespaces", Ordered, func() {
+		const (
+			watchedNamespace     = "scoped-watched"
+			unwatchedNamespace   = "scoped-unwatched"
+			scopedHostGroup      = "scoped-host"
+			scopedWorkloadName   = "hello-scoped"
+			unscopedWorkloadName = "hello-unscoped"
+			// chartFullname is the value of the `runtime-operator.fullname`
+			// helper for this suite's release. The chart joins release name
+			// and chart name unless one already contains the other; the e2e
+			// release is `operator-e2e` and the chart is `runtime-operator`.
+			chartFullname = "operator-e2e-runtime-operator"
+		)
+
+		var (
+			scopedWorkloadFile   string
+			unscopedWorkloadFile string
+		)
+
+		// Writes a hello-world WorkloadDeployment manifest into a temp file
+		// and returns the path. environment is pinned to the namespace so
+		// the workload schedules onto a host whose heartbeat carries the
+		// same value (see Tenant block for the same convention).
+		writeWorkloadManifest := func(name, ns, hostgroup string) string {
+			manifest := fmt.Sprintf(`apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  replicas: 1
+  template:
+    spec:
+      environment: %s
+      hostSelector:
+        hostgroup: %s
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            host: hello.localhost.direct
+      components:
+        - name: hello-world
+          image: ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0
+`, name, ns, ns, hostgroup)
+
+			f, err := os.CreateTemp("", "scoped-workload-*.yaml")
+			Expect(err).NotTo(HaveOccurred())
+			_, err = f.WriteString(manifest)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(f.Close()).To(Succeed())
+			return f.Name()
+		}
+
+		// helm upgrade --install --reset-values on the suite release with
+		// buildBaseHelmSets plus extraSets. --reset-values gives a clean
+		// slate from chart defaults so the operator config is determined
+		// solely by what we pass, discarding any prior upgrade's --sets.
+		helmUpgrade := func(extraSets []string, failMsg string) {
+			sets := append(buildBaseHelmSets(), extraSets...)
+			args := make([]string, 0, 6+2*len(sets)+4)
+			args = append(args, "upgrade", "--install", "--reset-values",
+				"-n", namespace)
+			for _, s := range sets {
+				args = append(args, "--set", s)
+			}
+			args = append(args, "--wait", "--timeout=5m",
+				"operator-e2e", helmChartPath)
+			_, err := utils.Run(exec.Command("helm", args...))
+			Expect(err).NotTo(HaveOccurred(), failMsg)
+		}
+
+		AfterAll(func() {
+			// Cleanup: the It blocks below delete both
+			// WorkloadDeployments, but if any It failed early the resource
+			// may still exist. --timeout=30s bounds the wait in case a
+			// finalizer can't clear (e.g. if a host pod is gone), so a
+			// stuck delete doesn't hang the whole suite.
+			By("deleting WorkloadDeployments created by the scoped block")
+			if scopedWorkloadFile != "" {
+				cmd := exec.Command("kubectl", "delete", "workloaddeployment",
+					scopedWorkloadName, "-n", watchedNamespace,
+					"--ignore-not-found", "--timeout=30s")
+				_, _ = utils.Run(cmd)
+				_ = os.Remove(scopedWorkloadFile)
+			}
+			if unscopedWorkloadFile != "" {
+				cmd := exec.Command("kubectl", "delete", "workloaddeployment",
+					unscopedWorkloadName, "-n", unwatchedNamespace,
+					"--ignore-not-found", "--timeout=30s")
+				_, _ = utils.Run(cmd)
+				_ = os.Remove(unscopedWorkloadFile)
+			}
+
+			// Restore watch-all before leaving this block. The scoped
+			// upgrade switched the *whole* release into watchNamespaces
+			// mode; other top-level specs (e.g. Messaging) run against the
+			// default namespace and assume watch-all, and Ginkgo may order
+			// them after this block. AfterSuite only deletes the release, so
+			// without this restore those specs would race an operator that
+			// no longer watches their namespace. Do this while the watched
+			// namespace still exists so Helm can cleanly remove its per-ns
+			// Roles, then tear the namespaces down.
+			By("restoring the release to watch-all mode")
+			helmUpgrade(nil, "helm upgrade restoring watch-all mode failed")
+
+			By("deleting scoped namespaces")
+			// AfterSuite's `helm delete` removes only helm-tracked
+			// resources; the namespaces themselves were created with
+			// kubectl, so we own their teardown here. Best-effort with a
+			// timeout so a stuck finalizer doesn't hang the suite.
+			for _, ns := range []string{watchedNamespace, unwatchedNamespace} {
+				cmd := exec.Command("kubectl", "delete", "namespace", ns,
+					"--ignore-not-found", "--timeout=60s")
+				_, _ = utils.Run(cmd)
+			}
+		})
+
+		It("creates the watched and unwatched namespaces", func() {
+			for _, ns := range []string{watchedNamespace, unwatchedNamespace} {
+				cmd := exec.Command("kubectl", "create", "namespace", ns)
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(),
+					"failed to create namespace %q", ns)
+			}
+		})
+
+		It("helm upgrades the release into scoped mode", func() {
+			helmUpgrade([]string{
+				fmt.Sprintf("operator.watchNamespaces[0]=%s", watchedNamespace),
+				// Run a host inside the watched namespace so a workload
+				// applied there has something to schedule onto. The
+				// chart's `runtime-operator.hostNamespaces` helper
+				// auto-derives -host-namespaces from
+				// runtime.hostGroups[].namespace, so we don't set
+				// operator.hostNamespaces directly.
+				fmt.Sprintf("runtime.hostGroups[1].name=%s", scopedHostGroup),
+				fmt.Sprintf("runtime.hostGroups[1].namespace=%s", watchedNamespace),
+				"runtime.hostGroups[1].replicas=1",
+				"runtime.hostGroups[1].service.type=ClusterIP",
+				"runtime.hostGroups[1].http.enabled=true",
+				"runtime.hostGroups[1].http.port=80",
+				"runtime.hostGroups[1].webgpu.enabled=false",
+				"runtime.hostGroups[1].resources.requests.memory=64Mi",
+				"runtime.hostGroups[1].resources.requests.cpu=250m",
+				"runtime.hostGroups[1].resources.limits.memory=512Mi",
+				"runtime.hostGroups[1].resources.limits.cpu=500m",
+				fmt.Sprintf("runtime.hostGroups[1].logLevel=%s", runtimeLogLevel),
+			}, "helm upgrade into scoped mode failed")
+		})
+
+		It("removes the cluster-scoped operator RBAC", func() {
+			// The watch-all clusterrole.yaml / clusterrolebinding.yaml are
+			// now gated on `not .Values.operator.watchNamespaces`, so Helm
+			// must reconcile them away on the upgrade. Their lingering
+			// presence would silently grant cluster-wide CRD verbs to the
+			// operator SA and defeat the whole point of watchNamespaces.
+			for _, kind := range []string{"clusterrole", "clusterrolebinding"} {
+				cmd := exec.Command("kubectl", "get", kind, chartFullname,
+					"--ignore-not-found", "-o", "name")
+				output, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(output).To(BeEmpty(),
+					"%s %s should be absent in scoped mode", kind, chartFullname)
+			}
+		})
+
+		It("creates per-namespace workload Roles and RoleBindings", func() {
+			roleNames := []string{
+				chartFullname + "-workload-crd",
+				chartFullname + "-workload-namespace",
+				chartFullname + "-endpointslice",
+			}
+			for _, kind := range []string{"role", "rolebinding"} {
+				for _, name := range roleNames {
+					cmd := exec.Command("kubectl", "get", kind, name,
+						"-n", watchedNamespace)
+					_, err := utils.Run(cmd)
+					Expect(err).NotTo(HaveOccurred(),
+						"expected %s %s in %s", kind, name, watchedNamespace)
+				}
+			}
+		})
+
+		It("brings up a host pod in the watched namespace", func() {
+			verifyHostReady := func(g Gomega) {
+				cmd := exec.Command("kubectl", "wait", "--for=condition=Ready",
+					"pod", "-l", fmt.Sprintf("wasmcloud.com/hostgroup=%s", scopedHostGroup),
+					"-n", watchedNamespace, "--timeout=10s")
+				_, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+			}
+			Eventually(verifyHostReady).WithTimeout(3 * time.Minute).Should(Succeed())
+		})
+
+		It("deploys a workload in the watched namespace", func() {
+			scopedWorkloadFile = writeWorkloadManifest(
+				scopedWorkloadName, watchedNamespace, scopedHostGroup)
+			verifyWorkloadDeploy(scopedWorkloadFile, scopedWorkloadName, watchedNamespace)
+		})
+
+		It("does not reconcile a workload in an unwatched namespace", func() {
+			// `cacheOpts.DefaultNamespaces` constrains the workload informer
+			// to watchNamespaces, so a WorkloadDeployment applied outside
+			// that set must remain completely untouched. We Consistently
+			// assert across 30s that the controller never:
+			//   * created a child WorkloadReplicaSet or Workload CR,
+			//   * added a finalizer to the WorkloadDeployment,
+			//   * wrote any status conditions.
+			// Together these cover every observable side effect of a
+			// reconcile pass, including the earliest (finalizer stamp).
+			unscopedWorkloadFile = writeWorkloadManifest(
+				unscopedWorkloadName, unwatchedNamespace, scopedHostGroup)
+
+			By("applying the unwatched-namespace WorkloadDeployment")
+			cmd := exec.Command("kubectl", "apply", "-f", unscopedWorkloadFile)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			// jsonpath emits an empty string when the resolved path is nil
+			// and `[]` when it resolves to an empty list. Accept either as
+			// "controller never touched this field".
+			emptyOrNil := Or(Equal(""), Equal("[]"))
+
+			verifyUnreconciled := func(g Gomega) {
+				for _, resource := range []string{
+					"workloads.runtime.wasmcloud.dev",
+					"workloadreplicasets.runtime.wasmcloud.dev",
+				} {
+					cmd := exec.Command("kubectl", "get", resource,
+						"-n", unwatchedNamespace, "-o", "jsonpath={.items}")
+					output, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(output).To(Equal("[]"),
+						"operator should not have created any %s in an unwatched namespace",
+						resource)
+				}
+
+				for _, field := range []string{
+					".status.conditions",
+					".metadata.finalizers",
+				} {
+					cmd := exec.Command("kubectl", "get", "workloaddeployment",
+						unscopedWorkloadName, "-n", unwatchedNamespace,
+						"-o", fmt.Sprintf("jsonpath={%s}", field))
+					output, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(output).To(emptyOrNil,
+						"WorkloadDeployment in unwatched namespace should have no %s; got %q",
+						field, output)
+				}
+			}
+			Consistently(verifyUnreconciled).WithTimeout(30 * time.Second).Should(Succeed())
+		})
+
+		// The Kubernetes apiserver formats every RBAC rejection as
+		// `<resource>.<group> "<name>" is forbidden: <reason>`, so a
+		// substring scan of the operator's log catches any controller path
+		// that hit a permission the per-namespace Role didn't grant.
+		It("should not have logged any forbidden errors", func() {
+			cmd := exec.Command("kubectl", "logs",
+				"-n", namespace,
+				"-l", "wasmcloud.com/name=runtime-operator",
+				"--tail=500")
+			output, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).NotTo(ContainSubstring("is forbidden"),
+				"operator log contains an admission-denied error in scoped mode — likely a missing per-namespace RBAC rule")
+		})
+
+		It("cleans up the scoped WorkloadDeployment on delete", func() {
+			// Run this before the hostgroup scale-to-zero below: with the
+			// host still up, the operator can clear its finalizer cleanly,
+			// which proves the per-namespace workload-crd Role grants
+			// enough to walk the full delete path (status update on
+			// children + finalizer removal on the parent). Running it now
+			// also keeps AfterAll's safety-net delete fast.
+			By("deleting the scoped WorkloadDeployment")
+			cmd := exec.Command("kubectl", "delete", "workloaddeployment",
+				scopedWorkloadName, "-n", watchedNamespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for child Workload CRs to be cleaned up")
+			verifyCleanup := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
+					"-n", watchedNamespace, "-o", "jsonpath={.items}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("[]"))
+			}
+			Eventually(verifyCleanup).WithTimeout(1 * time.Minute).Should(Succeed())
+		})
+
+		It("cleans up the unwatched WorkloadDeployment on delete", func() {
+			// The unwatched resource was never reconciled, so no finalizer
+			// was added — delete should return immediately. This both
+			// verifies our negative-reconcile assertion (no finalizer means
+			// delete completes synchronously) and keeps AfterAll quick.
+			By("deleting the unwatched WorkloadDeployment")
+			cmd := exec.Command("kubectl", "delete", "workloaddeployment",
+				unscopedWorkloadName, "-n", unwatchedNamespace, "--timeout=30s")
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(),
+				"delete should be instant since the controller never added a finalizer; "+
+					"a timeout here implies the operator did reconcile the unwatched workload")
+		})
+
+		It("scales the watched hostgroup to zero", func() {
+			// Hostgroup teardown sanity check. The workload finalizer path
+			// was exercised by the preceding workload-delete It, so this
+			// runs with no WorkloadDeployment referencing the hostgroup —
+			// any slow cleanup here is unambiguously a hostgroup-side
+			// signal, not a confused workload finalizer.
+			By("scaling hostgroup deployments in the watched namespace to zero")
+			cmd := exec.Command("kubectl", "scale", "deployment",
+				"-l", fmt.Sprintf("wasmcloud.com/hostgroup=%s", scopedHostGroup),
+				"--replicas=0", "-n", watchedNamespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			verifyNoPods := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "pods",
+					"-l", fmt.Sprintf("wasmcloud.com/hostgroup=%s", scopedHostGroup),
+					"-n", watchedNamespace, "-o", "jsonpath={.items}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("[]"))
+			}
+			Eventually(verifyNoPods).WithTimeout(2 * time.Minute).Should(Succeed())
+		})
+	})
 })
 
 // verifyWorkloadDeploy applies a WorkloadDeployment manifest and verifies the
 // deployment becomes ready, along with its ReplicaSet and Workload CRs.
 // deploymentName is the metadata.name of the WorkloadDeployment in the sample
-// manifest — needed so the Ready check targets the right CR.
-func verifyWorkloadDeploy(sampleDeployment, deploymentName string) {
+// manifest — needed so the Ready check targets the right CR. ns is the
+// namespace to apply into and to query for child CRs; the manifest is applied
+// with `-n ns` regardless of any metadata.namespace it carries.
+func verifyWorkloadDeploy(sampleDeployment, deploymentName, ns string) {
 	By("applying the sample WorkloadDeployment")
-	cmd := exec.Command("kubectl", "apply", "-n", namespace, "-f", sampleDeployment)
+	cmd := exec.Command("kubectl", "apply", "-n", ns, "-f", sampleDeployment)
 	_, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 
 	By("waiting for WorkloadDeployment to become Ready")
 	verifyWorkloadReady := func(g Gomega) {
 		cmd := exec.Command("kubectl", "get", "workloaddeployment", deploymentName,
-			"-n", namespace,
+			"-n", ns,
 			"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}")
 		output, err := utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
@@ -629,14 +987,14 @@ func verifyWorkloadDeploy(sampleDeployment, deploymentName string) {
 
 	By("verifying WorkloadReplicaSet was created")
 	cmd = exec.Command("kubectl", "get", "workloadreplicasets.runtime.wasmcloud.dev",
-		"-n", namespace, "-o", "jsonpath={.items}")
+		"-n", ns, "-o", "jsonpath={.items}")
 	output, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(output).NotTo(Equal("[]"))
 
 	By("verifying Workload CR was created")
 	cmd = exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
-		"-n", namespace, "-o", "jsonpath={.items}")
+		"-n", ns, "-o", "jsonpath={.items}")
 	output, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(output).NotTo(Equal("[]"))
