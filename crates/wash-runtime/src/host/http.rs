@@ -902,12 +902,12 @@ async fn run_http_server<T: Router>(
                         let handles_clone = workload_handles.clone();
                         let tls_acceptor_clone = tls_acceptor.clone();
                         let handler_clone = handler.clone();
-                         let fuel_meter = fuel_meter.clone();
+                        let fuel_meter = fuel_meter.clone();
                         tokio::spawn(async move {
                             let service = hyper::service::service_fn(move |req| {
                                 let handles = handles_clone.clone();
                                 let handler = handler_clone.clone();
-                                 let fuel_meter = fuel_meter.clone();
+                                let fuel_meter = fuel_meter.clone();
                                 async move {
                                     let extractor = opentelemetry_http::HeaderExtractor(req.headers());
                                     let remote_context =
@@ -973,10 +973,26 @@ fn error_response(status: u16) -> hyper::Response<HyperOutgoingBody> {
 }
 
 /// Handle individual HTTP requests by looking up workload and invoking component
+///
+/// HTTP request attributes are emitted under both the current-stable OTel HTTP
+/// semconv names (`http.request.method`, `url.path`, `server.address`,
+/// `server.port`) and the legacy names (`http.method`, `http.uri`, `http.host`)
+/// so dashboards built against either convention resolve. `server.address` holds
+/// the host without its port; the port is recorded separately as `server.port`
+/// when the `Host` header carries one. In addition:
+/// - `http.response.status_code` is recorded before returning so span-metrics
+///   collectors can break down requests by 2xx/4xx/5xx.
+/// - `otel.status_code` is set to `ERROR` for 5xx; 4xx stays UNSET per semconv.
 #[instrument(skip_all, fields(
     http.method = %req.method(),
+    http.request.method = %req.method(),
     http.uri = %req.uri(),
-    http.host = %req.headers().get(hyper::header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("unknown"),
+    url.path = %req.uri().path(),
+    http.host = %host_header(&req),
+    server.address = split_host_port(host_header(&req)).0,
+    server.port = tracing::field::Empty,
+    http.response.status_code = tracing::field::Empty,
+    otel.status_code = tracing::field::Empty,
 ))]
 async fn handle_http_request<T: Router>(
     handler: Arc<T>,
@@ -987,11 +1003,19 @@ async fn handle_http_request<T: Router>(
     let method = req.method().clone();
     let uri = req.uri().clone();
 
+    // server.port is recorded separately from server.address per the OTel HTTP
+    // semconv; only set it when the Host header actually carries a port.
+    if let Some(port) = split_host_port(host_header(&req)).1 {
+        tracing::Span::current().record("server.port", port);
+    }
+
     let workload_id = match handler.route_incoming_request(&req) {
         Ok(id) => id,
         Err(e) => {
             warn!(err = %e, "failed to route incoming request");
-            return Ok(error_response(e.status()));
+            let resp = error_response(e.status());
+            record_response_status(&resp);
+            return Ok(resp);
         }
     };
 
@@ -1037,7 +1061,47 @@ async fn handle_http_request<T: Router>(
         }
     };
 
+    record_response_status(&response);
     Ok(response)
+}
+
+/// Record the response's status on the current span as the OTel HTTP semconv
+/// attribute `http.response.status_code`. 5xx flips `otel.status_code` to
+/// `ERROR` per the HTTP semconv (4xx is a client error and stays UNSET).
+fn record_response_status<B>(response: &hyper::Response<B>) {
+    let status = response.status().as_u16();
+    let span = tracing::Span::current();
+    span.record("http.response.status_code", status);
+    if status >= 500 {
+        span.record("otel.status_code", "ERROR");
+    }
+}
+
+/// The request's `Host` header as a string, or `"unknown"` when absent or
+/// non-UTF-8.
+fn host_header<B>(req: &hyper::Request<B>) -> &str {
+    req.headers()
+        .get(hyper::header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown")
+}
+
+/// Split a `Host` header value into the OTel `server.address` (host without
+/// port) and an optional `server.port`. Handles bracketed IPv6 literals such as
+/// `[::1]:8080`, returning the address without brackets.
+fn split_host_port(host: &str) -> (&str, Option<u16>) {
+    if let Some(rest) = host.strip_prefix('[') {
+        // IPv6 literal: `[addr]` or `[addr]:port`.
+        if let Some((addr, after)) = rest.split_once(']') {
+            let port = after.strip_prefix(':').and_then(|p| p.parse().ok());
+            return (addr, port);
+        }
+        return (host, None);
+    }
+    match host.rsplit_once(':') {
+        Some((addr, port)) => (addr, port.parse().ok()),
+        None => (host, None),
+    }
 }
 
 /// Invoke the component handler for the given workload
@@ -1678,6 +1742,45 @@ mod tests {
     fn error_response_returns_correct_status() {
         assert_eq!(error_response(404).status(), 404);
         assert_eq!(error_response(500).status(), 500);
+    }
+
+    // --- split_host_port tests ---
+
+    #[test]
+    fn split_host_port_bare_host() {
+        assert_eq!(split_host_port("example.com"), ("example.com", None));
+    }
+
+    #[test]
+    fn split_host_port_host_with_port() {
+        assert_eq!(
+            split_host_port("example.com:8080"),
+            ("example.com", Some(8080))
+        );
+    }
+
+    #[test]
+    fn split_host_port_ipv4_with_port() {
+        assert_eq!(split_host_port("10.1.2.80:443"), ("10.1.2.80", Some(443)));
+    }
+
+    #[test]
+    fn split_host_port_ipv6_with_port() {
+        assert_eq!(split_host_port("[::1]:8080"), ("::1", Some(8080)));
+    }
+
+    #[test]
+    fn split_host_port_ipv6_without_port() {
+        assert_eq!(split_host_port("[2001:db8::1]"), ("2001:db8::1", None));
+    }
+
+    #[test]
+    fn split_host_port_invalid_port_is_dropped() {
+        // Non-numeric port can't be parsed; address is still returned.
+        assert_eq!(
+            split_host_port("example.com:notaport"),
+            ("example.com", None)
+        );
     }
 
     // --- OutgoingHandler delegation tests ---
