@@ -5,7 +5,7 @@
 #   ./scripts/bench/compare-bench.sh <bench> <ref_a> <ref_b>
 #
 # Variance handling (per the design call — see scripts/bench/README.md §9.4):
-#   - iai_callgrind: 1 run per ref (instruction counts are deterministic).
+#   - gungraun: 1 run per ref (instruction counts are deterministic).
 #   - criterion benches: 3 interleaved runs per ref (a₁ b₁ a₂ b₂ a₃ b₃);
 #     median of the three is what the delta is computed from.
 #
@@ -35,7 +35,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # wall-clock benches do. Override via WASMCLOUD_BENCH_COMPARE_ITERS=N for testing.
 if [ -n "${WASMCLOUD_BENCH_COMPARE_ITERS:-}" ]; then
   iters="$WASMCLOUD_BENCH_COMPARE_ITERS"
-elif [ "$bench" = "iai_callgrind" ]; then
+elif [ "$bench" = "gungraun" ]; then
   iters=1
 else
   iters=3
@@ -100,16 +100,16 @@ trap cleanup EXIT
 
 step() { printf '\n=== %s ===\n' "$*"; }
 
-# Snapshot the bench output dirs that exist (criterion and/or iai) into a
-# numbered iteration dir under ${compare_dir}/{a,b}/. Wipes the live dirs
-# afterwards so the next iteration starts clean (run-bench.sh also wipes,
-# but doing it here guarantees no inter-iteration leak even if run-bench.sh
-# changes later).
+# Snapshot the bench output dirs that exist (criterion and/or gungraun)
+# into a numbered iteration dir under ${compare_dir}/{a,b}/. Wipes the
+# live dirs afterwards so the next iteration starts clean (run-bench.sh
+# also wipes, but doing it here guarantees no inter-iteration leak even
+# if run-bench.sh changes later).
 snapshot() {
   local side="$1" iter="$2"
   local dest="${compare_dir}/${side}/iter-${iter}"
   mkdir -p "$dest"
-  for d in criterion iai; do
+  for d in criterion gungraun; do
     if [ -d "${CARGO_TARGET_DIR}/${d}" ]; then
       cp -a "${CARGO_TARGET_DIR}/${d}" "${dest}/${d}"
     fi

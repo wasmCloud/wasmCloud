@@ -7,7 +7,7 @@
 //!   (`mean_ns`, `median_ns`, `std_dev_ns`, `ci_low_ns`, `ci_high_ns`,
 //!   `throughput`) so the existing `arewefastyet` reader doesn't break
 //!   on the schema bump.
-//! - iai rows carry only `metric` + `value` (Ir instruction counts).
+//! - gungraun rows carry only `metric` + `value` (Ir instruction counts).
 //!
 //! The dedup key in `push-s3.sh` is widened to include `.metric`, which
 //! lets `(bench, group, param)` map to multiple rows, one per metric,
@@ -59,7 +59,7 @@ struct CriterionRow<'a> {
 }
 
 #[derive(Debug, Serialize)]
-struct IaiRow<'a> {
+struct GungraunRow<'a> {
     bench: &'a str,
     group: String,
     param: String,
@@ -83,8 +83,8 @@ pub fn run(args: Args) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 
-    if args.bench == "iai_callgrind" {
-        return emit_iai(&mut out, &args.bench, &meta, &target_dir);
+    if args.bench == "gungraun" {
+        return emit_gungraun(&mut out, &args.bench, &meta, &target_dir);
     }
 
     emit_criterion(
@@ -136,16 +136,16 @@ fn emit_criterion<W: Write>(
     Ok(())
 }
 
-fn emit_iai<W: Write>(
+fn emit_gungraun<W: Write>(
     out: &mut W,
     bench: &str,
     meta: &Meta,
     target_dir: &std::path::Path,
 ) -> Result<()> {
-    let iai_dir = callgrind::dir_from_target(target_dir);
-    let rows = callgrind::walk(&iai_dir)?;
+    let gungraun_dir = callgrind::dir_from_target(target_dir);
+    let rows = callgrind::walk(&gungraun_dir)?;
     for row in rows {
-        let serialized = IaiRow {
+        let serialized = GungraunRow {
             bench,
             group: row.group,
             param: row.param,

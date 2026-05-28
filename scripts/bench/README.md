@@ -169,7 +169,7 @@ pin a bench process to it.
 
 **Why:** even with `nosmt` and the performance governor, the kernel can
 still preempt a bench thread for IRQ handling, RCU callbacks, or the
-periodic scheduler tick. For `iai_callgrind` (deterministic instruction
+periodic scheduler tick. For `gungraun` (deterministic instruction
 counts via valgrind/cachegrind) preemption doesn't affect the *result*,
 but it bloats runtime by ~2–3×. For wall-clock benches that we may pin
 later, scheduler interference is a direct source of p99 variance.
@@ -187,8 +187,8 @@ CPU index `5` is the last with `nosmt` (CPUs 0..5). Reserving the
 trailing CPU leaves 5 cores for the runner agent + system, which is
 plenty.
 
-**How it's used:** [`run-bench.sh`](./run-bench.sh) wraps `iai_callgrind`
-(and only `iai_callgrind` — the criterion benches are multi-threaded and
+**How it's used:** [`run-bench.sh`](./run-bench.sh) wraps `gungraun`
+(and only `gungraun` — the criterion benches are multi-threaded and
 would lose throughput) in `taskset -c 5`. The criterion benches run
 unpinned across CPUs 0–4. Override the CPU index via `WASMCLOUD_BENCH_ISOLATED_CPU=`
 if the host was staged with a different reservation.
@@ -291,7 +291,7 @@ lives under a different label.
 ```sh
 cd scripts/bench/ansible
 ansible-playbook provision.yml                  # everything
-ansible-playbook provision.yml --tags toolchain # apt + rustup + iai only
+ansible-playbook provision.yml --tags toolchain # apt + rustup + gungraun only
 ansible-playbook provision.yml --tags kernel    # just GRUB drop-in
 ansible-playbook provision.yml --check          # dry-run; no changes
 ```
@@ -305,19 +305,19 @@ The playbook installs (as `root` on the bench host):
   - `libprotobuf-dev` provides `/usr/include/google/protobuf/*.proto`
     (the well-known types like `timestamp.proto`); without it,
     `protoc` finds the binary but fails to import.
-  - `valgrind` is the measurement engine for the `iai_callgrind`
-    instruction-count bench (see §9 and the `iai-callgrind-runner`
+  - `valgrind` is the measurement engine for the `gungraun`
+    instruction-count bench (see §9 and the `gungraun-runner`
     bullet below).
 - **rustup** as `root`, with `stable` as the default toolchain. Inside
   the wasmCloud workspace the repo's `rust-toolchain.toml` takes
   precedence (also `stable`, with the `wasm32-unknown-unknown`,
   `wasm32-wasip1`, and `wasm32-wasip2` targets). The default is set so
   out-of-tree `cargo install` invocations (notably
-  `iai-callgrind-runner` below) have something to pick.
-- **`iai-callgrind-runner`** via `cargo install --version 0.16.1`
-  (pinned). iai-callgrind enforces equality between the runner binary
-  and the `iai-callgrind` crate version pinned in
-  `crates/wash-runtime/Cargo.toml`; bump them together.
+  `gungraun-runner` below) have something to pick.
+- **`gungraun-runner`** via `cargo install --version 0.19.1`
+  (pinned). gungraun (formerly `iai-callgrind`; renamed at 0.17.0)
+  enforces equality between the runner binary and the `gungraun` crate
+  version pinned in `crates/wash-runtime/Cargo.toml`; bump them together.
 - **Node.js (current LTS)** from NodeSource's apt repo. The CI
   workflow runs `.github/scripts/*.mjs` via `run: node …`, which
   needs an OS-level `node` on `PATH` (self-hosted runners do not
@@ -341,7 +341,7 @@ uname -r                           # 6.8.0-* (Ubuntu Noble)
 cargo --version                    # rustup-pinned stable
 protoc --version                   # libprotoc 3.21.x or newer
 valgrind --version                 # valgrind-3.22.x or newer
-iai-callgrind-runner --version     # 0.16.1
+gungraun-runner --version          # 0.19.1
 node --version                     # the node_lts_major pinned in provision.yml
 cat /etc/wasmcloud-bench-stage     # post-install marker
 ```
@@ -491,9 +491,9 @@ touches the repo, a CI log, or `/proc/<pid>/cmdline` (env-only).
    `(group, param)`. Unit semantics live in
    [`crates/bench-tools/src/markdown.rs`](../../crates/bench-tools/src/markdown.rs):
    RPS for batch-throughput benches, B/s for byte throughput, time
-   otherwise. For `iai_callgrind` the same subcommand emits an
-   instruction-count table from the iai output instead.
-4. **Upload artifact** — the criterion and/or iai output dirs as
+   otherwise. For `gungraun` the same subcommand emits an
+   instruction-count table from the gungraun output instead.
+4. **Upload artifact** — the criterion and/or gungraun output dirs as
    `bench-<bench>-<run-id>` with 90-day retention.
 5. **Configure AWS** — `aws-actions/configure-aws-credentials@v6.1.1`
    assumes the `WASMCLOUD_BENCH_AWS_ROLE_ARN` role via OIDC.
@@ -566,7 +566,7 @@ GitHub → **Actions** → **bench** → **Run workflow**:
 
 | Input   | Description                                                                                | Default          |
 | ------- | ------------------------------------------------------------------------------------------ | ---------------- |
-| `bench` | which bench to run (`http_invoke`, `iai_callgrind`, `wasmtime_baseline`, `wasmtime_serve`) | `http_invoke`    |
+| `bench` | which bench to run (`http_invoke`, `gungraun`, `wasmtime_baseline`, `wasmtime_serve`) | `http_invoke`    |
 | `ref`   | git ref to bench (branch, tag, or sha)                                                     | the workflow ref |
 
 **Bench types:**
@@ -574,7 +574,7 @@ GitHub → **Actions** → **bench** → **Run workflow**:
 | Bench               | Harness       | Measures                           | Notes                                                                                                                                                          |
 | ------------------- | ------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `http_invoke`       | criterion     | wall-clock (ns / req/s)            | wash-runtime HTTP path; cold + hot invocations                                                                                                                 |
-| `iai_callgrind`     | iai-callgrind | CPU instruction count (cachegrind) | deterministic regression detection; not subject to shared-runner timing noise; output schema differs from criterion and does **not** feed `history.json` today |
+| `gungraun`          | gungraun      | CPU instruction count (cachegrind) | deterministic regression detection; not subject to shared-runner timing noise. `gungraun` is the renamed/refreshed `iai-callgrind` (rename landed upstream at 0.17.0) |
 | `wasmtime_baseline` | criterion     | wall-clock                         | wasmtime-only baseline for context                                                                                                                             |
 | `wasmtime_serve`    | criterion     | wall-clock                         | wasmtime serve subcommand baseline                                                                                                                             |
 
@@ -627,7 +627,7 @@ and produces a delta.
 **One entry point:** `workflow_dispatch`. Actions → bench-compare → Run
 workflow; supply:
 
-- `bench` — which bench to compare (default `iai_callgrind`).
+- `bench` — which bench to compare (default `gungraun`).
 - `ref_a` — baseline ref (default `main`).
 - `ref_b` — candidate ref. To compare a PR, paste the PR's head sha
   here (the PR page shows it; `gh pr view <N> --json headRefOid` also
@@ -635,7 +635,7 @@ workflow; supply:
 
 **Variance handling:**
 
-- `iai_callgrind`: **1×** per ref. Instruction counts via valgrind are
+- `gungraun`: **1×** per ref. Instruction counts via valgrind are
   deterministic, so repeats don't reduce noise.
 - Criterion benches (`http_invoke`, `wasmtime_*`): **3× interleaved**
   (a₁ b₁ a₂ b₂ a₃ b₃); the median of the three is what the delta is
@@ -701,8 +701,8 @@ Per-run uploads (private; only the WRITE role can read):
 s3://<bucket>/runs/<YYYY-MM-DD>/<short-sha>/<run-id>/<bench>/
   ├─ criterion.tar.zst   raw criterion data (samples, estimates, SVG reports)
                          only present for criterion-based benches
-  ├─ iai.tar.zst         raw iai-callgrind output (summary.json, callgrind.out, …)
-                         only present for iai-callgrind benches (iai_callgrind)
+  ├─ gungraun.tar.zst    raw gungraun output (summary.json, callgrind.out, …)
+                         only present for the gungraun bench
   ├─ results.jsonl       one JSON row per (group, param, metric) for trend tools
   ├─ metadata.json       run-level facts (git, host, kernel, timestamps, run URL)
   └─ run.log             cargo bench stdout/stderr
@@ -727,7 +727,7 @@ after each run. This is safe without locking because the workflow is
 **Row schema.** Every row carries `metric` (the measurement name) and
 `value` (the measurement). Criterion rows additionally carry the
 original sibling statistics so older renderers keep working through
-the schema bump; iai rows carry only `metric`/`value` because the
+the schema bump; gungraun rows carry only `metric`/`value` because the
 callgrind summary line doesn't produce per-iteration CIs.
 
 Criterion row (`metric: "mean_ns"`):
@@ -754,11 +754,11 @@ Criterion row (`metric: "mean_ns"`):
 }
 ```
 
-iai row (`metric: "Ir"`):
+gungraun row (`metric: "Ir"`):
 
 ```json
 {
-  "bench": "iai_callgrind",
+  "bench": "gungraun",
   "group": "http",
   "param": "iaps_hot_invocation.p2",
   "sha": "...", "short_sha": "...", "ref": "main",
@@ -774,7 +774,7 @@ iai row (`metric: "Ir"`):
 
 The `throughput` field on criterion rows is captured from criterion's
 `benchmark.json` and tells the renderer whether to display this row as
-time (latency-style) or as ops/sec (throughput-style). iai rows have no
+time (latency-style) or as ops/sec (throughput-style). gungraun rows have no
 throughput field — instruction counts are unit-less in that sense.
 
 ## 12. Re-staging from scratch
@@ -878,13 +878,13 @@ cache). For longer staleness:
 | [`hetzner-postinstall.sh`](./hetzner-postinstall.sh)                                                           | Chroot hook: `nosmt` + perf governor                                                                                                                                                                                      |
 | [`op-env.sh`](./op-env.sh)                                                                                     | `source`-only helper: pulls `WASMCLOUD_BENCH_HOST_IP` / `WASMCLOUD_BENCH_HOSTNAME` / `WASMCLOUD_BENCH_HOST_IPV6` from the 1Password item `WASMCLOUD_BENCH_BOX` into the current shell                                     |
 | [`stage-hetzner.sh`](./stage-hetzner.sh)                                                                       | Phase 1 from your laptop: rescue → installed OS                                                                                                                                                                           |
-| [`ansible/`](./ansible/)                                                                                       | Phase 2 from your laptop: deps + Rust + valgrind + iai-callgrind-runner + repo + kernel cmdline + perf governor. Idempotent; re-run to apply drift or as the "patch a live box without re-staging" path (`--tags kernel`) |
-| [`install-runner.sh`](./install-runner.sh)                                                                     | Phase 3 on the host: GH Actions runner under `bench` user; also installs iai-callgrind-runner. Kept as bash because runner registration takes a one-shot token whose lifecycle is awkward to model declaratively.         |
+| [`ansible/`](./ansible/)                                                                                       | Phase 2 from your laptop: deps + Rust + valgrind + gungraun-runner + repo + kernel cmdline + perf governor. Idempotent; re-run to apply drift or as the "patch a live box without re-staging" path (`--tags kernel`) |
+| [`install-runner.sh`](./install-runner.sh)                                                                     | Phase 3 on the host: GH Actions runner under `bench` user; also installs gungraun-runner. Kept as bash because runner registration takes a one-shot token whose lifecycle is awkward to model declaratively.             |
 | [`../../.github/scripts/bench-preflight.mjs`](../../.github/scripts/bench-preflight.mjs)                       | CI step: refuses to bench on a drifted host (env: `WASMCLOUD_BENCH_HOSTNAME`). GHA-only — runs via `node` from the workflow.                                                                                              |
 | [`run-bench.sh`](./run-bench.sh)                                                                               | CI step + local: invokes `cargo bench`, writes a run log. Stays bash because compare-bench.sh invokes it on the host for local operator runs.                                                                             |
-| [`../../.github/scripts/bench-push-results.mjs`](../../.github/scripts/bench-push-results.mjs)                 | CI step: per-run upload + history.json aggregate + CloudFront invalidate; archives `target/criterion/` and/or `target/iai/`. GHA-only.                                                                                    |
-| [`compare-bench.sh`](./compare-bench.sh)                                                                       | Pair-bench script: runs one bench against two refs (interleaved for criterion, 1× for iai) and snapshots per-iteration data                                                                                               |
-| [`../../crates/bench-tools/`](../../crates/bench-tools/)                                                       | Rust binary that parses criterion + iai-callgrind output and renders the JSONL trend rows, the step-summary markdown, and comparison deltas — see "Data processing" below                                                |
+| [`../../.github/scripts/bench-push-results.mjs`](../../.github/scripts/bench-push-results.mjs)                 | CI step: per-run upload + history.json aggregate + CloudFront invalidate; archives `target/criterion/` and/or `target/gungraun/`. GHA-only.                                                                                    |
+| [`compare-bench.sh`](./compare-bench.sh)                                                                       | Pair-bench script: runs one bench against two refs (interleaved for criterion, 1× for gungraun) and snapshots per-iteration data                                                                                               |
+| [`../../crates/bench-tools/`](../../crates/bench-tools/)                                                       | Rust binary that parses criterion + gungraun output and renders the JSONL trend rows, the step-summary markdown, and comparison deltas — see "Data processing" below                                                     |
 | [`build-history.sh`](./build-history.sh)                                                                       | Maintenance: rebuild `history.json` from scratch by scanning all per-run JSONL in S3                                                                                                                                      |
 | [`aws/setup-aws.sh`](./aws/setup-aws.sh)                                                                       | One-shot: bucket + OAC + CloudFront + WRITE role                                                                                                                                                                          |
 | [`../../.github/workflows/bench.yml`](../../.github/workflows/bench.yml)                                       | Trends pipeline (workflow_dispatch + release auto-trigger)                                                                                                                                                                |
@@ -931,11 +931,11 @@ into layers, each with its own cadence.
 | Layer                                  | Cadence                                           | Pin location                                                                                       | Notes                                                                                                                                                                                                                  |
 | -------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Ubuntu security patches                | continuous (auto)                                 | `unattended-upgrades` (default-on in Noble)                                                        | Only the `-security` pocket. sshd / openssl / glibc fixes go in continuously; kernel held back.                                                                                                                        |
-| Kernel                                 | quarterly, deliberate                             | apt — held back implicitly because we don't run blanket `apt upgrade`                              | Scheduler / cgroup / cpufreq behavior is the measurement substrate. A kernel jump can shift `iai_callgrind` Ir counts and criterion p99 in ways that look like regressions. Annotate the dashboard with the bump date. |
+| Kernel                                 | quarterly, deliberate                             | apt — held back implicitly because we don't run blanket `apt upgrade`                              | Scheduler / cgroup / cpufreq behavior is the measurement substrate. A kernel jump can shift `gungraun` Ir counts and criterion p99 in ways that look like regressions. Annotate the dashboard with the bump date.      |
 | glibc / libstdc++                      | with the kernel                                   | apt                                                                                                | Same reason.                                                                                                                                                                                                           |
-| valgrind                               | yearly, or when iai-callgrind asks for it         | apt                                                                                                | Major valgrind bumps have historically renamed cachegrind event columns; our `Ir` parser is robust to that, but verify.                                                                                                |
+| valgrind                               | yearly, or when gungraun asks for it              | apt                                                                                                | Major valgrind bumps have historically renamed cachegrind event columns; our `Ir` parser is robust to that, but verify.                                                                                                |
 | Rust toolchain                         | rolls with `rust-toolchain.toml` (monthly stable) | repo file                                                                                          | No bench-host-specific pin.                                                                                                                                                                                            |
-| `iai-callgrind` crate + runner         | when the bench fails to start, or yearly          | `crates/wash-runtime/Cargo.toml` + `provision.yml` (`iai_callgrind_version`) + `install-runner.sh` | All three sites must match — iai-callgrind enforces crate-vs-runner equality at run time.                                                                                                                              |
+| `gungraun` crate + runner              | when the bench fails to start, or yearly          | `crates/wash-runtime/Cargo.toml` (single source of truth)                                          | Bump the dep version in `Cargo.toml`; `provision.yml` and `install-runner.sh` both derive the runner version from there at install time. gungraun enforces crate-vs-runner equality at run time.                       |
 | Node.js                                | quarterly (with the kernel bump)                  | `provision.yml` (`node_lts_major`)                                                                 | Bump to the current active LTS line. Built-ins-only scripts; Node version changes are usually low-risk.                                                                                                                |
 | GitHub Actions runner agent            | monthly check, bump on changelog review           | `install-runner.sh` (`RUNNER_VERSION` + `RUNNER_SHA256`)                                           | Auto-tracked via [`bench-host-checks.yml`](../../.github/workflows/bench-host-checks.yml); see below.                                                                                                                  |
 | Action SHA pins (`actions/checkout@…`) | weekly via Dependabot                             | `.github/workflows/*.yml`                                                                          | Low risk — these execute on hosted runners, not the bench host.                                                                                                                                                        |
@@ -968,7 +968,7 @@ dashboard shows one annotated step instead of N small ones:
 2. Bump apt: `apt update && apt upgrade` on the bench host. This is where
    kernel + glibc + valgrind move forward.
 3. Re-run `ansible-playbook provision.yml` — picks up the `node_lts_major`,
-   `iai_callgrind_version` bumps you've staged in the repo.
+   `gungraun_version` bumps you've staged in the repo.
 4. If the kernel cmdline drop-in changed: reboot the host.
 5. Verify with `cat /etc/wasmcloud-bench-stage` + the `nproc`/`isolcpus` checks
    from §4.

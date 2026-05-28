@@ -2,7 +2,7 @@ name: bench-host-checks
 
 # Monthly upstream-version checks for the wasmCloud bench host. Today
 # this only covers the GitHub Actions self-hosted runner; new checks
-# (e.g. valgrind, iai-callgrind-runner, Node LTS) can be added as
+# (e.g. valgrind, gungraun-runner, Node LTS) can be added as
 # additional jobs alongside `runner-version`.
 #
 # Jobs run on hosted ubuntu-latest — they do NOT touch the bench host

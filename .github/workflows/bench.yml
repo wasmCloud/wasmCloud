@@ -9,7 +9,7 @@ on:
         default: http_invoke
         options:
           - http_invoke
-          - iai_callgrind
+          - gungraun
           - wasmtime_baseline
           - wasmtime_serve
       ref:
@@ -61,7 +61,7 @@ jobs:
       # published`. wasmtime_* are reference baselines for wasmtime itself
       # and don't shift with our changes — run them on demand via
       # workflow_dispatch when wasmtime is upgraded.
-      RELEASE_BENCHES: '["http_invoke","iai_callgrind"]'
+      RELEASE_BENCHES: '["http_invoke","gungraun"]'
     steps:
       - id: set
         env:
@@ -139,12 +139,12 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bench-${{ matrix.bench }}-${{ github.run_id }}
-          # criterion benches write to target/criterion/, iai-callgrind benches
-          # (iai_callgrind) write to target/iai/. A genuinely-empty run is a
-          # bug worth flagging loudly — fail rather than warn.
+          # criterion benches write to target/criterion/, gungraun benches
+          # (gungraun) write to target/gungraun/. A genuinely-empty run is
+          # a bug worth flagging loudly — fail rather than warn.
           path: |
             ${{ env.CARGO_TARGET_DIR }}/criterion/
-            ${{ env.CARGO_TARGET_DIR }}/iai/
+            ${{ env.CARGO_TARGET_DIR }}/gungraun/
           retention-days: 90
           if-no-files-found: error
 

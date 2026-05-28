@@ -6,7 +6,7 @@
 # Two harness types share this script:
 #   - criterion benches (http_invoke, wasmtime_baseline, wasmtime_serve)
 #     write to $CARGO_TARGET_DIR/criterion/.
-#   - iai-callgrind benches (iai_callgrind) write to $CARGO_TARGET_DIR/iai/
+#   - gungraun benches (gungraun) write to $CARGO_TARGET_DIR/gungraun/
 #     and are pinned to the isolated CPU (set by hetzner-postinstall.sh
 #     via isolcpus=) so that scheduler interference doesn't leak into
 #     instruction counts. valgrind serializes threads, so single-core
@@ -58,8 +58,8 @@ log="${CARGO_TARGET_DIR}/run-${bench}-${GITHUB_RUN_ID:-local}.log"
 # otherwise leak across benches because the dir at $CARGO_TARGET_DIR is
 # persistent (kept for the *build* cache, not the measurement output).
 # The build cache lives elsewhere in $CARGO_TARGET_DIR and is preserved.
-# Both criterion and iai keep "previous run" baseline data we don't use.
-rm -rf "${CARGO_TARGET_DIR}/criterion" "${CARGO_TARGET_DIR}/iai"
+# Both criterion and gungraun keep "previous run" baseline data we don't use.
+rm -rf "${CARGO_TARGET_DIR}/criterion" "${CARGO_TARGET_DIR}/gungraun"
 
 # Touch the run marker right before invoking cargo so `find -newer "$marker"`
 # in `bench-tools jsonl` picks up exactly the files this run produced.
@@ -67,11 +67,11 @@ rm -rf "${CARGO_TARGET_DIR}/criterion" "${CARGO_TARGET_DIR}/iai"
 # manual partial run), the marker still bounds what gets emitted.
 touch "$marker"
 
-# iai_callgrind: pin to the isolated CPU. The criterion-style benches are
+# gungraun: pin to the isolated CPU. The criterion-style benches are
 # multi-threaded (tokio + hyper) and would lose throughput under taskset,
 # so they run unpinned across the non-isolated cores.
 prefix=()
-if [ "$bench" = "iai_callgrind" ]; then
+if [ "$bench" = "gungraun" ]; then
   if [ -x "$(command -v taskset)" ]; then
     prefix=(taskset -c "$isolated_cpu")
     echo "pinning $bench to CPU $isolated_cpu via taskset" | tee -a "$log"

@@ -1,4 +1,4 @@
-//! Internal CLI for processing wasmCloud bench output (criterion + iai-callgrind).
+//! Internal CLI for processing wasmCloud bench output (criterion + gungraun).
 //!
 //! Run via `cargo run -p bench-tools -- <subcommand>` from CI or from any
 //! script in `scripts/bench/`. The output schemas match what the trend
@@ -17,7 +17,7 @@ mod meta;
 #[command(
     name = "bench-tools",
     version,
-    about = "wasmCloud bench data processing (criterion + iai-callgrind)"
+    about = "wasmCloud bench data processing (criterion + gungraun)"
 )]
 struct Cli {
     #[command(subcommand)]

@@ -132,7 +132,7 @@ fn fmt_bps(bps: f64) -> String {
 }
 
 /// `1_234_567` → `"1,234,567"`. Used by callers that want a human-readable
-/// integer count (e.g. instruction totals in the iai summary).
+/// integer count (e.g. instruction totals in the gungraun summary).
 pub fn fmt_thousands(n: u64) -> String {
     let s = n.to_string();
     let bytes = s.as_bytes();

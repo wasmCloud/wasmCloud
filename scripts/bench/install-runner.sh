@@ -88,7 +88,7 @@ aws --version
 
 step "install rustup for the bench user"
 # The runner runs as `bench`, so it needs its own cargo. Default to `stable`
-# so out-of-tree `cargo install` invocations (e.g. iai-callgrind-runner
+# so out-of-tree `cargo install` invocations (e.g. gungraun-runner
 # below) have something to pick. Inside the wasmCloud workspace the
 # repo's rust-toolchain.toml still wins — it also pins `stable` today,
 # so there's no drift between the default and the workspace toolchain.
@@ -104,17 +104,39 @@ fi
 # when stable is already the default; downloads + sets it otherwise.
 sudo -u bench -H bash -c '. $HOME/.cargo/env && rustup default stable && rustup --version'
 
-step "install iai-callgrind-runner for the bench user"
-# Required by the iai_callgrind bench. Version must equal the iai-callgrind
-# crate version pinned in crates/wash-runtime/Cargo.toml — iai-callgrind
-# enforces equality at run time.
-sudo -u bench -H bash -c '
+step "install gungraun-runner for the bench user"
+# Required by the gungraun bench. Version must equal the gungraun crate
+# version pinned in crates/wash-runtime/Cargo.toml — gungraun enforces
+# equality at run time, so they're derived from a single source of truth
+# (the Cargo.toml dep) rather than re-pinned here. `provision.yml` does
+# the same derivation, so a `cargo update gungraun` bump propagates to
+# both install paths without a separate edit.
+#
+# Version check uses `cargo install --list` rather than
+# `gungraun-runner --version`: the runner inspects the nearest Cargo.toml
+# at every invocation and bails with "No version information found for
+# gungraun" when it's run from the wasmCloud workspace root (the gungraun
+# dep lives in crates/wash-runtime/Cargo.toml as a dev-dependency, not in
+# [workspace.dependencies]). The install-time check below is
+# cwd-independent, so it works whether the operator runs the script from
+# /opt/wasmcloud, /tmp, or anywhere else.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cargo_toml="$script_dir/../../crates/wash-runtime/Cargo.toml"
+gungraun_version=$(awk -F'"' '/^gungraun = "/ { print $2; exit }' "$cargo_toml")
+if [ -z "$gungraun_version" ]; then
+  echo "could not extract gungraun version from $cargo_toml" >&2
+  echo "expected a line like: gungraun = \"X.Y.Z\"" >&2
+  exit 1
+fi
+echo "installing gungraun-runner v${gungraun_version} (from $cargo_toml)"
+sudo --preserve-env=GUNGRAUN_VERSION -u bench -H \
+  env GUNGRAUN_VERSION="$gungraun_version" bash -c '
+  set -euo pipefail
   . $HOME/.cargo/env
-  if ! command -v iai-callgrind-runner >/dev/null 2>&1 \
-       || [ "$(iai-callgrind-runner --version 2>/dev/null | awk "{print \$2}")" != "0.16.1" ]; then
-    cargo install iai-callgrind-runner --version 0.16.1
+  if ! cargo install --list | grep -qx "gungraun-runner v${GUNGRAUN_VERSION}:"; then
+    cargo install gungraun-runner --version "${GUNGRAUN_VERSION}"
   fi
-  iai-callgrind-runner --version
+  cargo install --list | grep "^gungraun-runner "
 '
 
 step "download + verify + extract actions-runner v${RUNNER_VERSION}"

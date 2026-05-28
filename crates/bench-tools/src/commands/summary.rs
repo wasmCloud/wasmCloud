@@ -1,9 +1,10 @@
 //! `bench-tools summary` renders a markdown table for `$GITHUB_STEP_SUMMARY`
 //!
 //! Per-row metric is RPS for batch throughput, B/s for byte throughput,
-//! and time otherwise. For `iai_callgrind` we render a separate
-//! instruction-count table from the iai output with different schema and unit,
-//! but same rough shape so the step summary stays consistent.
+//! and time otherwise. For `gungraun` we render a separate
+//! instruction-count table from the callgrind output with different
+//! schema and unit, but same rough shape so the step summary stays
+//! consistent.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -39,8 +40,8 @@ pub fn run(args: Args) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 
-    if args.bench == "iai_callgrind" {
-        return render_iai_stub(&mut out, &args.bench, &meta, &target_dir, &run_id);
+    if args.bench == "gungraun" {
+        return render_gungraun_stub(&mut out, &args.bench, &meta, &target_dir, &run_id);
     }
 
     let crit_dir = criterion::dir_from_target(&target_dir);
@@ -107,14 +108,14 @@ fn render_criterion<W: Write>(
     Ok(())
 }
 
-fn render_iai_stub<W: Write>(
+fn render_gungraun_stub<W: Write>(
     out: &mut W,
     bench: &str,
     meta: &Meta,
     target_dir: &std::path::Path,
     run_id: &str,
 ) -> Result<()> {
-    writeln!(out, "## bench: `{bench}` (iai-callgrind)")?;
+    writeln!(out, "## bench: `{bench}` (gungraun · cachegrind)")?;
     writeln!(out)?;
     writeln!(
         out,
@@ -124,14 +125,14 @@ fn render_iai_stub<W: Write>(
     writeln!(out)?;
     writeln!(
         out,
-        "Instruction-count bench (cachegrind via iai-callgrind). Raw counts \
+        "Instruction-count bench (cachegrind via gungraun). Raw counts \
          and callgrind output are archived under the workflow artifact \
          `bench-{bench}-{run_id}` and in S3 (see scripts/bench/README.md).",
     )?;
     writeln!(out)?;
 
-    let iai_dir = callgrind::dir_from_target(target_dir);
-    let rows = callgrind::walk(&iai_dir)?;
+    let gungraun_dir = callgrind::dir_from_target(target_dir);
+    let rows = callgrind::walk(&gungraun_dir)?;
     if !rows.is_empty() {
         writeln!(out, "| group | param | Ir (instructions) |")?;
         writeln!(out, "|---|---|---:|")?;
