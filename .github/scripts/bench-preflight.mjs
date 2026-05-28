@@ -57,12 +57,21 @@ if (actualHostname !== expectedHostname) {
 }
 ok(`host: ${expectedHostname}`);
 
-// 2. nproc == 6 (nosmt active).
-const nprocOut = parseInt(runStdout('nproc'), 10);
+// 2. nproc --all == 6 (nosmt active).
+//    Use `--all`, not bare `nproc`: bare `nproc` honors the caller's
+//    `sched_getaffinity` mask, which systemd (>= 240) narrows to
+//    "online CPUs minus isolcpus" for every service unit it manages —
+//    so inside the actions.runner service we'd see 5, not 6, and this
+//    check would mis-flag a correctly-configured host. `nproc --all`
+//    ignores affinity and reports the absolute online count, which is
+//    what we actually want to assert (`nosmt` collapsed 12 SMT → 6 cores).
+//    The isolcpus assertion (#4 below) covers the orthogonal concern of
+//    "is one core reserved".
+const nprocOut = parseInt(runStdout('nproc', ['--all']), 10);
 if (nprocOut !== EXPECTED_NPROC) {
   fail(`expected ${EXPECTED_NPROC} online CPUs (nosmt); got ${nprocOut}`);
 }
-ok(`nproc: ${nprocOut}  (nosmt active)`);
+ok(`nproc --all: ${nprocOut}  (nosmt active)`);
 
 // 3. cpufreq governor == "performance" on every CPU.
 const governors = runStdout('sh', [

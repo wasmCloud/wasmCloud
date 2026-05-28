@@ -1,20 +1,20 @@
 //! Valgrind/cachegrind-based instruction-count benchmarks for wash-runtime.
 //!
-//! Uses `iai-callgrind` to count CPU instructions deterministically — which
-//! makes this suite suitable for CI regression detection where wall-clock
-//! timing on shared runners is too noisy. See `http_invoke` for the
-//! wall-clock counterpart.
+//! Uses `gungraun` (formerly `iai-callgrind`, renamed at 0.17.0) to count
+//! CPU instructions deterministically — which makes this suite suitable
+//! for CI regression detection where wall-clock timing on shared runners
+//! is too noisy. See `http_invoke` for the wall-clock counterpart.
 //!
 //! Measures the same hot-invocation path as `http_invoke`: a single HTTP
 //! request through the full wash-runtime stack (hyper → router →
 //! component). A cold-path measurement is included to track startup-cost
 //! drift (component compile + host build + first request).
 //!
-//! Requires the `iai-callgrind-runner` binary on `PATH` and `valgrind`
+//! Requires the `gungraun-runner` binary on `PATH` and `valgrind`
 //! installed:
 //! ```text
-//! cargo install iai-callgrind-runner --version 0.16.1
-//! cargo bench -p wash-runtime --features wasip3 --bench iai_callgrind
+//! cargo install gungraun-runner --version 0.19.1
+//! cargo bench -p wash-runtime --features wasip3 --bench gungraun
 //! ```
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -24,7 +24,7 @@ mod common;
 use std::{collections::HashMap, hint::black_box, sync::Arc};
 
 use common::Flavor;
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use tokio::runtime::Runtime;
 
 use wash_runtime::{
@@ -155,10 +155,16 @@ fn drop_warm(warm: Warm) {
 
 // Hot path: one HTTP request against an already-warm host. Setup builds
 // the host and is excluded from instruction counts; teardown drops it.
+//
+// fn name is the leaf segment of the callgrind output path and becomes
+// the `param` in history.json rows (`hot_invocation.p2` etc.). The
+// `gungraun_` prefix that used to live here was redundant with the
+// (renamed) bench target name — keep this short and let the bench
+// target carry the harness identity.
 #[library_benchmark]
 #[bench::p2(args = (Flavor::P2), setup = setup_warm, teardown = drop_warm)]
 #[bench::p3(args = (Flavor::P3), setup = setup_warm, teardown = drop_warm)]
-fn iai_hot_invocation(warm: Warm) -> Warm {
+fn hot_invocation(warm: Warm) -> Warm {
     warm.rt.block_on(async {
         let resp = warm
             .client
@@ -180,13 +186,13 @@ fn iai_hot_invocation(warm: Warm) -> Warm {
 #[library_benchmark]
 #[bench::p2(args = (Flavor::P2), teardown = drop_warm)]
 #[bench::p3(args = (Flavor::P3), teardown = drop_warm)]
-fn iai_cold_invocation(flavor: Flavor) -> Warm {
+fn cold_invocation(flavor: Flavor) -> Warm {
     setup_warm(flavor)
 }
 
 library_benchmark_group!(
     name = http;
-    benchmarks = iai_hot_invocation, iai_cold_invocation
+    benchmarks = hot_invocation, cold_invocation
 );
 
 main!(library_benchmark_groups = http);

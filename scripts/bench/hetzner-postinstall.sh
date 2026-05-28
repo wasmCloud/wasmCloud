@@ -11,7 +11,7 @@
 #                        scheduler tick and offload RCU callbacks off
 #                        that core. Bench processes that want a quiet
 #                        core taskset themselves onto CPU 5 (currently
-#                        only iai_callgrind; criterion benches are
+#                        only the gungraun bench; criterion benches are
 #                        multi-threaded and don't pin).
 #   3. governor=perf   - systemd unit pins every CPU's scaling_governor to
 #                        `performance` on boot, eliminating freq scaling

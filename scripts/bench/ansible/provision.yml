@@ -5,7 +5,7 @@
 # stage-hetzner.sh + hetzner-postinstall.sh because Ansible needs a
 # running system with SSH, which we don't have during installimage.
 #
-# Idempotent. Re-running applies any drift: a new iai-callgrind-runner
+# Idempotent. Re-running applies any drift: a new gungraun-runner
 # version pinned below, a new apt dep, a kernel-cmdline change, etc.
 #
 # Run from scripts/bench/ansible/ with the env vars from inventory.yml's
@@ -13,7 +13,7 @@
 #
 #   ansible-playbook provision.yml                  # everything
 #   ansible-playbook provision.yml --tags kernel    # just the GRUB drop-in
-#   ansible-playbook provision.yml --tags toolchain # apt + rustup + iai
+#   ansible-playbook provision.yml --tags toolchain # apt + rustup + gungraun
 #   ansible-playbook provision.yml --check          # dry-run
 #
 # After --tags kernel changes, a reboot is required for the new cmdline
@@ -28,10 +28,13 @@
     expected_hostname: "{{ lookup('env', 'WASMCLOUD_BENCH_HOSTNAME') }}"
     repo_url: "https://github.com/wasmCloud/wasmCloud.git"
     repo_dir: /opt/wasmcloud
-    # iai-callgrind enforces equality between the runner binary version and
-    # the iai-callgrind crate version pinned in
-    # crates/wash-runtime/Cargo.toml. Bump both together.
-    iai_callgrind_version: "0.16.1"
+    # gungraun enforces equality between the runner binary version and the
+    # gungraun crate version at run time. Derive the runner version from the
+    # crate dep in crates/wash-runtime/Cargo.toml so a `cargo update gungraun`
+    # bump there is the single source of truth.
+    gungraun_version: >-
+      {{ (lookup('file', playbook_dir + '/../../../crates/wash-runtime/Cargo.toml')
+          | regex_findall('(?m)^gungraun = "([^"]+)"'))[0] }}
     # CPU index reserved by isolcpus / nohz_full / rcu_nocbs. Must match
     # WASMCLOUD_BENCH_ISOLATED_CPU in scripts/bench/run-bench.sh.
     isolated_cpu: 5
@@ -40,7 +43,7 @@
     # each quarterly bench-host maintenance window. Ubuntu 24.04 ships
     # Node 18 in `main`, which is past EOL; NodeSource gives us a current
     # LTS without competing with the OS package.
-    node_lts_major: 22
+    node_lts_major: 24
 
   pre_tasks:
     - name: Refuse to run if WASMCLOUD_BENCH_HOSTNAME isn't exported
@@ -90,7 +93,7 @@
           # it, protoc finds the binary but fails to import.
           - protobuf-compiler
           - libprotobuf-dev
-          # Valgrind is the measurement engine for iai_callgrind.
+          # Valgrind is the measurement engine for the gungraun bench.
           - valgrind
           # zstd for criterion.tar.zst archiving; AWS CLI installed
           # separately by install-runner.sh (apt's awscli is v1).
@@ -108,7 +111,7 @@
       args:
         # `creates:` makes this a no-op once rustup is in place. We install
         # `stable` as the default toolchain so out-of-tree `cargo install`
-        # invocations (e.g. iai-callgrind-runner below) have something to
+        # invocations (e.g. gungraun-runner below) have something to
         # pick. Inside the wasmCloud workspace the repo's
         # rust-toolchain.toml still wins — it also pins `stable` today, so
         # there's no drift between the default and the workspace toolchain.
@@ -170,22 +173,22 @@
       ansible.builtin.command: /root/.cargo/bin/cargo install --list
       register: cargo_installed
       changed_when: false
-      tags: [toolchain, iai]
+      tags: [toolchain, gungraun]
 
-    - name: Install or upgrade iai-callgrind-runner
+    - name: Install or upgrade gungraun-runner
       ansible.builtin.shell: |
         set -euo pipefail
         . "$HOME/.cargo/env"
-        cargo install iai-callgrind-runner --version {{ iai_callgrind_version }}
+        cargo install gungraun-runner --version {{ gungraun_version }}
       args:
         executable: /bin/bash
       # `cargo install --list` is the canonical way to query installed
       # binaries. Each crate's entry has the shape `<name> v<version>:`
-      # on its own line — the trailing colon disambiguates `0.16.1` from
-      # `0.16.10` etc., so a plain substring check is safe here (no
+      # on its own line — the trailing colon disambiguates `0.19.1` from
+      # `0.19.10` etc., so a plain substring check is safe here (no
       # regex, no split/last on a possibly-empty value).
-      when: ('iai-callgrind-runner v' ~ iai_callgrind_version ~ ':') not in cargo_installed.stdout
-      tags: [toolchain, iai]
+      when: ('gungraun-runner v' ~ gungraun_version ~ ':') not in cargo_installed.stdout
+      tags: [toolchain, gungraun]
 
     # ── Repo clone for ad-hoc / manual benches ────────────────────────────
     - name: Clone wasmCloud repo to {{ repo_dir }}
@@ -257,7 +260,7 @@
           kernel-tweak: nosmt isolcpus={{ isolated_cpu }} nohz_full={{ isolated_cpu }} rcu_nocbs={{ isolated_cpu }}
           cpufreq-governor: performance
           isolated-cpu: {{ isolated_cpu }}
-          iai-callgrind-runner: {{ iai_callgrind_version }}
+          gungraun-runner: {{ gungraun_version }}
           node-lts-major: {{ node_lts_major }}
       tags: [marker]
 

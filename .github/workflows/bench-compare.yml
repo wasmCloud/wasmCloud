@@ -32,10 +32,10 @@ on:
       bench:
         description: which bench to compare
         type: choice
-        default: iai_callgrind
+        default: gungraun
         options:
           - http_invoke
-          - iai_callgrind
+          - gungraun
           - wasmtime_baseline
           - wasmtime_serve
       ref_a:

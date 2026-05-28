@@ -1,6 +1,6 @@
 [package]
 name = "bench-tools"
-description = "Internal CLI for processing wasmCloud bench output (criterion + iai-callgrind)."
+description = "Internal CLI for processing wasmCloud bench output (criterion + gungraun)."
 edition.workspace = true
 rust-version.workspace = true
 version.workspace = true

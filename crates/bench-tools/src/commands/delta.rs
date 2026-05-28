@@ -6,14 +6,14 @@
 //! ```text
 //! $WASMCLOUD_BENCH_COMPARE_DIR/
 //!   a/iter-1/criterion/ …
-//!   a/iter-1/iai/       …
+//!   a/iter-1/gungraun/       …
 //!   a/iter-2/…          (when criterion benches run 3× interleaved)
 //!   b/iter-1/criterion/ …
-//!   b/iter-1/iai/       …
+//!   b/iter-1/gungraun/       …
 //! ```
 //!
 //! For each side we collect one numeric value per `(group, param)` per
-//! iteration (criterion → `mean_ns`; iai → `Ir`), take the median across
+//! iteration (criterion → `mean_ns`; gungraun → `Ir`), take the median across
 //! iterations, then compute `Δ = (B − A) / A · 100`. Output is markdown
 //! plus a sibling `$WASMCLOUD_BENCH_COMPARE_DIR/delta.md` file that the
 //! bench-compare workflow appends to `$GITHUB_STEP_SUMMARY`.
@@ -72,14 +72,14 @@ pub fn run(args: Args) -> Result<()> {
 enum Kind {
     /// criterion mean_ns; "lower is better".
     Time,
-    /// iai-callgrind Ir; "lower is better".
+    /// gungraun Ir; "lower is better".
     Instructions,
 }
 
 impl Kind {
     fn for_bench(bench: &str) -> Self {
         match bench {
-            "iai_callgrind" => Kind::Instructions,
+            "gungraun" => Kind::Instructions,
             _ => Kind::Time,
         }
     }
@@ -120,7 +120,7 @@ fn collect_side(side_dir: &Path, kind: Kind) -> Result<Series> {
         }
         match kind {
             Kind::Time => collect_criterion(&iter_dir, &mut series)?,
-            Kind::Instructions => collect_iai(&iter_dir, &mut series)?,
+            Kind::Instructions => collect_gungraun(&iter_dir, &mut series)?,
         }
     }
     Ok(series)
@@ -140,9 +140,9 @@ fn collect_criterion(iter_dir: &Path, series: &mut Series) -> Result<()> {
     Ok(())
 }
 
-fn collect_iai(iter_dir: &Path, series: &mut Series) -> Result<()> {
-    let iai_dir = iter_dir.join("iai");
-    let rows = callgrind::walk(&iai_dir)?;
+fn collect_gungraun(iter_dir: &Path, series: &mut Series) -> Result<()> {
+    let gungraun_dir = iter_dir.join("gungraun");
+    let rows = callgrind::walk(&gungraun_dir)?;
     for row in rows {
         series
             .entry((row.group, row.param))
@@ -160,7 +160,7 @@ fn median(values: &[f64]) -> Option<f64> {
     sorted.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
     let mid = sorted.len() / 2;
     // Matches the jq implementation we replaced: pick the upper-middle for
-    // even-length series. Single-iteration runs (iai) hit the mid=0 path.
+    // even-length series. Single-iteration runs (gungraun) hit the mid=0 path.
     sorted.get(mid).copied()
 }
 
@@ -234,7 +234,7 @@ fn render(args: &Args, kind: Kind, meta: &Meta, a: &Series, b: &Series) -> Strin
     let _ = writeln!(
         out,
         "_Δ is `(B − A) / A · 100` of the median across {} iteration(s). \
-         Single-iteration comparisons (`iai_callgrind`) are deterministic; \
+         Single-iteration comparisons (`gungraun`) are deterministic; \
          multi-iteration comparisons use the median to dampen run-to-run noise._",
         args.iters
     );

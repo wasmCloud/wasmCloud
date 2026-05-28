@@ -9,7 +9,7 @@
 // Per-run layout (private; only the bench role can read):
 //   s3://${WASMCLOUD_BENCH_S3_BUCKET}/runs/<date>/<short-sha>/<run-id>/<bench>/
 //     ├─ criterion.tar.zst   raw criterion data
-//     ├─ iai.tar.zst         raw iai-callgrind data (when applicable)
+//     ├─ gungraun.tar.zst    raw gungraun (cachegrind) data (when applicable)
 //     ├─ results.jsonl       one JSON row per (group, param, metric)
 //     ├─ metadata.json       run-level facts
 //     └─ run.log             cargo bench stdout/stderr
@@ -51,7 +51,7 @@ const distId = required('WASMCLOUD_BENCH_CF_DISTRIBUTION_ID');
 
 const targetDir = process.env.CARGO_TARGET_DIR ?? '/var/lib/bench/target';
 const critDir = join(targetDir, 'criterion');
-const iaiDir = join(targetDir, 'iai');
+const gungraunDir = join(targetDir, 'gungraun');
 
 const runId = process.env.GITHUB_RUN_ID ?? 'local';
 const sha = run('git', ['rev-parse', 'HEAD']);
@@ -78,12 +78,12 @@ if (existsSync(critDir)) {
   run('tar', ['-cf', join(work, 'criterion.tar.zst'), '-I', 'zstd -19 -T0', '-C', critDir, '.']);
   archived++;
 }
-if (existsSync(iaiDir)) {
-  run('tar', ['-cf', join(work, 'iai.tar.zst'), '-I', 'zstd -19 -T0', '-C', iaiDir, '.']);
+if (existsSync(gungraunDir)) {
+  run('tar', ['-cf', join(work, 'gungraun.tar.zst'), '-I', 'zstd -19 -T0', '-C', gungraunDir, '.']);
   archived++;
 }
 if (archived === 0) {
-  console.log(`::warning::no criterion or iai output at ${targetDir}; uploading metadata only`);
+  console.log(`::warning::no criterion or gungraun output at ${targetDir}; uploading metadata only`);
 }
 
 // 2. Per-(group, param) JSONL rows for trend ingestion. bench-tools jsonl
@@ -126,7 +126,7 @@ if (existsSync(logSrc)) {
 console.log(`uploading per-run artifacts to s3://${bucket}/${prefix}/`);
 for (const file of [
   'criterion.tar.zst',
-  'iai.tar.zst',
+  'gungraun.tar.zst',
   'results.jsonl',
   'metadata.json',
   'run.log',

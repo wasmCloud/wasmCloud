@@ -1,16 +1,21 @@
 //! Parser for valgrind's `callgrind.out` output — pulls instruction counts
 //! out of the trailing `events:` / `summary:` lines.
 //!
-//! iai-callgrind invokes valgrind with `--tool=callgrind`, which writes per
-//! bench a tree under `target/iai/`:
+//! gungraun invokes valgrind
+//! with `--tool=callgrind`, which writes per bench a tree under
+//! `target/gungraun/`:
 //!
 //! ```text
-//! target/iai/
+//! target/gungraun/
 //!   <package>/<bench_target>/<function>.<id>/
 //!     callgrind.out
 //!     summary.json     (we don't use this — schema changes across versions)
 //!     callgrind.out.old (baseline if any)
 //! ```
+//!
+//! The file format itself is callgrind's, set by valgrind, and is stable
+//! across the gungraun rename — so this parser's name stays `callgrind`
+//! rather than tracking the upstream crate.
 //!
 //! callgrind.out itself ends with two lines whose format is set by valgrind
 //! and very stable:
@@ -39,7 +44,7 @@ pub struct Row {
     pub ir: u64,
 }
 
-/// Walk `iai_dir`, returning one [`Row`] per `callgrind.out` found.
+/// Walk `gungraun_dir`, returning one [`Row`] per `callgrind.out` found.
 ///
 /// Every accepted file is logged to stderr in the form
 /// `bench-tools callgrind: <path> → (<group>, <param>) Ir=<ir>` so an
@@ -47,12 +52,12 @@ pub struct Row {
 /// because we derive `(group, param)` from path components, a stray
 /// callgrind.out in the tree (e.g. leftover from manual debugging) would
 /// otherwise silently appear as a real bench row.
-pub fn walk(iai_dir: &Path) -> Result<Vec<Row>> {
-    if !iai_dir.exists() {
+pub fn walk(gungraun_dir: &Path) -> Result<Vec<Row>> {
+    if !gungraun_dir.exists() {
         return Ok(Vec::new());
     }
     let mut rows = Vec::new();
-    for entry in WalkDir::new(iai_dir).sort_by_file_name() {
+    for entry in WalkDir::new(gungraun_dir).sort_by_file_name() {
         let entry = entry?;
         if !entry.file_type().is_file() {
             continue;
@@ -60,7 +65,7 @@ pub fn walk(iai_dir: &Path) -> Result<Vec<Row>> {
         if entry.file_name() != "callgrind.out" {
             continue;
         }
-        let Some(row) = parse_one(iai_dir, entry.path())? else {
+        let Some(row) = parse_one(gungraun_dir, entry.path())? else {
             continue;
         };
         eprintln!(
@@ -75,14 +80,14 @@ pub fn walk(iai_dir: &Path) -> Result<Vec<Row>> {
     Ok(rows)
 }
 
-fn parse_one(iai_dir: &Path, path: &Path) -> Result<Option<Row>> {
+fn parse_one(gungraun_dir: &Path, path: &Path) -> Result<Option<Row>> {
     let rel = path
-        .strip_prefix(iai_dir)
-        .with_context(|| format!("strip_prefix({})", iai_dir.display()))?;
+        .strip_prefix(gungraun_dir)
+        .with_context(|| format!("strip_prefix({})", gungraun_dir.display()))?;
 
     // `<package>/<group>/<param>/callgrind.out`
     // We pick the last two non-file components as (group, param). This is
-    // robust against iai-callgrind nesting one or more extra levels above
+    // robust against gungraun nesting one or more extra levels above
     // <group>, which it has done in some versions (e.g. <package>/<binary>/…).
     let components: Vec<_> = rel
         .components()
@@ -145,5 +150,5 @@ pub fn read_ir(path: &Path) -> Result<Option<u64>> {
 }
 
 pub fn dir_from_target(target_dir: &Path) -> PathBuf {
-    target_dir.join("iai")
+    target_dir.join("gungraun")
 }
