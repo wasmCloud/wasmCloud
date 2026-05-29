@@ -39,6 +39,7 @@ transmute_ptr_to_ref = 'deny'
 transmute_undefined_repr = 'deny'
 trivially_copy_pass_by_ref = 'deny'
 uninit_vec = 'deny'
+uninlined_format_args = 'deny'
 unnecessary_box_returns = 'deny'
 
 [workspace.dependencies]

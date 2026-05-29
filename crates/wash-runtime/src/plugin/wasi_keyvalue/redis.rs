@@ -146,7 +146,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
             Ok(value) => Ok(Ok(value)),
             Err(e) => {
                 tracing::error!("Redis error getting key: {}", e);
-                Ok(Err(StoreError::Other(format!("Redis error: {}", e))))
+                Ok(Err(StoreError::Other(format!("Redis error: {e}"))))
             }
         }
     }
@@ -173,7 +173,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
             Ok(_) => Ok(Ok(())),
             Err(e) => {
                 tracing::error!("Redis error setting key: {}", e);
-                Ok(Err(StoreError::Other(format!("Redis error: {}", e))))
+                Ok(Err(StoreError::Other(format!("Redis error: {e}"))))
             }
         }
     }
@@ -199,7 +199,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
             Ok(_) => Ok(Ok(())),
             Err(e) => {
                 tracing::error!("Redis error deleting key: {}", e);
-                Ok(Err(StoreError::Other(format!("Redis error: {}", e))))
+                Ok(Err(StoreError::Other(format!("Redis error: {e}"))))
             }
         }
     }
@@ -225,7 +225,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
             Ok(exists) => Ok(Ok(exists)),
             Err(e) => {
                 tracing::error!("Redis error checking key existence: {}", e);
-                Ok(Err(StoreError::Other(format!("Redis error: {}", e))))
+                Ok(Err(StoreError::Other(format!("Redis error: {e}"))))
             }
         }
     }
@@ -260,7 +260,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
             Ok(result) => result,
             Err(e) => {
                 tracing::error!("Redis error listing keys: {}", e);
-                return Ok(Err(StoreError::Other(format!("Redis error: {}", e))));
+                return Ok(Err(StoreError::Other(format!("Redis error: {e}"))));
             }
         };
 
@@ -322,7 +322,7 @@ impl<'a> bindings::wasi::keyvalue::atomics::Host for ActiveCtx<'a> {
             Ok(new_value) => Ok(Ok(new_value as u64)),
             Err(e) => {
                 tracing::error!("Redis error incrementing key: {}", e);
-                Ok(Err(StoreError::Other(format!("Redis error: {}", e))))
+                Ok(Err(StoreError::Other(format!("Redis error: {e}"))))
             }
         }
     }
@@ -357,7 +357,7 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!("Redis error getting keys: {}", e);
-                return Ok(Err(StoreError::Other(format!("Redis error: {}", e))));
+                return Ok(Err(StoreError::Other(format!("Redis error: {e}"))));
             }
         };
 
@@ -399,7 +399,7 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
             Ok(_) => Ok(Ok(())),
             Err(e) => {
                 tracing::error!("Redis error setting keys: {}", e);
-                Ok(Err(StoreError::Other(format!("Redis error: {}", e))))
+                Ok(Err(StoreError::Other(format!("Redis error: {e}"))))
             }
         }
     }
@@ -427,7 +427,7 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
                     Ok(_) => Ok(()),
                     Err(e) => {
                         tracing::error!("Redis error deleting key: {}", e);
-                        Err(StoreError::Other(format!("Redis error: {}", e)))
+                        Err(StoreError::Other(format!("Redis error: {e}")))
                     }
                 }
             }

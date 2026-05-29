@@ -196,7 +196,7 @@ impl Router for DynamicRouter {
             .config
             .get("host")
             .cloned()
-            .context("No host header found")?;
+            .context("no host header found")?;
 
         anyhow::ensure!(
             is_valid_hostname(&primary_host),
@@ -1273,10 +1273,10 @@ async fn load_tls_config(
     if let Some(ca_path) = ca_path {
         let ca_data = tokio::fs::read(ca_path)
             .await
-            .context(format!("Failed to read CA file: {}", ca_path.display()))?;
+            .context(format!("failed to read CA file: {}", ca_path.display()))?;
         let ca_certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&ca_data)
             .collect::<Result<Vec<_>, _>>()
-            .context(format!("Failed to parse CA file: {}", ca_path.display()))?;
+            .context(format!("failed to parse CA file: {}", ca_path.display()))?;
 
         ensure!(
             !ca_certs.is_empty(),
@@ -1319,8 +1319,7 @@ pub fn check_allowed_hosts<B>(
 
     if allowed_hosts.is_empty() {
         anyhow::bail!(
-            "outgoing request to host '{}' denied: allowed_hosts policy is empty (deny-all)",
-            request_host
+            "outgoing request to host '{request_host}' denied: allowed_hosts policy is empty (deny-all)"
         );
     }
 
@@ -1329,8 +1328,7 @@ pub fn check_allowed_hosts<B>(
     }
 
     anyhow::bail!(
-        "outgoing request to host '{}' is not allowed by allowed_hosts policy",
-        request_host
+        "outgoing request to host '{request_host}' is not allowed by allowed_hosts policy"
     )
 }
 

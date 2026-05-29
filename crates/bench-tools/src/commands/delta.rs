@@ -251,7 +251,7 @@ fn fmt_value(v: Option<f64>, kind: Kind) -> String {
 
 fn fmt_delta(v: Option<f64>) -> String {
     match v {
-        Some(pct) => format!("{:.2}%", pct),
+        Some(pct) => format!("{pct:.2}%"),
         None => "—".to_string(),
     }
 }

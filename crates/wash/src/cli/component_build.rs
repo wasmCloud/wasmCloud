@@ -291,7 +291,7 @@ impl ComponentBuilder {
         let component_path = build_config
             .component_path
             .clone()
-            .unwrap_or(format!("{}.wasm", project_dir_name).into());
+            .unwrap_or_else(|| format!("{project_dir_name}.wasm").into());
 
         let (cmd_bin, first_arg) = {
             #[cfg(not(windows))]

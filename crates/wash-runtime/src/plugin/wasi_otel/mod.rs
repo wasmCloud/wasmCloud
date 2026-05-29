@@ -361,7 +361,7 @@ impl<'a> bindings::wasi::otel::metrics::Host for ActiveCtx<'a> {
                 // Force flush to export recorded metrics
                 if let Err(e) = provider.force_flush() {
                     tracing::warn!(error = %e, "Failed to flush metrics");
-                    return Ok(Err(format!("Failed to flush metrics: {}", e)));
+                    return Ok(Err(format!("Failed to flush metrics: {e}")));
                 }
 
                 tracing::info!(

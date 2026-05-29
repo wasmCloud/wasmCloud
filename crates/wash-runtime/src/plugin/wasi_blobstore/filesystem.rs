@@ -127,7 +127,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         };
 
         if !root.exists() {
-            return Ok(Err(format!("bucket '{}' does not exist", name)));
+            return Ok(Err(format!("bucket '{name}' does not exist")));
         }
 
         let container_data = ContainerData {
@@ -152,7 +152,7 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
             return Ok(Err("invalid container name".to_string()));
         };
         if !path.exists() {
-            return Ok(Err(format!("bucket '{}' does not exist", name)));
+            return Ok(Err(format!("bucket '{name}' does not exist")));
         }
 
         if let Err(e) = tokio::fs::remove_dir_all(&path).await {
@@ -297,7 +297,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         };
 
         if !file.exists() {
-            return Ok(Err(format!("object '{}' does not exist", name)));
+            return Ok(Err(format!("object '{name}' does not exist")));
         }
 
         let resource = self.table.push(IncomingValueHandle { file, start, end })?;
@@ -365,7 +365,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<(), ContainerError>> {
         let container_data = self.table.get(&container)?;
         let Ok(path) = lock_root(&container_data.root, name.as_str()) else {
-            return Ok(Err(format!("invalid object name: {}", name)));
+            return Ok(Err(format!("invalid object name: {name}")));
         };
 
         match tokio::fs::remove_file(path).await {
@@ -384,7 +384,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
 
         for name in names {
             let Ok(path) = lock_root(&container_data.root, name.as_str()) else {
-                return Ok(Err(format!("invalid object name: {}", name)));
+                return Ok(Err(format!("invalid object name: {name}")));
             };
             if let Err(e) = tokio::fs::remove_file(path).await {
                 return Ok(Err(format!("failed to delete object: {e}")));

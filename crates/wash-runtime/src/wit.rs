@@ -235,7 +235,7 @@ impl Display for WitInterface {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.namespace, self.package)?;
         if let Some(name) = &self.name {
-            write!(f, " [{}]", name)?;
+            write!(f, " [{name}]")?;
         }
         if !self.interfaces.is_empty() {
             write!(f, "/")?;
@@ -243,7 +243,7 @@ impl Display for WitInterface {
             write!(f, "{}", interfaces.join(","))?;
         }
         if let Some(v) = &self.version {
-            write!(f, "@{}", v)?;
+            write!(f, "@{v}")?;
         }
         Ok(())
     }

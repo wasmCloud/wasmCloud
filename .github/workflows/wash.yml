@@ -216,6 +216,21 @@ jobs:
       - name: Lint
         run: |
           cargo clippy --workspace --features wasip3,wasi-tls
+      - name: Lint anyhow context message casing
+        run: |
+          # anyhow `.context()` / `.with_context()` strings are error messages,
+          # which by Rust convention start lowercase so they compose into error
+          # chains. Match sentence-case prose (capital + lowercase) so acronyms
+          # and type names (HTTP, P3, DevRouter) are left untouched.
+          #
+          # Scope is production source only (crates/*/src), matching the clippy
+          # job above; integration tests are not checked. Only single-line
+          # context calls are matched.
+          if matches=$(grep -rn --include='*.rs' -E '\.(with_)?context\((\|\| )?(format!\()?"[A-Z][a-z]' crates/*/src); then
+            echo "::error::anyhow context messages should start with a lowercase letter (Rust convention); lowercase the first letter:"
+            echo "$matches"
+            exit 1
+          fi
       - name: Check for unused dependencies
         run: |
           cargo machete

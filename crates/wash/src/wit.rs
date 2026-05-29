@@ -122,7 +122,7 @@ impl TryFrom<RegistryPullSource> for RegistryMapping {
     fn try_from(source: RegistryPullSource) -> Result<Self, Self::Error> {
         match source {
             RegistryPullSource::RemoteOci(url) => Ok(RegistryMapping::Registry(url.parse()?)),
-            _ => bail!("Cannot convert {:?} to RegistryMapping", source),
+            _ => bail!("Cannot convert {source:?} to RegistryMapping"),
         }
     }
 }
@@ -293,13 +293,13 @@ impl WkgFetcher {
                 RegistryPullSource::RemoteHttp(_) => {
                     let wit_dir = download_and_extract_http(source)
                         .await
-                        .with_context(|| format!("failed to download HTTP source [{}]", source))?;
+                        .with_context(|| format!("failed to download HTTP source [{source}]"))?;
                     set_override_for_target(wkg_config_overrides, &ns, &pkgs, wit_dir);
                 }
                 RegistryPullSource::RemoteGit(_) => {
                     let wit_dir = clone_git_and_find_wit(source)
                         .await
-                        .with_context(|| format!("failed to clone Git source [{}]", source))?;
+                        .with_context(|| format!("failed to clone Git source [{source}]"))?;
                     set_override_for_target(wkg_config_overrides, &ns, &pkgs, wit_dir);
                 }
                 RegistryPullSource::RemoteOci(_) => {
@@ -447,7 +447,7 @@ fn set_override_for_target(
     } else {
         // Package-level override: "namespace:package" = { path = "..." }
         for package in packages {
-            let key = format!("{}:{}", namespace, package);
+            let key = format!("{namespace}:{package}");
             overrides.insert(
                 key,
                 Override {
@@ -461,10 +461,10 @@ fn set_override_for_target(
 
 /// Download and extract HTTP tar.gz source
 async fn download_and_extract_http(url: &str) -> Result<PathBuf> {
-    let parsed_url = Url::parse(url).with_context(|| format!("invalid HTTP URL [{}]", url))?;
+    let parsed_url = Url::parse(url).with_context(|| format!("invalid HTTP URL [{url}]"))?;
 
     let tempdir = tempfile::tempdir()
-        .with_context(|| format!("failed to create temp dir for downloading [{}]", url))?
+        .with_context(|| format!("failed to create temp dir for downloading [{url}]"))?
         .keep();
 
     let output_path = tempdir.join("unpacked");
@@ -478,19 +478,19 @@ async fn download_and_extract_http(url: &str) -> Result<PathBuf> {
         .get(parsed_url)
         .send()
         .await
-        .with_context(|| format!("failed to download from URL [{}]", url))?;
+        .with_context(|| format!("failed to download from URL [{url}]"))?;
 
     let bytes = response
         .bytes()
         .await
-        .with_context(|| format!("failed to read response from URL [{}]", url))?;
+        .with_context(|| format!("failed to read response from URL [{url}]"))?;
 
     // Extract tar.gz
     let decoder = flate2::read::GzDecoder::new(&bytes[..]);
     let mut archive = tar::Archive::new(decoder);
     archive
         .unpack(&output_path)
-        .with_context(|| format!("failed to unpack archive from URL [{}]", url))?;
+        .with_context(|| format!("failed to unpack archive from URL [{url}]"))?;
 
     find_wit_folder_in_path(&output_path).await
 }
@@ -498,7 +498,7 @@ async fn download_and_extract_http(url: &str) -> Result<PathBuf> {
 /// Clone git repository and find WIT directory
 async fn clone_git_and_find_wit(url: &str) -> Result<PathBuf> {
     let tempdir = tempfile::tempdir()
-        .with_context(|| format!("failed to create temp dir for cloning [{}]", url))?
+        .with_context(|| format!("failed to create temp dir for cloning [{url}]"))?
         .keep();
 
     // Parse git URL to handle git+ prefix
@@ -521,11 +521,11 @@ async fn clone_git_and_find_wit(url: &str) -> Result<PathBuf> {
     let output = cmd
         .output()
         .await
-        .with_context(|| format!("failed to execute git clone command for [{}]", git_url))?;
+        .with_context(|| format!("failed to execute git clone command for [{git_url}]"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("Git clone failed for [{}]: {}", git_url, stderr);
+        bail!("Git clone failed for [{git_url}]: {stderr}");
     }
 
     debug!(url = git_url, "successfully cloned git repository");
