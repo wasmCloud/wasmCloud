@@ -43,6 +43,19 @@ function runStdout(cmd, args = []) {
   return execFileSync(cmd, args, { encoding: 'utf8' }).trim();
 }
 
+// Parse a Linux CPU mask string (`/sys/devices/system/cpu/{online,offline,
+// isolated,…}` format) into an integer count. Accepts `0-5`, `0,2-5`,
+// `0,2,4-7`, the empty string. Used for the online-CPU assertion below.
+function countCpuMask(mask) {
+  if (!mask) return 0;
+  let total = 0;
+  for (const part of mask.split(',')) {
+    const [lo, hi] = part.split('-').map(Number);
+    total += hi === undefined ? 1 : hi - lo + 1;
+  }
+  return total;
+}
+
 // 1. WASMCLOUD_BENCH_HOSTNAME must be exported, and we must be on that host.
 const expectedHostname = process.env.WASMCLOUD_BENCH_HOSTNAME;
 if (!expectedHostname) {
@@ -57,21 +70,29 @@ if (actualHostname !== expectedHostname) {
 }
 ok(`host: ${expectedHostname}`);
 
-// 2. nproc --all == 6 (nosmt active).
-//    Use `--all`, not bare `nproc`: bare `nproc` honors the caller's
-//    `sched_getaffinity` mask, which systemd (>= 240) narrows to
-//    "online CPUs minus isolcpus" for every service unit it manages —
-//    so inside the actions.runner service we'd see 5, not 6, and this
-//    check would mis-flag a correctly-configured host. `nproc --all`
-//    ignores affinity and reports the absolute online count, which is
-//    what we actually want to assert (`nosmt` collapsed 12 SMT → 6 cores).
-//    The isolcpus assertion (#4 below) covers the orthogonal concern of
+// 2. /sys/.../cpu/online == 6 cores (nosmt collapsed 12 SMT → 6 physical).
+//    None of the `nproc` variants are right here:
+//      - bare `nproc` honors `sched_getaffinity`, which systemd narrows
+//        to "online minus isolcpus" for every service unit it manages
+//        (returns 5 inside the actions.runner service even though the
+//        machine has 6 cores online).
+//      - `nproc --all` reads `/sys/devices/system/cpu/possible`, which
+//        is the kernel's max-CPU administrative cap — a function of
+//        `CONFIG_NR_CPUS` in the kernel build, not the hardware. The
+//        Ubuntu 6.8.0-117 kernel package reports 32 on a 6-core box.
+//    Sysfs `online` is the only one that tracks what's actually online,
+//    which is the signal we want for "did nosmt take effect". The
+//    isolcpus assertion (#4 below) covers the orthogonal concern of
 //    "is one core reserved".
-const nprocOut = parseInt(runStdout('nproc', ['--all']), 10);
-if (nprocOut !== EXPECTED_NPROC) {
-  fail(`expected ${EXPECTED_NPROC} online CPUs (nosmt); got ${nprocOut}`);
+const onlineMask = readTrim('/sys/devices/system/cpu/online');
+const onlineCount = countCpuMask(onlineMask);
+if (onlineCount !== EXPECTED_NPROC) {
+  fail(
+    `expected ${EXPECTED_NPROC} online CPUs (nosmt); ` +
+      `got ${onlineCount} (online mask: '${onlineMask}')`,
+  );
 }
-ok(`nproc --all: ${nprocOut}  (nosmt active)`);
+ok(`online CPUs: ${onlineCount}  (mask '${onlineMask}'; nosmt active)`);
 
 // 3. cpufreq governor == "performance" on every CPU.
 const governors = runStdout('sh', [
