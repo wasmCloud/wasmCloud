@@ -81,7 +81,7 @@ pub(crate) async fn clone_template(
         debug!("Removing .git directory from cloned repository");
         tokio::fs::remove_dir_all(&git_dir)
             .await
-            .context("Failed to remove .git directory")?;
+            .context("failed to remove .git directory")?;
     }
 
     Ok(())
@@ -129,7 +129,7 @@ pub(crate) fn copy_dir_recursive<'a>(
 
         let src_metadata = tokio::fs::metadata(src)
             .await
-            .with_context(|| format!("Failed to read source path: {src}", src = src.display()))?;
+            .with_context(|| format!("failed to read source path: {}", src.display()))?;
 
         if !src_metadata.is_dir() {
             bail!("Source is not a directory: {src}", src = src.display());
@@ -137,16 +137,16 @@ pub(crate) fn copy_dir_recursive<'a>(
 
         tokio::fs::create_dir_all(dst)
             .await
-            .with_context(|| format!("Failed to create directory: {dst}", dst = dst.display()))?;
+            .with_context(|| format!("failed to create directory: {}", dst.display()))?;
 
         let mut entries = tokio::fs::read_dir(src)
             .await
-            .with_context(|| format!("Failed to read directory: {src}", src = src.display()))?;
+            .with_context(|| format!("failed to read directory: {}", src.display()))?;
 
         while let Some(entry) = entries
             .next_entry()
             .await
-            .context("Failed to read directory entry")?
+            .context("failed to read directory entry")?
         {
             let path = entry.path();
             let name = entry.file_name();
@@ -161,14 +161,14 @@ pub(crate) fn copy_dir_recursive<'a>(
             let metadata = entry
                 .metadata()
                 .await
-                .context("Failed to read entry metadata")?;
+                .context("failed to read entry metadata")?;
 
             if metadata.is_dir() {
                 copy_dir_recursive(&path, &dst_path).await?;
             } else {
                 tokio::fs::copy(&path, &dst_path).await.with_context(|| {
                     format!(
-                        "Failed to copy file {} to {}",
+                        "failed to copy file {} to {}",
                         path.display(),
                         dst_path.display()
                     )
