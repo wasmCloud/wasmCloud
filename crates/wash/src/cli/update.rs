@@ -353,7 +353,7 @@ impl UpdateConfig {
             headers.insert(
                 AUTHORIZATION,
                 HeaderValue::from_str(&auth_header)
-                    .context("Failed to create authorization header")?,
+                    .context("failed to create authorization header")?,
             );
             debug!("Using GitHub token for authentication");
         }
@@ -361,6 +361,6 @@ impl UpdateConfig {
         Client::builder()
             .default_headers(headers)
             .build()
-            .context("Failed to create HTTP client")
+            .context("failed to create HTTP client")
     }
 }

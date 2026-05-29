@@ -1264,7 +1264,7 @@ async fn load_tls_config(
     let mut config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(cert_chain, key)
-        .context("Failed to create TLS configuration")?;
+        .context("failed to create TLS configuration")?;
 
     // Advertise both h2 and http/1.1 via ALPN
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];

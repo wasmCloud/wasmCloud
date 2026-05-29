@@ -541,7 +541,7 @@ where
 
     figment
         .extract()
-        .context("Failed to load wash configuration")
+        .context("failed to load wash configuration")
 }
 
 pub fn locate_project_config(project_dir: &Path) -> PathBuf {
@@ -616,7 +616,7 @@ pub async fn save_config(config: &Config, path: &Path) -> Result<()> {
     }
 
     let yaml_config =
-        serde_yaml_ng::to_string(config).context("Failed to serialize configuration")?;
+        serde_yaml_ng::to_string(config).context("failed to serialize configuration")?;
 
     tokio::fs::write(path, yaml_config)
         .await

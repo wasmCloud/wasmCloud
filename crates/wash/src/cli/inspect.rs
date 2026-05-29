@@ -45,12 +45,12 @@ impl CliCommand for InspectCommand {
 
         let component = decode_component(bytes.as_slice())
             .await
-            .context("Failed to decode component")?;
+            .context("failed to decode component")?;
 
         // Print the component WIT
         let wit = get_component_wit(component)
             .await
-            .context("Failed to print component WIT")?;
+            .context("failed to print component WIT")?;
 
         Ok(CommandOutput::ok(
             wit.to_owned(),
