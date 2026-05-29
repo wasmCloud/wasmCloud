@@ -169,7 +169,7 @@ impl std::fmt::Display for HostWorkload {
             HostWorkload::Starting => write!(f, "Starting"),
             HostWorkload::Running(_) => write!(f, "Running"),
             HostWorkload::Stopping => write!(f, "Stopping"),
-            HostWorkload::Error(err) => write!(f, "Error: {}", err),
+            HostWorkload::Error(err) => write!(f, "Error: {err}"),
         }
     }
 }

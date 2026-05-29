@@ -373,7 +373,7 @@ pub fn summarize_span_data(span: &wasi_tracing::SpanData) -> SpanSummary {
     let status = match &span.status {
         wasi_tracing::Status::Unset => "unset".to_string(),
         wasi_tracing::Status::Ok => "ok".to_string(),
-        wasi_tracing::Status::Error(msg) => format!("error: {}", msg),
+        wasi_tracing::Status::Error(msg) => format!("error: {msg}"),
     };
 
     SpanSummary {

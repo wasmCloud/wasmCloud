@@ -434,10 +434,7 @@ pub async fn pull_component(
         tokio::time::timeout(timeout, pull_future)
             .await
             .with_context(|| {
-                format!(
-                    "timeout pulling component from {reference} after {:?}",
-                    timeout
-                )
+                format!("timeout pulling component from {reference} after {timeout:?}")
             })?
             .with_context(|| format!("failed to pull component from {reference}"))?
     } else {
@@ -600,12 +597,7 @@ pub async fn push_component(
     let push_result = if let Some(timeout) = config.timeout {
         tokio::time::timeout(timeout, push_future)
             .await
-            .with_context(|| {
-                format!(
-                    "timeout pushing component to {reference} after {:?}",
-                    timeout
-                )
-            })?
+            .with_context(|| format!("timeout pushing component to {reference} after {timeout:?}"))?
             .with_context(|| format!("failed to push component to {reference}"))?
     } else {
         push_future

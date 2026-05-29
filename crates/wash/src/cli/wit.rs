@@ -194,15 +194,13 @@ fn validate_interface_ref(package: &str) -> Result<()> {
 
     if !name_part.contains(':') {
         bail!(
-            "Invalid package format '{}': must be in 'namespace:package/interface' format (e.g., 'wasi:http/types')",
-            name_part
+            "Invalid package format '{name_part}': must be in 'namespace:package/interface' format (e.g., 'wasi:http/types')"
         );
     }
 
     if !name_part.contains('/') {
         bail!(
-            "Invalid package format '{}': must include interface name in 'namespace:package/interface' format (e.g., 'wasi:http/types')",
-            name_part
+            "Invalid package format '{name_part}': must include interface name in 'namespace:package/interface' format (e.g., 'wasi:http/types')"
         );
     }
 
@@ -412,7 +410,7 @@ async fn handle_update(
 
         if lock_file.packages.len() == before_count {
             return Ok(CommandOutput::error(
-                format!("Package '{}' not found in lock file", package_name),
+                format!("Package '{package_name}' not found in lock file"),
                 None,
             ));
         }
@@ -435,7 +433,7 @@ async fn handle_update(
         handle_fetch(ctx, config, false).await?;
 
         Ok(CommandOutput::ok(
-            format!("Updated package: {}", package_name),
+            format!("Updated package: {package_name}"),
             Some(serde_json::json!({
                 "package": package_name,
                 "wit_dir": wit_dir.display().to_string(),
@@ -496,7 +494,7 @@ async fn handle_add(ctx: &CliContext, package: &str, config: &Config) -> Result<
     let world_wit_path = match find_world_wit_file(&wit_dir).await {
         Ok(path) => path,
         Err(e) => {
-            return Ok(CommandOutput::error(format!("{:#}", e), None));
+            return Ok(CommandOutput::error(format!("{e:#}"), None));
         }
     };
 
@@ -557,7 +555,7 @@ async fn handle_add(ctx: &CliContext, package: &str, config: &Config) -> Result<
 
                 if !has_more_imports {
                     // Insert after the last import
-                    new_lines.push(format!("{}{}", world_indent, import_line));
+                    new_lines.push(format!("{world_indent}{import_line}"));
                     inserted = true;
                 }
             } else if trimmed.starts_with("world ") && trimmed.ends_with('{') {
@@ -572,7 +570,7 @@ async fn handle_add(ctx: &CliContext, package: &str, config: &Config) -> Result<
 
                 if !has_imports {
                     // No imports yet, insert as first line in world block
-                    new_lines.push(format!("{}{}", world_indent, import_line));
+                    new_lines.push(format!("{world_indent}{import_line}"));
                     inserted = true;
                 }
             }
@@ -643,7 +641,7 @@ async fn handle_remove(_ctx: &CliContext, package: &str, config: &Config) -> Res
     let world_wit_path = match find_world_wit_file(&wit_dir).await {
         Ok(path) => path,
         Err(e) => {
-            return Ok(CommandOutput::error(format!("{:#}", e), None));
+            return Ok(CommandOutput::error(format!("{e:#}"), None));
         }
     };
 

@@ -30,17 +30,15 @@ impl CliCommand for InspectCommand {
                     .context("failed to read component file")?
             } else if path.is_dir() {
                 anyhow::bail!(
-                    "Directory '{}' specified. Please provide a file path.",
-                    component_reference
+                    "Directory '{component_reference}' specified. Please provide a file path."
                 );
             } else {
                 anyhow::bail!(
-                    "Path '{}' exists but is neither a file nor directory",
-                    component_reference
+                    "Path '{component_reference}' exists but is neither a file nor directory"
                 );
             }
         } else {
-            anyhow::bail!("Path '{}' does not exist locally", component_reference);
+            anyhow::bail!("Path '{component_reference}' does not exist locally");
         };
 
         let component = decode_component(bytes.as_slice())

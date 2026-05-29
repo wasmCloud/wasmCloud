@@ -1870,10 +1870,7 @@ fn topological_sort_components(
             .filter(|id| !result.contains(id))
             .map(|id| id.as_ref())
             .collect();
-        bail!(
-            "circular dependency detected among components: {:?}",
-            unprocessed
-        );
+        bail!("circular dependency detected among components: {unprocessed:?}");
     }
 
     Ok(result)
@@ -1898,8 +1895,8 @@ impl AsRef<str> for IdFlavor {
 impl std::fmt::Display for IdFlavor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IdFlavor::Component(id) => write!(f, "Component({})", id),
-            IdFlavor::Service(id) => write!(f, "Service({})", id),
+            IdFlavor::Component(id) => write!(f, "Component({id})"),
+            IdFlavor::Service(id) => write!(f, "Service({id})"),
         }
     }
 }

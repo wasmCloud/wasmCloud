@@ -133,7 +133,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
             Ok(entry) => Some(entry.to_vec()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => {
-                return Ok(Err(StoreError::Other(format!("Filesystem error: {}", e))));
+                return Ok(Err(StoreError::Other(format!("Filesystem error: {e}"))));
             }
         };
 
@@ -164,7 +164,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
             Ok(_) => Ok(Ok(())),
             Err(e) => {
                 tracing::error!("Filesystem error setting key: {}", e);
-                Ok(Err(StoreError::Other(format!("Filesystem error: {}", e))))
+                Ok(Err(StoreError::Other(format!("Filesystem error: {e}"))))
             }
         }
     }
@@ -191,7 +191,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
             Ok(_) => Ok(Ok(())),
             Err(e) => {
                 tracing::error!("Filesystem error deleting key: {}", e);
-                Ok(Err(StoreError::Other(format!("Filesystem error: {}", e))))
+                Ok(Err(StoreError::Other(format!("Filesystem error: {e}"))))
             }
         }
     }
@@ -242,7 +242,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
             Ok(i) => i,
             Err(e) => {
                 tracing::error!("Filesystem error getting key: {}", e);
-                return Ok(Err(StoreError::Other(format!("Filesystem error: {}", e))));
+                return Ok(Err(StoreError::Other(format!("Filesystem error: {e}"))));
             }
         };
 
@@ -311,7 +311,7 @@ impl<'a> bindings::wasi::keyvalue::atomics::Host for ActiveCtx<'a> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
             Err(e) => {
                 tracing::error!("Filesystem error getting key entry: {}", e);
-                return Ok(Err(StoreError::Other(format!("Filesystem error: {}", e))));
+                return Ok(Err(StoreError::Other(format!("Filesystem error: {e}"))));
             }
         };
 
@@ -321,7 +321,7 @@ impl<'a> bindings::wasi::keyvalue::atomics::Host for ActiveCtx<'a> {
             Ok(_) => Ok(Ok(new_value)),
             Err(e) => {
                 tracing::error!("Filesystem error putting key: {}", e);
-                Ok(Err(StoreError::Other(format!("Filesystem error: {}", e))))
+                Ok(Err(StoreError::Other(format!("Filesystem error: {e}"))))
             }
         }
     }
@@ -354,7 +354,7 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(e) => {
                     tracing::error!("JetStream error getting key: {}", e);
-                    Err(StoreError::Other(format!("JetStream error: {}", e)))
+                    Err(StoreError::Other(format!("JetStream error: {e}")))
                 }
             }
         }))
@@ -397,7 +397,7 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
                     Ok(_) => Ok(()),
                     Err(e) => {
                         tracing::error!("JetStream error putting key: {}", e);
-                        Err(StoreError::Other(format!("JetStream error: {}", e)))
+                        Err(StoreError::Other(format!("JetStream error: {e}")))
                     }
                 }
             },
@@ -438,7 +438,7 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
                 Ok(_) => Ok(()),
                 Err(e) => {
                     tracing::error!("JetStream error deleting key: {}", e);
-                    Err(StoreError::Other(format!("JetStream error: {}", e)))
+                    Err(StoreError::Other(format!("JetStream error: {e}")))
                 }
             }
         }))

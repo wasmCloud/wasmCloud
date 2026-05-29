@@ -76,8 +76,7 @@ impl CliCommand for NewCommand {
 
         if let Some(new_cmd) = template_config.new.and_then(|nc| nc.command)
             && ctx.request_confirmation(format!(
-                "Execute template setup command '{}'? This may modify the new project.",
-                new_cmd
+                "Execute template setup command '{new_cmd}'? This may modify the new project."
             ))?
         {
             run_new_command(&new_cmd, &output_dir).await?;

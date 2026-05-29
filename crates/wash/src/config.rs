@@ -590,7 +590,7 @@ fn load_config_file(file_path: &Path) -> Result<Figment> {
             figment = figment.merge(Toml::file_exact(file_path));
         }
         Some(ext) => {
-            bail!("Unsupported global config file extension: {}", ext);
+            bail!("Unsupported global config file extension: {ext}");
         }
         None => {
             bail!(
