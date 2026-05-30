@@ -46,19 +46,21 @@ cargo test --bin wash
 
 ## Project Structure
 
-The `wash` crate is organized as a single crate with both binary and library targets:
+This repository is a workspace. The `wash` CLI lives in `crates/wash`:
 
 ```text
-src/                # The wash binary
-└── main.rs
-crates/wash/src/
-├── cli/            # CLI structs and command handling
-│   ├── mod.rs
-│   └── <subcommand>.rs
-├── <subcommand>.rs # Reusable types and libraries for commands
-├── lib.rs          # Module exports
-├── config.rs       # Configuration management
-└── new.rs          # Project creation functionality
+crates/
+├── bench-tools/        # Benchmarking utilities
+├── wash/               # wash CLI crate
+│   └── src/
+│       ├── cli/        # CLI structs and command handling
+│       │   ├── mod.rs
+│       │   └── <subcommand>.rs
+│       ├── lib.rs      # Module exports
+│       ├── main.rs     # The wash binary entrypoint
+│       ├── config.rs   # Configuration management
+│       └── new.rs      # Project creation functionality
+└── wash-runtime/       # Runtime support used by wash
 ```
 
 ## Code Style and Conventions
