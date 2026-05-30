@@ -9,7 +9,7 @@ tool (
 )
 
 require (
-	connectrpc.com/connect v1.19.2
+	connectrpc.com/connect v1.20.0
 	github.com/distribution/reference v0.6.0
 	github.com/docker/cli v29.5.2+incompatible
 	github.com/goccy/go-yaml v1.19.2
