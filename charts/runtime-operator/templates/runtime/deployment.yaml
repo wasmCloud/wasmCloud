@@ -44,6 +44,12 @@ spec:
             secretName: {{ if and (.http.tls.certificate) (.http.tls.certificate.secretName) }}{{ .http.tls.certificate.secretName }}{{ else }}hostgroup-{{ .name }}-http-tls{{ end }}
         {{- end }}
         {{- end }}
+        {{- /* Optional pod volumes (e.g. ConfigMap / Secret mounts). Rendered
+               unconditionally — outside the global.tls.enabled guard above —
+               so they survive a TLS-off install. */}}
+        {{- with .volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       serviceAccountName: {{ include "runtime.serviceAccountName" $top }}
       {{- include "runtime-operator.imagePullSecrets" $top | nindent 6 }}
       containers:
@@ -58,6 +64,17 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            {{- /* Optional host env (appended after operator-managed vars).
+                   Standard k8s env shape — supports valueFrom secretKeyRef /
+                   configMapKeyRef. */}}
+            {{- with .env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- /* Optional envFrom (defensive — symmetric with .env above). */}}
+          {{- with .envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           args:
             {{- if .logLevel }}
             - "--log-level={{ .logLevel }}"
@@ -109,6 +126,12 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
+            {{- /* Optional host-container volumeMounts (pair with .volumes
+                   above). Rendered unconditionally so a TLS-off install still
+                   mounts user volumes. */}}
+            {{- with .volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- with .resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -118,6 +141,13 @@ spec:
             - name: http
               containerPort: {{ .http.port }}
               protocol: TCP
+            {{- end }}
+            {{- /* Optional additional container ports (e.g. metrics scrape).
+                   Do NOT re-list the http port — the chart renders it from
+                   `.http.port` above; a duplicate containerPort fails
+                   Deployment validation. */}}
+            {{- with .ports }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           securityContext:
             capabilities:
