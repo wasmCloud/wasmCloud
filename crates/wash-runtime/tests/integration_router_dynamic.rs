@@ -17,6 +17,8 @@
 //! - HTTP/1.0 request without a Host header returns 400 (RouteError::MissingHost).
 //! - Invalid hostnames in host-aliases are silently filtered; only valid ones route.
 //! - Two workloads bound to the same host both serve requests (HashSet routing).
+//! - Stopping a workload removes all of its routes — primary host and every
+//!   alias — so requests to any former alias return 404 after unbind.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -352,6 +354,44 @@ async fn test_dynamic_router_unknown_host_returns_404() -> Result<()> {
         reqwest::StatusCode::NOT_FOUND,
         "unknown host must map to RouteError::NoWorkloadForHost -> 404, got {status}"
     );
+
+    Ok(())
+}
+
+/// Stopping a workload must remove *all* of its routes — the primary host and
+/// every alias — not just the primary hostname. After unbind, a request to any
+/// former alias must map to `RouteError::NoWorkloadForHost` (404).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_dynamic_router_aliases_removed_on_unbind() -> Result<()> {
+    let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
+
+    let req = http_counter_request("primary.local", Some("alias-one.local,alias-two.local"));
+    let workload_id = req.workload_id.clone();
+    host.workload_start(req).await?;
+
+    let client = reqwest::Client::new();
+    let hostnames = ["primary.local", "alias-one.local", "alias-two.local"];
+
+    // Sanity check: the primary host and both aliases route while bound.
+    for hostname in hostnames {
+        assert!(
+            get_status(&client, addr, hostname).await?.is_success(),
+            "{hostname} should route while the workload is bound"
+        );
+    }
+
+    host.workload_stop(WorkloadStopRequest { workload_id })
+        .await?;
+
+    // After unbind, every former route — primary and aliases — must 404.
+    for hostname in hostnames {
+        let status = get_status(&client, addr, hostname).await?;
+        assert_eq!(
+            status,
+            reqwest::StatusCode::NOT_FOUND,
+            "{hostname} must be removed on unbind and return 404, got {status}"
+        );
+    }
 
     Ok(())
 }
