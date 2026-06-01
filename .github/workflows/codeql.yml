@@ -39,6 +39,11 @@ jobs:
         with:
           persist-credentials: false
 
+      # This job builds the whole workspace --all-targets and a CodeQL
+      # database on one runner; reclaim disk so the build isn't killed midway.
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+
       - name: Setup protoc
         # wash-runtime's build.rs invokes prost-build / tonic-build, which
         # needs protoc plus the well-known .proto includes on PATH. Matches
