@@ -84,12 +84,18 @@ pub struct StreamObjectNamesHandle {
 }
 
 /// Memory-based blobstore plugin
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct InMemoryBlobstore {
     /// Storage for all containers, keyed by store context ID
     storage: Arc<RwLock<HashMap<String, HashMap<String, ContainerData>>>>,
     /// The maximum size for objects stored in the blobstore
     max_object_size: usize,
+}
+
+impl Default for InMemoryBlobstore {
+    fn default() -> Self {
+        Self::new(None)
+    }
 }
 
 impl InMemoryBlobstore {
@@ -1023,6 +1029,12 @@ mod tests {
     fn test_custom_max_object_size() {
         let blobstore = InMemoryBlobstore::new(Some(512));
         assert_eq!(blobstore.max_object_size, 512);
+    }
+
+    #[test]
+    fn test_default_impl_matches_new() {
+        let blobstore = InMemoryBlobstore::default();
+        assert_eq!(blobstore.max_object_size, 1_000_000);
     }
 
     #[test]
