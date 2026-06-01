@@ -67,6 +67,15 @@ rm -rf "${CARGO_TARGET_DIR}/criterion" "${CARGO_TARGET_DIR}/gungraun"
 # manual partial run), the marker still bounds what gets emitted.
 touch "$marker"
 
+# Build the wasm fixtures the benches `include_bytes!`. Guarded on the
+# xtask dir because compare-bench.sh checks out arbitrary refs: refs that
+# predate the xtask crate build their fixtures during `cargo bench`
+# themselves, so the explicit step is skipped for them.
+if [ -d xtask ]; then
+  echo "building wasm test fixtures via xtask" | tee -a "$log"
+  cargo xtask build-fixtures 2>&1 | tee -a "$log"
+fi
+
 # gungraun: pin to the isolated CPU. The criterion-style benches are
 # multi-threaded (tokio + hyper) and would lose throughput under taskset,
 # so they run unpinned across the non-isolated cores.

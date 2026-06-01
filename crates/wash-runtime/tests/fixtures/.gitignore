@@ -1,7 +1,7 @@
 # Fixture WIT deps are populated at build time from the shared
-# p2-wit-deps/ and p3-wit-deps/ directories (see build.rs). The
-# shared dirs themselves are *not* matched by this pattern because
-# they don't contain a `wit/` subtree.
+# p2-wit-deps/ and p3-wit-deps/ directories (see `cargo xtask
+# build-fixtures` in /xtask). The shared dirs themselves are *not*
+# matched by this pattern because they don't contain a `wit/` subtree.
 */wit/deps/
 
 # Fixtures with local-only WIT worlds manage their own deps

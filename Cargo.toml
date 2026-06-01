@@ -5,6 +5,9 @@ members = [
     "crates/bench-tools",
     "crates/wash-runtime",
     "crates/wash",
+    # Repo task runner (`cargo xtask`). Deliberately excluded from
+    # default-members so normal builds/tests don't pull it in.
+    "xtask",
 ]
 
 [workspace.package]

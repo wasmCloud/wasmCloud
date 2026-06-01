@@ -13,7 +13,7 @@ Pull requests are welcome! The [good first issue][1] label is a great way to fin
 
 - **Rust** (latest stable version)
 - **Git**
-- **WebAssembly targets**: `wasm32-wasip2` (installed via `rustup target add wasm32-wasip2`)
+- **WebAssembly targets**: `wasm32-wasip2` and `wasm32-wasip1` (installed via `rustup target add wasm32-wasip2 wasm32-wasip1`) are both needed to build the `wash-runtime` wasm test fixtures.
 
 ### Building from Source
 
@@ -24,6 +24,16 @@ cargo build
 ```
 
 ### Running Tests
+
+The `wash-runtime` integration tests and benchmarks load precompiled wasm
+components from `crates/wash-runtime/tests/wasm/`. Build them once with the
+`xtask` task runner before running those tests (re-run it whenever you change
+a fixture under `crates/wash-runtime/tests/fixtures/`):
+
+```bash
+# Build the wasm test fixtures (writes crates/wash-runtime/tests/wasm/*.wasm)
+cargo xtask build-fixtures
+```
 
 ```bash
 # Run all tests

@@ -75,14 +75,19 @@ jobs:
           # fails to expand tracing::*, anyhow::*, and std macros like
           # vec!/format!, which tanks the "calls with resolved target"
           # quality metric. We deliberately do NOT set CARGO_TARGET_DIR as
-          # a job env: that env var propagates into any child `cargo build`
-          # invoked from a build script (e.g. wash-runtime's fixture
-          # builds), redirecting their outputs and breaking their
-          # post-build artifact lookups.
+          # a job env: that env var propagates into the child `cargo build`
+          # that `cargo xtask build-fixtures` runs in the nested fixtures
+          # workspace, redirecting its output and breaking xtask's
+          # post-build artifact lookup.
           config: |
             extraction:
               rust:
                 cargo_target_dir: ${{ github.workspace }}/target
+
+      # `cargo build --all-targets` compiles the wash-runtime test/bench
+      # targets, which `include_bytes!` the wasm fixtures. Build them first.
+      - name: Build test fixtures
+        run: cargo xtask build-fixtures
 
       - name: Build workspace
         run: cargo build --workspace --all-targets --locked

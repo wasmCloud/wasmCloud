@@ -94,6 +94,19 @@ wash-runtime provides three main abstractions:
 2. **Host**: Runtime environment with plugin management
 3. **Workload**: High-level API for managing component lifecycles
 
+## Testing
+
+The integration tests and benchmarks load precompiled wasm components from
+`tests/wasm/`. Build them once before running them:
+
+```bash
+# from the repo root
+cargo xtask build-fixtures
+```
+
+Re-run it after editing a fixture under [`tests/fixtures/`](./tests/fixtures/)
+(see that directory's README for details).
+
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](../../LICENSE) file for details.
