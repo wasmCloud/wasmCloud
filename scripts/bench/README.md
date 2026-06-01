@@ -329,9 +329,12 @@ The playbook installs (as `root` on the bench host):
   the CI runner uses its own workspace, see §6).
 - A **smoke build**:
   ```sh
+  cargo xtask build-fixtures   # benches include_bytes! the wasm fixtures
   cargo bench -p wash-runtime --features wasip3 --bench http_invoke --no-run
   ```
   to verify the bench binary compiles end-to-end. ~3 minutes cold.
+  (`run-bench.sh` runs `cargo xtask build-fixtures` for you; it's only
+  needed by hand for manual `cargo bench` invocations like this one.)
 
 Verify after the script:
 
@@ -589,6 +592,7 @@ GitHub":
 ```sh
 ssh -i ~/.ssh/hetzner_bench root@<WASMCLOUD_BENCH_HOST_IP> \
   '. $HOME/.cargo/env && cd /opt/wasmcloud && \
+   cargo xtask build-fixtures && \
    cargo bench -p wash-runtime --features wasip3 --bench http_invoke'
 ```
 

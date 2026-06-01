@@ -142,12 +142,13 @@ ulid = { optional = true, workspace = true, features = ["std"] }
 url = { workspace = true }
 webpki-roots = { workspace = true }
 
+# Proto codegen only. Wasm fixtures are built by `cargo xtask
+# build-fixtures` (see /xtask), which owns wit-component and the WASI
+# adapter provider.
 [build-dependencies]
 anyhow = { workspace = true, default-features = true }
 tonic-prost-build = { workspace = true, default-features = true }
 pbjson-build = { workspace = true, default-features = true }
-wasi-preview1-component-adapter-provider = "43"
-wit-component = { workspace = true, default-features = false }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

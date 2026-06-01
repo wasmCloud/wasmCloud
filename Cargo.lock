@@ -7429,7 +7429,6 @@ dependencies = [
  "url",
  "uuid",
  "wasi-graphics-context-wasmtime",
- "wasi-preview1-component-adapter-provider",
  "wasi-webgpu-wasmtime",
  "wasmtime",
  "wasmtime-wasi",
@@ -7469,9 +7468,9 @@ dependencies = [
 
 [[package]]
 name = "wasi-preview1-component-adapter-provider"
-version = "43.0.1"
+version = "45.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90e42a172c19dae1341c1586fc6aea8cd5159548fb761146a54f8a5ecd69b2a7"
+checksum = "f912a3f8ead075800ffaaa13cb978bbcaa359c427688a753b10cd2f1e01fdf28"
 
 [[package]]
 name = "wasi-webgpu-wasmtime"
@@ -9217,6 +9216,16 @@ name = "xml-rs"
 version = "0.8.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
+
+[[package]]
+name = "xtask"
+version = "2.2.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "wasi-preview1-component-adapter-provider",
+ "wit-component 0.248.0",
+]
 
 [[package]]
 name = "yaml-rust2"

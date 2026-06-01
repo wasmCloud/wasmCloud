@@ -1,0 +1,4 @@
+# `cargo xtask <task>` runs the repo task runner at /xtask. See the
+# cargo-xtask pattern: https://github.com/matklad/cargo-xtask
+[alias]
+xtask = "run --package xtask --"
