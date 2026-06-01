@@ -327,7 +327,7 @@ impl HostTcpSocketWithStore for WasiSockets {
 
             match socket_ref {
                 TcpSocket::Network(net) => {
-                    let listener = net.tcp_listener_arc().map_err(se)?.clone();
+                    let listener = net.tcp_listener_arc().map_err(se)?;
                     let family = net.address_family();
                     let options = net.non_inherited_options().clone();
                     ListenKind::Network {
@@ -337,7 +337,7 @@ impl HostTcpSocketWithStore for WasiSockets {
                     }
                 }
                 TcpSocket::Unspecified { net, .. } => {
-                    let listener = net.tcp_listener_arc().map_err(se)?.clone();
+                    let listener = net.tcp_listener_arc().map_err(se)?;
                     let options = net.non_inherited_options().clone();
                     let loopback_info = socket_ref.take_loopback_listen_rx().map_err(se)?;
                     ListenKind::Merged {

@@ -166,6 +166,11 @@ pub enum SocketAddrUse {
 }
 
 /// Convert our custom `util::ErrorCode` to the P3 bindings `ErrorCode`.
+///
+/// `util::ErrorCode` is a plain enum that carries no message payload, so
+/// `Unknown` maps to `Other(None)` and there is nothing to forward. Callers that
+/// have a meaningful message should construct `P3ErrorCode::Other(Some(..))`
+/// directly rather than routing through this helper.
 #[cfg(feature = "wasip3")]
 pub(crate) fn p3_error_code_from_util(
     error: util::ErrorCode,

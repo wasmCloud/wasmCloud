@@ -30,8 +30,17 @@ pub enum TcpEndpoint {
 pub struct TcpConn {
     pub local_address: SocketAddr,
     pub remote_address: SocketAddr,
-    pub rx: mpsc::UnboundedReceiver<(Bytes, OwnedSemaphorePermit)>,
-    pub tx: mpsc::UnboundedSender<(Bytes, OwnedSemaphorePermit)>,
+    /// Receiver for the incoming half of the connection.
+    ///
+    /// Wrapped in an `Option` so the receive stream can be taken exactly once;
+    /// a second take observes `None` and is rejected rather than handed a fresh,
+    /// already-disconnected channel.
+    pub rx: Option<mpsc::UnboundedReceiver<(Bytes, OwnedSemaphorePermit)>>,
+    /// Sender for the outgoing half of the connection.
+    ///
+    /// Wrapped in an `Option` for the same reason as `rx`: the send stream is
+    /// taken exactly once, matching the take-once semantics of network sockets.
+    pub tx: Option<mpsc::UnboundedSender<(Bytes, OwnedSemaphorePermit)>>,
 }
 
 impl TcpConn {
@@ -43,14 +52,14 @@ impl TcpConn {
             Self {
                 local_address,
                 remote_address,
-                rx: local_rx,
-                tx: local_tx,
+                rx: Some(local_rx),
+                tx: Some(local_tx),
             },
             Self {
                 local_address: remote_address,
                 remote_address: local_address,
-                rx: remote_rx,
-                tx: remote_tx,
+                rx: Some(remote_rx),
+                tx: Some(remote_tx),
             },
         )
     }
