@@ -55,8 +55,8 @@ impl TcpSocket {
                         super::util::ErrorCode::InvalidState,
                     ));
                 };
-                let rx = Arc::new(Mutex::new(Some(rx)));
-                let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
+                let rx = Arc::new(Mutex::new(rx));
+                let tx = Arc::new(std::sync::Mutex::new(tx));
                 // Ensure `check-write` allows more than `send_buffer_size` bytes to be written to
                 // make this assertion succeed:
                 // https://github.com/bytecodealliance/wasmtime/blob/b1c7887c801b62f7fb39e3bd916d8737b3043135/crates/test-programs/src/bin/p2_tcp_streams.rs#L96

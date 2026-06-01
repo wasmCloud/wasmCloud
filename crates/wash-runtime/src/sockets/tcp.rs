@@ -581,8 +581,11 @@ impl NetworkTcpSocket {
     }
 
     /// Start listening using P3 semantics (with implicit bind).
+    ///
+    /// Returns the shared listener so callers (and tests) can build accept
+    /// streams without a follow-up [`Self::tcp_listener_arc`] call.
     #[cfg(feature = "wasip3")]
-    pub(crate) fn listen_p3(&mut self) -> Result<(), ErrorCode> {
+    pub(crate) fn listen_p3(&mut self) -> Result<Arc<tokio::net::TcpListener>, ErrorCode> {
         let tokio_socket = match mem::replace(&mut self.tcp_state, TcpState::Closed) {
             TcpState::Bound(tokio_socket) => tokio_socket,
             TcpState::Default(tokio_socket) => {
@@ -599,11 +602,12 @@ impl NetworkTcpSocket {
 
         match tokio_socket.listen(self.listen_backlog_size) {
             Ok(listener) => {
+                let listener = Arc::new(listener);
                 self.tcp_state = TcpState::Listening {
-                    listener: Arc::new(listener),
+                    listener: Arc::clone(&listener),
                     pending_accept: None,
                 };
-                Ok(())
+                Ok(listener)
             }
             Err(err) => {
                 self.tcp_state = TcpState::Closed;
@@ -613,10 +617,13 @@ impl NetworkTcpSocket {
     }
 
     /// Get the TCP listener Arc (P3 only, for creating accept streams).
+    ///
+    /// Returns an owned clone of the `Arc` so callers don't have to clone it
+    /// themselves.
     #[cfg(feature = "wasip3")]
-    pub(crate) fn tcp_listener_arc(&self) -> Result<&Arc<tokio::net::TcpListener>, ErrorCode> {
+    pub(crate) fn tcp_listener_arc(&self) -> Result<Arc<tokio::net::TcpListener>, ErrorCode> {
         match &self.tcp_state {
-            TcpState::Listening { listener, .. } => Ok(listener),
+            TcpState::Listening { listener, .. } => Ok(Arc::clone(listener)),
             _ => Err(ErrorCode::InvalidState),
         }
     }
@@ -1375,6 +1382,7 @@ impl TcpSocket {
     }
 
     /// Take the loopback accept channel for P3 listen streaming.
+    ///
     /// Returns the receiver that yields incoming `TcpConn` connections.
     #[cfg(feature = "wasip3")]
     pub(crate) fn take_loopback_listen_rx(&mut self) -> Result<P3LoopbackListenInfo, ErrorCode> {
@@ -1386,15 +1394,16 @@ impl TcpSocket {
         take_loopback_listen_info(lo)
     }
 
-    /// Listen using P3 semantics (with implicit bind). For loopback, requires
-    /// the loopback network to register the listener.
+    /// Listen using P3 semantics (with implicit bind).
+    ///
+    /// For loopback, requires the loopback network to register the listener.
     #[cfg(feature = "wasip3")]
     pub(crate) fn listen_p3(
         &mut self,
         loopback: &mut super::loopback::Network,
     ) -> Result<(), ErrorCode> {
         match self {
-            Self::Network(socket) => socket.listen_p3(),
+            Self::Network(socket) => socket.listen_p3().map(|_| ()),
             Self::Loopback(socket) => {
                 socket.start_listen(loopback)?;
                 socket.finish_listen()
@@ -1407,21 +1416,21 @@ impl TcpSocket {
         }
     }
 
-    /// Take the send stream (P3 only). Returns the underlying stream or
-    /// channel for sending data.
+    /// Take the send stream (P3 only).
+    ///
+    /// Returns the underlying stream or channel for sending data.
     #[cfg(feature = "wasip3")]
     pub(crate) fn take_send_stream(&mut self) -> Result<P3SendStream, ErrorCode> {
         match self {
             Self::Network(socket) => socket.take_send_stream().map(P3SendStream::Network),
             Self::Loopback(socket) => {
-                if let super::loopback::TcpState::Connected { ref conn, .. } = socket.state {
+                if let super::loopback::TcpState::Connected { ref mut conn, .. } = socket.state {
+                    // Take the sender, leaving `None` so a second take fails.
+                    let tx = conn.tx.take().ok_or(ErrorCode::InvalidState)?;
                     let permits = Arc::new(tokio::sync::Semaphore::new(
                         socket.send_buffer_size as usize,
                     ));
-                    Ok(P3SendStream::Loopback {
-                        tx: conn.tx.clone(),
-                        permits,
-                    })
+                    Ok(P3SendStream::Loopback { tx, permits })
                 } else {
                     Err(ErrorCode::InvalidState)
                 }
@@ -1433,17 +1442,17 @@ impl TcpSocket {
         }
     }
 
-    /// Take the receive stream (P3 only). Returns the underlying stream or
-    /// channel for receiving data.
+    /// Take the receive stream (P3 only).
+    ///
+    /// Returns the underlying stream or channel for receiving data.
     #[cfg(feature = "wasip3")]
     pub(crate) fn take_receive_stream(&mut self) -> Result<P3ReceiveStream, ErrorCode> {
         match self {
             Self::Network(socket) => socket.take_receive_stream().map(P3ReceiveStream::Network),
             Self::Loopback(socket) => {
                 if let super::loopback::TcpState::Connected { ref mut conn, .. } = socket.state {
-                    // Swap out the receiver, replacing with a closed one
-                    let (_, dummy_rx) = tokio::sync::mpsc::unbounded_channel();
-                    let rx = mem::replace(&mut conn.rx, dummy_rx);
+                    // Take the receiver, leaving `None` so a second take fails.
+                    let rx = conn.rx.take().ok_or(ErrorCode::InvalidState)?;
                     Ok(P3ReceiveStream::Loopback(rx))
                 } else {
                     Err(ErrorCode::InvalidState)
@@ -1713,8 +1722,7 @@ mod tests {
         async fn test_take_send_stream_from_connected() {
             let mut socket = make_ipv4_socket();
             bind_socket(&mut socket);
-            socket.listen_p3().unwrap();
-            let listener = socket.tcp_listener_arc().unwrap().clone();
+            let listener = socket.listen_p3().unwrap();
             let local_addr = listener.local_addr().unwrap();
 
             let client = tokio::net::TcpStream::connect(local_addr).await.unwrap();
@@ -1745,8 +1753,7 @@ mod tests {
         async fn test_take_receive_stream_from_connected() {
             let mut socket = make_ipv4_socket();
             bind_socket(&mut socket);
-            socket.listen_p3().unwrap();
-            let listener = socket.tcp_listener_arc().unwrap().clone();
+            let listener = socket.listen_p3().unwrap();
             let local_addr = listener.local_addr().unwrap();
 
             let client = tokio::net::TcpStream::connect(local_addr).await.unwrap();
@@ -1848,8 +1855,8 @@ mod tests {
             let conn = loopback::TcpConn {
                 local_address: "127.0.0.1:8080".parse().unwrap(),
                 remote_address: "127.0.0.1:9090".parse().unwrap(),
-                rx: remote_rx,
-                tx: local_tx,
+                rx: Some(remote_rx),
+                tx: Some(local_tx),
             };
 
             let accepted = props.to_accepted_socket(conn);
@@ -1861,10 +1868,57 @@ mod tests {
                 loopback::TcpState::Connected { accepted: true, .. }
             ));
         }
+
+        #[test]
+        fn test_loopback_streams_can_only_be_taken_once() {
+            let props = LoopbackSocketProps {
+                listen_backlog_size: 128,
+                keep_alive_enabled: false,
+                keep_alive_idle_time: 0,
+                keep_alive_interval: 0,
+                keep_alive_count: 0,
+                hop_limit: 64,
+                receive_buffer_size: 4096,
+                send_buffer_size: 4096,
+                family: SocketAddressFamily::Ipv4,
+            };
+
+            let (local_tx, _local_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (_remote_tx, remote_rx) = tokio::sync::mpsc::unbounded_channel();
+            let conn = loopback::TcpConn {
+                local_address: "127.0.0.1:8080".parse().unwrap(),
+                remote_address: "127.0.0.1:9090".parse().unwrap(),
+                rx: Some(remote_rx),
+                tx: Some(local_tx),
+            };
+            let mut socket = TcpSocket::Loopback(props.to_accepted_socket(conn));
+
+            assert!(
+                socket.take_send_stream().is_ok(),
+                "first take_send_stream should succeed"
+            );
+            assert!(
+                matches!(socket.take_send_stream(), Err(ErrorCode::InvalidState)),
+                "second take_send_stream should fail"
+            );
+
+            assert!(
+                socket.take_receive_stream().is_ok(),
+                "first take_receive_stream should succeed"
+            );
+            assert!(
+                matches!(socket.take_receive_stream(), Err(ErrorCode::InvalidState)),
+                "second take_receive_stream should fail"
+            );
+        }
     }
 }
 
-/// Properties copied from a loopback TcpSocket for creating accepted sockets.
+/// Snapshot of a listening loopback [`loopback::TcpSocket`]'s configuration.
+///
+/// Captured when a listener is taken (see [`take_loopback_listen_info`]) so
+/// that each accepted connection can be seeded with the listener's options via
+/// [`LoopbackSocketProps::to_accepted_socket`].
 #[cfg(feature = "wasip3")]
 #[derive(Clone)]
 #[allow(dead_code)]
