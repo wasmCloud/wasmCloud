@@ -212,7 +212,9 @@ jobs:
             exit 1
           fi
           # Refresh Cargo.lock — `--workspace` only updates workspace member
-          # entries (verified empirically: 1 package locked, 79 deps unchanged).
+          # entries, leaving transitive deps pinned. It locks one entry per
+          # member (they all share the [workspace.package] version); the guard
+          # below confirms nothing outside the member set moved.
           cargo update --workspace
           # Defensive sanity check: confirm only workspace member entries
           # changed in Cargo.lock. If cargo ever expands this flag's scope,
@@ -224,9 +226,20 @@ jobs:
           # unchanged context and never appear as +/- in the diff.
           CHANGED_PKGS=$(git diff --unified=0 -- Cargo.lock \
             | sed -nE 's/^@@ .* @@ name = "([^"]+)".*$/\1/p' \
+            | grep -v '^$' \
             | sort -u || true)
-          # Workspace members in this repo: wash, wash-runtime.
-          UNEXPECTED=$(echo "${CHANGED_PKGS}" | grep -vE '^(wash|wash-runtime)?$' || true)
+          # Allowlist = the workspace members, derived from `cargo metadata`
+          # so this guard can't drift as crates are added to or removed from
+          # the workspace. (`--no-deps` restricts `.packages` to members.)
+          # All members share the single [workspace.package] version, so a
+          # version bump legitimately touches every one of their Cargo.lock
+          # entries; only a name outside this set is a real transitive bump.
+          MEMBERS=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[].name' \
+            | sort -u)
+          UNEXPECTED=$(comm -23 \
+            <(printf '%s\n' "${CHANGED_PKGS}") \
+            <(printf '%s\n' "${MEMBERS}") || true)
           if [[ -n "${UNEXPECTED}" ]]; then
             echo "cargo update --workspace touched non-workspace packages:" >&2
             echo "${UNEXPECTED}" >&2
