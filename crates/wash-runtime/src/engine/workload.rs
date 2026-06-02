@@ -2506,8 +2506,7 @@ mod tests {
         let result = topological_sort_components(&dependencies);
         assert!(
             result.is_err(),
-            "Should detect circular dependency: {:?}",
-            result
+            "Should detect circular dependency: {result:?}"
         );
     }
 

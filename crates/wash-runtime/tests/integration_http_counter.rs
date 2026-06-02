@@ -3,8 +3,6 @@
 //! Tests HTTP request handling, counter persistence, concurrent access,
 //! error handling, and plugin isolation.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use anyhow::{Context, Result};
 use std::{collections::HashMap, time::Duration};
 use tokio::time::timeout;

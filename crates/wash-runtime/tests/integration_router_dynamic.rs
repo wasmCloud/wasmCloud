@@ -2,7 +2,7 @@
 //! workloads by Host header (with optional comma-separated aliases).
 //!
 //! `DynamicRouter::route_incoming_request` uses `tokio::task::block_in_place`
-//! + `try_read`, so all tests run on the multi-thread runtime. Per-request
+//! with `try_read`, so all tests run on the multi-thread runtime. Per-request
 //! `timeout(...)` on individual HTTP calls guards against hangs.
 //!
 //! Covers:
@@ -17,8 +17,6 @@
 //! - HTTP/1.0 request without a Host header returns 400 (RouteError::MissingHost).
 //! - Invalid hostnames in host-aliases are silently filtered; only valid ones route.
 //! - Two workloads bound to the same host both serve requests (HashSet routing).
-
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::{Context, Result};
 use futures::future::join_all;

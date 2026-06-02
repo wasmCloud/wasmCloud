@@ -5,7 +5,6 @@
 //! exchange against a local rustls echo server started in-process.
 
 #![cfg(feature = "wasi-tls")]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::{Context, Result};
 use std::{collections::HashMap, time::Duration};

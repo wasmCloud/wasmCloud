@@ -4,6 +4,10 @@
 
 // Increase the default recursion limit
 #![recursion_limit = "256"]
+// A test asserts success by panicking on the error path; clippy's
+// allow-panic-in-tests only recognizes `#[test]`, not the `#[tokio::test]`
+// wrapper, so silence the restriction lint at the file level.
+#![allow(clippy::panic)]
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -195,7 +199,7 @@ world example {
 
     if !result.is_success() {
         let (msg, _) = result.render();
-        panic!("remove command should succeed, got error: {}", msg);
+        panic!("remove command should succeed, got error: {msg}");
     }
 
     // Verify removed from world.wit
@@ -324,8 +328,7 @@ async fn test_error_missing_world_wit() -> Result<()> {
     let (msg, _) = result.render();
     assert!(
         msg.contains("world") || msg.contains("WIT file"),
-        "error message should mention world or WIT file: {}",
-        msg
+        "error message should mention world or WIT file: {msg}"
     );
 
     Ok(())

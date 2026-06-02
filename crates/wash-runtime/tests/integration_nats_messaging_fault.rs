@@ -136,11 +136,13 @@ async fn copy_with_latency<R, W>(
             Ok(0) | Err(_) => break,
             Ok(n) => n,
         };
-        capture.lock().await.extend_from_slice(&buf[..n]);
+        // `n <= buf.len()` always holds for `read`; `get` keeps it panic-free.
+        let Some(chunk) = buf.get(..n) else { break };
+        capture.lock().await.extend_from_slice(chunk);
         if !latency.is_zero() {
             tokio::time::sleep(latency).await;
         }
-        if writer.write_all(&buf[..n]).await.is_err() {
+        if writer.write_all(chunk).await.is_err() {
             break;
         }
         let _ = writer.flush().await;
@@ -235,7 +237,7 @@ async fn setup(latency: Duration) -> Result<TestHarness> {
                 namespace: "wasmcloud".to_string(),
                 package: "messaging".to_string(),
                 interfaces: ["handler".to_string()].into_iter().collect(),
-                version: Some(semver::Version::parse("0.2.0").unwrap()),
+                version: Some(semver::Version::new(0, 2, 0)),
                 config: subscription_config,
                 name: None,
             }],

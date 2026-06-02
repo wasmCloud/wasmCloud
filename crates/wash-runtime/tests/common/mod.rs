@@ -1,6 +1,11 @@
 //! Shared helpers for wash-runtime integration tests.
 
 #![allow(dead_code)]
+// Shared builder helpers unwrap/expect on constant fixtures in non-`#[test]`
+// fns, which the clippy.toml in-tests allows don't cover. This module is
+// included by many test crates, so keep the allow self-contained here rather
+// than relying on every consumer to carry one.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 #[cfg(feature = "wasi-tls")]
 pub mod tls;
@@ -175,11 +180,11 @@ pub fn default_counter_resources() -> LocalResources {
 fn with_standard_plugins(
     builder: wash_runtime::host::HostBuilder,
 ) -> Result<wash_runtime::host::HostBuilder> {
-    Ok(builder
+    builder
         .with_plugin(Arc::new(InMemoryBlobstore::new(None)))?
         .with_plugin(Arc::new(InMemoryKeyValue::new()))?
         .with_plugin(Arc::new(TracingLogger::default()))?
-        .with_plugin(Arc::new(DynamicConfig::default()))?)
+        .with_plugin(Arc::new(DynamicConfig::default()))
 }
 
 /// Start a host with a "DevRouter" backed HTTP server and the standard plugin

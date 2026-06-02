@@ -1,5 +1,8 @@
 [toolchain]
-channel = "stable"
+# Pinned to an explicit stable so clippy is deterministic: a floating "stable"
+# silently turns CI red whenever a new toolchain ships new lints. Bump this in
+# a dedicated PR alongside any lint fixes the new toolchain requires.
+channel = "1.96.0"
 components = ["clippy", "rustfmt"]
 targets = [
     "wasm32-unknown-unknown",

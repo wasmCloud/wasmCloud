@@ -6,6 +6,11 @@
 //! 3. Verifying that the http-counter can use the blobstore-filesystem implementation
 //! 4. Testing the component resolution system that links them together
 
+// The test plugin's trait impl panics on an unexpected context to fail the test
+// loudly; that's in a trait method, not a `#[test]` fn, so the clippy.toml
+// in-tests allow doesn't cover it.
+#![allow(clippy::panic)]
+
 use anyhow::{Context, Result};
 use std::{
     collections::{HashMap, HashSet},
@@ -77,18 +82,13 @@ impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
             .get(&*self.component_id)
             .cloned();
 
-        if !per_component_info.is_some_and(|info| info.workload_id == &*self.workload_id) {
+        if per_component_info.is_none_or(|info| info.workload_id != *self.workload_id) {
             return Err(wasmtime::format_err!("workload ID mismatch"));
         }
 
         let prev_ctx_id = plugin.prev_ctx_id.lock().await.clone();
-        match (prev_ctx_id, &self.id) {
-            (Some(prev_ctx_id), ctx_id) => {
-                if prev_ctx_id == *ctx_id {
-                    panic!("same context");
-                }
-            }
-            (_, _) => {}
+        if prev_ctx_id.as_ref() == Some(&self.id) {
+            panic!("same context");
         }
 
         *plugin.prev_ctx_id.lock().await = Some(self.id.clone());
@@ -134,8 +134,7 @@ impl HostPlugin for CustomLogging {
             || !interface.interfaces.contains("logging")
         {
             anyhow::bail!(
-                "Expected exactly one interface: wasi:logging/logging, got: {:?}",
-                interfaces
+                "Expected exactly one interface: wasi:logging/logging, got: {interfaces:?}"
             );
         }
 
@@ -299,12 +298,11 @@ async fn test_inter_component_call() -> Result<()> {
     .context("Failed to make first request")?;
 
     let status = response.status();
-    println!("First Response Status: {}", status);
+    println!("First Response Status: {status}");
 
     assert!(
         status.is_success(),
-        "First request failed with status {}",
-        status,
+        "First request failed with status {status}",
     );
 
     Ok(())

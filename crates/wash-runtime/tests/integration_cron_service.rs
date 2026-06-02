@@ -84,30 +84,24 @@ async fn test_cron_service_integration() -> Result<()> {
         .expect("failed to read captured stderr");
 
     println!("\n=== Captured stderr ===");
-    println!("{}", output);
+    println!("{output}");
     println!("=====================\n");
 
     // Verify expected messages
     assert!(
         output.contains("Starting cron-service with 1 second intervals..."),
-        "Expected to find 'Starting cron-service with 1 second intervals...' in stderr.\nCaptured stderr:\n{}",
-        output
+        "Expected to find 'Starting cron-service with 1 second intervals...' in stderr.\nCaptured stderr:\n{output}"
     );
 
     // Check that "Hello from the cron-component!" appears at least 3 times
     let hello_count = output.matches("Hello from the cron-component!").count();
     assert!(
         hello_count >= 3,
-        "Expected at least 3 'Hello from the cron-component!' messages, but found {}.\nCaptured stderr:\n{}",
-        hello_count,
-        output
+        "Expected at least 3 'Hello from the cron-component!' messages, but found {hello_count}.\nCaptured stderr:\n{output}"
     );
 
     println!("✓ Found cron service start message");
-    println!(
-        "✓ Found {} cron-component messages (expected at least 3)",
-        hello_count
-    );
+    println!("✓ Found {hello_count} cron-component messages (expected at least 3)");
 
     Ok(())
 }

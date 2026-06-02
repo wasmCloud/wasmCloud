@@ -14,11 +14,11 @@
 //!
 //! The fixture reports the policy outcome via its own status, not the
 //! upstream's:
-//! - 200 OK          — request was permitted by policy and reached the
-//!                     outgoing handler (which the tests stub to a synthetic
-//!                     200 — see [`FakeOutgoingHandler`] — so the real network
-//!                     is never touched and runs are deterministic)
-//! - 403 Forbidden   — denied by the host's allowed_hosts policy
+//! - 200 OK — request was permitted by policy and reached the outgoing
+//!   handler (which the tests stub to a synthetic 200 — see
+//!   [`FakeOutgoingHandler`] — so the real network is never touched and runs
+//!   are deterministic)
+//! - 403 Forbidden — denied by the host's allowed_hosts policy
 //! - 502 Bad Gateway — any other client error from the fixture's perspective
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]

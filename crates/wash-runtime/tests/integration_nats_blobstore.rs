@@ -99,7 +99,7 @@ async fn setup() -> Result<TestHarness> {
                     namespace: "wasi".to_string(),
                     package: "http".to_string(),
                     interfaces: ["incoming-handler".to_string()].into_iter().collect(),
-                    version: Some(semver::Version::parse("0.2.2").unwrap()),
+                    version: Some(semver::Version::new(0, 2, 2)),
                     config: {
                         let mut config = HashMap::new();
                         config.insert("host".to_string(), "foo".to_string());
@@ -117,7 +117,9 @@ async fn setup() -> Result<TestHarness> {
                     ]
                     .into_iter()
                     .collect(),
-                    version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
+                    version: Some(
+                        semver::Version::parse("0.2.0-draft").expect("valid semver version"),
+                    ),
                     config: {
                         let mut config = HashMap::new();
                         config.insert("buckets".to_string(), "my-container-real".to_string());

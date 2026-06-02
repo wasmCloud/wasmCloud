@@ -540,7 +540,7 @@ mod tests {
         std::fs::write(&outside, "X=1\n").unwrap();
 
         let err = resolve_contained_path(Path::new("../outside.env"), &project).unwrap_err();
-        let msg = format!("{:#}", err);
+        let msg = format!("{err:#}");
         assert!(msg.contains("outside the project directory"), "{}", msg);
     }
 
@@ -565,7 +565,7 @@ mod tests {
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
         let handle = open_file_secure(&f).unwrap();
         let err = check_secret_file_perms(&handle, &f).unwrap_err();
-        assert!(format!("{:#}", err).contains("require 0600 or 0400"));
+        assert!(format!("{err:#}").contains("require 0600 or 0400"));
     }
 
     #[cfg(unix)]
@@ -619,7 +619,7 @@ mod tests {
             None,
         )
         .unwrap_err();
-        assert!(format!("{:#}", err).contains("missing"));
+        assert!(format!("{err:#}").contains("missing"));
     }
 
     #[test]
@@ -628,7 +628,7 @@ mod tests {
         let f = dir.path().join("a.env");
         std::fs::write(&f, "FOO=bar\nNOEQUALS\n").unwrap();
         let err = parse_env_file(open_file_secure(&f).unwrap(), &f).unwrap_err();
-        let msg = format!("{:#}", err);
+        let msg = format!("{err:#}");
         assert!(msg.contains("line 2"), "{}", msg);
         assert!(msg.contains("not KEY=VALUE"), "{}", msg);
     }
@@ -639,7 +639,7 @@ mod tests {
         let f = dir.path().join("a.env");
         std::fs::write(&f, "=value\n").unwrap();
         let err = parse_env_file(open_file_secure(&f).unwrap(), &f).unwrap_err();
-        assert!(format!("{:#}", err).contains("empty key"));
+        assert!(format!("{err:#}").contains("empty key"));
     }
 
     // SAFETY rationale for `std::env::{set,remove}_var` in tests below:
@@ -664,7 +664,7 @@ mod tests {
 
         unsafe { std::env::remove_var(&var) };
         let err = source.resolve("c", project.path()).unwrap_err();
-        assert!(format!("{:#}", err).contains(&var));
+        assert!(format!("{err:#}").contains(&var));
     }
 
     #[test]
@@ -676,7 +676,7 @@ mod tests {
         let var = format!("WASH_TEST_PREC_{}", uuid::Uuid::new_v4().simple());
 
         let f = project.path().join("a.env");
-        std::fs::write(&f, format!("{}=from_file\n", var)).unwrap();
+        std::fs::write(&f, format!("{var}=from_file\n")).unwrap();
 
         unsafe { std::env::set_var(&var, "from_env") };
 

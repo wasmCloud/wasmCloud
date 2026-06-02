@@ -716,31 +716,28 @@ mod tests {
     #[test]
     fn test_display() {
         let iface = create_interface("wasi", "http", &["incoming-handler"]);
-        assert_eq!(format!("{}", iface), "wasi:http/incoming-handler");
+        assert_eq!(format!("{iface}"), "wasi:http/incoming-handler");
 
         let iface_with_version =
             create_interface_with_version("wasi", "http", &["incoming-handler"], "0.2.0");
         assert_eq!(
-            format!("{}", iface_with_version),
+            format!("{iface_with_version}"),
             "wasi:http/incoming-handler@0.2.0"
         );
 
         let iface_no_interfaces = create_interface("wasi", "logging", &[]);
-        assert_eq!(format!("{}", iface_no_interfaces), "wasi:logging");
+        assert_eq!(format!("{iface_no_interfaces}"), "wasi:logging");
     }
 
     #[test]
     fn test_display_with_name() {
         let mut iface = create_interface("wasi", "keyvalue", &["store"]);
         iface.name = Some("cache".to_string());
-        assert_eq!(format!("{}", iface), "wasi:keyvalue [cache]/store");
+        assert_eq!(format!("{iface}"), "wasi:keyvalue [cache]/store");
 
         let mut iface_no_interfaces = create_interface("wasi", "keyvalue", &[]);
         iface_no_interfaces.name = Some("sessions".to_string());
-        assert_eq!(
-            format!("{}", iface_no_interfaces),
-            "wasi:keyvalue [sessions]"
-        );
+        assert_eq!(format!("{iface_no_interfaces}"), "wasi:keyvalue [sessions]");
     }
 
     #[test]
