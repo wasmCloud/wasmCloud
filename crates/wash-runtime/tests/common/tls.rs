@@ -111,7 +111,10 @@ pub async fn start_tls_echo_server() -> Result<EchoServer> {
                     match tls_stream.read(&mut buf).await {
                         Ok(0) => return,
                         Ok(n) => {
-                            received.extend_from_slice(&buf[..n]);
+                            // `n <= buf.len()` always holds for `read`; `get`
+                            // keeps it panic-free.
+                            let Some(chunk) = buf.get(..n) else { return };
+                            received.extend_from_slice(chunk);
                             if received.windows(2).any(|w| w == b"\r\n") {
                                 break;
                             }

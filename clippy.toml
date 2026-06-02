@@ -1,0 +1,9 @@
+# Test code is allowed to unwrap/expect/panic/index freely. The workspace
+# denies these restriction lints (see [workspace.lints.clippy] in Cargo.toml)
+# so production `src/` stays panic-free, but failing fast is fine in tests.
+# These knobs only relax code clippy identifies as a test, so `cargo clippy
+# --all-targets` is clean without weakening the production lint surface.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

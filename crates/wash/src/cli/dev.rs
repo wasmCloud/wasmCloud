@@ -996,7 +996,7 @@ mod tests {
             "no workload values should have been merged in"
         );
         assert_eq!(entry.config.get("USER_KEY").unwrap(), "user_value");
-        assert!(entry.config.get("WORKLOAD_KEY").is_none());
+        assert!(!entry.config.contains_key("WORKLOAD_KEY"));
     }
 
     #[test]

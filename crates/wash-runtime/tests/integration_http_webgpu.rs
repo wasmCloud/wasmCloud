@@ -147,17 +147,17 @@ async fn test_http_webgpu_integration() -> Result<()> {
     .context("Failed to make HTTP request")?;
 
     let status = response.status();
-    println!("HTTP Response Status: {}", status);
+    println!("HTTP Response Status: {status}");
 
     let response_text = response
         .text()
         .await
         .context("Failed to read response body")?;
-    println!("HTTP Response Body: {}", response_text);
+    println!("HTTP Response Body: {response_text}");
 
     // The webgpu component should now work with proper plugin binding
     println!("Webgpu component responded successfully");
-    assert!(status.is_success(), "Expected success, got {}", status);
+    assert!(status.is_success(), "Expected success, got {status}");
     assert!(
         !response_text.trim().is_empty(),
         "Expected response body content"
@@ -165,7 +165,7 @@ async fn test_http_webgpu_integration() -> Result<()> {
     // parse the numbers from the response
     let response_numbers = response_text
         .chars()
-        .filter(|s| s == &',' || s.is_digit(10))
+        .filter(|s| s == &',' || s.is_ascii_digit())
         .collect::<String>()
         .split(",")
         .map(|s| s.parse::<u32>().unwrap())

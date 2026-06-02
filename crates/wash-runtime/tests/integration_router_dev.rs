@@ -11,8 +11,6 @@
 //! - Concurrent reads racing a workload swap all resolve to a response (no
 //!   hangs, no panics from `try_read` contention).
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use anyhow::Result;
 use futures::future::join_all;
 use std::{collections::HashMap, time::Duration};

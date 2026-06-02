@@ -141,7 +141,7 @@ async fn test_http_blobstore_integration() -> Result<()> {
     .context("Failed to make HTTP request")?;
 
     let status = response.status();
-    println!("HTTP Response Status: {}", status);
+    println!("HTTP Response Status: {status}");
 
     let response_text = response
         .text()
@@ -151,7 +151,7 @@ async fn test_http_blobstore_integration() -> Result<()> {
 
     // The blobstore-filesystem component should now work with proper plugin binding
     println!("Blobstore-filesystem component responded successfully");
-    assert!(status.is_success(), "Expected success, got {}", status);
+    assert!(status.is_success(), "Expected success, got {status}");
     assert!(
         !response_text.trim().is_empty(),
         "Expected response body content"

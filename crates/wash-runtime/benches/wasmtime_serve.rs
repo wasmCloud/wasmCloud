@@ -457,15 +457,13 @@ async fn start_warm(flavor: Flavor) -> anyhow::Result<Warm> {
         .await?;
     anyhow::ensure!(
         warmup.status().is_success(),
-        "warmup failed for {:?}: {}",
-        flavor,
+        "warmup failed for {flavor:?}: {}",
         warmup.status()
     );
     let body = warmup.text().await?;
     anyhow::ensure!(
         body == flavor.expected_body(),
-        "unexpected warmup body for {:?}: {body:?}",
-        flavor
+        "unexpected warmup body for {flavor:?}: {body:?}"
     );
     Ok(Warm { server, client })
 }

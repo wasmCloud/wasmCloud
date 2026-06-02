@@ -41,7 +41,7 @@ impl<S: Subscriber> Layer<S> for SpanNameRecorder {
     fn on_new_span(&self, attrs: &Attributes<'_>, _id: &tracing::Id, _ctx: LayerContext<'_, S>) {
         self.names
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(attrs.metadata().name().to_string());
     }
 }
@@ -101,7 +101,7 @@ async fn wasi_blobstore_handlers_emit_namespaced_spans() -> Result<()> {
                     namespace: "wasi".to_string(),
                     package: "http".to_string(),
                     interfaces: ["incoming-handler".to_string()].into_iter().collect(),
-                    version: Some(semver::Version::parse("0.2.2").unwrap()),
+                    version: Some(semver::Version::new(0, 2, 2)),
                     config: {
                         let mut config = HashMap::new();
                         config.insert("host".to_string(), "foo".to_string());
@@ -119,7 +119,9 @@ async fn wasi_blobstore_handlers_emit_namespaced_spans() -> Result<()> {
                     ]
                     .into_iter()
                     .collect(),
-                    version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
+                    version: Some(
+                        semver::Version::parse("0.2.0-draft").expect("valid semver version"),
+                    ),
                     config: HashMap::new(),
                     name: None,
                 },

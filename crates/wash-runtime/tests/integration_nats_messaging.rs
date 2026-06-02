@@ -127,7 +127,7 @@ async fn setup() -> Result<TestHarness> {
                 namespace: "wasmcloud".to_string(),
                 package: "messaging".to_string(),
                 interfaces: ["handler".to_string()].into_iter().collect(),
-                version: Some(semver::Version::parse("0.2.0").unwrap()),
+                version: Some(semver::Version::new(0, 2, 0)),
                 config: subscription_config,
                 name: None,
             }],
