@@ -405,6 +405,7 @@ jobs:
       - check
       - lint
       - wash-image
+      - wash-image-wasip3
       - runtime-operator-e2e
       - canary-publish
       - canary-binaries
@@ -520,6 +521,33 @@ jobs:
           docker buildx imagetools inspect "ghcr.io/wasmcloud/wash:${STEPS_META_OUTPUTS_VERSION}"
         env:
           STEPS_META_OUTPUTS_VERSION: ${{ steps.meta.outputs.version }}
+
+  # wasip3 image variant. Builds wash with the `wasip3,wasi-tls` features
+  # (WASI Preview 3 compiled in) and publishes it as `canary-wasip3` /
+  # `sha-<full-sha>-wasip3`.
+  wash-image-wasip3:
+    needs:
+      - changes
+      - runtime-operator-e2e
+    if: |
+      always() &&
+      (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') &&
+      (((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main')) &&
+      needs.runtime-operator-e2e.result == 'success'
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/docker-build-push.yml
+    with:
+      image: ghcr.io/wasmcloud/wash
+      build-args: |
+        CARGO_FEATURES=wasip3,wasi-tls
+      # Push (and the manifest merge) only on main; PRs build to validate.
+      push: ${{ github.event_name != 'pull_request' }}
+      push-by-digest: ${{ github.event_name != 'pull_request' }}
+      tags: |
+        type=raw,value=canary-wasip3
+        type=sha,format=long,prefix=sha-,suffix=-wasip3
 
   # Canary matrix binary build. Runs on every release commit on main —
   # detected by `release-detect` as a Cargo.toml workspace version bump
