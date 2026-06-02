@@ -1,0 +1,32 @@
+# Backend workload is the leaf of the chain.
+#
+# Continues the trace exactly like the middle workload, but its outbound call
+# leaves the chain for `https://example.com`. The `traceparent` still rides
+# along on that request; example.com simply ignores it, which is the realistic
+# "trace context handed off to a service that doesn't participate" case.
+#
+# See chain/frontend/.wash/config.yaml for the shared-workspace build details.
+build:
+  command: cargo build --manifest-path ../../Cargo.toml --target wasm32-wasip2 --release
+  component_path: ../../target/wasm32-wasip2/release/otel_config.wasm
+
+wit:
+  skip_fetch: true
+
+dev:
+  address: 0.0.0.0:8002
+  wasi_blobstore_path: tmp/blobstore
+  wasi_keyvalue_path: tmp/keyvalue
+  wasi_otel: true
+  environment:
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:18889
+
+workload:
+  config:
+    # Leaf hop: leave the chain for a real upstream.
+    OUTBOUND_URL: https://example.com/
+    otel.resource.service.name: otel-chain-backend
+    otel.resource.deployment.environment: local
+    otel.resource.chain.position: "3-backend"
+  allowedHosts:
+    - example.com

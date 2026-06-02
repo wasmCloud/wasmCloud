@@ -117,6 +117,16 @@ pub fn initialize_observability(
 
     opentelemetry::global::set_meter_provider(meter_provider.clone());
 
+    // Register the W3C Trace Context propagator so the incoming-request path
+    // (`opentelemetry::global::get_text_map_propagator` in `host::http`) can
+    // parse the `traceparent` header into the OpenTelemetry context.
+    // Without this every workload roots its own trace instead of continuing the
+    // caller's. Registering it here is what lets a trace roll up across
+    // workload/host boundaries.
+    opentelemetry::global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
+
     // Return a shutdown function to flush providers on exit
     let shutdown_fn = move || {
         if let Err(e) = tracer_provider.shutdown() {

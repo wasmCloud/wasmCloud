@@ -7,6 +7,9 @@ build/
 # Wash dependencies
 wit/deps/
 
+# Per-workload local state written by the multi-workload chain demo.
+chain/*/tmp/
+
 # direnv local config: the `.envrc.example` template is checked in,
 # but the user-edited `.envrc` (with real secrets) must not be.
 .envrc
