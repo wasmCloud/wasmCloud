@@ -12,8 +12,12 @@ USER nonroot
 # copy source code
 COPY --chown=nonroot:nonroot . .
 
+# Optional comma-separated cargo feature list (e.g. "wasip3,wasi-tls").
+# Empty by default so the standard image stays on WASI Preview 2.
+ARG CARGO_FEATURES=""
+
 # build static binary
-RUN cargo build --release --bin wash
+RUN cargo build --release --bin wash ${CARGO_FEATURES:+--features ${CARGO_FEATURES}}
 
 # Release image
 FROM cgr.dev/chainguard/wolfi-base
