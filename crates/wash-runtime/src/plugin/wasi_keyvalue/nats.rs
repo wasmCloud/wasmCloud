@@ -75,6 +75,32 @@ impl NatsKeyValue {
         )];
         self.metrics.operations_total.add(1, &attributes);
     }
+
+    /// Get the JetStream KV bucket, creating it if it doesn't exist yet.
+    async fn get_or_create_bucket(
+        &self,
+        identifier: &str,
+    ) -> Result<async_nats::jetstream::kv::Store, String> {
+        match self.client.get_key_value(identifier).await {
+            Ok(kv) => {
+                tracing::debug!("Opened existing bucket in JetStream");
+                Ok(kv)
+            }
+            Err(e) => {
+                tracing::debug!("Bucket not found in JetStream({identifier}): {e}; creating it");
+                self.client
+                    .create_key_value(async_nats::jetstream::kv::Config {
+                        bucket: identifier.to_string(),
+                        ..Default::default()
+                    })
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to create bucket in JetStream({identifier}): {e}");
+                        "failed to create keyvalue bucket in JetStream".to_string()
+                    })
+            }
+        }
+    }
 }
 
 // Implementation for the store interface
@@ -91,17 +117,9 @@ impl<'a> bindings::wasi::keyvalue::store::Host for ActiveCtx<'a> {
         };
         plugin.record_operation("open");
 
-        let kv = match plugin.client.get_key_value(&identifier).await {
-            Ok(kv) => {
-                tracing::debug!("Opened existing bucket in JetStream");
-                kv
-            }
-            Err(e) => {
-                tracing::error!("Bucket not found in JetStream({identifier}): {e}");
-                return Ok(Err(StoreError::Other(
-                    "failed to get keyvalue from JetStream".to_string(),
-                )));
-            }
+        let kv = match plugin.get_or_create_bucket(&identifier).await {
+            Ok(kv) => kv,
+            Err(e) => return Ok(Err(StoreError::Other(e))),
         };
 
         let bucket = BucketHandle { kv };
