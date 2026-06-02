@@ -17,9 +17,14 @@ pub(crate) fn store_response_in_blobstore(body: &[u8]) -> Result<()> {
     let stream = outgoing
         .outgoing_value_write_body()
         .map_err(|()| anyhow!("failed to open blobstore output stream"))?;
-    stream
-        .blocking_write_and_flush(body)
-        .context("failed to write blob bytes")?;
+    // `blocking-write-and-flush` accepts at most 4096 bytes per call and traps
+    // on more, so chunk the body. Upstream responses in a workload-to-workload
+    // chain are easily larger than a single permit.
+    for chunk in body.chunks(4096) {
+        stream
+            .blocking_write_and_flush(chunk)
+            .context("failed to write blob bytes")?;
+    }
     drop(stream);
 
     container

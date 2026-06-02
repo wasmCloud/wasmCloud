@@ -1,0 +1,41 @@
+# Frontend workload is the trace entry point.
+#
+# `curl http://localhost:8000/` lands here. With no inbound `traceparent`,
+# this workload roots a fresh trace and its `handle-request` span becomes the
+# root the whole chain rolls up under. Its outbound call targets the middle
+# workload, carrying W3C `traceparent` on the wire so the trace continues
+# across the host boundary.
+#
+# All three chain workloads build the one shared crate in this Cargo workspace
+# into the same target dir, so cargo caches and only the first build does real
+# work. `wit.skip_fetch` keeps wash from fetching into this config-only
+# directory — the WIT lives next to the source and is fetched by a `wash build`
+# from the example root once (see the README).
+build:
+  command: cargo build --manifest-path ../../Cargo.toml --target wasm32-wasip2 --release
+  component_path: ../../target/wasm32-wasip2/release/otel_config.wasm
+
+wit:
+  skip_fetch: true
+
+dev:
+  address: 0.0.0.0:8000
+  wasi_blobstore_path: tmp/blobstore
+  wasi_keyvalue_path: tmp/keyvalue
+  wasi_otel: true
+  environment:
+    # Every workload exports to the same OTLP endpoint, so the collector
+    # stitches their spans into one trace. Matches the Aspire dashboard's
+    # gRPC ingest port (see the example README).
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:18889
+
+workload:
+  config:
+    # Verbatim outbound target: the next workload in the chain.
+    OUTBOUND_URL: http://localhost:8001/
+    otel.resource.service.name: otel-chain-frontend
+    otel.resource.deployment.environment: local
+    otel.resource.chain.position: "1-frontend"
+  allowedHosts:
+    # The middle workload runs on localhost; a bare host matches any port.
+    - localhost

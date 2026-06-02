@@ -42,16 +42,24 @@ fn build_app_config() -> AppConfig {
             entries.insert(k, v);
         }
     }
-    let outbound_host = entries
-        .get("OUTBOUND_HOST")
-        .map(String::as_str)
-        .unwrap_or(DEFAULT_OUTBOUND_HOST);
+    // `OUTBOUND_URL`, when set, is used verbatim. This lets a workload point at
+    // a sibling workload over `http://host:port/` (see the multi-workload
+    // roll-up demo in the README), where the bare-host + implicit-`https`
+    // shape of `OUTBOUND_HOST` doesn't fit. Otherwise fall back to
+    // `https://{OUTBOUND_HOST}/`.
+    let outbound_url = entries.get("OUTBOUND_URL").cloned().unwrap_or_else(|| {
+        let outbound_host = entries
+            .get("OUTBOUND_HOST")
+            .map(String::as_str)
+            .unwrap_or(DEFAULT_OUTBOUND_HOST);
+        format!("https://{outbound_host}/")
+    });
     let timeout_ms = entries
         .get("REQUEST_TIMEOUT_MS")
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS);
     AppConfig {
-        outbound_url: format!("https://{outbound_host}/"),
+        outbound_url,
         request_timeout: Duration::from_millis(timeout_ms),
         upstream_api_token: entries.get("UPSTREAM_API_TOKEN").cloned(),
     }

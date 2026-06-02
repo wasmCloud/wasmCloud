@@ -172,6 +172,85 @@ Open the dashboard at [http://localhost:18888](http://localhost:18888). You shou
   `http.server.response_body.size` gauge, both labelled by the Resource attributes from
   `workload.config`.
 
+## Multi-workload trace roll-up
+
+The single workload above already shows the two ingredients of a distributed
+trace: it continues an inbound trace (via `outer-span-context`) and propagates
+its own context outward (via the W3C `traceparent` header on its egress call).
+The [`chain/`](chain) directory wires three instances of *this same component*
+into a call graph so you can watch a request flow across workload and host
+boundaries and roll up under **one** trace:
+
+```
+curl :8000  ──►  frontend ──►  middle ──►  backend ──►  https://example.com
+              (chain/frontend) (chain/middle) (chain/backend)
+```
+
+Each hop is an independent workload and its own
+host, e.g. own `wash dev` process, with its own OTel `Resource` (`service.name` = `otel-chain-{frontend,middle,backend}`).
+They differ only in `wash dev` configuration; there is no per-workload code.
+Every workload points `OUTBOUND_URL` at the next one (the leaf, `backend`,
+leaves the chain for `https://example.com`) and exports to the same OTLP
+endpoint, so the collector stitches their spans into a single trace.
+
+### Run the chain
+
+1. Build the component once from the example root to fetch the WIT
+   dependencies. Each chain workload then builds the same crate in this Cargo
+   workspace, so after this first fetch cargo just reuses the cached build:
+
+   ```bash
+   wash build
+   ```
+
+2. Start an OTLP viewer (the [Aspire dashboard](#end-to-end-with-an-otlp-compatible-viewer)
+   `docker run` recipe above works) so the three workloads have somewhere to
+   export to.
+
+3. Launch the three workloads, each in its own terminal. Start from the leaf so
+   every hop's downstream is already listening:
+
+   ```bash
+   wash -C chain/backend dev    # :8002 → https://example.com
+   wash -C chain/middle dev     # :8001 → :8002
+   wash -C chain/frontend dev   # :8000 → :8001
+   ```
+
+4. Hit the entry point:
+
+   ```bash
+   curl http://localhost:8000/
+   ```
+
+In the trace viewer you'll see one trace whose root is the `frontend`
+workload's incoming-request span, with the `frontend → middle → backend` server
+spans nested in turn, and each workload's `outgoing http` / `blobstore write` /
+`keyvalue increment` child spans hanging off its `handle-request` span. Because
+every span records start and end times, the slowest hop in the chain stands out
+visually. You can use this to answer questions like "which workload is slow?"
+
+### How the context propagates
+
+There are two distinct propagation mechanisms at work:
+
+- **In-process (within one workload).** `handle-request` is the parent server
+  span; `outgoing http`, `blobstore write`, and `keyvalue increment` are child
+  client spans created under it by reusing the same trace ID and naming
+  `handle-request` as their parent. No headers are involved. This is ordinary
+  parent/child span construction inside the component.
+- **Across hosts (workload to workload).** On its outbound call a workload
+  injects a W3C `traceparent` header carrying the current trace ID, the
+  `outgoing http` span ID, and the sampling flag. On the receiving side
+  wash-runtime parses that header into the OpenTelemetry context before it
+  invokes the component, so the component's `outer-span-context` returns the
+  caller's span as its parent and continues the trace instead of rooting a new
+  one. The sampling decision rides along, so a `traceparent` that wasn't
+  sampled keeps the whole downstream chain out of the backend too.
+
+That second mechanism is why the trace stays unified across three separate
+hosts: the trace ID minted at `frontend` is the trace ID that every span in
+`middle` and `backend` carries.
+
 ### Demo: `allowedHosts` in action
 
 Edit `config/defaults.env` and change:

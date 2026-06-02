@@ -1,0 +1,32 @@
+# Middle workload is a downstream hop.
+#
+# Receives the frontend's request with a W3C `traceparent` header. wash-runtime
+# extracts it into the OTel context, so this workload's `outer-span-context`
+# returns the frontend's span. Its own `handle-request` span therefore nests
+# under the frontend's outbound span instead of starting a new trace. It then
+# calls the backend workload, propagating the trace one more hop.
+#
+# See chain/frontend/.wash/config.yaml for the shared-workspace build details.
+build:
+  command: cargo build --manifest-path ../../Cargo.toml --target wasm32-wasip2 --release
+  component_path: ../../target/wasm32-wasip2/release/otel_config.wasm
+
+wit:
+  skip_fetch: true
+
+dev:
+  address: 0.0.0.0:8001
+  wasi_blobstore_path: tmp/blobstore
+  wasi_keyvalue_path: tmp/keyvalue
+  wasi_otel: true
+  environment:
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:18889
+
+workload:
+  config:
+    OUTBOUND_URL: http://localhost:8002/
+    otel.resource.service.name: otel-chain-middle
+    otel.resource.deployment.environment: local
+    otel.resource.chain.position: "2-middle"
+  allowedHosts:
+    - localhost
