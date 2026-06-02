@@ -1,0 +1,28 @@
+# OSV-Scanner configuration.
+#
+# The advisories ignored below are "unmaintained crate" notices (RustSec
+# informational advisories) with no patched version available. They are pulled
+# in transitively and only appear in example, template, and test-fixture
+# lockfiles -- not in any shipped wasmCloud artifact. Each is blocked on an
+# upstream change we cannot make from this repository; see the reasons below.
+#
+# Note: the OpenSSF Scorecard "Vulnerabilities" check may query OSV directly and
+# might not honor these repo-local ignores. They are documented here regardless
+# so the accepted risk is auditable and visible to `osv-scanner` runs.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0384"
+# `instant` is unmaintained, with no fixed version. It is pulled in only on the
+# wasm target via wstd 0.6.6 -> futures-lite 1.x -> fastrand 1.x -> instant.
+# wstd 0.6.6 is the latest published release and pins `futures-lite = "1.12.0"`,
+# so the dependency cannot be removed until wstd migrates to futures-lite 2.x
+# upstream (futures-lite 2.0 / fastrand 2.0 dropped `instant`).
+reason = "Unmaintained-crate advisory, no fix; transitive (examples/templates only) via wstd 0.6.6 pinning futures-lite 1.x. Blocked on upstream wstd migration to futures-lite 2.x."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+# `paste` is unmaintained, with no fixed version. It appears only in the
+# crates/wash-runtime/tests/fixtures lockfile, pulled in via a pinned wgpu git
+# fork (wasi-gfx/wgpu) -> metal 0.27 -> paste. It cannot be bumped until that
+# fork updates.
+reason = "Unmaintained-crate advisory, no fix; transitive (test fixture only) via pinned wasi-gfx/wgpu fork -> metal -> paste. Blocked on upstream wgpu fork update."
