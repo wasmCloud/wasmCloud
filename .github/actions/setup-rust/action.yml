@@ -47,12 +47,26 @@ runs:
         # with the previous dtolnay/rust-toolchain input format.
         COMPONENTS="${COMPONENTS// /}"
         TARGETS="${TARGETS// /}"
+        # Install targets onto the named channel itself. Builds that run
+        # outside the repo (e.g. a template scaffolded into a temp dir) see no
+        # rust-toolchain.toml, so they use this default toolchain and need the
+        # targets here.
         rustup toolchain install "${TOOLCHAIN}" \
           --profile minimal \
           --component "${COMPONENTS}" \
           --target "${TARGETS}" \
           --no-self-update
         rustup default "${TOOLCHAIN}"
+        # Also add the targets to the toolchain rustup resolves *inside* this
+        # repo. A checked-in rust-toolchain.toml pins a specific channel and
+        # overrides `rustup default`, so in-repo cross builds use that pinned
+        # toolchain — not the one installed above. Without this, `cargo build
+        # --target` fails with a missing `core`/`std`. Run from the repo root,
+        # `rustup target add` honors the override and auto-installs the pinned
+        # toolchain if needed; it's a no-op when the target is already present.
+        if [ -n "${TARGETS}" ]; then
+          rustup target add ${TARGETS//,/ }
+        fi
 
     - name: Install nightly toolchain
       if: ${{ inputs.install-nightly == 'true' }}
