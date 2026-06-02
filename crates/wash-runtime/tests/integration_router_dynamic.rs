@@ -365,15 +365,17 @@ async fn test_dynamic_router_unknown_host_returns_404() -> Result<()> {
 async fn test_dynamic_router_aliases_removed_on_unbind() -> Result<()> {
     let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
 
-    let req = http_counter_request("primary.local", Some("alias-one.local,alias-two.local"));
+    let primary = "primary.local";
+    let aliases = ["alias-one.local", "alias-two.local"];
+
+    let req = http_counter_request(primary, Some(&aliases.join(",")));
     let workload_id = req.workload_id.clone();
     host.workload_start(req).await?;
 
     let client = reqwest::Client::new();
-    let hostnames = ["primary.local", "alias-one.local", "alias-two.local"];
 
     // Sanity check: the primary host and both aliases route while bound.
-    for hostname in hostnames {
+    for hostname in std::iter::once(primary).chain(aliases) {
         assert!(
             get_status(&client, addr, hostname).await?.is_success(),
             "{hostname} should route while the workload is bound"
@@ -384,7 +386,7 @@ async fn test_dynamic_router_aliases_removed_on_unbind() -> Result<()> {
         .await?;
 
     // After unbind, every former route — primary and aliases — must 404.
-    for hostname in hostnames {
+    for hostname in std::iter::once(primary).chain(aliases) {
         let status = get_status(&client, addr, hostname).await?;
         assert_eq!(
             status,
