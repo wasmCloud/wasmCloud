@@ -60,6 +60,23 @@ spec:
               mountPath: /operator-cert
               readOnly: true
           {{- end }}
+          ports:
+            - name: health
+              containerPort: 8082
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
           securityContext:
             capabilities:
               drop:
