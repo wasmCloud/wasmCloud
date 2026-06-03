@@ -16,12 +16,18 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statfsSync } from 'node:fs';
-import { hostname } from 'node:os';
+import { hostname, loadavg, platform } from 'node:os';
 
 const EXPECTED_NPROC = 6;
 const EXPECTED_GOVERNOR = 'performance';
 const MIN_FREE_BYTES = 5 * 1024 ** 3; // 5 GiB
 const MAX_LOAD1 = 1.0;
+// When the load is over MAX_LOAD1 at pre-flight it's almost always the
+// decaying tail of the previous bench (the release matrix runs them
+// back-to-back on this one host), not a rogue process. Poll for up to
+// LOAD_SETTLE_SECS. We typically see this fall off over ~60s.
+const LOAD_SETTLE_SECS = 240;
+const LOAD_POLL_SECS = 5;
 
 const isolatedCpu = process.env.WASMCLOUD_BENCH_ISOLATED_CPU ?? '5';
 const targetDir = process.env.CARGO_TARGET_DIR ?? '/var/lib/bench/target';
@@ -43,6 +49,15 @@ function runStdout(cmd, args = []) {
   return execFileSync(cmd, args, { encoding: 'utf8' }).trim();
 }
 
+// Block the synchronous pre-flight for `ms` without spawning a subprocess.
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function readLoad1() {
+  return loadavg()[0];
+}
+
 // Parse a Linux CPU mask string (`/sys/devices/system/cpu/{online,offline,
 // isolated,…}` format) into an integer count. Accepts `0-5`, `0,2-5`,
 // `0,2,4-7`, the empty string. Used for the online-CPU assertion below.
@@ -54,6 +69,13 @@ function countCpuMask(mask) {
     total += hi === undefined ? 1 : hi - lo + 1;
   }
   return total;
+}
+
+// 0. Linux only. Every check below reads /proc or /sys, and os.loadavg()
+//    returns [0, 0, 0] on Windows — which would silently sail past the
+//    load guard. Refuse outright rather than bench on a bogus baseline.
+if (platform() !== 'linux') {
+  fail(`unsupported platform '${platform()}'; the bench host must be Linux`);
 }
 
 // 1. WASMCLOUD_BENCH_HOSTNAME must be exported, and we must be on that host.
@@ -129,11 +151,23 @@ if (mdstat.includes('resync')) {
 }
 ok('mdraid: clean (no resync)');
 
-// 6. 1-min loadavg < 1.0. The runner agent itself is the only thing on
-//    this box; anything higher means something else is eating CPU.
-const load1 = parseFloat(readTrim('/proc/loadavg').split(/\s+/)[0]);
+// 6. 1-min loadavg must be under MAX_LOAD1 before the bench starts.
+//    Anything higher means CPU is being eaten and the numbers would be
+//    noisy. Because the release matrix runs benches back-to-back on this
+//    one host, a bench can launch into the previous bench's decaying load
+//    tail, so wait up to LOAD_SETTLE_SECS for load to drop rather than
+//    failing on the tail.
+let load1 = readLoad1();
 if (load1 > MAX_LOAD1) {
-  fail(`1-min loadavg=${load1} (something else is busy)`);
+  ok(`loadavg(1m)=${load1} > ${MAX_LOAD1}; waiting up to ${LOAD_SETTLE_SECS}s to settle`);
+  const deadline = Date.now() + LOAD_SETTLE_SECS * 1000;
+  while (load1 > MAX_LOAD1 && Date.now() < deadline) {
+    sleepSync(LOAD_POLL_SECS * 1000);
+    load1 = readLoad1();
+  }
+  if (load1 > MAX_LOAD1) {
+    fail(`1-min loadavg=${load1} after ${LOAD_SETTLE_SECS}s settle wait (something else is busy)`);
+  }
 }
 ok(`loadavg(1m): ${load1}`);
 
