@@ -47,6 +47,7 @@ spec:
             description: WorkloadReplicaSetSpec defines the desired state of WorkloadReplicaSet.
             properties:
               replicas:
+                default: 1
                 format: int32
                 type: integer
               template:
