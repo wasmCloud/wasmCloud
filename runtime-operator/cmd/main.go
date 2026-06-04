@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"flag"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -192,6 +193,19 @@ func main() {
 		operatorCfg.NatsOptions = append(operatorCfg.NatsOptions, nats.TLSHandshakeFirst())
 	}
 
+	// Surface NATS connection state.
+	operatorCfg.NatsOptions = append(operatorCfg.NatsOptions,
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			setupLog.Error(err, "nats disconnected")
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			setupLog.Info("nats reconnected", "url", nc.ConnectedUrl())
+		}),
+		nats.ClosedHandler(func(_ *nats.Conn) {
+			setupLog.Error(nil, "nats connection closed")
+		}),
+	)
+
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
 	// prevent from being vulnerable to the HTTP/2 Stream Cancellation and
@@ -295,7 +309,7 @@ func main() {
 
 	ctx := ctrl.SetupSignalHandler()
 
-	_, err = runtime_operator.NewEmbeddedOperator(ctx, mgr, operatorCfg)
+	embeddedOperator, err := runtime_operator.NewEmbeddedOperator(ctx, mgr, operatorCfg)
 	if err != nil {
 		setupLog.Error(err, "unable to create runtime operator")
 		os.Exit(1)
@@ -307,6 +321,15 @@ func main() {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
+	// Liveness must reflect NATS connectivity: a permanently closed connection
+	// means the operator can no longer observe host heartbeats, so the kubelet
+	// should restart the pod. Only the terminal closed state fails the probe —
+	// transient reconnecting stays healthy so routine NATS rollouts don't
+	// trigger restart storms.
+	if err := mgr.AddHealthzCheck("nats", natsLivenessCheck(embeddedOperator.NatsConn)); err != nil {
+		setupLog.Error(err, "unable to set up nats health check")
+		os.Exit(1)
+	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
@@ -316,6 +339,20 @@ func main() {
 	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
+	}
+}
+
+// natsLivenessCheck reports the operator as unhealthy only when the NATS
+// connection is permanently closed. A closed connection means the operator can
+// no longer observe host heartbeats, so Kubernetes should restart the pod. It
+// deliberately stays healthy while merely reconnecting so routine NATS rollouts
+// don't trigger restart storms.
+func natsLivenessCheck(nc *nats.Conn) healthz.Checker {
+	return func(_ *http.Request) error {
+		if nc.IsClosed() {
+			return errors.New("nats connection permanently closed")
+		}
+		return nil
 	}
 }
 

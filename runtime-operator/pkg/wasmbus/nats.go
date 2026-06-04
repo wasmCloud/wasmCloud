@@ -33,6 +33,12 @@ func NatsConnect(url string, options ...NatsOption) (*nats.Conn, error) {
 		nats.FlusherTimeout(30 * time.Second), // default is 1m
 		nats.Timeout(5 * time.Second),         // default is 2s
 		nats.ReconnectWait(1 * time.Second),   // default is 2s
+		// Reconnect forever. The nats.go default caps reconnection at 60
+		// attempts, after which the connection is closed permanently and any
+		// subscriptions (e.g. the operator's host heartbeat watch) go silently
+		// deaf with no recovery.
+		nats.MaxReconnects(-1),
+		nats.ReconnectJitter(100*time.Millisecond, 1*time.Second), // spread reconnect storms
 	}, options...)
 
 	nc, err := nats.Connect(url, opts...)
