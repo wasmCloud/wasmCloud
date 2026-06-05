@@ -166,6 +166,7 @@ impl Ctx {
     /// Get a plugin by its string ID and downcast to the expected type
     ///
     /// **Panics** if the plugin is not found or does not match the expected type.
+    #[allow(clippy::expect_used)] // Infallible accessor by contract; callers needing fallibility use `try_get_plugin`
     pub fn get_plugin<T: HostPlugin + 'static>(&self, plugin_id: &str) -> Arc<T> {
         self.try_get_plugin::<T>(plugin_id)
             .expect("plugin not found")

@@ -41,6 +41,10 @@ type BoundPluginWithInterfaces = (
     Vec<String>,
 );
 
+/// Shared slot holding the most recently instantiated component, keyed by its id.
+/// Used while resolving inter-component imports.
+type SharedInstanceSlot = Arc<RwLock<Option<(Arc<str>, Instance)>>>;
+
 /// Metadata associated with components and services within a workload.
 #[derive(Clone)]
 pub struct WorkloadMetadata {
@@ -814,7 +818,7 @@ impl ResolvedWorkload {
         let ty = component.component_type();
         let imports: Vec<_> = ty.imports(component.engine()).collect();
 
-        let instance: Arc<RwLock<Option<(Arc<str>, Instance)>>> = Arc::default();
+        let instance: SharedInstanceSlot = Arc::default();
         for (import_name, import_item) in imports.into_iter() {
             match import_item {
                 ComponentItem::ComponentInstance(import_instance_ty) => {
