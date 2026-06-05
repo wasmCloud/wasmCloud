@@ -329,7 +329,8 @@ jobs:
           # to 1" when the GitHub Release upload step runs them through.
           gh run download "${RUN_ID}" --dir ./artifacts \
             --pattern 'wash-x86_64-*' \
-            --pattern 'wash-aarch64-*'
+            --pattern 'wash-aarch64-*' \
+            --pattern 'wash-s390x-*'
           echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
           echo "--- downloaded ---"
           find ./artifacts -type f | sort
