@@ -814,7 +814,7 @@ impl ResolvedWorkload {
         let ty = component.component_type();
         let imports: Vec<_> = ty.imports(component.engine()).collect();
 
-        let instance: Arc<RwLock<Option<(String, Instance)>>> = Arc::default();
+        let instance: Arc<RwLock<Option<(Arc<str>, Instance)>>> = Arc::default();
         for (import_name, import_item) in imports.into_iter() {
             match import_item {
                 ComponentItem::ComponentInstance(import_instance_ty) => {

@@ -258,7 +258,7 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
 
     async fn drop(&mut self, rep: Resource<BucketHandle>) -> wasmtime::Result<()> {
         tracing::debug!(
-            workload_id = self.id,
+            workload_id = &*self.workload_id,
             resource_id = ?rep,
             "Dropping bucket resource"
         );
