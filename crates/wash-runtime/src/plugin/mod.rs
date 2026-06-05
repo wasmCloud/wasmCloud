@@ -69,15 +69,11 @@ impl<'a> WitInterfaces<'a> {
         package: &str,
         interfaces: &[&str],
     ) -> Option<&crate::wit::WitInterface> {
-        for interface in self.inner.iter() {
-            if interface.namespace == namespace
+        self.inner.iter().find(|interface| {
+            interface.namespace == namespace
                 && interface.package == package
                 && interfaces.iter().all(|i| interface.interfaces.contains(*i))
-            {
-                return Some(interface);
-            }
-        }
-        None
+        })
     }
 
     /// Returns `true` if the given namespace, package, and set of interfaces are contained within this collection of [`crate::wit::WitInterface`]s.
