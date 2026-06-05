@@ -63,7 +63,7 @@ pub struct PerComponentInfo {
 #[derive(Default)]
 pub struct CustomLogging {
     tracker: Mutex<HashMap<String, PerComponentInfo>>,
-    prev_ctx_id: Mutex<Option<String>>,
+    prev_ctx_id: Mutex<Option<Arc<str>>>,
 }
 
 impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
@@ -94,12 +94,12 @@ impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
         *plugin.prev_ctx_id.lock().await = Some(self.id.clone());
 
         match level {
-            Level::Critical => tracing::error!(id = &self.id, context, "{message}"),
-            Level::Error => tracing::error!(id = &self.id, context, "{message}"),
-            Level::Warn => tracing::warn!(id = &self.id, context, "{message}"),
-            Level::Info => tracing::info!(id = &self.id, context, "{message}"),
-            Level::Debug => tracing::debug!(id = &self.id, context, "{message}"),
-            Level::Trace => tracing::trace!(id = &self.id, context, "{message}"),
+            Level::Critical => tracing::error!(id = &*self.id, context, "{message}"),
+            Level::Error => tracing::error!(id = &*self.id, context, "{message}"),
+            Level::Warn => tracing::warn!(id = &*self.id, context, "{message}"),
+            Level::Info => tracing::info!(id = &*self.id, context, "{message}"),
+            Level::Debug => tracing::debug!(id = &*self.id, context, "{message}"),
+            Level::Trace => tracing::trace!(id = &*self.id, context, "{message}"),
         }
         Ok(())
     }
