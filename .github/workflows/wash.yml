@@ -603,6 +603,12 @@ jobs:
             artifact: wash-aarch64-unknown-linux-gnu
             runner: ubuntu-latest
             bin: wash
+          - target: s390x-unknown-linux-gnu
+            buildTarget: s390x-unknown-linux-gnu.2.17
+            buildCommand: cargo zigbuild
+            artifact: wash-s390x-unknown-linux-gnu
+            runner: ubuntu-latest
+            bin: wash
           - target: x86_64-unknown-linux-musl
             buildCommand: cargo zigbuild
             artifact: wash-x86_64-unknown-linux-musl

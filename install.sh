@@ -86,6 +86,7 @@ detect_platform() {
     case "$(uname -m)" in
         x86_64)  arch="x86_64" ;;
         arm64|aarch64) arch="aarch64" ;;
+        s390x)   arch="s390x" ;;
         *)       log_error "Unsupported architecture: $(uname -m)"; exit 1 ;;
     esac
 
