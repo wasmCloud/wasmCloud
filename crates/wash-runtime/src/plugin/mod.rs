@@ -55,12 +55,14 @@ pub mod wasmcloud_messaging;
 #[cfg(all(feature = "wasi-webgpu", not(target_os = "windows")))]
 pub mod wasi_webgpu;
 
+/// A wrapper around a [`std::collections::HashSet`] of [`crate::wit::WitInterface`] that provides convenience methods for looking up interfaces by namespace, package, and set of interfaces.
 #[derive(Debug)]
 pub struct WitInterfaces<'a> {
     pub inner: &'a std::collections::HashSet<crate::wit::WitInterface>,
 }
 
 impl<'a> WitInterfaces<'a> {
+    /// Returns the [`crate::wit::WitInterface`] that matches the given namespace, package, and set of interfaces, if one exists.
     pub fn get(
         &self,
         namespace: &str,
@@ -78,6 +80,7 @@ impl<'a> WitInterfaces<'a> {
         None
     }
 
+    /// Returns `true` if the given namespace, package, and set of interfaces are contained within this collection of [`crate::wit::WitInterface`]s.
     pub fn contains(&self, namespace: &str, package: &str, interfaces: &[&str]) -> bool {
         self.get(namespace, package, interfaces).is_some()
     }
