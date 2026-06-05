@@ -123,8 +123,8 @@ impl HostPlugin for CustomLogging {
         workload_handle: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        // Ensure exactly one interface: "wasi:logging/logging"
-        if interfaces.contains("wasi", "logging", &["logging"]) {
+        // Ensure the expected interface is present: "wasi:logging/logging"
+        if !interfaces.contains("wasi", "logging", &["logging"]) {
             anyhow::bail!(
                 "Expected exactly one interface: wasi:logging/logging, got: {interfaces:?}"
             );
