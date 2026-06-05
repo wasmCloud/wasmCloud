@@ -179,14 +179,14 @@ impl Ctx {
         self.plugins
             .get(plugin_id)
             .ok_or_else(|| wasmtime::format_err!("plugin {plugin_id} not found"))?
-            .downcast_ref()
-            .ok_or_else(|| {
+            .clone()
+            .downcast::<T>()
+            .map_err(|_| {
                 wasmtime::format_err!(
                     "failed to downcast plugin to type {}",
                     std::any::type_name::<T>()
                 )
             })
-            .cloned()
     }
 
     /// Create a new [`CtxBuilder`] to construct a [`Ctx`]
