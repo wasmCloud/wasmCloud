@@ -46,21 +46,46 @@ cargo test --bin wash
 
 ## Project Structure
 
-This repository is a workspace. The `wash` CLI lives in `crates/wash`:
+This repository is a workspace. The `wash` CLI lives in `crates/wash` and the core Wasm runtime it depends on lives in `crates/wash-runtime`:
 
 ```text
 crates/
-├── bench-tools/        # Benchmarking utilities
-├── wash/               # wash CLI crate
+├── bench-tools/            # Benchmarking utilities
+├── wash/                   # wash CLI crate
 │   └── src/
-│       ├── cli/        # CLI structs and command handling
+│       ├── cli/            # CLI structs and command handling
 │       │   ├── mod.rs
 │       │   └── <subcommand>.rs
-│       ├── lib.rs      # Module exports
-│       ├── main.rs     # The wash binary entrypoint
-│       ├── config.rs   # Configuration management
-│       └── new.rs      # Project creation functionality
-└── wash-runtime/       # Runtime support used by wash
+│       ├── lib.rs          # Module exports
+│       ├── main.rs         # The wash binary entrypoint
+│       ├── config.rs       # Configuration management
+│       └── new.rs          # Project creation functionality
+└── wash-runtime/           # Core Wasm runtime powering wash
+    └── src/
+        ├── engine/         # Wasmtime engine setup and execution context
+        │   ├── ctx.rs      # Store context (WASI, linking state)
+        │   ├── value.rs    # Runtime value types
+        │   └── workload.rs # Workload execution logic
+        ├── host/           # Host-side interface implementations
+        │   ├── allowed_hosts.rs        # Network allow-list enforcement
+        │   ├── http.rs / http_p3.rs    # HTTP outbound host (P2 and P3)
+        │   └── sysinfo.rs              # System information host
+        ├── plugin/         # WASI and wasmCloud capability plugins
+        │   ├── wasi_blobstore/         # wasi:blobstore implementation
+        │   ├── wasi_config/            # wasi:config implementation
+        │   ├── wasi_keyvalue/          # wasi:keyvalue implementation
+        │   ├── wasi_logging/           # wasi:logging implementation
+        │   ├── wasi_otel/              # OpenTelemetry WASI bridge
+        │   ├── wasi_webgpu/            # wasi:webgpu implementation
+        │   ├── wasmcloud_messaging/    # wasmCloud messaging capability
+        │   └── wasmcloud_postgres/     # wasmCloud Postgres capability
+        ├── sockets/        # WASI sockets host implementations (TCP/UDP/network)
+        ├── washlet/        # Washlet runner (embedded Wasm plugin host)
+        ├── lib.rs          # Crate root and module exports
+        ├── observability.rs # Tracing and metrics setup
+        ├── oci.rs          # OCI registry image pulling
+        ├── types.rs        # Shared runtime types
+        └── wit.rs          # WIT interface bindings
 ```
 
 ## Code Style and Conventions
