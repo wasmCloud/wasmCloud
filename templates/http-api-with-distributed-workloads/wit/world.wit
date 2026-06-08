@@ -8,5 +8,8 @@ world http-api {
 
 world task {
   import wasmcloud:messaging/consumer@0.2.0;
+  // Per-component config (workload defaults + this worker's overrides),
+  // read via wasi:config/store. See .wash/config.yaml.
+  import wasi:config/store@0.2.0-rc.1;
   export wasmcloud:messaging/handler@0.2.0;
 }

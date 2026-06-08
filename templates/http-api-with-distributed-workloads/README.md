@@ -50,8 +50,11 @@ The `worker` field determines the messaging subject (`tasks.{worker}`), allowing
 The transformed payload from the worker:
 
 ```
-H3110 W0r1d
+🤖 H3110 W0r1d
 ```
+
+The `🤖 ` prefix and aggressive leet substitution come from the worker's
+per-component config — see [Per-component configuration](#per-component-configuration).
 
 ### Example
 
@@ -68,3 +71,32 @@ curl -X POST http://localhost:8000/task \
   -H "Content-Type: application/json" \
   -d '{"payload": "Hello World", "worker": "leet"}'
 ```
+
+## Per-component configuration
+
+`.wash/config.yaml` shows how config is layered across a multi-component
+workload. The `workload:` block is the shared base.
+Each `dev.components` entry can override it on a per-key basis, mirroring the
+per-component `localResources` of a Kubernetes CRD `WorkloadDeployment`:
+
+```yaml
+dev:
+  components:
+    - name: task-leet
+      file: target/wasm32-wasip2/release/task_leet.wasm
+      config:                  # this worker's overrides
+        leet.mode: aggressive
+        leet.prefix: "🤖 "
+
+workload:
+  config:                      # shared defaults for every component
+    leet.mode: basic
+    leet.prefix: ""
+```
+
+The `task-leet` worker reads these via `wasi:config/store` (see
+`task-leet/src/lib.rs`): `leet.mode` toggles whether `l`/`t` are also
+substituted, and `leet.prefix` is prepended to each reply. Because the
+component's `config:` overrides the workload defaults, it runs in `aggressive`
+mode with the `🤖 ` prefix. Drop the per-component block and it falls back to
+the workload defaults (`basic`, no prefix → `H3llo W0rld`).

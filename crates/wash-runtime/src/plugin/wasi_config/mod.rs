@@ -48,7 +48,9 @@ type ConfigMap = HashMap<Arc<str>, HashMap<String, String>>;
 ///
 /// This plugin implements the WASI config interface, allowing components to
 /// retrieve configuration values and environment variables at runtime. Each
-/// component gets isolated access to its own configuration scope.
+/// component gets an isolated view: the workload-scoped `wasi:config`
+/// interface config layered with its own `LocalResources.config` (and, with
+/// `copy_environment`, its `LocalResources.environment`).
 ///
 /// Construct via [`DynamicConfig::builder`] (or [`Default::default`]) so new
 /// optional knobs land without breaking callers.
@@ -141,8 +143,15 @@ impl HostPlugin for DynamicConfig {
             extract_active_ctx,
         )?;
 
+        // Per-component view, later wins on key conflicts: interface
+        // config, then `LocalResources.config`, then (with
+        // `copy_environment`) the environment.
         let component_config = {
             let mut config_map = interface.config.clone();
+
+            for (key, value) in component_handle.local_resources().config.iter() {
+                config_map.insert(key.clone(), value.clone());
+            }
 
             if self.copy_environment {
                 for (key, value) in component_handle.local_resources().environment.iter() {

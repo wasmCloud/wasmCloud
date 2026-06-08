@@ -33,7 +33,7 @@ use anyhow::{Context as _, Result, bail};
 use tracing::{trace, warn};
 use wash_runtime::host::allowed_hosts::AllowedHost;
 
-use crate::config::{Config, ConfigSource, SecretSource, WorkloadConfig};
+use crate::config::{Config, ConfigSource, DevComponent, EnvironmentLayer, SecretSource};
 
 /// Resolved workload values ready to be applied to a runtime `LocalResources`.
 #[derive(Debug, Default, Clone)]
@@ -74,8 +74,9 @@ pub fn resolve_workload(
         return Ok(ResolvedWorkload::default());
     };
 
-    let environment = resolve_environment(
-        workload,
+    let environment = resolve_environment_layer(
+        workload.environment.as_ref(),
+        "workload",
         &config.config_sources,
         &config.secret_sources,
         project_dir,
@@ -86,7 +87,7 @@ pub fn resolve_workload(
     // YAML omitted `allowedHosts` (via `default_allow_all_hosts`), or the
     // user's explicit list (including an explicit empty list, which the
     // runtime treats as deny-all). Either way, pass through unchanged.
-    //Tthe substitution lives on the serde default, not here.
+    // The substitution lives on the serde default, not here.
     Ok(ResolvedWorkload {
         environment,
         config: workload.config.clone(),
@@ -94,18 +95,69 @@ pub fn resolve_workload(
     })
 }
 
-/// Builds the flat env-var map for a workload by walking
+/// Resolves a `dev.components` entry's overrides on top of the resolved
+/// workload-level `base`.
+///
+/// `environment` / `config` merge over the workload's, component wins on
+/// key conflicts. `allowedHosts`, when set, replaces the workload list
+/// (an explicit `[]` denies all egress); when omitted the workload list
+/// applies.
+///
+/// # Errors
+///
+/// Same failure modes as [`resolve_workload`], for the component's own
+/// `environment.configFrom` / `environment.secretFrom` references.
+pub fn resolve_component_workload(
+    base: &ResolvedWorkload,
+    component: &DevComponent,
+    config: &Config,
+    project_dir: &Path,
+    repo_root: Option<&Path>,
+) -> Result<ResolvedWorkload> {
+    let owner = format!("dev component '{}'", component.name);
+    let overrides = resolve_environment_layer(
+        component.environment.as_ref(),
+        &owner,
+        &config.config_sources,
+        &config.secret_sources,
+        project_dir,
+        repo_root,
+    )?;
+
+    let mut environment = base.environment.clone();
+    environment.extend(overrides);
+
+    let mut merged_config = base.config.clone();
+    merged_config.extend(component.config.clone());
+
+    let allowed_hosts = component
+        .allowed_hosts
+        .clone()
+        .unwrap_or_else(|| base.allowed_hosts.clone());
+
+    Ok(ResolvedWorkload {
+        environment,
+        config: merged_config,
+        allowed_hosts,
+    })
+}
+
+/// Builds the flat env-var map for one [`EnvironmentLayer`] by walking
 /// `environment.inline`, `environment.configFrom`, and
 /// `environment.secretFrom` in K8s `envFrom` order (inline → configFrom →
 /// secretFrom, later wins on key conflicts).
-fn resolve_environment(
-    workload: &WorkloadConfig,
+///
+/// `owner` names the declaring scope (e.g. `"workload"` or
+/// `"dev component 'hello'"`) in error messages.
+fn resolve_environment_layer(
+    env: Option<&EnvironmentLayer>,
+    owner: &str,
     configs: &BTreeMap<String, ConfigSource>,
     secrets: &BTreeMap<String, SecretSource>,
     project_dir: &Path,
     repo_root: Option<&Path>,
 ) -> Result<HashMap<String, String>> {
-    let Some(env) = workload.environment.as_ref() else {
+    let Some(env) = env else {
         return Ok(HashMap::new());
     };
 
@@ -115,10 +167,17 @@ fn resolve_environment(
     // then secretFrom. Later layers overwrite earlier on key conflicts.
     out.extend(env.config.clone());
 
-    apply_config_refs(&env.config_from, configs, project_dir, &mut out)
-        .context("failed to resolve workload.environment.configFrom")?;
-    apply_secret_refs(&env.secret_from, secrets, project_dir, repo_root, &mut out)
-        .context("failed to resolve workload.environment.secretFrom")?;
+    apply_config_refs(&env.config_from, owner, configs, project_dir, &mut out)
+        .with_context(|| format!("failed to resolve {owner} environment.configFrom"))?;
+    apply_secret_refs(
+        &env.secret_from,
+        owner,
+        secrets,
+        project_dir,
+        repo_root,
+        &mut out,
+    )
+    .with_context(|| format!("failed to resolve {owner} environment.secretFrom"))?;
 
     Ok(out)
 }
@@ -128,6 +187,7 @@ fn resolve_environment(
 /// a hard error so typos in `configFrom` fail loudly.
 fn apply_config_refs(
     refs: &[String],
+    owner: &str,
     catalog: &BTreeMap<String, ConfigSource>,
     project_dir: &Path,
     out: &mut HashMap<String, String>,
@@ -135,7 +195,7 @@ fn apply_config_refs(
     for name in refs {
         let Some(source) = catalog.get(name) else {
             bail!(
-                "workload references config '{name}' which is not defined in the top-level `configs:` block",
+                "{owner} references config '{name}' which is not defined in the top-level `configs:` block",
             );
         };
         let resolved = source.resolve(name, project_dir)?;
@@ -149,6 +209,7 @@ fn apply_config_refs(
 /// a hard error so typos in `secretFrom` fail loudly.
 fn apply_secret_refs(
     refs: &[String],
+    owner: &str,
     catalog: &BTreeMap<String, SecretSource>,
     project_dir: &Path,
     repo_root: Option<&Path>,
@@ -157,7 +218,7 @@ fn apply_secret_refs(
     for name in refs {
         let Some(source) = catalog.get(name) else {
             bail!(
-                "workload references secret '{name}' which is not defined in the top-level `secrets:` block",
+                "{owner} references secret '{name}' which is not defined in the top-level `secrets:` block",
             );
         };
         let resolved = source.resolve(name, project_dir, repo_root)?;
@@ -518,7 +579,7 @@ fn parse_env_file(file: File, path: &Path) -> Result<HashMap<String, String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::EnvironmentLayer;
+    use crate::config::WorkloadConfig;
     use tempfile::TempDir;
 
     #[test]
@@ -606,13 +667,10 @@ mod tests {
     fn missing_named_ref_errors() {
         let mut env = EnvironmentLayer::default();
         env.config_from.push("missing".into());
-        let workload = WorkloadConfig {
-            environment: Some(env),
-            ..Default::default()
-        };
         let project = TempDir::new().unwrap();
-        let err = resolve_environment(
-            &workload,
+        let err = resolve_environment_layer(
+            Some(&env),
+            "workload",
             &BTreeMap::new(),
             &BTreeMap::new(),
             project.path(),
@@ -709,16 +767,13 @@ mod tests {
         // disjoint marker key so a regression that silently drops a layer is
         // caught even when the conflicting key still gets a winning value.
         let project = TempDir::new().unwrap();
-        let workload = WorkloadConfig {
-            environment: Some(EnvironmentLayer {
-                config: HashMap::from([
-                    ("KEY".into(), "from_inline".into()),
-                    ("ONLY_INLINE".into(), "1".into()),
-                ]),
-                config_from: vec!["shared_cfg".into()],
-                secret_from: vec!["shared_sec".into()],
-            }),
-            ..Default::default()
+        let env = EnvironmentLayer {
+            config: HashMap::from([
+                ("KEY".into(), "from_inline".into()),
+                ("ONLY_INLINE".into(), "1".into()),
+            ]),
+            config_from: vec!["shared_cfg".into()],
+            secret_from: vec!["shared_sec".into()],
         };
         let configs = BTreeMap::from([(
             "shared_cfg".to_string(),
@@ -742,7 +797,15 @@ mod tests {
         )]);
 
         // The secret source has no `file:`, so no perm check fires.
-        let env = resolve_environment(&workload, &configs, &secrets, project.path(), None).unwrap();
+        let env = resolve_environment_layer(
+            Some(&env),
+            "workload",
+            &configs,
+            &secrets,
+            project.path(),
+            None,
+        )
+        .unwrap();
         assert_eq!(
             env.get("KEY").unwrap(),
             "from_secret",
@@ -843,6 +906,132 @@ mod tests {
             resolved.allowed_hosts,
             vec!["https://api.example.com".parse().unwrap()]
         );
+    }
+
+    #[test]
+    fn component_overrides_merge_over_workload_base() {
+        // environment / config: component entries win on key conflict, but
+        // workload-only keys survive the merge.
+        let base = ResolvedWorkload {
+            environment: HashMap::from([
+                ("LOG".into(), "debug".into()),
+                ("SHARED".into(), "from_workload".into()),
+            ]),
+            config: HashMap::from([
+                ("flag".into(), "off".into()),
+                ("base_only".into(), "1".into()),
+            ]),
+            allowed_hosts: vec![AllowedHost::Any],
+        };
+        let component = DevComponent {
+            environment: Some(EnvironmentLayer {
+                config: HashMap::from([("SHARED".into(), "from_component".into())]),
+                ..Default::default()
+            }),
+            config: HashMap::from([("flag".into(), "on".into())]),
+            ..DevComponent::new("sidecar", "sidecar.wasm")
+        };
+        let project = TempDir::new().unwrap();
+
+        let resolved =
+            resolve_component_workload(&base, &component, &Config::default(), project.path(), None)
+                .unwrap();
+
+        assert_eq!(resolved.environment.get("LOG").unwrap(), "debug");
+        assert_eq!(
+            resolved.environment.get("SHARED").unwrap(),
+            "from_component"
+        );
+        assert_eq!(resolved.config.get("flag").unwrap(), "on");
+        assert_eq!(resolved.config.get("base_only").unwrap(), "1");
+        // allowedHosts omitted on the component → workload list applies.
+        assert_eq!(resolved.allowed_hosts, vec![AllowedHost::Any]);
+    }
+
+    #[test]
+    fn component_allowed_hosts_replaces_workload_list() {
+        let base = ResolvedWorkload {
+            allowed_hosts: vec![AllowedHost::Any],
+            ..Default::default()
+        };
+        let project = TempDir::new().unwrap();
+
+        // Explicit list replaces (does not append to) the workload list.
+        let component = DevComponent {
+            allowed_hosts: Some(vec!["https://api.example.com".parse().unwrap()]),
+            ..DevComponent::new("locked", "locked.wasm")
+        };
+        let resolved =
+            resolve_component_workload(&base, &component, &Config::default(), project.path(), None)
+                .unwrap();
+        assert_eq!(
+            resolved.allowed_hosts,
+            vec!["https://api.example.com".parse().unwrap()]
+        );
+
+        // Explicit empty list replaces too — deny-all for this component
+        // even though the workload allows everything.
+        let component = DevComponent {
+            allowed_hosts: Some(vec![]),
+            ..DevComponent::new("sealed", "sealed.wasm")
+        };
+        let resolved =
+            resolve_component_workload(&base, &component, &Config::default(), project.path(), None)
+                .unwrap();
+        assert!(resolved.allowed_hosts.is_empty());
+    }
+
+    #[test]
+    fn component_env_refs_resolve_and_missing_ref_names_component() {
+        // A component's environment.configFrom resolves against the same
+        // top-level `configs:` catalog as the workload's...
+        let config = Config {
+            config_sources: BTreeMap::from([(
+                "sidecar_cfg".to_string(),
+                ConfigSource {
+                    inline: HashMap::from([("FROM_CATALOG".into(), "yes".into())]),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        let component = DevComponent {
+            environment: Some(EnvironmentLayer {
+                config_from: vec!["sidecar_cfg".into()],
+                ..Default::default()
+            }),
+            ..DevComponent::new("sidecar", "sidecar.wasm")
+        };
+        let project = TempDir::new().unwrap();
+        let resolved = resolve_component_workload(
+            &ResolvedWorkload::default(),
+            &component,
+            &config,
+            project.path(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(resolved.environment.get("FROM_CATALOG").unwrap(), "yes");
+
+        // ...and a missing reference names the component in the error.
+        let component = DevComponent {
+            environment: Some(EnvironmentLayer {
+                config_from: vec!["missing".into()],
+                ..Default::default()
+            }),
+            ..DevComponent::new("sidecar", "sidecar.wasm")
+        };
+        let err = resolve_component_workload(
+            &ResolvedWorkload::default(),
+            &component,
+            &Config::default(),
+            project.path(),
+            None,
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("dev component 'sidecar'"), "{}", msg);
+        assert!(msg.contains("missing"), "{}", msg);
     }
 
     #[test]

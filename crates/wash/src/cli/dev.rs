@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    path::Path,
     sync::Arc,
 };
 
@@ -24,7 +25,7 @@ use crate::{
     cli::{CliCommand, CliContext, CommandOutput, component_build::build_dev_component},
     config::{Config, load_config},
     wit::WitConfig,
-    workload::{ResolvedWorkload, resolve_workload},
+    workload::{ResolvedWorkload, resolve_component_workload, resolve_workload},
 };
 
 /// Start a development server for a Wasm component
@@ -76,11 +77,10 @@ impl CliCommand for DevCommand {
             .with_engine(engine)
             .with_meters(Meters::new(ctx.enable_meters()));
 
-        // Enable wasi config. `copy_environment = true` causes the plugin to
-        // surface every entry of `LocalResources.environment` via
-        // `wasi:config/store::get`, so values from `workload.environment` are
-        // visible to the component as both env vars and wasi:config entries
-        // without further plumbing.
+        // Enable wasi config. `copy_environment = true` surfaces each
+        // component's `LocalResources.environment` via `wasi:config/store`,
+        // so resolved env vars are visible as both env vars and wasi:config
+        // entries without further plumbing.
         host_builder = host_builder.with_plugin(Arc::new(
             plugin::wasi_config::DynamicConfig::builder()
                 .copy_environment(true)
@@ -252,8 +252,14 @@ impl CliCommand for DevCommand {
         // gitignored-secret warning.
         let resolved_workload = resolve_workload(&config, project_dir, Some(project_dir))
             .context("failed to resolve workload-level configuration")?;
-        let workload =
-            create_workload(&host, &config, wasm_bytes.into(), &resolved_workload).await?;
+        let workload = create_workload(
+            &host,
+            &config,
+            project_dir,
+            wasm_bytes.into(),
+            &resolved_workload,
+        )
+        .await?;
         // Running workload ID for reloads
         let workload_id = reload_component(host.clone(), &workload, None).await?;
 
@@ -291,22 +297,26 @@ impl CliCommand for DevCommand {
     }
 }
 
-/// Loaded inputs for [`build_workload`]. Bundles a component's raw bytes
-/// with its already-extracted WIT interface set so the pure assembly step
-/// has everything it needs without further I/O or host calls.
+/// Loaded inputs for [`build_workload`]: a component's raw bytes, its
+/// extracted WIT interface set, and its resolved workload values (workload
+/// base merged with the component's overrides), so the pure assembly step
+/// needs no further I/O or host calls.
 struct LoadedComponent {
     name: String,
     bytes: Bytes,
     interfaces: HashSet<WitInterface>,
+    workload: ResolvedWorkload,
 }
 
 /// Thin wrapper around [`build_workload`]: extracts dev-component
-/// interfaces, loads sidecar bytes + interfaces, and (when configured)
-/// loads the service-file bytes. All workload-construction logic lives in
+/// interfaces, loads sidecar bytes + interfaces, resolves each sidecar's
+/// overrides over the workload-level base, and (when configured) loads the
+/// service-file bytes. All workload-construction logic lives in
 /// `build_workload`.
 async fn create_workload(
     host: &Host,
     config: &Config,
+    project_dir: &Path,
     bytes: Bytes,
     resolved_workload: &ResolvedWorkload,
 ) -> anyhow::Result<Workload> {
@@ -329,10 +339,19 @@ async fn create_workload(
         let interfaces = host
             .intersect_interfaces(&comp_bytes)
             .context("failed to extract component interfaces")?;
+        // Errors already name the component.
+        let workload = resolve_component_workload(
+            resolved_workload,
+            dev_component,
+            config,
+            project_dir,
+            Some(project_dir),
+        )?;
         sidecars.push(LoadedComponent {
             name: dev_component.name.clone(),
             bytes: Bytes::from(comp_bytes),
             interfaces,
+            workload,
         });
     }
 
@@ -364,12 +383,12 @@ async fn create_workload(
 /// vs component branch, volume wiring, and the wasi:config injection (via
 /// [`build_workload_host_interfaces`]).
 ///
-/// Per-component workload values (`environment`, `config`, `allowed_hosts`)
-/// land on the dev component when `dev.service = false`, or on the service
-/// when `dev.service = true`. Sidecars in `dev.components` and a
-/// `service_file_bytes`-loaded sidecar service get default `LocalResources`.
-/// Workload-level decisions (notably the `wasi:config` interface injection)
-/// consider every component's imports, including sidecars.
+/// Workload values (`environment`, `config`, `allowed_hosts`) land on every
+/// component and service: the dev component and any service carry the
+/// workload-level values; each `dev.components` sidecar carries its own
+/// pre-merged values from [`create_workload`]. Workload-level decisions
+/// (notably the `wasi:config` interface injection) consider every
+/// component's imports, including sidecars.
 fn build_workload(
     dev_config: &crate::config::DevConfig,
     bytes: Bytes,
@@ -408,16 +427,11 @@ fn build_workload(
         &resolved_workload.config,
     );
 
-    let dev_local_resources = || LocalResources {
+    let local_resources_for = |w: &ResolvedWorkload| LocalResources {
         volume_mounts: volume_mounts.clone(),
-        environment: resolved_workload.environment.clone(),
-        config: resolved_workload.config.clone(),
-        allowed_hosts: resolved_workload.allowed_hosts.clone().into(),
-        ..Default::default()
-    };
-
-    let default_local_resources = || LocalResources {
-        volume_mounts: volume_mounts.clone(),
+        environment: w.environment.clone(),
+        config: w.config.clone(),
+        allowed_hosts: w.allowed_hosts.clone().into(),
         ..Default::default()
     };
 
@@ -428,14 +442,14 @@ fn build_workload(
             bytes,
             digest: None,
             max_restarts: 0,
-            local_resources: dev_local_resources(),
+            local_resources: local_resources_for(resolved_workload),
         })
     } else {
         components.push(Component {
             name: "wash-dev-component".to_string(),
             bytes,
             digest: None,
-            local_resources: dev_local_resources(),
+            local_resources: local_resources_for(resolved_workload),
             pool_size: -1,
             max_invocations: -1,
         });
@@ -445,7 +459,7 @@ fn build_workload(
                 bytes: service_bytes,
                 digest: None,
                 max_restarts: 0,
-                local_resources: default_local_resources(),
+                local_resources: local_resources_for(resolved_workload),
             });
         }
     }
@@ -455,7 +469,7 @@ fn build_workload(
             name: sidecar.name,
             bytes: sidecar.bytes,
             digest: None,
-            local_resources: default_local_resources(),
+            local_resources: local_resources_for(&sidecar.workload),
             pool_size: -1,
             max_invocations: -1,
         });
@@ -608,9 +622,17 @@ mod tests {
     }
 
     fn dev_component_named(name: &str) -> DevComponent {
-        DevComponent {
+        DevComponent::new(name, format!("/dev/null/{name}.wasm"))
+    }
+
+    /// A sidecar input with the given pre-merged workload values, as
+    /// `create_workload` would produce it.
+    fn loaded_sidecar(name: &str, workload: ResolvedWorkload) -> LoadedComponent {
+        LoadedComponent {
             name: name.into(),
-            file: PathBuf::from(format!("/dev/null/{name}.wasm")),
+            bytes: fake_bytes(name),
+            interfaces: HashSet::new(),
+            workload,
         }
     }
 
@@ -620,10 +642,10 @@ mod tests {
     }
 
     #[test]
-    fn build_workload_lands_workload_values_on_dev_component_only() {
-        // The dev component (when not running as a service) is the one
-        // configured with the resolved workload's environment / config /
-        // allowed_hosts. Sidecars get default LocalResources.
+    fn build_workload_lands_workload_values_on_every_component() {
+        // Workload values (environment / config / allowed_hosts) are
+        // workload-wide: the dev component and every sidecar receive them.
+        // A sidecar without overrides carries the workload values unchanged.
         let resolved = ResolvedWorkload {
             environment: HashMap::from([("LOG".into(), "debug".into())]),
             config: HashMap::from([("flag".into(), "on".into())]),
@@ -633,11 +655,7 @@ mod tests {
             components: vec![dev_component_named("sidecar-a")],
             ..Default::default()
         };
-        let sidecars = vec![LoadedComponent {
-            name: "sidecar-a".into(),
-            bytes: fake_bytes("sidecar-a"),
-            interfaces: HashSet::new(),
-        }];
+        let sidecars = vec![loaded_sidecar("sidecar-a", resolved.clone())];
 
         let workload = build_workload(
             &dev_cfg,
@@ -657,9 +675,72 @@ mod tests {
         );
 
         let sidecar = find_component(&workload, "sidecar-a").unwrap();
-        assert!(sidecar.local_resources.environment.is_empty());
-        assert!(sidecar.local_resources.config.is_empty());
-        assert!(sidecar.local_resources.allowed_hosts.is_empty());
+        assert_eq!(
+            sidecar.local_resources.environment.get("LOG").unwrap(),
+            "debug"
+        );
+        assert_eq!(sidecar.local_resources.config.get("flag").unwrap(), "on");
+        assert_eq!(
+            &sidecar.local_resources.allowed_hosts[..],
+            &["https://api.example.com".parse().unwrap()]
+        );
+    }
+
+    #[test]
+    fn build_workload_sidecar_carries_its_own_merged_values() {
+        // A sidecar's pre-merged per-component values land on that sidecar's
+        // LocalResources; the dev component keeps the workload-level values.
+        let resolved = ResolvedWorkload {
+            environment: HashMap::from([("LOG".into(), "debug".into())]),
+            allowed_hosts: vec![wash_runtime::host::allowed_hosts::AllowedHost::Any],
+            ..Default::default()
+        };
+        let sidecar_resolved = ResolvedWorkload {
+            environment: HashMap::from([
+                ("LOG".into(), "trace".into()),
+                ("SIDECAR_ONLY".into(), "1".into()),
+            ]),
+            config: HashMap::from([("flag".into(), "on".into())]),
+            allowed_hosts: vec!["https://api.example.com".parse().unwrap()],
+        };
+        let dev_cfg = DevConfig {
+            components: vec![dev_component_named("sidecar-a")],
+            ..Default::default()
+        };
+        let sidecars = vec![loaded_sidecar("sidecar-a", sidecar_resolved)];
+
+        let workload = build_workload(
+            &dev_cfg,
+            fake_bytes("dev"),
+            HashSet::new(),
+            sidecars,
+            None,
+            &resolved,
+        );
+
+        let dev = find_component(&workload, "wash-dev-component").unwrap();
+        assert_eq!(dev.local_resources.environment.get("LOG").unwrap(), "debug");
+        assert!(!dev.local_resources.environment.contains_key("SIDECAR_ONLY"));
+        assert!(dev.local_resources.config.is_empty());
+
+        let sidecar = find_component(&workload, "sidecar-a").unwrap();
+        assert_eq!(
+            sidecar.local_resources.environment.get("LOG").unwrap(),
+            "trace"
+        );
+        assert_eq!(
+            sidecar
+                .local_resources
+                .environment
+                .get("SIDECAR_ONLY")
+                .unwrap(),
+            "1"
+        );
+        assert_eq!(sidecar.local_resources.config.get("flag").unwrap(), "on");
+        assert_eq!(
+            &sidecar.local_resources.allowed_hosts[..],
+            &["https://api.example.com".parse().unwrap()]
+        );
     }
 
     #[test]
@@ -695,11 +776,10 @@ mod tests {
     }
 
     #[test]
-    fn build_workload_service_file_sidecar_gets_default_local_resources() {
+    fn build_workload_service_file_sidecar_gets_workload_values() {
         // dev.service = false + dev.service_file = Some(...) loads a sidecar
-        // service alongside the dev component. That service is a sidecar —
-        // it should NOT receive workload values (those went to the dev
-        // component above).
+        // service alongside the dev component. Workload values are
+        // workload-wide, so the sidecar service receives them too.
         let resolved = ResolvedWorkload {
             environment: HashMap::from([("LOG".into(), "info".into())]),
             ..Default::default()
@@ -719,10 +799,7 @@ mod tests {
             .service
             .as_ref()
             .expect("service_file should produce a Service");
-        assert!(
-            svc.local_resources.environment.is_empty(),
-            "service-file sidecar must not receive workload values"
-        );
+        assert_eq!(svc.local_resources.environment.get("LOG").unwrap(), "info");
         let dev = find_component(&workload, "wash-dev-component").unwrap();
         assert_eq!(dev.local_resources.environment.get("LOG").unwrap(), "info");
     }
@@ -739,11 +816,7 @@ mod tests {
             components: vec![dev_component_named("sidecar")],
             ..Default::default()
         };
-        let sidecars = vec![LoadedComponent {
-            name: "sidecar".into(),
-            bytes: fake_bytes("sidecar"),
-            interfaces: HashSet::new(),
-        }];
+        let sidecars = vec![loaded_sidecar("sidecar", ResolvedWorkload::default())];
 
         let workload = build_workload(
             &dev_cfg,
@@ -789,6 +862,7 @@ mod tests {
             name: "sidecar".into(),
             bytes: fake_bytes("sidecar"),
             interfaces: HashSet::from([iface("wasi", "config")]),
+            workload: ResolvedWorkload::default(),
         }];
 
         let workload = build_workload(
@@ -819,16 +893,8 @@ mod tests {
             ..Default::default()
         };
         let sidecars = vec![
-            LoadedComponent {
-                name: "first-sidecar".into(),
-                bytes: fake_bytes("a"),
-                interfaces: HashSet::new(),
-            },
-            LoadedComponent {
-                name: "second-sidecar".into(),
-                bytes: fake_bytes("b"),
-                interfaces: HashSet::new(),
-            },
+            loaded_sidecar("first-sidecar", ResolvedWorkload::default()),
+            loaded_sidecar("second-sidecar", ResolvedWorkload::default()),
         ];
 
         let workload = build_workload(

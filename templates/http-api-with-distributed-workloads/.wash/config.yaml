@@ -8,6 +8,19 @@ dev:
   components:
     - name: task-leet
       file: target/wasm32-wasip2/release/task_leet.wasm
+      # Per-component config overrides the workload defaults below for this
+      # worker only: it leetifies aggressively and prefixes its replies.
+      config:
+        leet.mode: aggressive
+        leet.prefix: "🤖 "
+
+# Workload-level values are the shared base layer for every component. The
+# task-leet worker reads these via wasi:config/store, overriding them with
+# its own `config:` block above.
+workload:
+  config:
+    leet.mode: basic
+    leet.prefix: ""
 
 new:
   command: cargo fetch

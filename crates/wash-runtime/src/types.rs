@@ -78,6 +78,10 @@ pub struct LocalResources {
     /// Opaque key-value configuration shared between operator + runtime + plugins.
     /// Allows passing arbitrary configuration values to influence implementation behavior for all component interfaces.
     /// Example: tracing=disable
+    ///
+    /// Also surfaced per component via `wasi:config/store`, layered over
+    /// the interface config (see
+    /// [`crate::plugin::wasi_config::DynamicConfig`]).
     pub config: HashMap<String, String>,
     /// `wasi:cli/env` variables, copied to `WasiCtxBuilder` at component
     /// instantiation.
