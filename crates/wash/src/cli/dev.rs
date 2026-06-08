@@ -87,12 +87,45 @@ impl CliCommand for DevCommand {
                 .build(),
         ))?;
 
-        // Enable wasmcloud:messaging
-        host_builder = host_builder.with_plugin(Arc::new(
-            plugin::wasmcloud_messaging::InMemoryMessaging::default(),
-        ))?;
+        // Shared data-plane NATS connection, mirroring `wash host`
+        // `--data-nats-url`. When `dev.data_nats_url` is set it backs
+        // blobstore, keyvalue, and messaging unless a per-plugin config overrides
+        // it. Connected once and shared across the three plugins.
+        let data_nats_client = if let Some(url) = &dev_config.data_nats_url {
+            let client = async_nats::connect(url.as_str())
+                .await
+                .context("failed to connect to NATS for dev.data_nats_url")?;
+            Some(Arc::new(client))
+        } else {
+            None
+        };
 
-        // Add blobstore plugin
+        // Enable wasmcloud:messaging — NATS when a messaging URL or the shared
+        // data_nats_url is configured, otherwise the in-memory backend.
+        if let Some(nats_url) = &dev_config.wasmcloud_messaging_nats_url {
+            let nats_client = async_nats::connect(nats_url.as_str())
+                .await
+                .context("failed to connect to NATS for messaging plugin")?;
+            host_builder = host_builder.with_plugin(Arc::new(
+                plugin::wasmcloud_messaging::NatsMessaging::new(Arc::new(nats_client)),
+            ))?;
+            debug!(url = %nats_url, "wasmcloud:messaging plugin registered with NATS backend");
+        } else if let Some(client) = &data_nats_client {
+            host_builder = host_builder.with_plugin(Arc::new(
+                plugin::wasmcloud_messaging::NatsMessaging::new(client.clone()),
+            ))?;
+            debug!("wasmcloud:messaging plugin registered with NATS backend (data_nats_url)");
+        } else {
+            host_builder = host_builder.with_plugin(Arc::new(
+                plugin::wasmcloud_messaging::InMemoryMessaging::default(),
+            ))?;
+            debug!("wasmcloud:messaging plugin registered with in-memory backend");
+        }
+
+        // Per-plugin settings override the in-memory default. The order of precedence is:
+        // use a filesystem backend if there is a path override,
+        // otherwise it uses NATS if `data_nats_url` is set, otherwise it falls back to
+        // the in-memory plugin.
         if let Some(blobstore_path) = &dev_config.wasi_blobstore_path {
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_blobstore::FilesystemBlobstore::new(blobstore_path.clone()),
@@ -101,6 +134,10 @@ impl CliCommand for DevCommand {
                 path = %blobstore_path.display(),
                 "WASI Blobstore plugin registered with filesystem backend"
             );
+        } else if let Some(client) = &data_nats_client {
+            host_builder = host_builder
+                .with_plugin(Arc::new(plugin::wasi_blobstore::NatsBlobstore::new(client)))?;
+            debug!("WASI Blobstore plugin registered with NATS backend (data_nats_url)");
         } else {
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_blobstore::InMemoryBlobstore::default(),
@@ -161,7 +198,9 @@ impl CliCommand for DevCommand {
             host_builder.with_plugin(Arc::new(plugin::wasi_logging::TracingLogger::default()))?;
         debug!("Logging plugin registered");
 
-        // Add keyvalue plugin — Redis > NATS > filesystem > in-memory
+        // Add keyvalue plugin — Redis > NATS override > filesystem >
+        // NATS (data_nats_url) > in-memory. Per-plugin settings win over the
+        // shared data_nats_url default.
         if let Some(redis_url) = &dev_config.wasi_keyvalue_redis_url {
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_keyvalue::RedisKeyValue::from_url(redis_url)
@@ -184,6 +223,10 @@ impl CliCommand for DevCommand {
                 path = %keyvalue_path.display(),
                 "WASI KeyValue plugin registered with filesystem backend"
             );
+        } else if let Some(client) = &data_nats_client {
+            host_builder = host_builder
+                .with_plugin(Arc::new(plugin::wasi_keyvalue::NatsKeyValue::new(client)))?;
+            debug!("WASI KeyValue plugin registered with NATS backend (data_nats_url)");
         } else {
             host_builder = host_builder
                 .with_plugin(Arc::new(plugin::wasi_keyvalue::InMemoryKeyValue::default()))?;
