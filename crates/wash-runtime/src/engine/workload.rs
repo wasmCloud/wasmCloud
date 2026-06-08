@@ -646,42 +646,36 @@ impl ResolvedWorkload {
 
     #[instrument(name="link_components", skip_all, fields(workload.id = self.id.as_ref(), workload.name = self.name.as_ref(), workload.namespace = self.namespace.as_ref()))]
     async fn link_components(&mut self) -> anyhow::Result<()> {
-        // A map from component ID to its exported interfaces
-        let mut interface_map: HashMap<String, Arc<str>> = HashMap::new();
-
-        // Determine available component exports to link to the rest of the workload
+        // Collect each component's exported component-instance interfaces.
+        let mut component_exports: Vec<(Arc<str>, Vec<String>)> = Vec::new();
         for c in self.components.read().await.values() {
-            let exported_instances = c.component_exports()?;
-            for (name, item) in exported_instances {
+            let mut names = Vec::new();
+            for (name, item) in c.component_exports()? {
                 // TODO(#11): It's probably a good idea to skip registering wasi@0.2 interfaces
-                match name.split_once('@') {
-                    Some(("wasmcloud:wash/plugin", _)) => {
-                        trace!(name, "skipping internal plugin export");
-                        continue;
-                    }
-                    None if name == "wasmcloud:wash/plugin" => {
-                        trace!(name, "skipping internal plugin export");
-                        continue;
-                    }
-                    None => {}
-                    _ => {}
+                if name == "wasmcloud:wash/plugin" || name.starts_with("wasmcloud:wash/plugin@") {
+                    trace!(name, "skipping internal plugin export");
+                    continue;
                 }
                 if let ComponentItem::ComponentInstance(_) = item {
-                    // Register the interface name to the component key
-                    if interface_map.contains_key(&name) {
-                        anyhow::bail!(
-                            "another component already implements the interface '{name}'"
-                        );
-                    }
-                    trace!(name, "registering component export for linking");
-                    interface_map.insert(name.clone(), Arc::from(c.id()));
+                    names.push(name);
                 } else {
                     warn!(name, "exported item is not a component instance, skipping");
                 }
             }
+            component_exports.push((Arc::from(c.id()), names));
         }
 
-        self.resolve_workload_imports(&interface_map).await?;
+        // Build the export→component map for intra-workload linking. An
+        // interface exported by more than one component is left out of the map
+        // and tracked as ambiguous; it only causes an error if a component
+        // actually imports it (host-invoked exports such as
+        // `wasmcloud:messaging/handler` or `wasi:http/incoming-handler` are
+        // consumed by host plugins, never imported intra-workload, so multiple
+        // exporters are fine).
+        let (interface_map, ambiguous_exports) = build_export_map(&component_exports);
+
+        self.resolve_workload_imports(&interface_map, &ambiguous_exports)
+            .await?;
 
         Ok(())
     }
@@ -696,6 +690,7 @@ impl ResolvedWorkload {
     async fn resolve_workload_imports(
         &mut self,
         interface_map: &HashMap<String, Arc<str>>,
+        ambiguous_exports: &HashSet<String>,
     ) -> anyhow::Result<()> {
         // Build a dependency graph: for each component, track which other components it imports from
         let mut dependencies: HashMap<Arc<str>, HashSet<Arc<str>>> = HashMap::new();
@@ -707,8 +702,21 @@ impl ResolvedWorkload {
                 let ty = component.metadata.component.component_type();
                 for (import_name, import_item) in ty.imports(component.metadata.component.engine())
                 {
-                    if matches!(import_item, ComponentItem::ComponentInstance(_))
-                        && let Some(exporter_id) = interface_map.get(import_name)
+                    if !matches!(import_item, ComponentItem::ComponentInstance(_)) {
+                        continue;
+                    }
+                    // An interface exported by multiple components can't be
+                    // resolved to a single provider for an intra-workload
+                    // import — that's the genuine ambiguity the link check
+                    // guards against.
+                    if ambiguous_exports.contains(import_name) {
+                        anyhow::bail!(
+                            "component '{component_id}' imports interface '{import_name}', \
+                             which is exported by multiple components in the workload; \
+                             cannot disambiguate the provider"
+                        );
+                    }
+                    if let Some(exporter_id) = interface_map.get(import_name)
                         && exporter_id != component_id
                     {
                         // This import is provided by another component in the workload
@@ -1818,6 +1826,44 @@ impl UnresolvedWorkload {
 /// # Returns
 /// A vector of component IDs in topological order (dependencies first), or an error
 /// if a circular dependency is detected.
+/// Builds the export→component map used to wire intra-workload component
+/// imports. An interface exported by exactly one component is registered for
+/// linking; an interface exported by more than one component is "ambiguous" —
+/// left out of the map and returned in the second set instead.
+///
+/// Ambiguity is not an error on its own: host-invoked exports (e.g.
+/// `wasmcloud:messaging/handler`, `wasi:http/incoming-handler`) are consumed
+/// by host plugins and never imported by another component, so multiple
+/// exporters are expected. The importer side ([`resolve_workload_imports`])
+/// errors only if a component actually imports an ambiguous interface.
+fn build_export_map(
+    component_exports: &[(Arc<str>, Vec<String>)],
+) -> (HashMap<String, Arc<str>>, HashSet<String>) {
+    let mut interface_map: HashMap<String, Arc<str>> = HashMap::new();
+    let mut ambiguous: HashSet<String> = HashSet::new();
+
+    for (component_id, names) in component_exports {
+        for name in names {
+            if ambiguous.contains(name) {
+                continue;
+            }
+            if interface_map.remove(name).is_some() {
+                // A second exporter for this interface: mark it ambiguous.
+                trace!(
+                    name,
+                    "interface exported by multiple components; deferring to import side"
+                );
+                ambiguous.insert(name.clone());
+            } else {
+                trace!(name, "registering component export for linking");
+                interface_map.insert(name.clone(), component_id.clone());
+            }
+        }
+    }
+
+    (interface_map, ambiguous)
+}
+
 fn topological_sort_components(
     dependencies: &HashMap<Arc<str>, HashSet<Arc<str>>>,
 ) -> anyhow::Result<Vec<Arc<str>>> {
@@ -2410,6 +2456,59 @@ mod tests {
 
     /// Tests topological sort with a chain dependency: A -> B -> C
     /// Expected order: C, B, A (or any valid topological order)
+    #[test]
+    fn build_export_map_registers_unique_exports() {
+        let exports = vec![
+            (
+                Arc::from("comp-a") as Arc<str>,
+                vec!["wasi:http/incoming-handler".to_string()],
+            ),
+            (
+                Arc::from("comp-b") as Arc<str>,
+                vec!["custom:pkg/iface".to_string()],
+            ),
+        ];
+        let (map, ambiguous) = build_export_map(&exports);
+        assert_eq!(
+            map.get("custom:pkg/iface").map(|c| c.as_ref()),
+            Some("comp-b")
+        );
+        assert!(ambiguous.is_empty());
+    }
+
+    #[test]
+    fn build_export_map_marks_duplicate_exports_ambiguous() {
+        // Two workers exporting the same handler interface: ambiguous, and
+        // dropped from the resolvable map (only an importer would error).
+        let exports = vec![
+            (
+                Arc::from("task-leet") as Arc<str>,
+                vec!["wasmcloud:messaging/handler@0.2.0".to_string()],
+            ),
+            (
+                Arc::from("task-reverse") as Arc<str>,
+                vec!["wasmcloud:messaging/handler@0.2.0".to_string()],
+            ),
+        ];
+        let (map, ambiguous) = build_export_map(&exports);
+        assert!(!map.contains_key("wasmcloud:messaging/handler@0.2.0"));
+        assert!(ambiguous.contains("wasmcloud:messaging/handler@0.2.0"));
+    }
+
+    #[test]
+    fn build_export_map_three_exporters_stay_ambiguous() {
+        // A third exporter must not accidentally re-register the interface.
+        let iface = "wasmcloud:messaging/handler@0.2.0".to_string();
+        let exports = vec![
+            (Arc::from("a") as Arc<str>, vec![iface.clone()]),
+            (Arc::from("b") as Arc<str>, vec![iface.clone()]),
+            (Arc::from("c") as Arc<str>, vec![iface.clone()]),
+        ];
+        let (map, ambiguous) = build_export_map(&exports);
+        assert!(!map.contains_key(&iface));
+        assert!(ambiguous.contains(&iface));
+    }
+
     #[test]
     fn test_topological_sort_chain() {
         let a: Arc<str> = Arc::from("component-a");
