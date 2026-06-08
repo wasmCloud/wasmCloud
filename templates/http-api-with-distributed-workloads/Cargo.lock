@@ -315,6 +315,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "task-reverse"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen",
+ "wstd",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
