@@ -3,21 +3,41 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Task API</title>
+    <title>Task API · wasmCloud</title>
     <style>
-        * {
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 600px;
-            margin: 40px auto;
-            padding: 20px;
-            background: #f5f5f5;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a0f2e 50%, #0a0a0a 100%);
+            min-height: 100vh;
+            padding: 2rem;
+            color: #1a1a1a;
         }
+        .container { max-width: 600px; margin: 0 auto; }
+
+        .header { text-align: center; margin-bottom: 2rem; }
         h1 {
-            color: #333;
-            margin-bottom: 24px;
+            color: white;
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        .powered-by {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 0.9rem;
+        }
+        .wasmcloud-logo { height: 24px; width: auto; vertical-align: middle; }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
         }
         label {
             display: block;
@@ -29,38 +49,40 @@
             width: 100%;
             padding: 10px;
             border: 1px solid #ccc;
-            border-radius: 4px;
+            border-radius: 6px;
             font-size: 14px;
             margin-bottom: 16px;
+        }
+        select:focus, textarea:focus {
+            outline: none;
+            border-color: #685bc7;
+            box-shadow: 0 0 0 3px rgba(104, 91, 199, 0.15);
         }
         textarea {
             min-height: 120px;
             resize: vertical;
         }
         button {
-            background: #0066cc;
+            background: #685bc7;
             color: white;
             border: none;
             padding: 12px 24px;
-            border-radius: 4px;
+            border-radius: 6px;
             font-size: 14px;
+            font-weight: 600;
             cursor: pointer;
         }
-        button:hover {
-            background: #0052a3;
-        }
-        button:disabled {
-            background: #999;
-            cursor: not-allowed;
-        }
+        button:hover { background: #574aae; }
+        button:disabled { background: #999; cursor: not-allowed; }
         #result {
             margin-top: 24px;
             padding: 16px;
-            background: white;
+            background: #f8f7ff;
             border: 1px solid #ddd;
-            border-radius: 4px;
+            border-radius: 6px;
             white-space: pre-wrap;
             word-break: break-word;
+            font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
             display: none;
         }
         #result.error {
@@ -69,26 +91,116 @@
             color: #cc0000;
         }
         #result.success {
-            border-color: #00cc66;
-            background: #f5fff5;
+            border-color: #685bc7;
+            background: #f8f7ff;
         }
+
+        h2 {
+            color: #1a1a1a;
+            font-size: 1.25rem;
+            margin-bottom: 1.25rem;
+            border-bottom: 2px solid #685bc7;
+            padding-bottom: 0.4rem;
+        }
+        .arch { display: flex; flex-direction: column; align-items: center; gap: 0.35rem; }
+        .arch-node {
+            background: #f8f7ff;
+            border: 1px solid #685bc7;
+            border-radius: 8px;
+            padding: 0.55rem 1rem;
+            font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #4c1d95;
+            text-align: center;
+        }
+        .arch-node.broker { width: 100%; }
+        .arch-muted { color: #8b7fd8; font-weight: 400; }
+        .arch-arrow { color: #685bc7; line-height: 1.1; font-size: 0.9rem; }
+        .arch-label { font-size: 0.72rem; color: #777; font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; }
+        .arch-branches { display: flex; gap: 1.5rem; width: 100%; justify-content: center; flex-wrap: wrap; }
+        .arch-branch { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; }
+        .arch-note { margin-top: 1.25rem; color: #666; font-size: 0.8rem; line-height: 1.5; }
+        .arch-note code {
+            background: #f8f7ff;
+            color: #4c1d95;
+            padding: 1px 5px;
+            border-radius: 4px;
+            font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+            font-size: 0.9em;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 1.5rem;
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 0.85rem;
+        }
+        .footer a { color: white; text-decoration: none; font-weight: 600; }
+        .footer a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
-    <h1>Task API</h1>
-    <form id="taskForm">
-        <label for="worker">Worker</label>
-        <select id="worker" name="worker">
-            <option value="task-leet" selected>Leet Speak</option>
-        </select>
+    <div class="container">
+        <div class="header">
+            <h1>Task API</h1>
+            <div class="powered-by">
+                Built with
+                <img
+                    src="https://cdn.prod.website-files.com/68e941b736876afc9468db2b/68e941b736876afc9468dcda_Wasmcloud.Logo-Hrztl_Color.png"
+                    alt="CNCF wasmCloud"
+                    class="wasmcloud-logo"
+                />
+            </div>
+        </div>
 
-        <label for="payload">Payload</label>
-        <textarea id="payload" name="payload" placeholder="Enter your message here..."></textarea>
+        <div class="card">
+            <h2>Architecture</h2>
+            <div class="arch">
+                <div class="arch-node">Browser</div>
+                <div class="arch-arrow">│ POST /task</div>
+                <div class="arch-arrow">▼</div>
+                <div class="arch-node">http-api <span class="arch-muted">:8000</span></div>
+                <div class="arch-arrow">│ publish <span class="arch-label">tasks.{worker}</span></div>
+                <div class="arch-arrow">▼</div>
+                <div class="arch-node broker">Message Broker <span class="arch-muted">in-memory · NATS</span></div>
+                <div class="arch-arrow">▼</div>
+                <div class="arch-branches">
+                    <div class="arch-branch">
+                        <span class="arch-label">tasks.leet</span>
+                        <div class="arch-node">task-leet</div>
+                    </div>
+                    <div class="arch-branch">
+                        <span class="arch-label">tasks.reverse</span>
+                        <div class="arch-node">task-reverse</div>
+                    </div>
+                </div>
+            </div>
+            <p class="arch-note">The HTTP API publishes to <code>tasks.{worker}</code>; the broker routes to the worker subscribed to that subject, which replies back to the caller.</p>
+        </div>
 
-        <button type="submit" id="submitBtn">Send Task</button>
-    </form>
+        <div class="card">
+            <form id="taskForm">
+                <label for="worker">Worker</label>
+                <select id="worker" name="worker">
+                    <option value="leet" selected>Leet Speak</option>
+                    <option value="reverse">Reverse Words</option>
+                </select>
 
-    <div id="result"></div>
+                <label for="payload">Payload</label>
+                <textarea id="payload" name="payload" placeholder="Enter your message here..."></textarea>
+
+                <button type="submit" id="submitBtn">Send Task</button>
+            </form>
+
+            <div id="result"></div>
+        </div>
+
+        <div class="footer">
+            Built with
+            <a href="https://wasmcloud.com" target="_blank" rel="noopener">wasmCloud</a>, a CNCF Incubating project
+        </div>
+    </div>
 
     <script>
         const form = document.getElementById('taskForm');
