@@ -106,8 +106,12 @@ impl NatsKeyValue {
             })
             .await
             .map_err(|e| {
-                tracing::error!("Failed to open keyvalue bucket in JetStream({identifier}): {e}");
-                "failed to open keyvalue bucket in JetStream".to_string()
+                tracing::error!(
+                    error = ?e,
+                    bucket = %identifier,
+                    "Failed to open keyvalue bucket in JetStream"
+                );
+                format!("failed to open keyvalue bucket in JetStream({identifier}): {e}")
             })
     }
 }
