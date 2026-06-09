@@ -454,7 +454,6 @@ mod tests {
     use crate::plugin::WorkloadTrackerItem;
     use std::time::Duration;
 
-
     /// Tracker round-trip: stored subscriptions and a stored cancellation
     /// token are retrievable by the same component_id; cleanup cancels the
     /// stored token. Does not exercise the NATS client at all — the goal is
