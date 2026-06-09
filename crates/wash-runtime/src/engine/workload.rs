@@ -1154,31 +1154,35 @@ impl ResolvedWorkload {
                             addr.ip().is_loopback() || addr.ip().is_unspecified()
                         }
                         SocketAddrUse::TcpConnect => {
-                            use crate::types::SocketTunnelMode;
-                            let mode = socket_tunnels_check
-                                .as_deref()
-                                .map(|p| p.mode)
-                                .unwrap_or_default();
-                            match mode {
-                                SocketTunnelMode::AllowAll => true,
-                                SocketTunnelMode::DenyAll => false,
-                                SocketTunnelMode::Strict => {
-                                    if !addr.ip().is_loopback() {
-                                        return false;
-                                    }
-                                    if let Some(p) = socket_tunnels_check.as_deref()
-                                        && p.rules.contains_key(&addr.port())
-                                    {
-                                        return true;
-                                    }
-                                    loopback_check
-                                        .lock()
-                                        .map(|lo| lo.has_tcp_listener(&addr))
-                                        .unwrap_or(false)
-                                }
-                            }
+                            // Gate via `allows_tcp_connect` (unit-tested). Skip the
+                            // loopback-registry lock for non-loopback targets, which
+                            // can never match an in-process listener.
+                            let has_loopback_listener = addr.ip().is_loopback()
+                                && loopback_check
+                                    .lock()
+                                    .map(|lo| lo.has_tcp_listener(&addr))
+                                    .unwrap_or(false);
+                            crate::types::SocketTunnelPolicy::allows_tcp_connect(
+                                socket_tunnels_check.as_deref(),
+                                &addr,
+                                has_loopback_listener,
+                            )
                         }
-                        SocketAddrUse::UdpConnect | SocketAddrUse::UdpOutgoingDatagram => true,
+                        SocketAddrUse::UdpConnect | SocketAddrUse::UdpOutgoingDatagram => {
+                            // Gate via `allows_udp_connect` — same as TCP but rules
+                            // never grant escape (no UDP rewrite), so Strict/DenyAll
+                            // allow only loopback service-to-service traffic.
+                            let has_loopback_listener = addr.ip().is_loopback()
+                                && loopback_check
+                                    .lock()
+                                    .map(|lo| lo.has_udp_listener(&addr))
+                                    .unwrap_or(false);
+                            crate::types::SocketTunnelPolicy::allows_udp_connect(
+                                socket_tunnels_check.as_deref(),
+                                &addr,
+                                has_loopback_listener,
+                            )
+                        }
                     }
                 })
             }),

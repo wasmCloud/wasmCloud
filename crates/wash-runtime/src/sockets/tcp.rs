@@ -948,6 +948,8 @@ impl TcpSocket {
             return Err(ErrorCode::InvalidArgument);
         }
         let ip = ip.to_canonical();
+        // Cleared below if we skip the OS bind (no usable OS socket → loopback-only).
+        let mut os_bound = true;
         if !ip.is_loopback() {
             if ip.is_unspecified() {
                 // Rewrite 0.0.0.0/[::] to loopback so the OS socket only listens on loopback
@@ -967,10 +969,12 @@ impl TcpSocket {
                         SocketAddr::V6(a) => a.set_ip(Ipv6Addr::LOCALHOST),
                     }
                 } else {
-                    // Specific port: skip the OS bind — the sandbox may deny it, and
-                    // the in-process loopback is the only listener needed for
-                    // wasm-to-wasm comms. Advance the state manually to BindStarted so
-                    // finish_bind sees the expected state.
+                    // Specific port: skip the OS bind (the sandbox may deny it; the
+                    // in-process loopback listener is all wasm-to-wasm needs). The
+                    // unbound OS socket must NOT become a listener — `listen()` on it
+                    // silently binds to `0.0.0.0:<ephemeral>` on Unix and fails on
+                    // Windows — so `os_bound = false` routes this to `Self::Loopback`.
+                    // Advance the state to BindStarted manually so finish_bind sees it.
                     let sock = match mem::replace(&mut socket.tcp_state, TcpState::Closed) {
                         TcpState::Default(s) => s,
                         other => {
@@ -979,6 +983,7 @@ impl TcpSocket {
                         }
                     };
                     socket.tcp_state = TcpState::BindStarted(sock);
+                    os_bound = false;
                 }
             } else {
                 // Non-loopback, non-unspecified address: bind on the real OS and return.
@@ -989,7 +994,7 @@ impl TcpSocket {
         let addr = loopback.bind_tcp(addr)?;
         let lo =
             super::loopback::TcpSocket::new(socket, super::loopback::TcpState::BindStarted(addr))?;
-        if ip.is_unspecified() {
+        if ip.is_unspecified() && os_bound {
             *self = Self::Unspecified {
                 net: NetworkTcpSocket {
                     tcp_state: mem::replace(&mut socket.tcp_state, TcpState::Closed),

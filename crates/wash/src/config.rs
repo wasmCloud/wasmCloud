@@ -335,15 +335,14 @@ pub struct DevComponent {
     pub file: PathBuf,
 }
 
-/// Outbound TCP policy mode for a workload's components.
+/// Outbound socket policy mode. Governs both TCP and UDP; tunnel rules (the
+/// rewrite escape hatch) apply to TCP only.
 ///
-/// - `strict` (default): block all TCP connects except (a) loopback connects to
-///   in-process wash services and (b) loopback connects matching a declared
-///   tunnel rule (rewritten to the rule's `host_addr`).
-/// - `allow-all`: pass every TCP connect straight to the OS. Tunnel rules are
-///   ignored. Intended as an explicit opt-out for development convenience.
-/// - `deny-all`: block every TCP connect, even tunnel rules. The in-process
-///   wash loopback registry is still honored for service-to-service traffic.
+/// - `strict` (default): block everything except loopback traffic to in-process
+///   wash services, plus (TCP) loopback ports matching a declared tunnel rule.
+/// - `allow-all`: pass every connect straight to the OS; rules are ignored.
+/// - `deny-all`: block everything except in-process service-to-service traffic
+///   (not even tunnel rules escape).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SocketTunnelMode {
@@ -353,85 +352,27 @@ pub enum SocketTunnelMode {
     DenyAll,
 }
 
-/// A single tunnel rule: traffic the component sends to `127.0.0.1:sandbox_port`
-/// is rewritten to dial `host_addr` on the real OS network.
+/// A single TCP tunnel rule: traffic the component sends to
+/// `127.0.0.1:sandbox_port` is rewritten to dial `host_addr` on the real
+/// network. `host_addr` defaults to `127.0.0.1:<sandbox_port>` when omitted
+/// (the "let this port escape as-is" shorthand).
 ///
-/// `host_addr` is optional. When omitted, it defaults to
-/// `127.0.0.1:<sandbox_port>` — the simplest "let this port escape the sandbox
-/// as-is" case. Provide it explicitly only when the destination host or port
-/// differs from the sandbox view.
+/// Notes:
+/// - `sandbox_port` is only the loopback port the component dials to match the
+///   rule; the real connection goes to `host_addr`, whose host and port are
+///   independent (e.g. `sandbox_port: 8080` → `host_addr: "example.com:443"`).
+/// - Only the connect *destination* is rewritten — the payload (TLS SNI, HTTP
+///   `Host`, etc.) is not, so the component must set those for the upstream.
+/// - Hostnames in `host_addr` are resolved once at workload start (first
+///   address wins; no re-resolution or fallback). Accepts `IP:port` or
+///   `hostname:port`.
 ///
-/// # Behavior
-///
-/// - **`sandbox_port` is the routing key, not the wire port.** It's only the
-///   loopback port the component must dial to match this rule. The actual TCP
-///   connection goes to the address and port encoded in `host_addr` — the two
-///   ports are completely independent. Example: `sandbox_port: 8080,
-///   host_addr: "example.com:443"` makes a component dialing `127.0.0.1:8080`
-///   end up with a TCP connection to `example.com` on port 443.
-///
-/// - **Only the connect destination is rewritten.** The component's payload
-///   (TLS SNI, HTTP `Host` header, etc.) is never modified. If the upstream
-///   needs `Host: example.com` or SNI `example.com`, the component must
-///   produce that itself. The component still "thinks" it's talking to
-///   `127.0.0.1:<sandbox_port>` and will set headers / SNI accordingly unless
-///   you configure its client to use the real upstream name.
-///
-/// - **Hostnames are resolved once at workload start** via the OS resolver.
-///   The first resolved address wins. There is no per-connection re-resolution
-///   and no fallback to subsequent addresses if the first fails.
-///
-/// # Scenarios
-///
-/// ## 1. Same host, same port — the shorthand
-/// Use case: dev has a local MySQL at `127.0.0.1:3306` and the component dials
-/// `127.0.0.1:3306`. No rewrite needed, just allow escape.
 /// ```yaml
 /// socket_tunnels:
 ///   rules:
-///     - sandbox_port: 3306
-/// ```
-///
-/// ## 2. Same port, different host
-/// Use case: the component is written against a "standard" port but the real
-/// service lives somewhere else (managed DB, sidecar, etc.).
-/// ```yaml
-/// socket_tunnels:
-///   rules:
-///     - sandbox_port: 3306
-///       host_addr: "db.internal:3306"
-/// ```
-///
-/// ## 3. Same host, different port
-/// Use case: managed service on a non-standard port; the component uses the
-/// well-known port for its driver/library.
-/// ```yaml
-/// socket_tunnels:
-///   rules:
+///     - sandbox_port: 3306                  # → 127.0.0.1:3306 (shorthand)
 ///     - sandbox_port: 5432
-///       host_addr: "127.0.0.1:25060"
-/// ```
-///
-/// ## 4. Fan-in: multiple sandbox ports → different backends
-/// Use case: the component talks to a primary and a replica using different
-/// loopback ports as routing keys.
-/// ```yaml
-/// socket_tunnels:
-///   rules:
-///     - sandbox_port: 3306
-///       host_addr: "primary-db.internal:3306"
-///     - sandbox_port: 3307
-///       host_addr: "replica-db.internal:3306"
-/// ```
-///
-/// ## 5. Hostname resolution
-/// `host_addr` accepts either `IP:port` or `hostname:port`. Hostnames are
-/// resolved once at workload start via the OS resolver.
-/// ```yaml
-/// socket_tunnels:
-///   rules:
-///     - sandbox_port: 3306
-///       host_addr: "tramway.proxy.rlwy.net:43086"
+///       host_addr: "db.internal:25060"      # rewrite host and port
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DevSocketTunnel {
@@ -443,35 +384,17 @@ pub struct DevSocketTunnel {
     pub host_addr: Option<String>,
 }
 
-/// Outbound TCP policy block for a workload.
+/// Outbound TCP/UDP policy block for a workload. Omit it entirely for the
+/// strict default; see [`SocketTunnelMode`] for the modes.
 ///
-/// # Examples
-///
-/// Strict (the default — also what you get if you omit the `socket_tunnels`
-/// block entirely): block every TCP connect except in-process wash service
-/// traffic and ports declared in `rules`.
 /// ```yaml
 /// dev:
 ///   socket_tunnels:
-///     rules:
-///       - sandbox_port: 3306                    # → 127.0.0.1:3306 (shorthand)
+///     mode: strict            # default; allow-all / deny-all also valid
+///     rules:                  # TCP only; ignored under allow-all / deny-all
+///       - sandbox_port: 3306
 ///       - sandbox_port: 5432
-///         host_addr: "db.internal:25060"        # rewrite host and port
-/// ```
-///
-/// Allow-all (explicit opt-out for dev convenience). Rules are ignored.
-/// ```yaml
-/// dev:
-///   socket_tunnels:
-///     mode: allow-all
-/// ```
-///
-/// Deny-all (strictest — even tunnel rules are blocked). In-process wash
-/// service-to-service traffic still works.
-/// ```yaml
-/// dev:
-///   socket_tunnels:
-///     mode: deny-all
+///         host_addr: "db.internal:25060"
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DevSocketTunnels {
@@ -1271,5 +1194,61 @@ secrets:
         let yaml = "dev: {}\n";
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         assert!(config.dev().environment.is_empty());
+    }
+
+    #[test]
+    fn dev_socket_tunnels_parses_mode_and_rules() {
+        // Pins the YAML contract: kebab-case `mode`, a `rules` list whose
+        // entries carry `sandbox_port` and an optional `host_addr`.
+        let yaml = r#"
+dev:
+  socket_tunnels:
+    mode: deny-all
+    rules:
+      - sandbox_port: 3306
+      - sandbox_port: 5432
+        host_addr: "db.internal:25060"
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let tunnels = config
+            .dev()
+            .socket_tunnels
+            .expect("socket_tunnels should parse");
+        assert_eq!(tunnels.mode, SocketTunnelMode::DenyAll);
+        assert_eq!(tunnels.rules.len(), 2);
+        assert_eq!(tunnels.rules[0].sandbox_port, 3306);
+        assert_eq!(tunnels.rules[0].host_addr, None);
+        assert_eq!(tunnels.rules[1].sandbox_port, 5432);
+        assert_eq!(
+            tunnels.rules[1].host_addr.as_deref(),
+            Some("db.internal:25060")
+        );
+    }
+
+    #[test]
+    fn dev_socket_tunnels_mode_defaults_to_strict() {
+        // A block with only `rules` (no `mode`) defaults to strict.
+        let yaml = r#"
+dev:
+  socket_tunnels:
+    rules:
+      - sandbox_port: 3306
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let tunnels = config
+            .dev()
+            .socket_tunnels
+            .expect("socket_tunnels should parse");
+        assert_eq!(tunnels.mode, SocketTunnelMode::Strict);
+        assert_eq!(tunnels.rules.len(), 1);
+    }
+
+    #[test]
+    fn dev_socket_tunnels_omitted_is_none() {
+        // Omitting the block entirely yields `None` (runtime treats it as the
+        // strict default).
+        let yaml = "dev: {}\n";
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(config.dev().socket_tunnels.is_none());
     }
 }

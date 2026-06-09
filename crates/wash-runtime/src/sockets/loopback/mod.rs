@@ -106,6 +106,16 @@ impl Network {
         matches!(net.get(&port), Some(TcpEndpoint::Listening(_)))
     }
 
+    /// Returns true if a loopback UDP socket is bound for `addr` — an in-process
+    /// peer able to receive datagrams. Unlike `connect_udp`, needs only `&self`.
+    pub fn has_udp_listener(&self, addr: &SocketAddr) -> bool {
+        let net = self.get_udp_net(addr.ip());
+        let Some(port) = NonZeroU16::new(addr.port()) else {
+            return false;
+        };
+        net.contains_key(&port)
+    }
+
     pub fn connect_tcp(&mut self, addr: &SocketAddr) -> Result<&mpsc::Sender<TcpConn>, ErrorCode> {
         let net = self.get_tcp_net(addr.ip());
         let Some(port) = NonZeroU16::new(addr.port()) else {
@@ -140,5 +150,55 @@ impl Network {
             return Ok(None);
         }
         Ok(Some(tx))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn has_tcp_listener_only_true_for_listening_endpoints() {
+        let (tx, _rx) = mpsc::channel::<TcpConn>(1);
+        let mut net = Network::default();
+        let port = NonZeroU16::new(8080).unwrap();
+
+        // A merely-bound endpoint is not a listener.
+        net.tcp_ipv4.insert(port, TcpEndpoint::Bound);
+        assert!(!net.has_tcp_listener(&SocketAddr::from(([127, 0, 0, 1], 8080))));
+
+        // Promote it to Listening → now it is.
+        net.tcp_ipv4.insert(port, TcpEndpoint::Listening(tx));
+        assert!(net.has_tcp_listener(&SocketAddr::from(([127, 0, 0, 1], 8080))));
+
+        // Unregistered port: false.
+        assert!(!net.has_tcp_listener(&SocketAddr::from(([127, 0, 0, 1], 9090))));
+
+        // Port 0 is never a valid listener key.
+        assert!(!net.has_tcp_listener(&SocketAddr::from(([127, 0, 0, 1], 0))));
+
+        // The IPv6 table is independent of the IPv4 one.
+        assert!(!net.has_tcp_listener(&"[::1]:8080".parse().unwrap()));
+    }
+
+    #[test]
+    fn has_udp_listener_true_only_for_bound_ports() {
+        let mut net = Network::default();
+
+        // Unbound port: false.
+        assert!(!net.has_udp_listener(&SocketAddr::from(([127, 0, 0, 1], 5353))));
+
+        // Bind it → now an in-process peer exists.
+        let (bound, _rx) = net
+            .bind_udp(SocketAddr::from(([127, 0, 0, 1], 5353)))
+            .unwrap();
+        assert!(net.has_udp_listener(&bound));
+        assert!(net.has_udp_listener(&SocketAddr::from(([127, 0, 0, 1], 5353))));
+
+        // Other port / port 0 / other family: false.
+        assert!(!net.has_udp_listener(&SocketAddr::from(([127, 0, 0, 1], 6000))));
+        assert!(!net.has_udp_listener(&SocketAddr::from(([127, 0, 0, 1], 0))));
+        assert!(!net.has_udp_listener(&"[::1]:5353".parse().unwrap()));
     }
 }

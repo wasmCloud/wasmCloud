@@ -13,7 +13,10 @@ use tokio::time::timeout;
 
 use wash_runtime::{
     host::{HostApi, HostBuilder},
-    types::{LocalResources, Service, Workload, WorkloadStartRequest, WorkloadState},
+    types::{
+        LocalResources, Service, SocketTunnelMode, SocketTunnelPolicy, Workload,
+        WorkloadStartRequest, WorkloadState,
+    },
 };
 
 mod common;
@@ -41,6 +44,14 @@ fn echo_client_workload_request(
                     memory_limit_mb: 256,
                     cpu_limit: 1,
                     environment: HashMap::from([("ECHO_ADDR".to_string(), echo_addr.to_string())]),
+                    // The echo server lives on a non-loopback interface, which the
+                    // default strict policy blocks. This test exercises TLS-over-TCP,
+                    // not the tunnel policy, so opt into allow-all to let the guest
+                    // dial the server directly.
+                    socket_tunnels: Some(SocketTunnelPolicy {
+                        mode: SocketTunnelMode::AllowAll,
+                        rules: HashMap::new(),
+                    }),
                     ..Default::default()
                 },
                 max_restarts: 0,

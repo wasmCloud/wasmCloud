@@ -52,7 +52,7 @@ pub struct WasiSocketsCtx {
     pub(crate) socket_addr_check: SocketAddrCheck,
     pub(crate) allowed_network_uses: AllowedNetworkUses,
     pub(crate) loopback: Arc<std::sync::Mutex<loopback::Network>>,
-    /// Outbound TCP policy. `None` is treated as the strict default
+    /// Outbound TCP/UDP policy. `None` is treated as the strict default
     /// (`SocketTunnelPolicy::default()` → mode = Strict, no rules).
     pub(crate) socket_tunnels: Option<Arc<SocketTunnelPolicy>>,
 }

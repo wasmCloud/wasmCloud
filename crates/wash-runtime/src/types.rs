@@ -69,32 +69,273 @@ pub struct Component {
     pub max_invocations: i32,
 }
 
-/// Policy mode for outbound TCP socket access from a sandboxed component.
+/// Policy mode for outbound TCP and UDP socket access from a sandboxed
+/// component. Tunnel rules (the rewrite escape hatch) apply to TCP only; UDP
+/// follows the mode but is never granted a rule-based escape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SocketTunnelMode {
-    /// Block all TCP connects except (a) loopback connects to in-process wash
-    /// services and (b) loopback connects matching a declared tunnel rule
-    /// (rewritten to the rule's host address). This is the secure default.
+    /// Block all connects except loopback traffic to in-process wash services
+    /// and (TCP only) loopback ports matching a declared tunnel rule (rewritten
+    /// to the rule's host address). The secure default.
     #[default]
     Strict,
-    /// Allow every TCP connect to pass through to the OS as-is. Tunnel rules
-    /// are ignored. Intended as an explicit opt-out for development scenarios
-    /// that don't require sandboxing.
+    /// Allow every connect to pass through to the OS as-is; tunnel rules are
+    /// ignored. An explicit opt-out for scenarios that don't need sandboxing.
     AllowAll,
-    /// Block every TCP connect, including escapes via tunnel rules. The
-    /// in-process wash loopback registry is still consulted first for
-    /// service-to-service traffic.
+    /// Block every connect except in-process service-to-service loopback
+    /// traffic — not even tunnel rules escape.
     DenyAll,
 }
 
-/// A sandbox→host TCP tunnel: traffic the component sends to `127.0.0.1:sandbox_port`
-/// is rewritten to dial `host_addr` on the real OS network.
+/// Outbound socket policy: a `mode` (applied to TCP and UDP) plus TCP tunnel
+/// `rules`. A rule rewrites traffic the component sends to
+/// `127.0.0.1:sandbox_port` to instead dial `host_addr` on the real network.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SocketTunnelPolicy {
     pub mode: SocketTunnelMode,
     /// Map from sandbox-side loopback port → real host `SocketAddr` to dial.
     /// Only consulted when `mode == Strict`.
     pub rules: HashMap<u16, SocketAddr>,
+}
+
+impl SocketTunnelPolicy {
+    /// Shared permission-gate core for outbound traffic. The single source of
+    /// truth for "may this connect proceed at all"; the actual routing
+    /// (loopback vs. tunnel vs. straight-to-OS) lives in [`crate::sockets`] and
+    /// must stay consistent with the verdict here.
+    ///
+    /// - `policy` is the workload's declared policy, or `None` for the strict
+    ///   default (block-by-default, no rules).
+    /// - `has_loopback_listener` is whether an in-process wash peer is bound on
+    ///   `addr` in the loopback registry (service-to-service traffic). Callers
+    ///   compute it lazily because it requires locking the registry.
+    /// - `honor_rules` controls whether a declared tunnel rule on the port grants
+    ///   passage. TCP sets it (a rule rewrites the destination to a real host);
+    ///   UDP does not (no rewrite exists), so a UDP rule never grants escape.
+    fn allows_connect(
+        policy: Option<&Self>,
+        addr: &SocketAddr,
+        has_loopback_listener: bool,
+        honor_rules: bool,
+    ) -> bool {
+        let mode = policy.map(|p| p.mode).unwrap_or_default();
+        match mode {
+            // Opt-out: every connect passes straight through to the OS.
+            SocketTunnelMode::AllowAll => true,
+            // Strict and DenyAll both confine traffic to loopback. In Strict, a
+            // declared tunnel rule additionally lets a port through (TCP only);
+            // DenyAll blocks even those. Both always allow in-process
+            // service-to-service traffic.
+            SocketTunnelMode::Strict | SocketTunnelMode::DenyAll => {
+                if !addr.ip().is_loopback() {
+                    return false;
+                }
+                let has_rule = honor_rules
+                    && mode == SocketTunnelMode::Strict
+                    && policy.is_some_and(|p| p.rules.contains_key(&addr.port()));
+                has_rule || has_loopback_listener
+            }
+        }
+    }
+
+    /// Permission-gate decision for an outbound **TCP** connect to `addr`.
+    /// Honors tunnel rules: a Strict-mode rule rewrites the destination to the
+    /// rule's host address and dials it on the real network.
+    pub fn allows_tcp_connect(
+        policy: Option<&Self>,
+        addr: &SocketAddr,
+        has_loopback_listener: bool,
+    ) -> bool {
+        Self::allows_connect(policy, addr, has_loopback_listener, true)
+    }
+
+    /// Permission-gate decision for outbound **UDP** — a connect or a single
+    /// outgoing datagram to `addr`.
+    ///
+    /// Tunnel rules are NOT honored for UDP: there is no UDP destination
+    /// rewrite, so a rule cannot grant a real-network escape. UDP is therefore
+    /// confined to in-process service-to-service loopback traffic under Strict
+    /// and DenyAll, and is unrestricted only under AllowAll.
+    pub fn allows_udp_connect(
+        policy: Option<&Self>,
+        addr: &SocketAddr,
+        has_loopback_listener: bool,
+    ) -> bool {
+        Self::allows_connect(policy, addr, has_loopback_listener, false)
+    }
+}
+
+#[cfg(test)]
+mod socket_tunnel_tests {
+    use super::*;
+
+    fn policy(mode: SocketTunnelMode, rule_ports: &[u16]) -> SocketTunnelPolicy {
+        SocketTunnelPolicy {
+            mode,
+            rules: rule_ports
+                .iter()
+                .map(|&p| (p, SocketAddr::from(([127, 0, 0, 1], p))))
+                .collect(),
+        }
+    }
+
+    fn loopback(port: u16) -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], port))
+    }
+
+    fn external(port: u16) -> SocketAddr {
+        SocketAddr::from(([93, 184, 216, 34], port))
+    }
+
+    #[test]
+    fn none_policy_defaults_to_strict() {
+        // No policy == strict default: loopback service traffic allowed,
+        // everything else blocked.
+        assert!(SocketTunnelPolicy::allows_tcp_connect(
+            None,
+            &loopback(8080),
+            true
+        ));
+        assert!(!SocketTunnelPolicy::allows_tcp_connect(
+            None,
+            &loopback(8080),
+            false
+        ));
+        assert!(!SocketTunnelPolicy::allows_tcp_connect(
+            None,
+            &external(443),
+            false
+        ));
+    }
+
+    #[test]
+    fn allow_all_permits_everything() {
+        let p = policy(SocketTunnelMode::AllowAll, &[]);
+        assert!(SocketTunnelPolicy::allows_tcp_connect(
+            Some(&p),
+            &external(443),
+            false
+        ));
+        assert!(SocketTunnelPolicy::allows_tcp_connect(
+            Some(&p),
+            &loopback(8080),
+            false
+        ));
+    }
+
+    #[test]
+    fn strict_allows_loopback_listener_and_rules_only() {
+        let p = policy(SocketTunnelMode::Strict, &[3306]);
+        // Declared rule on a loopback port: allowed even without a listener.
+        assert!(SocketTunnelPolicy::allows_tcp_connect(
+            Some(&p),
+            &loopback(3306),
+            false
+        ));
+        // In-process service listener: allowed.
+        assert!(SocketTunnelPolicy::allows_tcp_connect(
+            Some(&p),
+            &loopback(9000),
+            true
+        ));
+        // Loopback port with neither a rule nor a listener: blocked.
+        assert!(!SocketTunnelPolicy::allows_tcp_connect(
+            Some(&p),
+            &loopback(9000),
+            false
+        ));
+        // A rule never lifts the loopback restriction for an external address.
+        assert!(!SocketTunnelPolicy::allows_tcp_connect(
+            Some(&p),
+            &external(3306),
+            false
+        ));
+    }
+
+    #[test]
+    fn deny_all_blocks_rules_but_keeps_service_to_service() {
+        // Regression guard for the gate fix: DenyAll must still permit
+        // in-process service-to-service loopback traffic (matching its docs),
+        // while blocking tunnel rules and all non-loopback traffic.
+        let p = policy(SocketTunnelMode::DenyAll, &[3306]);
+        // Service-to-service loopback listener: allowed.
+        assert!(SocketTunnelPolicy::allows_tcp_connect(
+            Some(&p),
+            &loopback(9000),
+            true
+        ));
+        // Declared rule is ignored under DenyAll.
+        assert!(!SocketTunnelPolicy::allows_tcp_connect(
+            Some(&p),
+            &loopback(3306),
+            false
+        ));
+        // External traffic blocked.
+        assert!(!SocketTunnelPolicy::allows_tcp_connect(
+            Some(&p),
+            &external(443),
+            true
+        ));
+    }
+
+    #[test]
+    fn udp_ignores_rules_and_confines_to_loopback_service_traffic() {
+        // UDP has no tunnel rewrite, so rules never grant escape. AllowAll is
+        // open; Strict and DenyAll allow only in-process service-to-service
+        // loopback (and behave identically for UDP).
+        let strict = policy(SocketTunnelMode::Strict, &[3306]);
+        let allow = policy(SocketTunnelMode::AllowAll, &[]);
+        let deny = policy(SocketTunnelMode::DenyAll, &[3306]);
+
+        // AllowAll: open.
+        assert!(SocketTunnelPolicy::allows_udp_connect(
+            Some(&allow),
+            &external(53),
+            false
+        ));
+
+        // Strict: a rule does NOT let UDP escape (unlike TCP).
+        assert!(!SocketTunnelPolicy::allows_udp_connect(
+            Some(&strict),
+            &loopback(3306),
+            false
+        ));
+        // Strict: in-process loopback peer allowed; non-loopback always blocked.
+        assert!(SocketTunnelPolicy::allows_udp_connect(
+            Some(&strict),
+            &loopback(9000),
+            true
+        ));
+        assert!(!SocketTunnelPolicy::allows_udp_connect(
+            Some(&strict),
+            &external(53),
+            false
+        ));
+
+        // DenyAll: only service-to-service, rule ignored.
+        assert!(SocketTunnelPolicy::allows_udp_connect(
+            Some(&deny),
+            &loopback(9000),
+            true
+        ));
+        assert!(!SocketTunnelPolicy::allows_udp_connect(
+            Some(&deny),
+            &loopback(3306),
+            false
+        ));
+
+        // None == strict default.
+        assert!(!SocketTunnelPolicy::allows_udp_connect(
+            None,
+            &loopback(53),
+            false
+        ));
+        assert!(SocketTunnelPolicy::allows_udp_connect(
+            None,
+            &loopback(53),
+            true
+        ));
+    }
 }
 
 /// Resource limits and configuration for a component or service.
@@ -121,9 +362,9 @@ pub struct LocalResources {
     /// wire (proto / wash YAML) are parsed at conversion time, so the
     /// request hot path matches against the typed enum directly.
     pub allowed_hosts: Arc<[AllowedHost]>,
-    /// Explicit policy for outbound TCP from this workload. `None` is treated
-    /// the same as `Some(SocketTunnelPolicy::default())` (strict + no rules)
-    /// so callers that don't care can omit the field entirely.
+    /// Explicit policy for outbound TCP/UDP from this workload. `None` is
+    /// treated as `Some(SocketTunnelPolicy::default())` (strict + no rules) so
+    /// callers that don't care can omit the field entirely.
     pub socket_tunnels: Option<SocketTunnelPolicy>,
 }
 
