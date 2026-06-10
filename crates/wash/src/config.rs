@@ -426,8 +426,7 @@ pub struct DevConfig {
     /// blobstore, keyvalue, and messaging. Mirroring the `wash host`
     /// with `--data-nats-url`. When set, all three use NATS unless a per-plugin
     /// URL below overrides it (e.g. `wasi_keyvalue_redis_url`,
-    /// `wasi_keyvalue_path`, `wasi_keyvalue_nats_url`,
-    /// `wasmcloud_messaging_nats_url`, `wasi_blobstore_path`).
+    /// `wasi_keyvalue_path`, `wasi_keyvalue_nats_url`, `wasi_blobstore_path`).
     /// Example: nats://127.0.0.1:4222
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_nats_url: Option<String>,
@@ -448,14 +447,6 @@ pub struct DevConfig {
     /// When set, takes precedence over wasi_keyvalue_path but is overridden by wasi_keyvalue_redis_url.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasi_keyvalue_nats_url: Option<String>,
-
-    /// Optional NATS connection URL for the wasmcloud:messaging plugin.
-    /// Overrides `data_nats_url` for messaging.
-    /// Example: nats://127.0.0.1:4222
-    /// When set (or when `data_nats_url` is set), components subscribe to real
-    /// NATS subjects; otherwise an in-memory backend is used.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub wasmcloud_messaging_nats_url: Option<String>,
 
     /// Optional path for WASI blobstore filesystem storage. If not set, an in-memory store is used.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -511,14 +502,6 @@ impl DevConfig {
         if let Some(url) = &self.wasi_keyvalue_nats_url {
             check_url_scheme(
                 "dev.wasi_keyvalue_nats_url",
-                url,
-                &["nats", "tls"],
-                &mut errors,
-            );
-        }
-        if let Some(url) = &self.wasmcloud_messaging_nats_url {
-            check_url_scheme(
-                "dev.wasmcloud_messaging_nats_url",
                 url,
                 &["nats", "tls"],
                 &mut errors,
@@ -803,7 +786,6 @@ pub fn example_config() -> Config {
             wasi_keyvalue_redis_url: Some("redis://127.0.0.1:6379".to_string()),
             wasi_keyvalue_path: Some(PathBuf::from("./data/keyvalue")),
             wasi_keyvalue_nats_url: Some("nats://127.0.0.1:4222".to_string()),
-            wasmcloud_messaging_nats_url: Some("nats://127.0.0.1:4222".to_string()),
             wasi_blobstore_path: Some(PathBuf::from("./data/blobstore")),
             postgres_url: Some("postgres://user:pass@127.0.0.1:5432".to_string()),
             ..Default::default()
@@ -1071,25 +1053,6 @@ workload:
     fn dev_data_nats_valid_scheme_is_ok() {
         let cfg = DevConfig {
             data_nats_url: Some("nats://127.0.0.1:4222".to_string()),
-            ..Default::default()
-        };
-        assert!(cfg.validate().is_ok());
-    }
-
-    #[test]
-    fn dev_messaging_nats_wrong_scheme_is_err() {
-        let cfg = DevConfig {
-            wasmcloud_messaging_nats_url: Some("http://localhost:4222".to_string()),
-            ..Default::default()
-        };
-        let err = cfg.validate().unwrap_err().to_string();
-        assert!(err.contains("wasmcloud_messaging_nats_url"));
-    }
-
-    #[test]
-    fn dev_messaging_nats_valid_scheme_is_ok() {
-        let cfg = DevConfig {
-            wasmcloud_messaging_nats_url: Some("nats://127.0.0.1:4222".to_string()),
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());

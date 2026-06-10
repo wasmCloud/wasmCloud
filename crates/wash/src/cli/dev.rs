@@ -100,17 +100,9 @@ impl CliCommand for DevCommand {
             None
         };
 
-        // Enable wasmcloud:messaging — NATS when a messaging URL or the shared
-        // data_nats_url is configured, otherwise the in-memory backend.
-        if let Some(nats_url) = &dev_config.wasmcloud_messaging_nats_url {
-            let nats_client = async_nats::connect(nats_url.as_str())
-                .await
-                .context("failed to connect to NATS for messaging plugin")?;
-            host_builder = host_builder.with_plugin(Arc::new(
-                plugin::wasmcloud_messaging::NatsMessaging::new(Arc::new(nats_client)),
-            ))?;
-            debug!(url = %nats_url, "wasmcloud:messaging plugin registered with NATS backend");
-        } else if let Some(client) = &data_nats_client {
+        // Enable wasmcloud:messaging — NATS when data_nats_url is configured,
+        // otherwise the in-memory backend.
+        if let Some(client) = &data_nats_client {
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasmcloud_messaging::NatsMessaging::new(client.clone()),
             ))?;
