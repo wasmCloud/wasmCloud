@@ -14,6 +14,10 @@ use tracing::{Instrument, debug, instrument, warn};
 const PLUGIN_MESSAGING_MEMORY_ID: &str = "wasmcloud-messaging-memory";
 const MAX_QUEUE_SIZE: usize = 10000;
 
+/// A component's message inbox, shared between the publisher side
+/// (`route_to_subscribers`) and the component's processing task.
+type Inbox = Arc<RwLock<VecDeque<types::BrokerMessage>>>;
+
 mod bindings {
     crate::wasmtime::component::bindgen!({
         world: "messaging",
@@ -27,27 +31,87 @@ use bindings::wasmcloud::messaging::types;
 
 use crate::plugin::WorkloadTracker;
 
-/// Per-workload tracking data
+/// Per-workload tracking data. Holds the reply-routing table shared by every
+/// component in the workload; message delivery itself is per-component (see
+/// [`ComponentData`]).
+#[derive(Default)]
 struct WorkloadData {
-    pending_messages: Arc<RwLock<VecDeque<types::BrokerMessage>>>,
     pending_requests: Arc<RwLock<HashMap<String, oneshot::Sender<types::BrokerMessage>>>>,
-    notify: Arc<Notify>,
 }
 
-impl Default for WorkloadData {
-    fn default() -> Self {
-        Self {
-            pending_messages: Arc::default(),
-            pending_requests: Arc::default(),
-            notify: Arc::new(Notify::new()),
-        }
-    }
-}
-
-/// Per-component tracking data
+/// Per-component tracking data. Each handler component has its own subject
+/// subscriptions and inbox queue, so a published message is delivered only to
+/// the components whose subscriptions match its subject.
 struct ComponentData {
     cancel_token: tokio_util::sync::CancellationToken,
     task_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Subjects this component subscribes to (NATS tokens: `*` one token,
+    /// `>` one or more trailing tokens). Empty means "receive everything",
+    /// preserving the single-handler behavior of earlier versions.
+    subscriptions: Vec<String>,
+    /// This component's inbox. `publish`/`request` push matching messages
+    /// here; the component's processing task drains it.
+    inbox: Inbox,
+    notify: Arc<Notify>,
+}
+
+/// Returns whether `subject` matches NATS subscription `pattern`, where `*`
+/// matches exactly one token and `>` matches one or more trailing tokens.
+fn subject_matches(pattern: &str, subject: &str) -> bool {
+    let mut subject_tokens = subject.split('.');
+    let mut pattern_tokens = pattern.split('.').peekable();
+    while let Some(pat) = pattern_tokens.next() {
+        if pat == ">" {
+            // `>` is only valid as the final token and matches one or more
+            // remaining subject tokens.
+            return pattern_tokens.peek().is_none() && subject_tokens.next().is_some();
+        }
+        match subject_tokens.next() {
+            Some(sub) if pat == "*" || pat == sub => continue,
+            _ => return false,
+        }
+    }
+    // Every pattern token matched; the subject must be fully consumed too.
+    subject_tokens.next().is_none()
+}
+
+/// Whether any of a component's `subscriptions` match `subject`. An empty
+/// subscription list matches everything (single-handler back-compat).
+fn subscriptions_match(subscriptions: &[String], subject: &str) -> bool {
+    subscriptions.is_empty() || subscriptions.iter().any(|s| subject_matches(s, subject))
+}
+
+/// Pushes `msg` onto the inbox of every component in `workload_id` whose
+/// subscriptions match its subject, waking each one. Returns an error only if
+/// the workload is untracked or a target inbox is full.
+async fn route_to_subscribers(
+    plugin: &InMemoryMessaging,
+    workload_id: &str,
+    msg: &types::BrokerMessage,
+) -> Result<(), String> {
+    let targets: Vec<(Inbox, Arc<Notify>)> = {
+        let lock = plugin.tracker.read().await;
+        let Some(item) = lock.workloads.get(workload_id) else {
+            return Err("workload state not found".to_string());
+        };
+        item.components
+            .values()
+            .filter(|c| subscriptions_match(&c.subscriptions, &msg.subject))
+            .map(|c| (c.inbox.clone(), c.notify.clone()))
+            .collect()
+    };
+
+    for (inbox, notify) in targets {
+        {
+            let mut queue = inbox.write().await;
+            if queue.len() >= MAX_QUEUE_SIZE {
+                return Err("message queue full".to_string());
+            }
+            queue.push_back(msg.clone());
+        }
+        notify.notify_one();
+    }
+    Ok(())
 }
 
 /// In-memory messaging plugin for wash dev and mocking scenarios.
@@ -90,14 +154,10 @@ impl<'a> Host for ActiveCtx<'a> {
 
         let workload_id = self.ctx.workload_id.to_string();
 
-        let (pending_messages, pending_requests, notify) = {
+        let pending_requests = {
             let lock = plugin.tracker.read().await;
             match lock.get_workload_data(&workload_id) {
-                Some(data) => (
-                    data.pending_messages.clone(),
-                    data.pending_requests.clone(),
-                    data.notify.clone(),
-                ),
+                Some(data) => data.pending_requests.clone(),
                 None => wasmtime::bail!("workload state not found"),
             }
         };
@@ -122,24 +182,10 @@ impl<'a> Host for ActiveCtx<'a> {
         };
 
         debug!(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>"), "Sending request");
-        // Push the message to the queue
-        let queue_full = {
-            let mut msg_lock = pending_messages.write().await;
-
-            if msg_lock.len() >= MAX_QUEUE_SIZE {
-                true
-            } else {
-                msg_lock.push_back(msg);
-                false
-            }
-        };
-
-        if !queue_full {
-            notify.notify_one();
-        } else {
-            let mut req_lock = pending_requests.write().await;
-            req_lock.remove(&reply_to);
-            return Ok(Err("message queue full".to_string()));
+        // Route the request to subscribers of its subject.
+        if let Err(e) = route_to_subscribers(&plugin, &workload_id, &msg).await {
+            pending_requests.write().await.remove(&reply_to);
+            return Ok(Err(e));
         }
 
         // Wait for the response with timeout
@@ -169,21 +215,18 @@ impl<'a> Host for ActiveCtx<'a> {
         };
 
         let workload_id = self.ctx.workload_id.to_string();
-        let (pending_messages, pending_requests, notify) = {
+        let pending_requests = {
             let lock = plugin.tracker.read().await;
             match lock.get_workload_data(&workload_id) {
-                Some(data) => (
-                    data.pending_messages.clone(),
-                    data.pending_requests.clone(),
-                    data.notify.clone(),
-                ),
+                Some(data) => data.pending_requests.clone(),
                 None => wasmtime::bail!("workload state not found"),
             }
         };
 
         {
             let mut lock = pending_requests.write().await;
-            // Check if this is a reply to a pending request
+            // Check if this is a reply to a pending request. Reply subjects
+            // (`_INBOX.*`) are routed here, not to subscribers.
             if let Some(sender) = lock.remove(&msg.subject) {
                 debug!(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>"), "Responding message");
                 // This is a response to a request - send it via the oneshot channel
@@ -194,17 +237,11 @@ impl<'a> Host for ActiveCtx<'a> {
 
         debug!(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>"), "Publishing message");
 
-        // Regular publish - push to the pending messages queue
-        {
-            let mut lock = pending_messages.write().await;
-            if lock.len() >= MAX_QUEUE_SIZE {
-                return Ok(Err("message queue full".to_string()));
-            }
-
-            lock.push_back(msg);
+        // Regular publish - deliver to every subscriber of this subject.
+        match route_to_subscribers(&plugin, &workload_id, &msg).await {
+            Ok(()) => Ok(Ok(())),
+            Err(e) => Ok(Err(e)),
         }
-        notify.notify_one();
-        Ok(Ok(()))
     }
 }
 
@@ -269,6 +306,18 @@ impl HostPlugin for InMemoryMessaging {
             extract_active_ctx,
         )?;
 
+        // Per-component subscriptions come from this component's
+        // `LocalResources.config` (set via `dev.components[].config` or a
+        // WorkloadDeployment), so workers in one workload can subscribe to
+        // different subjects.
+        let subscriptions = super::parse_subscriptions(
+            component_handle
+                .local_resources()
+                .config
+                .get("subscriptions")
+                .map(String::as_str),
+        );
+
         let WorkloadItem::Component(component_handle) = component_handle else {
             // Only track components
             return Ok(());
@@ -279,12 +328,15 @@ impl HostPlugin for InMemoryMessaging {
             .exports
             .contains(&WitInterface::from("wasmcloud:messaging/handler@0.2.0"))
         {
-            debug!("Tracking component in in-memory messaging");
+            debug!(?subscriptions, "Tracking component in in-memory messaging");
             self.tracker.write().await.add_component(
                 component_handle,
                 ComponentData {
                     cancel_token: tokio_util::sync::CancellationToken::new(),
                     task_handle: None,
+                    subscriptions,
+                    inbox: Arc::default(),
+                    notify: Arc::new(Notify::new()),
                 },
             );
         }
@@ -297,18 +349,14 @@ impl HostPlugin for InMemoryMessaging {
         workload: &ResolvedWorkload,
         component_id: &str,
     ) -> anyhow::Result<()> {
-        let (pending_messages, notify) = {
-            let lock = self.tracker.read().await;
-            match lock.get_workload_data(workload.id()) {
-                Some(data) => (data.pending_messages.clone(), data.notify.clone()),
-                None => return Ok(()),
-            }
-        };
-
-        let cancel_token = {
+        let (inbox, notify, cancel_token) = {
             let lock = self.tracker.read().await;
             match lock.get_component_data(component_id) {
-                Some(data) => data.cancel_token.clone(),
+                Some(data) => (
+                    data.inbox.clone(),
+                    data.notify.clone(),
+                    data.cancel_token.clone(),
+                ),
                 None => return Ok(()),
             }
         };
@@ -335,11 +383,13 @@ impl HostPlugin for InMemoryMessaging {
                         break;
                     }
                     _ = notify.notified() => {
-                        // Try to get a message from the queue
-                        let msg = pending_messages.write().await.pop_front();
+                        // Drain every message queued since the last wakeup, so a
+                        // coalesced notification can't strand a message.
+                        loop {
+                        let msg = inbox.write().await.pop_front();
 
                         let Some(msg) = msg else {
-                            continue;
+                            break;
                         };
 
                         debug!(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>"), "Processing message");
@@ -395,6 +445,7 @@ impl HostPlugin for InMemoryMessaging {
                                 }
                             };
                         });
+                        }
                     }
                 }
             }
@@ -432,5 +483,50 @@ impl HostPlugin for InMemoryMessaging {
             .await;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{subject_matches, subscriptions_match};
+
+    #[test]
+    fn exact_and_literal_tokens() {
+        assert!(subject_matches("tasks.leet", "tasks.leet"));
+        assert!(!subject_matches("tasks.leet", "tasks.reverse"));
+        // Token counts must match for a literal pattern.
+        assert!(!subject_matches("tasks.leet", "tasks.leet.extra"));
+        assert!(!subject_matches("tasks.leet.extra", "tasks.leet"));
+    }
+
+    #[test]
+    fn single_token_wildcard() {
+        assert!(subject_matches("tasks.*", "tasks.leet"));
+        assert!(subject_matches("tasks.*", "tasks.reverse"));
+        // `*` matches exactly one token, not zero and not many.
+        assert!(!subject_matches("tasks.*", "tasks"));
+        assert!(!subject_matches("tasks.*", "tasks.leet.v2"));
+    }
+
+    #[test]
+    fn multi_token_wildcard() {
+        assert!(subject_matches("tasks.>", "tasks.leet"));
+        assert!(subject_matches("tasks.>", "tasks.leet.v2"));
+        // `>` requires at least one trailing token.
+        assert!(!subject_matches("tasks.>", "tasks"));
+    }
+
+    #[test]
+    fn empty_subscriptions_match_everything() {
+        // Back-compat: a handler with no configured subscriptions receives
+        // every subject, preserving single-handler behavior.
+        assert!(subscriptions_match(&[], "anything.at.all"));
+    }
+
+    #[test]
+    fn non_empty_subscriptions_match_only_listed_subjects() {
+        let subs = vec!["tasks.leet".to_string()];
+        assert!(subscriptions_match(&subs, "tasks.leet"));
+        assert!(!subscriptions_match(&subs, "tasks.reverse"));
     }
 }

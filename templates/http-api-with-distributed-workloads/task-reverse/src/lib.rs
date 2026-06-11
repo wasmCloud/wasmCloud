@@ -18,8 +18,8 @@ struct Component;
 /// workload-level `config:` block, with this component's `dev.components`
 /// entry overriding on a per-key basis (see `.wash/config.yaml`).
 struct Settings {
-    /// `basic` substitutes vowels and `s`; `aggressive` also maps `l`/`t`.
-    aggressive: bool,
+    /// `chars` reverses the characters; `words` reverses the word order.
+    by_words: bool,
     /// Prepended to every reply. Empty by default.
     prefix: String,
 }
@@ -27,11 +27,11 @@ struct Settings {
 impl Settings {
     fn load() -> Self {
         // `get` returns Ok(None) when unset and Err only on a store fault;
-        // fall back to the basic, unprefixed defaults in either case.
+        // fall back to the character-reversal, unprefixed defaults either way.
         let get = |key: &str| store::get(key).ok().flatten();
         Settings {
-            aggressive: get("leet.mode").as_deref() == Some("aggressive"),
-            prefix: get("leet.prefix").unwrap_or_default(),
+            by_words: get("reverse.mode").as_deref() == Some("words"),
+            prefix: get("reverse.prefix").unwrap_or_default(),
         }
     }
 }
@@ -54,7 +54,7 @@ impl bindings::exports::wasmcloud::messaging::handler::Guest for Component {
         let settings = Settings::load();
         let reply = BrokerMessage {
             subject,
-            body: format!("{}{}", settings.prefix, to_leet_speak(&payload, &settings)).into(),
+            body: format!("{}{}", settings.prefix, reverse(&payload, &settings)).into(),
             reply_to: None,
         };
 
@@ -62,18 +62,10 @@ impl bindings::exports::wasmcloud::messaging::handler::Guest for Component {
     }
 }
 
-fn to_leet_speak(input: &str, settings: &Settings) -> String {
-    input
-        .chars()
-        .map(|c| match c.to_ascii_lowercase() {
-            'a' => '4',
-            'e' => '3',
-            'i' => '1',
-            'o' => '0',
-            's' => '5',
-            't' if settings.aggressive => '7',
-            'l' if settings.aggressive => '1',
-            _ => c,
-        })
-        .collect()
+fn reverse(input: &str, settings: &Settings) -> String {
+    if settings.by_words {
+        input.split_whitespace().rev().collect::<Vec<_>>().join(" ")
+    } else {
+        input.chars().rev().collect()
+    }
 }

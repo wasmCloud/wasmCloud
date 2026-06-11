@@ -2,7 +2,7 @@
 resolver = "3"
 package.edition = "2024"
 package.authors = ["The wasmCloud Team"]
-members = ["http-api", "task-leet"]
+members = ["http-api", "task-leet", "task-reverse"]
 
 [workspace.lints.rust]
 warnings = "deny"

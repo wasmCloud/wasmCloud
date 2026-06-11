@@ -6,8 +6,23 @@ build:
 
 dev:
   components:
+    # Each worker subscribes to its own subject, so `tasks.leet` routes to
+    # task-leet and `tasks.reverse` routes to task-reverse. `subscriptions`
+    # is per-component config read by the messaging backend (in-memory for
+    # `wash dev`, or NATS when `data_nats_url` is set).
     - name: task-leet
       file: target/wasm32-wasip2/release/task_leet.wasm
+      # Per-component config for this worker
+      config:
+        subscriptions: tasks.leet
+        leet.mode: aggressive
+        leet.prefix: "🤖 "
+    - name: task-reverse
+      file: target/wasm32-wasip2/release/task_reverse.wasm
+      config:
+        subscriptions: tasks.reverse
+        reverse.mode: words
+        reverse.prefix: "🔁 "
 
 new:
   command: cargo fetch

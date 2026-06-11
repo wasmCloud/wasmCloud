@@ -327,12 +327,44 @@ pub struct DevVolume {
     pub guest_path: PathBuf,
 }
 
+/// A component loaded alongside the main dev component.
+///
+/// `environment` / `config` / `allowedHosts` override the workload-level
+/// `workload:` block for this component — see
+/// [`crate::workload::resolve_component_workload`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DevComponent {
     /// Name of the component
     pub name: String,
     /// Path to the component file
     pub file: PathBuf,
+    /// Environment variables (wasi:cli/env), merged over
+    /// `workload.environment`. This component wins on key conflicts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<EnvironmentLayer>,
+    /// Opaque key-value config, merged over `workload.config`. This
+    /// component wins on key conflicts.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub config: HashMap<String, String>,
+    /// Outbound HTTP allowlist. When set it replaces `workload.allowedHosts`
+    /// for this component (`[]` denies all egress); when omitted the
+    /// workload list applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_hosts: Option<Vec<AllowedHost>>,
+}
+
+impl DevComponent {
+    /// Creates a component entry with no per-component overrides.
+    pub fn new(name: impl Into<String>, file: impl Into<PathBuf>) -> Self {
+        Self {
+            name: name.into(),
+            file: file.into(),
+            environment: None,
+            config: HashMap::new(),
+            allowed_hosts: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -390,6 +422,15 @@ pub struct DevConfig {
     #[serde(default)]
     pub wasi_webgpu: bool,
 
+    /// Shared NATS connection URL for the data-plane plugins
+    /// blobstore, keyvalue, and messaging. Mirroring the `wash host`
+    /// with `--data-nats-url`. When set, all three use NATS unless a per-plugin
+    /// URL below overrides it (e.g. `wasi_keyvalue_redis_url`,
+    /// `wasi_keyvalue_path`, `wasi_keyvalue_nats_url`, `wasi_blobstore_path`).
+    /// Example: nats://127.0.0.1:4222
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_nats_url: Option<String>,
+
     /// Optional Redis connection URL for the WASI keyvalue plugin.
     /// Example: redis://127.0.0.1:6379
     /// When set, takes precedence over wasi_keyvalue_path.
@@ -400,7 +441,8 @@ pub struct DevConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasi_keyvalue_path: Option<PathBuf>,
 
-    /// Optional NATS connection URL for the WASI keyvalue plugin.
+    /// Optional NATS connection URL for the WASI keyvalue plugin. Overrides
+    /// `data_nats_url` for keyvalue.
     /// Example: nats://127.0.0.1:4222
     /// When set, takes precedence over wasi_keyvalue_path but is overridden by wasi_keyvalue_redis_url.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -446,6 +488,9 @@ impl DevConfig {
             _ => {}
         }
 
+        if let Some(url) = &self.data_nats_url {
+            check_url_scheme("dev.data_nats_url", url, &["nats", "tls"], &mut errors);
+        }
         if let Some(url) = &self.wasi_keyvalue_redis_url {
             check_url_scheme(
                 "dev.wasi_keyvalue_redis_url",
@@ -721,10 +766,10 @@ pub fn example_config() -> Config {
         dev: Some(DevConfig {
             address: Some("0.0.0.0:8000".to_string()),
             service_file: Some(PathBuf::from("example/path/to/service.wasm")),
-            components: vec![DevComponent {
-                name: "example-sidecar".to_string(),
-                file: PathBuf::from("example/path/to/sidecar.wasm"),
-            }],
+            components: vec![DevComponent::new(
+                "example-sidecar",
+                "example/path/to/sidecar.wasm",
+            )],
             volumes: vec![DevVolume {
                 host_path: PathBuf::from("./data"),
                 guest_path: PathBuf::from("/data"),
@@ -737,6 +782,7 @@ pub fn example_config() -> Config {
                 config: HashMap::new(),
                 name: None,
             }],
+            data_nats_url: Some("nats://127.0.0.1:4222".to_string()),
             wasi_keyvalue_redis_url: Some("redis://127.0.0.1:6379".to_string()),
             wasi_keyvalue_path: Some(PathBuf::from("./data/keyvalue")),
             wasi_keyvalue_nats_url: Some("nats://127.0.0.1:4222".to_string()),
@@ -994,6 +1040,25 @@ workload:
     }
 
     #[test]
+    fn dev_data_nats_wrong_scheme_is_err() {
+        let cfg = DevConfig {
+            data_nats_url: Some("http://localhost:4222".to_string()),
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("data_nats_url"));
+    }
+
+    #[test]
+    fn dev_data_nats_valid_scheme_is_ok() {
+        let cfg = DevConfig {
+            data_nats_url: Some("nats://127.0.0.1:4222".to_string()),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
     fn dev_postgres_wrong_scheme_is_err() {
         let cfg = DevConfig {
             postgres_url: Some("mysql://localhost/db".to_string()),
@@ -1024,10 +1089,7 @@ workload:
     #[test]
     fn dev_component_empty_name_is_err() {
         let cfg = DevConfig {
-            components: vec![DevComponent {
-                name: "  ".to_string(),
-                file: "comp.wasm".into(),
-            }],
+            components: vec![DevComponent::new("  ", "comp.wasm")],
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
@@ -1037,10 +1099,7 @@ workload:
     #[test]
     fn dev_component_empty_file_is_err() {
         let cfg = DevConfig {
-            components: vec![DevComponent {
-                name: "sidecar".to_string(),
-                file: "".into(),
-            }],
+            components: vec![DevComponent::new("sidecar", "")],
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
@@ -1050,13 +1109,51 @@ workload:
     #[test]
     fn dev_component_valid_is_ok() {
         let cfg = DevConfig {
-            components: vec![DevComponent {
-                name: "sidecar".to_string(),
-                file: "sidecar.wasm".into(),
-            }],
+            components: vec![DevComponent::new("sidecar", "sidecar.wasm")],
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn dev_component_overrides_parse_from_yaml() {
+        // Per-component overrides use the same camelCase shape as the
+        // `workload:` block (and the k8s `localResources` they mirror).
+        let yaml = r#"
+dev:
+  components:
+    - name: hello
+      file: hello.wasm
+      environment:
+        config:
+          MY_ENV_VAR: hello
+        configFrom:
+          - shared
+      config:
+        flag: "on"
+      allowedHosts:
+        - https://api.example.com
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let dev = config.dev();
+        let component = &dev.components[0];
+        let env = component.environment.as_ref().unwrap();
+        assert_eq!(env.config.get("MY_ENV_VAR").unwrap(), "hello");
+        assert_eq!(env.config_from, vec!["shared".to_string()]);
+        assert_eq!(component.config.get("flag").unwrap(), "on");
+        assert_eq!(
+            component.allowed_hosts.as_deref().unwrap(),
+            &["https://api.example.com".parse().unwrap()]
+        );
+
+        // Omitting all three leaves the overrides empty (inherit workload).
+        let yaml = "dev:\n  components:\n    - name: hello\n      file: hello.wasm\n";
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let dev = config.dev();
+        let component = &dev.components[0];
+        assert!(component.environment.is_none());
+        assert!(component.config.is_empty());
+        assert!(component.allowed_hosts.is_none());
     }
 
     #[test]
