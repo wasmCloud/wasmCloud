@@ -1,10 +1,4 @@
 # Example HorizontalPodAutoscaler targeting a WorkloadDeployment.
-#
-# This works because WorkloadDeployment implements the /scale subresource
-# (specReplicasPath=.spec.replicas, statusReplicasPath=.status.currentReplicas,
-# labelSelectorPath=.status.selector). HPA — and KEDA, which builds on HPA —
-# can therefore read and write the deployment's replica count.
-#
 # wasmCloud workloads run on wasmCloud hosts rather than as Pods, so Pods/
 # Resource metrics do not apply. Use External or Object metrics (e.g. a
 # request-rate metric exposed via Prometheus Adapter / KEDA). The example
