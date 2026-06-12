@@ -6,6 +6,21 @@ global:
     pullSecrets: []
   nameOverride: ""
   fullnameOverride: ""
+  nats:
+    # -- Control-plane / scheduler NATS URL. Used by the operator (`-nats-url`)
+    # and the host runtime (`--scheduler-nats-url`) so both connect to the same
+    # control plane. When empty, defaults to the in-cluster NATS service:
+    # `nats://nats.<release-namespace>.svc.cluster.local:4222`. Override to point
+    # at an external NATS cluster, a different service name/port, or NATS in
+    # another namespace. Can be overridden per host group via
+    # `runtime.hostGroups[].schedulerNatsUrl`.
+    schedulerUrl: ""
+    # -- Data-plane NATS URL. Used by the host runtime (`--data-nats-url`) for
+    # Wasm workload messaging, allowing workloads to use a separate NATS cluster
+    # from the control plane. When empty, defaults to the same in-cluster NATS
+    # service as `schedulerUrl`. Can be overridden per host group via
+    # `runtime.hostGroups[].dataNatsUrl`.
+    dataUrl: ""
   tls:
     # -- Enable TLS for NATS connections and certificate generation.
     # Set to false when a service mesh (e.g. Istio) provides mTLS.
@@ -93,6 +108,28 @@ operator:
   # `CrossEnvironmentSchedulingDenied` Warning Event and a
   # `HostSelection=False` condition on the Workload.
   allowSharedHosts: true
+  # -- Additional environment variables for the operator container, appended
+  # after the chart-managed vars. Standard Kubernetes env shape (supports
+  # `valueFrom` secretKeyRef / configMapKeyRef).
+  # Example:
+  #   env:
+  #     - name: LOG_LEVEL
+  #       value: debug
+  env: []
+  # -- Populate the operator container's environment from ConfigMaps/Secrets.
+  # Standard Kubernetes `envFrom` shape.
+  # Example:
+  #   envFrom:
+  #     - secretRef:
+  #         name: operator-extra-config
+  envFrom: []
+  # -- Additional CLI args appended verbatim to the operator container, for
+  # operator flags the chart does not template (e.g. `-leader-elect`,
+  # `-cpu-backpressure-threshold=75`).
+  # Example:
+  #   extraArgs:
+  #     - "-leader-elect"
+  extraArgs: []
 
 gateway:
   # -- DEPRECATED: runtime-gateway is being removed. HTTP routing is now handled
@@ -136,6 +173,17 @@ runtime:
     repository: wasmcloud/wash
     pull_policy: Always
     tag: ""
+  # -- Additional environment variables applied to every host group container,
+  # appended after the chart-managed vars and before any per-host-group `env`.
+  # Standard Kubernetes env shape (supports `valueFrom`).
+  env: []
+  # -- Populate every host group container's environment from
+  # ConfigMaps/Secrets. Merged with per-host-group `envFrom`. Standard
+  # Kubernetes `envFrom` shape.
+  envFrom: []
+  # -- Additional CLI args appended to every host group container, for host
+  # flags the chart does not template. Merged with per-host-group `extraArgs`.
+  extraArgs: []
   hostGroups:
     - name: default
       # -- Namespace to deploy this host group's Deployment, Service, generated
@@ -145,6 +193,19 @@ runtime:
       # has Pod RBAC + cache access to manage host Pod lifecycle there.
       namespace: ""
       replicas: 1
+      # -- Per-host-group override of the scheduler NATS URL. Empty falls back to
+      # `global.nats.schedulerUrl`, then the in-cluster NATS service.
+      schedulerNatsUrl: ""
+      # -- Per-host-group override of the data NATS URL. Empty falls back to
+      # `global.nats.dataUrl`, then the in-cluster NATS service.
+      dataNatsUrl: ""
+      # -- Per-host-group environment variables, appended after `runtime.env`.
+      # Standard Kubernetes env shape (supports `valueFrom`).
+      env: []
+      # -- Per-host-group `envFrom`, merged with `runtime.envFrom`.
+      envFrom: []
+      # -- Per-host-group extra CLI args, appended after `runtime.extraArgs`.
+      extraArgs: []
       service:
         type: ClusterIP
       webgpu:

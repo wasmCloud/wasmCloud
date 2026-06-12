@@ -153,6 +153,38 @@ Callers parse the comma-separated string with `splitList ","`.
 {{- end }}
 
 {{/*
+Control-plane / scheduler NATS URL. Used by the operator (`-nats-url`) and the
+host runtime (`--scheduler-nats-url`).
+
+Resolution order (first non-empty wins):
+  1. Per-host-group override (`.schedulerNatsUrl`).
+  2. Chart-wide `global.nats.schedulerUrl`.
+  3. The in-cluster NATS service built from the release namespace
+     (`nats://nats.<namespace>.svc.cluster.local:4222`) — for backwards compatibility.
+
+Callable two ways:
+  {{ include "runtime-operator.schedulerNatsUrl" . }} (operator: ctx is top)
+  {{ include "runtime-operator.schedulerNatsUrl" (dict "ctx" $top "group" .) }}  (runtime: per-group)
+*/}}
+{{- define "runtime-operator.schedulerNatsUrl" -}}
+{{- $ctx := . }}{{- $group := dict }}
+{{- if and (kindIs "map" .) (hasKey . "ctx") }}{{- $ctx = .ctx }}{{- $group = default dict .group }}{{- end }}
+{{- $default := default (printf "nats://nats.%s.svc.cluster.local:4222" $ctx.Release.Namespace) $ctx.Values.global.nats.schedulerUrl }}
+{{- default $default $group.schedulerNatsUrl -}}
+{{- end }}
+
+{{/*
+Data-plane NATS URL. Used by the host runtime (`--data-nats-url`) so Wasm
+workloads can use a separate NATS cluster from the control plane if desired.
+*/}}
+{{- define "runtime-operator.dataNatsUrl" -}}
+{{- $ctx := . }}{{- $group := dict }}
+{{- if and (kindIs "map" .) (hasKey . "ctx") }}{{- $ctx = .ctx }}{{- $group = default dict .group }}{{- end }}
+{{- $default := default (printf "nats://nats.%s.svc.cluster.local:4222" $ctx.Release.Namespace) $ctx.Values.global.nats.dataUrl }}
+{{- default $default $group.dataNatsUrl -}}
+{{- end }}
+
+{{/*
 Create the imagePullSecrets section for the chart.
 */}}
 {{- define "runtime-operator.imagePullSecrets" -}}
