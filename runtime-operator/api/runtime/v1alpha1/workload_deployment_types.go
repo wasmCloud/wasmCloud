@@ -53,10 +53,23 @@ type WorkloadDeploymentStatus struct {
 	PreviousReplicaSet *corev1.LocalObjectReference `json:"previousReplicaSet,omitempty"`
 	// +kubebuilder:validation:Optional
 	Replicas *ReplicaSetStatus `json:"replicas,omitempty"`
+
+	// CurrentReplicas is the number of workload instances currently running.
+	// Exposed as the /scale subresource statusReplicasPath so HPA can read the
+	// current replica count. Mirrors .status.replicas.current as a flat int.
+	// +kubebuilder:validation:Optional
+	CurrentReplicas int32 `json:"currentReplicas,omitempty"`
+
+	// Selector is the serialized label selector exposed by the /scale subresource
+	// (scale.status.selector). HPA requires a non-empty selector to compute
+	// metrics; without it scaling fails with "selector is required".
+	// +kubebuilder:validation:Optional
+	Selector string `json:"selector,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.currentReplicas,selectorpath=.status.selector
 // +kubebuilder:printcolumn:name="REPLICAS",type=integer,JSONPath=`.spec.replicas`
 // +kubebuilder:printcolumn:name="READY",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 

@@ -1,0 +1,30 @@
+# Example HorizontalPodAutoscaler targeting a WorkloadDeployment.
+# wasmCloud workloads run on wasmCloud hosts rather than as Pods, so Pods/
+# Resource metrics do not apply. Use External or Object metrics (e.g. a
+# request-rate metric exposed via Prometheus Adapter / KEDA). The example
+# below scales on an external `http_requests_per_second` metric.
+#
+# Apply config/samples/deployment.yaml first; it creates the `hello`
+# WorkloadDeployment this HPA targets.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hello
+spec:
+  scaleTargetRef:
+    apiVersion: runtime.wasmcloud.dev/v1alpha1
+    kind: WorkloadDeployment
+    name: hello
+  minReplicas: 1
+  maxReplicas: 100
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: http_requests_per_second
+        target:
+          type: AverageValue
+          averageValue: "10"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 60

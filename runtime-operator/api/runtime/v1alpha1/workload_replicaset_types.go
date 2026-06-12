@@ -35,6 +35,7 @@ func (w *WorkloadReplicaTemplate) Hash() string {
 // WorkloadReplicaSetSpec defines the desired state of WorkloadReplicaSet.
 type WorkloadReplicaSetSpec struct {
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=1
 	Replicas *int32 `json:"replicas,omitempty"`
 	// +kubebuilder:validation:Required
 	Template WorkloadReplicaTemplate `json:"template,omitempty"`

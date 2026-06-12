@@ -8,6 +8,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -21,6 +22,10 @@ import (
 const (
 	workloadDeploymentReconcileInterval = 1 * time.Minute
 	workloadDeploymentNameIndex         = "workload.deployment.name"
+	// workloadDeploymentNameLabel is stamped onto the ReplicaSets a deployment
+	// owns and exposed via the /scale subresource's selector so HPA/KEDA can
+	// identify the deployment's workloads.
+	workloadDeploymentNameLabel = "runtime.wasmcloud.dev/workload-deployment"
 )
 
 // WorkloadDeploymentReconciler reconciles a WorkloadReplicaSet object
@@ -110,11 +115,20 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 
 	replicaSetName := fmt.Sprintf("%s-%s", deployment.Name, randHash())
 
+	// Copy the deployment's labels and stamp the managed selector label so the
+	// /scale subresource's selector actually matches this deployment's
+	// ReplicaSets. Build a fresh map to avoid mutating deployment.Labels.
+	replicaSetLabels := make(map[string]string, len(deployment.Labels)+1)
+	for k, v := range deployment.Labels {
+		replicaSetLabels[k] = v
+	}
+	replicaSetLabels[workloadDeploymentNameLabel] = deployment.Name
+
 	newReplicaSet := &runtimev1alpha1.WorkloadReplicaSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   deployment.Namespace,
 			Name:        replicaSetName,
-			Labels:      deployment.Labels,
+			Labels:      replicaSetLabels,
 			Annotations: deployment.Annotations,
 		},
 		Spec: *replicaSetTemplate,
@@ -203,6 +217,13 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 		Unavailable: unavailableReplicas,
 	}
 	deployment.Status.Replicas = deploymentStatus
+
+	// Populate the flat /scale subresource fields (statusReplicasPath +
+	// selectorpath) so HPA/KEDA can read the current replica count and a
+	// non-empty selector. Set even on the not-available path below so status
+	// reflects what the operator observed.
+	deployment.Status.CurrentReplicas = currentReplicas
+	deployment.Status.Selector = labels.Set{workloadDeploymentNameLabel: deployment.Name}.String()
 
 	// Gate Scale on the active ReplicaSet actually being available, so
 	// WorkloadDeployment.Ready==True implies the underlying Workload is
