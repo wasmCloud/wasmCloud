@@ -64,16 +64,21 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            {{- /* Optional host env (appended after operator-managed vars).
-                   Standard k8s env shape — supports valueFrom secretKeyRef /
-                   configMapKeyRef. */}}
+            {{- with $top.Values.runtime.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
             {{- with .env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- /* Optional envFrom (defensive — symmetric with .env above). */}}
-          {{- with .envFrom }}
+          {{- /* Optional envFrom (chart-wide runtime.envFrom + per-host-group). */}}
+          {{- if or $top.Values.runtime.envFrom .envFrom }}
           envFrom:
+            {{- with $top.Values.runtime.envFrom }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .envFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           args:
             {{- if .logLevel }}
@@ -83,13 +88,13 @@ spec:
             - "--host-name=$(WASMCLOUD_HOST_IP)"
             - "--host-group={{ .name }}"
             - "--environment=$(WASMCLOUD_HOST_ENVIRONMENT)"
-            - "--scheduler-nats-url=nats://nats.{{ $top.Release.Namespace }}.svc.cluster.local:4222"
+            - "--scheduler-nats-url={{ include "runtime-operator.schedulerNatsUrl" (dict "ctx" $top "group" .) }}"
             {{- if $top.Values.global.tls.enabled }}
             - "--scheduler-nats-tls-ca=/runtime-cert/ca.crt"
             - "--scheduler-nats-tls-cert=/runtime-cert/tls.crt"
             - "--scheduler-nats-tls-key=/runtime-cert/tls.key"
             {{- end }}
-            - "--data-nats-url=nats://nats.{{ $top.Release.Namespace }}.svc.cluster.local:4222"
+            - "--data-nats-url={{ include "runtime-operator.dataNatsUrl" (dict "ctx" $top "group" .) }}"
             {{- if $top.Values.global.tls.enabled }}
             - "--data-nats-tls-ca=/data-cert/ca.crt"
             - "--data-nats-tls-cert=/data-cert/tls.crt"
@@ -108,6 +113,14 @@ spec:
             {{- end }}
             {{- if and (.wasip3) (.wasip3.enabled) }}
             - "--wasip3"
+            {{- end }}
+            {{- /* Chart-wide runtime.extraArgs applies to every host group; per-host-group
+                   .extraArgs is appended after it. */}}
+            {{- with $top.Values.runtime.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .extraArgs }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           imagePullPolicy: {{ $top.Values.runtime.image.pull_policy }}
           volumeMounts:
