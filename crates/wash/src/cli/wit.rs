@@ -188,19 +188,23 @@ impl CliCommand for WitCommand {
     }
 }
 
-/// Validate a WIT package reference follows the convention: namespace:package/interface
+/// Validate a WIT package reference follows the convention:
+/// `namespace:package` or `namespace:package/interface`, optionally with `@version`
 fn validate_interface_ref(package: &str) -> Result<()> {
     let name_part = package.split('@').next().unwrap_or(package);
 
-    if !name_part.contains(':') {
+    let Some((namespace, rest)) = name_part.split_once(':') else {
         bail!(
-            "Invalid package format '{name_part}': must be in 'namespace:package/interface' format (e.g., 'wasi:http/types')"
+            "Invalid package format '{name_part}': must be in 'namespace:package' or 'namespace:package/interface' format (e.g., 'wasi:http' or 'wasi:http/types')"
         );
-    }
+    };
 
-    if !name_part.contains('/') {
+    // The package name is everything before an optional '/'
+    let pkg_name = rest.split('/').next().unwrap_or(rest);
+
+    if namespace.is_empty() || pkg_name.is_empty() {
         bail!(
-            "Invalid package format '{name_part}': must include interface name in 'namespace:package/interface' format (e.g., 'wasi:http/types')"
+            "Invalid package format '{name_part}': namespace and package name must be non-empty (e.g., 'wasi:http' or 'wasi:http/types')"
         );
     }
 
@@ -672,7 +676,9 @@ async fn handle_remove(_ctx: &CliContext, package: &str, config: &Config) -> Res
                     .unwrap_or(after_import)
                     .trim();
 
-                if package_part == package {
+                // Strip version from user input so "wasi:http@0.2.0" matches "import wasi:http@0.2.0;"
+                let package_name_only = package.split('@').next().unwrap_or(package);
+                if package_part == package_name_only {
                     removed = true;
                     continue; // Skip this line
                 }
@@ -1591,6 +1597,70 @@ world example {
         assert_eq!(
             import_count, 2,
             "Should find 2 imports, ignoring commented one"
+        );
+    }
+
+    #[test]
+    fn test_validate_interface_ref_package_only() {
+        // Package-level references (no interface) must be accepted
+        assert!(validate_interface_ref("wasi:http").is_ok());
+        assert!(validate_interface_ref("wasi:http@0.2.0").is_ok());
+        assert!(validate_interface_ref("wasi:keyvalue").is_ok());
+    }
+
+    #[test]
+    fn test_validate_interface_ref_with_interface() {
+        // Interface-level references must still be accepted
+        assert!(validate_interface_ref("wasi:http/types").is_ok());
+        assert!(validate_interface_ref("wasi:http/types@0.2.0").is_ok());
+        assert!(validate_interface_ref("wasi:http/incoming-handler@0.2.0").is_ok());
+    }
+
+    #[test]
+    fn test_validate_interface_ref_invalid() {
+        // Missing namespace separator
+        assert!(validate_interface_ref("http").is_err());
+        assert!(validate_interface_ref("http/types").is_err());
+        // Empty namespace or package name
+        assert!(validate_interface_ref(":http").is_err());
+        assert!(validate_interface_ref("wasi:").is_err());
+        assert!(validate_interface_ref(":/").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_remove_with_version_in_argument() {
+        let (_temp, _project_dir, wit_dir) = setup_test_project().await;
+        let world_wit_path = wit_dir.join("world.wit");
+
+        let content = "package test:component@0.1.0;\n\nworld example {\n    import wasi:http@0.2.0;\n}\n";
+        fs::write(&world_wit_path, content).expect("failed to write world.wit");
+
+        let config = Config {
+            wit: Some(crate::wit::WitConfig {
+                wit_dir: Some(wit_dir.clone()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let ctx = CliContext::builder().build().await.unwrap();
+
+        // Removing with an explicit version should work: "wasi:http@0.2.0" matches
+        // "import wasi:http@0.2.0;" by stripping the version before comparing.
+        let output = handle_remove(&ctx, "wasi:http@0.2.0", &config)
+            .await
+            .expect("handle_remove should not return Err");
+
+        assert!(
+            output.is_success(),
+            "removing wasi:http@0.2.0 should succeed when 'import wasi:http@0.2.0;' is present"
+        );
+
+        let new_content = tokio::fs::read_to_string(&world_wit_path)
+            .await
+            .expect("failed to read world.wit");
+        assert!(
+            !new_content.contains("import wasi:http"),
+            "import should have been removed"
         );
     }
 }
