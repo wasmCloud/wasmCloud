@@ -191,6 +191,12 @@ func TestReconcileScale_FreshDeploy_RSNotAvailable_ReturnsUnknown(t *testing.T) 
 	if got := wd.Status.Replicas.Unavailable; got != 1 {
 		t.Fatalf("expected Unavailable=1 in status, got %d", got)
 	}
+	// /scale selector must be set even while the RS is unavailable, so HPA
+	// never sees a missing selector during a deploy.
+	wantSelector := workloadDeploymentNameLabel + "=" + testDeploymentName
+	if wd.Status.Selector != wantSelector {
+		t.Fatalf("expected Status.Selector=%q on unavailable path, got %q", wantSelector, wd.Status.Selector)
+	}
 }
 
 // In production an RS exists for several reconcile cycles before
@@ -226,6 +232,15 @@ func TestReconcileScale_FreshDeploy_RSAvailable_ReturnsNil(t *testing.T) {
 	}
 	if wd.Status.Replicas == nil || wd.Status.Replicas.Ready != 1 {
 		t.Fatalf("expected Status.Replicas.Ready=1, got %+v", wd.Status.Replicas)
+	}
+	// The /scale subresource fields must be populated for HPA/KEDA: a flat
+	// current-replica count and a non-empty, correctly-formatted selector.
+	if wd.Status.CurrentReplicas != testReplicas {
+		t.Fatalf("expected Status.CurrentReplicas=%d, got %d", testReplicas, wd.Status.CurrentReplicas)
+	}
+	wantSelector := workloadDeploymentNameLabel + "=" + testDeploymentName
+	if wd.Status.Selector != wantSelector {
+		t.Fatalf("expected Status.Selector=%q, got %q", wantSelector, wd.Status.Selector)
 	}
 }
 

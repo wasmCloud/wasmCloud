@@ -98,6 +98,7 @@ spec:
                     type: object
                 type: object
               replicas:
+                default: 1
                 format: int32
                 type: integer
               template:
@@ -625,6 +626,13 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              currentReplicas:
+                description: |-
+                  CurrentReplicas is the number of workload instances currently running.
+                  Exposed as the /scale subresource statusReplicasPath so HPA can read the
+                  current replica count. Mirrors .status.replicas.current as a flat int.
+                format: int32
+                type: integer
               previousReplicaSet:
                 description: |-
                   LocalObjectReference contains enough information to let you locate the
@@ -656,9 +664,19 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              selector:
+                description: |-
+                  Selector is the serialized label selector exposed by the /scale subresource
+                  (scale.status.selector). HPA requires a non-empty selector to compute
+                  metrics; without it scaling fails with "selector is required".
+                type: string
             type: object
         type: object
     served: true
     storage: true
     subresources:
+      scale:
+        labelSelectorPath: .status.selector
+        specReplicasPath: .spec.replicas
+        statusReplicasPath: .status.currentReplicas
       status: {}
