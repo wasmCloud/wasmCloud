@@ -456,7 +456,7 @@ impl HostPlugin for WasmcloudPostgres {
         component_handle: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let database = match interfaces.get("wasmcloud", "postgres", &["database"]) {
+        let database = match interfaces.get("wasmcloud", "postgres", &[]) {
             Some(i) => i.config.get("database"),
             None => return Ok(()),
         };

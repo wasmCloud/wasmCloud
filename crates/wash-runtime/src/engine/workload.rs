@@ -1282,12 +1282,7 @@ impl ResolvedWorkload {
                         .collect::<std::collections::HashSet<_>>();
 
                     if let Err(e) = plugin
-                        .on_workload_unbind(
-                            self.id(),
-                            WitInterfaces {
-                                inner: &bound_interfaces,
-                            },
-                        )
+                        .on_workload_unbind(self.id(), WitInterfaces::new(&bound_interfaces))
                         .await
                     {
                         warn!(
@@ -1545,12 +1540,7 @@ impl UnresolvedWorkload {
 
                 // Call on_workload_bind with the workload and all matched interfaces
                 if let Err(e) = p
-                    .on_workload_bind(
-                        self,
-                        WitInterfaces {
-                            inner: &plugin_matched_interfaces,
-                        },
-                    )
+                    .on_workload_bind(self, WitInterfaces::new(&plugin_matched_interfaces))
                     .instrument(bind_span)
                     .await
                 {
@@ -1568,12 +1558,7 @@ impl UnresolvedWorkload {
                             "calling on_workload_unbind for cleanup after bind failure"
                         );
                         if let Err(cleanup_err) = bound_plugin
-                            .on_workload_unbind(
-                                self.id(),
-                                WitInterfaces {
-                                    inner: bound_interfaces,
-                                },
-                            )
+                            .on_workload_unbind(self.id(), WitInterfaces::new(bound_interfaces))
                             .await
                         {
                             warn!(
@@ -1619,9 +1604,7 @@ impl UnresolvedWorkload {
                     if let Err(e) = p
                         .on_workload_item_bind(
                             &mut workload_item,
-                            WitInterfaces {
-                                inner: &matching_interfaces,
-                            },
+                            WitInterfaces::new(&matching_interfaces),
                         )
                         .instrument(item_bind_span)
                         .await
@@ -1641,12 +1624,7 @@ impl UnresolvedWorkload {
                                 "calling on_workload_unbind for cleanup after component bind failure"
                             );
                             if let Err(cleanup_err) = bound_plugin
-                                .on_workload_unbind(
-                                    self.id(),
-                                    WitInterfaces {
-                                        inner: bound_interfaces,
-                                    },
-                                )
+                                .on_workload_unbind(self.id(), WitInterfaces::new(bound_interfaces))
                                 .await
                             {
                                 warn!(
@@ -2079,7 +2057,7 @@ mod tests {
                 plugin_id: self.id.to_string(),
                 method: "on_workload_bind".to_string(),
                 component_id: None,
-                interfaces: interfaces.inner.iter().map(|i| i.to_string()).collect(),
+                interfaces: interfaces.iter().map(|i| i.to_string()).collect(),
             });
             Ok(())
         }
@@ -2095,7 +2073,7 @@ mod tests {
                 plugin_id: self.id.to_string(),
                 method: "on_workload_item_bind".to_string(),
                 component_id: Some(item.id().to_string()),
-                interfaces: interfaces.inner.iter().map(|i| i.to_string()).collect(),
+                interfaces: interfaces.iter().map(|i| i.to_string()).collect(),
             });
             Ok(())
         }
@@ -2209,6 +2187,102 @@ mod tests {
             #[cfg(feature = "wasip3")]
             false,
         )
+    }
+
+    /// Every built-in plugin must actually bind the interface it advertises in its
+    /// `world()`. The bind hooks pick which interfaces to serve by matching
+    /// namespace / package / interface-name strings against the requested set, so a
+    /// wrong literal (a package typo, or a config key passed where an interface name
+    /// is expected) makes the plugin silently no-op instead of registering its host
+    /// functions. This guards that whole class of regression: feed each plugin an
+    /// interface it is designed to serve, then assert the first bind registers host
+    /// functions. Because a second bind of the same interface on the same linker
+    /// conflicts, a plugin that no-op'd (never touched the linker) is caught by the
+    /// second bind wrongly succeeding.
+    #[cfg(all(
+        feature = "wasmcloud-postgres",
+        feature = "wasi-blobstore",
+        feature = "wasi-keyvalue"
+    ))]
+    #[tokio::test]
+    async fn builtin_plugins_bind_their_declared_interfaces() {
+        use crate::plugin::wasi_blobstore::{FilesystemBlobstore, InMemoryBlobstore};
+        use crate::plugin::wasi_keyvalue::InMemoryKeyValue;
+        use crate::plugin::wasmcloud_postgres::WasmcloudPostgres;
+        // wasmcloud:postgres carries the target database as interface config, not as
+        // an interface name; the plugin reads it after matching on package.
+        let mut postgres_iface =
+            WitInterface::from("wasmcloud:postgres/types,query,prepared@0.1.1-draft");
+        postgres_iface
+            .config
+            .insert("database".to_string(), "testdb".to_string());
+        let blobstore_iface =
+            WitInterface::from("wasi:blobstore/blobstore,container,types@0.2.0-draft");
+        let keyvalue_iface = WitInterface::from("wasi:keyvalue/store,atomics,batch@0.2.0-draft");
+        let cases: Vec<(Arc<dyn HostPlugin>, WitInterface)> = vec![
+            (
+                Arc::new(WasmcloudPostgres::new("postgres://user:pass@localhost:5432/db").unwrap())
+                    as Arc<dyn HostPlugin>,
+                postgres_iface,
+            ),
+            (
+                Arc::new(FilesystemBlobstore::new(std::env::temp_dir())) as Arc<dyn HostPlugin>,
+                blobstore_iface.clone(),
+            ),
+            (
+                Arc::new(InMemoryBlobstore::new(None)) as Arc<dyn HostPlugin>,
+                blobstore_iface,
+            ),
+            (
+                Arc::new(InMemoryKeyValue::new()) as Arc<dyn HostPlugin>,
+                keyvalue_iface,
+            ),
+        ];
+        // A minimal empty component is enough: the bind hooks only mutate the linker.
+        let build_component = || {
+            let engine = wasmtime::Engine::default();
+            let linker = Linker::new(&engine);
+            // Minimal empty component: magic "\0asm" + component version + layer.
+            let component =
+                Component::new(&engine, [0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00]).unwrap();
+            WorkloadComponent::new(
+                "workload-bind".to_string(),
+                "test-workload-bind".to_string(),
+                "test-namespace".to_string(),
+                "test-component".to_string(),
+                component,
+                linker,
+                Vec::new(),
+                LocalResources::default(),
+                Arc::default(),
+                #[cfg(feature = "wasip3")]
+                false,
+            )
+        };
+        for (plugin, iface) in cases {
+            let id = plugin.id();
+            let set: HashSet<WitInterface> = std::iter::once(iface).collect();
+            let mut component = build_component();
+            let mut item = WorkloadItem::Component(&mut component);
+            plugin
+                .on_workload_item_bind(&mut item, WitInterfaces::new(&set))
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("plugin `{id}` failed to bind its declared interface: {e}")
+                });
+            // The first bind registered the plugin's host functions, so binding the
+            // same interface again on the same linker must conflict. If the plugin
+            // silently no-op'd (e.g. a matcher typo), it never touched the linker and
+            // this second bind wrongly succeeds.
+            let rebind = plugin
+                .on_workload_item_bind(&mut item, WitInterfaces::new(&set))
+                .await;
+            assert!(
+                rebind.is_err(),
+                "plugin `{id}` silently no-op'd on its declared interface instead of \
+                     registering host functions"
+            );
+        }
     }
 
     /// Tests basic plugin binding with one plugin and one component.

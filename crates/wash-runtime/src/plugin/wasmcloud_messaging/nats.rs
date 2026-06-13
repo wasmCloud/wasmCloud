@@ -170,9 +170,9 @@ impl HostPlugin for NatsMessaging {
         component_handle: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        if !interfaces.contains("wasmcloud", "messaging", &[]) {
+        let Some(interface) = interfaces.get("wasmcloud", "messaging", &[]) else {
             return Ok(());
-        }
+        };
 
         // Subscriptions come from this component's own `LocalResources.config`
         // (so workers in one workload can subscribe to different subjects),
