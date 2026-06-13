@@ -58,10 +58,20 @@ pub mod wasi_webgpu;
 /// A wrapper around a [`std::collections::HashSet`] of [`crate::wit::WitInterface`] that provides convenience methods for looking up interfaces by namespace, package, and set of interfaces.
 #[derive(Debug)]
 pub struct WitInterfaces<'a> {
-    pub inner: &'a std::collections::HashSet<crate::wit::WitInterface>,
+    inner: &'a std::collections::HashSet<crate::wit::WitInterface>,
 }
 
 impl<'a> WitInterfaces<'a> {
+    /// Wraps a borrowed set of [`crate::wit::WitInterface`]s.
+    pub fn new(inner: &'a std::collections::HashSet<crate::wit::WitInterface>) -> Self {
+        Self { inner }
+    }
+
+    /// Returns an iterator over the wrapped [`crate::wit::WitInterface`]s.
+    pub fn iter(&self) -> impl Iterator<Item = &'a crate::wit::WitInterface> + 'a {
+        self.inner.iter()
+    }
+
     /// Returns the [`crate::wit::WitInterface`] that matches the given namespace, package, and set of interfaces, if one exists.
     pub fn get(
         &self,

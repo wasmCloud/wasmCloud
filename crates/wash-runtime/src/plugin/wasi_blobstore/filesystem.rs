@@ -728,7 +728,7 @@ impl HostPlugin for FilesystemBlobstore {
         component_handle: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        if !interfaces.contains("wasi", "package", &[]) {
+        if !interfaces.contains("wasi", "blobstore", &[]) {
             return Ok(());
         }
 
@@ -760,7 +760,7 @@ impl HostPlugin for FilesystemBlobstore {
         workload: &crate::engine::workload::UnresolvedWorkload,
         host_interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        if !host_interfaces.contains("wasi", "package", &[]) {
+        if !host_interfaces.contains("wasi", "blobstore", &[]) {
             return Ok(());
         }
 
