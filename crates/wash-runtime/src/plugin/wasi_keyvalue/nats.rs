@@ -75,6 +75,45 @@ impl NatsKeyValue {
         )];
         self.metrics.operations_total.add(1, &attributes);
     }
+
+    /// Open the JetStream KV bucket for `identifier`, creating it if it doesn't
+    /// exist.
+    ///
+    /// We unconditionally call `create_key_value`: it is idempotent for an
+    /// identical config, so creating a bucket that already exists returns the
+    /// existing store (entries intact) rather than erroring, and concurrent
+    /// opens racing here all succeed. Verified by
+    /// `tests::test_reopening_bucket_preserves_entries`.
+    ///
+    /// Any error is therefore a genuine failure (permission, connection,
+    /// JetStream disabled, or a pre-existing bucket created with a *different*
+    /// config) and is surfaced rather than masked.
+    ///
+    /// Note this means `open` requires stream-create permission even for an
+    /// already-existing bucket. That is fine today because the NATS connection —
+    /// and therefore its permissions — is owned by the Host and shared across
+    /// all workloads, not scoped per workload. If per-workload NATS credentials
+    /// are ever introduced, a workload allowed to open but not create buckets
+    /// would break here, and this should fall back to a get-then-create path.
+    async fn get_or_create_bucket(
+        &self,
+        identifier: &str,
+    ) -> Result<async_nats::jetstream::kv::Store, String> {
+        self.client
+            .create_key_value(async_nats::jetstream::kv::Config {
+                bucket: identifier.to_string(),
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    error = ?e,
+                    bucket = %identifier,
+                    "Failed to open keyvalue bucket in JetStream"
+                );
+                format!("failed to open keyvalue bucket in JetStream({identifier}): {e}")
+            })
+    }
 }
 
 // Implementation for the store interface
@@ -88,17 +127,9 @@ impl<'a> bindings::wasi::keyvalue::store::Host for ActiveCtx<'a> {
 
         plugin.record_operation("open");
 
-        let kv = match plugin.client.get_key_value(&identifier).await {
-            Ok(kv) => {
-                tracing::debug!("Opened existing bucket in JetStream");
-                kv
-            }
-            Err(e) => {
-                tracing::error!("Bucket not found in JetStream({identifier}): {e}");
-                return Ok(Err(StoreError::Other(
-                    "failed to get keyvalue from JetStream".to_string(),
-                )));
-            }
+        let kv = match plugin.get_or_create_bucket(&identifier).await {
+            Ok(kv) => kv,
+            Err(e) => return Ok(Err(StoreError::Other(e))),
         };
 
         let bucket = BucketHandle { kv };
@@ -487,6 +518,101 @@ impl HostPlugin for NatsKeyValue {
         _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         tracing::debug!("WasiKeyvalue plugin unbound from workload '{workload_id}'");
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests for the private `get_or_create_bucket` path that `open` relies on.
+    //!
+    //! These live here (rather than under `tests/`) because they exercise a
+    //! private method directly; the repo's `tests/integration_nats_*` files can
+    //! only reach the public host API. They spin up a real JetStream via
+    //! testcontainers. Requires Docker. Gated behind `NATS_INTEGRATION_TESTS=1`.
+
+    use super::*;
+    use testcontainers::{
+        ContainerAsync, GenericImage, ImageExt,
+        core::{IntoContainerPort, WaitFor},
+        runners::AsyncRunner,
+    };
+
+    async fn start_nats_jetstream()
+    -> anyhow::Result<(ContainerAsync<GenericImage>, async_nats::Client)> {
+        let container = GenericImage::new("nats", "2.12.8-alpine")
+            .with_exposed_port(4222.tcp())
+            .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+            .with_cmd(["-js"])
+            .start()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to start NATS container: {e}"))?;
+
+        let port = container
+            .get_host_port_ipv4(4222)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to get NATS host port: {e}"))?;
+
+        let client = async_nats::connect(format!("nats://127.0.0.1:{port}"))
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to NATS: {e}"))?;
+
+        Ok((container, client))
+    }
+
+    fn skip_if_disabled() -> bool {
+        if std::env::var("NATS_INTEGRATION_TESTS").unwrap_or_default() != "1" {
+            eprintln!(
+                "Skipping NATS keyvalue integration test (set NATS_INTEGRATION_TESTS=1 to enable)"
+            );
+            return true;
+        }
+        false
+    }
+
+    /// `get_or_create_bucket` is implemented as an idempotent `create_key_value`.
+    /// This verifies the property that makes that safe: re-opening an existing,
+    /// populated bucket returns the same store with its entries intact — the
+    /// duplicate create does not reset or wipe the bucket.
+    #[tokio::test]
+    async fn test_reopening_bucket_preserves_entries() -> anyhow::Result<()> {
+        if skip_if_disabled() {
+            return Ok(());
+        }
+
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .try_init()
+            .ok();
+
+        let (_container, client) = start_nats_jetstream().await?;
+        let kv = NatsKeyValue::new(&client);
+        let bucket = format!("kv-{}", uuid::Uuid::new_v4());
+
+        let created = kv
+            .get_or_create_bucket(&bucket)
+            .await
+            .map_err(|e| anyhow::anyhow!("first open failed: {e}"))?;
+        created
+            .put("greeting", bytes::Bytes::from_static(b"hello"))
+            .await
+            .map_err(|e| anyhow::anyhow!("put failed: {e}"))?;
+
+        let reopened = kv
+            .get_or_create_bucket(&bucket)
+            .await
+            .map_err(|e| anyhow::anyhow!("re-open failed: {e}"))?;
+        let value = reopened
+            .get("greeting")
+            .await
+            .map_err(|e| anyhow::anyhow!("get failed: {e}"))?;
+
+        assert_eq!(
+            value.as_deref(),
+            Some(b"hello".as_slice()),
+            "entry was lost when re-opening the bucket"
+        );
 
         Ok(())
     }
