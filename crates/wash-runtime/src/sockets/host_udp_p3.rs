@@ -40,8 +40,8 @@ fn get_socket_mut<'a>(
         .map_err(SocketError::trap)
 }
 
-impl HostUdpSocketWithStore for WasiSockets {
-    async fn send<T>(
+impl<T> HostUdpSocketWithStore<T> for WasiSockets {
+    async fn send(
         store: &Accessor<T, Self>,
         socket: Resource<UpstreamUdpSocket>,
         data: Vec<u8>,
@@ -152,7 +152,7 @@ impl HostUdpSocketWithStore for WasiSockets {
         Ok(())
     }
 
-    async fn receive<T>(
+    async fn receive(
         store: &Accessor<T, Self>,
         socket: Resource<UpstreamUdpSocket>,
     ) -> SocketResult<(Vec<u8>, IpSocketAddress)> {
