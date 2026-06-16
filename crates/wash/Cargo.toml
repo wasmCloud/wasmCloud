@@ -63,9 +63,11 @@ wasm-pkg-core = { workspace = true }
 wash-runtime = { workspace = true, features = ["washlet", "oci", "wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "wasi-otel"] }
 wit-component = { workspace = true }
 
-# Enable WebGPU support on non-Windows platforms
-# WebGPU is disabled on Windows due to dependency version conflicts with the windows crate
-[target.'cfg(not(target_os = "windows"))'.dependencies]
+# Enable WebGPU support on non-Windows platforms.
+# WebGPU is disabled on Windows due to dependency version conflicts with the windows crate.
+# It is also disabled on s390x because naga pulls in `half` (f16) and the zigbuild LLVM
+# backend can't lower the f16 conversions for the s390x target (LLVM ERROR in __fixhfsi).
+[target.'cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))'.dependencies]
 wash-runtime = { workspace = true, features = ["wasi-webgpu"] }
 
 # `O_NOFOLLOW` for the secret-file-open hardening in `crate::workload`.
