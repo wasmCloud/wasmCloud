@@ -1632,7 +1632,8 @@ world example {
         let (_temp, _project_dir, wit_dir) = setup_test_project().await;
         let world_wit_path = wit_dir.join("world.wit");
 
-        let content = "package test:component@0.1.0;\n\nworld example {\n    import wasi:http@0.2.0;\n}\n";
+        let content =
+            "package test:component@0.1.0;\n\nworld example {\n    import wasi:http@0.2.0;\n}\n";
         fs::write(&world_wit_path, content).expect("failed to write world.wit");
 
         let config = Config {
