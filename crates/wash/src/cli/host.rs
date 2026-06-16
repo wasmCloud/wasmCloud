@@ -87,7 +87,7 @@ pub struct HostCommand {
     pub tls_ca_path: Option<PathBuf>,
 
     /// Enable WASI WebGPU support
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))]
     #[arg(long = "wasi-webgpu", default_value_t = false)]
     pub wasi_webgpu: bool,
 
@@ -227,7 +227,7 @@ impl CliCommand for HostCommand {
         }
 
         // Enable WASI WebGPU if requested
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))]
         if self.wasi_webgpu {
             tracing::info!("WASI WebGPU support enabled");
             cluster_host_builder = cluster_host_builder
