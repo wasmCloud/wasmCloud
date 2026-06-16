@@ -604,19 +604,95 @@ impl Engine {
     }
 }
 
+/// A wasmtime WebAssembly proposal that can be opted into on the engine.
+///
+/// Each variant maps to one or more `wasmtime::Config` feature flags. Use it
+/// with [`EngineBuilder::with_wasm_proposal`] to enable a bundle of related
+/// settings without having to replace the entire config via
+/// [`EngineBuilder::with_config`].
+///
+/// ```no_run
+/// # use wash_runtime::engine::{Engine, WasmProposal};
+/// # fn example() -> anyhow::Result<()> {
+/// let engine = Engine::builder()
+///     .with_wasm_proposal(WasmProposal::Gc)
+///     .with_wasm_proposal(WasmProposal::Threads)
+///     .build()?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum WasmProposal {
+    /// Component model async ABI (`stream`/`future`/`error-context` types).
+    /// Enables `wasm_component_model_async`. Required for WASIP3.
+    ComponentModelAsync,
+    /// Garbage collection. Enables `wasm_function_references` (a prerequisite)
+    /// and `wasm_gc`.
+    Gc,
+    /// Exception handling. Enables `wasm_exceptions`.
+    ExceptionHandling,
+    /// 128-bit wide arithmetic. Enables `wasm_wide_arithmetic`.
+    WideArithmetic,
+    /// Shared-memory threads. Enables `wasm_threads`.
+    Threads,
+    /// Tail calls. Enables `wasm_tail_call`.
+    TailCall,
+}
+
+impl WasmProposal {
+    /// Apply this proposal's wasmtime feature flags onto `cfg`.
+    fn apply(self, cfg: &mut wasmtime::Config) {
+        match self {
+            WasmProposal::ComponentModelAsync => {
+                cfg.wasm_component_model_async(true);
+            }
+            WasmProposal::Gc => {
+                // GC builds on the function-references proposal.
+                cfg.wasm_function_references(true);
+                cfg.wasm_gc(true);
+            }
+            WasmProposal::ExceptionHandling => {
+                cfg.wasm_exceptions(true);
+            }
+            WasmProposal::WideArithmetic => {
+                cfg.wasm_wide_arithmetic(true);
+            }
+            WasmProposal::Threads => {
+                cfg.wasm_threads(true);
+            }
+            WasmProposal::TailCall => {
+                cfg.wasm_tail_call(true);
+            }
+        }
+    }
+}
+
 /// Builder for constructing an [`Engine`] with custom configuration.
 ///
 /// The builder pattern allows for flexible configuration of the engine
 /// before creation. By default, it enables async support which is required
 /// for component execution.
+///
+/// Settings configured through the builder ([`with_pooling_allocator`],
+/// [`with_fuel_consumption`], [`with_wasm_proposal`], …) are layered on top of
+/// any base config supplied via [`with_config`], so a custom config can be
+/// combined with pooling and proposal flags rather than replacing them.
+///
+/// [`with_pooling_allocator`]: EngineBuilder::with_pooling_allocator
+/// [`with_fuel_consumption`]: EngineBuilder::with_fuel_consumption
+/// [`with_wasm_proposal`]: EngineBuilder::with_wasm_proposal
+/// [`with_config`]: EngineBuilder::with_config
 #[derive(Default)]
 pub struct EngineBuilder {
     config: Option<wasmtime::Config>,
     use_pooling_allocator: Option<bool>,
     max_instances: Option<u32>,
+    pooling_config: Option<PoolingAllocationConfig>,
+    proposals: std::collections::BTreeSet<WasmProposal>,
     compilation_cache_size: Option<u64>,
     compilation_cache_ttl: Option<Duration>,
-    fuel_consumption: bool,
+    fuel_consumption: Option<bool>,
     #[cfg(feature = "wasip3")]
     wasip3: bool,
     /// Optional TLS provider override for wasi:tls client connections.
@@ -641,21 +717,58 @@ impl EngineBuilder {
 
     /// Sets the maximum number of instances for the pooling allocator.
     /// This is a 'hint' and can be overridden by environment variables.
+    ///
+    /// Ignored when a full [`PoolingAllocationConfig`] is supplied via
+    /// [`with_pooling_config`](Self::with_pooling_config).
     pub fn with_max_instances(mut self, max: u32) -> Self {
         self.max_instances = Some(max);
         self
     }
 
-    /// Enables or disables fuel consumption for the engine.
-    pub fn with_fuel_consumption(mut self, enable: bool) -> Self {
-        self.fuel_consumption = enable;
+    /// Sets a fully-customized [`PoolingAllocationConfig`] for the pooling
+    /// allocator, giving callers control over every pooling knob rather than
+    /// only the `WASMTIME_POOLING_*` environment variables.
+    ///
+    /// Supplying a pooling config implies the pooling allocator is enabled and
+    /// takes precedence over [`with_max_instances`](Self::with_max_instances).
+    /// It is still only applied when the host supports the pooling allocator.
+    pub fn with_pooling_config(mut self, config: PoolingAllocationConfig) -> Self {
+        self.pooling_config = Some(config);
+        self.use_pooling_allocator = Some(true);
         self
     }
 
-    /// Sets a custom wasmtime configuration for the engine.
+    /// Enables an additional WebAssembly proposal on the engine.
     ///
-    /// This allows full control over the wasmtime engine configuration,
-    /// including compilation settings, runtime limits, and feature flags.
+    /// Each [`WasmProposal`] maps to one or more `wasmtime::Config` feature
+    /// flags (see the variant docs for the exact flags). Proposals are layered
+    /// on top of any base config from [`with_config`](Self::with_config), so a
+    /// single extra proposal can be enabled without replacing the whole config.
+    /// Calling this repeatedly accumulates proposals; duplicates are ignored.
+    pub fn with_wasm_proposal(mut self, proposal: WasmProposal) -> Self {
+        self.proposals.insert(proposal);
+        self
+    }
+
+    /// Enables or disables fuel consumption for the engine.
+    ///
+    /// When unset, fuel consumption is left at whatever the base config (from
+    /// [`with_config`](Self::with_config), or the wasmtime default of disabled)
+    /// specifies, rather than being forced off.
+    pub fn with_fuel_consumption(mut self, enable: bool) -> Self {
+        self.fuel_consumption = Some(enable);
+        self
+    }
+
+    /// Sets a custom wasmtime configuration to use as the *base* for the engine.
+    ///
+    /// This config is used as the starting point, and any other builder
+    /// settings — pooling allocator, fuel consumption, and
+    /// [`WasmProposal`]s — are layered on top of it. This means a custom config
+    /// can be combined with [`with_pooling_allocator`](Self::with_pooling_allocator),
+    /// [`with_max_instances`](Self::with_max_instances), and
+    /// [`with_wasm_proposal`](Self::with_wasm_proposal) rather than being
+    /// mutually exclusive with them.
     ///
     /// # Arguments
     /// * `config` - A wasmtime `Config` object with custom settings
@@ -675,8 +788,11 @@ impl EngineBuilder {
     }
 
     /// Enables or disables WASIP3 support.
+    ///
     /// When enabled (and compiled with the `wasip3` feature), both P2 and P3
-    /// bindings are registered in component linkers.
+    /// bindings are registered in component linkers, and
+    /// [`WasmProposal::ComponentModelAsync`] is enabled on the wasmtime config
+    /// (i.e. `wasm_component_model_async`), which the P3 async ABI requires.
     #[cfg(feature = "wasip3")]
     pub fn with_wasip3(mut self, enable: bool) -> Self {
         self.wasip3 = enable;
@@ -720,42 +836,42 @@ impl EngineBuilder {
             }
         }
 
-        // If a custom config was provided, use it as-is
-        let config = if let Some(cfg) = self.config.take() {
-            if self.max_instances.is_some() || self.use_pooling_allocator.is_some() {
-                bail!(
-                    "cannot use with_config() together with with_max_instances() or with_pooling_allocator()"
-                );
-            }
-            cfg
-        } else {
-            let mut cfg = wasmtime::Config::default();
+        // Start from the caller-supplied base config (or wasmtime's default) and
+        // layer the builder-managed settings on top of it.
+        let mut config = self.config.take().unwrap_or_default();
 
-            let use_pooling_allocator = getenv::<bool>("WASMTIME_POOLING");
-            let use_pooling_allocator = self
-                .use_pooling_allocator
-                .or(use_pooling_allocator)
-                .unwrap_or(true);
+        let use_pooling_allocator = self
+            .use_pooling_allocator
+            .or_else(|| getenv::<bool>("WASMTIME_POOLING"))
+            .unwrap_or(true);
 
-            // The pooling allocator can be more efficient for workloads with many short-lived instances
-            if use_pooling_allocator && let Ok(true) = is_pooling_allocator_supported() {
-                tracing::debug!("using pooling allocator by default");
-                cfg.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(
-                    new_pooling_config(self.max_instances.unwrap_or(1000)),
-                ));
-            } else if use_pooling_allocator {
-                tracing::warn!("pooling allocator requested but not supported");
-            }
+        // The pooling allocator can be more efficient for workloads with many short-lived instances
+        if use_pooling_allocator && let Ok(true) = is_pooling_allocator_supported() {
+            tracing::debug!("using pooling allocator by default");
+            let pooling = self
+                .pooling_config
+                .take()
+                .unwrap_or_else(|| new_pooling_config(self.max_instances.unwrap_or(1000)));
+            config.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pooling));
+        } else if use_pooling_allocator {
+            tracing::warn!("pooling allocator requested but not supported");
+        }
 
-            cfg.consume_fuel(self.fuel_consumption);
+        // Only override fuel consumption when the caller explicitly set it, so a
+        // custom base config's setting is otherwise preserved.
+        if let Some(fuel) = self.fuel_consumption {
+            config.consume_fuel(fuel);
+        }
 
-            #[cfg(feature = "wasip3")]
-            if self.wasip3 {
-                cfg.wasm_component_model_async(true);
-            }
+        // WASIP3's async ABI requires the component-model async proposal.
+        #[cfg(feature = "wasip3")]
+        if self.wasip3 {
+            self.proposals.insert(WasmProposal::ComponentModelAsync);
+        }
 
-            cfg
-        };
+        for proposal in &self.proposals {
+            proposal.apply(&mut config);
+        }
 
         let inner = wasmtime::Engine::new(&config)?;
         let cache = Cache::builder()
@@ -907,4 +1023,47 @@ fn new_pooling_config(instances: u32) -> PoolingAllocationConfig {
         config.total_gc_heaps(instances);
     }
     config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A custom base config can now be combined with the pooling allocator and
+    // instance limits, which previously errored out of `build()`.
+    #[test]
+    fn custom_config_layers_with_pooling() {
+        let mut cfg = wasmtime::Config::default();
+        cfg.cranelift_opt_level(wasmtime::OptLevel::Speed);
+
+        Engine::builder()
+            .with_config(cfg)
+            .with_pooling_allocator(true)
+            .with_max_instances(64)
+            .build()
+            .expect("custom config + pooling should build");
+    }
+
+    // A single extra proposal can be enabled on top of a custom config without
+    // replacing the whole config.
+    #[test]
+    fn wasm_proposal_layers_with_custom_config() {
+        Engine::builder()
+            .with_config(wasmtime::Config::default())
+            .with_wasm_proposal(WasmProposal::Gc)
+            .build()
+            .expect("custom config + GC proposal should build");
+    }
+
+    // An externally-supplied pooling config is accepted and applied.
+    #[test]
+    fn external_pooling_config_builds() {
+        let mut pool = PoolingAllocationConfig::default();
+        pool.total_component_instances(32);
+
+        Engine::builder()
+            .with_pooling_config(pool)
+            .build()
+            .expect("external pooling config should build");
+    }
 }
