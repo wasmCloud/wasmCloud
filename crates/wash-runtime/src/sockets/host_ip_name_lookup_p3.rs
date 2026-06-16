@@ -8,8 +8,8 @@ use wasmtime::component::Accessor;
 use wasmtime_wasi::p3::bindings::sockets::ip_name_lookup::{Host, HostWithStore};
 use wasmtime_wasi::p3::bindings::sockets::{ip_name_lookup::ErrorCode, types};
 
-impl HostWithStore for WasiSockets {
-    async fn resolve_addresses<U>(
+impl<U> HostWithStore<U> for WasiSockets {
+    async fn resolve_addresses(
         store: &Accessor<U, Self>,
         name: String,
     ) -> wasmtime::Result<Result<Vec<types::IpAddress>, ErrorCode>> {

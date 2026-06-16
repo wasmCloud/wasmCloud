@@ -141,6 +141,7 @@ impl WorkloadMetadata {
             .component
             .component_type()
             .exports(self.component.engine())
+            .map(|(name, item)| (name, item.ty))
             .filter_map(|(name, item)| {
                 if matches!(item, ComponentItem::ComponentInstance(_)) {
                     Some((name.to_string(), item))
@@ -180,7 +181,7 @@ impl WorkloadMetadata {
             .component_type()
             .imports(self.component.engine())
         {
-            if let ComponentItem::ComponentInstance(_) = import_item {
+            if let ComponentItem::ComponentInstance(_) = import_item.ty {
                 let interface = WitInterface::from(import_name);
                 let k = interface.instance();
                 imports
@@ -203,7 +204,7 @@ impl WorkloadMetadata {
             .component_type()
             .exports(self.component.engine())
         {
-            if let ComponentItem::ComponentInstance(_) = export_item {
+            if let ComponentItem::ComponentInstance(_) = export_item.ty {
                 let interface = WitInterface::from(export_name);
                 let k = interface.instance();
                 exports
@@ -709,7 +710,7 @@ impl ResolvedWorkload {
                 let ty = component.metadata.component.component_type();
                 for (import_name, import_item) in ty.imports(component.metadata.component.engine())
                 {
-                    if !matches!(import_item, ComponentItem::ComponentInstance(_)) {
+                    if !matches!(import_item.ty, ComponentItem::ComponentInstance(_)) {
                         continue;
                     }
                     // An interface exported by multiple components can't be
@@ -820,7 +821,7 @@ impl ResolvedWorkload {
 
         let instance: SharedInstanceSlot = Arc::default();
         for (import_name, import_item) in imports.into_iter() {
-            match import_item {
+            match import_item.ty {
                 ComponentItem::ComponentInstance(import_instance_ty) => {
                     trace!(name = import_name, "processing component instance import");
                     let mut all_components = self.components.write().await;
@@ -870,7 +871,7 @@ impl ResolvedWorkload {
                     for (export_name, export_ty) in
                         import_instance_ty.exports(plugin_component.metadata.component.engine())
                     {
-                        match export_ty {
+                        match export_ty.ty {
                             ComponentItem::ComponentFunc(_func_ty) => {
                                 let (item, func_idx) = match plugin_component
                                     .metadata

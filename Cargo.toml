@@ -13,8 +13,8 @@ members = [
 [workspace.package]
 authors = ["The wasmCloud Team"]
 edition = "2024"
-rust-version = "1.91.0"
 version = "2.4.0"
+rust-version = "1.94.0"
 
 [workspace.lints.rust]
 warnings = 'deny' # Treat all warnings as errors
@@ -120,11 +120,14 @@ wasm-pkg-client = { version = "0.10.0", default-features = false }
 wasm-pkg-core = { version = "0.10.0", default-features = false }
 wasm-metadata = { version = "0.248.0", default-features = false, features = ["oci"] }
 wasmcloud = { path = "crates/wasmcloud", default-features = false }
-wasmtime = { version = "45.0.2", default-features = false }
-wasmtime-wasi = { version = "45.0.2", default-features = false }
-wasmtime-wasi-io = { version = "45.0.2", default-features = false }
-wasmtime-wasi-http = { version = "45.0.2", default-features = false }
-wasmtime-wasi-tls = { version = "45.0.2", default-features = false }
+# wasmtime 46 is not yet released to crates.io; pin to the release-46.0.0
+# branch HEAD. Bump the rev together when picking up release-branch fixes,
+# and switch back to a crates.io `version` once 46.0.0 ships.
+wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "7535c0255b2b84f6ae4de6034649ba2eeda84173", default-features = false }
+wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "7535c0255b2b84f6ae4de6034649ba2eeda84173", default-features = false }
+wasmtime-wasi-io = { git = "https://github.com/bytecodealliance/wasmtime", rev = "7535c0255b2b84f6ae4de6034649ba2eeda84173", default-features = false }
+wasmtime-wasi-http = { git = "https://github.com/bytecodealliance/wasmtime", rev = "7535c0255b2b84f6ae4de6034649ba2eeda84173", default-features = false }
+wasmtime-wasi-tls = { git = "https://github.com/bytecodealliance/wasmtime", rev = "7535c0255b2b84f6ae4de6034649ba2eeda84173", default-features = false }
 wit-component = { version = "0.248.0", default-features = false }
 wash-runtime = { path = "crates/wash-runtime", default-features = false }
 wat = { version = "1.248.0", default-features = false }
