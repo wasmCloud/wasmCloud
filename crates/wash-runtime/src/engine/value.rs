@@ -2,7 +2,7 @@
 //! instance to another in the context of a single [`wasmtime::Store`].
 
 use tracing::trace;
-use wasmtime::component::Val;
+use wasmtime::component::{ResourceAny, ResourceType, Val, types::Type};
 use wasmtime::error::Context as _;
 use wasmtime::{AsContextMut, StoreContextMut};
 
@@ -133,9 +133,26 @@ pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> wasmtime
                 }
             }
         }
-        &Val::Future(_) | &Val::Stream(_) | &Val::ErrorContext(_) => {
-            wasmtime::bail!("async not supported")
+        Val::Future(v) => Ok(Val::Future(v.clone())),
+        Val::Stream(v) => Ok(Val::Stream(v.clone())),
+        Val::ErrorContext(v) => Ok(Val::ErrorContext(v.clone())),
+    }
+}
+
+pub(crate) fn lower_with_type(
+    store: &mut StoreContextMut<SharedCtx>,
+    v: &Val,
+    ty: &Type,
+) -> wasmtime::Result<Val> {
+    match (ty, v) {
+        (Type::Own(resource_ty) | Type::Borrow(resource_ty), &Val::Resource(any))
+            if *resource_ty == ResourceType::host::<ResourceAny>()
+                && any.ty() == ResourceType::host::<ResourceAny>() =>
+        {
+            trace!(resource = ?any, "lowering host resource by identity");
+            Ok(Val::Resource(any))
         }
+        _ => lower(store, v),
     }
 }
 
@@ -258,9 +275,9 @@ pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> wasmtime::
                 ))
             }
         }
-        Val::Future(_) | Val::Stream(_) | Val::ErrorContext(_) => {
-            wasmtime::bail!("async not supported")
-        }
+        Val::Future(v) => Ok(Val::Future(v)),
+        Val::Stream(v) => Ok(Val::Stream(v)),
+        Val::ErrorContext(v) => Ok(Val::ErrorContext(v)),
     }
 }
 

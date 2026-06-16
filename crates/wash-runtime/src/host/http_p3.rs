@@ -35,6 +35,26 @@ pub type P3SendResult = Result<
 /// Future returned by [`crate::host::http::OutgoingHandler::send_request_p3`].
 pub type P3SendFuture = Box<dyn std::future::Future<Output = P3SendResult> + Send>;
 
+/// Called once the P3 component task exits — whether it ran to completion,
+/// returned early, or was aborted because the response body was dropped (client
+/// disconnect). Used to reclaim per-request store state, e.g. the cached
+/// linked-component instances keyed by this request's store id.
+pub type P3CompletionHook = Box<dyn FnOnce() + Send + 'static>;
+
+/// Runs the [`P3CompletionHook`] from `Drop` so it fires on **every** task exit
+/// path. The component runs in a task wrapped in an `AbortOnDropHandle`, so when
+/// the response body is dropped mid-stream the task is cancelled and any
+/// end-of-task cleanup code would never run — a `Drop` guard does.
+struct OnCompleteGuard(Option<P3CompletionHook>);
+
+impl Drop for OnCompleteGuard {
+    fn drop(&mut self) {
+        if let Some(hook) = self.0.take() {
+            hook();
+        }
+    }
+}
+
 /// Response body that yields frames forwarded from the component task over a
 /// bounded channel. End-of-stream is signalled when the sender (held by the
 /// component task) is dropped.
@@ -71,16 +91,28 @@ impl hyper::body::Body for ChannelBody {
 /// guest stays alive until the body has been fully drained, and a slow client
 /// applies backpressure to the guest rather than buffering the whole body in
 /// memory.
+///
+/// `on_complete` runs once the component task exits (completion, early error, or
+/// abort-on-disconnect) to reclaim per-request store state.
 pub async fn handle_component_request_p3(
     mut store: Store<SharedCtx>,
     pre: InstancePre<SharedCtx>,
     req: hyper::Request<hyper::body::Incoming>,
     fuel_meter: FuelConsumptionMeter,
+    on_complete: P3CompletionHook,
 ) -> anyhow::Result<hyper::Response<P3Body>> {
     let _ = &fuel_meter; // fuel metering integration deferred to match P2's observe() pattern
 
-    let service_pre = ServicePre::new(pre)
-        .map_err(|e| anyhow::anyhow!(e).context("failed to create P3 ServicePre"))?;
+    let service_pre = match ServicePre::new(pre)
+        .map_err(|e| anyhow::anyhow!(e).context("failed to create P3 ServicePre"))
+    {
+        Ok(service_pre) => service_pre,
+        Err(e) => {
+            // No task is spawned on this path, so run the hook here.
+            on_complete();
+            return Err(e);
+        }
+    };
 
     // Convert the hyper request body — map error type since hyper::Error doesn't impl Into<ErrorCode>
     let (parts, body) = req.into_parts();
@@ -108,6 +140,10 @@ pub async fn handle_component_request_p3(
     // task is aborted rather than detached to run unbounded.
     let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
         async move {
+            // Reclaim per-request store state on every exit path below
+            // (completion, early return, or abort), via this guard's `Drop`.
+            let _on_complete = OnCompleteGuard(Some(on_complete));
+
             let service = match service_pre.instantiate_async(&mut store).await {
                 Ok(service) => service,
                 Err(e) => {

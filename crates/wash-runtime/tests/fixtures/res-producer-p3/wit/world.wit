@@ -1,0 +1,18 @@
+package wasmcloud:resource-test@0.1.0;
+
+interface factory {
+    /// A guest-defined resource. When its handle crosses the dynamic linker,
+    /// the runtime represents it as a host `ResourceAny`.
+    resource token {
+        greet: func() -> string;
+    }
+
+    make-token: async func(name: string) -> token;
+}
+
+world res-producer {
+    import wasi:cli/types@0.3.0-rc-2026-03-15;
+    import wasi:clocks/types@0.3.0-rc-2026-03-15;
+
+    export factory;
+}
