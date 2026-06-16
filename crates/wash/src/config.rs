@@ -519,6 +519,9 @@ impl DevConfig {
         if cfg!(target_os = "windows") && self.wasi_webgpu {
             errors.push("dev.wasi_webgpu is not supported on Windows".to_string());
         }
+        if cfg!(target_arch = "s390x") && self.wasi_webgpu {
+            errors.push("dev.wasi_webgpu is not supported on s390x".to_string());
+        }
 
         for comp in &self.components {
             if comp.name.trim().is_empty() {

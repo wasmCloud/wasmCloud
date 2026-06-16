@@ -52,7 +52,11 @@ pub mod wasi_otel;
 
 pub mod wasmcloud_messaging;
 
-#[cfg(all(feature = "wasi-webgpu", not(target_os = "windows")))]
+#[cfg(all(
+    feature = "wasi-webgpu",
+    not(target_os = "windows"),
+    not(target_arch = "s390x")
+))]
 pub mod wasi_webgpu;
 
 /// A wrapper around a [`std::collections::HashSet`] of [`crate::wit::WitInterface`] that provides convenience methods for looking up interfaces by namespace, package, and set of interfaces.
