@@ -104,10 +104,8 @@ fn add_wasi_to_linker(
     )?;
 
     // CLI
-    let cli_options = cli::exit::LinkOptions::default();
     cli::exit::add_to_linker::<SharedCtx, wasmtime_wasi::cli::WasiCli>(
         linker,
-        &cli_options,
         <SharedCtx as wasmtime_wasi::cli::WasiCliView>::cli,
     )?;
     cli::environment::add_to_linker::<SharedCtx, wasmtime_wasi::cli::WasiCli>(

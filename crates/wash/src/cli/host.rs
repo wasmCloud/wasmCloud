@@ -114,7 +114,7 @@ pub struct HostCommand {
 
     /// Enable WASIP3 support for components that target wasi@0.3 interfaces
     #[cfg(feature = "wasip3")]
-    #[arg(long = "wasip3", env = "WASH_WASIP3", default_value_t = false)]
+    #[arg(long = "wasip3", env = "WASH_WASIP3", default_value_t = true)]
     pub wasip3: bool,
 }
 
@@ -227,7 +227,7 @@ impl CliCommand for HostCommand {
         }
 
         // Enable WASI WebGPU if requested
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(not(target_os = "windows"), feature = "wasi-webgpu"))]
         if self.wasi_webgpu {
             tracing::info!("WASI WebGPU support enabled");
             cluster_host_builder = cluster_host_builder

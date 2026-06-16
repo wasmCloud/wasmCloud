@@ -69,7 +69,7 @@ impl CliCommand for DevCommand {
             .with_fuel_consumption(ctx.enable_meters());
         #[cfg(feature = "wasip3")]
         {
-            engine_builder = engine_builder.with_wasip3(dev_config.wasip3);
+            engine_builder = engine_builder.with_wasip3(dev_config.wasip3.unwrap_or(true));
         }
         let engine = engine_builder.build()?;
 
@@ -242,7 +242,7 @@ impl CliCommand for DevCommand {
         }
 
         // Enable WASI WebGPU if requested
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(not(target_os = "windows"), feature = "wasi-webgpu"))]
         if dev_config.wasi_webgpu {
             host_builder =
                 host_builder.with_plugin(Arc::new(plugin::wasi_webgpu::WebGpu::default()))?;

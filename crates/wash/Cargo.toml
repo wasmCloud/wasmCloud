@@ -14,6 +14,10 @@ version.workspace = true
 [features]
 wasip3 = ["wash-runtime/wasip3"]
 wasi-tls = ["wash-runtime/wasi-tls"]
+# Opt-in: pulls in wasi-gfx git deps that still target wasmtime 45 and do
+# not build against the pinned wasmtime 46. Re-add to the default build
+# once wasi-gfx-runtime supports wasmtime 46.
+wasi-webgpu = ["wash-runtime/wasi-webgpu"]
 
 [lints]
 workspace = true
@@ -60,13 +64,8 @@ uuid = { workspace = true }
 wasm-metadata = { workspace = true }
 wasm-pkg-client = { workspace = true }
 wasm-pkg-core = { workspace = true }
-wash-runtime = { workspace = true, features = ["washlet", "oci", "wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "wasi-otel"] }
+wash-runtime = { workspace = true, features = ["washlet", "oci", "wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "wasi-otel", "wasip3"] }
 wit-component = { workspace = true }
-
-# Enable WebGPU support on non-Windows platforms
-# WebGPU is disabled on Windows due to dependency version conflicts with the windows crate
-[target.'cfg(not(target_os = "windows"))'.dependencies]
-wash-runtime = { workspace = true, features = ["wasi-webgpu"] }
 
 # `O_NOFOLLOW` for the secret-file-open hardening in `crate::workload`.
 # Unix-only. Windows has no portable equivalent.
