@@ -104,6 +104,12 @@ const P3_FIXTURES: &[&str] = &[
     "tls-echo-client-p3",
     "inter-component-call-p3-caller",
     "inter-component-call-p3-callee",
+    "stream-producer-p3",
+    "stream-consumer-p3",
+    "stream-pacer-p3",
+    "res-producer-p3",
+    "res-sink-p3",
+    "res-caller-p3",
 ];
 
 // Fixtures with local-only WIT worlds (no wasi imports). Copying shared

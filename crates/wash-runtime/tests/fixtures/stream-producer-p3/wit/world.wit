@@ -1,0 +1,14 @@
+package wasmcloud:stream-test@0.1.0;
+
+interface producer {
+    /// Produce a stream of `n` bytes. Returned as a `stream<u8>` so the
+    /// handle can be passed to another component through the dynamic linker.
+    produce: async func(n: u32) -> stream<u8>;
+}
+
+world stream-producer {
+    import wasi:cli/types@0.3.0-rc-2026-03-15;
+    import wasi:clocks/types@0.3.0-rc-2026-03-15;
+
+    export producer;
+}

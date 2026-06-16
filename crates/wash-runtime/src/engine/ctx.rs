@@ -138,6 +138,8 @@ impl<'a> DerefMut for ActiveCtx<'a> {
 pub struct Ctx {
     /// Unique identifier for this component context. This is a [uuid::Uuid::new_v4] string.
     pub id: Arc<str>,
+    /// Unique identifier shared by all component contexts in the same store.
+    pub store_id: String,
     /// The unique identifier for the workload component this instance belongs to
     pub component_id: Arc<str>,
     /// The unique identifier for the workload this component belongs to
@@ -352,6 +354,7 @@ impl wasmtime_wasi_http::p3::WasiHttpHooks for CtxHttpHooksP3 {
 /// Helper struct to build a [`Ctx`] with a builder pattern
 pub struct CtxBuilder {
     id: Arc<str>,
+    store_id: String,
     workload_id: Arc<str>,
     component_id: Arc<str>,
     ctx: Option<WasiCtx>,
@@ -368,6 +371,7 @@ impl CtxBuilder {
     pub fn new(workload_id: impl Into<Arc<str>>, component_id: impl Into<Arc<str>>) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string().into(),
+            store_id: uuid::Uuid::new_v4().to_string(),
             component_id: component_id.into(),
             workload_id: workload_id.into(),
             ctx: None,
@@ -444,6 +448,7 @@ impl CtxBuilder {
 
         Ctx {
             id: self.id,
+            store_id: self.store_id,
             ctx: self.ctx.unwrap_or_else(|| {
                 WasiCtxBuilder::new()
                     .args(&["main.wasm"])
