@@ -10,11 +10,6 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      is_release:
-        description: "Treat this run as a release: run canary-binaries, gate as if Cargo.toml had bumped. Use when re-releasing a SHA whose Cargo.toml is already at the target version, or when finalizing a release whose train run failed."
-        type: boolean
-        default: false
 
 defaults:
   run:
@@ -64,59 +59,6 @@ jobs:
               - 'runtime-operator/test/e2e/**'
               - 'charts/runtime-operator/**'
               - 'deploy/kind/kind-config.yaml'
-
-  # Detect whether this commit bumps the workspace version — the signal
-  # that "this is a release." Compare `[workspace.package].version` at
-  # HEAD against HEAD~1. workflow_dispatch can override via `is_release`
-  # input (e.g., re-releases where Cargo.toml is already at the target
-  # version, or finalizing a release whose train run failed).
-  release-detect:
-    needs:
-      - changes
-    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      is_release: ${{ steps.detect.outputs.is_release }}
-      version: ${{ steps.detect.outputs.version }}
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          fetch-depth: 2
-          persist-credentials: false
-      - name: Detect workspace version bump
-        id: detect
-        env:
-          INPUT_IS_RELEASE: ${{ inputs.is_release }}
-        run: |
-          set -euo pipefail
-          read_ws_version() {
-            local src="$1"
-            if [[ "${src}" == "HEAD" ]]; then
-              cat Cargo.toml
-            else
-              git show "${src}:Cargo.toml"
-            fi | awk -F'"' '
-              /^\[workspace\.package\]/ { in_pkg = 1; next }
-              /^\[/ && !/^\[workspace\.package\]/ { in_pkg = 0 }
-              in_pkg && /^version = "/ { print $2; exit }
-            '
-          }
-          CUR=$(read_ws_version HEAD)
-          PREV=$(read_ws_version HEAD~1 2>/dev/null || true)
-          if [[ "${INPUT_IS_RELEASE}" == "true" ]]; then
-            echo "workflow_dispatch with is_release=true — treating as release"
-            echo "is_release=true" >> "${GITHUB_OUTPUT}"
-            echo "version=${CUR}" >> "${GITHUB_OUTPUT}"
-          elif [[ -n "${CUR}" && "${CUR}" != "${PREV}" ]]; then
-            echo "version bump detected: ${PREV:-<none>} → ${CUR}"
-            echo "is_release=true" >> "${GITHUB_OUTPUT}"
-            echo "version=${CUR}" >> "${GITHUB_OUTPUT}"
-          else
-            echo "no version bump (HEAD=${CUR}, HEAD~1=${PREV:-<none>}) — not a release"
-            echo "is_release=false" >> "${GITHUB_OUTPUT}"
-          fi
 
   check:
     needs:
@@ -406,7 +348,6 @@ jobs:
 
   gate:
     needs:
-      - release-detect
       - check
       - lint
       - wash-image
@@ -422,7 +363,6 @@ jobs:
           RESULTS: ${{ toJSON(needs.*.result) }}
           CANARY_PUBLISH_RESULT: ${{ needs.canary-publish.result }}
           CANARY_BINARIES_RESULT: ${{ needs.canary-binaries.result }}
-          IS_RELEASE: ${{ needs.release-detect.outputs.is_release }}
           REF: ${{ github.ref }}
         run: |
           set -euo pipefail
@@ -434,10 +374,10 @@ jobs:
             echo "canary-publish result=${CANARY_PUBLISH_RESULT} on main push; expected success" >&2
             exit 1
           fi
-          # Release commits must also build per-target binaries that
+          # Main pushes must also build the per-target binaries that
           # release-tag.yml attaches to the GH Release.
-          if [[ "${IS_RELEASE}" == "true" ]] && [[ "${CANARY_BINARIES_RESULT}" != "success" ]]; then
-            echo "canary-binaries result=${CANARY_BINARIES_RESULT} on release commit; expected success" >&2
+          if [[ "${REF}" == "refs/heads/main" ]] && [[ "${CANARY_BINARIES_RESULT}" != "success" ]]; then
+            echo "canary-binaries result=${CANARY_BINARIES_RESULT} on main push; expected success" >&2
             exit 1
           fi
 
@@ -554,29 +494,23 @@ jobs:
         type=raw,value=canary-wasip3
         type=sha,format=long,prefix=sha-,suffix=-wasip3
 
-  # Canary matrix binary build. Runs on every release commit on main —
-  # detected by `release-detect` as a Cargo.toml workspace version bump
-  # vs the parent commit — so release-tag.yml can promote the exact
-  # bytes that the canary CI tested instead of rebuilding on tag.
-  # Skipped for non-release main pushes to avoid burning ~7 runners on
-  # every commit. Manual fallback: `gh workflow run wash.yml --ref main
-  # -f is_release=true`.
+  # Canary matrix binary build. Runs on every push to main so each commit
+  # exercises the full per-target matrix (including the s390x/musl cross
+  # builds that the regular `check`/`lint` jobs don't cover), and so
+  # release-tag.yml can promote the exact bytes that the canary CI tested
+  # instead of rebuilding on tag.
   canary-binaries:
-    # Fires whenever `release-detect` says this is a release commit —
-    # detected via Cargo.toml workspace version bump (HEAD vs HEAD~1)
-    # or forced via `workflow_dispatch` input. `always()` breaks the
-    # skipped-`changes` propagation; the explicit per-need success
-    # gates restore the default `success()` check.
+    # Fires on every main push and on `workflow_dispatch`. `always()`
+    # breaks the skipped-`changes` propagation; the explicit per-need
+    # success gates restore the default `success()` check.
     if: |
       always() &&
-      needs.release-detect.outputs.is_release == 'true' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/main' &&
       needs.check.result == 'success' &&
       needs.lint.result == 'success' &&
       needs.runtime-operator-e2e.result == 'success'
     needs:
-      - release-detect
       - check
       - lint
       - runtime-operator-e2e

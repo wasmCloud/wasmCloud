@@ -312,7 +312,7 @@ jobs:
           TOTAL=$(echo "${JOBS_JSON}" | jq -r '[.jobs[] | select(.name | startswith("canary-binaries"))] | length')
           OK=$(echo "${JOBS_JSON}" | jq -r '[.jobs[] | select((.name | startswith("canary-binaries")) and .conclusion == "success")] | length')
           if (( TOTAL == 0 )); then
-            echo "wash.yml run ${RUN_ID} has no canary-binaries jobs — was the commit a 'release: v…' commit?" >&2
+            echo "wash.yml run ${RUN_ID} has no canary-binaries jobs. Check the check/lint/e2e gates for failures." >&2
             exit 1
           fi
           if (( OK != TOTAL )); then
