@@ -592,6 +592,10 @@ jobs:
           echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "${GITHUB_ENV}"
 
       - name: Build binary (${{ matrix.target }})
+        env:
+          # Retry transient crates.io download failures (e.g. SSL eof) more
+          # aggressively than cargo's default of 3.
+          CARGO_NET_RETRY: "10"
         run: |
           ${{ matrix.buildCommand }} --release --target ${{ matrix.buildTarget || matrix.target }}
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} ${{ matrix.artifact }}
