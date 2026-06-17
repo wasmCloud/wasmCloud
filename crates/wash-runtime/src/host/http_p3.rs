@@ -12,6 +12,7 @@
 use crate::engine::ctx::SharedCtx;
 use crate::observability::FuelConsumptionMeter;
 use http_body_util::BodyExt;
+use tracing::Instrument;
 use wasmtime::Store;
 use wasmtime::component::InstancePre;
 use wasmtime_wasi_http::p3::bindings::ServicePre;
@@ -34,10 +35,42 @@ pub type P3SendResult = Result<
 /// Future returned by [`crate::host::http::OutgoingHandler::send_request_p3`].
 pub type P3SendFuture = Box<dyn std::future::Future<Output = P3SendResult> + Send>;
 
+/// Response body that yields frames forwarded from the component task over a
+/// bounded channel. End-of-stream is signalled when the sender (held by the
+/// component task) is dropped.
+struct ChannelBody {
+    rx: tokio::sync::mpsc::Receiver<Result<hyper::body::Frame<bytes::Bytes>, ErrorCode>>,
+    /// Aborts the component task when this body is dropped before the stream
+    /// completes (e.g. the client disconnects). Without this, a guest that is
+    /// busy computing — rather than parked on a frame send — would keep running
+    /// until its next send; there is no epoch/wall-clock backstop. Held only
+    /// for its `Drop`.
+    _task: tokio_util::task::AbortOnDropHandle<()>,
+}
+
+impl hyper::body::Body for ChannelBody {
+    type Data = bytes::Bytes;
+    type Error = ErrorCode;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        self.rx.poll_recv(cx)
+    }
+}
+
 /// Handle an HTTP request using the WASIP3 `wasi:http/handler` interface.
 ///
 /// P3 uses `ServicePre`/`Service` with `Store::run_concurrent` to get an
 /// `Accessor` for concurrent component-model async operations.
+///
+/// The response body is **streamed**: the component runs in a background task
+/// that owns the store and drives `run_concurrent`, forwarding response frames
+/// over a bounded channel as they are produced. The store and therefore the
+/// guest stays alive until the body has been fully drained, and a slow client
+/// applies backpressure to the guest rather than buffering the whole body in
+/// memory.
 pub async fn handle_component_request_p3(
     mut store: Store<SharedCtx>,
     pre: InstancePre<SharedCtx>,
@@ -57,65 +90,239 @@ pub async fn handle_component_request_p3(
     let req = hyper::Request::from_parts(parts, body);
     let (wasi_req, req_io) = wasmtime_wasi_http::p3::Request::from_http(req);
 
-    // Instantiate the service
-    let service = service_pre
-        .instantiate_async(&mut store)
-        .await
-        .map_err(|e| anyhow::anyhow!(e).context("failed to instantiate P3 service"))?;
+    // Bounded so a slow client applies backpressure to the guest instead of
+    // letting response frames accumulate without limit.
+    let (frame_tx, frame_rx) =
+        tokio::sync::mpsc::channel::<Result<hyper::body::Frame<bytes::Bytes>, ErrorCode>>(4);
+    // Delivers the response head (status + headers) as soon as the handler
+    // returns it, while the body is still streaming.
+    let (parts_tx, parts_rx) =
+        tokio::sync::oneshot::channel::<anyhow::Result<hyper::http::response::Parts>>();
 
-    // Use run_concurrent to get an Accessor for the P3 async component model.
-    // The handler invocation, response conversion, AND body collection must all
-    // happen inside run_concurrent since the body stream requires the concurrent
-    // runtime to pump data from the component.
-    let result: anyhow::Result<hyper::Response<http_body_util::Collected<bytes::Bytes>>> = store
-        .run_concurrent(async move |store| {
-            let handler_fut = async {
-                let result = service.handle(store, wasi_req).await;
-                match result {
-                    Ok(Ok(response)) => {
-                        let http_response =
-                            store.with(|s| response.into_http(s, async { Ok(()) }))?;
-                        let (parts, body) = http_response.into_parts();
-                        let body = body.collect().await.map_err(|e| {
-                            anyhow::anyhow!("failed to collect P3 response body: {e:?}")
-                        })?;
-                        Ok(hyper::Response::from_parts(parts, body))
-                    }
-                    Ok(Err(error_code)) => {
-                        tracing::error!(?error_code, "P3 HTTP handler returned error");
-                        let body = http_body_util::Empty::new()
-                            .map_err(|never| match never {})
-                            .boxed_unsync()
-                            .collect()
-                            .await
-                            .map_err(|e| anyhow::anyhow!("failed to collect error body: {e:?}"))?;
-                        Ok(hyper::Response::builder()
-                            .status(500)
-                            .body(body)
-                            .map_err(anyhow::Error::from)?)
-                    }
-                    Err(e) => Err(anyhow::anyhow!(e).context("P3 handler trap")),
+    // The store is owned by this task for the entire response lifetime.
+    // `run_concurrent` only resolves once every frame has been forwarded, so the
+    // guest keeps running until the body is fully drained. Wrapped in an
+    // `AbortOnDropHandle` immediately (not just once the body holds it) so that
+    // if this request future is cancelled while still awaiting the response head
+    // — e.g. the client disconnects before the guest produces a response — the
+    // task is aborted rather than detached to run unbounded.
+    let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+        async move {
+            let service = match service_pre.instantiate_async(&mut store).await {
+                Ok(service) => service,
+                Err(e) => {
+                    let _ = parts_tx.send(Err(
+                        anyhow::anyhow!(e).context("failed to instantiate P3 service")
+                    ));
+                    return;
                 }
             };
-            let io_fut = async {
-                if let Err(e) = req_io.await {
-                    tracing::error!(err = ?e, "P3 request I/O error");
-                }
-            };
-            let (handler_result, _) = tokio::join!(handler_fut, io_fut);
-            handler_result
-        })
-        .await?;
 
-    // Convert collected body back to a streaming body for the hyper response
-    match result {
-        Ok(response) => {
-            let (parts, collected) = response.into_parts();
-            let body: P3Body = http_body_util::Full::new(collected.to_bytes())
-                .map_err(|never| match never {})
-                .boxed_unsync();
-            Ok(hyper::Response::from_parts(parts, body))
+            let run = store
+                .run_concurrent(async move |store| {
+                    let mut parts_tx = Some(parts_tx);
+                    // `async move` so `handler_fut` owns `frame_tx`: it drops the
+                    // instant the response body completes, delivering end-of-stream
+                    // to the client without waiting for `io_fut` (request-body
+                    // upload) to finish in the `join!` below.
+                    let handler_fut = async move {
+                        let response = match service.handle(store, wasi_req).await {
+                            Ok(Ok(response)) => response,
+                            Ok(Err(error_code)) => {
+                                tracing::error!(?error_code, "P3 HTTP handler returned error");
+                                if let Some(tx) = parts_tx.take() {
+                                    let (mut head, ()) = hyper::Response::new(()).into_parts();
+                                    head.status = hyper::StatusCode::INTERNAL_SERVER_ERROR;
+                                    let _ = tx.send(Ok(head));
+                                }
+                                return Ok(());
+                            }
+                            Err(e) => {
+                                if let Some(tx) = parts_tx.take() {
+                                    let _ =
+                                        tx.send(Err(anyhow::anyhow!(e).context("P3 handler trap")));
+                                }
+                                return Ok(());
+                            }
+                        };
+                        // `into_http`'s `fut` reports the body-delivery outcome
+                        // back to the guest (it resolves the future returned by
+                        // `wasi:http/types.response#new`). Resolve it once we have
+                        // finished forwarding the body to the client, so a guest
+                        // that awaits the result learns whether delivery succeeded.
+                        let (finish_tx, finish_rx) =
+                            tokio::sync::oneshot::channel::<Result<(), ErrorCode>>();
+                        let http_response = match store.with(|s| {
+                            response.into_http(s, async move {
+                                match finish_rx.await {
+                                    Ok(result) => {
+                                        tracing::trace!(
+                                            ?result,
+                                            "P3 response body delivery finished"
+                                        );
+                                        result
+                                    }
+                                    // Sender dropped (task aborted mid-stream),
+                                    // e.g. the client disconnected; nothing to
+                                    // report back to the guest.
+                                    Err(_) => {
+                                        tracing::debug!(
+                                            "P3 response delivery future dropped before completion"
+                                        );
+                                        Ok(())
+                                    }
+                                }
+                            })
+                        }) {
+                            Ok(http_response) => http_response,
+                            Err(e) => {
+                                if let Some(tx) = parts_tx.take() {
+                                    let _ = tx.send(Err(anyhow::anyhow!(e)
+                                        .context("failed to convert P3 response to http")));
+                                }
+                                return Ok(());
+                            }
+                        };
+                        let (head, mut body) = http_response.into_parts();
+                        if let Some(tx) = parts_tx.take()
+                            && tx.send(Ok(head)).is_err()
+                        {
+                            // Caller dropped the receiver; report the failed
+                            // delivery to the guest and stop.
+                            let _ = finish_tx.send(Err(ErrorCode::ConnectionTerminated));
+                            return Ok(());
+                        }
+                        let mut delivery = Ok(());
+                        while let Some(frame) = body.frame().await {
+                            if frame_tx.send(frame).await.is_err() {
+                                // The hyper response body was dropped (e.g. the
+                                // client disconnected); stop pulling from the guest
+                                // and report the failed delivery.
+                                delivery = Err(ErrorCode::ConnectionTerminated);
+                                break;
+                            }
+                        }
+                        let _ = finish_tx.send(delivery);
+                        Ok::<(), anyhow::Error>(())
+                    };
+                    let io_fut = async {
+                        if let Err(e) = req_io.await {
+                            tracing::error!(err = ?e, "P3 request I/O error");
+                        }
+                    };
+                    let (handler_result, ()) = tokio::join!(handler_fut, io_fut);
+                    handler_result
+                })
+                .await;
+            match run {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::error!(err = ?e, "P3 response streaming failed"),
+                Err(e) => tracing::error!(err = ?e, "P3 run_concurrent failed"),
+            }
         }
-        Err(e) => Err(e),
+        .in_current_span(),
+    ));
+
+    let head = parts_rx
+        .await
+        .map_err(|_| anyhow::anyhow!("P3 component task ended before producing a response"))??;
+    let body: P3Body = ChannelBody {
+        rx: frame_rx,
+        _task: task,
+    }
+    .boxed_unsync();
+    Ok(hyper::Response::from_parts(head, body))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use hyper::body::Frame;
+
+    /// `ChannelBody` must forward frames **incrementally**, a consumer should
+    /// receive a frame while the producer is still parked, not only after the
+    /// producer has finished and signal end-of-stream when the producer drops
+    /// its sender.
+    #[tokio::test]
+    async fn channel_body_streams_frames_incrementally() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, ErrorCode>>(4);
+        // Gates the producer's second frame on the consumer acknowledging the
+        // first, proving the first was delivered before the producer completed.
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let producer = tokio::spawn(async move {
+            tx.send(Ok(Frame::data(Bytes::from_static(b"first"))))
+                .await
+                .expect("send first");
+            ack_rx.await.expect("consumer ack");
+            tx.send(Ok(Frame::data(Bytes::from_static(b"second"))))
+                .await
+                .expect("send second");
+            // `tx` dropped here -> end-of-stream.
+        });
+
+        let mut body = ChannelBody {
+            rx,
+            _task: tokio_util::task::AbortOnDropHandle::new(producer),
+        };
+
+        let first = body
+            .frame()
+            .await
+            .expect("a frame")
+            .expect("ok frame")
+            .into_data()
+            .expect("data frame");
+        assert_eq!(first.as_ref(), b"first");
+
+        // The producer is now parked on `ack_rx`; releasing it lets the second
+        // frame flow. Receiving `first` before this proves incremental delivery.
+        ack_tx.send(()).expect("release producer");
+
+        let second = body
+            .frame()
+            .await
+            .expect("a frame")
+            .expect("ok frame")
+            .into_data()
+            .expect("data frame");
+        assert_eq!(second.as_ref(), b"second");
+
+        assert!(
+            body.frame().await.is_none(),
+            "stream should end when the producer drops its sender"
+        );
+    }
+
+    /// Dropping a `ChannelBody` must abort the component task (via the held
+    /// `AbortOnDropHandle`) so the guest is cancelled promptly on disconnect.
+    #[tokio::test]
+    async fn channel_body_drop_aborts_task() {
+        let (_tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, ErrorCode>>(1);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+        let (gone_tx, gone_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let task = tokio::spawn(async move {
+            let _gone_tx = gone_tx; // dropped (closing the channel) only when the task ends
+            let _ = started_tx.send(());
+            // Runs "forever" unless aborted.
+            std::future::pending::<()>().await;
+        });
+
+        let body = ChannelBody {
+            rx,
+            _task: tokio_util::task::AbortOnDropHandle::new(task),
+        };
+        started_rx.await.expect("task started");
+
+        drop(body);
+
+        // The task's `gone_tx` is dropped when the task is aborted, so this
+        // resolves with a recv error.
+        assert!(
+            gone_rx.await.is_err(),
+            "dropping the body should abort the task"
+        );
     }
 }
