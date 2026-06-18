@@ -117,9 +117,9 @@ async fn setup() -> Result<TestHarness> {
                     ]
                     .into_iter()
                     .collect(),
-                    version: Some(
-                        semver::Version::parse("0.2.0-draft").expect("valid semver version"),
-                    ),
+                    version: Some(semver::Version::parse("0.2.0-draft").map_err(|e| {
+                        anyhow::anyhow!("invalid blobstore interface version: {e}")
+                    })?),
                     config: {
                         let mut config = HashMap::new();
                         config.insert("buckets".to_string(), "my-container-real".to_string());
