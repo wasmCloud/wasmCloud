@@ -11,7 +11,11 @@ impl udp_create_socket::Host for WasiSocketsCtxView<'_> {
         &mut self,
         address_family: IpAddressFamily,
     ) -> SocketResult<Resource<UpstreamUdpSocket>> {
-        let socket = UdpSocket::new(self.ctx, address_family.into())
+        let address_family = match address_family {
+            IpAddressFamily::Ipv4 => cap_net_ext::AddressFamily::Ipv4,
+            IpAddressFamily::Ipv6 => cap_net_ext::AddressFamily::Ipv6,
+        };
+        let socket = UdpSocket::new(self.ctx, address_family)
             .map_err(super::network::socket_error_from_util)?;
         let socket = self.table.push(socket)?;
         Ok(Resource::new_own(socket.rep()))
