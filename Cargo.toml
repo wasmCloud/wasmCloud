@@ -123,6 +123,10 @@ wasmcloud = { path = "crates/wasmcloud", default-features = false }
 # wasmtime 46 is not yet released to crates.io; pin to the release-46.0.0
 # branch HEAD. Bump the rev together when picking up release-branch fixes,
 # and switch back to a crates.io `version` once 46.0.0 ships.
+# The resource-implements feature (bytecodealliance/wasmtime#13666) merged to
+# `main` and will ship in wasmtime 47 — it is NOT on the 46 release branch. To
+# run it on 46 we maintain a backport and pull it in via the
+# `[patch."https://github.com/bytecodealliance/wasmtime"]` section below.
 wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "7535c0255b2b84f6ae4de6034649ba2eeda84173", default-features = false }
 wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "7535c0255b2b84f6ae4de6034649ba2eeda84173", default-features = false }
 wasmtime-wasi-io = { git = "https://github.com/bytecodealliance/wasmtime", rev = "7535c0255b2b84f6ae4de6034649ba2eeda84173", default-features = false }
@@ -165,3 +169,22 @@ ignored = [
 [patch.crates-io]
 # Pinned for async component support (fixes #187). Remove after https://github.com/bytecodealliance/rust-oci-wasm/issues/28
 oci-wasm = { git = "https://github.com/bytecodealliance/rust-oci-wasm", rev = "5ee16fa1" }
+
+# Redirect upstream wasmtime to a 46 backport carrying the resource-implements
+# feature (bytecodealliance/wasmtime#13666). The feature merged to `main` (47.0.0)
+# but is not on the 46 release branch, and wasmtime does not backport features to
+# release branches — so to ship it on 46 we maintain `release-46.0.0-implements`
+# on the fork: `release-46.0.0` + the cherry-picked implements commits. Cargo
+# requires the patch source to be version-compatible with the upstream dep, so the
+# branch MUST stay based on release-46.0.0 (46.0.0) to match the rev pinned above
+# — a main-based (47.0.0) branch will fail to apply.
+#
+# Re-cherry-pick onto a newer release-46.0.x base when bumping the rev above.
+# Retire this whole block (and the fork branch) once the workspace moves to
+# wasmtime 47, where the feature ships in the stock release.
+[patch."https://github.com/bytecodealliance/wasmtime"]
+wasmtime = { git = "https://github.com/ricochet/wasmtime", branch = "release-46.0.0-implements" }
+wasmtime-wasi = { git = "https://github.com/ricochet/wasmtime", branch = "release-46.0.0-implements" }
+wasmtime-wasi-io = { git = "https://github.com/ricochet/wasmtime", branch = "release-46.0.0-implements" }
+wasmtime-wasi-http = { git = "https://github.com/ricochet/wasmtime", branch = "release-46.0.0-implements" }
+wasmtime-wasi-tls = { git = "https://github.com/ricochet/wasmtime", branch = "release-46.0.0-implements" }
