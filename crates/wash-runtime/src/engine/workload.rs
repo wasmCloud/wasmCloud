@@ -106,6 +106,11 @@ impl WorkloadMetadata {
         &mut self.linker
     }
 
+    /// Returns a reference to the wasmtime [`Component`].
+    pub fn component(&self) -> &Component {
+        &self.component
+    }
+
     /// Returns a reference to component local resources.
     pub fn local_resources(&self) -> &LocalResources {
         &self.local_resources
@@ -1484,6 +1489,18 @@ impl UnresolvedWorkload {
                 for wit_interface in required_interfaces.iter() {
                     // Check if plugin supports this interface
                     if plugin_interfaces.includes_bidirectional(wit_interface) {
+                        // an `(implements ..)` named interface is served only
+                        // by a plugin that supports named instances.
+                        let defer_to_other = if wit_interface.name.is_some() {
+                            !p.supports_named_instances()
+                                && other_plugin_serves(plugins, plugin_id, wit_interface, true)
+                        } else {
+                            p.supports_named_instances()
+                                && other_plugin_serves(plugins, plugin_id, wit_interface, false)
+                        };
+                        if defer_to_other {
+                            continue;
+                        }
                         matching_interfaces.insert(wit_interface.clone());
                     }
                 }
@@ -1876,6 +1893,23 @@ fn build_export_map(
     }
 
     (interface_map, ambiguous)
+}
+
+/// Returns whether some *other* registered plugin (not `self_id`) with
+/// `supports_named_instances() == want_named` can serve `iface`.
+/// Used to determine whether a plugin can defer an `(implements ..)`
+///  interface to a named-capable one, and vice versa).
+fn other_plugin_serves(
+    plugins: &HashMap<&'static str, Arc<dyn HostPlugin + 'static>>,
+    self_id: &str,
+    iface: &WitInterface,
+    want_named: bool,
+) -> bool {
+    plugins.iter().any(|(id, q)| {
+        *id != self_id
+            && q.supports_named_instances() == want_named
+            && q.world().includes_bidirectional(iface)
+    })
 }
 
 fn topological_sort_components(
@@ -2962,6 +2996,57 @@ mod tests {
         if let Err(e) = result {
             panic!("Single named entry should not require named instance support: {e}");
         }
+    }
+
+    /// Coexistence: a regular (standalone) plugin and a named-capable
+    /// (multiplexed) plugin both matching the same package bind together, with
+    /// the unnamed interface routed to the regular plugin and the `(implements
+    /// ..)` named interfaces routed to the named-capable one. Without the
+    /// name-aware dispatch this errors (the regular plugin would claim the two
+    /// named entries it cannot serve).
+    #[tokio::test]
+    async fn test_named_and_regular_plugins_coexist() {
+        let regular = Arc::new(MockPlugin::new(
+            "kv-standalone",
+            vec![],
+            vec![keyvalue_interface(None)],
+        ));
+        let multiplexed = Arc::new(
+            MockPlugin::new("kv-multiplexed", vec![], vec![keyvalue_interface(None)])
+                .with_named_instance_support(),
+        );
+
+        let mut plugins = HashMap::new();
+        plugins.insert(regular.id(), regular.clone() as Arc<dyn HostPlugin>);
+        plugins.insert(multiplexed.id(), multiplexed.clone() as Arc<dyn HostPlugin>);
+
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![create_test_component("component1")],
+            vec![
+                keyvalue_interface(None),
+                keyvalue_interface(Some("cache")),
+                keyvalue_interface(Some("sessions")),
+            ],
+        );
+
+        let bound = workload
+            .bind_plugins(&plugins)
+            .await
+            .expect("standalone + multiplexed plugins should bind together");
+        let bound_ids: std::collections::HashSet<&str> =
+            bound.iter().map(|(p, _)| p.id()).collect();
+        assert!(
+            bound_ids.contains("kv-standalone"),
+            "regular plugin must bind the unnamed interface"
+        );
+        assert!(
+            bound_ids.contains("kv-multiplexed"),
+            "named-capable plugin must bind the named interfaces"
+        );
     }
 
     /// Existing unnamed entries -> no change in behavior
