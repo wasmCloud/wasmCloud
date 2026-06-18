@@ -625,6 +625,14 @@ pub enum WasmProposal {
     /// Component model async ABI (`stream`/`future`/`error-context` types).
     /// Enables `wasm_component_model_async`. Required for WASIP3.
     ComponentModelAsync,
+    /// Component model `(implements ..)` named imports, letting a component
+    /// import the same interface multiple times under distinct names so host
+    /// plugins can route each independently. Enables
+    /// `wasm_component_model_implements`. Requires the backported wasmtime
+    /// support, so it is only available with the `wasm_component_model_implements`
+    /// crate feature.
+    #[cfg(feature = "wasm_component_model_implements")]
+    WasmComponentModelImplements,
     /// Garbage collection. Enables `wasm_function_references` (a prerequisite)
     /// and `wasm_gc`.
     Gc,
@@ -644,6 +652,10 @@ impl WasmProposal {
         match self {
             WasmProposal::ComponentModelAsync => {
                 cfg.wasm_component_model_async(true);
+            }
+            #[cfg(feature = "wasm_component_model_implements")]
+            WasmProposal::WasmComponentModelImplements => {
+                cfg.wasm_component_model_implements(true);
             }
             WasmProposal::Gc => {
                 // GC builds on the function-references proposal.
@@ -866,6 +878,16 @@ impl EngineBuilder {
         if self.wasip3 {
             self.proposals.insert(WasmProposal::ComponentModelAsync);
         }
+
+        // Accept components that import an interface multiple times via the
+        // component-model `(implements ..)` annotation, so host plugins can
+        // route each named import (e.g. two `wasi:keyvalue/store` imports
+        // backed by redis vs NATS) independently. Only available with the
+        // backported wasmtime support behind the
+        // `wasm_component_model_implements` feature.
+        #[cfg(feature = "wasm_component_model_implements")]
+        self.proposals
+            .insert(WasmProposal::WasmComponentModelImplements);
 
         for proposal in &self.proposals {
             proposal.apply(&mut config);
