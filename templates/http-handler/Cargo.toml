@@ -41,8 +41,13 @@ crate-type = ["cdylib"]
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["json", "query", "matched-path"] }
 serde = { version = "1.0", features = ["derive"] }
-wstd = "0.6"
-wstd-axum = "0.6"
+# `wstd-axum` -> `wstd` -> transitive `wasip2` together determine which
+# `wasi-http` version the generated component exports. Pin all three so
+# `wit/world.wit` stays in sync deterministically — bumping any of them
+# requires bumping the world.wit version too.
+wstd = "=0.6.6"
+wstd-axum = "=0.6.6"
+wasip2 = "=1.0.3"
 
 [package.metadata.cargo-machete]
 ignored = ["wstd"]

@@ -41,7 +41,9 @@ crate-type = ["cdylib"]
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0"
-wit-bindgen = "0.57.1"
+# wit-bindgen pinned exact: a minor bump can change how bindings are
+# generated. Coordinate any bump with wit/world.wit and wkg.lock.
+wit-bindgen = "=0.57.1"
 
 [profile.release]
 lto = true

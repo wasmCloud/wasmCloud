@@ -8,4 +8,5 @@ workspace = true
 
 [dependencies]
 wstd = { workspace = true }
+wasip2 = { workspace = true }
 anyhow = { workspace = true }

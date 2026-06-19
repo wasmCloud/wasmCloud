@@ -1,7 +1,10 @@
 package wasmcloud:http-client;
 
+// The `wasi:http/...` versions must match what `wstd` was compiled
+// against (see Cargo.toml pin). Bumping `wstd` requires bumping these
+// versions and running `wash wit fetch` (or just `wash build`).
 world http-client {
-  import wasi:http/outgoing-handler@0.2.2;
+  import wasi:http/outgoing-handler@0.2.9;
 
-  export wasi:http/incoming-handler@0.2.2;
+  export wasi:http/incoming-handler@0.2.9;
 }

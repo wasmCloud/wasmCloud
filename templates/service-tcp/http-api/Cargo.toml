@@ -11,5 +11,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wstd = { workspace = true }
+wasip2 = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }

@@ -7,6 +7,6 @@ name = "wasi:http"
 registry = "wasi.dev"
 
 [[packages.versions]]
-requirement = "=0.2.2"
-version = "0.2.2"
-digest = "sha256:a1f129cdf1fde55ec2d4ae8d998c39a7e5cf7544a8bd84a831054ac0d2ac64dd"
+requirement = "=0.2.9"
+version = "0.2.9"
+digest = "sha256:db563c1ef2f846c3875341468b2e0c23f7463d091a282f8e7d016203177fbe4f"

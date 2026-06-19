@@ -1,5 +1,9 @@
 package wasmcloud:http-handler;
 
+// The `wasi:http/incoming-handler` version must match what `wstd-axum`
+// + `wstd` were compiled against (see Cargo.toml pin). Bumping either
+// crate requires bumping this version and running `wash wit fetch`
+// (or just `wash build`) to refresh `wkg.lock`.
 world http-handler {
-  export wasi:http/incoming-handler@0.2.2;
+  export wasi:http/incoming-handler@0.2.9;
 }

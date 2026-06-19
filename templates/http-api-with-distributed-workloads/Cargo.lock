@@ -111,6 +111,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
+ "wasip2",
  "wit-bindgen",
  "wstd",
 ]
@@ -310,6 +311,7 @@ dependencies = [
 name = "task-leet"
 version = "0.1.0"
 dependencies = [
+ "wasip2",
  "wit-bindgen",
  "wstd",
 ]
@@ -318,6 +320,7 @@ dependencies = [
 name = "task-reverse"
 version = "0.1.0"
 dependencies = [
+ "wasip2",
  "wit-bindgen",
  "wstd",
 ]
