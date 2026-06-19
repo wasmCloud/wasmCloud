@@ -48,7 +48,7 @@ runs:
           password: ${{ inputs.registry-password }}
 
       - name: Update dependencies with Helmfile
-        uses: helmfile/helmfile-action@f6f7844b9e6d9f5ac8cf4cdae8ada1a42755c036 # v2.4.4
+        uses: helmfile/helmfile-action@daefb3e1fa5a91b7a88d30870d20da4896944818 # v2.4.5
         with:
           helmfile-args: deps
           helmfile-version: ${{ inputs.helmfile-version }}
