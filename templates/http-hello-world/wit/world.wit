@@ -1,5 +1,11 @@
 package wasmcloud:hello;
 
+// The `wasi:http/incoming-handler` version must match what the `wstd`
+// crate pinned in Cargo.toml was compiled against — `wstd 0.6.6`
+// targets `wasi-http 0.2.9`. If you bump `wstd`, bump this version to
+// match, and run `wash wit fetch` (or just `wash build`) to refresh
+// `wkg.lock`. The two are checked at component-encode time when the
+// quickstart's persistent-storage step adds `wit_bindgen::generate!`.
 world hello {
-   export wasi:http/incoming-handler@0.2.2;
+   export wasi:http/incoming-handler@0.2.9;
 }

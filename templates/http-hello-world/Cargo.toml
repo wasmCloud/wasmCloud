@@ -39,4 +39,10 @@ unnecessary_box_returns = 'deny'
 crate-type = ["cdylib"]
 
 [dependencies]
-wstd = "0.6"
+# `wstd` and its transitive `wasip2` together determine which
+# `wasi-http` version the generated component exports. Pinning both
+# keeps `wit/world.wit` in sync deterministically — bumping either
+# requires bumping the world.wit version too (see comment there).
+wstd = "=0.6.6"
+wasip2 = "=1.0.3"
+
