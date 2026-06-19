@@ -102,20 +102,20 @@ impl NewCommand {
 
         // Try to derive name from subfolder first, then from repository URL
         if let Some(subfolder) = &self.subfolder {
-            subfolder
-                .split('/')
-                .next_back()
+            last_non_empty_segment(subfolder)
                 .unwrap_or("new-project")
                 .to_string()
         } else {
-            self.git
-                .split('/')
-                .next_back()
+            last_non_empty_segment(&self.git)
                 .unwrap_or("new-project")
                 .trim_end_matches(".git")
                 .to_string()
         }
     }
+}
+
+fn last_non_empty_segment(value: &str) -> Option<&str> {
+    value.split('/').rev().find(|segment| !segment.is_empty())
 }
 
 fn load_template_new_command(project_dir: &Path) -> anyhow::Result<Option<String>> {
@@ -217,5 +217,29 @@ mod tests {
             load_template_new_command(tempdir.path()).expect("project config should parse");
 
         assert_eq!(new_cmd.as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn get_project_name_ignores_trailing_slash_in_repo_url() {
+        let cmd = NewCommand {
+            git: "https://github.com/wasmCloud/wasmCloud.git/".to_string(),
+            name: None,
+            subfolder: None,
+            git_ref: None,
+        };
+
+        assert_eq!(cmd.get_project_name(), "wasmCloud");
+    }
+
+    #[test]
+    fn get_project_name_ignores_trailing_slash_in_subfolder() {
+        let cmd = NewCommand {
+            git: "https://github.com/wasmCloud/wasmCloud.git".to_string(),
+            name: None,
+            subfolder: Some("templates/http-hello-world/".to_string()),
+            git_ref: None,
+        };
+
+        assert_eq!(cmd.get_project_name(), "http-hello-world");
     }
 }
