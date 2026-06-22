@@ -52,10 +52,10 @@ wash build
 
 ## WIT Interfaces
 
-This component exports the following [WIT interfaces](https://component-model.bytecodealliance.org/design/wit.html):
+This component exports `wasi:http/incoming-handler` via `wstd`'s `#[http_server]` proc macro, so the [WIT world](https://component-model.bytecodealliance.org/design/wit.html) itself is empty:
 
 ```wit
-world hello {
-  export wasi:http/incoming-handler@0.2.2;
-}
+world hello {}
 ```
+
+To add capabilities like key-value storage or logging, declare them as imports in `wit/world.wit` and use `wit_bindgen::generate!` to bring in the bindings &mdash; see [`examples/http-hello-world-persistent-storage`](https://github.com/wasmCloud/wasmCloud/tree/main/examples/http-hello-world-persistent-storage) for a worked example.
