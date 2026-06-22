@@ -1,0 +1,8 @@
+package wasmcloud:hello;
+
+// wasi:http/incoming-handler is exported via wstd's #[http_server] proc macro,
+// so it does not appear explicitly in this world definition.
+world hello {
+  import wasi:keyvalue/store@0.2.0-draft;
+  import wasi:keyvalue/atomics@0.2.0-draft;
+}

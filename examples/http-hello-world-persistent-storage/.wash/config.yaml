@@ -1,0 +1,3 @@
+build:
+  command: cargo build --target wasm32-wasip2 --release --locked
+  component_path: target/wasm32-wasip2/release/http_hello_world_persistent_storage.wasm
