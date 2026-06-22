@@ -1,0 +1,8 @@
+# Rust build artifacts
+target/
+
+# WIT dependencies
+wit/deps
+
+# Trash
+.DS_Store
