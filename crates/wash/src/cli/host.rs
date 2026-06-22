@@ -4,7 +4,7 @@ use anyhow::Context as _;
 use clap::Args;
 use tracing::info;
 use wash_runtime::{
-    engine::Engine,
+    engine::{Engine, WasmProposal},
     observability::Meters,
     plugin::{self},
 };
@@ -115,6 +115,17 @@ pub struct HostCommand {
     /// Enable WASI OpenTelemetry plugin
     #[arg(long = "wasi-otel", default_value_t = false)]
     pub wasi_otel: bool,
+
+    /// Enable additional wasm proposals on the engine. Accepts a comma-separated
+    /// list and/or repeated flags, e.g. `--wasm-proposal gc,threads`. Accepted
+    /// names: component-model-async, gc, exception-handling, wide-arithmetic,
+    /// threads, tail-call.
+    #[arg(
+        long = "wasm-proposal",
+        env = "WASH_WASM_PROPOSALS",
+        value_delimiter = ','
+    )]
+    pub wasm_proposals: Vec<WasmProposal>,
 }
 
 impl CliCommand for HostCommand {
@@ -156,10 +167,13 @@ impl CliCommand for HostCommand {
             oci_cache_dir: self.oci_cache_dir.clone(),
         };
 
-        let engine = Engine::builder()
+        let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
-            .with_fuel_consumption(ctx.enable_meters())
-            .build()?;
+            .with_fuel_consumption(ctx.enable_meters());
+        for proposal in &self.wasm_proposals {
+            engine_builder = engine_builder.with_wasm_proposal(*proposal);
+        }
+        let engine = engine_builder.build()?;
 
         let mut cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default()
             .with_engine(engine)

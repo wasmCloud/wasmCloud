@@ -10,7 +10,7 @@ use clap::Args;
 use tokio::{select, sync::mpsc};
 use tracing::{debug, info, instrument, warn};
 use wash_runtime::{
-    engine::Engine,
+    engine::{Engine, WasmProposal},
     host::{Host, HostApi},
     observability::Meters,
     plugin::{self},
@@ -63,10 +63,16 @@ impl CliCommand for DevCommand {
             .clone()
             .unwrap_or_else(|| "0.0.0.0:8000".to_string());
 
-        let engine = Engine::builder()
+        let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
-            .with_fuel_consumption(ctx.enable_meters())
-            .build()?;
+            .with_fuel_consumption(ctx.enable_meters());
+        for name in &dev_config.wasm_proposals {
+            let proposal: WasmProposal = name
+                .parse()
+                .with_context(|| format!("invalid dev.wasm_proposals entry {name:?}"))?;
+            engine_builder = engine_builder.with_wasm_proposal(proposal);
+        }
+        let engine = engine_builder.build()?;
 
         let mut host_builder = Host::builder()
             .with_engine(engine)

@@ -637,6 +637,42 @@ impl WasmProposal {
     }
 }
 
+/// Error returned when a string cannot be parsed into a [`WasmProposal`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParseWasmProposalError(String);
+
+impl std::fmt::Display for ParseWasmProposalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unknown wasm proposal {:?}; expected one of: component-model-async, gc, \
+             exception-handling, wide-arithmetic, threads, tail-call",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for ParseWasmProposalError {}
+
+impl FromStr for WasmProposal {
+    type Err = ParseWasmProposalError;
+
+    /// Parse a proposal from its kebab-case name. Matching is case-insensitive
+    /// and treats `_` and `-` interchangeably, so `gc`, `GC`,
+    /// `exception_handling`, and `exception-handling` all parse.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+            "component-model-async" => Ok(Self::ComponentModelAsync),
+            "gc" => Ok(Self::Gc),
+            "exception-handling" => Ok(Self::ExceptionHandling),
+            "wide-arithmetic" => Ok(Self::WideArithmetic),
+            "threads" => Ok(Self::Threads),
+            "tail-call" => Ok(Self::TailCall),
+            _ => Err(ParseWasmProposalError(s.to_string())),
+        }
+    }
+}
+
 /// Builder for constructing an [`Engine`] with custom configuration.
 ///
 /// The builder pattern allows for flexible configuration of the engine
@@ -1038,5 +1074,23 @@ mod tests {
             .with_pooling_config(pool)
             .build()
             .expect("external pooling config should build");
+    }
+
+    // Proposal names parse case-insensitively and accept `_`/`-` interchangeably;
+    // unknown names are rejected.
+    #[test]
+    fn wasm_proposal_from_str() {
+        assert_eq!("gc".parse(), Ok(WasmProposal::Gc));
+        assert_eq!("GC".parse(), Ok(WasmProposal::Gc));
+        assert_eq!(" threads ".parse(), Ok(WasmProposal::Threads));
+        assert_eq!(
+            "exception_handling".parse(),
+            Ok(WasmProposal::ExceptionHandling)
+        );
+        assert_eq!(
+            "component-model-async".parse(),
+            Ok(WasmProposal::ComponentModelAsync)
+        );
+        assert!("nonsense".parse::<WasmProposal>().is_err());
     }
 }
