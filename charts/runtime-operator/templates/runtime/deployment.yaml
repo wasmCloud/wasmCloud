@@ -114,6 +114,9 @@ spec:
             {{- if and (.wasip3) (.wasip3.enabled) }}
             - "--wasip3"
             {{- end }}
+            {{- range .wasmProposals }}
+            - "--wasm-proposal={{ . }}"
+            {{- end }}
             {{- /* Chart-wide runtime.extraArgs applies to every host group; per-host-group
                    .extraArgs is appended after it. */}}
             {{- with $top.Values.runtime.extraArgs }}
