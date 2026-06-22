@@ -737,6 +737,13 @@ impl EngineBuilder {
     /// [`with_wasm_proposal`](Self::with_wasm_proposal) rather than being
     /// mutually exclusive with them.
     ///
+    /// Unlike the default-config path, the pooling allocator is *not* enabled
+    /// by default on top of a custom config. A base config's allocation
+    /// strategy is preserved unless pooling is explicitly requested via
+    /// [`with_pooling_allocator`](Self::with_pooling_allocator),
+    /// [`with_pooling_config`](Self::with_pooling_config), or the
+    /// `WASMTIME_POOLING` environment variable.
+    ///
     /// # Arguments
     /// * `config` - A wasmtime `Config` object with custom settings
     ///
@@ -793,12 +800,18 @@ impl EngineBuilder {
 
         // Start from the caller-supplied base config (or wasmtime's default) and
         // layer the builder-managed settings on top of it.
+        let has_custom_config = self.config.is_some();
         let mut config = self.config.take().unwrap_or_default();
 
+        // Default the pooling allocator on only when starting from wasmtime's
+        // default config. With a caller-supplied base config, leave its
+        // allocation strategy untouched unless pooling was explicitly requested
+        // (via with_pooling_allocator/with_pooling_config or WASMTIME_POOLING),
+        // so a custom strategy is not silently overridden.
         let use_pooling_allocator = self
             .use_pooling_allocator
             .or_else(|| getenv::<bool>("WASMTIME_POOLING"))
-            .unwrap_or(true);
+            .unwrap_or(!has_custom_config);
 
         // The pooling allocator can be more efficient for workloads with many short-lived instances
         if use_pooling_allocator && let Ok(true) = is_pooling_allocator_supported() {
