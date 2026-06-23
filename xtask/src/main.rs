@@ -91,6 +91,8 @@ const P2_FIXTURES: &[&str] = &[
     "inter-component-call-callee",
     "inter-component-call-middleware",
     "http-allowed-hosts",
+    "keyvalue-counter",
+    "keyvalue-implements",
 ];
 
 const P3_FIXTURES: &[&str] = &[
@@ -267,6 +269,11 @@ fn componentize(core_module: &[u8], adapter: &[u8]) -> Result<Vec<u8>> {
 /// of a single bundled `package.wit`.
 fn copy_shared_wit_deps(shared_wit_dir: &Path, fixture_dir: &Path) -> Result<()> {
     let deps_dir = fixture_dir.join("wit/deps");
+    // Clear stale deps before re-staging
+    if deps_dir.exists() {
+        fs::remove_dir_all(&deps_dir)
+            .with_context(|| format!("failed to clear stale {}", deps_dir.display()))?;
+    }
     fs::create_dir_all(&deps_dir)?;
 
     for entry in fs::read_dir(shared_wit_dir)

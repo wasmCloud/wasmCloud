@@ -1,7 +1,6 @@
 //! Integration tests for `wash oci push` / `wash oci pull` round-trip.
 //!
-//! Requires Docker and the `OCI_INTEGRATION_TESTS` env var to be set.
-//! Skips gracefully otherwise.
+//! Requires Docker/registry; marked `#[ignore]`, run with `cargo test --include-ignored`.
 
 use std::time::Duration;
 
@@ -33,16 +32,8 @@ async fn start_registry() -> Result<(ContainerAsync<GenericImage>, u16)> {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker/registry; run with `cargo test --include-ignored`"]
 async fn oci_push_pull_round_trip() -> Result<()> {
-    // Gate on env var — matches pattern from wash-runtime OCI tests
-    if std::env::var("OCI_INTEGRATION_TESTS")
-        .unwrap_or_default()
-        .is_empty()
-    {
-        eprintln!("Skipping OCI integration test (set OCI_INTEGRATION_TESTS=1 to enable)");
-        return Ok(());
-    }
-
     // Start local registry
     let (_container, port) = start_registry().await?;
     let reference = format!("localhost:{port}/test/wash-e2e:v1");

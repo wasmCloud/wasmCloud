@@ -1,0 +1,11 @@
+[package]
+name = "keyvalue-counter"
+edition = "2021"
+version = "0.0.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true }
+anyhow = { workspace = true }

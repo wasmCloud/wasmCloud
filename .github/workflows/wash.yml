@@ -116,13 +116,26 @@ jobs:
       - name: Test
         env:
           RUST_BACKTRACE: "1"
-          OCI_INTEGRATION_TESTS: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
-          NATS_INTEGRATION_TESTS: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
         run: |
           cargo test --workspace
-      - name: Test with wasi-tls
+      - name: Test with wasi-tls + wasm_component_model_implements
+        env:
+          RUST_BACKTRACE: "1"
         run: |
-          cargo test -p wash-runtime --features wasi-tls
+          cargo test -p wash-runtime --features wasi-tls,wasm_component_model_implements
+      # Docker/registry-backed `#[ignore]` integration tests, Linux only: the
+      # macOS/Windows hosted runners have no Docker daemon (and macOS can't get
+      # one — no nested virtualization). `-- --ignored` runs ONLY the ignored
+      # tests, once. Scoped to the crates we gate this way (wash-runtime + wash's
+      # OCI suite) so it doesn't pull in the pre-existing network-only wit tests
+      # in `crates/wash/tests/integration_wit.rs`.
+      - name: Integration tests (Docker/registry, Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          RUST_BACKTRACE: "1"
+        run: |
+          cargo test -p wash-runtime --features wasm_component_model_implements,wasi-tls -- --ignored
+          cargo test -p wash --test integration_oci -- --ignored
       - name: Build benchmarks
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -155,6 +168,10 @@ jobs:
           rust-components: rustfmt
       - name: Install cargo-machete
         uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2.81.10
+        env:
+          # Authenticate the action's GitHub API calls so they aren't throttled
+          # by the 60/hr anonymous per-IP limit shared across hosted runners.
+          GITHUB_TOKEN: ${{ github.token }}
         with:
           tool: cargo-machete@0.8.0
       - name: Format
@@ -162,7 +179,7 @@ jobs:
           cargo +nightly fmt -- --check
       - name: Lint
         run: |
-          cargo clippy --workspace --features wasi-tls
+          cargo clippy --workspace --features wasm_component_model_implements,wasi-tls
       - name: Lint anyhow context message casing
         run: |
           # anyhow `.context()` / `.with_context()` strings are error messages,

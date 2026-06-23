@@ -15,6 +15,8 @@ members = [
     "inter-component-call-callee",
     "inter-component-call-middleware",
     "http-allowed-hosts",
+    "keyvalue-counter",
+    "keyvalue-implements",
     # P3 fixtures (wasm32-wasip1 + reactor adapter)
     "http-handler-p3",
     "http-blobstore-p3",
@@ -35,4 +37,4 @@ tokio = { version = "1", default-features = false, features = ["sync", "macros",
 wstd = "0.6"
 wasmcloud-component = "0.2.0"
 wgpu = { git = "https://github.com/wasi-gfx/wgpu.git", rev = "898122bf2cace048e63f065181a86459edb28205", default-features = false, features = ["wasi", "wgsl"] }
-wit-bindgen = "0.54.0"
+wit-bindgen = "0.58.0"

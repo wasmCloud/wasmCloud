@@ -7,7 +7,7 @@
 //! or the spawn loop that silently break subscription delivery will fail this
 //! test.
 //!
-//! Requires Docker. Gated behind `NATS_INTEGRATION_TESTS=1` so CI can opt in.
+//! Requires Docker (NATS); marked `#[ignore]`, run with `cargo test --include-ignored`.
 
 use anyhow::{Context, Result};
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -148,12 +148,8 @@ async fn setup() -> Result<TestHarness> {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn test_nats_messaging_handler_subscription_round_trip() -> Result<()> {
-    if std::env::var("NATS_INTEGRATION_TESTS").unwrap_or_default() != "1" {
-        eprintln!("Skipping NATS integration test (set NATS_INTEGRATION_TESTS=1 to enable)");
-        return Ok(());
-    }
-
     let harness = setup().await?;
 
     // Give the plugin a moment to flush its SUB to the server. The handler
@@ -190,12 +186,8 @@ async fn test_nats_messaging_handler_subscription_round_trip() -> Result<()> {
 /// timing-dependent on slow runners; with the flush, it must be true by the
 /// time `workload_start` returns.
 #[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn test_nats_messaging_subscription_registered_on_server() -> Result<()> {
-    if std::env::var("NATS_INTEGRATION_TESTS").unwrap_or_default() != "1" {
-        eprintln!("Skipping NATS integration test (set NATS_INTEGRATION_TESTS=1 to enable)");
-        return Ok(());
-    }
-
     let harness = setup().await?;
 
     // Poll briefly to absorb the small lag between connect and the server's

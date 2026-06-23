@@ -52,6 +52,10 @@ pub mod wasi_otel;
 
 pub mod wasmcloud_messaging;
 
+/// Shared `(implements ..)` multiplexing core
+#[cfg(feature = "wasm_component_model_implements")]
+pub mod multiplex;
+
 #[cfg(all(
     feature = "wasi-webgpu",
     not(target_os = "windows"),
