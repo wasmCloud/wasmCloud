@@ -129,11 +129,9 @@ pub struct NetworkTcpSocket {
     options: NonInheritedOptions,
 
     /// Tracks whether the send stream has been taken (P3 only).
-    #[cfg(feature = "wasip3")]
     send_taken: bool,
 
     /// Tracks whether the receive stream has been taken (P3 only).
-    #[cfg(feature = "wasip3")]
     receive_taken: bool,
 }
 
@@ -205,15 +203,12 @@ impl NetworkTcpSocket {
             listen_backlog_size: DEFAULT_TCP_BACKLOG,
             family,
             options: Default::default(),
-            #[cfg(feature = "wasip3")]
             send_taken: false,
-            #[cfg(feature = "wasip3")]
             receive_taken: false,
         })
     }
 
     /// Create an error socket (P3 only, for deferred accept errors).
-    #[cfg(feature = "wasip3")]
     pub(crate) fn new_error(_err: std::io::Error, family: SocketAddressFamily) -> Self {
         // Create a closed socket to represent the error.
         // The upstream uses a dedicated Error state, but for simplicity
@@ -228,9 +223,7 @@ impl NetworkTcpSocket {
             listen_backlog_size: DEFAULT_TCP_BACKLOG,
             family,
             options: Default::default(),
-            #[cfg(feature = "wasip3")]
             send_taken: false,
-            #[cfg(feature = "wasip3")]
             receive_taken: false,
         }
     }
@@ -584,7 +577,6 @@ impl NetworkTcpSocket {
     ///
     /// Returns the shared listener so callers (and tests) can build accept
     /// streams without a follow-up [`Self::tcp_listener_arc`] call.
-    #[cfg(feature = "wasip3")]
     pub(crate) fn listen_p3(&mut self) -> Result<Arc<tokio::net::TcpListener>, ErrorCode> {
         let tokio_socket = match mem::replace(&mut self.tcp_state, TcpState::Closed) {
             TcpState::Bound(tokio_socket) => tokio_socket,
@@ -620,7 +612,6 @@ impl NetworkTcpSocket {
     ///
     /// Returns an owned clone of the `Arc` so callers don't have to clone it
     /// themselves.
-    #[cfg(feature = "wasip3")]
     pub(crate) fn tcp_listener_arc(&self) -> Result<Arc<tokio::net::TcpListener>, ErrorCode> {
         match &self.tcp_state {
             TcpState::Listening { listener, .. } => Ok(Arc::clone(listener)),
@@ -629,7 +620,6 @@ impl NetworkTcpSocket {
     }
 
     /// Take the send stream Arc (P3 only).
-    #[cfg(feature = "wasip3")]
     pub(crate) fn take_send_stream(&mut self) -> Result<Arc<tokio::net::TcpStream>, ErrorCode> {
         if self.send_taken {
             return Err(ErrorCode::InvalidState);
@@ -644,7 +634,6 @@ impl NetworkTcpSocket {
     }
 
     /// Take the receive stream Arc (P3 only).
-    #[cfg(feature = "wasip3")]
     pub(crate) fn take_receive_stream(&mut self) -> Result<Arc<tokio::net::TcpStream>, ErrorCode> {
         if self.receive_taken {
             return Err(ErrorCode::InvalidState);
@@ -659,7 +648,6 @@ impl NetworkTcpSocket {
     }
 
     /// Get non-inherited options reference (for accepted sockets).
-    #[cfg(feature = "wasip3")]
     pub(crate) fn non_inherited_options(&self) -> &NonInheritedOptions {
         &self.options
     }
@@ -975,9 +963,7 @@ impl TcpSocket {
                     listen_backlog_size: socket.listen_backlog_size,
                     family: socket.family,
                     options: socket.options.clone(),
-                    #[cfg(feature = "wasip3")]
                     send_taken: false,
-                    #[cfg(feature = "wasip3")]
                     receive_taken: false,
                 },
                 lo,
@@ -1384,7 +1370,6 @@ impl TcpSocket {
     /// Take the loopback accept channel for P3 listen streaming.
     ///
     /// Returns the receiver that yields incoming `TcpConn` connections.
-    #[cfg(feature = "wasip3")]
     pub(crate) fn take_loopback_listen_rx(&mut self) -> Result<P3LoopbackListenInfo, ErrorCode> {
         let lo = match self {
             Self::Loopback(socket) => socket,
@@ -1397,7 +1382,6 @@ impl TcpSocket {
     /// Listen using P3 semantics (with implicit bind).
     ///
     /// For loopback, requires the loopback network to register the listener.
-    #[cfg(feature = "wasip3")]
     pub(crate) fn listen_p3(
         &mut self,
         loopback: &mut super::loopback::Network,
@@ -1419,7 +1403,6 @@ impl TcpSocket {
     /// Take the send stream (P3 only).
     ///
     /// Returns the underlying stream or channel for sending data.
-    #[cfg(feature = "wasip3")]
     pub(crate) fn take_send_stream(&mut self) -> Result<P3SendStream, ErrorCode> {
         match self {
             Self::Network(socket) => socket.take_send_stream().map(P3SendStream::Network),
@@ -1445,7 +1428,6 @@ impl TcpSocket {
     /// Take the receive stream (P3 only).
     ///
     /// Returns the underlying stream or channel for receiving data.
-    #[cfg(feature = "wasip3")]
     pub(crate) fn take_receive_stream(&mut self) -> Result<P3ReceiveStream, ErrorCode> {
         match self {
             Self::Network(socket) => socket.take_receive_stream().map(P3ReceiveStream::Network),
@@ -1662,7 +1644,6 @@ mod tests {
         assert!(size > 0);
     }
 
-    #[cfg(feature = "wasip3")]
     mod p3 {
         use super::*;
         use crate::sockets::loopback;
@@ -1919,7 +1900,6 @@ mod tests {
 /// Captured when a listener is taken (see [`take_loopback_listen_info`]) so
 /// that each accepted connection can be seeded with the listener's options via
 /// [`LoopbackSocketProps::to_accepted_socket`].
-#[cfg(feature = "wasip3")]
 #[derive(Clone)]
 #[allow(dead_code)]
 pub(crate) struct LoopbackSocketProps {
@@ -1934,7 +1914,6 @@ pub(crate) struct LoopbackSocketProps {
     pub family: SocketAddressFamily,
 }
 
-#[cfg(feature = "wasip3")]
 impl From<&super::loopback::TcpSocket> for LoopbackSocketProps {
     fn from(socket: &super::loopback::TcpSocket) -> Self {
         Self {
@@ -1951,7 +1930,6 @@ impl From<&super::loopback::TcpSocket> for LoopbackSocketProps {
     }
 }
 
-#[cfg(feature = "wasip3")]
 impl LoopbackSocketProps {
     /// Create a loopback TcpSocket in the Connected state from an accepted connection.
     pub(crate) fn to_accepted_socket(
@@ -1977,7 +1955,6 @@ impl LoopbackSocketProps {
 }
 
 /// P3 send stream type, either a network TcpStream or loopback channel.
-#[cfg(feature = "wasip3")]
 pub(crate) enum P3SendStream {
     Network(Arc<tokio::net::TcpStream>),
     Loopback {
@@ -1987,7 +1964,6 @@ pub(crate) enum P3SendStream {
 }
 
 /// P3 receive stream type.
-#[cfg(feature = "wasip3")]
 pub(crate) enum P3ReceiveStream {
     Network(Arc<tokio::net::TcpStream>),
     Loopback(
@@ -1996,7 +1972,6 @@ pub(crate) enum P3ReceiveStream {
 }
 
 /// Extract the accept channel from a loopback TcpSocket in Listening state.
-#[cfg(feature = "wasip3")]
 fn take_loopback_listen_info(
     lo: &mut super::loopback::TcpSocket,
 ) -> Result<P3LoopbackListenInfo, ErrorCode> {
@@ -2018,7 +1993,6 @@ fn take_loopback_listen_info(
 }
 
 /// P3 listen stream info for loopback, holding the accept channel.
-#[cfg(feature = "wasip3")]
 pub(crate) struct P3LoopbackListenInfo {
     pub rx: tokio::sync::mpsc::Receiver<super::loopback::TcpConn>,
     pub socket_props: LoopbackSocketProps,

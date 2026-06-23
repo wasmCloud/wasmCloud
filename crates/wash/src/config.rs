@@ -460,13 +460,6 @@ pub struct DevConfig {
     /// Enable WASI OpenTelemetry support
     #[serde(default)]
     pub wasi_otel: bool,
-
-    /// Enable WASIP3 support for components that target wasi@0.3 interfaces.
-    /// `None` means use the default (enabled); set `wasip3: false` to opt out.
-    /// `Option` keeps "unset = enabled" consistent across `Default`, serde, and
-    /// direct construction without a hand-written `Default` impl.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasip3: Option<bool>,
 }
 
 impl DevConfig {

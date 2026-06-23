@@ -70,9 +70,6 @@ pub struct WorkloadMetadata {
     loopback: Arc<std::sync::Mutex<loopback::Network>>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
-    /// Whether WASIP3 support is enabled for this component's engine.
-    #[cfg(feature = "wasip3")]
-    wasip3_enabled: bool,
 }
 
 impl WorkloadMetadata {
@@ -169,10 +166,9 @@ impl WorkloadMetadata {
         crate::engine::exports_wasi_http(&self.component)
     }
 
-    /// Returns whether this component targets WASIP3 and the engine has P3 enabled.
-    #[cfg(feature = "wasip3")]
+    /// Returns whether this component targets WASIP3.
     pub fn targets_p3(&self) -> bool {
-        self.wasip3_enabled && crate::engine::targets_wasip3(&self.component)
+        crate::engine::targets_wasip3(&self.component)
     }
 
     /// Computes and returns the [`WitWorld`] of this component.
@@ -259,7 +255,6 @@ impl WorkloadService {
         local_resources: LocalResources,
         max_restarts: u64,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
-        #[cfg(feature = "wasip3")] wasip3_enabled: bool,
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
@@ -274,8 +269,6 @@ impl WorkloadService {
                 plugins: None,
                 loopback,
                 linked_components: Default::default(),
-                #[cfg(feature = "wasip3")]
-                wasip3_enabled,
             },
             handle: None,
             max_restarts,
@@ -291,7 +284,6 @@ impl WorkloadService {
     }
 
     /// Pre-instantiate the component for P3 execution.
-    #[cfg(feature = "wasip3")]
     pub fn pre_instantiate_p3(
         &mut self,
     ) -> anyhow::Result<wasmtime_wasi::p3::bindings::CommandPre<SharedCtx>> {
@@ -339,7 +331,6 @@ impl WorkloadComponent {
         volume_mounts: Vec<(PathBuf, VolumeMount)>,
         local_resources: LocalResources,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
-        #[cfg(feature = "wasip3")] wasip3_enabled: bool,
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
@@ -354,8 +345,6 @@ impl WorkloadComponent {
                 plugins: None,
                 loopback,
                 linked_components: Default::default(),
-                #[cfg(feature = "wasip3")]
-                wasip3_enabled,
             },
             name: component_name.into(),
             // TODO: Implement pooling and instance limits
@@ -527,7 +516,6 @@ impl ResolvedWorkload {
     /// Executes the service, if present, and returns whether it was run.
     #[instrument(name="execute_service", skip_all, fields(workload.id = self.id.as_ref(), workload.name = self.name.as_ref(), workload.namespace = self.namespace.as_ref()))]
     pub(crate) async fn execute_service(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
-        #[cfg(feature = "wasip3")]
         if self
             .service
             .as_ref()
@@ -573,7 +561,6 @@ impl ResolvedWorkload {
     }
 
     /// Execute a service using P3 (wasi:cli@0.3) CommandPre.
-    #[cfg(feature = "wasip3")]
     async fn execute_service_p3(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
         let service = self
             .service
@@ -2171,8 +2158,6 @@ mod tests {
             Vec::new(),
             local_resources,
             Arc::default(),
-            #[cfg(feature = "wasip3")]
-            false,
         )
     }
 
@@ -2195,8 +2180,6 @@ mod tests {
             Vec::new(),
             local_resources,
             Arc::default(),
-            #[cfg(feature = "wasip3")]
-            false,
         )
     }
 
@@ -2219,8 +2202,6 @@ mod tests {
             local_resources,
             3,
             Arc::default(),
-            #[cfg(feature = "wasip3")]
-            false,
         )
     }
 
@@ -2290,8 +2271,6 @@ mod tests {
                 Vec::new(),
                 LocalResources::default(),
                 Arc::default(),
-                #[cfg(feature = "wasip3")]
-                false,
             )
         };
         for (plugin, iface) in cases {

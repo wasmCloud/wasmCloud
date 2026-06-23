@@ -18,7 +18,7 @@
 //!
 //! Run with:
 //! ```text
-//! cargo bench -p wash-runtime --features wasip3 --bench wasmtime_baseline
+//! cargo bench -p wash-runtime --bench wasmtime_baseline
 //! ```
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -95,7 +95,6 @@ impl wasmtime_wasi_http::p2::WasiHttpView for Ctx {
     }
 }
 
-#[cfg(feature = "wasip3")]
 impl wasmtime_wasi_http::p3::WasiHttpView for Ctx {
     fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
         wasmtime_wasi_http::p3::WasiHttpCtxView {
@@ -119,7 +118,6 @@ fn build_engine() -> anyhow::Result<Engine> {
     pool.total_tables(100);
     pool.total_component_instances(100);
     cfg.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pool));
-    #[cfg(feature = "wasip3")]
     cfg.wasm_component_model_async(true);
     Ok(Engine::new(&cfg)?)
 }
@@ -132,12 +130,9 @@ fn build_linker(engine: &Engine) -> anyhow::Result<Linker<Ctx>> {
     wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
     wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
 
-    // P3 WASI + wasi:http bindings (only present when the wasip3 feature is on).
-    #[cfg(feature = "wasip3")]
-    {
-        wasmtime_wasi::p3::add_to_linker(&mut linker)?;
-        wasmtime_wasi_http::p3::add_to_linker(&mut linker)?;
-    }
+    // P3 WASI + wasi:http bindings.
+    wasmtime_wasi::p3::add_to_linker(&mut linker)?;
+    wasmtime_wasi_http::p3::add_to_linker(&mut linker)?;
 
     Ok(linker)
 }
@@ -187,7 +182,6 @@ async fn handle_p2(
 }
 
 /// Handle a P3 request via `wasi:http/handler@0.3.x`.
-#[cfg(feature = "wasip3")]
 async fn handle_p3(
     pre: wasmtime::component::InstancePre<Ctx>,
     req: hyper::Request<Incoming>,
@@ -304,10 +298,7 @@ impl Server {
                             async move {
                                 let resp = match flavor_copy {
                                     Flavor::P2 => handle_p2(pre, req).await,
-                                    #[cfg(feature = "wasip3")]
                                     Flavor::P3 => handle_p3(pre, req).await,
-                                    #[cfg(not(feature = "wasip3"))]
-                                    Flavor::P3 => unreachable!("wasip3 feature disabled"),
                                 };
                                 match resp {
                                     Ok(r) => Ok::<_, hyper::Error>(r),

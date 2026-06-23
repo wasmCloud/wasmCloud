@@ -117,16 +117,13 @@ jobs:
           NATS_INTEGRATION_TESTS: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
         run: |
           cargo test --workspace
-      - name: Test with wasip3
+      - name: Test with wasi-tls
         run: |
-          cargo test -p wash-runtime --features wasip3
-      - name: Test with wasi-tls + wasip3
-        run: |
-          cargo test -p wash-runtime --features wasi-tls,wasip3
+          cargo test -p wash-runtime --features wasi-tls
       - name: Build benchmarks
         if: matrix.os == 'ubuntu-latest'
         run: |
-          cargo bench -p wash-runtime --features wasip3 --no-run
+          cargo bench -p wash-runtime --no-run
 
   lint:
     needs:
@@ -162,7 +159,7 @@ jobs:
           cargo +nightly fmt -- --check
       - name: Lint
         run: |
-          cargo clippy --workspace --features wasip3,wasi-tls
+          cargo clippy --workspace --features wasi-tls
       - name: Lint anyhow context message casing
         run: |
           # anyhow `.context()` / `.with_context()` strings are error messages,

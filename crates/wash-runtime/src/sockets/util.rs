@@ -455,7 +455,6 @@ pub fn parse_host(name: &str) -> Result<url::Host, ErrorCode> {
 
 /// Returns the implicit bind address for a given address family (port 0, unspecified IP).
 /// Used by P3 for implicit bind before listen.
-#[cfg(feature = "wasip3")]
 pub fn implicit_bind_addr(family: SocketAddressFamily) -> SocketAddr {
     let ip = match family {
         SocketAddressFamily::Ipv4 => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
