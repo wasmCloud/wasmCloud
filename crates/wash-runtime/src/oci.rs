@@ -467,7 +467,8 @@ pub async fn pull_component(
             .with_context(|| "failed to cache component")?;
     }
 
-    Ok((component_data, digest))
+    // oci-client 0.17 hands back layer data as `Bytes`; callers expect `Vec<u8>`.
+    Ok((component_data.to_vec(), digest))
 }
 
 /// Push a WebAssembly component to an OCI registry
@@ -566,6 +567,7 @@ pub async fn push_component(
             size: config_obj.data.len() as i64,
             urls: None,
             annotations: None,
+            artifact_type: None,
         };
 
         let layer_descriptors: Vec<OciDescriptor> = layers
@@ -576,6 +578,7 @@ pub async fn push_component(
                 size: layer.data.len() as i64,
                 urls: None,
                 annotations: None,
+                artifact_type: None,
             })
             .collect();
 

@@ -118,7 +118,7 @@ opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_ex
 
 # OCI dependencies (optional, behind 'oci' feature)
 docker_credential = { workspace = true, optional = true }
-oci-client = { workspace = true, optional = true, features = ["rustls-tls", "rustls-tls-native-roots"] }
+oci-client = { workspace = true, optional = true, features = ["rustls-tls"] }
 oci-wasm = { workspace = true, optional = true, features = ["rustls-tls"] }
 sha2 = { workspace = true, optional = true }
 wit-component = { workspace = true, optional = true }
@@ -157,7 +157,10 @@ pbjson-build = { workspace = true, default-features = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-reqwest = { workspace = true }
+# `stream` (bytes_stream / Body::wrap_stream) is used by the blobstore
+# integration tests; enable it explicitly rather than relying on another dep
+# transitively turning it on (oci-client 0.17 no longer does).
+reqwest = { workspace = true, features = ["stream"] }
 wat = { workspace = true, features = ["component-model"] }
 bytes = { workspace = true }
 http-body-util = { workspace = true }
