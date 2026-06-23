@@ -17,7 +17,7 @@
 //! protocol is line-based ASCII so substring matches on the buffer are
 //! sufficient: `SUB <subject> <sid>\r\n`, `UNSUB <sid>\r\n`).
 //!
-//! Requires Docker. Gated behind `NATS_INTEGRATION_TESTS=1`.
+//! Requires Docker (NATS); marked `#[ignore]`, run with `cargo test --include-ignored`.
 
 use anyhow::{Context, Result};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
@@ -257,14 +257,6 @@ async fn setup(latency: Duration) -> Result<TestHarness> {
     })
 }
 
-fn skip_if_disabled() -> bool {
-    if std::env::var("NATS_INTEGRATION_TESTS").unwrap_or_default() != "1" {
-        eprintln!("Skipping NATS fault-injection test (set NATS_INTEGRATION_TESTS=1 to enable)");
-        return true;
-    }
-    false
-}
-
 // ---------------------------------------------------------------------------
 // Fault injection: invariant must hold even with NATS-side latency
 // ---------------------------------------------------------------------------
@@ -281,11 +273,8 @@ fn skip_if_disabled() -> bool {
 /// resolve says "ok", the subscription is *on the server*. The latency
 /// makes the window wide enough to be deterministic on every machine.
 #[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn subscription_registers_under_upstream_latency() -> Result<()> {
-    if skip_if_disabled() {
-        return Ok(());
-    }
-
     let harness = setup(Duration::from_millis(100)).await?;
 
     let connz_url = format!("{}/connz?subs=true", harness.monitoring_url);
@@ -321,11 +310,8 @@ async fn subscription_registers_under_upstream_latency() -> Result<()> {
 ///
 /// NATS protocol subscribe message format: `SUB <subject> <sid>\r\n`.
 #[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn sub_protocol_message_sent_before_resolve_returns() -> Result<()> {
-    if skip_if_disabled() {
-        return Ok(());
-    }
-
     let harness = setup(Duration::from_millis(0)).await?;
 
     // Poll briefly for the SUB to land in the capture buffer. Even with the
@@ -365,11 +351,8 @@ async fn sub_protocol_message_sent_before_resolve_returns() -> Result<()> {
 /// `SUB <subject> <sid>` line for our subject and assert no `UNSUB <sid>`
 /// follows it.
 #[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn no_unsubscribe_during_steady_state() -> Result<()> {
-    if skip_if_disabled() {
-        return Ok(());
-    }
-
     let harness = setup(Duration::from_millis(0)).await?;
     // Give the subscriber loop a moment to be polled; if it were going to
     // exit immediately and drop its Subscribers, the UNSUB would land here.

@@ -1,0 +1,13 @@
+package wasmcloud:keyvalue-counter;
+
+// Imports wasi:keyvalue ONCE, unnamed (the default instance). The coexistence
+// test registers a standalone keyvalue plugin (which serves this unnamed
+// import) alongside a multiplexed `(implements ..)` plugin (which serves named
+// imports) to prove the two `add_to_linker` flavors share one linker without
+// conflict. The named side is declared host-side here; for a guest that emits
+// `(implements ..)` imports itself, see the `keyvalue-implements` fixture.
+world keyvalue-counter {
+    import wasi:keyvalue/store@0.2.0-draft;
+    import wasi:keyvalue/atomics@0.2.0-draft;
+    export wasi:http/incoming-handler@0.2.2;
+}

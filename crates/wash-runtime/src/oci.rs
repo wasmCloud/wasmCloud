@@ -742,14 +742,10 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // Integration test with real registry - only run when OCI_INTEGRATION_TESTS env var is set
+    // Integration test with real registry - marked `#[ignore]`, run with `cargo test --include-ignored`
     #[tokio::test]
+    #[ignore = "hits a real OCI registry (network); run with `cargo test --include-ignored`"]
     async fn test_pull_and_validate_ghcr_component() {
-        // Skip this test unless integration tests are explicitly enabled
-        if std::env::var("OCI_INTEGRATION_TESTS").is_err() {
-            return;
-        }
-
         // Use public OCI references for testing
         let references = vec![
             // wasmCloud hello world component

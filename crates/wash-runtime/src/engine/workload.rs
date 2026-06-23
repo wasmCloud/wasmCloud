@@ -182,8 +182,21 @@ impl WorkloadMetadata {
             .component_type()
             .imports(self.component.engine())
         {
-            if let ComponentItem::ComponentInstance(_) = import_item.ty {
-                let interface = WitInterface::from(import_name);
+            if let ComponentItem::ComponentInstance(_) = &import_item.ty {
+                // An `(implements <id>)` import carries the real interface
+                // identity in its `implements` annotation; the import name is
+                // the multiplex label (e.g. `team-a`). Build the interface from
+                // the annotation and record the label as the routing `name` so
+                // it lines up with a named host interface. A plain import uses
+                // its name as the identity directly.
+                let interface = match import_item.implements {
+                    Some(implements_id) => {
+                        let mut iface = WitInterface::from(implements_id);
+                        iface.name = Some(import_name.to_string());
+                        iface
+                    }
+                    None => WitInterface::from(import_name),
+                };
                 let k = interface.instance();
                 imports
                     .entry(k)

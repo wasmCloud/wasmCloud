@@ -305,7 +305,14 @@ impl<'a> bindings::wasi::keyvalue::atomics::Host for ActiveCtx<'a> {
         let (entry_revision, entry_value) = match bucket_handle.kv.entry(&key).await {
             Ok(Some(mut e)) => {
                 let revision = Some(e.revision);
-                let value = e.value.get_u64();
+                // Tolerate a malformed (non-8-byte) value as 0 rather than
+                // panicking: `Buf::get_u64` traps the guest if the value has
+                // fewer than 8 bytes.
+                let value = if e.value.len() >= 8 {
+                    e.value.get_u64()
+                } else {
+                    0
+                };
                 (revision, value)
             }
             Ok(None) => (None, 0),
@@ -315,7 +322,8 @@ impl<'a> bindings::wasi::keyvalue::atomics::Host for ActiveCtx<'a> {
             }
         };
 
-        let new_value = entry_value + delta;
+        // saturating, so an overflowing increment can't panic-trap the guest.
+        let new_value = entry_value.saturating_add(delta);
         let entry_bytes = Bytes::from((new_value).to_be_bytes().to_vec());
 
         // Here's were CAS happens
@@ -530,7 +538,8 @@ mod tests {
     //! These live here (rather than under `tests/`) because they exercise a
     //! private method directly; the repo's `tests/integration_nats_*` files can
     //! only reach the public host API. They spin up a real JetStream via
-    //! testcontainers. Requires Docker. Gated behind `NATS_INTEGRATION_TESTS=1`.
+    //! testcontainers. Requires Docker; marked `#[ignore]`, run with
+    //! `cargo test --include-ignored`.
 
     use super::*;
     use testcontainers::{
@@ -561,26 +570,13 @@ mod tests {
         Ok((container, client))
     }
 
-    fn skip_if_disabled() -> bool {
-        if std::env::var("NATS_INTEGRATION_TESTS").unwrap_or_default() != "1" {
-            eprintln!(
-                "Skipping NATS keyvalue integration test (set NATS_INTEGRATION_TESTS=1 to enable)"
-            );
-            return true;
-        }
-        false
-    }
-
     /// `get_or_create_bucket` is implemented as an idempotent `create_key_value`.
     /// This verifies the property that makes that safe: re-opening an existing,
     /// populated bucket returns the same store with its entries intact — the
     /// duplicate create does not reset or wipe the bucket.
     #[tokio::test]
+    #[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
     async fn test_reopening_bucket_preserves_entries() -> anyhow::Result<()> {
-        if skip_if_disabled() {
-            return Ok(());
-        }
-
         tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
             .try_init()

@@ -13,7 +13,7 @@ impl Guest for Component {
         let msg = b"p3 service running\n".to_vec();
         let (mut tx, rx) = bindings::wit_stream::new();
 
-        wit_bindgen::spawn(async move {
+        wit_bindgen::spawn_local(async move {
             tx.write_all(msg).await;
             drop(tx);
         });

@@ -18,7 +18,7 @@ fn respond(status: u16, body_bytes: Vec<u8>) -> Result<Response, ErrorCode> {
     let (mut tx, rx) = bindings::wit_stream::new();
     let (trailers_tx, trailers_rx) = bindings::wit_future::new(|| todo!());
 
-    wit_bindgen::spawn(async move {
+    wit_bindgen::spawn_local(async move {
         tx.write_all(body_bytes).await;
         drop(tx);
         let _ = trailers_tx.write(Ok(None)).await;
