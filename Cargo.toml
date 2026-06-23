@@ -120,13 +120,14 @@ wasm-pkg-client = { version = "0.10.0", default-features = false }
 wasm-pkg-core = { version = "0.10.0", default-features = false }
 wasm-metadata = { version = "0.248.0", default-features = false, features = ["oci"] }
 wasmcloud = { path = "crates/wasmcloud", default-features = false }
-# wasmtime 46 is not yet released to crates.io; pin to the release-46.0.0
-# branch HEAD. Bump the rev together when picking up release-branch fixes,
-# and switch back to a crates.io `version` once 46.0.0 ships.
-# The resource-implements feature (bytecodealliance/wasmtime#13666) merged to
-# `main` and will ship in wasmtime 47 — it is NOT on the 46 release branch. To
-# run it on 46 we maintain a backport and pull it in via the
-# `[patch."https://github.com/bytecodealliance/wasmtime"]` section below.
+# Pinned to the release-46.0.0 branch HEAD rather than the crates.io 46.0.0
+# release because we need the resource-implements feature
+# (bytecodealliance/wasmtime#13666): it merged to `main` and ships in wasmtime
+# 47 — it is NOT on the 46 release branch. To run it on 46 we maintain a
+# backport and pull it in via the
+# `[patch."https://github.com/bytecodealliance/wasmtime"]` section below. Bump
+# the rev when picking up release-branch fixes. Drop the git pin for a crates.io
+# `version` once the feature lands in a stock release (wasmtime 47).
 wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "7535c0255b2b84f6ae4de6034649ba2eeda84173", default-features = false }
 wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "7535c0255b2b84f6ae4de6034649ba2eeda84173", default-features = false }
 wasmtime-wasi-io = { git = "https://github.com/bytecodealliance/wasmtime", rev = "7535c0255b2b84f6ae4de6034649ba2eeda84173", default-features = false }
@@ -169,6 +170,16 @@ ignored = [
 [patch.crates-io]
 # Pinned for async component support (fixes #187). Remove after https://github.com/bytecodealliance/rust-oci-wasm/issues/28
 oci-wasm = { git = "https://github.com/bytecodealliance/rust-oci-wasm", rev = "5ee16fa1" }
+
+# The wasi-gfx deps (behind the `wasi-webgpu` feature) depend on wasmtime 46
+# from crates.io, while the rest of the workspace uses the forked git wasmtime
+# below. Without this, two distinct wasmtime crates end up in the graph and the
+# gfx `add_to_linker` calls fail to typecheck. Redirect crates.io wasmtime to
+# the same fork so the whole graph shares one wasmtime. Retire alongside the
+# git-source patch block when the workspace moves to wasmtime 47.
+wasmtime = { git = "https://github.com/ricochet/wasmtime", branch = "release-46.0.0-implements" }
+wasmtime-wasi = { git = "https://github.com/ricochet/wasmtime", branch = "release-46.0.0-implements" }
+wasmtime-wasi-io = { git = "https://github.com/ricochet/wasmtime", branch = "release-46.0.0-implements" }
 
 # Redirect upstream wasmtime to a 46 backport carrying the resource-implements
 # feature (bytecodealliance/wasmtime#13666). The feature merged to `main` (47.0.0)
