@@ -12,10 +12,10 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
+default = ["wasi-webgpu"]
 wasi-tls = ["wash-runtime/wasi-tls"]
-# Opt-in: pulls in wasi-gfx git deps that still target wasmtime 45 and do
-# not build against the pinned wasmtime 46. Re-add to the default build
-# once wasi-gfx-runtime supports wasmtime 46.
+# On by default. Pulls in git-only wasi-gfx deps (no crates.io release);
+# disable with `--no-default-features` for a build without the git sources.
 wasi-webgpu = ["wash-runtime/wasi-webgpu"]
 
 [lints]

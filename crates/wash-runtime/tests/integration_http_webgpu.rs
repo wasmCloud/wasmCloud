@@ -9,7 +9,11 @@
 //! Note: This is a basic integration test that verifies plugin loading and host functionality.
 //! Full component binding and request routing would require proper WIT interface configuration.
 //!
-#![cfg(feature = "wasi-webgpu")]
+#![cfg(all(
+    feature = "wasi-webgpu",
+    not(target_os = "windows"),
+    not(target_arch = "s390x")
+))]
 
 use anyhow::{Context, Result};
 use std::{collections::HashMap, sync::Arc, time::Duration};

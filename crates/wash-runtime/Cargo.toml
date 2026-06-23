@@ -37,7 +37,7 @@ path = "src/lib.rs"
 workspace = true
 
 [features]
-default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel"]
+default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasi-webgpu"]
 oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:sha2", "dep:wit-component"]
 wasi-otel = []
 washlet = ["oci"]
@@ -115,8 +115,6 @@ opentelemetry-http = { workspace = true }
 # Otel dependencies (optional, behind 'wasi-otel' feature)
 opentelemetry-otlp = { workspace = true, features = ["grpc-tonic","http-proto", "trace", "metrics", "logs"] }
 opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
-wasi-graphics-context-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "24ac92e1a2fff283b2326a8607dd9b96c302237d", optional = true }
-wasi-webgpu-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "24ac92e1a2fff283b2326a8607dd9b96c302237d", optional = true }
 
 # OCI dependencies (optional, behind 'oci' feature)
 docker_credential = { workspace = true, optional = true }
@@ -138,6 +136,14 @@ tokio-postgres-rustls = { optional = true, workspace = true }
 ulid = { optional = true, workspace = true, features = ["std"] }
 url = { workspace = true }
 webpki-roots = { workspace = true }
+
+# wasi-webgpu dependencies (optional, behind 'wasi-webgpu' feature). Pulled in
+# only on platforms where the `wasi_webgpu` plugin module compiles: wgpu-hal
+# fails to build on Windows and s390x, so the deps are gated to match the
+# `#[cfg]` on `plugin::wasi_webgpu`.
+[target.'cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))'.dependencies]
+wasi-graphics-context-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "301716b5591bc6e08eca852b936fc8a17dea5379", optional = true }
+wasi-webgpu-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "301716b5591bc6e08eca852b936fc8a17dea5379", optional = true }
 
 # Proto codegen only. Wasm fixtures are built by `cargo xtask
 # build-fixtures` (see /xtask), which owns wit-component and the WASI
