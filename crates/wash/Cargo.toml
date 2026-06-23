@@ -12,7 +12,6 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-wasip3 = ["wash-runtime/wasip3"]
 wasi-tls = ["wash-runtime/wasi-tls"]
 # Opt-in: pulls in wasi-gfx git deps that still target wasmtime 45 and do
 # not build against the pinned wasmtime 46. Re-add to the default build
@@ -64,7 +63,7 @@ uuid = { workspace = true }
 wasm-metadata = { workspace = true }
 wasm-pkg-client = { workspace = true }
 wasm-pkg-core = { workspace = true }
-wash-runtime = { workspace = true, features = ["washlet", "oci", "wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "wasi-otel", "wasip3"] }
+wash-runtime = { workspace = true, features = ["washlet", "oci", "wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "wasi-otel"] }
 wit-component = { workspace = true }
 
 # `O_NOFOLLOW` for the secret-file-open hardening in `crate::workload`.

@@ -20,11 +20,8 @@ pub(crate) mod tcp;
 pub(crate) mod udp;
 pub(crate) mod util;
 
-#[cfg(feature = "wasip3")]
 pub(crate) mod host_ip_name_lookup_p3;
-#[cfg(feature = "wasip3")]
 pub(crate) mod host_tcp_p3;
-#[cfg(feature = "wasip3")]
 pub(crate) mod host_udp_p3;
 
 pub use tcp::TcpSocket;
@@ -171,7 +168,6 @@ pub enum SocketAddrUse {
 /// `Unknown` maps to `Other(None)` and there is nothing to forward. Callers that
 /// have a meaningful message should construct `P3ErrorCode::Other(Some(..))`
 /// directly rather than routing through this helper.
-#[cfg(feature = "wasip3")]
 pub(crate) fn p3_error_code_from_util(
     error: util::ErrorCode,
 ) -> wasmtime_wasi::p3::bindings::sockets::types::ErrorCode {
@@ -197,7 +193,6 @@ pub(crate) fn p3_error_code_from_util(
 }
 
 /// Convert our `util::ErrorCode` to a P3 `SocketError` (TrappableError).
-#[cfg(feature = "wasip3")]
 pub(crate) fn p3_socket_error_from_util(
     error: util::ErrorCode,
 ) -> wasmtime_wasi::p3::sockets::SocketError {
@@ -205,7 +200,6 @@ pub(crate) fn p3_socket_error_from_util(
 }
 
 /// Register P3 socket interfaces with the linker using our custom socket implementation.
-#[cfg(feature = "wasip3")]
 pub fn add_p3_to_linker(
     linker: &mut wasmtime::component::Linker<crate::engine::ctx::SharedCtx>,
 ) -> anyhow::Result<()> {
@@ -221,7 +215,6 @@ pub(crate) enum SocketAddressFamily {
     Ipv6,
 }
 
-#[cfg(feature = "wasip3")]
 impl From<SocketAddressFamily> for wasmtime_wasi::p3::bindings::sockets::types::IpAddressFamily {
     fn from(family: SocketAddressFamily) -> Self {
         match family {
@@ -231,7 +224,7 @@ impl From<SocketAddressFamily> for wasmtime_wasi::p3::bindings::sockets::types::
     }
 }
 
-#[cfg(all(test, feature = "wasip3"))]
+#[cfg(test)]
 mod tests_p3 {
     use super::*;
 

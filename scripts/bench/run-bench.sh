@@ -89,7 +89,7 @@ if [ "$bench" = "gungraun" ]; then
   fi
 fi
 
-"${prefix[@]}" cargo bench -p wash-runtime --features wasip3 --bench "$bench" 2>&1 \
+"${prefix[@]}" cargo bench -p wash-runtime --bench "$bench" 2>&1 \
   | tee -a "$log"
 
 echo "WASMCLOUD_BENCH_LOG=${log}" >> "${GITHUB_OUTPUT:-/dev/null}"

@@ -59,13 +59,10 @@ use std::str::FromStr;
 use std::{path::PathBuf, sync::Arc};
 use wasmtime_wasi::WasiView;
 
-/// Add all WASI@0.2 interfaces to the linker, using upstream for non-socket interfaces
+/// Add all WASI interfaces to the linker, using upstream for non-socket interfaces
 /// and our custom socket implementation (with loopback support) for socket interfaces.
-/// When `wasip3` is true (and the feature is compiled in), P3 bindings are also registered.
-fn add_wasi_to_linker(
-    linker: &mut Linker<SharedCtx>,
-    #[cfg(feature = "wasip3")] wasip3: bool,
-) -> anyhow::Result<()> {
+/// Both P2 and P3 bindings are registered.
+fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
     use wasmtime_wasi::p2::bindings::{cli, clocks, filesystem, random, sockets};
 
     // IO interfaces (error, poll, streams)
@@ -177,29 +174,25 @@ fn add_wasi_to_linker(
         ctx::extract_sockets,
     )?;
 
-    #[cfg(feature = "wasip3")]
-    if wasip3 {
-        // CLI, clocks, filesystem, random — upstream P3 add_to_linker
-        wasmtime_wasi::p3::cli::add_to_linker(linker)?;
-        wasmtime_wasi::p3::clocks::add_to_linker(linker)?;
-        wasmtime_wasi::p3::filesystem::add_to_linker(linker)?;
-        wasmtime_wasi::p3::random::add_to_linker(linker)?;
+    // CLI, clocks, filesystem, random — upstream P3 add_to_linker
+    wasmtime_wasi::p3::cli::add_to_linker(linker)?;
+    wasmtime_wasi::p3::clocks::add_to_linker(linker)?;
+    wasmtime_wasi::p3::filesystem::add_to_linker(linker)?;
+    wasmtime_wasi::p3::random::add_to_linker(linker)?;
 
-        // Sockets with our custom P3 implementation (with loopback)
-        crate::sockets::add_p3_to_linker(linker)?;
+    // Sockets with our custom P3 implementation (with loopback)
+    crate::sockets::add_p3_to_linker(linker)?;
 
-        // wasi:tls@0.3.0-draft (p3).
-        #[cfg(feature = "wasi-tls")]
-        wasmtime_wasi_tls::p3::add_to_linker(linker)?;
-    }
+    // wasi:tls@0.3.0-draft (p3).
+    #[cfg(feature = "wasi-tls")]
+    wasmtime_wasi_tls::p3::add_to_linker(linker)?;
 
     Ok(())
 }
 
 /// Detect whether a component targets WASIP3 by checking for `@0.3` in WASI imports/exports.
-/// This is a pure detection function — the caller is responsible for checking whether
-/// WASIP3 support is enabled on the engine.
-#[cfg(feature = "wasip3")]
+/// This is a pure detection function used to pick the P2 vs P3 dispatch path; P3 bindings
+/// are always registered on the linker.
 pub fn targets_wasip3(component: &Component) -> bool {
     let ty = component.component_type();
     let engine = component.engine();
@@ -214,7 +207,6 @@ pub fn targets_wasip3(component: &Component) -> bool {
 /// `wasi:http` imports/exports with `@0.3`. Used for HTTP dispatch to avoid
 /// routing a component that imports `wasi:cli@0.3` but exports `wasi:http@0.2`
 /// through the P3 HTTP handler.
-#[cfg(feature = "wasip3")]
 pub fn targets_wasip3_http(component: &Component) -> bool {
     let ty = component.component_type();
     let engine = component.engine();
@@ -239,9 +231,6 @@ pub struct Engine {
     // wasmtime engine
     pub(crate) inner: wasmtime::Engine,
     pub(crate) cache: Cache<CacheKey, CacheValue>,
-    /// Whether WASIP3 support is enabled for this engine.
-    #[cfg(feature = "wasip3")]
-    wasip3: bool,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
@@ -250,8 +239,6 @@ pub struct Engine {
 impl std::fmt::Debug for Engine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("Engine");
-        #[cfg(feature = "wasip3")]
-        s.field("wasip3", &self.wasip3);
         #[cfg(feature = "wasi-tls")]
         s.field("tls_provider", &self.tls_provider.is_some());
         s.finish_non_exhaustive()
@@ -282,12 +269,6 @@ impl Engine {
     /// Gets a reference to the inner wasmtime engine.
     pub fn inner(&self) -> &wasmtime::Engine {
         &self.inner
-    }
-
-    /// Returns whether WASIP3 support is enabled for this engine.
-    #[cfg(feature = "wasip3")]
-    pub fn wasip3(&self) -> bool {
-        self.wasip3
     }
 
     /// Initializes a workload by validating and preparing all its components.
@@ -432,25 +413,16 @@ impl Engine {
         // Create a linker for this component
         let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
 
-        // Add WASI@0.2 interfaces to the linker (with custom socket implementation)
-        add_wasi_to_linker(
-            &mut linker,
-            #[cfg(feature = "wasip3")]
-            self.wasip3(),
-        )
-        .context("failed to add WASI to linker")?;
+        // Add WASI interfaces to the linker (with custom socket implementation)
+        add_wasi_to_linker(&mut linker).context("failed to add WASI to linker")?;
 
-        // Add HTTP interfaces to the linker if feature is enabled and component uses them
+        // Add HTTP interfaces to the linker if the component uses them
         if uses_wasi_http(&wasmtime_component) {
             wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
                 .map_err(anyhow::Error::from)
                 .context("failed to add wasi:http/types to linker")?;
-            #[cfg(feature = "wasip3")]
-            if self.wasip3() {
-                wasmtime_wasi_http::p3::add_to_linker(&mut linker).map_err(|e| {
-                    anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker")
-                })?;
-            }
+            wasmtime_wasi_http::p3::add_to_linker(&mut linker)
+                .map_err(|e| anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker"))?;
         }
 
         // Build volume mounts for this component by looking up validated volumes
@@ -476,8 +448,6 @@ impl Engine {
             service.local_resources,
             service.max_restarts,
             loopback,
-            #[cfg(feature = "wasip3")]
-            self.wasip3(),
         );
 
         let world = service.world();
@@ -548,25 +518,16 @@ impl Engine {
         // Create a linker for this component
         let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
 
-        // Add WASI@0.2 interfaces to the linker (with custom socket implementation)
-        add_wasi_to_linker(
-            &mut linker,
-            #[cfg(feature = "wasip3")]
-            self.wasip3(),
-        )
-        .context("failed to add WASI to linker")?;
+        // Add WASI interfaces to the linker (with custom socket implementation)
+        add_wasi_to_linker(&mut linker).context("failed to add WASI to linker")?;
 
         // Add HTTP interfaces to the linker
         if uses_wasi_http(&wasmtime_component) {
             wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
                 .map_err(anyhow::Error::from)
                 .context("failed to add wasi:http/types to linker")?;
-            #[cfg(feature = "wasip3")]
-            if self.wasip3() {
-                wasmtime_wasi_http::p3::add_to_linker(&mut linker).map_err(|e| {
-                    anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker")
-                })?;
-            }
+            wasmtime_wasi_http::p3::add_to_linker(&mut linker)
+                .map_err(|e| anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker"))?;
         }
 
         // Build volume mounts for this component by looking up validated volumes
@@ -593,8 +554,6 @@ impl Engine {
             component_volume_mounts,
             component.local_resources,
             loopback,
-            #[cfg(feature = "wasip3")]
-            self.wasip3(),
             // TODO: implement pooling and instance limits
             // component.pool_size,
             // component.max_invocations,
@@ -703,8 +662,6 @@ pub struct EngineBuilder {
     compilation_cache_size: Option<u64>,
     compilation_cache_ttl: Option<Duration>,
     fuel_consumption: Option<bool>,
-    #[cfg(feature = "wasip3")]
-    wasip3: bool,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -797,18 +754,6 @@ impl EngineBuilder {
         self
     }
 
-    /// Enables or disables WASIP3 support.
-    ///
-    /// When enabled (and compiled with the `wasip3` feature), both P2 and P3
-    /// bindings are registered in component linkers, and
-    /// [`WasmProposal::ComponentModelAsync`] is enabled on the wasmtime config
-    /// (i.e. `wasm_component_model_async`), which the P3 async ABI requires.
-    #[cfg(feature = "wasip3")]
-    pub fn with_wasip3(mut self, enable: bool) -> Self {
-        self.wasip3 = enable;
-        self
-    }
-
     /// Override the TLS provider used for `wasi:tls` client connections.
     ///
     /// Use this to plug in an alternative TLS backend, install a custom root
@@ -874,10 +819,7 @@ impl EngineBuilder {
         }
 
         // WASIP3's async ABI requires the component-model async proposal.
-        #[cfg(feature = "wasip3")]
-        if self.wasip3 {
-            self.proposals.insert(WasmProposal::ComponentModelAsync);
-        }
+        self.proposals.insert(WasmProposal::ComponentModelAsync);
 
         // Accept components that import an interface multiple times via the
         // component-model `(implements ..)` annotation, so host plugins can
@@ -904,8 +846,6 @@ impl EngineBuilder {
         Ok(Engine {
             inner,
             cache,
-            #[cfg(feature = "wasip3")]
-            wasip3: self.wasip3,
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
         })

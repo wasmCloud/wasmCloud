@@ -14,7 +14,7 @@
 //! installed:
 //! ```text
 //! cargo install gungraun-runner --version 0.19.1
-//! cargo bench -p wash-runtime --features wasip3 --bench gungraun
+//! cargo bench -p wash-runtime --bench gungraun
 //! ```
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -45,10 +45,7 @@ fn flavor_host_header(flavor: Flavor) -> &'static str {
 }
 
 fn engine() -> Engine {
-    Engine::builder()
-        .with_wasip3(true)
-        .build()
-        .expect("failed to build engine with wasip3")
+    Engine::builder().build().expect("failed to build engine")
 }
 
 fn http_host_interfaces(host: &str) -> Vec<WitInterface> {

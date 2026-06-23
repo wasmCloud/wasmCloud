@@ -55,12 +55,7 @@ wasmcloud-postgres = [
     "dep:bit-vec", "dep:cidr", "dep:geo-types",
     "dep:ulid",
 ]
-wasip3 = [
-    "wasmtime-wasi/p3",
-    "wasmtime-wasi-http/p3",
-    "wasmtime-wasi-http/component-model-async",
-]
-wasi-tls = ["dep:wasmtime-wasi-tls", "wasip3"]
+wasi-tls = ["dep:wasmtime-wasi-tls"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -85,9 +80,9 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["sync", "net", "macros"] }
 tracing = { workspace = true }
 wasmtime = { workspace = true, features = ["anyhow", "component-model", "component-model-async", "cranelift", "pooling-allocator", "gc", "gc-null", "threads"] }
-wasmtime-wasi = { workspace = true }
+wasmtime-wasi = { workspace = true, features = ["p3"] }
 wasmtime-wasi-io = { workspace = true }
-wasmtime-wasi-http = { workspace = true, features = ["default-send-request", "p2"] }
+wasmtime-wasi-http = { workspace = true, features = ["default-send-request", "p2", "p3", "component-model-async"] }
 wasmtime-wasi-tls = { workspace = true, optional = true, features = ["p3", "rustls"] }
 cap-net-ext = { workspace = true }
 cap-std = { workspace = true }
@@ -175,20 +170,16 @@ gungraun = "0.19.1"
 [[bench]]
 name = "http_invoke"
 harness = false
-required-features = ["wasip3"]
 
 [[bench]]
 name = "gungraun"
 harness = false
-required-features = ["wasip3"]
 
 [[bench]]
 name = "wasmtime_baseline"
 harness = false
-required-features = ["wasip3"]
 
 [[bench]]
 name = "wasmtime_serve"
 harness = false
-required-features = ["wasip3"]
 

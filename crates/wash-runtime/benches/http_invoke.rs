@@ -18,7 +18,7 @@
 //!
 //! Run with:
 //! ```text
-//! cargo bench -p wash-runtime --features wasip3 --bench http_invoke
+//! cargo bench -p wash-runtime --bench http_invoke
 //! ```
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -56,11 +56,7 @@ fn flavor_host_header(flavor: Flavor) -> &'static str {
 }
 
 fn engine() -> Engine {
-    // Enable P3 unconditionally so the same engine can serve both flavors.
-    Engine::builder()
-        .with_wasip3(true)
-        .build()
-        .expect("failed to build engine with wasip3")
+    Engine::builder().build().expect("failed to build engine")
 }
 
 fn http_host_interfaces(host: &str) -> Vec<WitInterface> {
