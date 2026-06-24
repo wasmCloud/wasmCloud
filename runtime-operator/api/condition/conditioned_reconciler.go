@@ -72,20 +72,34 @@ func HandleFinalizer[T ConditionedType](
 	obj T,
 	finalizer string,
 	finalizeFunc FinalizerFunc[T]) (bool, error) {
-	objCopy := obj.DeepCopyObject().(T)
-	if objCopy.GetDeletionTimestamp().IsZero() && !controllerutil.ContainsFinalizer(objCopy, finalizer) {
-		objCopy.InitializeConditionedStatus()
-		controllerutil.AddFinalizer(objCopy, finalizer)
-		err := c.Update(ctx, objCopy)
-		return err == nil, err
-	}
-
-	if !objCopy.GetDeletionTimestamp().IsZero() && controllerutil.ContainsFinalizer(objCopy, finalizer) {
-		if err := finalizeFunc(ctx, objCopy); err != nil {
+	if obj.GetDeletionTimestamp().IsZero() && !controllerutil.ContainsFinalizer(obj, finalizer) {
+		// Patch the finalizer in with a non-optimistic merge patch rather than a
+		// read-modify-write Update. The object is concurrently mutated by other
+		// writers (e.g. a heartbeat-driven status updater), so an Update — which
+		// carries the cached resourceVersion — fails with "the object has been
+		// modified" whenever it loses that race. A MergeFrom patch sends no
+		// resourceVersion precondition, so the server applies it to the latest
+		// object. (Server-Side Apply is unsuitable here: removal would only drop
+		// finalizers owned by this field manager, leaving entries written by any
+		// other manager — e.g. an earlier client-side update — stuck forever.)
+		patch := client.MergeFrom(obj.DeepCopyObject().(client.Object))
+		controllerutil.AddFinalizer(obj, finalizer)
+		if err := c.Patch(ctx, obj, patch); err != nil {
 			return false, err
 		}
-		controllerutil.RemoveFinalizer(objCopy, finalizer)
-		return true, c.Update(ctx, objCopy)
+		return true, nil
+	}
+
+	if !obj.GetDeletionTimestamp().IsZero() && controllerutil.ContainsFinalizer(obj, finalizer) {
+		if err := finalizeFunc(ctx, obj); err != nil {
+			return false, err
+		}
+		patch := client.MergeFrom(obj.DeepCopyObject().(client.Object))
+		controllerutil.RemoveFinalizer(obj, finalizer)
+		if err := c.Patch(ctx, obj, patch); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 
 	return false, nil
