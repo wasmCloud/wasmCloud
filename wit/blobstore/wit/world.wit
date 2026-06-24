@@ -20,7 +20,38 @@ interface types {
   /// size of an object, in bytes
   type object-size = u64;
 
-  type error = string;
+  /// The set of errors which may be raised by functions in this package.
+  ///
+  /// Following the wasip3 convention, this enumerates specific named cases
+  /// rather than a bare `string`. It is intentionally non-exhaustive: future
+  /// versions may add cases, and generated bindings are marked non-exhaustive
+  /// accordingly, so consumers must always include a catch-all arm.
+  /// Backend-specific failures that do not map to a named case are reported
+  /// via `other`.
+  variant error {
+    /// The referenced container does not exist.
+    no-such-container,
+    /// A container with the requested name already exists (e.g. on
+    /// `create-container`).
+    container-already-exists,
+    /// The referenced object does not exist.
+    no-such-object,
+    /// The requesting component does not have access to the container or
+    /// object (which may or may not exist).
+    access-denied,
+    /// The operation did not complete within the host- or backend-imposed
+    /// time limit.
+    timeout,
+    /// The store is currently unreachable or otherwise unavailable. The
+    /// operation may succeed if retried later.
+    store-unavailable,
+    /// The operation was rejected because a storage quota or rate limit was
+    /// exceeded.
+    quota-exceeded,
+    /// Some other implementation-specific error has occurred (e.g. I/O). Used
+    /// for backend-specific failures that do not map to a named case above.
+    other(string),
+  }
 
   /// information about a container
   record container-metadata {
