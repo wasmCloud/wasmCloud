@@ -158,7 +158,7 @@ func TestHandleFinalizer(t *testing.T) {
 
 			if tc.emitClientError {
 				errFunc := interceptor.Funcs{
-					Update: func(ctx context.Context, client client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+					Patch: func(ctx context.Context, client client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 						return errors.New("boom")
 					},
 				}
@@ -376,11 +376,12 @@ func TestConditionedReconciler(t *testing.T) {
 			}
 
 			if tc.emitClientError {
-				interceptor.Update = func(
+				interceptor.Patch = func(
 					ctx context.Context,
 					client client.WithWatch,
 					obj client.Object,
-					opts ...client.UpdateOption) error {
+					patch client.Patch,
+					opts ...client.PatchOption) error {
 					return errors.New("boom")
 				}
 			}
