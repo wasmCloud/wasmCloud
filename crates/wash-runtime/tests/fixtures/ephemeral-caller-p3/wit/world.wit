@@ -1,0 +1,14 @@
+package wasmcloud:ephemeral-test@0.1.0;
+
+interface compute {
+    /// Mirror of the callee interface. The signature must match the callee
+    /// fixture exactly so the dynamic linker wires the import of
+    /// `wasmcloud:ephemeral-test/compute` to the callee's export.
+    run: async func(n: u32) -> u32;
+}
+
+world ephemeral-caller {
+    import compute;
+    import wasi:http/types@0.3.0;
+    export wasi:http/handler@0.3.0;
+}

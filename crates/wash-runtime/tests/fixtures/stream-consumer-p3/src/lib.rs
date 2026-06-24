@@ -12,7 +12,7 @@ mod bindings {
         generate_all,
         async: [
             "import:wasmcloud:stream-test/producer@0.1.0#produce",
-            "export:wasi:http/handler@0.3.0-rc-2026-03-15#handle",
+            "export:wasi:http/handler@0.3.0#handle",
         ],
     });
 }

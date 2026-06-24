@@ -9,7 +9,6 @@
 //! handle were re-lowered (copied) instead of passed by identity, the sink's
 //! `greet()` call would fail or read the wrong resource.
 
-#![cfg(feature = "wasip3")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::{Context, Result};

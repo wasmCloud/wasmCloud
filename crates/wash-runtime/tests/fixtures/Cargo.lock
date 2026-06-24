@@ -235,6 +235,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ephemeral-callee-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.54.0",
+]
+
+[[package]]
+name = "ephemeral-caller-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.54.0",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

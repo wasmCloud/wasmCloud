@@ -1,0 +1,13 @@
+package wasmcloud:ephemeral-test@0.1.0;
+
+interface compute {
+    /// Plain-value async function: both the param and result are plain values
+    /// (no resource/stream/future/borrow handles), so the dynamic linker
+    /// dispatches a call to it through the *ephemeral store* path
+    /// (instantiate-call-drop in a throwaway store).
+    run: async func(n: u32) -> u32;
+}
+
+world ephemeral-callee {
+    export compute;
+}

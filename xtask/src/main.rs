@@ -110,6 +110,8 @@ const P3_FIXTURES: &[&str] = &[
     "res-producer-p3",
     "res-sink-p3",
     "res-caller-p3",
+    "ephemeral-callee-p3",
+    "ephemeral-caller-p3",
 ];
 
 // Fixtures with local-only WIT worlds (no wasi imports). Copying shared
