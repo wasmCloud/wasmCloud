@@ -1,14 +1,15 @@
-//! P3 fixture (HTTP entrypoint): obtains a `token` from `res-producer-p3` and
-//! hands it to `res-sink-p3`, then returns the sink's reply as the HTTP body.
-//! Passing the token to `accept` is what exercises `lower_with_type`'s
-//! resource-identity passthrough across the dynamic linker.
+//! Minimal P3 fixture: an HTTP handler that invokes the plain-value async
+//! `run` export of the linked `ephemeral-callee-p3` component and returns the
+//! result as the response body. Because `run`'s signature is all plain values,
+//! the call is dispatched through the ephemeral-store path
+//! (`invoke_ephemeral_linked_export`): the callee is instantiated in a
+//! short-lived store that is dropped as soon as the call returns.
 
 mod bindings {
     wit_bindgen::generate!({
         generate_all,
         async: [
-            "import:wasmcloud:resource-test/factory@0.1.0#make-token",
-            "import:wasmcloud:resource-test/sink@0.1.0#accept",
+            "import:wasmcloud:ephemeral-test/compute@0.1.0#run",
             "export:wasi:http/handler@0.3.0#handle",
         ],
     });
@@ -16,22 +17,23 @@ mod bindings {
 
 use bindings::exports::wasi::http::handler::Guest as Handler;
 use bindings::wasi::http::types::{ErrorCode, Fields, Request, Response};
-use bindings::wasmcloud::resource_test::{factory, sink};
+use bindings::wasmcloud::ephemeral_test::compute;
 
 struct Component;
 
 impl Handler for Component {
     async fn handle(_request: Request) -> Result<Response, ErrorCode> {
-        // make_token returns a host-owned handle; passing it to accept lowers
-        // it across the linker into res-sink-p3.
-        let token = factory::make_token("world".to_string()).await;
-        let body = sink::accept(token).await;
+        // Plain-value async cross-component call -> ephemeral-store path.
+        // run(21) = 21 * 2 + 1 = 43.
+        let result = compute::run(21).await;
 
         let headers = Fields::new();
         let (mut tx, rx) = bindings::wit_stream::new::<u8>();
         let (trailers_tx, trailers_rx) = bindings::wit_future::new(|| todo!());
+
+        let body = result.to_string().into_bytes();
         wit_bindgen::spawn(async move {
-            tx.write_all(body.into_bytes()).await;
+            tx.write_all(body).await;
             drop(tx);
             let _ = trailers_tx.write(Ok(None)).await;
         });

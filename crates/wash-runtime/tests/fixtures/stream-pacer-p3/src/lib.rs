@@ -13,8 +13,8 @@ mod bindings {
     wit_bindgen::generate!({
         generate_all,
         async: [
-            "export:wasi:http/handler@0.3.0-rc-2026-03-15#handle",
-            "import:wasi:clocks/monotonic-clock@0.3.0-rc-2026-03-15#wait-for",
+            "export:wasi:http/handler@0.3.0#handle",
+            "import:wasi:clocks/monotonic-clock@0.3.0#wait-for",
         ],
     });
 }
