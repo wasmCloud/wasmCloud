@@ -39,6 +39,7 @@ jobs:
       pull-requests: read
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
+      workflow: ${{ steps.filter.outputs.workflow }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -59,6 +60,8 @@ jobs:
               - 'runtime-operator/test/e2e/**'
               - 'charts/runtime-operator/**'
               - 'deploy/kind/kind-config.yaml'
+            workflow:
+              - '.github/workflows/wash.yml'
 
   check:
     needs:
@@ -469,17 +472,22 @@ jobs:
   # release-tag.yml can promote the exact bytes that the canary CI tested
   # instead of rebuilding on tag.
   canary-binaries:
-    # Fires on every main push and on `workflow_dispatch`. `always()`
-    # breaks the skipped-`changes` propagation; the explicit per-need
-    # success gates restore the default `success()` check.
+    # Fires on every main push and on `workflow_dispatch`, plus on PRs that
+    # edit this workflow so a newly added build target is validated before
+    # merge rather than only after it lands on main. `always()` breaks the
+    # skipped-`changes` propagation; the explicit per-need success gates
+    # restore the default `success()` check.
     if: |
       always() &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      github.ref == 'refs/heads/main' &&
       needs.check.result == 'success' &&
       needs.lint.result == 'success' &&
-      needs.runtime-operator-e2e.result == 'success'
+      needs.runtime-operator-e2e.result == 'success' &&
+      (
+        ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'pull_request' && needs.changes.outputs.workflow == 'true')
+      )
     needs:
+      - changes
       - check
       - lint
       - runtime-operator-e2e
