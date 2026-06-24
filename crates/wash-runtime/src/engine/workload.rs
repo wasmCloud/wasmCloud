@@ -103,6 +103,61 @@ impl ResolvedVolumeMount {
     }
 }
 
+async fn resolve_volume_mounts(
+    volume_mounts: &[(PathBuf, VolumeMount)],
+) -> anyhow::Result<Vec<ResolvedVolumeMount>> {
+    let mut resolved = Vec::with_capacity(volume_mounts.len());
+    for (host_path, mount) in volume_mounts {
+        resolved.push(ResolvedVolumeMount::from_mount(host_path, mount).await?);
+    }
+    Ok(resolved)
+}
+
+async fn resolve_component_volume_mounts_in_map(
+    components: &Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>>,
+    component_ids: &[Arc<str>],
+) -> anyhow::Result<()> {
+    let pending = {
+        let components = components.read().await;
+        let mut pending = Vec::new();
+        for component_id in component_ids {
+            let component = components
+                .get(component_id)
+                .with_context(|| format!("component '{component_id}' not found"))?;
+            if component.metadata.resolved_volume_mounts.is_empty()
+                && !component.metadata.volume_mounts.is_empty()
+            {
+                pending.push((
+                    component_id.clone(),
+                    component.metadata.volume_mounts.clone(),
+                ));
+            }
+        }
+        pending
+    };
+
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    let mut resolved = Vec::with_capacity(pending.len());
+    for (component_id, volume_mounts) in pending {
+        resolved.push((component_id, resolve_volume_mounts(&volume_mounts).await?));
+    }
+
+    let mut components = components.write().await;
+    for (component_id, resolved_volume_mounts) in resolved {
+        let component = components
+            .get_mut(&component_id)
+            .with_context(|| format!("component '{component_id}' not found"))?;
+        if component.metadata.resolved_volume_mounts.is_empty() {
+            component.metadata.resolved_volume_mounts = resolved_volume_mounts;
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Clone)]
 struct ComponentCtxTemplate {
     component_id: Arc<str>,
@@ -130,13 +185,30 @@ impl ComponentCtxTemplate {
     }
 }
 
+#[cfg(not(feature = "wasi-tls"))]
+fn component_ctx_template_from_metadata(metadata: &WorkloadMetadata) -> ComponentCtxTemplate {
+    ComponentCtxTemplate::from_metadata(metadata)
+}
+
+#[cfg(feature = "wasi-tls")]
+fn component_ctx_template_from_metadata_with_tls(
+    metadata: &WorkloadMetadata,
+    tls_provider: Option<SharedTlsProvider>,
+) -> ComponentCtxTemplate {
+    let mut template = ComponentCtxTemplate::from_metadata(metadata);
+    template.tls_provider = tls_provider;
+    template
+}
+
 #[derive(Clone)]
 struct EphemeralLinkedCall {
     engine: wasmtime::Engine,
     http_handler: Arc<dyn crate::host::http::HostHandler>,
-    active: ComponentCtxTemplate,
-    linked: Vec<ComponentCtxTemplate>,
-    linked_instances: Vec<(Arc<str>, InstancePre<SharedCtx>)>,
+    components: Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>>,
+    active_component_id: Arc<str>,
+    linked_component_ids: Vec<Arc<str>>,
+    #[cfg(feature = "wasi-tls")]
+    tls_provider: Option<SharedTlsProvider>,
 }
 
 fn type_is_ephemeral_safe(ty: &Type) -> bool {
@@ -276,12 +348,82 @@ async fn new_store_from_templates(
 async fn new_ephemeral_store(
     call: &EphemeralLinkedCall,
 ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
+    let mut component_ids = call.linked_component_ids.clone();
+    component_ids.push(call.active_component_id.clone());
+    component_ids.sort();
+    component_ids.dedup();
+    resolve_component_volume_mounts_in_map(&call.components, &component_ids).await?;
+
+    let (active_metadata, linked_metadata) = {
+        let components = call.components.read().await;
+        let active = components
+            .get(&call.active_component_id)
+            .with_context(|| {
+                format!(
+                    "ephemeral linked component '{}' not found",
+                    call.active_component_id
+                )
+            })?
+            .metadata
+            .clone();
+        let linked = call
+            .linked_component_ids
+            .iter()
+            .map(|component_id| {
+                components
+                    .get(component_id)
+                    .with_context(|| format!("linked component '{component_id}' not found"))
+                    .map(|component| component.metadata.clone())
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        (active, linked)
+    };
+
+    #[cfg(not(feature = "wasi-tls"))]
+    let active = component_ctx_template_from_metadata(&active_metadata);
+    #[cfg(feature = "wasi-tls")]
+    let active =
+        component_ctx_template_from_metadata_with_tls(&active_metadata, call.tls_provider.clone());
+
+    #[cfg(not(feature = "wasi-tls"))]
+    let linked = linked_metadata
+        .iter()
+        .map(component_ctx_template_from_metadata)
+        .collect::<Vec<_>>();
+    #[cfg(feature = "wasi-tls")]
+    let linked = linked_metadata
+        .iter()
+        .map(|metadata| {
+            component_ctx_template_from_metadata_with_tls(metadata, call.tls_provider.clone())
+        })
+        .collect::<Vec<_>>();
+
+    let linked_instances = {
+        let mut components = call.components.write().await;
+        call.linked_component_ids
+            .iter()
+            .map(|component_id| {
+                let component = components.get_mut(component_id).ok_or_else(|| {
+                    wasmtime::format_err!("linked component '{component_id}' not found")
+                })?;
+                component
+                    .pre_instantiate()
+                    .map(|pre| (component_id.clone(), pre))
+            })
+            .collect::<wasmtime::Result<Vec<_>>>()
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to pre-instantiate linked components for ephemeral call: {e}"
+                )
+            })?
+    };
+
     new_store_from_templates(
         &call.engine,
         call.http_handler.clone(),
-        &call.active,
-        &call.linked,
-        &call.linked_instances,
+        &active,
+        &linked,
+        &linked_instances,
         false,
     )
     .await
@@ -1131,18 +1273,7 @@ impl ResolvedWorkload {
         &self,
         component_ids: &[Arc<str>],
     ) -> anyhow::Result<()> {
-        let mut components = self.components.write().await;
-        for component_id in component_ids {
-            let component = components
-                .get_mut(component_id)
-                .with_context(|| format!("component '{component_id}' not found"))?;
-            if component.metadata.resolved_volume_mounts.is_empty()
-                && !component.metadata.volume_mounts.is_empty()
-            {
-                component.metadata.resolve_volume_mounts().await?;
-            }
-        }
-        Ok(())
+        resolve_component_volume_mounts_in_map(&self.components, component_ids).await
     }
 
     async fn resolve_service_volume_mounts(&mut self) -> anyhow::Result<()> {
@@ -1361,9 +1492,8 @@ impl ResolvedWorkload {
                     let (
                         plugin_component,
                         instance_idx,
-                        plugin_ctx_template,
-                        linked_ctx_templates,
-                        linked_instances,
+                        plugin_component_id,
+                        nested_linked_component_ids,
                         plugin_engine,
                     ) = {
                         let Some(exporter_component) = interface_map.get(import_name).cloned()
@@ -1393,39 +1523,13 @@ impl ResolvedWorkload {
                                 .cloned()
                                 .collect::<Vec<_>>()
                         };
-                        let linked_ctx_templates = nested_linked_component_ids
-                            .iter()
-                            .filter_map(|component_id| all_components.get(component_id))
-                            .map(|component| self.component_ctx_template(&component.metadata))
-                            .collect::<Vec<_>>();
-                        let linked_instances = nested_linked_component_ids
-                            .iter()
-                            .map(|component_id| {
-                                let component = all_components.get_mut(component_id).ok_or_else(
-                                    || {
-                                        wasmtime::format_err!(
-                                            "linked component '{component_id}' not found"
-                                        )
-                                    },
-                                )?;
-                                component
-                                    .pre_instantiate()
-                                    .map(|pre| (component_id.clone(), pre))
-                            })
-                            .collect::<wasmtime::Result<Vec<_>>>()
-                            .map_err(|e| {
-                                anyhow::anyhow!(
-                                    "failed to pre-instantiate linked components for ephemeral call: {e}"
-                                )
-                            })?;
                         let Some(plugin_component) = all_components.get_mut(&exporter_component)
                         else {
                             anyhow::bail!(
                                 "exporting component '{exporter_component}' for import '{import_name}' not found"
                             );
                         };
-                        let plugin_ctx_template =
-                            self.component_ctx_template(&plugin_component.metadata);
+                        let plugin_component_id = plugin_component.id.clone();
                         let plugin_engine = plugin_component.metadata.engine().clone();
                         let Some((ComponentItem::ComponentInstance(_), idx)) = plugin_component
                             .metadata
@@ -1438,9 +1542,8 @@ impl ResolvedWorkload {
                         (
                             plugin_component,
                             idx,
-                            plugin_ctx_template,
-                            linked_ctx_templates,
-                            linked_instances,
+                            plugin_component_id,
+                            nested_linked_component_ids,
                             plugin_engine,
                         )
                     };
@@ -1489,18 +1592,21 @@ impl ResolvedWorkload {
                                     "linking function import"
                                 );
                                 let export_is_async = func_ty.async_();
-                                let ephemeral_call =
-                                    if export_is_async && func_is_ephemeral_safe(&func_ty) {
-                                        Some(Arc::new(EphemeralLinkedCall {
-                                            engine: plugin_engine.clone(),
-                                            http_handler: self.http_handler.clone(),
-                                            active: plugin_ctx_template.clone(),
-                                            linked: linked_ctx_templates.clone(),
-                                            linked_instances: linked_instances.clone(),
-                                        }))
-                                    } else {
-                                        None
-                                    };
+                                let ephemeral_call = if export_is_async
+                                    && func_is_ephemeral_safe(&func_ty)
+                                {
+                                    Some(Arc::new(EphemeralLinkedCall {
+                                        engine: plugin_engine.clone(),
+                                        http_handler: self.http_handler.clone(),
+                                        components: self.components.clone(),
+                                        active_component_id: plugin_component_id.clone(),
+                                        linked_component_ids: nested_linked_component_ids.clone(),
+                                        #[cfg(feature = "wasi-tls")]
+                                        tls_provider: self.tls_provider.clone(),
+                                    }))
+                                } else {
+                                    None
+                                };
 
                                 let inv = LinkedExportInvocation {
                                     import_name: import_name.into(),
@@ -1689,7 +1795,7 @@ impl ResolvedWorkload {
     }
 
     /// Creates a new wasmtime Store for multiple components from the given workload metadata.
-    pub async fn new_store_from_metadata(
+    async fn new_store_from_metadata(
         &self,
         metadata: &WorkloadMetadata,
         is_service: bool,
