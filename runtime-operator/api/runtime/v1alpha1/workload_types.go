@@ -1,6 +1,9 @@
 package v1alpha1
 
 import (
+	"fmt"
+
+	"github.com/Masterminds/semver/v3"
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -144,21 +147,27 @@ type HostInterface struct {
 	ConfigLayer `json:",inline"`
 
 	// Name uniquely identifies this interface instance when multiple entries
-	// share the same namespace+package. Components use this name as the
-	// identifier parameter in resource-opening functions (e.g., store::open(name)).
+	// share the same namespace+package. It is the `(implements <name>)` id the
+	// host uses to route a component's named import to this interface's backend,
+	// so two imports of the same namespace:package can resolve to different
+	// backends.
 	// Required when multiple entries of the same namespace:package exist.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]*$`
+	// +kubebuilder:validation:MaxLength=64
 	Name string `json:"name,omitempty"`
 
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=128
 	Namespace string `json:"namespace"`
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=128
 	Package string `json:"package"`
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
 	Interfaces []string `json:"interfaces,omitempty"`
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=64
 	Version string `json:"version,omitempty"`
 }
 
@@ -220,7 +229,21 @@ type WorkloadSpec struct {
 
 	// +kubebuilder:validation:Optional
 	Components []WorkloadComponent `json:"components,omitempty"`
+
+	// HostInterfaces declares the host-provided interfaces this workload needs.
+	// Two routing invariants are enforced at admission, complementing the
+	// host-side checks:
+	//   1. No two entries may be exact duplicates (same namespace, package,
+	//      name, and version).
+	//   2. At most one entry of a given namespace:package may be unnamed — the
+	//      unnamed entry is the default route and cannot be shared. Declare
+	//      distinct `name`s to route multiple imports of the same package to
+	//      different backends. Semver-incompatible versions of the same package
+	//      may coexist (they are distinct interfaces).
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y.__namespace__ == x.__namespace__ && y.__package__ == x.__package__ && (has(y.name) ? y.name : '') == (has(x.name) ? x.name : '') && (has(y.version) ? y.version : '') == (has(x.version) ? x.version : '')))",message="hostInterfaces must not contain duplicate entries with the same namespace, package, name, and version"
+	// +kubebuilder:validation:XValidation:rule="self.all(x, (has(x.name) && x.name != '') || self.filter(y, y.__namespace__ == x.__namespace__ && y.__package__ == x.__package__ && !(has(y.name) && y.name != '')).size() == 1)",message="at most one unnamed hostInterface is allowed per namespace:package; set a unique name to disambiguate multiple imports of the same package"
 	HostInterfaces []HostInterface `json:"hostInterfaces,omitempty"`
 	// +kubebuilder:validation:Optional
 	Service *WorkloadService `json:"service,omitempty"`
@@ -235,7 +258,17 @@ type WorkloadSpec struct {
 
 func (s *WorkloadSpec) EnsureHostInterface(iface HostInterface) {
 	for i, existing := range s.HostInterfaces {
-		if existing.Namespace == iface.Namespace && existing.Package == iface.Package && existing.Name == iface.Name {
+		// Merge only entries that share a routing identity (namespace, package,
+		// name) AND a semver-compatible version. Following the component-model
+		// canonical-version rules (and wit-parser's merge-imports-by-semver),
+		// only compatible versions collapse: e.g. 0.2.1 and 0.2.6 (canonical
+		// "0.2") merge keeping the higher, while 0.2 and 0.3 stay distinct.
+		// Name is part of the identity, so differently-named interfaces of the
+		// same package never merge.
+		if existing.Namespace == iface.Namespace &&
+			existing.Package == iface.Package &&
+			existing.Name == iface.Name &&
+			canonVersion(existing.Version) == canonVersion(iface.Version) {
 			existing.EnsureInterfaces(iface.Interfaces...)
 			if iface.Config != nil && existing.Config == nil {
 				existing.Config = make(map[string]string)
@@ -244,12 +277,67 @@ func (s *WorkloadSpec) EnsureHostInterface(iface HostInterface) {
 			for k, v := range iface.Config {
 				existing.Config[k] = v
 			}
+			// Settle a compatible merge on the newer version.
+			existing.Version = maxVersion(existing.Version, iface.Version)
 			s.HostInterfaces[i] = existing
 
 			return
 		}
 	}
 	s.HostInterfaces = append(s.HostInterfaces, iface)
+}
+
+// canonVersion returns the canonical version prefix that determines whether two
+// interface versions are compatible for deduplication, per the component-model
+// `canonversion` rules:
+//   - major > 0            -> "<major>"                 (1.2.3      -> "1")
+//   - major == 0, minor>0  -> "<major>.<minor>"         (0.2.6-rc.1 -> "0.2")
+//   - otherwise            -> "<major>.<minor>.<patch>" (0.0.1      -> "0.0.1")
+//
+// Compatible versions share a canonical prefix and so link by trivial string
+// equality. An empty version canonicalizes to "" (unversioned); a version that
+// does not parse as semver is returned verbatim, so it only matches an
+// identical string rather than silently merging.
+func canonVersion(v string) string {
+	if v == "" {
+		return ""
+	}
+	parsed, err := semver.NewVersion(v)
+	if err != nil {
+		return v
+	}
+	switch {
+	case parsed.Major() > 0:
+		return fmt.Sprintf("%d", parsed.Major())
+	case parsed.Minor() > 0:
+		return fmt.Sprintf("%d.%d", parsed.Major(), parsed.Minor())
+	default:
+		return fmt.Sprintf("%d.%d.%d", parsed.Major(), parsed.Minor(), parsed.Patch())
+	}
+}
+
+// maxVersion returns the semver-greater of two compatible versions so a merge
+// settles on the newer one. Unparseable versions sort below parseable ones; if
+// both are unparseable the non-empty one (else a) is kept.
+func maxVersion(a, b string) string {
+	av, aerr := semver.NewVersion(a)
+	bv, berr := semver.NewVersion(b)
+	switch {
+	case aerr != nil && berr != nil:
+		if a == "" {
+			return b
+		}
+		return a
+	case aerr != nil:
+		return b
+	case berr != nil:
+		return a
+	default:
+		if av.LessThan(bv) {
+			return b
+		}
+		return a
+	}
 }
 
 // WorkloadStatus defines the observed state of Workload.

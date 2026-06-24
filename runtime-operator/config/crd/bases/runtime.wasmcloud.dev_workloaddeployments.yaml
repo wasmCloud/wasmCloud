@@ -283,6 +283,17 @@ spec:
                       hostId:
                         type: string
                       hostInterfaces:
+                        description: |-
+                          HostInterfaces declares the host-provided interfaces this workload needs.
+                          Two routing invariants are enforced at admission, complementing the
+                          host-side checks:
+                            1. No two entries may be exact duplicates (same namespace, package,
+                               name, and version).
+                            2. At most one entry of a given namespace:package may be unnamed — the
+                               unnamed entry is the default route and cannot be shared. Declare
+                               distinct `name`s to route multiple imports of the same package to
+                               different backends. Semver-incompatible versions of the same package
+                               may coexist (they are distinct interfaces).
                         items:
                           properties:
                             config:
@@ -319,14 +330,19 @@ spec:
                             name:
                               description: |-
                                 Name uniquely identifies this interface instance when multiple entries
-                                share the same namespace+package. Components use this name as the
-                                identifier parameter in resource-opening functions (e.g., store::open(name)).
+                                share the same namespace+package. It is the `(implements <name>)` id the
+                                host uses to route a component's named import to this interface's backend,
+                                so two imports of the same namespace:package can resolve to different
+                                backends.
                                 Required when multiple entries of the same namespace:package exist.
+                              maxLength: 64
                               pattern: ^[a-z0-9][a-z0-9-]*$
                               type: string
                             namespace:
+                              maxLength: 128
                               type: string
                             package:
+                              maxLength: 128
                               type: string
                             secretFrom:
                               description: |-
@@ -351,13 +367,29 @@ spec:
                                 x-kubernetes-map-type: atomic
                               type: array
                             version:
+                              maxLength: 64
                               type: string
                           required:
                           - interfaces
                           - namespace
                           - package
                           type: object
+                        maxItems: 64
                         type: array
+                        x-kubernetes-validations:
+                        - message: hostInterfaces must not contain duplicate entries
+                            with the same namespace, package, name, and version
+                          rule: 'self.all(x, self.exists_one(y, y.__namespace__ ==
+                            x.__namespace__ && y.__package__ == x.__package__ && (has(y.name)
+                            ? y.name : '''') == (has(x.name) ? x.name : '''') && (has(y.version)
+                            ? y.version : '''') == (has(x.version) ? x.version : '''')))'
+                        - message: at most one unnamed hostInterface is allowed per
+                            namespace:package; set a unique name to disambiguate multiple
+                            imports of the same package
+                          rule: self.all(x, (has(x.name) && x.name != '') || self.filter(y,
+                            y.__namespace__ == x.__namespace__ && y.__package__ ==
+                            x.__package__ && !(has(y.name) && y.name != '')).size()
+                            == 1)
                       hostSelector:
                         additionalProperties:
                           type: string

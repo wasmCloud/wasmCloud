@@ -139,3 +139,89 @@ func TestEnsureHostInterface_NamedAndUnnamedAreDistinct(t *testing.T) {
 		t.Fatalf("expected 2 host interfaces (named vs unnamed), got %d", len(spec.HostInterfaces))
 	}
 }
+
+func TestEnsureHostInterface_CompatibleVersionsMergeKeepingMax(t *testing.T) {
+	spec := &WorkloadSpec{}
+
+	spec.EnsureHostInterface(HostInterface{
+		Name:       "cache",
+		Namespace:  "wasi",
+		Package:    "keyvalue",
+		Version:    "0.2.1",
+		Interfaces: []string{"store"},
+	})
+	// Same name + semver-compatible version (canonical "0.2") => merge, keep the
+	// higher version.
+	spec.EnsureHostInterface(HostInterface{
+		Name:       "cache",
+		Namespace:  "wasi",
+		Package:    "keyvalue",
+		Version:    "0.2.6",
+		Interfaces: []string{"atomics"},
+	})
+
+	if len(spec.HostInterfaces) != 1 {
+		t.Fatalf("expected 1 host interface (compatible merge), got %d", len(spec.HostInterfaces))
+	}
+	if got := spec.HostInterfaces[0].Version; got != "0.2.6" {
+		t.Errorf("expected merged version 0.2.6 (max), got %q", got)
+	}
+	if !spec.HostInterfaces[0].HasInterface("store") || !spec.HostInterfaces[0].HasInterface("atomics") {
+		t.Errorf("expected merged interfaces to include store+atomics, got %v", spec.HostInterfaces[0].Interfaces)
+	}
+}
+
+func TestEnsureHostInterface_IncompatibleVersionsStayDistinct(t *testing.T) {
+	spec := &WorkloadSpec{}
+
+	spec.EnsureHostInterface(HostInterface{
+		Name:       "cache",
+		Namespace:  "wasi",
+		Package:    "keyvalue",
+		Version:    "0.2.0",
+		Interfaces: []string{"store"},
+	})
+	// Same name but semver-incompatible (canonical "0.2" vs "0.3") => distinct.
+	spec.EnsureHostInterface(HostInterface{
+		Name:       "cache",
+		Namespace:  "wasi",
+		Package:    "keyvalue",
+		Version:    "0.3.0",
+		Interfaces: []string{"store"},
+	})
+
+	if len(spec.HostInterfaces) != 2 {
+		t.Fatalf("expected 2 host interfaces (incompatible versions stay distinct), got %d", len(spec.HostInterfaces))
+	}
+}
+
+func TestCanonVersion(t *testing.T) {
+	cases := map[string]string{
+		"":            "",
+		"1.2.3":       "1",
+		"0.2.6-rc.1":  "0.2",
+		"0.2.0-draft": "0.2",
+		"0.0.1-alpha": "0.0.1",
+		"not-semver":  "not-semver",
+	}
+	for in, want := range cases {
+		if got := canonVersion(in); got != want {
+			t.Errorf("canonVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestMaxVersion(t *testing.T) {
+	cases := []struct{ a, b, want string }{
+		{"0.2.1", "0.2.6", "0.2.6"},
+		{"0.2.10", "0.2.9", "0.2.10"},
+		{"0.3.0", "0.2.9", "0.3.0"},
+		{"", "0.2.0", "0.2.0"},
+		{"0.2.0", "", "0.2.0"},
+	}
+	for _, c := range cases {
+		if got := maxVersion(c.a, c.b); got != c.want {
+			t.Errorf("maxVersion(%q, %q) = %q, want %q", c.a, c.b, got, c.want)
+		}
+	}
+}
