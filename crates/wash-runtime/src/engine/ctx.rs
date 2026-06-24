@@ -11,7 +11,8 @@ use std::{
     sync::Arc,
 };
 
-use wasmtime::component::ResourceTable;
+use wasmtime::StoreContextMut;
+use wasmtime::component::{Accessor, Instance, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wasmtime_wasi_http::WasiHttpCtx;
 use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpHooks, WasiHttpView};
@@ -67,6 +68,15 @@ pub struct SharedCtx {
     pub table: wasmtime::component::ResourceTable,
     /// Contexts for linked components
     pub contexts: HashMap<Arc<str>, Ctx>,
+    /// Pre-instantiated linked-component instances, keyed by component id.
+    ///
+    /// Owned by the store: every store created by the workload's store factory
+    /// is born with its linked components instantiated here, and they are
+    /// reclaimed automatically when the store is dropped (no external cache,
+    /// guards, or completion hooks). The concurrent cross-component call path
+    /// reads from here under `accessor.with`, where it cannot instantiate on
+    /// demand.
+    pub exporter_instances: HashMap<Arc<str>, Instance>,
 }
 
 impl SharedCtx {
@@ -75,6 +85,7 @@ impl SharedCtx {
             active_ctx: context,
             table: ResourceTable::new(),
             contexts: Default::default(),
+            exporter_instances: Default::default(),
         }
     }
 
@@ -92,6 +103,54 @@ impl SharedCtx {
                 "Context for component {id} not found"
             ))
         }
+    }
+}
+
+pub struct AccessorActiveCtxGuard<'a> {
+    accessor: &'a Accessor<SharedCtx>,
+    previous: Arc<str>,
+}
+
+impl<'a> AccessorActiveCtxGuard<'a> {
+    pub fn new(accessor: &'a Accessor<SharedCtx>, id: &Arc<str>) -> wasmtime::Result<Self> {
+        let previous = accessor.with(|mut access| -> wasmtime::Result<_> {
+            let previous = access.data_mut().active_ctx.component_id.clone();
+            access.data_mut().set_active_ctx(id)?;
+            Ok(previous)
+        })?;
+
+        Ok(Self { accessor, previous })
+    }
+}
+
+impl Drop for AccessorActiveCtxGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self
+            .accessor
+            .with(|mut access| access.data_mut().set_active_ctx(&self.previous));
+    }
+}
+
+pub struct StoreActiveCtxGuard<'a> {
+    store: StoreContextMut<'a, SharedCtx>,
+    previous: Arc<str>,
+}
+
+impl<'a> StoreActiveCtxGuard<'a> {
+    pub fn new(mut store: StoreContextMut<'a, SharedCtx>, id: &Arc<str>) -> wasmtime::Result<Self> {
+        let previous = store.data().active_ctx.component_id.clone();
+        store.data_mut().set_active_ctx(id)?;
+        Ok(Self { store, previous })
+    }
+
+    pub fn store_mut(&mut self) -> &mut StoreContextMut<'a, SharedCtx> {
+        &mut self.store
+    }
+}
+
+impl Drop for StoreActiveCtxGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.store.data_mut().set_active_ctx(&self.previous);
     }
 }
 
@@ -559,5 +618,33 @@ mod tests {
         shared.set_active_ctx(&comp_a).unwrap();
         assert_eq!(shared.active_ctx.component_id.as_ref(), "comp-a");
         assert!(shared.contexts.is_empty());
+    }
+
+    #[test]
+    fn store_active_ctx_guard_restores_on_drop() {
+        setup();
+        use wasmtime::AsContextMut;
+
+        let mut config = wasmtime::Config::new();
+        config.wasm_component_model(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+
+        let ctx_a = Ctx::builder("wk", "comp-a").build();
+        let ctx_b = Ctx::builder("wk", "comp-b").build();
+        let comp_b_id: Arc<str> = Arc::from("comp-b");
+
+        let mut shared = SharedCtx::new(ctx_a);
+        shared.contexts.insert(comp_b_id.clone(), ctx_b);
+        let mut store = wasmtime::Store::new(&engine, shared);
+
+        {
+            let mut guard = StoreActiveCtxGuard::new(store.as_context_mut(), &comp_b_id).unwrap();
+            assert_eq!(
+                guard.store_mut().data().active_ctx.component_id.as_ref(),
+                "comp-b"
+            );
+        }
+
+        assert_eq!(store.data().active_ctx.component_id.as_ref(), "comp-a");
     }
 }
