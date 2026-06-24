@@ -245,6 +245,12 @@ jobs:
         with:
           context: .
           outputs: type=docker,dest=/tmp/wash-image.tar,name=localhost/wasmcloud-wash:e2e
+          # Build the e2e host with `(implements ..)` multiplexing enabled so the
+          # implements spec's named keyvalue imports resolve. Only this e2e
+          # tarball gets the feature; the published canary build below stays on
+          # default features.
+          build-args: |
+            CARGO_FEATURES=wasm_component_model_implements
           # head_ref on PRs (the source branch, shared across re-pushes
           # and across PRs from the same branch); falls back to ref_name
           # on main pushes ("main"). Always falls back to the main scope
@@ -344,6 +350,7 @@ jobs:
           # Exercise the messaging spec — this is the regression test for
           # #5074 and is the whole reason the gate exists.
           MESSAGING_E2E_IMAGE: ghcr.io/wasmcloud/components/messaging-echo-rust:0.1.0
+          IMPLEMENTS_E2E_IMAGE: ghcr.io/wasmcloud/components/keyvalue-implements:0.1.0
           PROMETHEUS_INSTALL_SKIP: "true"
           CERT_MANAGER_INSTALL_SKIP: "true"
           KIND_CLUSTER_NAME: wasmcloud-e2e
