@@ -48,6 +48,9 @@ spec:
             - "-host-namespaces={{ . }}"
             {{- end }}
             - "-allow-shared-hosts={{ .Values.operator.allowSharedHosts }}"
+            # Always leader-gate the operator. Harmless at the default
+            # replicas: 1, and required if replicas is ever raised.
+            - "-leader-elect"
             {{- with .Values.operator.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
