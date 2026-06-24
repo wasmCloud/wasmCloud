@@ -33,6 +33,7 @@ jobs:
               - 'runtime-gateway/**'
               - 'runtime-operator/**'
               - 'go.work'
+              - '.github/workflows/runtime-gateway.yml'
 
   lint:
     needs:
