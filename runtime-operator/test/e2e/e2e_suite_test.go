@@ -106,8 +106,11 @@ var _ = BeforeSuite(func() {
 		runtimeImageRef := fmt.Sprintf("%s:%s", runtimeImageRepo, operatorImageTag)
 		if !skipRuntimeBuild {
 			By("building the wash-runtime image from the local tree")
-			// Repo root sits one level above runtime-operator/.
-			cmd := exec.Command("docker", "build", "-t", runtimeImageRef, "..")
+			// Repo root sits one level above runtime-operator/. Build wash with
+			// `(implements ..)` multiplexing enabled.
+			cmd := exec.Command("docker", "build",
+				"--build-arg", "CARGO_FEATURES=wasm_component_model_implements",
+				"-t", runtimeImageRef, "..")
 			_, err := utils.Run(cmd)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the wash-runtime image")
 		}
