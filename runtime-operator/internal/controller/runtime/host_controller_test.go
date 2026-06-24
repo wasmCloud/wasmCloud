@@ -40,11 +40,9 @@ func patchStatusKeys(t *testing.T, status *runtimev1alpha1.HostStatus) map[strin
 	return p.Status
 }
 
-// TestHostStatusPatch_EmptyStatusInjectsRequiredKeys guards the regression: a
-// status write before reconcileReporting has polled the host must still carry
-// every CRD-required key, plus lastSeen. A diff-based MergeFrom patch used to
-// drop value-equal fields (notably int64 0), leaving the keys absent and the
-// status subresource rejected with "Required value".
+// TestHostStatusPatch_EmptyStatusInjectsRequiredKeys ensures that lastSeen is always
+// populated in the patch, even for an empty status. Other keys required are also tested
+// to ensure the patch is valid for the CRD.
 func TestHostStatusPatch_EmptyStatusInjectsRequiredKeys(t *testing.T) {
 	keys := patchStatusKeys(t, &runtimev1alpha1.HostStatus{})
 
@@ -90,16 +88,7 @@ func TestHostStatusPatch_ReportedFieldsPreserved(t *testing.T) {
 }
 
 // TestHostStatusPatch_SatisfiesCRDRequired exercises the patch against a real
-// API server with the Host CRD installed. It reproduces the production failure
-// path: a freshly created Host whose status has not yet been populated by
-// reconcileReporting, then the heartbeat handler's status patch. Before the
-// fix, the API server rejected this with "status.osArch: Required value" (and
-// the other required fields). Requires envtest binaries — skipped when
-// KUBEBUILDER_ASSETS is unset (e.g. plain `go test`); `make test` sets it.
-// startHostEnvtest boots an envtest API server with the operator's CRDs
-// installed and returns a client plus a context. The environment is torn down
-// via t.Cleanup. Tests are skipped when KUBEBUILDER_ASSETS is unset (e.g. plain
-// `go test`); `make test` sets it.
+// API server with the Host CRD installed.
 func startHostEnvtest(t *testing.T) (client.Client, context.Context) {
 	t.Helper()
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
@@ -218,15 +207,15 @@ func applyHost(ctx context.Context, c client.Client, ns, name, hostID, hostname 
 		HTTPPort:    httpPort,
 		Environment: env,
 	}
-	return c.Patch(ctx, host, client.Apply,
+	// Mirrors the production SSA path; client.Apply is deprecated but the
+	// replacement needs a generated ApplyConfiguration the Host CRD lacks.
+	return c.Patch(ctx, host, client.Apply, //nolint:staticcheck // matches host_controller.go
 		client.FieldOwner("host-status-updater"), client.ForceOwnership)
 }
 
-// TestHostApply_UpsertIsIdempotent verifies the Server-Side Apply path that
-// replaced CreateOrUpdate+retry: the first apply creates the Host, a second
-// apply updates it in place, and neither can produce an AlreadyExists error
-// (the failure mode SSA was adopted to eliminate). It runs against a real API
-// server so the apply is validated against the actual Host CRD schema.
+// TestHostApply_UpsertIsIdempotent verifies the Server-Side Apply patch for the host information
+// was applied correctly. It runs against a real API server so the apply is validated against
+// the actual Host CRD schema.
 func TestHostApply_UpsertIsIdempotent(t *testing.T) {
 	c, ctx := startHostEnvtest(t)
 	ns := createTestNamespace(t, ctx, c, "host-apply-test")
