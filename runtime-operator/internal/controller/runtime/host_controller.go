@@ -29,6 +29,7 @@ const (
 	// the host finalizer can fan out to assigned workloads without
 	// scanning every Workload in the cluster.
 	workloadByHostIDIndex = "status.hostId"
+	statusUnknown         = "unknown"
 )
 
 // HostReconciler reconciles a Host object
@@ -208,14 +209,8 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 		// populated verbatim from req.Environment — the heartbeat is the
 		// source of truth and is not validated against cluster state.
 		//
-		// Upsert spec and metadata (labels, HostID, Hostname, HTTPPort,
-		// Environment) with Server-Side Apply. SSA performs the create-or-update
-		// at the API server with no client-side Get, so it is immune to
-		// informer-cache staleness: a read-modify-write (e.g. CreateOrUpdate)
-		// can see a stale NotFound, take the Create path, and fail with
-		// AlreadyExists when the object actually exists — SSA cannot. TypeMeta
-		// must be set for Apply, and a stable FieldOwner keeps this handler's
-		// fields cleanly separated from those owned by the reconciler.
+		// Upsert spec and metadata with Server-Side Apply in case the object was
+		// updated by another process, and the cache is stale.
 		host := &runtimev1alpha1.Host{
 			TypeMeta: metav1.TypeMeta{
 				APIVersion: runtimev1alpha1.GroupVersion.String(),
@@ -231,30 +226,17 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 			HTTPPort:    req.HttpPort,
 			Environment: req.GetEnvironment(),
 		}
-		if err := h.client.Patch(ctx, host, client.Apply,
+		// adding a nolint check to allow for client.apply, as the Host CRD
+		// would need to have an ApplyConfiguration generated for it, and thus a
+		// new CRD version would be required.
+		if err := h.client.Patch(ctx, host, client.Apply, //nolint:staticcheck
 			client.FieldOwner("host-status-updater"), client.ForceOwnership); err != nil {
 			log.Error(err, "failed to apply Host resource", "host", req.FriendlyName, "hostID", req.Id)
 			return
 		}
 
-		// Status is a separate subresource; c.Update() (used by CreateOrUpdate)
-		// silently ignores status fields. Patch the status subresource to
-		// persist LastSeen without conflicting with concurrent metadata
-		// changes (e.g. the ConditionedReconciler adding a finalizer between
-		// CreateOrUpdate and this call).
-		//
-		// The Host CRD marks the system/OS status fields as required, so the
-		// status subresource is rejected unless those keys are present — yet
-		// reconcileReporting (a separate RPC poll of the host) is what fills
-		// in their real values, which can lag or never happen for an
-		// unresponsive host. A diff-based MergeFrom patch additionally drops
-		// fields whose value equals the base (an int64 0 is omitted), so the
-		// keys never get written. Build the status patch explicitly so it
-		// always carries the required keys, injecting zero-value defaults only
-		// for fields not yet reported (a zero value satisfies "required"
-		// without clobbering any real value). Conditions and the optional
-		// counts are intentionally excluded so the ConditionedReconciler's
-		// state is left untouched.
+		// Patching the status subresource to update the LastSeen timestamp in case
+		// the other fields reported are not yet available (such as system/OS information).
 		statusPatch, err := hostStatusPatch(&host.Status)
 		if err != nil {
 			log.Error(err, "failed to build Host status patch", "host", req.FriendlyName, "hostID", req.Id)
@@ -270,28 +252,20 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 }
 
 // hostStatusPatch builds a JSON merge patch for the Host status subresource
-// that always refreshes LastSeen and guarantees the CRD-required system/OS
-// fields are present. Those fields are populated with real values by
-// reconcileReporting's RPC poll; until that succeeds (and it may never, for an
-// unresponsive host) the keys would be absent and the API server rejects the
-// status write with "Required value". A zero value satisfies the required
-// constraint, so each required field is defaulted only when it has not yet been
-// reported — never overwriting a real value already present on the object.
-// Conditions and the optional counts are deliberately omitted so the patch does
-// not clobber state owned by the ConditionedReconciler.
+// that always refreshes LastSeen.
 func hostStatusPatch(status *runtimev1alpha1.HostStatus) ([]byte, error) {
 	s := map[string]any{"lastSeen": metav1.Now()}
 	if status.Version == "" {
-		s["version"] = "unknown"
+		s["version"] = statusUnknown
 	}
 	if status.OSName == "" {
-		s["osName"] = "unknown"
+		s["osName"] = statusUnknown
 	}
 	if status.OSArch == "" {
-		s["osArch"] = "unknown"
+		s["osArch"] = statusUnknown
 	}
 	if status.OSKernel == "" {
-		s["osKernel"] = "unknown"
+		s["osKernel"] = statusUnknown
 	}
 	if status.SystemCPUUsage == "" {
 		s["systemCPUUsage"] = "0"

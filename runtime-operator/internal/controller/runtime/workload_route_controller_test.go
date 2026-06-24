@@ -183,6 +183,7 @@ func TestWorkloadRouteReconcile_NonIPHostname_ResolvesViaPodIP(t *testing.T) {
 	slice := getSlice(t, r, testServiceName)
 	if slice == nil {
 		t.Fatalf("EndpointSlice was not created for service %q", testServiceName)
+		return
 	}
 	if got, want := slice.AddressType, discoveryv1.AddressTypeIPv4; got != want {
 		t.Fatalf("AddressType = %q, want %q", got, want)
@@ -218,6 +219,7 @@ func TestWorkloadRouteReconcile_IPHostname_BackwardCompat(t *testing.T) {
 	slice := getSlice(t, r, testServiceName)
 	if slice == nil {
 		t.Fatalf("EndpointSlice was not created")
+		return
 	}
 	if len(slice.Endpoints) != 1 || len(slice.Endpoints[0].Addresses) != 1 {
 		t.Fatalf("expected exactly one endpoint with one address; got %#v", slice.Endpoints)
