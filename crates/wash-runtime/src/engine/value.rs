@@ -8,6 +8,48 @@ use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::engine::ctx::SharedCtx;
 
+pub(crate) fn carries_cross_store_handle(ty: &Type) -> bool {
+    match ty {
+        Type::Bool
+        | Type::S8
+        | Type::U8
+        | Type::S16
+        | Type::U16
+        | Type::S32
+        | Type::U32
+        | Type::S64
+        | Type::U64
+        | Type::Float32
+        | Type::Float64
+        | Type::Char
+        | Type::String
+        | Type::Enum(_)
+        | Type::Flags(_) => false,
+        Type::List(list) => carries_cross_store_handle(&list.ty()),
+        Type::Map(map) => {
+            carries_cross_store_handle(&map.key()) || carries_cross_store_handle(&map.value())
+        }
+        Type::Record(record) => record
+            .fields()
+            .any(|field| carries_cross_store_handle(&field.ty)),
+        Type::Tuple(tuple) => tuple.types().any(|ty| carries_cross_store_handle(&ty)),
+        Type::Variant(variant) => variant
+            .cases()
+            .any(|case| case.ty.as_ref().is_some_and(carries_cross_store_handle)),
+        Type::Option(option) => carries_cross_store_handle(&option.ty()),
+        Type::Result(result) => {
+            result.ok().as_ref().is_some_and(carries_cross_store_handle)
+                || result
+                    .err()
+                    .as_ref()
+                    .is_some_and(carries_cross_store_handle)
+        }
+        Type::Own(_) | Type::Borrow(_) | Type::Future(_) | Type::Stream(_) | Type::ErrorContext => {
+            true
+        }
+    }
+}
+
 pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> wasmtime::Result<Val> {
     match v {
         &Val::Bool(v) => Ok(Val::Bool(v)),
@@ -144,6 +186,10 @@ pub(crate) fn lower_with_type(
     v: &Val,
     ty: &Type,
 ) -> wasmtime::Result<Val> {
+    if !carries_cross_store_handle(ty) {
+        return lower(store, v);
+    }
+
     match (ty, v) {
         (Type::Own(resource_ty) | Type::Borrow(resource_ty), &Val::Resource(any))
             if *resource_ty == ResourceType::host::<ResourceAny>()
