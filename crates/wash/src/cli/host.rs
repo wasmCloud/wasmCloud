@@ -197,6 +197,17 @@ impl CliCommand for HostCommand {
             )))?
             .with_meters(Meters::new(ctx.enable_meters()));
 
+        #[cfg(feature = "wasm_component_model_implements")]
+        {
+            cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
+                plugin::wasi_keyvalue::MultiplexedKeyValue::new()
+                    .with_provider(Arc::new(plugin::wasi_keyvalue::InMemoryProvider))
+                    .with_provider(Arc::new(plugin::wasi_keyvalue::RedisProvider))
+                    .with_provider(Arc::new(plugin::wasi_keyvalue::NatsProvider))
+                    .with_provider(Arc::new(plugin::wasi_keyvalue::FilesystemProvider)),
+            ))?;
+        }
+
         if let Some(postgres_url) = &self.postgres_url {
             cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
                 plugin::wasmcloud_postgres::WasmcloudPostgres::new(postgres_url)

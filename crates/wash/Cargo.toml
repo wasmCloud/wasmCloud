@@ -14,6 +14,11 @@ version.workspace = true
 [features]
 default = ["wasi-webgpu"]
 wasi-tls = ["wash-runtime/wasi-tls"]
+# Route component-model `(implements ..)` named imports to per-import backends.
+# When enabled, `wash host`/`wash dev` additionally register the multiplexed
+# keyvalue plugin (the unnamed/default import keeps its standalone backend, so
+# normal workloads are unaffected). Needs a wasmtime build with resource-implements.
+wasm_component_model_implements = ["wash-runtime/wasm_component_model_implements"]
 # On by default. Pulls in git-only wasi-gfx deps (no crates.io release);
 # disable with `--no-default-features` for a build without the git sources.
 wasi-webgpu = ["wash-runtime/wasi-webgpu"]
