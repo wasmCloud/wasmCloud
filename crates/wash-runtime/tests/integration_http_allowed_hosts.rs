@@ -93,7 +93,6 @@ impl OutgoingHandler for FakeOutgoingHandler {
         Ok(HostFutureIncomingResponse::pending(handle))
     }
 
-    #[cfg(feature = "wasip3")]
     fn send_request_p3(
         &self,
         _workload_id: &str,

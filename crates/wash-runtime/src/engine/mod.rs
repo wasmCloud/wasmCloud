@@ -59,13 +59,10 @@ use std::str::FromStr;
 use std::{path::PathBuf, sync::Arc};
 use wasmtime_wasi::WasiView;
 
-/// Add all WASI@0.2 interfaces to the linker, using upstream for non-socket interfaces
+/// Add all WASI interfaces to the linker, using upstream for non-socket interfaces
 /// and our custom socket implementation (with loopback support) for socket interfaces.
-/// When `wasip3` is true (and the feature is compiled in), P3 bindings are also registered.
-fn add_wasi_to_linker(
-    linker: &mut Linker<SharedCtx>,
-    #[cfg(feature = "wasip3")] wasip3: bool,
-) -> anyhow::Result<()> {
+/// Both P2 and P3 bindings are registered.
+fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
     use wasmtime_wasi::p2::bindings::{cli, clocks, filesystem, random, sockets};
 
     // IO interfaces (error, poll, streams)
@@ -104,10 +101,8 @@ fn add_wasi_to_linker(
     )?;
 
     // CLI
-    let cli_options = cli::exit::LinkOptions::default();
     cli::exit::add_to_linker::<SharedCtx, wasmtime_wasi::cli::WasiCli>(
         linker,
-        &cli_options,
         <SharedCtx as wasmtime_wasi::cli::WasiCliView>::cli,
     )?;
     cli::environment::add_to_linker::<SharedCtx, wasmtime_wasi::cli::WasiCli>(
@@ -179,29 +174,25 @@ fn add_wasi_to_linker(
         ctx::extract_sockets,
     )?;
 
-    #[cfg(feature = "wasip3")]
-    if wasip3 {
-        // CLI, clocks, filesystem, random — upstream P3 add_to_linker
-        wasmtime_wasi::p3::cli::add_to_linker(linker)?;
-        wasmtime_wasi::p3::clocks::add_to_linker(linker)?;
-        wasmtime_wasi::p3::filesystem::add_to_linker(linker)?;
-        wasmtime_wasi::p3::random::add_to_linker(linker)?;
+    // CLI, clocks, filesystem, random — upstream P3 add_to_linker
+    wasmtime_wasi::p3::cli::add_to_linker(linker)?;
+    wasmtime_wasi::p3::clocks::add_to_linker(linker)?;
+    wasmtime_wasi::p3::filesystem::add_to_linker(linker)?;
+    wasmtime_wasi::p3::random::add_to_linker(linker)?;
 
-        // Sockets with our custom P3 implementation (with loopback)
-        crate::sockets::add_p3_to_linker(linker)?;
+    // Sockets with our custom P3 implementation (with loopback)
+    crate::sockets::add_p3_to_linker(linker)?;
 
-        // wasi:tls@0.3.0-draft (p3).
-        #[cfg(feature = "wasi-tls")]
-        wasmtime_wasi_tls::p3::add_to_linker(linker)?;
-    }
+    // wasi:tls@0.3.0-draft (p3).
+    #[cfg(feature = "wasi-tls")]
+    wasmtime_wasi_tls::p3::add_to_linker(linker)?;
 
     Ok(())
 }
 
 /// Detect whether a component targets WASIP3 by checking for `@0.3` in WASI imports/exports.
-/// This is a pure detection function — the caller is responsible for checking whether
-/// WASIP3 support is enabled on the engine.
-#[cfg(feature = "wasip3")]
+/// This is a pure detection function used to pick the P2 vs P3 dispatch path; P3 bindings
+/// are always registered on the linker.
 pub fn targets_wasip3(component: &Component) -> bool {
     let ty = component.component_type();
     let engine = component.engine();
@@ -216,7 +207,6 @@ pub fn targets_wasip3(component: &Component) -> bool {
 /// `wasi:http` imports/exports with `@0.3`. Used for HTTP dispatch to avoid
 /// routing a component that imports `wasi:cli@0.3` but exports `wasi:http@0.2`
 /// through the P3 HTTP handler.
-#[cfg(feature = "wasip3")]
 pub fn targets_wasip3_http(component: &Component) -> bool {
     let ty = component.component_type();
     let engine = component.engine();
@@ -241,9 +231,6 @@ pub struct Engine {
     // wasmtime engine
     pub(crate) inner: wasmtime::Engine,
     pub(crate) cache: Cache<CacheKey, CacheValue>,
-    /// Whether WASIP3 support is enabled for this engine.
-    #[cfg(feature = "wasip3")]
-    wasip3: bool,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
@@ -252,8 +239,6 @@ pub struct Engine {
 impl std::fmt::Debug for Engine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("Engine");
-        #[cfg(feature = "wasip3")]
-        s.field("wasip3", &self.wasip3);
         #[cfg(feature = "wasi-tls")]
         s.field("tls_provider", &self.tls_provider.is_some());
         s.finish_non_exhaustive()
@@ -284,12 +269,6 @@ impl Engine {
     /// Gets a reference to the inner wasmtime engine.
     pub fn inner(&self) -> &wasmtime::Engine {
         &self.inner
-    }
-
-    /// Returns whether WASIP3 support is enabled for this engine.
-    #[cfg(feature = "wasip3")]
-    pub fn wasip3(&self) -> bool {
-        self.wasip3
     }
 
     /// Initializes a workload by validating and preparing all its components.
@@ -434,25 +413,16 @@ impl Engine {
         // Create a linker for this component
         let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
 
-        // Add WASI@0.2 interfaces to the linker (with custom socket implementation)
-        add_wasi_to_linker(
-            &mut linker,
-            #[cfg(feature = "wasip3")]
-            self.wasip3(),
-        )
-        .context("failed to add WASI to linker")?;
+        // Add WASI interfaces to the linker (with custom socket implementation)
+        add_wasi_to_linker(&mut linker).context("failed to add WASI to linker")?;
 
-        // Add HTTP interfaces to the linker if feature is enabled and component uses them
+        // Add HTTP interfaces to the linker if the component uses them
         if uses_wasi_http(&wasmtime_component) {
             wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
                 .map_err(anyhow::Error::from)
                 .context("failed to add wasi:http/types to linker")?;
-            #[cfg(feature = "wasip3")]
-            if self.wasip3() {
-                wasmtime_wasi_http::p3::add_to_linker(&mut linker).map_err(|e| {
-                    anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker")
-                })?;
-            }
+            wasmtime_wasi_http::p3::add_to_linker(&mut linker)
+                .map_err(|e| anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker"))?;
         }
 
         // Build volume mounts for this component by looking up validated volumes
@@ -478,8 +448,6 @@ impl Engine {
             service.local_resources,
             service.max_restarts,
             loopback,
-            #[cfg(feature = "wasip3")]
-            self.wasip3(),
         );
 
         let world = service.world();
@@ -550,25 +518,16 @@ impl Engine {
         // Create a linker for this component
         let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
 
-        // Add WASI@0.2 interfaces to the linker (with custom socket implementation)
-        add_wasi_to_linker(
-            &mut linker,
-            #[cfg(feature = "wasip3")]
-            self.wasip3(),
-        )
-        .context("failed to add WASI to linker")?;
+        // Add WASI interfaces to the linker (with custom socket implementation)
+        add_wasi_to_linker(&mut linker).context("failed to add WASI to linker")?;
 
         // Add HTTP interfaces to the linker
         if uses_wasi_http(&wasmtime_component) {
             wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
                 .map_err(anyhow::Error::from)
                 .context("failed to add wasi:http/types to linker")?;
-            #[cfg(feature = "wasip3")]
-            if self.wasip3() {
-                wasmtime_wasi_http::p3::add_to_linker(&mut linker).map_err(|e| {
-                    anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker")
-                })?;
-            }
+            wasmtime_wasi_http::p3::add_to_linker(&mut linker)
+                .map_err(|e| anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker"))?;
         }
 
         // Build volume mounts for this component by looking up validated volumes
@@ -595,12 +554,122 @@ impl Engine {
             component_volume_mounts,
             component.local_resources,
             loopback,
-            #[cfg(feature = "wasip3")]
-            self.wasip3(),
             // TODO: implement pooling and instance limits
             // component.pool_size,
             // component.max_invocations,
         ))
+    }
+}
+
+/// A wasmtime WebAssembly proposal that can be opted into on the engine.
+///
+/// Each variant maps to one or more `wasmtime::Config` feature flags. Use it
+/// with [`EngineBuilder::with_wasm_proposal`] to enable a bundle of related
+/// settings without having to replace the entire config via
+/// [`EngineBuilder::with_config`].
+///
+/// ```no_run
+/// # use wash_runtime::engine::{Engine, WasmProposal};
+/// # fn example() -> anyhow::Result<()> {
+/// let engine = Engine::builder()
+///     .with_wasm_proposal(WasmProposal::Gc)
+///     .with_wasm_proposal(WasmProposal::Threads)
+///     .build()?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum WasmProposal {
+    /// Component model async ABI (`stream`/`future`/`error-context` types).
+    /// Enables `wasm_component_model_async`. Required for WASIP3.
+    ComponentModelAsync,
+    /// Component model `(implements ..)` named imports, letting a component
+    /// import the same interface multiple times under distinct names so host
+    /// plugins can route each independently. Enables
+    /// `wasm_component_model_implements`. Requires the backported wasmtime
+    /// support, so it is only available with the `wasm_component_model_implements`
+    /// crate feature.
+    #[cfg(feature = "wasm_component_model_implements")]
+    WasmComponentModelImplements,
+    /// Garbage collection. Enables `wasm_function_references` (a prerequisite)
+    /// and `wasm_gc`.
+    Gc,
+    /// Exception handling. Enables `wasm_exceptions`.
+    ExceptionHandling,
+    /// 128-bit wide arithmetic. Enables `wasm_wide_arithmetic`.
+    WideArithmetic,
+    /// Shared-memory threads. Enables `wasm_threads`.
+    Threads,
+    /// Tail calls. Enables `wasm_tail_call`.
+    TailCall,
+}
+
+impl WasmProposal {
+    /// Apply this proposal's wasmtime feature flags onto `cfg`.
+    fn apply(self, cfg: &mut wasmtime::Config) {
+        match self {
+            WasmProposal::ComponentModelAsync => {
+                cfg.wasm_component_model_async(true);
+            }
+            #[cfg(feature = "wasm_component_model_implements")]
+            WasmProposal::WasmComponentModelImplements => {
+                cfg.wasm_component_model_implements(true);
+            }
+            WasmProposal::Gc => {
+                // GC builds on the function-references proposal.
+                cfg.wasm_function_references(true);
+                cfg.wasm_gc(true);
+            }
+            WasmProposal::ExceptionHandling => {
+                cfg.wasm_exceptions(true);
+            }
+            WasmProposal::WideArithmetic => {
+                cfg.wasm_wide_arithmetic(true);
+            }
+            WasmProposal::Threads => {
+                cfg.wasm_threads(true);
+            }
+            WasmProposal::TailCall => {
+                cfg.wasm_tail_call(true);
+            }
+        }
+    }
+}
+
+/// Error returned when a string cannot be parsed into a [`WasmProposal`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParseWasmProposalError(String);
+
+impl std::fmt::Display for ParseWasmProposalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unknown wasm proposal {:?}; expected one of: component-model-async, gc, \
+             exception-handling, wide-arithmetic, threads, tail-call",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for ParseWasmProposalError {}
+
+impl FromStr for WasmProposal {
+    type Err = ParseWasmProposalError;
+
+    /// Parse a proposal from its kebab-case name. Matching is case-insensitive
+    /// and treats `_` and `-` interchangeably, so `gc`, `GC`,
+    /// `exception_handling`, and `exception-handling` all parse.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+            "component-model-async" => Ok(Self::ComponentModelAsync),
+            "gc" => Ok(Self::Gc),
+            "exception-handling" => Ok(Self::ExceptionHandling),
+            "wide-arithmetic" => Ok(Self::WideArithmetic),
+            "threads" => Ok(Self::Threads),
+            "tail-call" => Ok(Self::TailCall),
+            _ => Err(ParseWasmProposalError(s.to_string())),
+        }
     }
 }
 
@@ -609,16 +678,26 @@ impl Engine {
 /// The builder pattern allows for flexible configuration of the engine
 /// before creation. By default, it enables async support which is required
 /// for component execution.
+///
+/// Settings configured through the builder ([`with_pooling_allocator`],
+/// [`with_fuel_consumption`], [`with_wasm_proposal`], …) are layered on top of
+/// any base config supplied via [`with_config`], so a custom config can be
+/// combined with pooling and proposal flags rather than replacing them.
+///
+/// [`with_pooling_allocator`]: EngineBuilder::with_pooling_allocator
+/// [`with_fuel_consumption`]: EngineBuilder::with_fuel_consumption
+/// [`with_wasm_proposal`]: EngineBuilder::with_wasm_proposal
+/// [`with_config`]: EngineBuilder::with_config
 #[derive(Default)]
 pub struct EngineBuilder {
     config: Option<wasmtime::Config>,
     use_pooling_allocator: Option<bool>,
     max_instances: Option<u32>,
+    pooling_config: Option<PoolingAllocationConfig>,
+    proposals: std::collections::BTreeSet<WasmProposal>,
     compilation_cache_size: Option<u64>,
     compilation_cache_ttl: Option<Duration>,
-    fuel_consumption: bool,
-    #[cfg(feature = "wasip3")]
-    wasip3: bool,
+    fuel_consumption: Option<bool>,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -641,21 +720,65 @@ impl EngineBuilder {
 
     /// Sets the maximum number of instances for the pooling allocator.
     /// This is a 'hint' and can be overridden by environment variables.
+    ///
+    /// Ignored when a full [`PoolingAllocationConfig`] is supplied via
+    /// [`with_pooling_config`](Self::with_pooling_config).
     pub fn with_max_instances(mut self, max: u32) -> Self {
         self.max_instances = Some(max);
         self
     }
 
-    /// Enables or disables fuel consumption for the engine.
-    pub fn with_fuel_consumption(mut self, enable: bool) -> Self {
-        self.fuel_consumption = enable;
+    /// Sets a fully-customized [`PoolingAllocationConfig`] for the pooling
+    /// allocator, giving callers control over every pooling knob rather than
+    /// only the `WASMTIME_POOLING_*` environment variables.
+    ///
+    /// Supplying a pooling config implies the pooling allocator is enabled and
+    /// takes precedence over [`with_max_instances`](Self::with_max_instances).
+    /// It is still only applied when the host supports the pooling allocator.
+    pub fn with_pooling_config(mut self, config: PoolingAllocationConfig) -> Self {
+        self.pooling_config = Some(config);
+        self.use_pooling_allocator = Some(true);
         self
     }
 
-    /// Sets a custom wasmtime configuration for the engine.
+    /// Enables an additional WebAssembly proposal on the engine.
     ///
-    /// This allows full control over the wasmtime engine configuration,
-    /// including compilation settings, runtime limits, and feature flags.
+    /// Each [`WasmProposal`] maps to one or more `wasmtime::Config` feature
+    /// flags (see the variant docs for the exact flags). Proposals are layered
+    /// on top of any base config from [`with_config`](Self::with_config), so a
+    /// single extra proposal can be enabled without replacing the whole config.
+    /// Calling this repeatedly accumulates proposals; duplicates are ignored.
+    pub fn with_wasm_proposal(mut self, proposal: WasmProposal) -> Self {
+        self.proposals.insert(proposal);
+        self
+    }
+
+    /// Enables or disables fuel consumption for the engine.
+    ///
+    /// When unset, fuel consumption is left at whatever the base config (from
+    /// [`with_config`](Self::with_config), or the wasmtime default of disabled)
+    /// specifies, rather than being forced off.
+    pub fn with_fuel_consumption(mut self, enable: bool) -> Self {
+        self.fuel_consumption = Some(enable);
+        self
+    }
+
+    /// Sets a custom wasmtime configuration to use as the *base* for the engine.
+    ///
+    /// This config is used as the starting point, and any other builder
+    /// settings — pooling allocator, fuel consumption, and
+    /// [`WasmProposal`]s — are layered on top of it. This means a custom config
+    /// can be combined with [`with_pooling_allocator`](Self::with_pooling_allocator),
+    /// [`with_max_instances`](Self::with_max_instances), and
+    /// [`with_wasm_proposal`](Self::with_wasm_proposal) rather than being
+    /// mutually exclusive with them.
+    ///
+    /// Unlike the default-config path, the pooling allocator is *not* enabled
+    /// by default on top of a custom config. A base config's allocation
+    /// strategy is preserved unless pooling is explicitly requested via
+    /// [`with_pooling_allocator`](Self::with_pooling_allocator),
+    /// [`with_pooling_config`](Self::with_pooling_config), or the
+    /// `WASMTIME_POOLING` environment variable.
     ///
     /// # Arguments
     /// * `config` - A wasmtime `Config` object with custom settings
@@ -671,15 +794,6 @@ impl EngineBuilder {
     pub fn with_compilation_cache(mut self, size: u64, ttl: Duration) -> Self {
         self.compilation_cache_size = Some(size);
         self.compilation_cache_ttl = Some(ttl);
-        self
-    }
-
-    /// Enables or disables WASIP3 support.
-    /// When enabled (and compiled with the `wasip3` feature), both P2 and P3
-    /// bindings are registered in component linkers.
-    #[cfg(feature = "wasip3")]
-    pub fn with_wasip3(mut self, enable: bool) -> Self {
-        self.wasip3 = enable;
         self
     }
 
@@ -720,42 +834,55 @@ impl EngineBuilder {
             }
         }
 
-        // If a custom config was provided, use it as-is
-        let config = if let Some(cfg) = self.config.take() {
-            if self.max_instances.is_some() || self.use_pooling_allocator.is_some() {
-                bail!(
-                    "cannot use with_config() together with with_max_instances() or with_pooling_allocator()"
-                );
-            }
-            cfg
-        } else {
-            let mut cfg = wasmtime::Config::default();
+        // Start from the caller-supplied base config (or wasmtime's default) and
+        // layer the builder-managed settings on top of it.
+        let has_custom_config = self.config.is_some();
+        let mut config = self.config.take().unwrap_or_default();
 
-            let use_pooling_allocator = getenv::<bool>("WASMTIME_POOLING");
-            let use_pooling_allocator = self
-                .use_pooling_allocator
-                .or(use_pooling_allocator)
-                .unwrap_or(true);
+        // Default the pooling allocator on only when starting from wasmtime's
+        // default config. With a caller-supplied base config, leave its
+        // allocation strategy untouched unless pooling was explicitly requested
+        // (via with_pooling_allocator/with_pooling_config or WASMTIME_POOLING),
+        // so a custom strategy is not silently overridden.
+        let use_pooling_allocator = self
+            .use_pooling_allocator
+            .or_else(|| getenv::<bool>("WASMTIME_POOLING"))
+            .unwrap_or(!has_custom_config);
 
-            // The pooling allocator can be more efficient for workloads with many short-lived instances
-            if use_pooling_allocator && let Ok(true) = is_pooling_allocator_supported() {
-                tracing::debug!("using pooling allocator by default");
-                cfg.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(
-                    new_pooling_config(self.max_instances.unwrap_or(1000)),
-                ));
-            } else if use_pooling_allocator {
-                tracing::warn!("pooling allocator requested but not supported");
-            }
+        // The pooling allocator can be more efficient for workloads with many short-lived instances
+        if use_pooling_allocator && let Ok(true) = is_pooling_allocator_supported() {
+            tracing::debug!("using pooling allocator by default");
+            let pooling = self
+                .pooling_config
+                .take()
+                .unwrap_or_else(|| new_pooling_config(self.max_instances.unwrap_or(1000)));
+            config.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pooling));
+        } else if use_pooling_allocator {
+            tracing::warn!("pooling allocator requested but not supported");
+        }
 
-            cfg.consume_fuel(self.fuel_consumption);
+        // Only override fuel consumption when the caller explicitly set it, so a
+        // custom base config's setting is otherwise preserved.
+        if let Some(fuel) = self.fuel_consumption {
+            config.consume_fuel(fuel);
+        }
 
-            #[cfg(feature = "wasip3")]
-            if self.wasip3 {
-                cfg.wasm_component_model_async(true);
-            }
+        // WASIP3's async ABI requires the component-model async proposal.
+        self.proposals.insert(WasmProposal::ComponentModelAsync);
 
-            cfg
-        };
+        // Accept components that import an interface multiple times via the
+        // component-model `(implements ..)` annotation, so host plugins can
+        // route each named import (e.g. two `wasi:keyvalue/store` imports
+        // backed by redis vs NATS) independently. Only available with the
+        // backported wasmtime support behind the
+        // `wasm_component_model_implements` feature.
+        #[cfg(feature = "wasm_component_model_implements")]
+        self.proposals
+            .insert(WasmProposal::WasmComponentModelImplements);
+
+        for proposal in &self.proposals {
+            proposal.apply(&mut config);
+        }
 
         let inner = wasmtime::Engine::new(&config)?;
         let cache = Cache::builder()
@@ -768,8 +895,6 @@ impl EngineBuilder {
         Ok(Engine {
             inner,
             cache,
-            #[cfg(feature = "wasip3")]
-            wasip3: self.wasip3,
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
         })
@@ -907,4 +1032,65 @@ fn new_pooling_config(instances: u32) -> PoolingAllocationConfig {
         config.total_gc_heaps(instances);
     }
     config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A custom base config can now be combined with the pooling allocator and
+    // instance limits, which previously errored out of `build()`.
+    #[test]
+    fn custom_config_layers_with_pooling() {
+        let mut cfg = wasmtime::Config::default();
+        cfg.cranelift_opt_level(wasmtime::OptLevel::Speed);
+
+        Engine::builder()
+            .with_config(cfg)
+            .with_pooling_allocator(true)
+            .with_max_instances(64)
+            .build()
+            .expect("custom config + pooling should build");
+    }
+
+    // A single extra proposal can be enabled on top of a custom config without
+    // replacing the whole config.
+    #[test]
+    fn wasm_proposal_layers_with_custom_config() {
+        Engine::builder()
+            .with_config(wasmtime::Config::default())
+            .with_wasm_proposal(WasmProposal::Gc)
+            .build()
+            .expect("custom config + GC proposal should build");
+    }
+
+    // An externally-supplied pooling config is accepted and applied.
+    #[test]
+    fn external_pooling_config_builds() {
+        let mut pool = PoolingAllocationConfig::default();
+        pool.total_component_instances(32);
+
+        Engine::builder()
+            .with_pooling_config(pool)
+            .build()
+            .expect("external pooling config should build");
+    }
+
+    // Proposal names parse case-insensitively and accept `_`/`-` interchangeably;
+    // unknown names are rejected.
+    #[test]
+    fn wasm_proposal_from_str() {
+        assert_eq!("gc".parse(), Ok(WasmProposal::Gc));
+        assert_eq!("GC".parse(), Ok(WasmProposal::Gc));
+        assert_eq!(" threads ".parse(), Ok(WasmProposal::Threads));
+        assert_eq!(
+            "exception_handling".parse(),
+            Ok(WasmProposal::ExceptionHandling)
+        );
+        assert_eq!(
+            "component-model-async".parse(),
+            Ok(WasmProposal::ComponentModelAsync)
+        );
+        assert!("nonsense".parse::<WasmProposal>().is_err());
+    }
 }

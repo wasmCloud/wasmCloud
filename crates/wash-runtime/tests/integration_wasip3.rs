@@ -1,10 +1,9 @@
 //! Integration tests for WASIP3 support.
 //!
-//! Tests that the wasip3 feature flag correctly enables P3 bindings,
-//! P2 components still work when P3 is enabled, and the detection
-//! logic correctly identifies P3 components.
+//! Tests that P3 bindings are registered, P2 components still work
+//! alongside P3, and the detection logic correctly identifies P3
+//! components.
 
-#![cfg(feature = "wasip3")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::{Context, Result};
@@ -22,30 +21,6 @@ use common::{http_counter_host_interfaces, start_host_with_p3};
 
 const HTTP_COUNTER_WASM: &[u8] = include_bytes!("wasm/http_counter.wasm");
 
-fn engine_with_p3() -> Engine {
-    Engine::builder()
-        .with_wasip3(true)
-        .build()
-        .expect("failed to build engine with wasip3")
-}
-
-// Engine configuration tests
-
-#[test]
-fn test_engine_builder_wasip3_flag() {
-    let engine = Engine::builder().with_wasip3(true).build().unwrap();
-    assert!(engine.wasip3(), "engine should report wasip3 enabled");
-
-    let engine = Engine::builder().with_wasip3(false).build().unwrap();
-    assert!(!engine.wasip3(), "engine should report wasip3 disabled");
-}
-
-#[test]
-fn test_engine_builder_wasip3_default_off() {
-    let engine = Engine::builder().build().unwrap();
-    assert!(!engine.wasip3(), "wasip3 should default to disabled");
-}
-
 // P3 component detection tests
 
 #[test]
@@ -58,7 +33,7 @@ fn test_targets_wasip3_detects_p3_import() {
     "#;
     let wasm = wat::parse_str(wat).expect("failed to parse WAT");
 
-    let engine = engine_with_p3();
+    let engine = Engine::builder().build().expect("failed to build engine");
     let component =
         wasmtime::component::Component::new(engine.inner(), &wasm).expect("failed to compile");
     assert!(
@@ -77,7 +52,7 @@ fn test_targets_wasip3_detects_p3_handler() {
     "#;
     let wasm = wat::parse_str(wat).expect("failed to parse WAT");
 
-    let engine = engine_with_p3();
+    let engine = Engine::builder().build().expect("failed to build engine");
     let component =
         wasmtime::component::Component::new(engine.inner(), &wasm).expect("failed to compile");
     assert!(
@@ -96,7 +71,7 @@ fn test_targets_wasip3_ignores_p2() {
     "#;
     let wasm = wat::parse_str(wat).expect("failed to parse WAT");
 
-    let engine = engine_with_p3();
+    let engine = Engine::builder().build().expect("failed to build engine");
     let component =
         wasmtime::component::Component::new(engine.inner(), &wasm).expect("failed to compile");
     assert!(
@@ -110,7 +85,7 @@ fn test_targets_wasip3_ignores_empty() {
     let wat = r#"(component)"#;
     let wasm = wat::parse_str(wat).expect("failed to parse WAT");
 
-    let engine = engine_with_p3();
+    let engine = Engine::builder().build().expect("failed to build engine");
     let component =
         wasmtime::component::Component::new(engine.inner(), &wasm).expect("failed to compile");
     assert!(
@@ -129,7 +104,7 @@ fn test_targets_wasip3_ignores_non_wasi() {
     "#;
     let wasm = wat::parse_str(wat).expect("failed to parse WAT");
 
-    let engine = engine_with_p3();
+    let engine = Engine::builder().build().expect("failed to build engine");
     let component =
         wasmtime::component::Component::new(engine.inner(), &wasm).expect("failed to compile");
     assert!(
@@ -272,7 +247,7 @@ async fn test_p2_concurrent_requests_with_p3_enabled() -> Result<()> {
 #[tokio::test]
 async fn test_p3_linker_accepts_p2_component() -> Result<()> {
     // Engine with P3 enabled should still initialize P2 components
-    let engine = engine_with_p3();
+    let engine = Engine::builder().build().expect("failed to build engine");
 
     let workload = Workload {
         namespace: "test".to_string(),
@@ -295,38 +270,6 @@ async fn test_p3_linker_accepts_p2_component() -> Result<()> {
     assert!(
         result.is_ok(),
         "P3-enabled engine should accept P2 component: {:?}",
-        result.err()
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_p3_disabled_engine_rejects_nothing() -> Result<()> {
-    // Engine without P3 should still work fine for P2
-    let engine = Engine::builder().with_wasip3(false).build()?;
-
-    let workload = Workload {
-        namespace: "test".to_string(),
-        name: "p2-no-p3".to_string(),
-        annotations: HashMap::new(),
-        service: None,
-        components: vec![Component {
-            name: "http-counter.wasm".to_string(),
-            digest: None,
-            bytes: bytes::Bytes::from_static(HTTP_COUNTER_WASM),
-            local_resources: LocalResources::default(),
-            pool_size: 1,
-            max_invocations: 100,
-        }],
-        host_interfaces: http_counter_host_interfaces("no-p3-test"),
-        volumes: vec![],
-    };
-
-    let result = engine.initialize_workload("test-id", workload);
-    assert!(
-        result.is_ok(),
-        "P2 component on non-P3 engine should work: {:?}",
         result.err()
     );
 

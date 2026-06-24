@@ -148,7 +148,6 @@ pub trait Router: Send + Sync + 'static {
     ) -> anyhow::Result<()>;
 
     /// Determine if a P3 outgoing request is allowed.
-    #[cfg(feature = "wasip3")]
     fn allow_outgoing_request_p3(
         &self,
         _workload_id: &str,
@@ -320,7 +319,6 @@ pub trait OutgoingHandler: Send + Sync + 'static {
     /// it (`_fut`). It is provided so that custom transports with out-of-band
     /// error channels can still deliver upload errors to the component after
     /// the response has been returned.
-    #[cfg(feature = "wasip3")]
     fn send_request_p3(
         &self,
         workload_id: &str,
@@ -361,7 +359,6 @@ impl OutgoingHandler for DefaultOutgoingHandler {
         );
         Ok(HostFutureIncomingResponse::pending(handle))
     }
-    #[cfg(feature = "wasip3")]
     fn send_request_p3(
         &self,
         _workload_id: &str,
@@ -481,7 +478,6 @@ pub trait HostHandler: Send + Sync + 'static {
     /// Override to apply custom egress logic (e.g. alternate transports or
     /// per-workload TLS configuration) while still honouring the allowlist via
     /// [`check_allowed_hosts`].
-    #[cfg(feature = "wasip3")]
     fn outgoing_request_p3(
         &self,
         workload_id: &str,
@@ -557,7 +553,6 @@ impl HostHandler for NullServer {
         ))
     }
 
-    #[cfg(feature = "wasip3")]
     fn outgoing_request_p3(
         &self,
         _workload_id: &str,
@@ -866,7 +861,6 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
             .send_request(workload_id, request, config)
     }
 
-    #[cfg(feature = "wasip3")]
     fn outgoing_request_p3(
         &self,
         workload_id: &str,
@@ -1303,7 +1297,6 @@ async fn invoke_component_handler(
     let store = workload_handle.new_store(component_id).await?;
 
     // Check if this component targets WASIP3 and dispatch accordingly
-    #[cfg(feature = "wasip3")]
     if crate::engine::targets_wasip3_http(instance_pre.component()) {
         let resp =
             crate::host::http_p3::handle_component_request_p3(store, instance_pre, req, fuel_meter)
@@ -1673,7 +1666,6 @@ async fn send_grpc_request_handler(
 }
 
 /// P3 sibling of send_grpc_request: HTTP/2 sender for P3 outgoing gRPC.
-#[cfg(feature = "wasip3")]
 fn send_grpc_request_p3(
     request: hyper::Request<crate::host::http_p3::P3Body>,
     options: Option<wasmtime_wasi_http::p3::RequestOptions>,
@@ -1688,13 +1680,11 @@ fn send_grpc_request_p3(
 /// fires (or the stream ends / errors), releasing the underlying HTTP/2 stream
 /// and TCP connection eagerly instead of leaving it pinned until the guest
 /// drops its body handle.
-#[cfg(feature = "wasip3")]
 struct TimedBody<B> {
     inner: Option<B>,
     interval: tokio::time::Interval,
 }
 
-#[cfg(feature = "wasip3")]
 impl<B> hyper::body::Body for TimedBody<B>
 where
     B: hyper::body::Body<Data = bytes::Bytes, Error = hyper::Error> + Unpin,
@@ -1748,7 +1738,6 @@ where
     }
 }
 
-#[cfg(feature = "wasip3")]
 async fn send_grpc_request_p3_handler(
     mut request: hyper::Request<crate::host::http_p3::P3Body>,
     options: Option<wasmtime_wasi_http::p3::RequestOptions>,
@@ -2040,7 +2029,6 @@ mod tests {
             ))
         }
 
-        #[cfg(feature = "wasip3")]
         fn send_request_p3(
             &self,
             _workload_id: &str,
@@ -2099,7 +2087,6 @@ mod tests {
     /// `ConnectionReadTimeout` *and* eagerly drop the inner body so the
     /// underlying connection is released immediately rather than lingering
     /// until the guest drops its body handle.
-    #[cfg(feature = "wasip3")]
     #[tokio::test]
     async fn timed_body_releases_inner_on_between_bytes_timeout() {
         use http_body_util::BodyExt;
@@ -2198,7 +2185,6 @@ mod tests {
 
     /// NullServer must deny P3 outgoing requests with an internal error,
     /// matching its P2 behaviour of returning "http client not available".
-    #[cfg(feature = "wasip3")]
     #[tokio::test]
     async fn null_server_denies_p3_outgoing_request() {
         use crate::host::http_p3::{P3Body, P3RequestErrorFuture};

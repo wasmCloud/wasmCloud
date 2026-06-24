@@ -59,7 +59,6 @@ fn echo_client_workload_request(
 /// - TLS handshake against a self-signed cert via the custom `TestTlsProvider`
 /// - Plaintext `PING\r\n` write through the encrypted stream
 /// - Receipt verified via oneshot channel on the server side
-#[cfg(feature = "wasip3")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_p3_tls_tcp_round_trip() -> Result<()> {
     install_default_crypto_provider();

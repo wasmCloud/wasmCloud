@@ -330,7 +330,7 @@ The playbook installs (as `root` on the bench host):
 - A **smoke build**:
   ```sh
   cargo xtask build-fixtures   # benches include_bytes! the wasm fixtures
-  cargo bench -p wash-runtime --features wasip3 --bench http_invoke --no-run
+  cargo bench -p wash-runtime --bench http_invoke --no-run
   ```
   to verify the bench binary compiles end-to-end. ~3 minutes cold.
   (`run-bench.sh` runs `cargo xtask build-fixtures` for you; it's only
@@ -487,7 +487,7 @@ touches the repo, a CI log, or `/proc/<pid>/cmdline` (env-only).
 
 1. **Pre-flight** ([`bench-preflight.mjs`](../../.github/scripts/bench-preflight.mjs)) — see §10.
 2. **Run bench** ([`run-bench.sh`](./run-bench.sh)) — sources cargo,
-   runs `cargo bench -p wash-runtime --features wasip3 --bench <name>`,
+   runs `cargo bench -p wash-runtime --bench <name>`,
    tees output to a per-run log under `$CARGO_TARGET_DIR`.
 3. **Summary** (`cargo run -p bench-tools -- summary --bench <name>`) —
    emits a markdown table to `$GITHUB_STEP_SUMMARY` with one row per
@@ -593,7 +593,7 @@ GitHub":
 ssh -i ~/.ssh/hetzner_bench root@<WASMCLOUD_BENCH_HOST_IP> \
   '. $HOME/.cargo/env && cd /opt/wasmcloud && \
    cargo xtask build-fixtures && \
-   cargo bench -p wash-runtime --features wasip3 --bench http_invoke'
+   cargo bench -p wash-runtime --bench http_invoke'
 ```
 
 Manual runs do **not** touch S3 or arewefastyet — only the GitHub

@@ -461,9 +461,11 @@ pub struct DevConfig {
     #[serde(default)]
     pub wasi_otel: bool,
 
-    /// Enable WASIP3 support for components that target wasi@0.3 interfaces
+    /// Additional wasm proposals to enable on the engine, by name. Accepted
+    /// names match `wash_runtime`'s `WasmProposal`: component-model-async, gc,
+    /// exception-handling, wide-arithmetic, threads, tail-call.
     #[serde(default)]
-    pub wasip3: bool,
+    pub wasm_proposals: Vec<String>,
 }
 
 impl DevConfig {
@@ -521,6 +523,12 @@ impl DevConfig {
         }
         if cfg!(target_arch = "s390x") && self.wasi_webgpu {
             errors.push("dev.wasi_webgpu is not supported on s390x".to_string());
+        }
+
+        for proposal in &self.wasm_proposals {
+            if let Err(err) = proposal.parse::<wash_runtime::engine::WasmProposal>() {
+                errors.push(format!("dev.wasm_proposals: {err}"));
+            }
         }
 
         for comp in &self.components {

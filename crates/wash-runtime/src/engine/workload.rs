@@ -70,9 +70,6 @@ pub struct WorkloadMetadata {
     loopback: Arc<std::sync::Mutex<loopback::Network>>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
-    /// Whether WASIP3 support is enabled for this component's engine.
-    #[cfg(feature = "wasip3")]
-    wasip3_enabled: bool,
 }
 
 impl WorkloadMetadata {
@@ -104,6 +101,11 @@ impl WorkloadMetadata {
     /// Returns a mutable reference to the component's linker.
     pub fn linker(&mut self) -> &mut Linker<SharedCtx> {
         &mut self.linker
+    }
+
+    /// Returns a reference to the wasmtime [`Component`].
+    pub fn component(&self) -> &Component {
+        &self.component
     }
 
     /// Returns a reference to component local resources.
@@ -141,6 +143,7 @@ impl WorkloadMetadata {
             .component
             .component_type()
             .exports(self.component.engine())
+            .map(|(name, item)| (name, item.ty))
             .filter_map(|(name, item)| {
                 if matches!(item, ComponentItem::ComponentInstance(_)) {
                     Some((name.to_string(), item))
@@ -163,10 +166,9 @@ impl WorkloadMetadata {
         crate::engine::exports_wasi_http(&self.component)
     }
 
-    /// Returns whether this component targets WASIP3 and the engine has P3 enabled.
-    #[cfg(feature = "wasip3")]
+    /// Returns whether this component targets WASIP3.
     pub fn targets_p3(&self) -> bool {
-        self.wasip3_enabled && crate::engine::targets_wasip3(&self.component)
+        crate::engine::targets_wasip3(&self.component)
     }
 
     /// Computes and returns the [`WitWorld`] of this component.
@@ -180,7 +182,7 @@ impl WorkloadMetadata {
             .component_type()
             .imports(self.component.engine())
         {
-            if let ComponentItem::ComponentInstance(_) = import_item {
+            if let ComponentItem::ComponentInstance(_) = import_item.ty {
                 let interface = WitInterface::from(import_name);
                 let k = interface.instance();
                 imports
@@ -203,7 +205,7 @@ impl WorkloadMetadata {
             .component_type()
             .exports(self.component.engine())
         {
-            if let ComponentItem::ComponentInstance(_) = export_item {
+            if let ComponentItem::ComponentInstance(_) = export_item.ty {
                 let interface = WitInterface::from(export_name);
                 let k = interface.instance();
                 exports
@@ -253,7 +255,6 @@ impl WorkloadService {
         local_resources: LocalResources,
         max_restarts: u64,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
-        #[cfg(feature = "wasip3")] wasip3_enabled: bool,
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
@@ -268,8 +269,6 @@ impl WorkloadService {
                 plugins: None,
                 loopback,
                 linked_components: Default::default(),
-                #[cfg(feature = "wasip3")]
-                wasip3_enabled,
             },
             handle: None,
             max_restarts,
@@ -285,7 +284,6 @@ impl WorkloadService {
     }
 
     /// Pre-instantiate the component for P3 execution.
-    #[cfg(feature = "wasip3")]
     pub fn pre_instantiate_p3(
         &mut self,
     ) -> anyhow::Result<wasmtime_wasi::p3::bindings::CommandPre<SharedCtx>> {
@@ -333,7 +331,6 @@ impl WorkloadComponent {
         volume_mounts: Vec<(PathBuf, VolumeMount)>,
         local_resources: LocalResources,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
-        #[cfg(feature = "wasip3")] wasip3_enabled: bool,
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
@@ -348,8 +345,6 @@ impl WorkloadComponent {
                 plugins: None,
                 loopback,
                 linked_components: Default::default(),
-                #[cfg(feature = "wasip3")]
-                wasip3_enabled,
             },
             name: component_name.into(),
             // TODO: Implement pooling and instance limits
@@ -521,7 +516,6 @@ impl ResolvedWorkload {
     /// Executes the service, if present, and returns whether it was run.
     #[instrument(name="execute_service", skip_all, fields(workload.id = self.id.as_ref(), workload.name = self.name.as_ref(), workload.namespace = self.namespace.as_ref()))]
     pub(crate) async fn execute_service(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
-        #[cfg(feature = "wasip3")]
         if self
             .service
             .as_ref()
@@ -567,7 +561,6 @@ impl ResolvedWorkload {
     }
 
     /// Execute a service using P3 (wasi:cli@0.3) CommandPre.
-    #[cfg(feature = "wasip3")]
     async fn execute_service_p3(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
         let service = self
             .service
@@ -709,7 +702,7 @@ impl ResolvedWorkload {
                 let ty = component.metadata.component.component_type();
                 for (import_name, import_item) in ty.imports(component.metadata.component.engine())
                 {
-                    if !matches!(import_item, ComponentItem::ComponentInstance(_)) {
+                    if !matches!(import_item.ty, ComponentItem::ComponentInstance(_)) {
                         continue;
                     }
                     // An interface exported by multiple components can't be
@@ -820,7 +813,7 @@ impl ResolvedWorkload {
 
         let instance: SharedInstanceSlot = Arc::default();
         for (import_name, import_item) in imports.into_iter() {
-            match import_item {
+            match import_item.ty {
                 ComponentItem::ComponentInstance(import_instance_ty) => {
                     trace!(name = import_name, "processing component instance import");
                     let mut all_components = self.components.write().await;
@@ -870,7 +863,7 @@ impl ResolvedWorkload {
                     for (export_name, export_ty) in
                         import_instance_ty.exports(plugin_component.metadata.component.engine())
                     {
-                        match export_ty {
+                        match export_ty.ty {
                             ComponentItem::ComponentFunc(_func_ty) => {
                                 let (item, func_idx) = match plugin_component
                                     .metadata
@@ -1483,6 +1476,18 @@ impl UnresolvedWorkload {
                 for wit_interface in required_interfaces.iter() {
                     // Check if plugin supports this interface
                     if plugin_interfaces.includes_bidirectional(wit_interface) {
+                        // an `(implements ..)` named interface is served only
+                        // by a plugin that supports named instances.
+                        let defer_to_other = if wit_interface.name.is_some() {
+                            !p.supports_named_instances()
+                                && other_plugin_serves(plugins, plugin_id, wit_interface, true)
+                        } else {
+                            p.supports_named_instances()
+                                && other_plugin_serves(plugins, plugin_id, wit_interface, false)
+                        };
+                        if defer_to_other {
+                            continue;
+                        }
                         matching_interfaces.insert(wit_interface.clone());
                     }
                 }
@@ -1877,6 +1882,23 @@ fn build_export_map(
     (interface_map, ambiguous)
 }
 
+/// Returns whether some *other* registered plugin (not `self_id`) with
+/// `supports_named_instances() == want_named` can serve `iface`.
+/// Used to determine whether a plugin can defer an `(implements ..)`
+///  interface to a named-capable one, and vice versa).
+fn other_plugin_serves(
+    plugins: &HashMap<&'static str, Arc<dyn HostPlugin + 'static>>,
+    self_id: &str,
+    iface: &WitInterface,
+    want_named: bool,
+) -> bool {
+    plugins.iter().any(|(id, q)| {
+        *id != self_id
+            && q.supports_named_instances() == want_named
+            && q.world().includes_bidirectional(iface)
+    })
+}
+
 fn topological_sort_components(
     dependencies: &HashMap<Arc<str>, HashSet<Arc<str>>>,
 ) -> anyhow::Result<Vec<Arc<str>>> {
@@ -2136,8 +2158,6 @@ mod tests {
             Vec::new(),
             local_resources,
             Arc::default(),
-            #[cfg(feature = "wasip3")]
-            false,
         )
     }
 
@@ -2160,8 +2180,6 @@ mod tests {
             Vec::new(),
             local_resources,
             Arc::default(),
-            #[cfg(feature = "wasip3")]
-            false,
         )
     }
 
@@ -2184,8 +2202,6 @@ mod tests {
             local_resources,
             3,
             Arc::default(),
-            #[cfg(feature = "wasip3")]
-            false,
         )
     }
 
@@ -2255,8 +2271,6 @@ mod tests {
                 Vec::new(),
                 LocalResources::default(),
                 Arc::default(),
-                #[cfg(feature = "wasip3")]
-                false,
             )
         };
         for (plugin, iface) in cases {
@@ -2961,6 +2975,57 @@ mod tests {
         if let Err(e) = result {
             panic!("Single named entry should not require named instance support: {e}");
         }
+    }
+
+    /// Coexistence: a regular (standalone) plugin and a named-capable
+    /// (multiplexed) plugin both matching the same package bind together, with
+    /// the unnamed interface routed to the regular plugin and the `(implements
+    /// ..)` named interfaces routed to the named-capable one. Without the
+    /// name-aware dispatch this errors (the regular plugin would claim the two
+    /// named entries it cannot serve).
+    #[tokio::test]
+    async fn test_named_and_regular_plugins_coexist() {
+        let regular = Arc::new(MockPlugin::new(
+            "kv-standalone",
+            vec![],
+            vec![keyvalue_interface(None)],
+        ));
+        let multiplexed = Arc::new(
+            MockPlugin::new("kv-multiplexed", vec![], vec![keyvalue_interface(None)])
+                .with_named_instance_support(),
+        );
+
+        let mut plugins = HashMap::new();
+        plugins.insert(regular.id(), regular.clone() as Arc<dyn HostPlugin>);
+        plugins.insert(multiplexed.id(), multiplexed.clone() as Arc<dyn HostPlugin>);
+
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![create_test_component("component1")],
+            vec![
+                keyvalue_interface(None),
+                keyvalue_interface(Some("cache")),
+                keyvalue_interface(Some("sessions")),
+            ],
+        );
+
+        let bound = workload
+            .bind_plugins(&plugins)
+            .await
+            .expect("standalone + multiplexed plugins should bind together");
+        let bound_ids: std::collections::HashSet<&str> =
+            bound.iter().map(|(p, _)| p.id()).collect();
+        assert!(
+            bound_ids.contains("kv-standalone"),
+            "regular plugin must bind the unnamed interface"
+        );
+        assert!(
+            bound_ids.contains("kv-multiplexed"),
+            "named-capable plugin must bind the named interfaces"
+        );
     }
 
     /// Existing unnamed entries -> no change in behavior

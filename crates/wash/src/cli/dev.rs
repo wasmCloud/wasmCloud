@@ -10,7 +10,7 @@ use clap::Args;
 use tokio::{select, sync::mpsc};
 use tracing::{debug, info, instrument, warn};
 use wash_runtime::{
-    engine::Engine,
+    engine::{Engine, WasmProposal},
     host::{Host, HostApi},
     observability::Meters,
     plugin::{self},
@@ -63,13 +63,14 @@ impl CliCommand for DevCommand {
             .clone()
             .unwrap_or_else(|| "0.0.0.0:8000".to_string());
 
-        #[allow(unused_mut)]
         let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
             .with_fuel_consumption(ctx.enable_meters());
-        #[cfg(feature = "wasip3")]
-        {
-            engine_builder = engine_builder.with_wasip3(dev_config.wasip3);
+        for name in &dev_config.wasm_proposals {
+            let proposal: WasmProposal = name
+                .parse()
+                .with_context(|| format!("invalid dev.wasm_proposals entry {name:?}"))?;
+            engine_builder = engine_builder.with_wasm_proposal(proposal);
         }
         let engine = engine_builder.build()?;
 
@@ -242,7 +243,11 @@ impl CliCommand for DevCommand {
         }
 
         // Enable WASI WebGPU if requested
-        #[cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))]
+        #[cfg(all(
+            not(target_os = "windows"),
+            not(target_arch = "s390x"),
+            feature = "wasi-webgpu"
+        ))]
         if dev_config.wasi_webgpu {
             host_builder =
                 host_builder.with_plugin(Arc::new(plugin::wasi_webgpu::WebGpu::default()))?;

@@ -4,7 +4,7 @@ use anyhow::Context as _;
 use clap::Args;
 use tracing::info;
 use wash_runtime::{
-    engine::Engine,
+    engine::{Engine, WasmProposal},
     observability::Meters,
     plugin::{self},
 };
@@ -87,7 +87,11 @@ pub struct HostCommand {
     pub tls_ca_path: Option<PathBuf>,
 
     /// Enable WASI WebGPU support
-    #[cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))]
+    #[cfg(all(
+        not(target_os = "windows"),
+        not(target_arch = "s390x"),
+        feature = "wasi-webgpu"
+    ))]
     #[arg(long = "wasi-webgpu", default_value_t = false)]
     pub wasi_webgpu: bool,
 
@@ -112,10 +116,16 @@ pub struct HostCommand {
     #[arg(long = "wasi-otel", default_value_t = false)]
     pub wasi_otel: bool,
 
-    /// Enable WASIP3 support for components that target wasi@0.3 interfaces
-    #[cfg(feature = "wasip3")]
-    #[arg(long = "wasip3", env = "WASH_WASIP3", default_value_t = false)]
-    pub wasip3: bool,
+    /// Enable additional wasm proposals on the engine. Accepts a comma-separated
+    /// list and/or repeated flags, e.g. `--wasm-proposal gc,threads`. Accepted
+    /// names: component-model-async, gc, exception-handling, wide-arithmetic,
+    /// threads, tail-call.
+    #[arg(
+        long = "wasm-proposal",
+        env = "WASH_WASM_PROPOSALS",
+        value_delimiter = ','
+    )]
+    pub wasm_proposals: Vec<WasmProposal>,
 }
 
 impl CliCommand for HostCommand {
@@ -157,13 +167,11 @@ impl CliCommand for HostCommand {
             oci_cache_dir: self.oci_cache_dir.clone(),
         };
 
-        #[allow(unused_mut)]
         let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
             .with_fuel_consumption(ctx.enable_meters());
-        #[cfg(feature = "wasip3")]
-        {
-            engine_builder = engine_builder.with_wasip3(self.wasip3);
+        for proposal in &self.wasm_proposals {
+            engine_builder = engine_builder.with_wasm_proposal(*proposal);
         }
         let engine = engine_builder.build()?;
 
@@ -227,7 +235,11 @@ impl CliCommand for HostCommand {
         }
 
         // Enable WASI WebGPU if requested
-        #[cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))]
+        #[cfg(all(
+            not(target_os = "windows"),
+            not(target_arch = "s390x"),
+            feature = "wasi-webgpu"
+        ))]
         if self.wasi_webgpu {
             tracing::info!("WASI WebGPU support enabled");
             cluster_host_builder = cluster_host_builder

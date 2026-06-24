@@ -158,7 +158,6 @@ pub struct Ctx {
     /// The HTTP hooks for outgoing HTTP requests (implements WasiHttpHooks for P2).
     http_hooks: CtxHttpHooks,
     /// The HTTP hooks for outgoing HTTP requests (implements WasiHttpHooks for P3).
-    #[cfg(feature = "wasip3")]
     http_hooks_p3: CtxHttpHooksP3,
 }
 
@@ -246,7 +245,6 @@ impl WasiTlsView for SharedCtx {
 }
 
 // Implement WasiHttpView for wasi:http P3
-#[cfg(feature = "wasip3")]
 impl wasmtime_wasi_http::p3::WasiHttpView for SharedCtx {
     fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
         wasmtime_wasi_http::p3::WasiHttpCtxView {
@@ -286,14 +284,12 @@ impl WasiHttpHooks for CtxHttpHooks {
 /// configured [`HostHandler`](crate::host::http::HostHandler), so custom egress
 /// (allowed-hosts policy, alternate transports, etc.) applies uniformly to
 /// both P2 and P3 components.
-#[cfg(feature = "wasip3")]
 struct CtxHttpHooksP3 {
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
     workload_id: Arc<str>,
     allowed_hosts: Arc<[AllowedHost]>,
 }
 
-#[cfg(feature = "wasip3")]
 impl wasmtime_wasi_http::p3::WasiHttpHooks for CtxHttpHooksP3 {
     fn send_request(
         &mut self,
@@ -434,7 +430,6 @@ impl CtxBuilder {
             .map(|(k, v)| (k, v as Arc<dyn Any + Send + Sync>))
             .collect();
 
-        #[cfg(feature = "wasip3")]
         let http_hooks_p3 = CtxHttpHooksP3 {
             http_handler: self.http_handler.clone(),
             workload_id: self.workload_id.clone(),
@@ -472,7 +467,6 @@ impl CtxBuilder {
             },
             plugins,
             http_hooks,
-            #[cfg(feature = "wasip3")]
             http_hooks_p3,
         }
     }

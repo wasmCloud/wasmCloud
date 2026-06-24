@@ -39,6 +39,7 @@ jobs:
       pull-requests: read
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
+      workflow: ${{ steps.filter.outputs.workflow }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -59,6 +60,8 @@ jobs:
               - 'runtime-operator/test/e2e/**'
               - 'charts/runtime-operator/**'
               - 'deploy/kind/kind-config.yaml'
+            workflow:
+              - '.github/workflows/wash.yml'
 
   check:
     needs:
@@ -117,16 +120,13 @@ jobs:
           NATS_INTEGRATION_TESTS: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
         run: |
           cargo test --workspace
-      - name: Test with wasip3
+      - name: Test with wasi-tls
         run: |
-          cargo test -p wash-runtime --features wasip3
-      - name: Test with wasi-tls + wasip3
-        run: |
-          cargo test -p wash-runtime --features wasi-tls,wasip3
+          cargo test -p wash-runtime --features wasi-tls
       - name: Build benchmarks
         if: matrix.os == 'ubuntu-latest'
         run: |
-          cargo bench -p wash-runtime --features wasip3 --no-run
+          cargo bench -p wash-runtime --no-run
 
   lint:
     needs:
@@ -162,7 +162,7 @@ jobs:
           cargo +nightly fmt -- --check
       - name: Lint
         run: |
-          cargo clippy --workspace --features wasip3,wasi-tls
+          cargo clippy --workspace --features wasi-tls
       - name: Lint anyhow context message casing
         run: |
           # anyhow `.context()` / `.with_context()` strings are error messages,
@@ -351,7 +351,6 @@ jobs:
       - check
       - lint
       - wash-image
-      - wash-image-wasip3
       - runtime-operator-e2e
       - canary-publish
       - canary-binaries
@@ -467,50 +466,28 @@ jobs:
         env:
           STEPS_META_OUTPUTS_VERSION: ${{ steps.meta.outputs.version }}
 
-  # wasip3 image variant. Builds wash with the `wasip3,wasi-tls` features
-  # (WASI Preview 3 compiled in) and publishes it as `canary-wasip3` /
-  # `sha-<full-sha>-wasip3`.
-  wash-image-wasip3:
-    needs:
-      - changes
-      - runtime-operator-e2e
-    if: |
-      always() &&
-      (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') &&
-      (((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main')) &&
-      needs.runtime-operator-e2e.result == 'success'
-    permissions:
-      contents: write
-      packages: write
-    uses: ./.github/workflows/docker-build-push.yml
-    with:
-      image: ghcr.io/wasmcloud/wash
-      build-args: |
-        CARGO_FEATURES=wasip3,wasi-tls
-      # Push (and the manifest merge) only on main; PRs build to validate.
-      push: ${{ github.event_name != 'pull_request' }}
-      push-by-digest: ${{ github.event_name != 'pull_request' }}
-      tags: |
-        type=raw,value=canary-wasip3
-        type=sha,format=long,prefix=sha-,suffix=-wasip3
-
   # Canary matrix binary build. Runs on every push to main so each commit
   # exercises the full per-target matrix (including the s390x/musl cross
   # builds that the regular `check`/`lint` jobs don't cover), and so
   # release-tag.yml can promote the exact bytes that the canary CI tested
   # instead of rebuilding on tag.
   canary-binaries:
-    # Fires on every main push and on `workflow_dispatch`. `always()`
-    # breaks the skipped-`changes` propagation; the explicit per-need
-    # success gates restore the default `success()` check.
+    # Fires on every main push and on `workflow_dispatch`, plus on PRs that
+    # edit this workflow so a newly added build target is validated before
+    # merge rather than only after it lands on main. `always()` breaks the
+    # skipped-`changes` propagation; the explicit per-need success gates
+    # restore the default `success()` check.
     if: |
       always() &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      github.ref == 'refs/heads/main' &&
       needs.check.result == 'success' &&
       needs.lint.result == 'success' &&
-      needs.runtime-operator-e2e.result == 'success'
+      needs.runtime-operator-e2e.result == 'success' &&
+      (
+        ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'pull_request' && needs.changes.outputs.workflow == 'true')
+      )
     needs:
+      - changes
       - check
       - lint
       - runtime-operator-e2e
