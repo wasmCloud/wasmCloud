@@ -124,11 +124,12 @@ operator:
   #         name: operator-extra-config
   envFrom: []
   # -- Additional CLI args appended verbatim to the operator container, for
-  # operator flags the chart does not template (e.g. `-leader-elect`,
-  # `-cpu-backpressure-threshold=75`).
+  # operator flags the chart does not template (e.g.
+  # `-cpu-backpressure-threshold=75`). Note: `-leader-elect` is always passed
+  # by the chart, so it does not need to be added here.
   # Example:
   #   extraArgs:
-  #     - "-leader-elect"
+  #     - "-cpu-backpressure-threshold=75"
   extraArgs: []
 
 gateway:
