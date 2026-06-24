@@ -1,0 +1,121 @@
+package wasmcloud:blobstore@0.1.0;
+
+/// Types used by blobstore.
+///
+/// Unlike `wasi:blobstore@0.2.0-draft`, this package does not depend on `wasi:io`. Object bodies
+/// are carried as native component-model `stream<u8>` values, so the `incoming-value` and
+/// `outgoing-value` wrapper resources are gone.
+interface types {
+  /// name of a container, a collection of objects.
+  /// The container name may be any valid UTF-8 string.
+  type container-name = string;
+
+  /// name of an object within a container
+  /// The object name may be any valid UTF-8 string.
+  type object-name = string;
+
+  /// nanoseconds since the Unix epoch.
+  type timestamp = u64;
+
+  /// size of an object, in bytes
+  type object-size = u64;
+
+  type error = string;
+
+  /// information about a container
+  record container-metadata {
+    /// the container's name
+    name: container-name,
+    /// date and time the container was created
+    created-at: timestamp,
+  }
+
+  /// information about an object
+  record object-metadata {
+    /// the object's name
+    name: object-name,
+    /// the object's parent container
+    container: container-name,
+    /// date and time the object was created
+    created-at: timestamp,
+    /// size of the object, in bytes
+    size: object-size,
+  }
+
+  /// identifier for an object that includes its container name
+  record object-id {
+    container: container-name,
+    object: object-name,
+  }
+}
+
+/// a Container is a collection of objects
+interface container {
+  use types.{container-metadata, error, object-metadata, object-name};
+
+  /// this defines the `container` resource
+  resource container {
+    /// returns container name
+    name: async func() -> result<string, error>;
+    /// returns container metadata
+    info: async func() -> result<container-metadata, error>;
+    /// retrieves an object, or a portion of an object, as a byte stream.
+    ///
+    /// Start and end offsets are inclusive. The returned `stream<u8>` yields the object's bytes
+    /// as they become available; the caller owns the stream and drives it to completion (or drops
+    /// it early to cancel the transfer).
+    get-data: async func(name: object-name, start: u64, end: u64) -> result<stream<u8>, error>;
+    /// creates or replaces an object with the data read from the provided byte stream.
+    ///
+    /// The callee consumes the `stream<u8>`; the write completes once the stream is exhausted.
+    write-data: async func(name: object-name, data: stream<u8>) -> result<_, error>;
+    /// returns the names of the objects in the container as a stream. Order is undefined.
+    list-objects: async func() -> result<stream<object-name>, error>;
+    /// deletes an object.
+    /// does not return an error if the object did not exist.
+    delete-object: async func(name: object-name) -> result<_, error>;
+    /// deletes multiple objects in the container
+    delete-objects: async func(names: list<object-name>) -> result<_, error>;
+    /// returns true if the object exists in this container
+    has-object: async func(name: object-name) -> result<bool, error>;
+    /// returns metadata for the object
+    object-info: async func(name: object-name) -> result<object-metadata, error>;
+    /// removes all objects within the container, leaving the container empty.
+    clear: async func() -> result<_, error>;
+  }
+}
+
+/// wasmCloud blobstore service definition
+interface blobstore {
+  use container.{container};
+  use types.{error, container-name, object-id};
+
+  /// creates a new empty container
+  create-container: async func(name: container-name) -> result<container, error>;
+
+  /// retrieves a container by name
+  get-container: async func(name: container-name) -> result<container, error>;
+
+  /// deletes a container and all objects within it
+  delete-container: async func(name: container-name) -> result<_, error>;
+
+  /// returns true if the container exists
+  container-exists: async func(name: container-name) -> result<bool, error>;
+
+  /// copies (duplicates) an object, to the same or a different container.
+  /// returns an error if the target container does not exist.
+  /// overwrites the destination object if it already existed.
+  copy-object: async func(src: object-id, dest: object-id) -> result<_, error>;
+
+  /// moves or renames an object, to the same or a different container.
+  /// returns an error if the destination container does not exist.
+  /// overwrites the destination object if it already existed.
+  move-object: async func(src: object-id, dest: object-id) -> result<_, error>;
+}
+
+/// The `wasmcloud:blobstore/imports` world provides common APIs for interacting with blob stores.
+world imports {
+  import types;
+  import container;
+  import blobstore;
+}
