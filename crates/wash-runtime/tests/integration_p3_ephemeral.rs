@@ -16,6 +16,8 @@
 //! A correct round-trip body (`run(21) == 43`) proves the call crossed the
 //! linker into a fresh ephemeral store, executed, and returned its plain value
 //! back to the caller.
+//! Run with `RUST_LOG=wash_runtime::engine::workload=trace` to see the
+//! `invoked ephemeral dynamic export` trace for each request.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -36,11 +38,12 @@ const EPHEMERAL_CALLEE_P3_WASM: &[u8] = include_bytes!("wasm/ephemeral_callee_p3
 
 #[tokio::test]
 async fn test_p3_plain_value_async_call_uses_ephemeral_store() -> Result<()> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+
     let (addr, host) = start_host_with_p3("127.0.0.1:0").await?;
 
-    // The caller exports wasi:http/handler and is the workload's incoming
-    // entrypoint; the callee is auto-linked in and supplies the plain-value
-    // async `run` function dispatched via the ephemeral-store path.
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
@@ -93,17 +96,12 @@ async fn test_p3_plain_value_async_call_uses_ephemeral_store() -> Result<()> {
         response.status()
     );
 
-    // run(21) = 21 * 2 + 1 = 43. A correct value proves the plain-value async
-    // call round-tripped through the freshly-created ephemeral store.
     let body = response.text().await?;
     assert_eq!(
         body, "43",
         "ephemeral cross-component call should return run(21) == 43"
     );
 
-    // A second request reuses the same long-lived request stores but creates a
-    // fresh ephemeral store again; it must still succeed (the per-call store is
-    // dropped and its exporter-cache entries evicted after each call).
     let response2 = timeout(
         Duration::from_secs(10),
         client

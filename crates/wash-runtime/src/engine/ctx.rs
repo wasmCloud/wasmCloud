@@ -68,14 +68,8 @@ pub struct SharedCtx {
     pub table: wasmtime::component::ResourceTable,
     /// Contexts for linked components
     pub contexts: HashMap<Arc<str>, Ctx>,
-    /// Pre-instantiated linked-component instances, keyed by component id.
-    ///
-    /// Owned by the store: every store created by the workload's store factory
-    /// is born with its linked components instantiated here, and they are
-    /// reclaimed automatically when the store is dropped (no external cache,
-    /// guards, or completion hooks). The concurrent cross-component call path
-    /// reads from here under `accessor.with`, where it cannot instantiate on
-    /// demand.
+    /// Store-owned linked-component instances, keyed by component id.
+    /// Dropping the store reclaims the instances without external cleanup.
     pub exporter_instances: HashMap<Arc<str>, Instance>,
 }
 

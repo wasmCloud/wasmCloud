@@ -64,7 +64,6 @@ fn lower_params(
     Ok(params_buf)
 }
 
-/// Lift dynamic-linker call results back into the caller-provided result slots.
 fn lift_results(
     store: &mut StoreContextMut<'_, SharedCtx>,
     results_buf: Vec<Val>,
@@ -429,9 +428,6 @@ async fn new_ephemeral_store(
     .await
 }
 
-/// Everything a linker closure needs to invoke one linked component export,
-/// bundled so the invocation logic lives in named helpers instead of a deeply
-/// nested inline `async` block.
 #[derive(Clone)]
 struct LinkedExportInvocation {
     import_name: Arc<str>,
@@ -443,8 +439,6 @@ struct LinkedExportInvocation {
     ephemeral_call: Option<Arc<EphemeralLinkedCall>>,
 }
 
-/// Dispatch an async (`func_new_concurrent`) linked export to either the
-/// ephemeral-store path (plain-value signatures) or the shared-store path.
 async fn invoke_linked_async_export(
     accessor: &Accessor<SharedCtx>,
     params: &[Val],
@@ -521,8 +515,6 @@ async fn invoke_ephemeral_linked_export(
     Ok(())
 }
 
-/// Run an async linked call on the request's own (long-lived) store, reusing the
-/// exporter instance pre-instantiated for `(component, store)` by the entrypoint.
 async fn invoke_shared_store_linked_export(
     accessor: &Accessor<SharedCtx>,
     params: &[Val],
@@ -532,9 +524,6 @@ async fn invoke_shared_store_linked_export(
     let _active_ctx = AccessorActiveCtxGuard::new(accessor, &inv.plugin_component_id)?;
 
     let call: wasmtime::Result<()> = async {
-        // The store factory pre-instantiates every linked component into the
-        // store's own cache, so the instance is always present here — the
-        // concurrent `accessor.with` closure cannot instantiate on demand.
         let (func, params_buf) = accessor.with(|mut access| -> wasmtime::Result<_> {
             let instance = access
                 .data_mut()
@@ -582,20 +571,16 @@ async fn invoke_shared_store_linked_export(
     Ok(())
 }
 
-/// Run a synchronous (`func_new_async`) linked call on the caller's store.
 async fn invoke_linked_sync_export(
     store: StoreContextMut<'_, SharedCtx>,
     params: &[Val],
     results: &mut [Val],
     inv: &LinkedExportInvocation,
 ) -> wasmtime::Result<()> {
-    // TODO(#103): some kind of store data hashing mechanism to detect a diff store to drop the old one
     let mut active_ctx = StoreActiveCtxGuard::new(store, &inv.plugin_component_id)?;
     let mut store = active_ctx.store_mut();
 
     async {
-        // The store factory pre-instantiates linked components into the store's
-        // own cache, so the instance is always present.
         let instance = store
             .data()
             .exporter_instances
@@ -623,7 +608,6 @@ async fn invoke_linked_sync_export(
 
         let mut results_buf = vec![Val::Bool(false); results.len()];
 
-        // Enforce a timeout on this call to prevent hanging indefinitely
         const CALL_TIMEOUT: Duration = Duration::from_secs(30);
         timeout(
             CALL_TIMEOUT,
@@ -1196,10 +1180,6 @@ impl ResolvedWorkload {
             } else {
                 bail!("service unexpectedly missing during execution");
             };
-            // `new_store_from_metadata` already pre-instantiated the linked
-            // components into the store-owned cache; they are reclaimed when the
-            // store is dropped (service exit/abort), no external cleanup needed.
-
             let handle = tokio::spawn(async move {
                 loop {
                     let instance = match pre.instantiate_async(&mut store).await {
