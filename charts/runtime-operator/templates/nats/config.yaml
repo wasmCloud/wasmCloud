@@ -10,7 +10,11 @@ metadata:
 data:
   nats-server.conf: |
     port: 4222
-    jetstream: enabled
+    jetstream {
+      # Writable emptyDir (see nats/deployment.yaml) so JetStream works under a
+      # read-only root filesystem.
+      store_dir: "/data/jetstream"
+    }
 
     {{- if $.Values.global.tls.enabled }}
     tls {

@@ -1,0 +1,16 @@
+# chart-testing (ct) configuration — consumed by the `lint` job in
+# .github/workflows/charts.yml.
+#
+# The point of this file is `check-version-increment`: when a PR changes any
+# file under a chart, ct compares the chart against `target-branch` and FAILS
+# unless Chart.yaml `version` was bumped. That is the guard against shipping a
+# chart edit without a version bump.
+target-branch: main
+chart-dirs:
+  - charts
+# Core guard: require a Chart.yaml `version` bump for any chart change.
+check-version-increment: true
+# Chart.yaml carries no `maintainers` list; don't require one.
+validate-maintainers: false
+# Lint Chart.yaml / values.yaml with a project-appropriate yamllint config.
+lint-conf: .github/ct-lint-config.yaml

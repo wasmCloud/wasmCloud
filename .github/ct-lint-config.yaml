@@ -1,0 +1,16 @@
+# yamllint config used by `ct lint` (referenced from .github/ct.yaml).
+# ct only yaml-lints Chart.yaml and values.yaml, not the Go-templated manifests
+# under templates/. We relax the noisiest stylistic rules so the lint focuses on
+# real problems (and the version-increment check) rather than line width.
+extends: default
+
+rules:
+  # Load-bearing: the chart's comments and values run past yamllint's 80-col
+  # default, which is an error and would fail ct. The two below only silence
+  # cosmetic warnings (warnings don't fail ct) on the chart's existing style.
+  line-length: disable
+  # Helm Chart.yaml / values.yaml conventionally have no leading `---`.
+  document-start: disable
+  # The chart uses single-space inline comments, e.g. `cpu: "250m" # 0.25 cores`.
+  comments:
+    min-spaces-from-content: 1
