@@ -23,6 +23,9 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      automountServiceAccountToken: {{ .Values.operator.automountServiceAccountToken }}
+      securityContext:
+        {{- toYaml .Values.operator.podSecurityContext | nindent 8 }}
       {{- if $.Values.global.tls.enabled }}
       volumes:
         - name: operator-cert
@@ -73,6 +76,8 @@ spec:
               mountPath: /operator-cert
               readOnly: true
           {{- end }}
+          resources:
+            {{- toYaml .Values.operator.resources | nindent 12 }}
           ports:
             - name: health
               containerPort: 8082
@@ -91,9 +96,7 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           securityContext:
-            capabilities:
-              drop:
-                - NET_RAW
+            {{- toYaml .Values.operator.securityContext | nindent 12 }}
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       terminationGracePeriodSeconds: 0

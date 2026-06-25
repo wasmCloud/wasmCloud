@@ -1,0 +1,14 @@
+# Trivy misconfiguration findings that are intentional for this chart.
+# Read by `trivy config` (the `trivy` job in .github/workflows/charts.yml).
+#
+# Everything NOT listed here is still reported. These two are core to what the
+# operator does — it reconciles wasmCloud Hosts/Workloads, which requires writing
+# the resources below — so they are accepted rather than "to fix". See
+# .github/scripts/runtime-operator-rbac-parity.mjs for the authoritative,
+# generated-from-code view of the RBAC the operator actually needs.
+
+# Operator ClusterRole manages Secrets (mounts/propagates host + NATS credentials).
+AVD-KSV-0041
+
+# Operator ClusterRole manages Services/Endpoints/EndpointSlices for host wiring.
+AVD-KSV-0056

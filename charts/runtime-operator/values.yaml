@@ -52,6 +52,33 @@ nats:
     repository: nats
     pull_policy: Always
     tag: "2.12.8-alpine"
+  # -- Compute resources for the NATS container. Idle ~6Mi (profiled); the
+  # bundled NATS is light control-plane use, so the limit is sized accordingly.
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "64Mi"
+    limits:
+      memory: "128Mi"
+  # -- The bundled NATS server does not use the Kubernetes API.
+  automountServiceAccountToken: false
+  # -- Pod-level securityContext. Hardened by default; override any field via values.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  # -- Container securityContext. Hardened by default. JetStream data is written
+  # to an emptyDir, so read-only root works.
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    capabilities:
+      drop:
+        - ALL
   serviceAccount:
     # -- Specifies whether a service account should be created
     create: true
@@ -72,6 +99,38 @@ operator:
     pull_policy: Always
     # Overrides the image tag whose default is the chart appVersion.
     tag: ""
+  # -- Compute resources for the operator container. Idle ~19Mi (profiled), but
+  # the informer cache grows with the number of watched objects (Hosts,
+  # Workloads, Pods, EndpointSlices), so the limit keeps extra headroom.
+  # Raise it for large clusters.
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "64Mi"
+    limits:
+      memory: "192Mi"
+  # -- The operator calls the Kubernetes API, so it needs its ServiceAccount token.
+  automountServiceAccountToken: true
+  # -- Pod-level securityContext. Hardened by default; override any field via
+  # values (e.g. `--set operator.podSecurityContext.runAsUser=1000`). fsGroup
+  # makes the chart's emptyDir volumes writable by the non-root process.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  # -- Container securityContext. Hardened by default. Set
+  # `readOnlyRootFilesystem: false` if the container must write outside its
+  # mounted volumes.
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    capabilities:
+      drop:
+        - ALL
   service:
     type: ClusterIP
     port: 8443
@@ -144,6 +203,34 @@ gateway:
     registry: ghcr.io
     repository: wasmcloud/runtime-gateway
     pull_policy: Always
+  # -- Compute resources for the gateway container. Idle ~8Mi (profiled); a light
+  # proxy, with headroom for the Go runtime/GC under load.
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "32Mi"
+    limits:
+      memory: "96Mi"
+  # -- The gateway is a controller (it reconciles EndpointSlices), so it needs
+  # its ServiceAccount token to reach the Kubernetes API.
+  automountServiceAccountToken: true
+  # -- Pod-level securityContext. Hardened by default; override any field via values.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  # -- Container securityContext. Hardened by default. Set
+  # `readOnlyRootFilesystem: false` to write outside mounted volumes.
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    capabilities:
+      drop:
+        - ALL
   service:
     type: ClusterIP
     port: 80
@@ -174,6 +261,41 @@ runtime:
     repository: wasmcloud/wash
     pull_policy: Always
     tag: ""
+  # -- The host talks to NATS, not the Kubernetes API, so it does not need its token.
+  automountServiceAccountToken: false
+  # -- Pod-level securityContext. Hardened by default; override any field via values.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  # -- Container securityContext. Hardened by default. The host's OCI cache and
+  # scratch space are emptyDir volumes, so read-only root works. Set
+  # `readOnlyRootFilesystem: false` to opt out.
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    capabilities:
+      drop:
+        - ALL
+  # -- Compute resources applied to every host group, unless a host group sets
+  # its own `resources` (see hostGroups[].resources). Host pods run Wasm
+  # components in-process, so memory scales with the workloads scheduled onto a
+  # host: size `limits.memory` for your expected per-host workload density, or
+  # remove it to leave host memory uncapped.
+  #
+  # The simplest way to change host sizing for the whole release:
+  #   --set runtime.resources.limits.memory=2Gi
+  #   --set runtime.resources.requests.cpu=500m
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "64Mi"
+    limits:
+      memory: "512Mi"
   # -- Additional environment variables applied to every host group container,
   # appended after the chart-managed vars and before any per-host-group `env`.
   # Standard Kubernetes env shape (supports `valueFrom`).
@@ -239,10 +361,12 @@ runtime:
               # -- List of DNS Subject Alternative Names (SANs) for the generated TLS certificate.
               # Example: ["myapp.example.com", "myapp.default.svc.cluster.local"]
               domains: []
-      resources:
-        requests:
-          memory: "64Mi"
-          cpu: "250m" # 0.25 CPU cores
-        limits:
-          memory: "512Mi"
-          cpu: "500m" # 0.5 CPU cores
+      # -- Per-host-group compute resources. Omitted so this group inherits the
+      # chart-wide `runtime.resources` above; uncomment to size one host group
+      # differently (e.g. a webgpu group that needs more memory):
+      # resources:
+      #   requests:
+      #     cpu: "500m"
+      #     memory: "128Mi"
+      #   limits:
+      #     memory: "2Gi"

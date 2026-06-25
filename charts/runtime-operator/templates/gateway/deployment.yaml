@@ -19,7 +19,9 @@ spec:
         wasmcloud.com/name: runtime-gateway
         {{- include "runtime-operator.labels" . | nindent 8 }}
     spec:
-      # change this
+      automountServiceAccountToken: {{ .Values.gateway.automountServiceAccountToken }}
+      securityContext:
+        {{- toYaml .Values.gateway.podSecurityContext | nindent 8 }}
       serviceAccountName: {{ include "gateway.serviceAccountName" . }}
       {{- include "runtime-operator.imagePullSecrets" . | nindent 6 }}
       containers:
@@ -34,10 +36,21 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
           securityContext:
-            capabilities:
-              drop:
-                - NET_RAW
+            {{- toYaml .Values.gateway.securityContext | nindent 12 }}
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       terminationGracePeriodSeconds: 0

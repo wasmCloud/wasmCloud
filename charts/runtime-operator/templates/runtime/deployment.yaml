@@ -28,8 +28,16 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      automountServiceAccountToken: {{ $top.Values.runtime.automountServiceAccountToken }}
+      securityContext:
+        {{- toYaml $top.Values.runtime.podSecurityContext | nindent 8 }}
       volumes:
         - name: oci-cache
+          emptyDir: {}
+        # wash creates its data/config/cache directories under $HOME (set to /tmp
+        # below), so the host needs a writable /tmp to run with a read-only root
+        # filesystem.
+        - name: tmp
           emptyDir: {}
         {{- if $top.Values.global.tls.enabled }}
         - name: runtime-cert
@@ -56,6 +64,11 @@ spec:
         - name: host
           image: {{ if $registry }}{{ printf "%s/%s" $registry $top.Values.runtime.image.repository }}{{ else }}{{ $top.Values.runtime.image.repository }}{{ end }}:{{ $top.Values.runtime.image.tag | default $top.Chart.AppVersion }}
           env:
+            # wash resolves its XDG data/config/cache dirs under $HOME; point it
+            # at the writable /tmp emptyDir so the host runs with a read-only root
+            # filesystem. A user-supplied runtime.env HOME (below) overrides this.
+            - name: HOME
+              value: /tmp
             - name: WASMCLOUD_HOST_IP
               valueFrom:
                 fieldRef:
@@ -129,6 +142,8 @@ spec:
           volumeMounts:
             - name: oci-cache
               mountPath: /oci-cache
+            - name: tmp
+              mountPath: /tmp
             {{- if $top.Values.global.tls.enabled }}
             - name: runtime-cert
               mountPath: /runtime-cert
@@ -148,7 +163,7 @@ spec:
             {{- with .volumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- with .resources }}
+          {{- with (.resources | default $top.Values.runtime.resources) }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -165,10 +180,21 @@ spec:
             {{- with .ports }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- if and (.http) (.http.enabled) }}
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- end }}
           securityContext:
-            capabilities:
-              drop:
-                - NET_RAW
+            {{- toYaml $top.Values.runtime.securityContext | nindent 12 }}
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       terminationGracePeriodSeconds: 0

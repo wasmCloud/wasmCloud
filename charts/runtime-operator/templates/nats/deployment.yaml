@@ -23,10 +23,19 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      automountServiceAccountToken: {{ .Values.nats.automountServiceAccountToken }}
+      securityContext:
+        {{- toYaml .Values.nats.podSecurityContext | nindent 8 }}
       volumes:
         - name: nats-config
           configMap:
             name: nats
+        # Writable scratch dir so the container can run with a read-only root fs.
+        - name: tmp
+          emptyDir: {}
+        # JetStream store dir (see nats/config.yaml store_dir).
+        - name: jetstream
+          emptyDir: {}
         {{- if $.Values.global.tls.enabled }}
         - name: nats-cert
           secret:
@@ -45,6 +54,10 @@ spec:
           volumeMounts:
             - name: nats-config
               mountPath: /nats-config
+            - name: tmp
+              mountPath: /tmp
+            - name: jetstream
+              mountPath: /data/jetstream
             {{- if $.Values.global.tls.enabled }}
             - name: nats-cert
               mountPath: /nats-cert
@@ -52,10 +65,21 @@ spec:
           ports:
             - name: tcp-nats
               containerPort: 4222
+          livenessProbe:
+            tcpSocket:
+              port: tcp-nats
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: tcp-nats
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.nats.resources | nindent 12 }}
           securityContext:
-            capabilities:
-              drop:
-                - NET_RAW
+            {{- toYaml .Values.nats.securityContext | nindent 12 }}
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       terminationGracePeriodSeconds: 0
