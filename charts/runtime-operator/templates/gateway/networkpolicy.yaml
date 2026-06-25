@@ -1,0 +1,22 @@
+{{- if and .Values.networkPolicy.enabled .Values.gateway.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runtime-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    wasmcloud.com/name: runtime-gateway
+    {{- include "runtime-operator.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      wasmcloud.com/name: runtime-gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    # HTTP front door; the gateway is the chart's ingress point so traffic is
+    # accepted from any source on its bind port.
+    - ports:
+        - port: 8000
+          protocol: TCP
+{{- end }}

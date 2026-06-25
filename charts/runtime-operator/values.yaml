@@ -40,6 +40,17 @@ global:
     # -- Name of the Kubernetes Secret holding the TLS client certificate host pods present to the data NATS connection
     dataCertSecretName: wasmcloud-data-tls
 
+# -- Baseline NetworkPolicies for the chart's pods. Each enabled component gets a
+# NetworkPolicy whose podSelector matches its pods, restricting ingress to the
+# ports the component actually serves (traffic on any other port is dropped).
+# Egress is intentionally left unrestricted: hosts pull OCI images from arbitrary
+# registries, the operator talks to the Kubernetes API, and any component may
+# connect to an external NATS cluster. Tightening egress safely requires
+# environment-specific knowledge and is left to the consumer. Set `enabled` to
+# false if a CNI without NetworkPolicy support or a service mesh manages this.
+networkPolicy:
+  enabled: true
+
 # -- Values for installing a basic NATS Server with Ephemeral Storage. If you prefer to install NATS separately, set `enabled` to `false`.
 nats:
   enabled: true

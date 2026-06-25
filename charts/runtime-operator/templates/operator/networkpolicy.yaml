@@ -1,0 +1,24 @@
+{{- if and .Values.networkPolicy.enabled .Values.operator.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runtime-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    wasmcloud.com/name: runtime-operator
+    {{- include "runtime-operator.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      wasmcloud.com/name: runtime-operator
+  policyTypes:
+    - Ingress
+  ingress:
+    # Health/readiness endpoint and the metrics/HTTPS service port. Probes from
+    # the kubelet originate on the node and are not subject to this policy.
+    - ports:
+        - port: 8082
+          protocol: TCP
+        - port: {{ .Values.operator.service.port }}
+          protocol: TCP
+{{- end }}
