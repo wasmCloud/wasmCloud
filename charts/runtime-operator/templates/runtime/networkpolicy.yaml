@@ -1,0 +1,35 @@
+{{- $top := . }}
+{{- range .Values.runtime.hostGroups }}
+{{- if $top.Values.networkPolicy.enabled }}
+{{- $ns := default $top.Release.Namespace .namespace }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hostgroup-{{ .name }}
+  namespace: {{ $ns }}
+  labels:
+    wasmcloud.com/name: hostgroup
+    wasmcloud.com/hostgroup: {{ .name }}
+    {{- include "runtime-operator.labels" $top | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      wasmcloud.com/name: hostgroup
+      wasmcloud.com/hostgroup: {{ .name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # The host's served HTTP port plus any additional container ports the host
+    # group declares (e.g. a metrics scrape endpoint).
+    - ports:
+        {{- if and .http .http.enabled }}
+        - port: {{ .http.port }}
+          protocol: TCP
+        {{- end }}
+        {{- range .ports }}
+        - port: {{ .containerPort }}
+          protocol: {{ .protocol | default "TCP" }}
+        {{- end }}
+---
+{{- end }}
+{{- end }}
