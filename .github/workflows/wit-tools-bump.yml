@@ -1,13 +1,14 @@
 name: wit-tools-bump
 
-# Opens a PR when bytecodealliance/wasm-tools publishes a new stable
-# GitHub release. The pinned version lives in wit.yml's top-level
-# `env:` block — this workflow is the only thing that edits it.
+# Opens a PR when bytecodealliance/wasm-tools or bytecodealliance/wasm-pkg-tools
+# (wkg) publishes a new stable GitHub release. The pinned versions live in
+# wit.yml's top-level `env:` block.
 #
 # Why this exists: Dependabot's `github-actions` ecosystem tracks `uses:`
-# refs (the action SHA), not arbitrary `with:` inputs. The tool version
-# installed by `bytecodealliance/actions/wasm-tools/setup` is therefore
-# invisible to Dependabot, so we maintain it with a small custom updater.
+# refs (the action SHA), not arbitrary `with:` inputs or versions fetched
+# at runtime. wasm-tools (installed via bytecodealliance/actions/wasm-tools/setup)
+# and wkg (downloaded by the validate job at its pinned version) are therefore
+# invisible to Dependabot, so we maintain them with a small custom updater.
 #
 # wash is installed via wasmcloud/setup-wash-action (which defaults to
 # the latest wash release) and is not tracked here.
@@ -41,31 +42,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Resolve latest wasm-tools version and apply bump
+      - name: Resolve latest tool versions and apply bumps
         id: update
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          FILE=.github/workflows/wit.yml
-          # `releases/latest` returns the most recent non-prerelease,
-          # non-draft release. Strip the leading `v` to match wit.yml's
-          # bare-semver format.
-          LATEST=$(gh api repos/bytecodealliance/wasm-tools/releases/latest --jq '.tag_name' | sed -E 's/^v//')
-          # The regex is anchored to the two-space indent that the
-          # workflow-level env: block uses; if the indent changes, this
-          # extractor must be updated too.
-          CURRENT=$(grep -E "^  WASM_TOOLS_VERSION: " "${FILE}" | sed -E "s/.*'([^']+)'.*/\\1/")
-          if [[ "${CURRENT}" == "${LATEST}" ]]; then
-            echo "wasm-tools is already at ${LATEST} — nothing to do"
-            echo "changed=false" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          sed -i -E "s/^(  WASM_TOOLS_VERSION: )'[^']+'/\\1'${LATEST}'/" "${FILE}"
-          {
-            echo "changed=true"
-            echo "body=- wasm-tools \`${CURRENT}\` → \`${LATEST}\` ([release notes](https://github.com/bytecodealliance/wasm-tools/releases/tag/v${LATEST}))"
-          } >> "${GITHUB_OUTPUT}"
+        run: node .github/scripts/bump-wit-tools.mjs
 
       - name: Open / update PR
         if: steps.update.outputs.changed == 'true'
@@ -73,16 +54,16 @@ jobs:
         with:
           branch: bump/wit-tools
           delete-branch: true
-          title: 'ci(wit): bump pinned wasm-tools version'
+          title: 'ci(wit): bump pinned wit tool versions'
           commit-message: |
-            ci(wit): bump pinned wasm-tools version
+            ci(wit): bump pinned wit tool versions
 
             ${{ steps.update.outputs.body }}
           labels: |
             dependencies
             github-actions
           body: |
-            Bumps the wit pipeline's pinned wasm-tools version to upstream's latest stable release.
+            Bumps the wit pipeline's pinned tool versions (wasm-tools, wkg) to upstream's latest stable releases.
 
             ${{ steps.update.outputs.body }}
 
