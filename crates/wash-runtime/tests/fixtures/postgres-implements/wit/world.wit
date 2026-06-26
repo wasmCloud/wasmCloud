@@ -1,0 +1,13 @@
+package wasmcloud:postgres-implements;
+
+// Imports wasmcloud:postgres/query TWICE under distinct labels (team-a, team-b)
+// via the component-model named-import (`implements`) clause. The host routes
+// each label to a connection carrying that team's database credentials.
+// `types` is imported once (unnamed): it only carries the shared pg-value /
+// result-row / query-error types and has no per-connection state.
+world postgres-implements {
+    import wasmcloud:postgres/types@0.1.1-draft;
+    import team-a: wasmcloud:postgres/query@0.1.1-draft;
+    import team-b: wasmcloud:postgres/query@0.1.1-draft;
+    export wasi:http/incoming-handler@0.2.2;
+}

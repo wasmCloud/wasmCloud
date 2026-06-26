@@ -13,14 +13,31 @@ use url::Url;
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
+#[cfg(feature = "wasm_component_model_implements")]
+use crate::plugin::multiplex::Multiplexer;
 use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
 
 use conversions::into_result_row;
 
+/// `(implements ..)` named per-credential routing: [`PgId`], its provider, the
+/// named-import host impls, and the multiplex constructors. The shared query
+/// helpers (`execute_query`, `pg_error_string`) and the legacy per-component
+/// path stay here in the parent module.
+#[cfg(feature = "wasm_component_model_implements")]
+mod multiplexed;
+#[cfg(feature = "wasm_component_model_implements")]
+pub use multiplexed::PgId;
+
 const PLUGIN_POSTGRES_ID: &str = "wasmcloud-postgres";
 const DEFAULT_POOL_SIZE: usize = 10;
 
+// Two variants of the same `postgres` world. They generate identical
+// `bindings::wasmcloud::postgres::{types,query,prepared}` modules (so the legacy
+// per-component path and `conversions` are unaffected); the implements variant
+// additionally generates `bindings::named_imports::*` for `(implements ..)`
+// routing. `types` carries no functions, so it is linked once and left unnamed.
+#[cfg(not(feature = "wasm_component_model_implements"))]
 mod bindings {
     crate::wasmtime::component::bindgen!({
         world: "postgres",
@@ -28,11 +45,27 @@ mod bindings {
     });
 }
 
+#[cfg(feature = "wasm_component_model_implements")]
+mod bindings {
+    crate::wasmtime::component::bindgen!({
+        world: "postgres",
+        imports: { default: async | trappable | tracing },
+        // Allow a component to import `wasmcloud:postgres` multiple times via
+        // `(implements ..)`, routing each named import to its own credentialed
+        // connection pool (the embedder-chosen `id`).
+        named_imports: {
+            "wasmcloud:postgres/query": super::PgId,
+            "wasmcloud:postgres/prepared": super::PgId,
+        },
+    });
+}
+
 use bindings::wasmcloud::postgres::prepared;
 use bindings::wasmcloud::postgres::query;
 use bindings::wasmcloud::postgres::types;
 
-use query::{PgValue, QueryError};
+// `pub` because these appear in `PgId`'s public query/exec API.
+pub use query::{PgValue, QueryError, ResultRow};
 
 use prepared::{PreparedStatementExecError, StatementPrepareError};
 
@@ -65,6 +98,11 @@ pub struct WasmcloudPostgres {
     component_databases: Arc<RwLock<HashMap<String, String>>>,
     /// Notifies the pool reaper that an unbind happened
     pool_reaper_notify: Arc<tokio::sync::Notify>,
+    /// Multiplexing core for `(implements ..)` named imports: builds and shares
+    /// a per-credential [`PgId`] connection pool per named host interface, keyed
+    /// by URL so identical interfaces reuse one pool across workload binds.
+    #[cfg(feature = "wasm_component_model_implements")]
+    mux: Arc<Multiplexer<PgId>>,
 }
 
 impl WasmcloudPostgres {
@@ -88,15 +126,23 @@ impl WasmcloudPostgres {
         // Strip dbname from the base config - workloads set this via their config
         config.dbname("");
 
-        Ok(Self {
-            base_config: config,
+        Ok(Self::with_base(config, pool_size, tls))
+    }
+
+    /// Assemble a plugin around an already-parsed base config, fresh shared state
+    /// and (under the implements feature) the named-import multiplexer.
+    fn with_base(base_config: tokio_postgres::Config, pool_size: usize, tls: bool) -> Self {
+        Self {
+            base_config,
             pool_size,
             tls,
             pools: Arc::new(RwLock::new(HashMap::new())),
             prepared_statements: Arc::new(RwLock::new(HashMap::new())),
             component_databases: Arc::new(RwLock::new(HashMap::new())),
             pool_reaper_notify: Arc::new(tokio::sync::Notify::new()),
-        })
+            #[cfg(feature = "wasm_component_model_implements")]
+            mux: Arc::new(Self::multiplexer()),
+        }
     }
 
     /// Get or lazily create a connection pool for the given database name.
@@ -214,29 +260,7 @@ impl<'a> query::Host for ActiveCtx<'a> {
             }
         };
 
-        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
-            .iter()
-            .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
-            .collect();
-
-        let rows = match client.query_raw(&q, param_refs).await {
-            Ok(stream) => match stream.try_collect::<Vec<_>>().await {
-                Ok(rows) => rows,
-                Err(e) => {
-                    return Ok(Err(QueryError::Unexpected(format!(
-                        "failed to collect rows: {e}"
-                    ))));
-                }
-            },
-            Err(e) => {
-                return Ok(Err(QueryError::InvalidQuery(format!(
-                    "query execution failed: {e}"
-                ))));
-            }
-        };
-
-        let result: Vec<query::ResultRow> = rows.into_iter().map(into_result_row).collect();
-        Ok(Ok(result))
+        Ok(execute_query(&client, &q, &params).await)
     }
 
     #[instrument(name = "wasmcloud.postgres.query_batch", skip_all, fields(query = %q))]
@@ -274,7 +298,8 @@ impl<'a> query::Host for ActiveCtx<'a> {
         match client.batch_execute(&q).await {
             Ok(()) => Ok(Ok(())),
             Err(e) => Ok(Err(QueryError::InvalidQuery(format!(
-                "batch execution failed: {e}"
+                "batch execution failed: {}",
+                pg_error_string(&e)
             )))),
         }
     }
@@ -320,7 +345,8 @@ impl<'a> prepared::Host for ActiveCtx<'a> {
             Ok(s) => s,
             Err(e) => {
                 return Ok(Err(StatementPrepareError::Unexpected(format!(
-                    "prepare failed: {e}"
+                    "prepare failed: {}",
+                    pg_error_string(&e)
                 ))));
             }
         };
@@ -385,7 +411,8 @@ impl<'a> prepared::Host for ActiveCtx<'a> {
             Ok(s) => s,
             Err(e) => {
                 return Ok(Err(PreparedStatementExecError::Unexpected(format!(
-                    "re-prepare failed: {e}"
+                    "re-prepare failed: {}",
+                    pg_error_string(&e)
                 ))));
             }
         };
@@ -398,10 +425,44 @@ impl<'a> prepared::Host for ActiveCtx<'a> {
         match client.execute_raw(&stmt, param_refs).await {
             Ok(n) => Ok(Ok(n)),
             Err(e) => Ok(Err(PreparedStatementExecError::QueryError(
-                QueryError::Unexpected(format!("execute failed: {e}")),
+                QueryError::Unexpected(format!("execute failed: {}", pg_error_string(&e))),
             ))),
         }
     }
+}
+
+// ── shared query helpers (used by the legacy and multiplexed paths) ─────────
+
+/// Format a postgres error, surfacing the server-side message (e.g. "permission
+/// denied for table ...") since `tokio_postgres::Error`'s `Display` is only the
+/// terse "db error". Per-credential routing leans on these messages to show RBAC
+/// denials, so make them legible.
+fn pg_error_string(e: &tokio_postgres::Error) -> String {
+    match e.as_db_error() {
+        Some(db) => format!("{}: {}", db.code().code(), db.message()),
+        None => e.to_string(),
+    }
+}
+
+/// Run a parameterized query on a connection and map rows to WIT result rows.
+/// Shared by the legacy per-component path and the named per-credential path.
+async fn execute_query(
+    client: &deadpool_postgres::Client,
+    q: &str,
+    params: &[PgValue],
+) -> Result<Vec<ResultRow>, QueryError> {
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+        .iter()
+        .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
+    let stream = client
+        .query_raw(q, param_refs)
+        .await
+        .map_err(|e| QueryError::InvalidQuery(format!("query failed: {}", pg_error_string(&e))))?;
+    let rows = stream.try_collect::<Vec<_>>().await.map_err(|e| {
+        QueryError::Unexpected(format!("failed to collect rows: {}", pg_error_string(&e)))
+    })?;
+    Ok(rows.into_iter().map(into_result_row).collect())
 }
 
 // ── HostPlugin implementation ───────────────────────────────────────────────
@@ -419,6 +480,11 @@ impl HostPlugin for WasmcloudPostgres {
             )]),
             ..Default::default()
         }
+    }
+
+    #[cfg(feature = "wasm_component_model_implements")]
+    fn supports_named_instances(&self) -> bool {
+        true
     }
 
     async fn start(&self) -> anyhow::Result<()> {
@@ -456,43 +522,77 @@ impl HostPlugin for WasmcloudPostgres {
         component_handle: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let database = match interfaces.get("wasmcloud", "postgres", &[]) {
-            Some(i) => i.config.get("database"),
-            None => return Ok(()),
-        };
+        let pg: Vec<&WitInterface> = interfaces
+            .iter()
+            .filter(|i| i.namespace == "wasmcloud" && i.package == "postgres")
+            .collect();
+        if pg.is_empty() {
+            return Ok(());
+        }
 
-        let Some(database) = database.cloned() else {
-            bail!("wasmcloud:postgres requires a 'database' config parameter")
-        };
+        // A `(implements ..)` import is a *named* postgres interface routed to
+        // its own credentialed connection; an unnamed one keeps the legacy
+        // per-component-database behavior (one shared bouncer URL, database
+        // chosen by config).
+        let unnamed = pg.iter().find(|i| i.name.is_none()).copied();
 
         let component_id = component_handle.id().to_string();
-
-        tracing::debug!(
-            component_id = %component_id,
-            database = %database,
-            "Binding postgres plugin to component"
-        );
-
-        // Store the component → database mapping
-        self.component_databases
-            .write()
-            .await
-            .insert(component_id, database);
-
-        // Add linker functions
+        // Clone the component (cheap, Arc-backed) before taking the mutable
+        // linker borrow — named-import linking needs both.
+        #[cfg(feature = "wasm_component_model_implements")]
+        let component = component_handle.component().clone();
         let linker = component_handle.linker();
+
+        // `types` carries no functions and is shared by query/prepared; link the
+        // instance once regardless of named/unnamed routing.
         bindings::wasmcloud::postgres::types::add_to_linker::<_, SharedCtx>(
             linker,
             extract_active_ctx,
         )?;
-        bindings::wasmcloud::postgres::query::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
-        bindings::wasmcloud::postgres::prepared::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
+
+        if let Some(i) = unnamed {
+            let Some(database) = i.config.get("database").cloned() else {
+                bail!("wasmcloud:postgres requires a 'database' config parameter")
+            };
+            tracing::debug!(
+                component_id = %component_id,
+                database = %database,
+                "Binding postgres plugin to component (per-component database)"
+            );
+            self.component_databases
+                .write()
+                .await
+                .insert(component_id, database);
+            bindings::wasmcloud::postgres::query::add_to_linker::<_, SharedCtx>(
+                linker,
+                extract_active_ctx,
+            )?;
+            bindings::wasmcloud::postgres::prepared::add_to_linker::<_, SharedCtx>(
+                linker,
+                extract_active_ctx,
+            )?;
+        }
+
+        #[cfg(feature = "wasm_component_model_implements")]
+        if pg.iter().any(|i| i.name.is_some()) {
+            let registry = self.build_named_pools(pg.iter().copied()).await?;
+            tracing::debug!(
+                imports = ?registry.keys().collect::<Vec<_>>(),
+                "Binding postgres plugin to component (per-credential named imports)"
+            );
+            bindings::named_imports::wasmcloud::postgres::query::add_to_linker::<_, SharedCtx>(
+                linker,
+                &component,
+                |name| self.mux.resolve(&registry, name),
+                extract_active_ctx,
+            )?;
+            bindings::named_imports::wasmcloud::postgres::prepared::add_to_linker::<_, SharedCtx>(
+                linker,
+                &component,
+                |name| self.mux.resolve(&registry, name),
+                extract_active_ctx,
+            )?;
+        }
 
         Ok(())
     }
@@ -504,29 +604,68 @@ impl HostPlugin for WasmcloudPostgres {
     ) -> anyhow::Result<()> {
         tracing::debug!(workload_id = %workload_id, "Unbinding postgres plugin from workload");
 
-        // Remove component → database mappings for this workload
-        let removed_components: Vec<String> = {
+        // Remove component → database mappings for this workload (legacy path).
+        {
             let mut component_databases = self.component_databases.write().await;
-            let removed: Vec<String> = component_databases
-                .keys()
-                .filter(|k| k.starts_with(workload_id))
-                .cloned()
-                .collect();
-            for c in &removed {
-                component_databases.remove(c);
-            }
-            removed
-        };
+            component_databases.retain(|component_id, _| !component_id.starts_with(workload_id));
+        }
 
-        // Clean up prepared statements by component_id (not database)
-        if !removed_components.is_empty() {
+        // Clean up prepared statements created by this workload's components.
+        // Both the legacy per-database path and implements-routed named imports
+        // tag each entry with the creating `component_id`, so match on it
+        // directly — a pure-multiplex workload never populates
+        // `component_databases`, so deriving the set from there would miss its
+        // prepared statements.
+        {
             let mut prepared = self.prepared_statements.write().await;
-            prepared.retain(|_, entry| !removed_components.contains(&entry.component_id));
+            prepared.retain(|_, entry| !entry.component_id.starts_with(workload_id));
         }
 
         // Signal the pool reaper to check for idle pools
         self.pool_reaper_notify.notify_one();
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(component_id: &str) -> PreparedEntry {
+        PreparedEntry {
+            sql: "SELECT 1".to_string(),
+            param_types: Vec::new(),
+            database: String::new(),
+            component_id: component_id.to_string(),
+        }
+    }
+
+    /// Unbinding a workload reaps prepared statements tagged with any of its
+    /// component ids — covering both the legacy path and implements-routed named
+    /// imports (which set an empty `database` but the same `component_id`), and
+    /// leaving other workloads' statements untouched.
+    #[tokio::test]
+    async fn unbind_reaps_only_this_workloads_prepared_statements() {
+        let pg = WasmcloudPostgres::new("postgres://u:p@localhost/").unwrap();
+        {
+            let mut prepared = pg.prepared_statements.write().await;
+            prepared.insert("legacy".to_string(), entry("workload-a-component-0"));
+            prepared.insert("named".to_string(), entry("workload-a-component-1"));
+            prepared.insert("other".to_string(), entry("workload-b-component-0"));
+        }
+
+        let empty = HashSet::new();
+        pg.on_workload_unbind("workload-a", WitInterfaces::new(&empty))
+            .await
+            .unwrap();
+
+        let prepared = pg.prepared_statements.read().await;
+        assert!(!prepared.contains_key("legacy"), "legacy entry reaped");
+        assert!(!prepared.contains_key("named"), "named entry reaped");
+        assert!(
+            prepared.contains_key("other"),
+            "another workload's entry must survive"
+        );
     }
 }

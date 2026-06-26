@@ -245,6 +245,17 @@ impl CliCommand for DevCommand {
                     .context("failed to configure postgres plugin")?,
             ))?;
             debug!("wasmcloud:postgres plugin registered");
+        } else {
+            // No shared bouncer URL: still register postgres so workloads that
+            // route purely through `(implements ..)` named imports (each
+            // carrying its own URL) are served.
+            #[cfg(feature = "wasm_component_model_implements")]
+            {
+                host_builder = host_builder.with_plugin(Arc::new(
+                    plugin::wasmcloud_postgres::WasmcloudPostgres::multiplex_only(),
+                ))?;
+                debug!("wasmcloud:postgres multiplexed plugin registered (implements)");
+            }
         }
 
         // Add otel plugin

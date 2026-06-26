@@ -17,6 +17,7 @@ members = [
     "http-allowed-hosts",
     "keyvalue-counter",
     "keyvalue-implements",
+    "postgres-implements",
     # P3 fixtures (wasm32-wasip1 + reactor adapter)
     "http-handler-p3",
     "http-blobstore-p3",

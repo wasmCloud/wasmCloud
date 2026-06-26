@@ -93,6 +93,7 @@ const P2_FIXTURES: &[&str] = &[
     "http-allowed-hosts",
     "keyvalue-counter",
     "keyvalue-implements",
+    "postgres-implements",
 ];
 
 const P3_FIXTURES: &[&str] = &[
