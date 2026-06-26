@@ -206,6 +206,11 @@ impl CliCommand for HostCommand {
                     .with_provider(Arc::new(plugin::wasi_keyvalue::NatsProvider))
                     .with_provider(Arc::new(plugin::wasi_keyvalue::FilesystemProvider)),
             ))?;
+            cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
+                plugin::wasmcloud_messaging::MultiplexedMessaging::new()
+                    .with_provider(Arc::new(plugin::wasmcloud_messaging::InMemoryMsgProvider))
+                    .with_provider(Arc::new(plugin::wasmcloud_messaging::NatsMsgProvider)),
+            ))?;
         }
 
         if let Some(postgres_url) = &self.postgres_url {

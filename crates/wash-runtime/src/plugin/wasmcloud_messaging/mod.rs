@@ -1,7 +1,14 @@
 mod in_memory;
+#[cfg(feature = "wasm_component_model_implements")]
+mod multiplexed;
 mod nats;
 
 pub use in_memory::InMemoryMessaging;
+#[cfg(feature = "wasm_component_model_implements")]
+pub use multiplexed::{
+    BrokerMessage, InMemoryMsgBackend, InMemoryMsgProvider, MsgBackend, MsgId, MsgProvider,
+    MultiplexedMessaging, NatsMsgBackend, NatsMsgProvider,
+};
 pub use nats::NatsMessaging;
 
 /// Parses a comma-separated `subscriptions` config value into trimmed,
