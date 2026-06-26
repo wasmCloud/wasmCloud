@@ -5,7 +5,7 @@ go 1.26.0
 tool github.com/air-verse/air
 
 require (
-	go.wasmcloud.dev/runtime-operator/v2 v2.3.0
+	go.wasmcloud.dev/runtime-operator/v2 v2.4.0
 	k8s.io/api v0.36.2
 	k8s.io/apimachinery v0.36.2
 	sigs.k8s.io/controller-runtime v0.24.1
