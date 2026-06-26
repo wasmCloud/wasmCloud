@@ -236,6 +236,12 @@ impl CliCommand for DevCommand {
                     .with_provider(Arc::new(plugin::wasi_keyvalue::FilesystemProvider)),
             ))?;
             debug!("WASI KeyValue multiplexed plugin registered (implements)");
+            host_builder = host_builder.with_plugin(Arc::new(
+                plugin::wasmcloud_messaging::MultiplexedMessaging::new()
+                    .with_provider(Arc::new(plugin::wasmcloud_messaging::InMemoryMsgProvider))
+                    .with_provider(Arc::new(plugin::wasmcloud_messaging::NatsMsgProvider)),
+            ))?;
+            debug!("wasmcloud:messaging multiplexed plugin registered (implements)");
         }
 
         // Add postgres plugin if configured
