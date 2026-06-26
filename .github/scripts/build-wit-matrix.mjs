@@ -5,8 +5,15 @@
 // `package <ns>:<name>@<ver>;` header in canonical form. That's the
 // source of truth for what to publish and where. Each artifact becomes
 // one matrix entry:
-//   { name, version, ref: ghcr.io/wasmcloud/interfaces/<name>:<version>,
+//   { name, version,
+//     ref: ghcr.io/wasmcloud/interfaces/<ns>/<name>:<version>,
+//     subject: ghcr.io/wasmcloud/interfaces/<ns>/<name>,
 //     artifact: <basename of wasm file> }
+//
+// The OCI path MUST include the `<ns>` segment: the wasmcloud.com registry
+// maps `wasmcloud:<name>` to `<namespacePrefix><ns>/<name>` (namespacePrefix
+// is `wasmcloud/interfaces/`). Publishing to `…/interfaces/<name>` (no `<ns>`)
+// succeeds but lands at a path nothing resolves via `wkg`/`wasmcloud:<name>`.
 //
 // Outputs (to $GITHUB_OUTPUT):
 //   matrix=<JSON object with `include` array>
@@ -64,7 +71,11 @@ for (const file of wasms) {
   items.push({
     name,
     version,
-    ref: `${REGISTRY_PATH}/${name}:${version}`,
+    // Include `<namespace>` in the OCI path so it matches the wasmcloud.com
+    // registry's `namespacePrefix` mapping (`wasmcloud/interfaces/<ns>/<name>`).
+    ref: `${REGISTRY_PATH}/${namespace}/${name}:${version}`,
+    // Same path without the tag, for the build-provenance attestation subject.
+    subject: `${REGISTRY_PATH}/${namespace}/${name}`,
     artifact: basename(path),
   });
 }

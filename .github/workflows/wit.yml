@@ -5,8 +5,10 @@ name: wit
 # OCI tag is the version declared in its `package <ns>:<name>@<ver>;`
 # header — independent of the monorepo's `vX.Y.Z` release cadence.
 #
-# Destination: ghcr.io/wasmcloud/interfaces/<name>:<version>
-# (the matrix builder enforces `<ns>` == `wasmcloud`).
+# Destination: ghcr.io/wasmcloud/interfaces/<ns>/<name>:<version>
+# (the matrix builder enforces `<ns>` == `wasmcloud`; the `<ns>` path
+# segment is required by the wasmcloud.com registry's `namespacePrefix`
+# mapping, so `wkg`/`wasmcloud:<name>` resolves the pushed package).
 #
 # Pipeline:
 #   validate  for each wit/<pkg>/: round-trips the WIT through
@@ -317,7 +319,7 @@ jobs:
         if: steps.push.outputs.skipped == 'false'
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-name: ghcr.io/wasmcloud/interfaces/${{ matrix.name }}
+          subject-name: ${{ matrix.subject }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
