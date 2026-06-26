@@ -115,7 +115,10 @@ impl NewCommand {
 }
 
 fn last_non_empty_segment(value: &str) -> Option<&str> {
-    value.split('/').rev().find(|segment| !segment.is_empty())
+    value
+        .split(['/', '\\'])
+        .rev()
+        .find(|segment| !segment.is_empty())
 }
 
 fn load_template_new_command(project_dir: &Path) -> anyhow::Result<Option<String>> {
@@ -237,6 +240,30 @@ mod tests {
             git: "https://github.com/wasmCloud/wasmCloud.git".to_string(),
             name: None,
             subfolder: Some("templates/http-hello-world/".to_string()),
+            git_ref: None,
+        };
+
+        assert_eq!(cmd.get_project_name(), "http-hello-world");
+    }
+
+    #[test]
+    fn get_project_name_uses_last_segment_of_windows_repo_path() {
+        let cmd = NewCommand {
+            git: r"C:\src\templates\http-hello-world.git".to_string(),
+            name: None,
+            subfolder: None,
+            git_ref: None,
+        };
+
+        assert_eq!(cmd.get_project_name(), "http-hello-world");
+    }
+
+    #[test]
+    fn get_project_name_uses_last_segment_of_windows_subfolder_path() {
+        let cmd = NewCommand {
+            git: "https://github.com/wasmCloud/wasmCloud.git".to_string(),
+            name: None,
+            subfolder: Some(r"templates\http-hello-world\".to_string()),
             git_ref: None,
         };
 
