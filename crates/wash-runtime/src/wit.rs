@@ -50,46 +50,34 @@ impl WitWorld {
     /// different than [`WitWorld::includes`] because it considers that in one
     /// [`WitInterface`] there may be both imports and exports.
     pub fn includes_bidirectional(&self, interface: &WitInterface) -> bool {
-        let import_match = self.imports.iter().find(|i| {
+        // Same namespace+package, and (when both specify one) the same version.
+        // Name is intentionally ignored here: this answers "does the world use
+        // this namespace:package interface", regardless of the `(implements ..)`
+        // label — label routing is resolved later during plugin binding.
+        let matches_pkg = |other: &WitInterface| {
             if let Some(v) = &interface.version
-                && let Some(ov) = &i.version
+                && let Some(ov) = &other.version
                 && v != ov
             {
                 return false;
             }
-            i.namespace == interface.namespace && i.package == interface.package
-        });
+            other.namespace == interface.namespace && other.package == interface.package
+        };
 
-        let export_match = self.exports.iter().find(|e| {
-            // If both interfaces specify a version, they must match
-            if let Some(v) = &interface.version
-                && let Some(ov) = &e.version
-                && v != ov
-            {
-                return false;
-            }
-            e.namespace == interface.namespace && e.package == interface.package
-        });
-
-        // Ensure the interfaces are covered by either the import or export match
-        for i in &interface.interfaces {
-            // Interface satisfied by import
-            if let Some(im) = &import_match
-                && im.interfaces.contains(i)
-            {
-                continue;
-            }
-            // Interface satisfied by export
-            if let Some(em) = &export_match
-                && em.interfaces.contains(i)
-            {
-                continue;
-            }
-
-            return false;
-        }
-
-        true
+        // Each requested interface must be covered by *some* import or export of
+        // the matching package. A package can spread its interfaces across
+        // multiple entries (e.g. `wasmcloud:postgres` imports `types` unnamed and
+        // `query` under several labels), so check every entry per interface
+        // rather than binding to the first package match.
+        interface.interfaces.iter().all(|i| {
+            self.imports
+                .iter()
+                .any(|im| matches_pkg(im) && im.interfaces.contains(i))
+                || self
+                    .exports
+                    .iter()
+                    .any(|ex| matches_pkg(ex) && ex.interfaces.contains(i))
+        })
     }
 
     /// Checks if a guest world (imports) can be satisfied by a host world (exports).
@@ -846,5 +834,34 @@ mod tests {
         // Same name should produce the same hash
         iface1.name = Some("cache".to_string());
         assert_eq!(hash(&iface1), hash(&iface2));
+    }
+
+    #[test]
+    fn includes_bidirectional_covers_multi_interface_package() {
+        // A package whose interfaces are split across several imports — one
+        // unnamed `types` plus two `(implements ..)`-labeled `query` imports —
+        // mirrors a multiplexed `wasmcloud:postgres` guest. Every interface must
+        // resolve regardless of `imports` (a HashSet) iteration order.
+        let types = create_interface_with_version("wasmcloud", "postgres", &["types"], "0.1.1");
+        let mut query_a =
+            create_interface_with_version("wasmcloud", "postgres", &["query"], "0.1.1");
+        query_a.name = Some("team-a".to_string());
+        let mut query_b =
+            create_interface_with_version("wasmcloud", "postgres", &["query"], "0.1.1");
+        query_b.name = Some("team-b".to_string());
+
+        let world = WitWorld {
+            imports: HashSet::from([types, query_a.clone(), query_b.clone()]),
+            exports: HashSet::new(),
+        };
+
+        // Both labeled query interfaces are part of the world even though a
+        // different `types` import shares the package.
+        assert!(world.includes_bidirectional(&query_a));
+        assert!(world.includes_bidirectional(&query_b));
+        // An interface the package does not provide is still rejected.
+        let prepared =
+            create_interface_with_version("wasmcloud", "postgres", &["prepared"], "0.1.1");
+        assert!(!world.includes_bidirectional(&prepared));
     }
 }

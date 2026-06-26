@@ -213,6 +213,15 @@ impl CliCommand for HostCommand {
                 plugin::wasmcloud_postgres::WasmcloudPostgres::new(postgres_url)
                     .context("failed to configure postgres plugin")?,
             ))?;
+        } else {
+            // register postgres for `(implements ..)` named imports (each
+            // carrying its own URL) are served.
+            #[cfg(feature = "wasm_component_model_implements")]
+            {
+                cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
+                    plugin::wasmcloud_postgres::WasmcloudPostgres::multiplex_only(),
+                ))?;
+            }
         }
 
         if let Some(host_name) = &self.host_name {
