@@ -32,7 +32,7 @@ impl Handler for Component {
         let (trailers_tx, trailers_rx) = bindings::wit_future::new(|| todo!());
 
         let body = result.to_string().into_bytes();
-        wit_bindgen::spawn(async move {
+        wit_bindgen::spawn_local(async move {
             tx.write_all(body).await;
             drop(tx);
             let _ = trailers_tx.write(Ok(None)).await;

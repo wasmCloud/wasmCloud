@@ -38,7 +38,7 @@ impl Handler for Component {
 
         // Emit `chunk-{i}\n` once per tick. The response is returned to the
         // host immediately; this task keeps feeding the body afterwards.
-        wit_bindgen::spawn(async move {
+        wit_bindgen::spawn_local(async move {
             for i in 0..CHUNKS {
                 if i > 0 {
                     monotonic_clock::wait_for(TICK_NS).await;

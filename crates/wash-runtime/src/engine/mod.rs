@@ -218,7 +218,9 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
 }
 
 pub mod ctx;
+mod linked_call;
 mod value;
+mod volumes;
 pub mod workload;
 
 /// The core WebAssembly engine for executing components and workloads.

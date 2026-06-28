@@ -5,30 +5,29 @@ use std::{
     ops::{Deref, DerefMut},
     path::PathBuf,
     sync::Arc,
-    time::Duration,
 };
 
-use crate::{
-    plugin::WitInterfaces,
-    sockets::{self, SocketAddrUse, loopback},
-};
-use anyhow::{Context as _, bail, ensure};
-use tokio::{sync::RwLock, task::JoinHandle, time::timeout};
+use crate::{plugin::WitInterfaces, sockets::loopback};
+use anyhow::{bail, ensure};
+use tokio::{sync::RwLock, task::JoinHandle};
 use tracing::{Instrument, debug, error, info, instrument, trace, warn};
 use wasmtime::component::{
-    Accessor, Component, ComponentExportIndex, InstancePre, Linker, ResourceAny, ResourceType, Val,
-    types::{ComponentFunc, ComponentItem, Type},
+    Component, InstancePre, Linker, ResourceAny, ResourceType, types::ComponentItem,
 };
-use wasmtime::{AsContext, AsContextMut, StoreContextMut};
+use wasmtime::error::Context as _;
 use wasmtime_wasi::p2::bindings::CommandPre;
-use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
 #[cfg(feature = "wasi-tls")]
 use crate::engine::ctx::SharedTlsProvider;
 use crate::{
     engine::{
-        ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx, StoreActiveCtxGuard},
-        value::{carries_cross_store_handle, lift, lower_with_type},
+        ctx::SharedCtx,
+        linked_call::{
+            ComponentCtxTemplate, EphemeralLinkedCall, LinkedExportInvocation,
+            func_is_ephemeral_safe, invoke_linked_async_export, invoke_linked_sync_export,
+            new_store_from_templates,
+        },
+        volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map},
     },
     plugin::HostPlugin,
     types::{LocalResources, VolumeMount},
@@ -43,593 +42,13 @@ type BoundPluginWithInterfaces = (
     Vec<String>,
 );
 
-/// Lower dynamic-linker call params, using each param's declared type so host
-/// resource handles cross the linker by identity (see [`lower_with_type`]).
-fn lower_params(
-    store: &mut StoreContextMut<'_, SharedCtx>,
-    params: &[Val],
-    param_tys: &[Type],
-) -> wasmtime::Result<Vec<Val>> {
-    if params.len() != param_tys.len() {
-        return Err(wasmtime::format_err!(
-            "dynamic call arity mismatch: {} args vs {} param types",
-            params.len(),
-            param_tys.len()
-        ));
-    }
-    let mut params_buf = Vec::with_capacity(params.len());
-    for (v, ty) in params.iter().zip(param_tys) {
-        params_buf.push(lower_with_type(store, v, ty)?);
-    }
-    Ok(params_buf)
-}
-
-fn lift_results(
-    store: &mut StoreContextMut<'_, SharedCtx>,
-    results_buf: Vec<Val>,
-    results: &mut [Val],
-) -> wasmtime::Result<()> {
-    for (i, v) in results_buf.into_iter().enumerate() {
-        *results
-            .get_mut(i)
-            .ok_or_else(|| wasmtime::format_err!("result index out of bounds"))? = lift(store, v)?;
-    }
-    Ok(())
-}
-
-#[derive(Clone)]
-struct ResolvedVolumeMount {
-    host_path: PathBuf,
-    mount_path: String,
-    dir_perms: DirPerms,
-    file_perms: FilePerms,
-}
-
-impl ResolvedVolumeMount {
-    async fn from_mount(host_path: &PathBuf, mount: &VolumeMount) -> anyhow::Result<Self> {
-        let host_path = tokio::fs::canonicalize(host_path).await?;
-        let (dir_perms, file_perms) = match mount.read_only {
-            true => (DirPerms::READ, FilePerms::READ),
-            false => (DirPerms::all(), FilePerms::all()),
-        };
-
-        Ok(Self {
-            host_path,
-            mount_path: mount.mount_path.clone(),
-            dir_perms,
-            file_perms,
-        })
-    }
-}
-
-async fn resolve_volume_mounts(
-    volume_mounts: &[(PathBuf, VolumeMount)],
-) -> anyhow::Result<Vec<ResolvedVolumeMount>> {
-    let mut resolved = Vec::with_capacity(volume_mounts.len());
-    for (host_path, mount) in volume_mounts {
-        resolved.push(ResolvedVolumeMount::from_mount(host_path, mount).await?);
-    }
-    Ok(resolved)
-}
-
-async fn resolve_component_volume_mounts_in_map(
-    components: &Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>>,
-    component_ids: &[Arc<str>],
-) -> anyhow::Result<()> {
-    let pending = {
-        let components = components.read().await;
-        let mut pending = Vec::new();
-        for component_id in component_ids {
-            let component = components
-                .get(component_id)
-                .with_context(|| format!("component '{component_id}' not found"))?;
-            if component.metadata.resolved_volume_mounts.is_empty()
-                && !component.metadata.volume_mounts.is_empty()
-            {
-                pending.push((
-                    component_id.clone(),
-                    component.metadata.volume_mounts.clone(),
-                ));
-            }
-        }
-        pending
-    };
-
-    if pending.is_empty() {
-        return Ok(());
-    }
-
-    let mut resolved = Vec::with_capacity(pending.len());
-    for (component_id, volume_mounts) in pending {
-        resolved.push((component_id, resolve_volume_mounts(&volume_mounts).await?));
-    }
-
-    let mut components = components.write().await;
-    for (component_id, resolved_volume_mounts) in resolved {
-        let component = components
-            .get_mut(&component_id)
-            .with_context(|| format!("component '{component_id}' not found"))?;
-        if component.metadata.resolved_volume_mounts.is_empty() {
-            component.metadata.resolved_volume_mounts = resolved_volume_mounts;
-        }
-    }
-
-    Ok(())
-}
-
-#[derive(Clone)]
-struct ComponentCtxTemplate {
-    component_id: Arc<str>,
-    workload_id: Arc<str>,
-    local_resources: LocalResources,
-    volume_mounts: Vec<ResolvedVolumeMount>,
-    plugins: Option<HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>>,
-    loopback: Arc<std::sync::Mutex<loopback::Network>>,
-    #[cfg(feature = "wasi-tls")]
-    tls_provider: Option<SharedTlsProvider>,
-}
-
-impl ComponentCtxTemplate {
-    fn from_metadata(metadata: &WorkloadMetadata) -> Self {
-        Self {
-            component_id: metadata.id.clone(),
-            workload_id: metadata.workload_id.clone(),
-            local_resources: metadata.local_resources.clone(),
-            volume_mounts: metadata.resolved_volume_mounts.clone(),
-            plugins: metadata.plugins.clone(),
-            loopback: metadata.loopback.clone(),
-            #[cfg(feature = "wasi-tls")]
-            tls_provider: None,
-        }
-    }
-}
-
-#[cfg(not(feature = "wasi-tls"))]
-fn component_ctx_template_from_metadata(metadata: &WorkloadMetadata) -> ComponentCtxTemplate {
-    ComponentCtxTemplate::from_metadata(metadata)
-}
-
-#[cfg(feature = "wasi-tls")]
-fn component_ctx_template_from_metadata_with_tls(
-    metadata: &WorkloadMetadata,
-    tls_provider: Option<SharedTlsProvider>,
-) -> ComponentCtxTemplate {
-    let mut template = ComponentCtxTemplate::from_metadata(metadata);
-    template.tls_provider = tls_provider;
-    template
-}
-
-#[derive(Clone)]
-struct EphemeralLinkedCall {
-    engine: wasmtime::Engine,
-    http_handler: Arc<dyn crate::host::http::HostHandler>,
-    components: Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>>,
-    active_component_id: Arc<str>,
-    linked_component_ids: Vec<Arc<str>>,
-    #[cfg(feature = "wasi-tls")]
-    tls_provider: Option<SharedTlsProvider>,
-}
-
-fn type_is_ephemeral_safe(ty: &Type) -> bool {
-    !carries_cross_store_handle(ty)
-}
-
-fn func_is_ephemeral_safe(func_ty: &ComponentFunc) -> bool {
-    func_ty.params().all(|(_, ty)| type_is_ephemeral_safe(&ty))
-        && func_ty.results().all(|ty| type_is_ephemeral_safe(&ty))
-}
-
-async fn build_ctx_from_template(
-    template: &ComponentCtxTemplate,
-    http_handler: Arc<dyn crate::host::http::HostHandler>,
-    all_volume_mounts: &[ResolvedVolumeMount],
-    store_id: &str,
-    is_service: bool,
-) -> anyhow::Result<Ctx> {
-    let mut wasi_ctx_builder = WasiCtxBuilder::new();
-    wasi_ctx_builder
-        .envs(
-            template
-                .local_resources
-                .environment
-                .iter()
-                .map(|kv| (kv.0.as_str(), kv.1.as_str()))
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
-        .inherit_stdout()
-        .inherit_stderr();
-
-    let sockets_ctx = sockets::WasiSocketsCtx {
-        socket_addr_check: sockets::SocketAddrCheck::new(move |addr, reason| {
-            Box::pin(async move {
-                match reason {
-                    SocketAddrUse::TcpBind if is_service => addr.ip().is_loopback(),
-                    SocketAddrUse::TcpBind => false,
-                    SocketAddrUse::UdpBind => addr.ip().is_loopback() || addr.ip().is_unspecified(),
-                    SocketAddrUse::TcpConnect
-                    | SocketAddrUse::UdpConnect
-                    | SocketAddrUse::UdpOutgoingDatagram => true,
-                }
-            })
-        }),
-        loopback: Arc::clone(&template.loopback),
-        ..Default::default()
-    };
-
-    for mount in all_volume_mounts {
-        wasi_ctx_builder.preopened_dir(
-            &mount.host_path,
-            &mount.mount_path,
-            mount.dir_perms,
-            mount.file_perms,
-        )?;
-    }
-
-    let mut ctx_builder = Ctx::builder(template.workload_id.clone(), template.component_id.clone())
-        .with_http_handler(http_handler)
-        .with_wasi_ctx(wasi_ctx_builder.build())
-        .with_sockets(sockets_ctx)
-        .with_allowed_hosts(template.local_resources.allowed_hosts.clone());
-
-    if let Some(plugins) = &template.plugins {
-        ctx_builder = ctx_builder.with_plugins(plugins.clone());
-    }
-
-    #[cfg(feature = "wasi-tls")]
-    if let Some(provider) = template.tls_provider.clone() {
-        ctx_builder = ctx_builder.with_tls_provider(provider);
-    }
-
-    let mut ctx = ctx_builder.build();
-    ctx.store_id = store_id.to_string();
-    Ok(ctx)
-}
-
-async fn new_store_from_templates(
-    engine: &wasmtime::Engine,
-    http_handler: Arc<dyn crate::host::http::HostHandler>,
-    active: &ComponentCtxTemplate,
-    linked: &[ComponentCtxTemplate],
-    linked_instances: &[(Arc<str>, InstancePre<SharedCtx>)],
-    is_service: bool,
-) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
-    let store_id = uuid::Uuid::new_v4().to_string();
-    let all_volume_mounts = std::iter::once(active)
-        .chain(linked.iter())
-        .flat_map(|template| template.volume_mounts.clone())
-        .collect::<Vec<_>>();
-    let active_ctx = build_ctx_from_template(
-        active,
-        http_handler.clone(),
-        &all_volume_mounts,
-        &store_id,
-        is_service,
-    )
-    .await?;
-    let mut shared_ctx = SharedCtx::new(active_ctx);
-
-    for linked in linked {
-        let linked_ctx = build_ctx_from_template(
-            linked,
-            http_handler.clone(),
-            &all_volume_mounts,
-            &store_id,
-            false,
-        )
-        .await?;
-        shared_ctx
-            .contexts
-            .insert(linked.component_id.clone(), linked_ctx);
-    }
-
-    let mut store = wasmtime::Store::new(engine, shared_ctx);
-
-    let active_id = active.component_id.clone();
-    for (linked_id, linked_pre) in linked_instances {
-        store.data_mut().set_active_ctx(linked_id)?;
-        let instantiate_result = linked_pre.instantiate_async(&mut store).await;
-        store.data_mut().set_active_ctx(&active_id)?;
-        let instance = instantiate_result.map_err(|e| {
-            anyhow::anyhow!(
-                "failed to instantiate linked component '{linked_id}' in ephemeral store: {e}"
-            )
-        })?;
-        store
-            .data_mut()
-            .exporter_instances
-            .insert(linked_id.clone(), instance);
-    }
-
-    Ok(store)
-}
-
-async fn new_ephemeral_store(
-    call: &EphemeralLinkedCall,
-) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
-    let mut component_ids = call.linked_component_ids.clone();
-    component_ids.push(call.active_component_id.clone());
-    component_ids.sort();
-    component_ids.dedup();
-    resolve_component_volume_mounts_in_map(&call.components, &component_ids).await?;
-
-    let (active_metadata, linked_metadata) = {
-        let components = call.components.read().await;
-        let active = components
-            .get(&call.active_component_id)
-            .with_context(|| {
-                format!(
-                    "ephemeral linked component '{}' not found",
-                    call.active_component_id
-                )
-            })?
-            .metadata
-            .clone();
-        let linked = call
-            .linked_component_ids
-            .iter()
-            .map(|component_id| {
-                components
-                    .get(component_id)
-                    .with_context(|| format!("linked component '{component_id}' not found"))
-                    .map(|component| component.metadata.clone())
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        (active, linked)
-    };
-
-    #[cfg(not(feature = "wasi-tls"))]
-    let active = component_ctx_template_from_metadata(&active_metadata);
-    #[cfg(feature = "wasi-tls")]
-    let active =
-        component_ctx_template_from_metadata_with_tls(&active_metadata, call.tls_provider.clone());
-
-    #[cfg(not(feature = "wasi-tls"))]
-    let linked = linked_metadata
-        .iter()
-        .map(component_ctx_template_from_metadata)
-        .collect::<Vec<_>>();
-    #[cfg(feature = "wasi-tls")]
-    let linked = linked_metadata
-        .iter()
-        .map(|metadata| {
-            component_ctx_template_from_metadata_with_tls(metadata, call.tls_provider.clone())
-        })
-        .collect::<Vec<_>>();
-
-    let linked_instances = {
-        let mut components = call.components.write().await;
-        call.linked_component_ids
-            .iter()
-            .map(|component_id| {
-                let component = components.get_mut(component_id).ok_or_else(|| {
-                    wasmtime::format_err!("linked component '{component_id}' not found")
-                })?;
-                component
-                    .pre_instantiate()
-                    .map(|pre| (component_id.clone(), pre))
-            })
-            .collect::<wasmtime::Result<Vec<_>>>()
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to pre-instantiate linked components for ephemeral call: {e}"
-                )
-            })?
-    };
-
-    new_store_from_templates(
-        &call.engine,
-        call.http_handler.clone(),
-        &active,
-        &linked,
-        &linked_instances,
-        false,
-    )
-    .await
-}
-
-#[derive(Clone)]
-struct LinkedExportInvocation {
-    import_name: Arc<str>,
-    export_name: Arc<str>,
-    pre: InstancePre<SharedCtx>,
-    plugin_component_id: Arc<str>,
-    func_idx: ComponentExportIndex,
-    param_tys: Arc<std::sync::OnceLock<Arc<[Type]>>>,
-    ephemeral_call: Option<Arc<EphemeralLinkedCall>>,
-}
-
-async fn invoke_linked_async_export(
-    accessor: &Accessor<SharedCtx>,
-    params: &[Val],
-    results: &mut [Val],
-    inv: &LinkedExportInvocation,
-) -> wasmtime::Result<()> {
-    if let Some(ephemeral_call) = &inv.ephemeral_call {
-        invoke_ephemeral_linked_export(params, results, inv, ephemeral_call).await
-    } else {
-        invoke_shared_store_linked_export(accessor, params, results, inv).await
-    }
-}
-
-/// Run a plain-value async linked call in a short-lived store that is dropped
-/// (reclaiming its core-instance slots) as soon as the call returns.
-async fn invoke_ephemeral_linked_export(
-    params: &[Val],
-    results: &mut [Val],
-    inv: &LinkedExportInvocation,
-    ephemeral_call: &EphemeralLinkedCall,
-) -> wasmtime::Result<()> {
-    let mut store = new_ephemeral_store(ephemeral_call)
-        .await
-        .map_err(|e| wasmtime::format_err!("{e:#}"))?;
-
-    let params_buf = params.to_vec();
-    let mut results_buf = vec![Val::Bool(false); results.len()];
-    let call_import_name = inv.import_name.clone();
-    let call_export_name = inv.export_name.clone();
-    let call_pre = inv.pre.clone();
-    let func_idx = inv.func_idx;
-    let call_result = tokio::task::spawn(async move {
-        let instance = call_pre.instantiate_async(&mut store).await?;
-        store
-            .run_concurrent(async move |accessor| {
-                let func = accessor.with(|mut access| -> wasmtime::Result<_> {
-                    instance.get_func(&mut access, func_idx).ok_or_else(|| {
-                        wasmtime::format_err!(
-                            "function not found for linked import {call_import_name}.{call_export_name}"
-                        )
-                    })
-                })?;
-                const CALL_TIMEOUT: Duration = Duration::from_secs(600);
-                timeout(
-                    CALL_TIMEOUT,
-                    func.call_concurrent(accessor, &params_buf, &mut results_buf),
-                )
-                .await
-                .map_err(|e| {
-                    wasmtime::format_err!("function call timed out after 600 seconds: {e}")
-                })??;
-                Ok::<Vec<Val>, wasmtime::Error>(results_buf)
-            })
-            .await
-            .map_err(|e| wasmtime::format_err!("{e:#}"))?
-    })
-    .await
-    .map_err(|e| wasmtime::format_err!("ephemeral linked call task failed: {e}"));
-    let call_result = call_result??;
-
-    for (i, v) in call_result.into_iter().enumerate() {
-        *results
-            .get_mut(i)
-            .ok_or_else(|| wasmtime::format_err!("result index out of bounds"))? = v;
-    }
-
-    trace!(
-        name = %inv.import_name,
-        fn_name = %inv.export_name,
-        ?results,
-        "invoked ephemeral dynamic export"
-    );
-
-    Ok(())
-}
-
-async fn invoke_shared_store_linked_export(
-    accessor: &Accessor<SharedCtx>,
-    params: &[Val],
-    results: &mut [Val],
-    inv: &LinkedExportInvocation,
-) -> wasmtime::Result<()> {
-    let _active_ctx = AccessorActiveCtxGuard::new(accessor, &inv.plugin_component_id)?;
-
-    let call: wasmtime::Result<()> = async {
-        let (func, params_buf) = accessor.with(|mut access| -> wasmtime::Result<_> {
-            let instance = access
-                .data_mut()
-                .exporter_instances
-                .get(&inv.plugin_component_id)
-                .copied()
-                .ok_or_else(|| {
-                    wasmtime::format_err!(
-                        "linked component '{}' was not pre-instantiated in this store",
-                        inv.plugin_component_id
-                    )
-                })?;
-            let func = instance
-                .get_func(&mut access, inv.func_idx)
-                .ok_or_else(|| wasmtime::format_err!("function not found"))?;
-            let tys = inv.param_tys.get_or_init(|| {
-                func.ty(access.as_context())
-                    .params()
-                    .map(|(_, ty)| ty)
-                    .collect::<Vec<_>>()
-                    .into()
-            });
-            let params_buf = lower_params(&mut access.as_context_mut(), params, tys)?;
-            Ok((func, params_buf))
-        })?;
-
-        trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoking dynamic export");
-
-        let mut results_buf = vec![Val::Bool(false); results.len()];
-        func.call_concurrent(accessor, &params_buf, &mut results_buf)
-            .await?;
-
-        accessor.with(|mut access| -> wasmtime::Result<_> {
-            lift_results(&mut access.as_context_mut(), results_buf, results)
-        })?;
-
-        Ok(())
-    }
-    .await;
-
-    call?;
-
-    trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoked dynamic export");
-
-    Ok(())
-}
-
-async fn invoke_linked_sync_export(
-    store: StoreContextMut<'_, SharedCtx>,
-    params: &[Val],
-    results: &mut [Val],
-    inv: &LinkedExportInvocation,
-) -> wasmtime::Result<()> {
-    let mut active_ctx = StoreActiveCtxGuard::new(store, &inv.plugin_component_id)?;
-    let mut store = active_ctx.store_mut();
-
-    async {
-        let instance = store
-            .data()
-            .exporter_instances
-            .get(&inv.plugin_component_id)
-            .copied()
-            .ok_or_else(|| {
-                wasmtime::format_err!(
-                    "linked component '{}' was not pre-instantiated in this store",
-                    inv.plugin_component_id
-                )
-            })?;
-
-        let func = instance
-            .get_func(&mut store, inv.func_idx)
-            .ok_or_else(|| wasmtime::format_err!("function not found"))?;
-        let tys = inv.param_tys.get_or_init(|| {
-            func.ty(store.as_context())
-                .params()
-                .map(|(_, ty)| ty)
-                .collect::<Vec<_>>()
-                .into()
-        });
-        let params_buf = lower_params(store, params, tys)?;
-        trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoking dynamic export");
-
-        let mut results_buf = vec![Val::Bool(false); results.len()];
-
-        const CALL_TIMEOUT: Duration = Duration::from_secs(30);
-        timeout(
-            CALL_TIMEOUT,
-            func.call_async(&mut store, &params_buf, &mut results_buf),
-        )
-        .await
-        .map_err(|e| wasmtime::format_err!("function call timed out after 30 seconds: {e}"))??;
-
-        lift_results(store, results_buf, results)?;
-        trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoked dynamic export");
-        Ok(())
-    }
-    .await
-}
-
 /// Metadata associated with components and services within a workload.
 #[derive(Clone)]
 pub struct WorkloadMetadata {
     /// The unique identifier for this component
-    id: Arc<str>,
+    pub(crate) id: Arc<str>,
     /// The unique identifier for the workload this component belongs to
-    workload_id: Arc<str>,
+    pub(crate) workload_id: Arc<str>,
     /// The name of the workload this component belongs to
     workload_name: Arc<str>,
     /// The namespace of the workload this component belongs to
@@ -639,15 +58,15 @@ pub struct WorkloadMetadata {
     /// The wasmtime [`Linker`] used to instantiate the component
     linker: Linker<SharedCtx>,
     /// The volume mounts requested by this component
-    volume_mounts: Vec<(PathBuf, VolumeMount)>,
+    pub(crate) volume_mounts: Vec<(PathBuf, VolumeMount)>,
     /// Canonicalized volume mounts, resolved once during workload resolution.
-    resolved_volume_mounts: Vec<ResolvedVolumeMount>,
+    pub(crate) resolved_volume_mounts: Vec<ResolvedVolumeMount>,
     /// The local resources requested by this component
-    local_resources: LocalResources,
+    pub(crate) local_resources: LocalResources,
     /// The plugins available to this component
-    plugins: Option<HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>>,
+    pub(crate) plugins: Option<HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>>,
     /// Workload loopback
-    loopback: Arc<std::sync::Mutex<loopback::Network>>,
+    pub(crate) loopback: Arc<std::sync::Mutex<loopback::Network>>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
 }
@@ -913,7 +332,7 @@ pub struct WorkloadComponent {
     /// Component name. Primarily for debugging purposes.
     name: Arc<str>,
     /// The [`WorkloadMetadata`] for this component
-    metadata: WorkloadMetadata,
+    pub(crate) metadata: WorkloadMetadata,
     /// The number of warm instances to keep for this component
     pool_size: usize,
     /// The maximum number of concurrent invocations allowed for this component
@@ -1283,14 +702,14 @@ impl ResolvedWorkload {
     fn component_ctx_template(&self, metadata: &WorkloadMetadata) -> ComponentCtxTemplate {
         #[cfg(feature = "wasi-tls")]
         {
-            let mut template = ComponentCtxTemplate::from_metadata(metadata);
-            template.tls_provider = self.tls_provider.clone();
-            template
+            crate::engine::linked_call::component_ctx_template_from_metadata_with_tls(
+                metadata,
+                self.tls_provider.clone(),
+            )
         }
-
         #[cfg(not(feature = "wasi-tls"))]
         {
-            ComponentCtxTemplate::from_metadata(metadata)
+            crate::engine::linked_call::component_ctx_template_from_metadata(metadata)
         }
     }
 
@@ -1380,7 +799,8 @@ impl ResolvedWorkload {
         // Topologically sort components: components with no dependencies (or dependencies
         // already processed) come first. This ensures that when we process a component
         // that imports from another component, the exporter has already been resolved.
-        let sorted_component_ids = topological_sort_components(&dependencies).context(
+        let sorted_component_ids = anyhow::Context::context(
+            topological_sort_components(&dependencies),
             "failed to determine component processing order - possible circular dependency",
         )?;
 
@@ -1632,7 +1052,9 @@ impl ResolvedWorkload {
                                                 })
                                             },
                                         )
-                                        .map_err(|e| e.context("failed to create async func"))?;
+                                        .map_err(|e| {
+                                            e.context("failed to wrap sync func in async func")
+                                        })?;
                                 }
                             }
                             ComponentItem::Resource(resource_ty) => {
@@ -1740,33 +1162,12 @@ impl ResolvedWorkload {
         &self,
         component_id: &str,
     ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
-        let component_id = Arc::<str>::from(component_id);
-        let mut component_ids = {
-            let components = self.components.read().await;
-            let component = components
-                .get(&component_id)
-                .context("component ID not found in workload")?;
-            let mut ids = component
-                .metadata
-                .linked_components
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>();
-            ids.push(component_id.clone());
-            ids
-        };
-        component_ids.sort();
-        component_ids.dedup();
-        self.resolve_component_volume_mounts(&component_ids).await?;
-
-        // Clone the metadata and drop the read lock before building the store:
-        // the store factory pre-instantiates linked components, which takes a
-        // `components` write lock (via `instantiate_pre`) — holding the read
-        // lock across that call would deadlock.
+        // Clone + drop the lock before building: the store factory write-locks
+        // `components`, so a held read lock would deadlock.
         let metadata = {
             let components = self.components.read().await;
             components
-                .get(&component_id)
+                .get(component_id)
                 .context("component ID not found in workload")?
                 .metadata
                 .clone()
@@ -1797,7 +1198,7 @@ impl ResolvedWorkload {
                             format!("linked component '{linked_component_id}' not found")
                         })
                 })
-                .collect::<anyhow::Result<Vec<_>>>()?
+                .collect::<wasmtime::Result<Vec<_>>>()?
         };
         let active_template = self.component_ctx_template(metadata);
         let linked_templates = linked_metadata
@@ -1889,10 +1290,10 @@ impl ResolvedWorkload {
             }
 
             if component.exports_wasi_http() {
-                self.http_handler
-                    .on_workload_unbind(self.id())
-                    .await
-                    .context("failed to notify HTTP handler of workload")?;
+                anyhow::Context::context(
+                    self.http_handler.on_workload_unbind(self.id()).await,
+                    "failed to notify HTTP handler of workload",
+                )?;
             }
         }
 
@@ -2362,6 +1763,19 @@ impl UnresolvedWorkload {
             bail!(e);
         }
 
+        // Canonicalize component volume mounts up front so bad paths fail at
+        // deploy time, not on first request (the service resolves its own).
+        let all_component_ids: Vec<Arc<str>> = resolved_workload
+            .components
+            .read()
+            .await
+            .keys()
+            .cloned()
+            .collect();
+        resolved_workload
+            .resolve_component_volume_mounts(&all_component_ids)
+            .await?;
+
         // Notify plugins of the resolved workload
         for (plugin, component_ids) in bound_plugins.iter() {
             debug!(
@@ -2429,20 +1843,6 @@ impl UnresolvedWorkload {
     }
 }
 
-/// Performs a topological sort on components based on their inter-component dependencies.
-///
-/// This function uses Kahn's algorithm to produce an ordering where components
-/// that export interfaces are processed before components that import those interfaces.
-/// This ensures that when linking components, the exporting component's linker has
-/// already been fully configured before it needs to be pre-instantiated.
-///
-/// # Arguments
-/// * `dependencies` - A map from component ID to the set of component IDs it depends on
-///   (i.e., components whose exports it imports)
-///
-/// # Returns
-/// A vector of component IDs in topological order (dependencies first), or an error
-/// if a circular dependency is detected.
 /// Builds the export→component map used to wire intra-workload component
 /// imports. An interface exported by exactly one component is registered for
 /// linking; an interface exported by more than one component is "ambiguous" —
@@ -2498,6 +1898,9 @@ fn other_plugin_serves(
     })
 }
 
+/// Topologically sort components (Kahn's algorithm) so exporters come before
+/// importers, a component's linker must be fully configured before anything
+/// that imports from it is pre-instantiated. Errors on a dependency cycle.
 fn topological_sort_components(
     dependencies: &HashMap<Arc<str>, HashSet<Arc<str>>>,
 ) -> anyhow::Result<Vec<Arc<str>>> {
@@ -2556,6 +1959,9 @@ fn topological_sort_components(
     Ok(result)
 }
 
+/// Expand `direct_links` into the full transitive closure. One hop suffices
+/// because components are processed in topological order, so each
+/// `resolved_links[dep]` already holds that dep's complete closure.
 fn expand_link_closure(
     direct_links: &HashSet<Arc<str>>,
     resolved_links: &HashMap<Arc<str>, HashSet<Arc<str>>>,

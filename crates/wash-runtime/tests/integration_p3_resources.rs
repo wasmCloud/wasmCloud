@@ -1,13 +1,28 @@
 //! Integration test for passing a guest resource handle across the WASIP3
 //! dynamic linker.
 //!
-//! `res-caller-p3` (the HTTP entrypoint) gets a `token` resource from
-//! `res-producer-p3` and hands it to `res-sink-p3`, which calls a method on
-//! it. The handle crosses the linker as a host `ResourceAny`, so the call to
-//! `accept(token)` exercises `engine::value::lower_with_type`'s resource
-//! identity passthrough — the path the streaming tests do not cover. If the
-//! handle were re-lowered (copied) instead of passed by identity, the sink's
-//! `greet()` call would fail or read the wrong resource.
+//! Three P3 components are linked together in one workload, and a single HTTP
+//! request drives a resource handle through both linker hops:
+//!
+//! 1. A request hits `res-caller-p3`, the workload's HTTP entrypoint.
+//! 2. `res-caller-p3` calls `res-producer-p3` (hop 1) and gets back a `token`
+//!    resource, created for the string `"world"`.
+//! 3. `res-caller-p3` passes that same `token` to `res-sink-p3` (hop 2) via
+//!    `accept(token)`. The handle crosses the linker as a host `ResourceAny`.
+//! 4. `res-sink-p3` calls `greet()` on the token (`"hello world"`) and wraps it
+//!    as `"sink:hello world"`, which `res-caller-p3` returns as the body.
+//!
+//! What this exercises:
+//!
+//! - Each linker hop lowers the `token` via `engine::value::lower_with_type`,
+//!   which must pass the resource by *identity* rather than re-lowering
+//!   (copying) it.
+//! - If identity were not preserved, `res-sink-p3` would receive a different /
+//!   stale resource and its `greet()` call would fail or read the wrong token,
+//!   so the body would not come back as `"sink:hello world"`.
+//!
+//! Asserting the exact `"sink:hello world"` body therefore proves the one
+//! `token` resource survived both hops across the dynamic linker intact.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

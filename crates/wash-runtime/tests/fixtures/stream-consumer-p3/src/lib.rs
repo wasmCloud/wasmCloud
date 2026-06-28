@@ -37,7 +37,7 @@ impl Handler for Component {
         // Forward producer bytes straight into the HTTP response body, then
         // close. The runtime streams P3 bodies through to hyper, so these
         // reach the client without being buffered in full first.
-        wit_bindgen::spawn(async move {
+        wit_bindgen::spawn_local(async move {
             while let Some(byte) = upstream.next().await {
                 tx.write_all(vec![byte]).await;
             }

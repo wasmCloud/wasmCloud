@@ -181,6 +181,40 @@ pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> wasmtime
     }
 }
 
+/// Lower dynamic-linker call params, using each param's declared type so host
+/// resource handles cross the linker by identity (see [`lower_with_type`]).
+pub(crate) fn lower_params(
+    store: &mut StoreContextMut<'_, SharedCtx>,
+    params: &[Val],
+    param_tys: &[Type],
+) -> wasmtime::Result<Vec<Val>> {
+    if params.len() != param_tys.len() {
+        return Err(wasmtime::format_err!(
+            "dynamic call arity mismatch: {} args vs {} param types",
+            params.len(),
+            param_tys.len()
+        ));
+    }
+    let mut params_buf = Vec::with_capacity(params.len());
+    for (v, ty) in params.iter().zip(param_tys) {
+        params_buf.push(lower_with_type(store, v, ty)?);
+    }
+    Ok(params_buf)
+}
+
+/// Lift a dynamic-linker call's result values back into the caller's store,
+/// writing each into `results` (see [`lift`]).
+pub(crate) fn lift_results(
+    store: &mut StoreContextMut<'_, SharedCtx>,
+    results_buf: Vec<Val>,
+    results: &mut [Val],
+) -> wasmtime::Result<()> {
+    for (i, v) in results_buf.into_iter().enumerate() {
+        *results.get_mut(i).context("result index out of bounds")? = lift(store, v)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn lower_with_type(
     store: &mut StoreContextMut<SharedCtx>,
     v: &Val,
