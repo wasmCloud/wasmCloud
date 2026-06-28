@@ -238,14 +238,14 @@ dependencies = [
 name = "ephemeral-callee-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.54.0",
+ "wit-bindgen 0.58.0",
 ]
 
 [[package]]
 name = "ephemeral-caller-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.54.0",
+ "wit-bindgen 0.58.0",
 ]
 
 [[package]]
@@ -1098,21 +1098,21 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 name = "res-caller-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.54.0",
+ "wit-bindgen 0.58.0",
 ]
 
 [[package]]
 name = "res-producer-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.54.0",
+ "wit-bindgen 0.58.0",
 ]
 
 [[package]]
 name = "res-sink-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.54.0",
+ "wit-bindgen 0.58.0",
 ]
 
 [[package]]
@@ -1253,21 +1253,21 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 name = "stream-consumer-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.54.0",
+ "wit-bindgen 0.58.0",
 ]
 
 [[package]]
 name = "stream-pacer-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.54.0",
+ "wit-bindgen 0.58.0",
 ]
 
 [[package]]
 name = "stream-producer-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.54.0",
+ "wit-bindgen 0.58.0",
 ]
 
 [[package]]

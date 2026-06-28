@@ -36,7 +36,7 @@ impl Guest for Component {
         // Emit `n` bytes ('a', 'b', ...) on a background task, one per tick,
         // so the reader can be returned immediately and drained incrementally
         // by the consumer across the linker.
-        wit_bindgen::spawn(async move {
+        wit_bindgen::spawn_local(async move {
             for i in 0..n {
                 if i > 0 {
                     monotonic_clock::wait_for(TICK_NS).await;

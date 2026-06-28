@@ -100,51 +100,77 @@ impl SharedCtx {
     }
 }
 
-pub struct AccessorActiveCtxGuard<'a> {
+/// RAII guard that points [`SharedCtx::active_ctx`] at a linked component for
+/// the duration of a cross-component call, restoring the previous component on
+/// drop.
+///
+/// TODO(concurrency): the single `active_ctx` slot with LIFO save/restore is
+/// only correct for *sequential* linked calls. `func_new_concurrent` allows
+/// several in flight on one shared store, and their save/restore interleaves —
+/// A sets B; C (concurrent) saves B, sets D; A restores B; C restores B — so
+/// the original ctx is lost and `active_ctx` is wrong even after both finish
+/// (and mid-flight, across awaits, it need not match the running call). The
+/// single-call fixtures issue one at a time so they don't exercise this; a real
+/// fix needs per-call ctx scoping rather than a shared slot. Tracked follow-up.
+pub(crate) struct AccessorActiveCtxGuard<'a> {
     accessor: &'a Accessor<SharedCtx>,
-    previous: Arc<str>,
+    previous_component_id: Arc<str>,
 }
 
 impl<'a> AccessorActiveCtxGuard<'a> {
-    pub fn new(accessor: &'a Accessor<SharedCtx>, id: &Arc<str>) -> wasmtime::Result<Self> {
-        let previous = accessor.with(|mut access| -> wasmtime::Result<_> {
-            let previous = access.data_mut().active_ctx.component_id.clone();
+    pub(crate) fn new(accessor: &'a Accessor<SharedCtx>, id: &Arc<str>) -> wasmtime::Result<Self> {
+        let previous_component_id = accessor.with(|mut access| -> wasmtime::Result<_> {
+            let previous_component_id = access.data_mut().active_ctx.component_id.clone();
             access.data_mut().set_active_ctx(id)?;
-            Ok(previous)
+            Ok(previous_component_id)
         })?;
 
-        Ok(Self { accessor, previous })
+        Ok(Self {
+            accessor,
+            previous_component_id,
+        })
     }
 }
 
 impl Drop for AccessorActiveCtxGuard<'_> {
     fn drop(&mut self) {
-        let _ = self
-            .accessor
-            .with(|mut access| access.data_mut().set_active_ctx(&self.previous));
+        let _ = self.accessor.with(|mut access| {
+            access
+                .data_mut()
+                .set_active_ctx(&self.previous_component_id)
+        });
     }
 }
 
-pub struct StoreActiveCtxGuard<'a> {
+pub(crate) struct StoreActiveCtxGuard<'a> {
     store: StoreContextMut<'a, SharedCtx>,
-    previous: Arc<str>,
+    previous_component_id: Arc<str>,
 }
 
 impl<'a> StoreActiveCtxGuard<'a> {
-    pub fn new(mut store: StoreContextMut<'a, SharedCtx>, id: &Arc<str>) -> wasmtime::Result<Self> {
-        let previous = store.data().active_ctx.component_id.clone();
+    pub(crate) fn new(
+        mut store: StoreContextMut<'a, SharedCtx>,
+        id: &Arc<str>,
+    ) -> wasmtime::Result<Self> {
+        let previous_component_id = store.data().active_ctx.component_id.clone();
         store.data_mut().set_active_ctx(id)?;
-        Ok(Self { store, previous })
+        Ok(Self {
+            store,
+            previous_component_id,
+        })
     }
 
-    pub fn store_mut(&mut self) -> &mut StoreContextMut<'a, SharedCtx> {
+    pub(crate) fn store_mut(&mut self) -> &mut StoreContextMut<'a, SharedCtx> {
         &mut self.store
     }
 }
 
 impl Drop for StoreActiveCtxGuard<'_> {
     fn drop(&mut self) {
-        let _ = self.store.data_mut().set_active_ctx(&self.previous);
+        let _ = self
+            .store
+            .data_mut()
+            .set_active_ctx(&self.previous_component_id);
     }
 }
 
@@ -192,7 +218,7 @@ pub struct Ctx {
     /// Unique identifier for this component context. This is a [uuid::Uuid::new_v4] string.
     pub id: Arc<str>,
     /// Unique identifier shared by all component contexts in the same store.
-    pub store_id: String,
+    pub store_id: Arc<str>,
     /// The unique identifier for the workload component this instance belongs to
     pub component_id: Arc<str>,
     /// The unique identifier for the workload this component belongs to
@@ -407,7 +433,7 @@ impl wasmtime_wasi_http::p3::WasiHttpHooks for CtxHttpHooksP3 {
 /// Helper struct to build a [`Ctx`] with a builder pattern
 pub struct CtxBuilder {
     id: Arc<str>,
-    store_id: String,
+    store_id: Arc<str>,
     workload_id: Arc<str>,
     component_id: Arc<str>,
     ctx: Option<WasiCtx>,
@@ -424,7 +450,7 @@ impl CtxBuilder {
     pub fn new(workload_id: impl Into<Arc<str>>, component_id: impl Into<Arc<str>>) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string().into(),
-            store_id: uuid::Uuid::new_v4().to_string(),
+            store_id: uuid::Uuid::new_v4().to_string().into(),
             component_id: component_id.into(),
             workload_id: workload_id.into(),
             ctx: None,

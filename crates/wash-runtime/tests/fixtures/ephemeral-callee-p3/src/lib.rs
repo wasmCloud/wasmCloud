@@ -18,7 +18,6 @@ struct Component;
 
 impl Guest for Component {
     async fn run(n: u32) -> u32 {
-        // Deterministic plain-value transform the caller can assert on.
         n.wrapping_mul(2).wrapping_add(1)
     }
 }
