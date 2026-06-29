@@ -1,0 +1,66 @@
+package wasmcloud:keyvalue@0.1.0;
+
+/// A keyvalue interface that provides compare-and-swap (optimistic concurrency) for a single key.
+///
+/// This is kept separate from `atomics` so a host can grant or deny it independently, and so
+/// backends that cannot perform conditional writes can decline just this capability. It is a
+/// one-shot, resource-free API: each `swap` carries its own preconditions and reports the current
+/// state back on conflict, so the read-modify-write retry loop needs no extra round trips.
+interface cas {
+  use types.{bucket, error};
+
+  /// An opaque, backend-defined version token for an entry: an etcd revision, an S3/HTTP ETag, a
+  /// Cosmos DB `_etag`, a monotonic counter, and so on. Treat it as opaque — only equality is
+  /// meaningful, and tokens are not ordered or comparable across keys or backends.
+  type version = string;
+
+  /// A key's value together with its current version.
+  record entry {
+    value: list<u8>,
+    version: version,
+  }
+
+  /// Read a key's current value and version, for use as the precondition of a later `swap`.
+  /// Returns `none` if the key does not exist.
+  ///
+  /// `store.get` deliberately omits the version; use this when you intend to do a
+  /// version-checked swap.
+  current: async func(bucket: borrow<bucket>, key: string) -> result<option<entry>, error>;
+
+  /// Preconditions for a `swap`. Every condition that is set must hold for the write to be
+  /// applied. At least one condition must be set: a `swap` with an empty `cas-options` is a
+  /// misuse and is rejected with `error::invalid-argument` (use `store.set` for an unconditional
+  /// write).
+  record cas-options {
+    /// Require the entry's current version to equal this. This is the ABA-safe check: it detects
+    /// a value that changed A -> B -> A, which a value comparison misses. Omit it if you do not
+    /// care about ABA.
+    require-version: option<version>,
+    /// Require the entry's current value to equal this. A version-free optimistic check: simpler,
+    /// but ABA-prone. Omit to skip.
+    require-value: option<list<u8>>,
+  }
+
+  /// The outcome of a `swap`.
+  variant cas-result {
+    /// The new value was written.
+    swapped,
+    /// A precondition did not hold; nothing was written. The current entry is returned (`none`
+    /// if the key is absent) so the caller can recompute and retry without a separate read.
+    stale(option<entry>),
+  }
+
+  /// Conditionally and atomically set `key` to `value` if every precondition in `options` holds.
+  ///
+  /// Returns `cas-result::swapped` on success, or `cas-result::stale` with the current entry if a
+  /// precondition fails. A lost race is the expected `stale` outcome, not an `error`. `options`
+  /// must set at least one precondition; an empty `cas-options` returns `err(error::invalid-argument)`
+  /// rather than performing an unconditional write. Other `err(error)` values are store-level
+  /// failures.
+  swap: async func(
+    bucket: borrow<bucket>,
+    key: string,
+    value: list<u8>,
+    options: cas-options,
+  ) -> result<cas-result, error>;
+}

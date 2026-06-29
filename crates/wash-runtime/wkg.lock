@@ -57,6 +57,24 @@ version = "0.2.0-rc.2"
 digest = "sha256:cd1c073a1875e04072951871a2c29d1725d15d0e824a9e4c2ae730810eab1c54"
 
 [[packages]]
+name = "wasmcloud:blobstore"
+registry = "wasmcloud.com"
+
+[[packages.versions]]
+requirement = "=0.1.0"
+version = "0.1.0"
+digest = "sha256:aefb774ef6d8b964d96d2d9a97198bba1e5e63037f0d901fd8fe0b5d1196d261"
+
+[[packages]]
+name = "wasmcloud:keyvalue"
+registry = "wasmcloud.com"
+
+[[packages.versions]]
+requirement = "=0.1.0"
+version = "0.1.0"
+digest = "sha256:f1d194f6a56e57a2ce23cf2858de79f6c953f9159c9c0456e17935a0c5fcda73"
+
+[[packages]]
 name = "wasmcloud:messaging"
 registry = "wasmcloud.com"
 
