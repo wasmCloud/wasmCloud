@@ -50,33 +50,22 @@ impl WitWorld {
     /// different than [`WitWorld::includes`] because it considers that in one
     /// [`WitInterface`] there may be both imports and exports.
     pub fn includes_bidirectional(&self, interface: &WitInterface) -> bool {
-        // Same namespace+package, and (when both specify one) the same version.
-        // Name is intentionally ignored here: this answers "does the world use
-        // this namespace:package interface", regardless of the `(implements ..)`
-        // label — label routing is resolved later during plugin binding.
-        let matches_pkg = |other: &WitInterface| {
-            if let Some(v) = &interface.version
-                && let Some(ov) = &other.version
-                && v != ov
-            {
-                return false;
-            }
-            other.namespace == interface.namespace && other.package == interface.package
-        };
-
         // Each requested interface must be covered by *some* import or export of
-        // the matching package. A package can spread its interfaces across
+        // the same package (see [`WitInterface::same_package`]). The label/name
+        // is intentionally ignored for checking "does the world use this
+        // namespace:package interface", and label routing is resolved later
+        // during plugin binding. A package can spread its interfaces across
         // multiple entries (e.g. `wasmcloud:postgres` imports `types` unnamed and
         // `query` under several labels), so check every entry per interface
         // rather than binding to the first package match.
         interface.interfaces.iter().all(|i| {
             self.imports
                 .iter()
-                .any(|im| matches_pkg(im) && im.interfaces.contains(i))
+                .any(|im| interface.same_package(im) && im.interfaces.contains(i))
                 || self
                     .exports
                     .iter()
-                    .any(|ex| matches_pkg(ex) && ex.interfaces.contains(i))
+                    .any(|ex| interface.same_package(ex) && ex.interfaces.contains(i))
         })
     }
 
@@ -180,6 +169,23 @@ impl WitInterface {
         true
     }
 
+    /// Returns `true` if `other` belongs to the same `namespace:package` at a
+    /// compatible version. Equal when both specify a version;
+    /// if either omits a version, any version is considered compatible.
+    pub fn same_package(&self, other: &WitInterface) -> bool {
+        if self.namespace != other.namespace || self.package != other.package {
+            return false;
+        }
+        // If both interfaces specify a version, they must match.
+        if let Some(v) = &self.version
+            && let Some(ov) = &other.version
+            && v != ov
+        {
+            return false;
+        }
+        true
+    }
+
     /// Checks if this interface contains (is a superset of) another interface.
     ///
     /// This method is used to determine if a plugin or component that provides
@@ -190,20 +196,12 @@ impl WitInterface {
     ///
     /// # Returns
     /// `true` if:
-    /// - The namespace and package match exactly
-    /// - If this interface has a version, it must match the other's version
+    /// - The namespace and package match at a compatible version (see
+    ///   [`WitInterface::same_package`])
+    /// - If both interfaces specify a name, they match
     /// - The other's interfaces are a subset of this interface's interfaces
     pub fn contains(&self, other: &WitInterface) -> bool {
-        // Namespace and package must match
-        if self.namespace != other.namespace || self.package != other.package {
-            return false;
-        }
-
-        // If both interfaces specify a version, they must match
-        if let Some(v) = &self.version
-            && let Some(ov) = &other.version
-            && v != ov
-        {
+        if !self.same_package(other) {
             return false;
         }
 
