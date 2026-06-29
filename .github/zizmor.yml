@@ -1,0 +1,14 @@
+# zizmor configuration: https://docs.zizmor.sh/configuration/
+#
+# Suppressions live here rather than as inline `# zizmor: ignore[...]`
+# comments on `uses:` lines. An inline ignore turns the action's version
+# comment into `# vX.Y.Z  # zizmor: ignore[...]`, which Dependabot no longer
+# recognizes as a pure version comment, so it bumps the pinned SHA but leaves
+# the `# vX.Y.Z` text stale (tripping zizmor's ref-version-mismatch audit).
+rules:
+  superfluous-actions:
+    ignore:
+      # softprops/action-gh-release on the release step: keeping the action is
+      # deliberate (idempotent re-runs, glob fail-on-empty, prerelease
+      # detection); see the comment above the `uses:` line.
+      - release-tag.yml
