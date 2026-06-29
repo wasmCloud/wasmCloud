@@ -431,7 +431,7 @@ jobs:
         # shell equivalent has to re-implement idempotent re-run handling,
         # glob fail-on-empty, and prerelease detection — ~25 lines of bash
         # on a release-critical step.
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.0  # zizmor: ignore[superfluous-actions]
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           name: ${{ steps.ver.outputs.tag }}
           tag_name: ${{ steps.ver.outputs.tag }}
