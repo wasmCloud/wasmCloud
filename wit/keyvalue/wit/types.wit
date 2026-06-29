@@ -1,0 +1,140 @@
+package wasmcloud:keyvalue@0.1.0;
+
+/// Types shared across the keyvalue interfaces.
+///
+/// The `bucket` resource lives here (rather than in `store`) so that every
+/// interface that operates on a bucket — `store`, `atomics`, `cas`, `batch`,
+/// `watcher` — `use`s the *same* resource type. That matters for the
+/// component-model `(implements ..)` mechanism: a host can route each labeled
+/// `store` import to a different backend, and the bucket a guest opens through
+/// one label is still accepted by the (unlabeled) `atomics`/`cas`/`batch`
+/// interfaces, because they all reference this one `types.bucket`.
+interface types {
+  /// The set of errors which may be raised by functions in this package.
+  ///
+  /// Following the wasip3 convention, this enumerates specific named cases
+  /// rather than leaning on stringly-typed errors. It is intentionally
+  /// non-exhaustive: future versions may add cases, and generated bindings are
+  /// marked non-exhaustive accordingly, so consumers must always include a
+  /// catch-all arm. Backend-specific failures that do not map to a named case
+  /// are reported via `other`.
+  variant error {
+    /// The host does not recognize the store identifier requested.
+    no-such-store,
+    /// The requesting component does not have access to the specified store
+    /// (which may or may not exist).
+    access-denied,
+    /// The request was malformed or self-contradictory, e.g. a `cas.swap`
+    /// whose `cas-options` sets no precondition.
+    invalid-argument,
+    /// A conditional operation did not meet its precondition, e.g. a `set` with
+    /// `if-not-exists` against a key that already exists.
+    precondition-failed,
+    /// The operation did not complete within the host- or backend-imposed time
+    /// limit.
+    timeout,
+    /// The store is currently unreachable or otherwise unavailable. The
+    /// operation may succeed if retried later.
+    store-unavailable,
+    /// The operation was rejected because a quota or rate limit was exceeded.
+    quota-exceeded,
+    /// Some other implementation-specific error has occurred (e.g. I/O). Used
+    /// for backend-specific failures that do not map to a named case above.
+    other(string),
+  }
+
+  /// A response to a `list-keys` operation.
+  record key-response {
+    /// The list of keys returned by the query.
+    keys: list<string>,
+    /// The continuation token to use to fetch the next page of keys. If this is `none`, then
+    /// there are no more keys to fetch.
+    cursor: option<string>,
+  }
+
+  /// Options that modify the behavior of a `set` operation.
+  record set-options {
+    /// If set, the entry expires this many milliseconds after the write, after
+    /// which the host removes it. `none` stores the entry without expiry.
+    ///
+    /// Hosts whose backend cannot honor expiry MUST raise an error rather than
+    /// silently ignoring the TTL.
+    ttl-ms: option<u64>,
+    /// When true, the write succeeds only if the key does not already exist,
+    /// failing with `error::precondition-failed` otherwise. Useful for locks
+    /// and idempotent initialization.
+    if-not-exists: bool,
+  }
+
+  /// A bucket is a collection of key-value pairs. Each key-value pair is stored as an entry in the
+  /// bucket, and the bucket itself acts as a collection of all these entries.
+  ///
+  /// It is worth noting that the exact terminology for bucket in key-value stores can vary
+  /// depending on the specific implementation. For example:
+  ///
+  /// 1. Amazon DynamoDB calls a collection of key-value pairs a table
+  /// 2. Redis has hashes, sets, and sorted sets as different types of collections
+  /// 3. Cassandra calls a collection of key-value pairs a column family
+  /// 4. MongoDB calls a collection of key-value pairs a collection
+  /// 5. Riak calls a collection of key-value pairs a bucket
+  /// 6. Memcached calls a collection of key-value pairs a slab
+  /// 7. Azure Cosmos DB calls a collection of key-value pairs a container
+  ///
+  /// In this interface, we use the term `bucket` to refer to a collection of key-value pairs
+  resource bucket {
+    /// Get the value associated with the specified `key`
+    ///
+    /// The value is returned as an option. If the key-value pair exists in the
+    /// store, it returns `ok(value)`. If the key does not exist in the
+    /// store, it returns `ok(none)`.
+    ///
+    /// If any other error occurs, it returns an `err(error)`.
+    get: async func(key: string) -> result<option<list<u8>>, error>;
+    /// Set the value associated with the key in the store. If the key already
+    /// exists in the store, it overwrites the value.
+    ///
+    /// If the key does not exist in the store, it creates a new key-value pair.
+    ///
+    /// `options` controls expiry (`ttl-ms`) and conditional writes
+    /// (`if-not-exists`); pass `none` for the default overwrite-on-exists
+    /// behavior with no expiry.
+    ///
+    /// If any other error occurs, it returns an `err(error)`.
+    set: async func(key: string, value: list<u8>, options: option<set-options>) -> result<_, error>;
+    /// Delete the key-value pair associated with the key in the store.
+    ///
+    /// If the key does not exist in the store, it does nothing.
+    ///
+    /// If any other error occurs, it returns an `err(error)`.
+    delete: async func(key: string) -> result<_, error>;
+    /// Check if the key exists in the store.
+    ///
+    /// If the key exists in the store, it returns `ok(true)`. If the key does
+    /// not exist in the store, it returns `ok(false)`.
+    ///
+    /// If any other error occurs, it returns an `err(error)`.
+    exists: async func(key: string) -> result<bool, error>;
+    /// Get the keys in the store, optionally restricted to those starting with
+    /// `prefix`, with an optional cursor (for use in pagination). It returns a
+    /// list of keys. Please note that for most KeyValue implementations, this
+    /// can be a very expensive operation and so it should be used judiciously. Implementations
+    /// can return any number of keys in a single response, but they should never attempt to
+    /// send more data than is reasonable (i.e. on a small edge device, this may only be a few
+    /// KB, while on a large machine this could be several MB). Any response should also return
+    /// a cursor that can be used to fetch the next page of keys. See the `key-response` record
+    /// for more information.
+    ///
+    /// `prefix` filters the result to keys that begin with the given string; pass
+    /// `none` to list all keys. When paginating, the same `prefix` should be
+    /// supplied alongside each `cursor`.
+    ///
+    /// Note that the keys are not guaranteed to be returned in any particular order.
+    ///
+    /// If the store is empty (or no keys match `prefix`), it returns an empty list.
+    ///
+    /// MAY show an out-of-date list of keys if there are concurrent writes to the store.
+    ///
+    /// If any error occurs, it returns an `err(error)`.
+    list-keys: async func(prefix: option<string>, cursor: option<string>) -> result<key-response, error>;
+  }
+}
