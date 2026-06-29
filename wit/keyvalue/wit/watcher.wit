@@ -1,0 +1,17 @@
+package wasmcloud:keyvalue@0.1.0;
+
+/// A keyvalue interface that provides event-driven notifications of changes to a bucket.
+///
+/// This interface is exported by a component that wants to react to key-value changes, and the
+/// callbacks are delivered by the host as those changes occur.
+interface watcher {
+  use types.{bucket};
+
+  /// Handle the `set` event for the given bucket and key. It includes a handle to the `bucket`
+  /// that can be used to interact with the store.
+  on-set: async func(bucket: bucket, key: string, value: list<u8>);
+
+  /// Handle the `delete` event for the given bucket and key. It includes a handle to the
+  /// `bucket` that can be used to interact with the store.
+  on-delete: async func(bucket: bucket, key: string);
+}
