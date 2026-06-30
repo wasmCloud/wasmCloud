@@ -235,10 +235,7 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 		getErr := h.client.Get(ctx,
 			types.NamespacedName{Name: req.FriendlyName, Namespace: h.operatorNamespace},
 			existing)
-		switch {
-		case apierrors.IsNotFound(getErr):
-			// fall through: the apply below creates the Host
-		case getErr != nil:
+		if getErr != nil && !apierrors.IsNotFound(getErr) {
 			log.Error(getErr, "failed to read Host resource", "host", req.FriendlyName, "hostID", req.Id)
 			return
 		}
