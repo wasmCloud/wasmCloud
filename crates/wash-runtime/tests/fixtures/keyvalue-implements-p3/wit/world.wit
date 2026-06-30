@@ -1,0 +1,15 @@
+package wasmcloud:keyvalue-implements-p3@0.1.0;
+
+// Imports the async `wasmcloud:keyvalue@0.1.0` `store` under an `(implements ..)`
+// label (`kv`) plus `atomics`, `cas`, and `batch` unlabeled. Those three
+// `use types.{bucket}`, so they cannot carry their own label; the host binds them
+// standalone and they operate on the `bucket` opened through the labeled `store`
+// The guest exercises all four (store/atomics/cas/batch) against one bucket.
+world keyvalue-aba {
+    import kv: wasmcloud:keyvalue/store@0.1.0;
+    import wasmcloud:keyvalue/atomics@0.1.0;
+    import wasmcloud:keyvalue/cas@0.1.0;
+    import wasmcloud:keyvalue/batch@0.1.0;
+
+    export wasi:http/handler@0.3.0;
+}

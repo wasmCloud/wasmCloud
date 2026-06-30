@@ -112,6 +112,8 @@ const P3_FIXTURES: &[&str] = &[
     "res-caller-p3",
     "ephemeral-callee-p3",
     "ephemeral-caller-p3",
+    "blobstore-implements-p3",
+    "keyvalue-implements-p3",
 ];
 
 // Fixtures with local-only WIT worlds (no wasi imports). Copying shared
