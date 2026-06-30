@@ -104,4 +104,19 @@ rules:
     - patch
     - update
     - watch
+  # endpointslices/restricted is a virtual resource that has no impact to non-OpenShift clusters.
+  # The operator needs this permission to create EndpointSlices in OpenShift clusters that have
+  #the restricted API enabled.
+  - apiGroups:
+    - discovery.k8s.io
+    resources:
+    - endpointslices/restricted
+    verbs:
+    - create
+  - apiGroups:
+    - ""
+    resources:
+    - endpoints/restricted
+    verbs:
+    - create
 {{- end }}
