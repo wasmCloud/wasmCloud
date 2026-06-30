@@ -143,4 +143,33 @@ impl FsKvStore {
             .map_err(FsKvError::Io)?;
         Ok(next)
     }
+
+    /// Signed counterpart of [`Self::increment`] for the multiplexed
+    /// `wasmcloud:keyvalue` backend, whose `atomics.increment` is `s64` (a
+    /// negative `delta` decrements). The standalone `wasi:keyvalue` plugin keeps
+    /// using the unsigned [`Self::increment`]; the two never share a store
+    /// (separate roots), so the decimal encodings don't mix.
+    #[cfg(feature = "wasm_component_model_implements")]
+    pub(crate) async fn increment_signed(
+        &self,
+        bucket: &str,
+        key: &str,
+        delta: i64,
+    ) -> Result<i64, FsKvError> {
+        let path = self.key_path(bucket, key)?;
+        let current = match tokio::fs::read_to_string(&path).await {
+            Ok(s) => s.trim().parse::<i64>().unwrap_or(0),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(e) => return Err(FsKvError::Io(e)),
+        };
+        // Report overflow as an error (consistent with Redis `HINCRBY`) rather
+        // than saturating or panicking.
+        let next = current
+            .checked_add(delta)
+            .ok_or_else(|| FsKvError::Io(std::io::Error::other("counter overflow")))?;
+        tokio::fs::write(&path, next.to_string())
+            .await
+            .map_err(FsKvError::Io)?;
+        Ok(next)
+    }
 }
