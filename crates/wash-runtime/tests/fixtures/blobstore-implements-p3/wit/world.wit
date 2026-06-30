@@ -1,0 +1,15 @@
+package wasmcloud:blobstore-implements-p3@0.1.0;
+
+// Imports the async, native-stream `wasmcloud:blobstore@0.1.0` under `(implements
+// ..)` labels. Because WIT requires one interface per label, the `blobstore`
+// interface (create/get container) and the `container` interface (the resource
+// methods, incl. the `stream<u8>` get-data/write-data) get *distinct* labels per
+// logical store. The container resource carries its host-bound backend, so its
+// methods route correctly regardless of which labeled container import they
+// arrive on.
+world blobstore-implements {
+    import store-a: wasmcloud:blobstore/blobstore@0.1.0;
+    import objects-a: wasmcloud:blobstore/container@0.1.0;
+
+    export wasi:http/handler@0.3.0;
+}
