@@ -2,11 +2,53 @@
 //! instance to another in the context of a single [`wasmtime::Store`].
 
 use tracing::trace;
-use wasmtime::component::Val;
+use wasmtime::component::{ResourceAny, ResourceType, Val, types::Type};
 use wasmtime::error::Context as _;
 use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::engine::ctx::SharedCtx;
+
+pub(crate) fn carries_cross_store_handle(ty: &Type) -> bool {
+    match ty {
+        Type::Bool
+        | Type::S8
+        | Type::U8
+        | Type::S16
+        | Type::U16
+        | Type::S32
+        | Type::U32
+        | Type::S64
+        | Type::U64
+        | Type::Float32
+        | Type::Float64
+        | Type::Char
+        | Type::String
+        | Type::Enum(_)
+        | Type::Flags(_) => false,
+        Type::List(list) => carries_cross_store_handle(&list.ty()),
+        Type::Map(map) => {
+            carries_cross_store_handle(&map.key()) || carries_cross_store_handle(&map.value())
+        }
+        Type::Record(record) => record
+            .fields()
+            .any(|field| carries_cross_store_handle(&field.ty)),
+        Type::Tuple(tuple) => tuple.types().any(|ty| carries_cross_store_handle(&ty)),
+        Type::Variant(variant) => variant
+            .cases()
+            .any(|case| case.ty.as_ref().is_some_and(carries_cross_store_handle)),
+        Type::Option(option) => carries_cross_store_handle(&option.ty()),
+        Type::Result(result) => {
+            result.ok().as_ref().is_some_and(carries_cross_store_handle)
+                || result
+                    .err()
+                    .as_ref()
+                    .is_some_and(carries_cross_store_handle)
+        }
+        Type::Own(_) | Type::Borrow(_) | Type::Future(_) | Type::Stream(_) | Type::ErrorContext => {
+            true
+        }
+    }
+}
 
 pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> wasmtime::Result<Val> {
     match v {
@@ -133,9 +175,64 @@ pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> wasmtime
                 }
             }
         }
-        &Val::Future(_) | &Val::Stream(_) | &Val::ErrorContext(_) => {
-            wasmtime::bail!("async not supported")
+        Val::Future(v) => Ok(Val::Future(v.clone())),
+        Val::Stream(v) => Ok(Val::Stream(v.clone())),
+        Val::ErrorContext(v) => Ok(Val::ErrorContext(v.clone())),
+    }
+}
+
+/// Lower dynamic-linker call params, using each param's declared type so host
+/// resource handles cross the linker by identity (see [`lower_with_type`]).
+pub(crate) fn lower_params(
+    store: &mut StoreContextMut<'_, SharedCtx>,
+    params: &[Val],
+    param_tys: &[Type],
+) -> wasmtime::Result<Vec<Val>> {
+    if params.len() != param_tys.len() {
+        return Err(wasmtime::format_err!(
+            "dynamic call arity mismatch: {} args vs {} param types",
+            params.len(),
+            param_tys.len()
+        ));
+    }
+    let mut params_buf = Vec::with_capacity(params.len());
+    for (v, ty) in params.iter().zip(param_tys) {
+        params_buf.push(lower_with_type(store, v, ty)?);
+    }
+    Ok(params_buf)
+}
+
+/// Lift a dynamic-linker call's result values back into the caller's store,
+/// writing each into `results` (see [`lift`]).
+pub(crate) fn lift_results(
+    store: &mut StoreContextMut<'_, SharedCtx>,
+    results_buf: Vec<Val>,
+    results: &mut [Val],
+) -> wasmtime::Result<()> {
+    for (i, v) in results_buf.into_iter().enumerate() {
+        *results.get_mut(i).context("result index out of bounds")? = lift(store, v)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn lower_with_type(
+    store: &mut StoreContextMut<SharedCtx>,
+    v: &Val,
+    ty: &Type,
+) -> wasmtime::Result<Val> {
+    if !carries_cross_store_handle(ty) {
+        return lower(store, v);
+    }
+
+    match (ty, v) {
+        (Type::Own(resource_ty) | Type::Borrow(resource_ty), &Val::Resource(any))
+            if *resource_ty == ResourceType::host::<ResourceAny>()
+                && any.ty() == ResourceType::host::<ResourceAny>() =>
+        {
+            trace!(resource = ?any, "lowering host resource by identity");
+            Ok(Val::Resource(any))
         }
+        _ => lower(store, v),
     }
 }
 
@@ -258,9 +355,9 @@ pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> wasmtime::
                 ))
             }
         }
-        Val::Future(_) | Val::Stream(_) | Val::ErrorContext(_) => {
-            wasmtime::bail!("async not supported")
-        }
+        Val::Future(v) => Ok(Val::Future(v)),
+        Val::Stream(v) => Ok(Val::Stream(v)),
+        Val::ErrorContext(v) => Ok(Val::ErrorContext(v)),
     }
 }
 

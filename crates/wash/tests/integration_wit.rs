@@ -107,6 +107,40 @@ async fn test_add_fetch_clean_workflow() -> Result<()> {
     Ok(())
 }
 
+/// Test 1b: Add dependency when the world opening brace is on the next line
+/// Verifies `wash wit add` handles valid multi-line world declarations
+#[tokio::test]
+#[ignore] // Requires network access
+async fn test_add_with_next_line_world_brace() -> Result<()> {
+    let (temp, wit_dir) =
+        setup_test_project_with_world("package test:component@0.1.0;\n\nworld example\n{\n}\n")
+            .await?;
+
+    let ctx = CliContext::builder()
+        .non_interactive(true)
+        .project_dir(temp.path().to_path_buf())
+        .build()
+        .await
+        .context("failed to create CLI context")?;
+
+    let add_cmd = WitCommand::Add {
+        package: "wasi:logging/logging@0.1.0-draft".to_string(),
+    };
+    let result = timeout(Duration::from_secs(60), add_cmd.handle(&ctx))
+        .await
+        .context("add command timed out after 60s")?
+        .context("add command failed")?;
+    assert!(result.is_success(), "add command should succeed");
+
+    let content = fs::read_to_string(wit_dir.join("world.wit"))?;
+    assert!(
+        content.contains("world example\n{\n    import wasi:logging/logging@0.1.0-draft;\n}"),
+        "world.wit should contain the import inside the multi-line world block"
+    );
+
+    Ok(())
+}
+
 /// Test 2: Update workflow (selective and full)
 /// Tests that update modifies lock file correctly
 #[tokio::test]
