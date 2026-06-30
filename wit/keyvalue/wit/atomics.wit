@@ -9,7 +9,8 @@ interface atomics {
   use types.{bucket, error};
 
   /// Atomically increment the value associated with the key in the store by the given (signed)
-  /// delta. It returns the new value.
+  /// delta, returning the new value. A negative delta decrements, where decrement is just a
+  /// negative increment, rather than `wasi:keyvalue`'s unsigned-only counter.
   ///
   /// If the key does not exist in the store, it creates a new key-value pair with the value set
   /// to the given delta.

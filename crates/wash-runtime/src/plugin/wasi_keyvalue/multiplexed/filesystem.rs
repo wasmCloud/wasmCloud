@@ -76,9 +76,9 @@ impl KvBackend for FilesystemBackend {
         Ok(KeyResponse { keys, cursor })
     }
 
-    async fn increment(&self, bucket: &str, key: &str, delta: u64) -> Result<u64, StoreError> {
+    async fn increment(&self, bucket: &str, key: &str, delta: i64) -> Result<i64, StoreError> {
         self.store
-            .increment(bucket, key, delta)
+            .increment_signed(bucket, key, delta)
             .await
             .map_err(to_store_error)
     }

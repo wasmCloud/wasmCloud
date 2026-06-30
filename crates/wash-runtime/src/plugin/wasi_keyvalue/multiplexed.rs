@@ -13,10 +13,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use bytes::{Buf, Bytes};
-use futures::stream::{FuturesOrdered, StreamExt};
-use redis::AsyncCommands;
-use tokio::sync::RwLock;
 use wasmtime::component::Resource;
 
 use crate::engine::ctx::{SharedCtx, extract_active_ctx};
@@ -56,6 +52,51 @@ pub struct KvBucket {
     name: String,
 }
 
+impl KvBucket {
+    pub(crate) fn new(backend: KvId, name: String) -> Self {
+        Self { backend, name }
+    }
+
+    pub(crate) fn backend(&self) -> &KvId {
+        &self.backend
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// A value together with its backend-native version token. The token is opaque
+/// and only equality is meaningful, but it MUST change on every write to the key
+/// (NATS revision, a per-bucket counter, ...). Never a hash of the value, or a
+/// value that returns to identical bytes (A → B → A) would reuse a version and
+/// defeat the ABA check.
+#[derive(Clone, Debug)]
+pub struct Versioned {
+    pub value: Vec<u8>,
+    pub version: String,
+}
+
+/// Preconditions for a [`KvBackend::swap`]. At least one must be set (enforced
+/// by the host layer). Every set condition must hold for the write to apply.
+#[derive(Default, Clone, Debug)]
+pub struct CasGuard {
+    /// Require the entry's current version to equal this (the ABA-safe check).
+    pub require_version: Option<String>,
+    /// Require the entry's current value to equal this (ABA-prone).
+    pub require_value: Option<Vec<u8>>,
+}
+
+/// Outcome of a [`KvBackend::swap`].
+#[derive(Clone, Debug)]
+pub enum CasOutcome {
+    /// Preconditions held; the new value was written.
+    Swapped,
+    /// A precondition failed; nothing was written. Carries the current entry
+    /// (`None` if the key is absent) so the caller can recompute and retry.
+    Stale(Option<Versioned>),
+}
+
 /// A keyvalue backend (redis, NATS, in-memory, ...). Operations are keyed by
 /// the opened bucket `name` plus the per-call key(s); the backend owns its own
 /// connection/state. This is the unified surface that the per-interface host
@@ -68,9 +109,19 @@ pub trait KvBackend: Send + Sync {
     async fn set(&self, bucket: &str, key: &str, value: Vec<u8>) -> Result<(), StoreError>;
     async fn delete(&self, bucket: &str, key: &str) -> Result<(), StoreError>;
     async fn exists(&self, bucket: &str, key: &str) -> Result<bool, StoreError>;
+    /// List keys, page-by-page via an opaque `u64` cursor. NOTE: paging is
+    /// offset/scan-based, so concurrent writes between pages may cause a key to
+    /// be skipped or repeated — the WIT permits an out-of-date listing.
     async fn list_keys(&self, bucket: &str, cursor: Option<u64>)
     -> Result<KeyResponse, StoreError>;
-    async fn increment(&self, bucket: &str, key: &str, delta: u64) -> Result<u64, StoreError>;
+    /// Atomically add the signed `delta` to the counter at `key`, returning the
+    /// new value. A negative `delta` decrements (the `wasmcloud:keyvalue` counter
+    /// is signed, like Redis/DynamoDB/FoundationDB). NOTE: the counter is stored
+    /// in a backend-specific encoding (in-memory little-endian i64, NATS
+    /// big-endian i64, redis integer, filesystem decimal text), so a counter is
+    /// not portable across backends, and a value written via `set` is only a
+    /// valid counter if it matches that backend's encoding.
+    async fn increment(&self, bucket: &str, key: &str, delta: i64) -> Result<i64, StoreError>;
     #[allow(clippy::type_complexity)]
     async fn get_many(
         &self,
@@ -83,11 +134,50 @@ pub trait KvBackend: Send + Sync {
         key_values: Vec<(String, Vec<u8>)>,
     ) -> Result<(), StoreError>;
     async fn delete_many(&self, bucket: &str, keys: Vec<String>) -> Result<(), StoreError>;
+
+    /// Set `key` to `value` only if it is absent (the `set` `if-not-exists`
+    /// option). Returns `true` if the write happened, `false` if the key already
+    /// existed. Backends SHOULD make this atomic; the default is a (racy)
+    /// `exists`-then-`set` that can let two concurrent callers both win.
+    async fn put_if_absent(
+        &self,
+        bucket: &str,
+        key: &str,
+        value: Vec<u8>,
+    ) -> Result<bool, StoreError> {
+        if self.exists(bucket, key).await? {
+            return Ok(false);
+        }
+        self.set(bucket, key, value).await?;
+        Ok(true)
+    }
+
+    /// Read a key's current value and version (the `cas.current` operation), or
+    /// `None` if absent. Default: compare-and-swap is unsupported.
+    async fn current(&self, _bucket: &str, _key: &str) -> Result<Option<Versioned>, StoreError> {
+        Err(StoreError::Other(
+            "compare-and-swap is not supported by this backend".to_string(),
+        ))
+    }
+
+    /// Atomically write `value` to `key` iff every precondition in `guard` holds
+    /// (the `cas.swap` operation). MUST be a single atomic compare-and-set
+    /// against the backend, not a host-side read-then-write. Default:
+    /// compare-and-swap is unsupported.
+    async fn swap(
+        &self,
+        _bucket: &str,
+        _key: &str,
+        _value: Vec<u8>,
+        _guard: CasGuard,
+    ) -> Result<CasOutcome, StoreError> {
+        Err(StoreError::Other(
+            "compare-and-swap is not supported by this backend".to_string(),
+        ))
+    }
 }
 
 use crate::engine::ctx::ActiveCtx;
-
-// ---- store interface -------------------------------------------------------
 
 impl<'a> bindings::named_imports::wasi::keyvalue::store::Host for ActiveCtx<'a> {
     async fn open(
@@ -164,8 +254,6 @@ impl<'a> bindings::named_imports::wasi::keyvalue::store::HostBucket for ActiveCt
     }
 }
 
-// ---- atomics interface -----------------------------------------------------
-
 impl<'a> bindings::named_imports::wasi::keyvalue::atomics::Host for ActiveCtx<'a> {
     async fn increment(
         &mut self,
@@ -174,12 +262,22 @@ impl<'a> bindings::named_imports::wasi::keyvalue::atomics::Host for ActiveCtx<'a
         key: String,
         delta: u64,
     ) -> wasmtime::Result<Result<u64, StoreError>> {
+        // `wasi:keyvalue/atomics` is unsigned, but the shared `KvBackend` is
+        // signed (for `wasmcloud:keyvalue`'s `s64`). Convert at the boundary: a
+        // delta beyond `i64::MAX` or a counter that has gone negative is reported
+        // as an error rather than silently wrapping.
         let b = self.table.get(&bucket)?;
-        Ok(b.backend.increment(&b.name, &key, delta).await)
+        let Ok(delta) = i64::try_from(delta) else {
+            return Ok(Err(StoreError::Other("delta exceeds i64::MAX".to_string())));
+        };
+        Ok(b.backend
+            .increment(&b.name, &key, delta)
+            .await
+            .and_then(|v| {
+                u64::try_from(v).map_err(|_| StoreError::Other("counter is negative".to_string()))
+            }))
     }
 }
-
-// ---- batch interface -------------------------------------------------------
 
 impl<'a> bindings::named_imports::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
     #[allow(clippy::type_complexity)]
@@ -214,528 +312,24 @@ impl<'a> bindings::named_imports::wasi::keyvalue::batch::Host for ActiveCtx<'a> 
     }
 }
 
-// ---- in-memory backend (reference impl; no external infra) -----------------
-
-/// An in-memory [`KvBackend`], used to prove the routing mechanism and for
-/// tests. Each instance is an isolated store, so two named imports backed by
-/// two `InMemoryBackend`s do not share data.
-#[derive(Default)]
-pub struct InMemoryBackend {
-    buckets: RwLock<HashMap<String, HashMap<String, Vec<u8>>>>,
-}
-
-impl InMemoryBackend {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    fn missing(bucket: &str) -> StoreError {
-        StoreError::Other(format!("bucket '{bucket}' does not exist"))
-    }
-}
-
-#[async_trait::async_trait]
-impl KvBackend for InMemoryBackend {
-    async fn open(&self, identifier: &str) -> Result<(), StoreError> {
-        self.buckets
-            .write()
-            .await
-            .entry(identifier.to_string())
-            .or_default();
-        Ok(())
-    }
-
-    async fn get(&self, bucket: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
-        let store = self.buckets.read().await;
-        let b = store.get(bucket).ok_or_else(|| Self::missing(bucket))?;
-        Ok(b.get(key).cloned())
-    }
-
-    async fn set(&self, bucket: &str, key: &str, value: Vec<u8>) -> Result<(), StoreError> {
-        let mut store = self.buckets.write().await;
-        let b = store.get_mut(bucket).ok_or_else(|| Self::missing(bucket))?;
-        b.insert(key.to_string(), value);
-        Ok(())
-    }
-
-    async fn delete(&self, bucket: &str, key: &str) -> Result<(), StoreError> {
-        let mut store = self.buckets.write().await;
-        let b = store.get_mut(bucket).ok_or_else(|| Self::missing(bucket))?;
-        b.remove(key);
-        Ok(())
-    }
-
-    async fn exists(&self, bucket: &str, key: &str) -> Result<bool, StoreError> {
-        let store = self.buckets.read().await;
-        let b = store.get(bucket).ok_or_else(|| Self::missing(bucket))?;
-        Ok(b.contains_key(key))
-    }
-
-    async fn list_keys(
-        &self,
-        bucket: &str,
-        cursor: Option<u64>,
-    ) -> Result<KeyResponse, StoreError> {
-        const PAGE_SIZE: usize = 100;
-        let store = self.buckets.read().await;
-        let b = store.get(bucket).ok_or_else(|| Self::missing(bucket))?;
-        let mut keys: Vec<String> = b.keys().cloned().collect();
-        keys.sort();
-        let start = cursor.unwrap_or(0) as usize;
-        let end = std::cmp::min(start + PAGE_SIZE, keys.len());
-        let page = keys.get(start..end).unwrap_or_default().to_vec();
-        let next = (end < keys.len()).then_some(end as u64);
-        Ok(KeyResponse {
-            keys: page,
-            cursor: next,
-        })
-    }
-
-    async fn increment(&self, bucket: &str, key: &str, delta: u64) -> Result<u64, StoreError> {
-        let mut store = self.buckets.write().await;
-        let b = store.get_mut(bucket).ok_or_else(|| Self::missing(bucket))?;
-        let current = match b.get(key) {
-            Some(bytes) if bytes.len() == 8 => {
-                // len checked == 8 by the guard, so copy into a fixed array
-                // without a fallible conversion (the lib denies unwrap/expect).
-                let mut arr = [0u8; 8];
-                arr.copy_from_slice(bytes);
-                u64::from_le_bytes(arr)
-            }
-            Some(bytes) => String::from_utf8_lossy(bytes).parse::<u64>().unwrap_or(0),
-            None => 0,
-        };
-        let next = current.saturating_add(delta);
-        b.insert(key.to_string(), next.to_le_bytes().to_vec());
-        Ok(next)
-    }
-
-    async fn get_many(
-        &self,
-        bucket: &str,
-        keys: Vec<String>,
-    ) -> Result<Vec<Option<(String, Vec<u8>)>>, StoreError> {
-        let store = self.buckets.read().await;
-        let b = store.get(bucket).ok_or_else(|| Self::missing(bucket))?;
-        Ok(keys
-            .into_iter()
-            .map(|k| b.get(&k).cloned().map(|v| (k, v)))
-            .collect())
-    }
-
-    async fn set_many(
-        &self,
-        bucket: &str,
-        key_values: Vec<(String, Vec<u8>)>,
-    ) -> Result<(), StoreError> {
-        let mut store = self.buckets.write().await;
-        let b = store.get_mut(bucket).ok_or_else(|| Self::missing(bucket))?;
-        for (k, v) in key_values {
-            b.insert(k, v);
-        }
-        Ok(())
-    }
-
-    async fn delete_many(&self, bucket: &str, keys: Vec<String>) -> Result<(), StoreError> {
-        let mut store = self.buckets.write().await;
-        let b = store.get_mut(bucket).ok_or_else(|| Self::missing(bucket))?;
-        for k in keys {
-            b.remove(&k);
-        }
-        Ok(())
-    }
-}
-
-// ---- providers + plugin ----------------------------------------------------
-
 const DEFAULT_BACKEND: &str = "in-memory";
 const MULTIPLEXED_KEYVALUE_ID: &str = "wasi-keyvalue-multiplexed";
+
+/// Page size for `list-keys` paging against the redis / NATS backends.
+const LIST_KEYS_BATCH_SIZE: usize = 1000;
 
 /// A keyvalue backend provider: a [`BackendProvider`] producing [`KvId`]s.
 pub type KvProvider = dyn BackendProvider<KvId>;
 
-/// In-memory provider. Each named interface gets its own isolated store.
-#[derive(Default)]
-pub struct InMemoryProvider;
-
-#[async_trait::async_trait]
-impl BackendProvider<KvId> for InMemoryProvider {
-    fn backend_type(&self) -> &'static str {
-        DEFAULT_BACKEND
-    }
-
-    async fn instantiate(&self, _config: &HashMap<String, String>) -> anyhow::Result<KvId> {
-        Ok(Arc::new(InMemoryBackend::new()))
-    }
-}
-
-// ---- redis backend ---------------------------------------------------------
-
-const LIST_KEYS_BATCH_SIZE: usize = 1000;
-
-/// A redis-backed [`KvBackend`]. The bucket identifier is used as a key prefix
-/// (`{bucket}:{key}`). Holds a shared multiplexed connection (pooled per url by
-/// the provider).
-pub struct RedisBackend {
-    conn: redis::aio::MultiplexedConnection,
-}
-
-impl RedisBackend {
-    fn prefixed(bucket: &str, key: &str) -> String {
-        format!("{bucket}:{key}")
-    }
-
-    fn err(e: impl std::fmt::Display) -> StoreError {
-        StoreError::Other(format!("Redis error: {e}"))
-    }
-}
-
-#[async_trait::async_trait]
-impl KvBackend for RedisBackend {
-    async fn open(&self, _identifier: &str) -> Result<(), StoreError> {
-        // Redis namespaces by key prefix; there is no bucket to create.
-        Ok(())
-    }
-
-    async fn get(&self, bucket: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
-        let mut conn = self.conn.clone();
-        conn.get::<_, Option<Vec<u8>>>(Self::prefixed(bucket, key))
-            .await
-            .map_err(Self::err)
-    }
-
-    async fn set(&self, bucket: &str, key: &str, value: Vec<u8>) -> Result<(), StoreError> {
-        let mut conn = self.conn.clone();
-        conn.set::<_, _, ()>(Self::prefixed(bucket, key), value)
-            .await
-            .map_err(Self::err)
-    }
-
-    async fn delete(&self, bucket: &str, key: &str) -> Result<(), StoreError> {
-        let mut conn = self.conn.clone();
-        conn.del::<_, ()>(Self::prefixed(bucket, key))
-            .await
-            .map_err(Self::err)
-    }
-
-    async fn exists(&self, bucket: &str, key: &str) -> Result<bool, StoreError> {
-        let mut conn = self.conn.clone();
-        conn.exists::<_, bool>(Self::prefixed(bucket, key))
-            .await
-            .map_err(Self::err)
-    }
-
-    async fn list_keys(
-        &self,
-        bucket: &str,
-        cursor: Option<u64>,
-    ) -> Result<KeyResponse, StoreError> {
-        let mut conn = self.conn.clone();
-        let pattern = Self::prefixed(bucket, "*");
-        let (next, raw): (u64, Vec<String>) = redis::cmd("SCAN")
-            .arg(cursor.unwrap_or(0))
-            .arg("MATCH")
-            .arg(&pattern)
-            .arg("COUNT")
-            .arg(LIST_KEYS_BATCH_SIZE)
-            .query_async(&mut conn)
-            .await
-            .map_err(Self::err)?;
-        let prefix = pattern.strip_suffix('*').unwrap_or("");
-        let keys = raw
-            .into_iter()
-            .filter_map(|k| k.strip_prefix(prefix).map(str::to_string))
-            .collect();
-        Ok(KeyResponse {
-            keys,
-            cursor: (next != 0).then_some(next),
-        })
-    }
-
-    async fn increment(&self, bucket: &str, key: &str, delta: u64) -> Result<u64, StoreError> {
-        let mut conn = self.conn.clone();
-        let delta = i64::try_from(delta)
-            .map_err(|_| StoreError::Other(format!("delta {delta} exceeds i64::MAX")))?;
-        conn.incr::<_, _, i64>(Self::prefixed(bucket, key), delta)
-            .await
-            .map(|v| v as u64)
-            .map_err(Self::err)
-    }
-
-    async fn get_many(
-        &self,
-        bucket: &str,
-        keys: Vec<String>,
-    ) -> Result<Vec<Option<(String, Vec<u8>)>>, StoreError> {
-        if keys.is_empty() {
-            return Ok(vec![]);
-        }
-        let mut conn = self.conn.clone();
-        let redis_keys: Vec<String> = keys.iter().map(|k| Self::prefixed(bucket, k)).collect();
-        let values: Vec<Option<Vec<u8>>> =
-            conn.mget(redis_keys.as_slice()).await.map_err(Self::err)?;
-        Ok(keys
-            .into_iter()
-            .zip(values)
-            .map(|(k, v)| v.map(|v| (k, v)))
-            .collect())
-    }
-
-    async fn set_many(
-        &self,
-        bucket: &str,
-        key_values: Vec<(String, Vec<u8>)>,
-    ) -> Result<(), StoreError> {
-        if key_values.is_empty() {
-            return Ok(());
-        }
-        let mut conn = self.conn.clone();
-        let pairs: Vec<(String, Vec<u8>)> = key_values
-            .into_iter()
-            .map(|(k, v)| (Self::prefixed(bucket, &k), v))
-            .collect();
-        conn.mset::<_, _, ()>(pairs.as_slice())
-            .await
-            .map_err(Self::err)
-    }
-
-    async fn delete_many(&self, bucket: &str, keys: Vec<String>) -> Result<(), StoreError> {
-        if keys.is_empty() {
-            return Ok(());
-        }
-        let mut conn = self.conn.clone();
-        let redis_keys: Vec<String> = keys.iter().map(|k| Self::prefixed(bucket, k)).collect();
-        conn.del::<_, ()>(redis_keys.as_slice())
-            .await
-            .map_err(Self::err)
-    }
-}
-
-/// Provider for [`RedisBackend`], selected by `config.backend = "redis"`.
-/// Requires `config.url` (e.g. `redis://127.0.0.1:6379`).
-#[derive(Default)]
-pub struct RedisProvider;
-
-#[async_trait::async_trait]
-impl BackendProvider<KvId> for RedisProvider {
-    fn pool_key(&self, config: &HashMap<String, String>) -> Option<String> {
-        config.get("url").cloned()
-    }
-    fn backend_type(&self) -> &'static str {
-        "redis"
-    }
-
-    async fn instantiate(&self, config: &HashMap<String, String>) -> anyhow::Result<KvId> {
-        let url = config
-            .get("url")
-            .ok_or_else(|| anyhow::anyhow!("redis keyvalue backend requires a 'url' config"))?;
-        let client = redis::Client::open(url.as_str())?;
-        let conn = client.get_multiplexed_async_connection().await?;
-        Ok(Arc::new(RedisBackend { conn }))
-    }
-}
-
-// ---- NATS JetStream backend ------------------------------------------------
-
-/// A NATS JetStream KV-backed [`KvBackend`]. Each bucket maps to a JetStream KV
-/// store (which must already exist); store handles are cached by name.
-pub struct NatsBackend {
-    context: Arc<async_nats::jetstream::Context>,
-    stores: RwLock<HashMap<String, async_nats::jetstream::kv::Store>>,
-}
-
-impl NatsBackend {
-    fn err(e: impl std::fmt::Display) -> StoreError {
-        StoreError::Other(format!("JetStream error: {e}"))
-    }
-
-    async fn store(&self, bucket: &str) -> Result<async_nats::jetstream::kv::Store, StoreError> {
-        if let Some(s) = self.stores.read().await.get(bucket) {
-            return Ok(s.clone());
-        }
-        let kv = self
-            .context
-            .get_key_value(bucket)
-            .await
-            .map_err(Self::err)?;
-        self.stores
-            .write()
-            .await
-            .insert(bucket.to_string(), kv.clone());
-        Ok(kv)
-    }
-}
-
-#[async_trait::async_trait]
-impl KvBackend for NatsBackend {
-    async fn open(&self, identifier: &str) -> Result<(), StoreError> {
-        self.store(identifier).await.map(|_| ())
-    }
-
-    async fn get(&self, bucket: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
-        let s = self.store(bucket).await?;
-        Ok(s.get(key).await.map_err(Self::err)?.map(|b| b.to_vec()))
-    }
-
-    async fn set(&self, bucket: &str, key: &str, value: Vec<u8>) -> Result<(), StoreError> {
-        let s = self.store(bucket).await?;
-        s.put(key.to_string(), value.into())
-            .await
-            .map_err(Self::err)?;
-        Ok(())
-    }
-
-    async fn delete(&self, bucket: &str, key: &str) -> Result<(), StoreError> {
-        let s = self.store(bucket).await?;
-        s.delete(key).await.map_err(Self::err)?;
-        Ok(())
-    }
-
-    async fn exists(&self, bucket: &str, key: &str) -> Result<bool, StoreError> {
-        let s = self.store(bucket).await?;
-        Ok(s.get(key).await.map_err(Self::err)?.is_some())
-    }
-
-    async fn list_keys(
-        &self,
-        bucket: &str,
-        cursor: Option<u64>,
-    ) -> Result<KeyResponse, StoreError> {
-        let s = self.store(bucket).await?;
-        let skip = cursor.unwrap_or(0) as usize;
-        let mut stream = s
-            .keys()
-            .await
-            .map_err(Self::err)?
-            .skip(skip)
-            .take(LIST_KEYS_BATCH_SIZE + 1)
-            .boxed();
-        let mut resp = KeyResponse {
-            keys: vec![],
-            cursor: None,
-        };
-        while let Some(Ok(key)) = stream.next().await {
-            if resp.keys.len() >= LIST_KEYS_BATCH_SIZE {
-                resp.cursor = Some(skip as u64 + LIST_KEYS_BATCH_SIZE as u64);
-                break;
-            }
-            resp.keys.push(key);
-        }
-        Ok(resp)
-    }
-
-    async fn increment(&self, bucket: &str, key: &str, delta: u64) -> Result<u64, StoreError> {
-        let s = self.store(bucket).await?;
-        // Optimistic CAS, matching the standalone NATS backend (big-endian u64).
-        let (revision, current) = match s.entry(key).await.map_err(Self::err)? {
-            // Read the counter as a big-endian u64, tolerating a malformed
-            // (non-8-byte) value as 0 rather than panicking: `Buf::get_u64`
-            // traps the guest if the value has fewer than 8 bytes.
-            Some(mut e) => {
-                let current = if e.value.len() >= 8 {
-                    e.value.get_u64()
-                } else {
-                    0
-                };
-                (Some(e.revision), current)
-            }
-            None => (None, 0),
-        };
-        // saturating, matching the in-memory/filesystem backends: a host-method
-        // panic on overflow would become a wasmtime trap.
-        let next = current.saturating_add(delta);
-        let bytes = Bytes::from(next.to_be_bytes().to_vec());
-        match revision {
-            Some(rev) => s.update(key, bytes, rev).await.map_err(Self::err)?,
-            None => s.put(key.to_string(), bytes).await.map_err(Self::err)?,
-        };
-        Ok(next)
-    }
-
-    async fn get_many(
-        &self,
-        bucket: &str,
-        keys: Vec<String>,
-    ) -> Result<Vec<Option<(String, Vec<u8>)>>, StoreError> {
-        let s = self.store(bucket).await?;
-        FuturesOrdered::from_iter(keys.into_iter().map(|key| {
-            let s = s.clone();
-            async move {
-                Ok(s.get(&key)
-                    .await
-                    .map_err(Self::err)?
-                    .map(|b| (key, b.to_vec())))
-            }
-        }))
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect()
-    }
-
-    async fn set_many(
-        &self,
-        bucket: &str,
-        key_values: Vec<(String, Vec<u8>)>,
-    ) -> Result<(), StoreError> {
-        let s = self.store(bucket).await?;
-        FuturesOrdered::from_iter(key_values.into_iter().map(|(key, value)| {
-            let s = s.clone();
-            async move {
-                s.put(key, value.into())
-                    .await
-                    .map(|_| ())
-                    .map_err(Self::err)
-            }
-        }))
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect()
-    }
-
-    async fn delete_many(&self, bucket: &str, keys: Vec<String>) -> Result<(), StoreError> {
-        let s = self.store(bucket).await?;
-        FuturesOrdered::from_iter(keys.into_iter().map(|key| {
-            let s = s.clone();
-            async move { s.delete(&key).await.map(|_| ()).map_err(Self::err) }
-        }))
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect()
-    }
-}
-
-/// Provider for [`NatsBackend`], selected by `config.backend = "nats"`. Requires
-/// `config.url` (e.g. `nats://127.0.0.1:4222`).
-#[derive(Default)]
-pub struct NatsProvider;
-
-#[async_trait::async_trait]
-impl BackendProvider<KvId> for NatsProvider {
-    fn pool_key(&self, config: &HashMap<String, String>) -> Option<String> {
-        config.get("url").cloned()
-    }
-    fn backend_type(&self) -> &'static str {
-        "nats"
-    }
-
-    async fn instantiate(&self, config: &HashMap<String, String>) -> anyhow::Result<KvId> {
-        let url = config
-            .get("url")
-            .ok_or_else(|| anyhow::anyhow!("nats keyvalue backend requires a 'url' config"))?;
-        let client = async_nats::connect(url).await?;
-        let context = async_nats::jetstream::new(client);
-        Ok(Arc::new(NatsBackend {
-            context: Arc::new(context),
-            stores: RwLock::new(HashMap::new()),
-        }))
-    }
-}
-
 mod filesystem;
+mod in_memory;
+mod nats;
+mod redis;
+
 pub use filesystem::{FilesystemBackend, FilesystemProvider};
+pub use in_memory::{InMemoryBackend, InMemoryProvider};
+pub use nats::{NatsBackend, NatsProvider};
+pub use redis::{RedisBackend, RedisProvider};
 
 /// A keyvalue [`HostPlugin`] that multiplexes `wasi:keyvalue` across backends
 /// selected per `(implements ..)` import. Register the backend providers you
