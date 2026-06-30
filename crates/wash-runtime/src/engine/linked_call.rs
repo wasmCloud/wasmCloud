@@ -385,6 +385,18 @@ pub(crate) async fn invoke_linked_async_export(
     }
 }
 
+/// Aborts the wrapped task when dropped before it completes, so a cancelled
+/// caller (e.g. a client disconnect tearing down the request future) reclaims
+/// the ephemeral store's core-instance slots immediately instead of leaving a
+/// detached task to run to its timeout.
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Run a plain-value async linked call in a short-lived store that is dropped
 /// (reclaiming its core-instance slots) as soon as the call returns.
 async fn invoke_ephemeral_linked_export(
@@ -411,7 +423,7 @@ async fn invoke_ephemeral_linked_export(
         "invoking ephemeral dynamic export"
     );
 
-    let call_result = tokio::task::spawn(async move {
+    let mut task = AbortOnDrop(tokio::task::spawn(async move {
         let instance = call_pre.instantiate_async(&mut store).await?;
         store
             .run_concurrent(async move |accessor| {
@@ -435,9 +447,10 @@ async fn invoke_ephemeral_linked_export(
             })
             .await
             .map_err(|e| wasmtime::format_err!("{e:#}"))?
-    })
-    .await
-    .map_err(|e| wasmtime::format_err!("ephemeral linked call task failed: {e}"));
+    }));
+    let call_result = (&mut task.0)
+        .await
+        .map_err(|e| wasmtime::format_err!("ephemeral linked call task failed: {e}"));
     let call_result = call_result??;
 
     for (i, v) in call_result.into_iter().enumerate() {
