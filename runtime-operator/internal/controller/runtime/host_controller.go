@@ -4,15 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strconv"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
@@ -177,7 +181,7 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&runtimev1alpha1.Host{}).
+		For(&runtimev1alpha1.Host{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("workload-host").
 		Complete(r)
 }
@@ -226,13 +230,25 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 			HTTPPort:    req.HttpPort,
 			Environment: req.GetEnvironment(),
 		}
-		// adding a nolint check to allow for client.apply, as the Host CRD
-		// would need to have an ApplyConfiguration generated for it, and thus a
-		// new CRD version would be required.
-		if err := h.client.Patch(ctx, host, client.Apply, //nolint:staticcheck
-			client.FieldOwner("host-status-updater"), client.ForceOwnership); err != nil {
-			log.Error(err, "failed to apply Host resource", "host", req.FriendlyName, "hostID", req.Id)
+		// Read the current state from the cache to see if the values in the heartbeat changed.
+		existing := &runtimev1alpha1.Host{}
+		getErr := h.client.Get(ctx,
+			types.NamespacedName{Name: req.FriendlyName, Namespace: h.operatorNamespace},
+			existing)
+		if getErr != nil && !apierrors.IsNotFound(getErr) {
+			log.Error(getErr, "failed to read Host resource", "host", req.FriendlyName, "hostID", req.Id)
 			return
+		}
+
+		if apierrors.IsNotFound(getErr) || hostSpecChanged(existing, host) {
+			// adding a nolint check to allow for client.apply, as the Host CRD
+			// would need to have an ApplyConfiguration generated for it, and thus a
+			// new CRD version would be required.
+			if err := h.client.Patch(ctx, host, client.Apply, //nolint:staticcheck
+				client.FieldOwner("host-status-updater"), client.ForceOwnership); err != nil {
+				log.Error(err, "failed to apply Host resource", "host", req.FriendlyName, "hostID", req.Id)
+				return
+			}
 		}
 
 		// Patching the status subresource to update the LastSeen timestamp in case
@@ -249,6 +265,16 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 
 	<-ctx.Done()
 	return subscription.Drain()
+}
+
+// hostSpecChanged returns true if any of the stored metadata
+// spec fields differs from what the heartbeat returns
+func hostSpecChanged(existing, next *runtimev1alpha1.Host) bool {
+	return existing.HostID != next.HostID ||
+		existing.Hostname != next.Hostname ||
+		existing.HTTPPort != next.HTTPPort ||
+		existing.Environment != next.Environment ||
+		!maps.Equal(existing.Labels, next.Labels)
 }
 
 // hostStatusPatch builds a JSON merge patch for the Host status subresource
