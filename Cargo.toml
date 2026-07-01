@@ -75,7 +75,7 @@ kube-derive = { version = "1", default-features = false }
 notify = { version = "8.0.0", default-features = false, features = ["macos_fsevent"] }
 moka = { version = "0.12", default-features = false }
 oci-client = { version = "0.17.0", default-features = false, features = ["rustls-tls"] }
-oci-wasm = { version = "0.4.0", default-features = false, features = ["rustls-tls"] }
+oci-wasm = { version = "0.5.0", default-features = false, features = ["rustls-tls"] }
 opentelemetry = { version = "0.31", default-features = false }
 opentelemetry-appender-tracing = { version = "0.31", default-features = false }
 opentelemetry-otlp = { version = "0.31", default-features = false }
@@ -116,9 +116,9 @@ tracing-opentelemetry = { version = "0.32", default-features = false }
 tracing-subscriber = { version = "0.3.19", default-features = false, features = ["env-filter", "ansi", "time", "json"] }
 url = { version = "2.5", default-features = false }
 uuid = { version = "1.17.0", default-features = false }
-wasm-pkg-client = { version = "0.10.0", default-features = false }
-wasm-pkg-core = { version = "0.10.0", default-features = false }
-wasm-metadata = { version = "0.248.0", default-features = false, features = ["oci"] }
+wasm-pkg-client = { version = "0.15.1", default-features = false }
+wasm-pkg-core = { version = "0.15.1", default-features = false }
+wasm-metadata = { version = "0.252.0", default-features = false, features = ["oci"] }
 wasmcloud = { path = "crates/wasmcloud", default-features = false }
 # Pinned to the release-46.0.0 branch HEAD rather than the crates.io 46.0.0
 # release because we need the resource-implements feature
@@ -168,13 +168,6 @@ ignored = [
 ]
 
 [patch.crates-io]
-# Pinned to main for two reasons: async component support (fixes #187, not yet
-# in a release — see https://github.com/bytecodealliance/rust-oci-wasm/issues/28)
-# and a wit-component (0.251) new enough to decode `(implements ..)` named
-# imports when building the OCI config. Switch back to a crates.io version once
-# a release carries both.
-oci-wasm = { git = "https://github.com/bytecodealliance/rust-oci-wasm", rev = "e7b5865f99503acce599cf083d59e42a4f05030e" }
-
 # The wasi-gfx deps (behind the `wasi-webgpu` feature) depend on wasmtime 46
 # from crates.io, while the rest of the workspace uses the forked git wasmtime
 # below. Without this, two distinct wasmtime crates end up in the graph and the
