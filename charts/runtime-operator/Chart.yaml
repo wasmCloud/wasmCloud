@@ -21,4 +21,4 @@ version: 2.5.1
 # This tracks the release-train tag rather than this file: at release time
 # `helm-publish` overrides it with the pushed `vX.Y.Z` tag. The value here is the
 # local/dev default used by `helm template` and canary builds.
-appVersion: "2.5.0"
+appVersion: "2.5.1"
