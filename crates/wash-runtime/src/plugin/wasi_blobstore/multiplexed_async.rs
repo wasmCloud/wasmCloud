@@ -215,7 +215,17 @@ impl<T: 'static + Send> bindings::wasmcloud::blobstore::container::HostContainer
                 },
             )
         })?;
-        let bytes = rx.await.unwrap_or_default();
+        // The consumer always delivers on `Drop` at end-of-stream; a receive
+        // error means it was dropped without finishing, so surface that rather
+        // than silently writing a zero-length object.
+        let bytes = match rx.await {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return Ok(Err(AsyncError::Other(
+                    "object body stream ended without delivering data".to_string(),
+                )));
+            }
+        };
         Ok(backend
             .write_data(&container, &name, bytes)
             .await

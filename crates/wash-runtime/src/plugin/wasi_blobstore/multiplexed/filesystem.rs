@@ -60,11 +60,11 @@ impl BlobBackend for FilesystemBackend {
     }
 
     async fn get_container(&self, name: &str) -> BlobResult<()> {
-        self.container_exists(name).await.and_then(|exists| {
-            exists
-                .then_some(())
-                .ok_or_else(|| BlobBackendError::NoSuchContainer(name.to_string()))
-        })
+        match self.container_exists(name).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(BlobBackendError::NoSuchContainer(name.to_string())),
+            Err(e) => Err(e),
+        }
     }
 
     async fn delete_container(&self, name: &str) -> BlobResult<()> {

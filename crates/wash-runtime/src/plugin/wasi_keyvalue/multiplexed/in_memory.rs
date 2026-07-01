@@ -56,7 +56,7 @@ impl InMemoryBackend {
         Self::default()
     }
 
-    fn missing(bucket: &str) -> StoreError {
+    fn err_missing(bucket: &str) -> StoreError {
         StoreError::Other(format!("bucket '{bucket}' does not exist"))
     }
 }
@@ -74,27 +74,31 @@ impl KvBackend for InMemoryBackend {
 
     async fn get(&self, bucket: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
         let store = self.buckets.read().await;
-        let b = store.get(bucket).ok_or_else(|| Self::missing(bucket))?;
+        let b = store.get(bucket).ok_or_else(|| Self::err_missing(bucket))?;
         Ok(b.entries.get(key).map(|e| e.value.clone()))
     }
 
     async fn set(&self, bucket: &str, key: &str, value: Vec<u8>) -> Result<(), StoreError> {
         let mut store = self.buckets.write().await;
-        let b = store.get_mut(bucket).ok_or_else(|| Self::missing(bucket))?;
+        let b = store
+            .get_mut(bucket)
+            .ok_or_else(|| Self::err_missing(bucket))?;
         b.put(key, value);
         Ok(())
     }
 
     async fn delete(&self, bucket: &str, key: &str) -> Result<(), StoreError> {
         let mut store = self.buckets.write().await;
-        let b = store.get_mut(bucket).ok_or_else(|| Self::missing(bucket))?;
+        let b = store
+            .get_mut(bucket)
+            .ok_or_else(|| Self::err_missing(bucket))?;
         b.entries.remove(key);
         Ok(())
     }
 
     async fn exists(&self, bucket: &str, key: &str) -> Result<bool, StoreError> {
         let store = self.buckets.read().await;
-        let b = store.get(bucket).ok_or_else(|| Self::missing(bucket))?;
+        let b = store.get(bucket).ok_or_else(|| Self::err_missing(bucket))?;
         Ok(b.entries.contains_key(key))
     }
 
@@ -105,7 +109,7 @@ impl KvBackend for InMemoryBackend {
     ) -> Result<KeyResponse, StoreError> {
         const PAGE_SIZE: usize = 100;
         let store = self.buckets.read().await;
-        let b = store.get(bucket).ok_or_else(|| Self::missing(bucket))?;
+        let b = store.get(bucket).ok_or_else(|| Self::err_missing(bucket))?;
         let mut keys: Vec<String> = b.entries.keys().cloned().collect();
         keys.sort();
         let start = cursor.unwrap_or(0) as usize;
@@ -120,7 +124,9 @@ impl KvBackend for InMemoryBackend {
 
     async fn increment(&self, bucket: &str, key: &str, delta: i64) -> Result<i64, StoreError> {
         let mut store = self.buckets.write().await;
-        let b = store.get_mut(bucket).ok_or_else(|| Self::missing(bucket))?;
+        let b = store
+            .get_mut(bucket)
+            .ok_or_else(|| Self::err_missing(bucket))?;
         let current = match b.entries.get(key) {
             Some(e) if e.value.len() == 8 => {
                 // len checked == 8 by the guard, so copy into a fixed array
@@ -149,7 +155,7 @@ impl KvBackend for InMemoryBackend {
         keys: Vec<String>,
     ) -> Result<Vec<Option<(String, Vec<u8>)>>, StoreError> {
         let store = self.buckets.read().await;
-        let b = store.get(bucket).ok_or_else(|| Self::missing(bucket))?;
+        let b = store.get(bucket).ok_or_else(|| Self::err_missing(bucket))?;
         Ok(keys
             .into_iter()
             .map(|k| b.entries.get(&k).map(|e| (k, e.value.clone())))
@@ -162,7 +168,9 @@ impl KvBackend for InMemoryBackend {
         key_values: Vec<(String, Vec<u8>)>,
     ) -> Result<(), StoreError> {
         let mut store = self.buckets.write().await;
-        let b = store.get_mut(bucket).ok_or_else(|| Self::missing(bucket))?;
+        let b = store
+            .get_mut(bucket)
+            .ok_or_else(|| Self::err_missing(bucket))?;
         for (k, v) in key_values {
             b.put(&k, v);
         }
@@ -171,7 +179,9 @@ impl KvBackend for InMemoryBackend {
 
     async fn delete_many(&self, bucket: &str, keys: Vec<String>) -> Result<(), StoreError> {
         let mut store = self.buckets.write().await;
-        let b = store.get_mut(bucket).ok_or_else(|| Self::missing(bucket))?;
+        let b = store
+            .get_mut(bucket)
+            .ok_or_else(|| Self::err_missing(bucket))?;
         for k in keys {
             b.entries.remove(&k);
         }
@@ -187,7 +197,9 @@ impl KvBackend for InMemoryBackend {
         // Check-and-insert under one write lock: atomic against concurrent
         // writers in-process, so two `if-not-exists` sets can't both win.
         let mut store = self.buckets.write().await;
-        let b = store.get_mut(bucket).ok_or_else(|| Self::missing(bucket))?;
+        let b = store
+            .get_mut(bucket)
+            .ok_or_else(|| Self::err_missing(bucket))?;
         if b.entries.contains_key(key) {
             return Ok(false);
         }
@@ -197,7 +209,7 @@ impl KvBackend for InMemoryBackend {
 
     async fn current(&self, bucket: &str, key: &str) -> Result<Option<Versioned>, StoreError> {
         let store = self.buckets.read().await;
-        let b = store.get(bucket).ok_or_else(|| Self::missing(bucket))?;
+        let b = store.get(bucket).ok_or_else(|| Self::err_missing(bucket))?;
         Ok(b.entries.get(key).map(|e| Versioned {
             value: e.value.clone(),
             version: e.version.to_string(),
@@ -214,7 +226,9 @@ impl KvBackend for InMemoryBackend {
         // The whole compare-and-set runs under one write lock, so it is atomic
         // against concurrent writers (no lost update).
         let mut store = self.buckets.write().await;
-        let b = store.get_mut(bucket).ok_or_else(|| Self::missing(bucket))?;
+        let b = store
+            .get_mut(bucket)
+            .ok_or_else(|| Self::err_missing(bucket))?;
         let current = b.entries.get(key);
         let stale = || {
             CasOutcome::Stale(current.map(|e| Versioned {

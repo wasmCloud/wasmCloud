@@ -4,7 +4,7 @@
 //! isolated store, so two named imports backed by two `InMemoryBackend`s do not
 //! share data.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -25,7 +25,9 @@ struct MemObject {
 #[derive(Default, Debug)]
 struct MemContainer {
     created_at: u64,
-    objects: HashMap<String, MemObject>,
+    // `BTreeMap` keeps objects ordered by (often hierarchical) name, so
+    // `list_objects` yields a stable, sorted listing.
+    objects: BTreeMap<String, MemObject>,
 }
 
 /// An in-memory [`BlobBackend`]. Each instance is an isolated store.
@@ -51,18 +53,18 @@ impl BlobBackend for InMemoryBackend {
             name.to_string(),
             MemContainer {
                 created_at: now_secs(),
-                objects: HashMap::new(),
+                objects: BTreeMap::new(),
             },
         );
         Ok(())
     }
 
     async fn get_container(&self, name: &str) -> BlobResult<()> {
-        self.container_exists(name).await.and_then(|exists| {
-            exists
-                .then_some(())
-                .ok_or_else(|| BlobBackendError::NoSuchContainer(name.to_string()))
-        })
+        match self.container_exists(name).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(BlobBackendError::NoSuchContainer(name.to_string())),
+            Err(e) => Err(e),
+        }
     }
 
     async fn delete_container(&self, name: &str) -> BlobResult<()> {
