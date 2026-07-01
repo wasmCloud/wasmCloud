@@ -248,14 +248,14 @@ impl CliCommand for DevCommand {
                     .with_provider(Arc::new(plugin::wasi_blobstore::FilesystemProvider))
                     .with_provider(Arc::new(plugin::wasi_blobstore::NatsBlobProvider)),
             ))?;
-            debug!("WASI Blobstore multiplexed plugin registered (implements)");
+            debug!("wasi:blobstore multiplexed plugin registered (implements)");
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_blobstore::MultiplexedAsyncBlobstore::new()
                     .with_provider(Arc::new(plugin::wasi_blobstore::InMemoryProvider))
                     .with_provider(Arc::new(plugin::wasi_blobstore::FilesystemProvider))
                     .with_provider(Arc::new(plugin::wasi_blobstore::NatsBlobProvider)),
             ))?;
-            debug!("wasmcloud Blobstore async multiplexed plugin registered (implements)");
+            debug!("wasmcloud:blobstore async multiplexed plugin registered (implements)");
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_keyvalue::MultiplexedAsyncKeyValue::new()
                     .with_provider(Arc::new(plugin::wasi_keyvalue::InMemoryProvider))
@@ -263,7 +263,7 @@ impl CliCommand for DevCommand {
                     .with_provider(Arc::new(plugin::wasi_keyvalue::NatsProvider))
                     .with_provider(Arc::new(plugin::wasi_keyvalue::FilesystemProvider)),
             ))?;
-            debug!("wasmcloud KeyValue async multiplexed plugin registered (implements)");
+            debug!("wasmcloud:keyvalue async multiplexed plugin registered (implements)");
         }
 
         // Add postgres plugin if configured

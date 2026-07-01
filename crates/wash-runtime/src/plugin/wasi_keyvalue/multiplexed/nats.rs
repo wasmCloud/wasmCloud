@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytes::{Buf, Bytes};
-use futures::stream::{FuturesOrdered, StreamExt};
+use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::RwLock;
 
 use crate::plugin::multiplex::BackendProvider;
@@ -45,11 +45,10 @@ impl NatsBackend {
                 // failure is a real error that must propagate so a guest can retry
                 // instead of seeing "not found".
                 KeyValueErrorKind::GetBucket => {
-                    let transport = matches!(
+                    if matches!(
                         e.source().and_then(|s| s.downcast_ref::<GetStreamError>()),
                         Some(g) if g.kind() == GetStreamErrorKind::Request
-                    );
-                    if transport {
+                    ) {
                         Self::err(e)
                     } else {
                         StoreError::NoSuchStore
@@ -177,7 +176,7 @@ impl KvBackend for NatsBackend {
         keys: Vec<String>,
     ) -> Result<Vec<Option<(String, Vec<u8>)>>, StoreError> {
         let s = self.store(bucket).await?;
-        FuturesOrdered::from_iter(keys.into_iter().map(|key| {
+        FuturesUnordered::from_iter(keys.into_iter().map(|key| {
             let s = s.clone();
             async move {
                 Ok(s.get(&key)
@@ -198,7 +197,7 @@ impl KvBackend for NatsBackend {
         key_values: Vec<(String, Vec<u8>)>,
     ) -> Result<(), StoreError> {
         let s = self.store(bucket).await?;
-        FuturesOrdered::from_iter(key_values.into_iter().map(|(key, value)| {
+        FuturesUnordered::from_iter(key_values.into_iter().map(|(key, value)| {
             let s = s.clone();
             async move {
                 s.put(key, value.into())
@@ -215,7 +214,7 @@ impl KvBackend for NatsBackend {
 
     async fn delete_many(&self, bucket: &str, keys: Vec<String>) -> Result<(), StoreError> {
         let s = self.store(bucket).await?;
-        FuturesOrdered::from_iter(keys.into_iter().map(|key| {
+        FuturesUnordered::from_iter(keys.into_iter().map(|key| {
             let s = s.clone();
             async move { s.delete(&key).await.map(|_| ()).map_err(Self::err) }
         }))

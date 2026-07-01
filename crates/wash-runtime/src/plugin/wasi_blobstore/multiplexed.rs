@@ -130,7 +130,6 @@ type BlobResult<T> = Result<T, BlobBackendError>;
 #[async_trait::async_trait]
 pub trait BlobBackend: Send + Sync {
     async fn create_container(&self, name: &str) -> BlobResult<()>;
-    /// Validate that `name` exists (used by `get-container`).
     async fn get_container(&self, name: &str) -> BlobResult<()>;
     async fn delete_container(&self, name: &str) -> BlobResult<()>;
     async fn container_exists(&self, name: &str) -> BlobResult<bool>;
