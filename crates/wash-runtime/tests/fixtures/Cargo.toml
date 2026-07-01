@@ -36,6 +36,9 @@ members = [
     "ephemeral-caller-p3",
     "blobstore-implements-p3",
     "keyvalue-implements-p3",
+    "svc-counter",
+    "bridge-backend",
+    "bridge-service",
 ]
 
 [workspace.dependencies]
