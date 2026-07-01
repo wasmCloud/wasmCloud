@@ -246,9 +246,7 @@ jobs:
           context: .
           outputs: type=docker,dest=/tmp/wash-image.tar,name=localhost/wasmcloud-wash:e2e
           # Build the e2e host with `(implements ..)` multiplexing enabled so the
-          # implements spec's named keyvalue imports resolve. Only this e2e
-          # tarball gets the feature; the published canary build below stays on
-          # default features.
+          # implements spec's named keyvalue imports resolve.
           build-args: |
             CARGO_FEATURES=wasm_component_model_implements
           # head_ref on PRs (the source branch, shared across re-pushes
@@ -269,6 +267,9 @@ jobs:
         with:
           context: .
           outputs: type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
+          # Enable wasm_component_model_implements on the wasm host image for canary builds
+          build-args: |
+            CARGO_FEATURES=wasm_component_model_implements
           cache-from: |
             type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
             type=gha,scope=wash-${{ matrix.arch }}-main
@@ -604,7 +605,7 @@ jobs:
           # aggressively than cargo's default of 3.
           CARGO_NET_RETRY: "10"
         run: |
-          ${{ matrix.buildCommand }} --release --target ${{ matrix.buildTarget || matrix.target }}
+          ${{ matrix.buildCommand }} --release --target ${{ matrix.buildTarget || matrix.target }} -p wash --features wasm_component_model_implements
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} ${{ matrix.artifact }}
 
       - name: Create Windows zip archive
