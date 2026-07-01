@@ -15,7 +15,7 @@ type: application
 # The chart version. This is what gets published: `helm-publish` packages the
 # chart with this value, so it MUST be bumped whenever anything under this chart
 # changes. CI enforces the bump with `ct lint --check-version-increment`.
-version: 2.5.0
+version: 2.5.1
 
 # The version of the application being deployed (the operator image tag default).
 # This tracks the release-train tag rather than this file: at release time
