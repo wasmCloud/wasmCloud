@@ -12,10 +12,12 @@ description: A Helm chart for Kubernetes
 # pipeline. Library charts do not define any templates and therefore cannot be deployed.
 type: application
 
-# The chart version. This is what gets published: `helm-publish` packages the
-# chart with this value, so it MUST be bumped whenever anything under this chart
-# changes. CI enforces the bump with `ct lint --check-version-increment`.
-version: 2.5.2
+# The chart version. This is what `helm-publish` packages the chart with. It is
+# release-driven: the release-train workflow sets it equal to `appVersion` on
+# every release, so the two always match. Don't bump it in feature PRs — chart
+# changes ride out with the next release. (ct does not enforce a per-PR bump;
+# see .github/ct.yaml.)
+version: 2.5.1
 
 # The version of the application being deployed (the operator image tag default).
 # This tracks the release-train tag rather than this file: at release time

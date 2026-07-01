@@ -48,25 +48,25 @@ jobs:
       - name: Render
         run: make helm-render
 
-  # Fails a PR that changes any file under a chart without bumping that chart's
-  # Chart.yaml `version`. Also runs `helm lint` + yamllint on the chart.
+  # Runs `helm lint` + yamllint on the chart. The chart `version` is
+  # release-driven (see .github/ct.yaml), so this does not enforce a version bump.
   lint:
     needs:
       - changes
     if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
-    name: ct lint (chart version bump)
+    name: ct lint (helm + yaml)
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # ct diffs the chart against `target-branch` to decide whether the
-          # version was bumped, so it needs full history, not a shallow clone.
+          # ct diffs against `target-branch` to detect which charts changed so
+          # it only lints those, so it needs full history, not a shallow clone.
           fetch-depth: 0
           persist-credentials: false
       - uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
-      - name: Lint charts and enforce version bump
+      - name: Lint charts
         run: ct lint --config .github/ct.yaml
 
   # Schema-validates the rendered manifests against the Kubernetes API.

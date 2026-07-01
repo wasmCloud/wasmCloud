@@ -205,10 +205,17 @@ jobs:
             echo "failed to bump workspace version in Cargo.toml" >&2
             exit 1
           fi
-          # Helm chart appVersion tracks the workspace version.
-          sed -i -E "s/^appVersion: \".*\"$/appVersion: \"${NEW}\"/" charts/runtime-operator/Chart.yaml
-          if ! grep -qE "^appVersion: \"${NEW}\"$" charts/runtime-operator/Chart.yaml; then
-            echo "failed to bump appVersion in Chart.yaml" >&2
+          # The Helm chart is release-driven: both `appVersion` and the chart
+          # `version` track the workspace version and always match. This is the
+          # only place the chart version changes — ct's per-PR version-bump guard
+          # is disabled (see .github/ct.yaml) precisely so chart-only PRs don't
+          # have to touch it.
+          CHART_YAML=charts/runtime-operator/Chart.yaml
+          sed -i -E "s/^appVersion: \".*\"$/appVersion: \"${NEW}\"/" "${CHART_YAML}"
+          sed -i -E "s/^version: .*/version: ${NEW}/" "${CHART_YAML}"
+          if ! grep -qE "^appVersion: \"${NEW}\"$" "${CHART_YAML}" \
+            || ! grep -qE "^version: ${NEW}$" "${CHART_YAML}"; then
+            echo "failed to set chart version/appVersion to ${NEW} in ${CHART_YAML}" >&2
             exit 1
           fi
           # Refresh Cargo.lock — `--workspace` only updates workspace member
