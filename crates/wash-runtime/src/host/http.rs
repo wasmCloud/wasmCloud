@@ -30,6 +30,7 @@ use crate::host::allowed_hosts::AllowedHost;
 use crate::wit::WitInterface;
 use crate::{engine::ctx::SharedCtx, observability::Meters};
 use crate::{engine::workload::ResolvedWorkload, observability::FuelConsumptionMeter};
+use crate::host::reactor::{BrokerMessage, MessagingJob};
 use anyhow::{Context, ensure};
 use http_body_util::BodyExt;
 use hyper::client::conn::http2;
@@ -137,6 +138,13 @@ pub trait Router: Send + Sync + 'static {
 
     /// Unregister a workload that is being stopped
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()>;
+
+    /// Register a workload whose long-lived service handles HTTP ingress (the
+    /// service exports `wasi:http/handler`). Routers that key off a component
+    /// can use this to map the workload for routing. Default: no-op.
+    async fn on_service_http_resolved(&self, _workload_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
 
     /// Determine if the outgoing request is allowed
     fn allow_outgoing_request(
@@ -409,6 +417,17 @@ impl Router for DevRouter {
         Ok(())
     }
 
+    async fn on_service_http_resolved(&self, workload_id: &str) -> anyhow::Result<()> {
+        // A service-handled workload routes the same way as a component one:
+        // DevRouter sends all requests to the most-recently resolved workload.
+        let mut lock = self
+            .last_workload_id
+            .write()
+            .map_err(|e| anyhow::anyhow!("DevRouter write lock poisoned: {e}"))?;
+        lock.replace(workload_id.to_string());
+        Ok(())
+    }
+
     fn allow_outgoing_request(
         &self,
         _workload_id: &str,
@@ -462,6 +481,52 @@ pub trait HostHandler: Send + Sync + 'static {
     ) -> anyhow::Result<()>;
     /// Unregister a workload
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()>;
+
+    /// Register a long-lived service instance that serves HTTP ingress: inbound
+    /// requests for `workload_id` are delivered over `sender` instead of
+    /// instantiating a component per request. Default: no-op (the workload
+    /// keeps the per-request path).
+    async fn on_service_http_resolved(
+        &self,
+        _workload_id: &str,
+        _sender: tokio::sync::mpsc::Sender<ServiceHttpJob>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    /// Unregister a service HTTP instance. Default: no-op.
+    async fn on_service_http_unbind(&self, _workload_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Register a long-lived reactor instance that handles inbound messages:
+    /// messages for `workload_id` are delivered over `sender` instead of
+    /// instantiating a component per message. Default: no-op.
+    async fn on_reactor_messaging_resolved(
+        &self,
+        _workload_id: &str,
+        _sender: tokio::sync::mpsc::Sender<MessagingJob>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    /// Unregister a reactor messaging instance. Default: no-op.
+    async fn on_reactor_messaging_unbind(&self, _workload_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+    /// Deliver a message to a workload's registered messaging reactor, returning
+    /// the handler's `result<_, string>`. Default: no messaging support.
+    async fn deliver_reactor_message(
+        &self,
+        _workload_id: &str,
+        _msg: BrokerMessage,
+    ) -> anyhow::Result<Result<(), String>> {
+        anyhow::bail!("this host does not support reactor messaging delivery")
+    }
+    /// Whether a long-lived reactor is registered to handle messages for
+    /// `workload_id` (so a host ingress can deliver to it instead of
+    /// instantiating per message). Default: false.
+    async fn has_reactor_messaging(&self, _workload_id: &str) -> bool {
+        false
+    }
 
     /// Handle an outgoing HTTP request from a workload
     fn outgoing_request(
@@ -574,6 +639,23 @@ impl HostHandler for NullServer {
 pub type WorkloadHandles =
     Arc<RwLock<HashMap<String, (ResolvedWorkload, InstancePre<SharedCtx>, String)>>>;
 
+/// An inbound HTTP request routed to a long-lived service instance, paired with
+/// a oneshot for its response.
+pub type ServiceHttpJob = (
+    hyper::Request<hyper::body::Incoming>,
+    tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
+);
+
+/// A map from workload id to the channel of its HTTP-serving service instance.
+/// Empty unless a workload's service opts into HTTP ingress (a p3 feature).
+pub type ServiceHandlers =
+    Arc<RwLock<HashMap<String, tokio::sync::mpsc::Sender<ServiceHttpJob>>>>;
+
+/// A map from workload id to the channel of a reactor's messaging handler
+/// instance. Empty unless a workload's service exports a messaging handler.
+pub type MessagingHandlers =
+    Arc<RwLock<HashMap<String, tokio::sync::mpsc::Sender<MessagingJob>>>>;
+
 /// HTTP server plugin that handles incoming HTTP requests for WebAssembly components.
 ///
 /// This plugin implements the `wasi:http/incoming-handler` interface and routes
@@ -594,6 +676,10 @@ pub struct HttpServer<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
     outgoing_handler: O,
     addr: SocketAddr,
     workload_handles: WorkloadHandles,
+    /// Workloads whose long-lived service serves HTTP ingress directly.
+    service_handlers: ServiceHandlers,
+    /// Workloads whose long-lived reactor serves messaging ingress directly.
+    messaging_handlers: MessagingHandlers,
     shutdown_tx: Arc<RwLock<Option<mpsc::Sender<()>>>>,
     tls_acceptor: Option<TlsAcceptor>,
     listener: Arc<tokio::sync::Mutex<Option<TcpListener>>>,
@@ -713,6 +799,8 @@ impl<T: Router, O: OutgoingHandler> HttpServerBuilder<T, O> {
             outgoing_handler: self.outgoing_handler,
             addr,
             workload_handles: Arc::default(),
+            service_handlers: Arc::default(),
+            messaging_handlers: Arc::default(),
             shutdown_tx: Arc::new(RwLock::new(None)),
             tls_acceptor,
             listener: Arc::new(tokio::sync::Mutex::new(Some(listener))),
@@ -756,6 +844,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
         let shutdown_tx_clone = self.shutdown_tx.clone();
         let workload_handles = self.workload_handles.clone();
+        let service_handlers = self.service_handlers.clone();
         let tls_acceptor = self.tls_acceptor.clone();
 
         // Store the shutdown sender
@@ -782,6 +871,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
                 listener,
                 handler,
                 workload_handles,
+                service_handlers,
                 &mut shutdown_rx,
                 tls_acceptor,
                 fuel_meter,
@@ -837,8 +927,72 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
         self.router.on_workload_unbind(workload_id).await?;
 
         self.workload_handles.write().await.remove(workload_id);
+        self.service_handlers.write().await.remove(workload_id);
+        self.messaging_handlers.write().await.remove(workload_id);
 
         Ok(())
+    }
+
+    async fn on_service_http_resolved(
+        &self,
+        workload_id: &str,
+        sender: tokio::sync::mpsc::Sender<ServiceHttpJob>,
+    ) -> anyhow::Result<()> {
+        self.router.on_service_http_resolved(workload_id).await?;
+        self.service_handlers
+            .write()
+            .await
+            .insert(workload_id.to_string(), sender);
+        Ok(())
+    }
+
+    async fn on_service_http_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
+        self.service_handlers.write().await.remove(workload_id);
+        Ok(())
+    }
+
+    async fn on_reactor_messaging_resolved(
+        &self,
+        workload_id: &str,
+        sender: tokio::sync::mpsc::Sender<MessagingJob>,
+    ) -> anyhow::Result<()> {
+        self.messaging_handlers
+            .write()
+            .await
+            .insert(workload_id.to_string(), sender);
+        Ok(())
+    }
+
+    async fn on_reactor_messaging_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
+        self.messaging_handlers.write().await.remove(workload_id);
+        Ok(())
+    }
+
+    async fn deliver_reactor_message(
+        &self,
+        workload_id: &str,
+        msg: BrokerMessage,
+    ) -> anyhow::Result<Result<(), String>> {
+        let sender = self
+            .messaging_handlers
+            .read()
+            .await
+            .get(workload_id)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!("no messaging reactor registered for workload {workload_id}")
+            })?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        sender
+            .send((msg, tx))
+            .await
+            .map_err(|_| anyhow::anyhow!("reactor messaging instance is not running"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("reactor dropped the message response"))
+    }
+
+    async fn has_reactor_messaging(&self, workload_id: &str) -> bool {
+        self.messaging_handlers.read().await.contains_key(workload_id)
     }
 
     fn outgoing_request(
@@ -917,6 +1071,7 @@ async fn run_http_server<T: Router>(
     listener: TcpListener,
     handler: Arc<T>,
     workload_handles: WorkloadHandles,
+    service_handlers: ServiceHandlers,
     shutdown_rx: &mut mpsc::Receiver<()>,
     tls_acceptor: Option<TlsAcceptor>,
     fuel_meter: FuelConsumptionMeter,
@@ -935,12 +1090,14 @@ async fn run_http_server<T: Router>(
                         debug!(addr = ?client_addr, "new HTTP client connection");
 
                         let handles_clone = workload_handles.clone();
+                        let service_handlers_clone = service_handlers.clone();
                         let tls_acceptor_clone = tls_acceptor.clone();
                         let handler_clone = handler.clone();
                         let fuel_meter = fuel_meter.clone();
                         tokio::spawn(async move {
                             let service = hyper::service::service_fn(move |req| {
                                 let handles = handles_clone.clone();
+                                let service_handlers = service_handlers_clone.clone();
                                 let handler = handler_clone.clone();
                                 let fuel_meter = fuel_meter.clone();
                                 async move {
@@ -948,7 +1105,7 @@ async fn run_http_server<T: Router>(
                                     let remote_context =
                                         opentelemetry::global::get_text_map_propagator(|propagator| propagator.extract(&extractor));
 
-                                    handle_http_request(handler, req, handles, fuel_meter).with_context(remote_context).await
+                                    handle_http_request(handler, req, handles, service_handlers, fuel_meter).with_context(remote_context).await
                                 }
                             });
 
@@ -1040,6 +1197,7 @@ async fn handle_http_request<T: Router>(
     handler: Arc<T>,
     req: hyper::Request<hyper::body::Incoming>,
     workload_handles: WorkloadHandles,
+    service_handlers: ServiceHandlers,
     fuel_meter: FuelConsumptionMeter,
 ) -> Result<hyper::Response<HyperOutgoingBody>, hyper::Error> {
     let method = req.method().clone();
@@ -1067,6 +1225,31 @@ async fn handle_http_request<T: Router>(
         host = %workload_id,
         "HTTP request received"
     );
+
+    // If this workload's long-lived service serves HTTP, deliver the request to
+    // it (preserving its in-memory state) instead of the per-request path.
+    let service_sender = service_handlers.read().await.get(&workload_id).cloned();
+    if let Some(sender) = service_sender {
+        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+        let response = if sender.send((req, resp_tx)).await.is_err() {
+            error!(host = %workload_id, "service HTTP instance is not running");
+            error_response(503)
+        } else {
+            match resp_rx.await {
+                Ok(Ok(resp)) => resp,
+                Ok(Err(e)) => {
+                    error!(err = ?e, "service HTTP handler failed");
+                    error_response(500)
+                }
+                Err(_) => {
+                    error!("service HTTP instance dropped the response");
+                    error_response(500)
+                }
+            }
+        };
+        record_response_status(&response);
+        return Ok(response);
+    }
 
     // NOTE(lxf): Separate HTTP / GRPC handling
 

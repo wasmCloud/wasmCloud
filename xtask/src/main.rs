@@ -114,11 +114,21 @@ const P3_FIXTURES: &[&str] = &[
     "ephemeral-caller-p3",
     "blobstore-implements-p3",
     "keyvalue-implements-p3",
+    "svc-counter",
+    "msg-counter",
+    "bridge-backend",
+    "bridge-service",
 ];
 
 // Fixtures with local-only WIT worlds (no wasi imports). Copying shared
 // deps into these would pollute their wit resolution with unneeded packages.
 const P2_SKIP_SHARED_WIT: &[&str] = &["cron-service", "cron-component"];
+
+// P3 fixtures that vendor their own `wit/deps` (a custom `wasmcloud:bridge`
+// contract plus the wasi packages they reference). Copying the shared
+// p3-wit-deps over them would pull every wasi package into their
+// `generate_all` surface.
+const P3_SKIP_SHARED_WIT: &[&str] = &["bridge-backend", "bridge-service", "msg-counter"];
 
 fn build_fixtures(workspace: &Path) -> Result<()> {
     let fixtures_dir = workspace.join("crates/wash-runtime/tests/fixtures");
@@ -137,7 +147,13 @@ fn build_fixtures(workspace: &Path) -> Result<()> {
         P2_FIXTURES,
         P2_SKIP_SHARED_WIT,
     )?;
-    build_kind(&fixtures_dir, &wasm_dir, FixtureKind::P3, P3_FIXTURES, &[])?;
+    build_kind(
+        &fixtures_dir,
+        &wasm_dir,
+        FixtureKind::P3,
+        P3_FIXTURES,
+        P3_SKIP_SHARED_WIT,
+    )?;
 
     println!(
         "staged {} fixtures into {}",
