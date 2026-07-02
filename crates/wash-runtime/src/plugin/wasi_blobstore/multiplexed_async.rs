@@ -145,6 +145,113 @@ impl<T: 'static + Send> bindings::named_imports::wasmcloud::blobstore::blobstore
 
 impl bindings::named_imports::wasmcloud::blobstore::blobstore::Host for ActiveCtx<'_> {}
 
+/// Look up the per-workload default backend for a PLAIN (unlabeled) import,
+/// populated at bind from the `""` route. `None` if the workload has no default
+/// blobstore route (e.g. it only imports labeled instances).
+async fn default_backend<T: 'static + Send>(
+    accessor: &Accessor<T, SharedCtx>,
+) -> wasmtime::Result<Option<BlobId>> {
+    let (plugin, workload_id) = accessor.with(|mut a| {
+        let ctx = a.get();
+        (
+            ctx.try_get_plugin::<MultiplexedAsyncBlobstore>(MULTIPLEXED_ASYNC_BLOBSTORE_ID),
+            ctx.workload_id.clone(),
+        )
+    });
+    let plugin = plugin?;
+    Ok(plugin.mux.default_for(&workload_id))
+}
+
+fn no_default_backend<T2>() -> wasmtime::Result<Result<T2, AsyncError>> {
+    Ok(Err(AsyncError::Other(
+        "no default wasmcloud:blobstore backend is bound for this component".to_string(),
+    )))
+}
+
+// Standard (non-`(implements)`) binding for a PLAIN `wasmcloud:blobstore/blobstore`
+// import: every call routes to the workload's single default backend. The
+// returned `container` resource carries that backend, so the standalone
+// `container` methods (read/write/list/…) work unchanged.
+impl<T: 'static + Send> bindings::wasmcloud::blobstore::blobstore::HostWithStore<T> for SharedCtx {
+    async fn create_container(
+        accessor: &Accessor<T, Self>,
+        name: ContainerName,
+    ) -> wasmtime::Result<Result<Resource<BlobContainer>, AsyncError>> {
+        let Some(id) = default_backend(accessor).await? else {
+            return no_default_backend();
+        };
+        if let Err(e) = id.create_container(&name).await {
+            return Ok(Err(e.into()));
+        }
+        let resource = accessor.with(|mut a| a.get().table.push(BlobContainer::new(id, name)))?;
+        Ok(Ok(resource))
+    }
+
+    async fn get_container(
+        accessor: &Accessor<T, Self>,
+        name: ContainerName,
+    ) -> wasmtime::Result<Result<Resource<BlobContainer>, AsyncError>> {
+        let Some(id) = default_backend(accessor).await? else {
+            return no_default_backend();
+        };
+        if let Err(e) = id.get_container(&name).await {
+            return Ok(Err(e.into()));
+        }
+        let resource = accessor.with(|mut a| a.get().table.push(BlobContainer::new(id, name)))?;
+        Ok(Ok(resource))
+    }
+
+    async fn delete_container(
+        accessor: &Accessor<T, Self>,
+        name: ContainerName,
+    ) -> wasmtime::Result<Result<(), AsyncError>> {
+        let Some(id) = default_backend(accessor).await? else {
+            return no_default_backend();
+        };
+        Ok(id.delete_container(&name).await.map_err(Into::into))
+    }
+
+    async fn container_exists(
+        accessor: &Accessor<T, Self>,
+        name: ContainerName,
+    ) -> wasmtime::Result<Result<bool, AsyncError>> {
+        let Some(id) = default_backend(accessor).await? else {
+            return no_default_backend();
+        };
+        Ok(id.container_exists(&name).await.map_err(Into::into))
+    }
+
+    async fn copy_object(
+        accessor: &Accessor<T, Self>,
+        src: ObjectId,
+        dest: ObjectId,
+    ) -> wasmtime::Result<Result<(), AsyncError>> {
+        let Some(id) = default_backend(accessor).await? else {
+            return no_default_backend();
+        };
+        Ok(id
+            .copy_object(&src.container, &src.object, &dest.container, &dest.object)
+            .await
+            .map_err(Into::into))
+    }
+
+    async fn move_object(
+        accessor: &Accessor<T, Self>,
+        src: ObjectId,
+        dest: ObjectId,
+    ) -> wasmtime::Result<Result<(), AsyncError>> {
+        let Some(id) = default_backend(accessor).await? else {
+            return no_default_backend();
+        };
+        Ok(id
+            .move_object(&src.container, &src.object, &dest.container, &dest.object)
+            .await
+            .map_err(Into::into))
+    }
+}
+
+impl bindings::wasmcloud::blobstore::blobstore::Host for ActiveCtx<'_> {}
+
 // The `container` interface is bound as a *standalone* (non-implements)
 // interface rather than per-label. A `wasmcloud:blobstore/blobstore` `use
 // container.{container}` drags the `container` interface into the guest as an
@@ -429,20 +536,48 @@ impl HostPlugin for MultiplexedAsyncBlobstore {
         }
 
         let registry = self.build_registry(interfaces.iter()).await?;
+
+        // Does the component import blobstore with an `(implements ..)` label, or
+        // plainly (unlabeled), or both? Bind only what's needed so a plain-only
+        // component doesn't also get the labeled instance (and vice versa).
+        let has_labeled = interfaces
+            .iter()
+            .any(|i| i.namespace == "wasmcloud" && i.package == "blobstore" && i.name.is_some());
+        let has_plain = interfaces
+            .iter()
+            .any(|i| i.namespace == "wasmcloud" && i.package == "blobstore" && i.name.is_none());
+
+        // A plain import routes to the workload's default backend (the `""` route
+        // from the registry), stashed on the multiplexer so the standard host impl
+        // can find it — the shared mechanism every multiplexed plugin uses.
+        if has_plain {
+            self.mux.set_default(item.workload_id(), &registry);
+        }
+
         let component = item.component().clone();
         let linker = item.linker();
 
-        // `blobstore` (create/get/delete container, copy/move) is routed per
+        // `blobstore` (create/get/delete container, copy/move) routed per
         // `(implements ..)` label so each label lands on its own backend.
-        bindings::named_imports::wasmcloud::blobstore::blobstore::add_to_linker::<_, SharedCtx>(
-            linker,
-            &component,
-            |name| self.mux.resolve(&registry, name),
-            extract_active_ctx,
-        )?;
-        // `container` is bound standalone (see the container host impls): a guest
-        // imports it *unlabeled* via `blobstore`'s `use container`, and its
-        // methods route through the resource's stored backend, not a label.
+        if has_labeled {
+            bindings::named_imports::wasmcloud::blobstore::blobstore::add_to_linker::<_, SharedCtx>(
+                linker,
+                &component,
+                |name| self.mux.resolve(&registry, name),
+                extract_active_ctx,
+            )?;
+        }
+        // A plain (unlabeled) `blobstore` import: bind the standard interface to
+        // the workload's default backend — no label required.
+        if has_plain {
+            bindings::wasmcloud::blobstore::blobstore::add_to_linker::<_, SharedCtx>(
+                linker,
+                extract_active_ctx,
+            )?;
+        }
+        // `container` is bound standalone regardless: a guest imports it
+        // *unlabeled* via `blobstore`'s `use container`, and its methods route
+        // through the resource's stored backend, not a label.
         bindings::wasmcloud::blobstore::container::add_to_linker::<_, SharedCtx>(
             linker,
             extract_active_ctx,

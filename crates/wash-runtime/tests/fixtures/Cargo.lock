@@ -90,6 +90,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4512299f36f043ab09a583e57bceb5a5aab7a73db1805848e8fef3c9e8c78b3"
 
 [[package]]
+name = "blobstore-default-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.58.0",
+]
+
+[[package]]
 name = "blobstore-implements-p3"
 version = "0.0.0"
 dependencies = [
@@ -753,6 +760,13 @@ name = "keyvalue-counter"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "wit-bindgen 0.58.0",
+]
+
+[[package]]
+name = "keyvalue-default-p3"
+version = "0.0.0"
+dependencies = [
  "wit-bindgen 0.58.0",
 ]
 

@@ -1,0 +1,12 @@
+package wasmcloud:keyvalue-default-p3@0.1.0;
+
+// Imports the async `wasmcloud:keyvalue@0.1.0` `store` *plainly* — no
+// `(implements ..)` label. A component should get a working default backend from
+// the host without labeling the import, which is what this fixture exercises.
+// `atomics` is imported unlabeled too and operates on the plainly-opened bucket.
+world keyvalue-default {
+    import wasmcloud:keyvalue/store@0.1.0;
+    import wasmcloud:keyvalue/atomics@0.1.0;
+
+    export wasi:http/handler@0.3.0;
+}

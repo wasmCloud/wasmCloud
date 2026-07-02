@@ -1,0 +1,12 @@
+package wasmcloud:blobstore-default-p3@0.1.0;
+
+// Imports the async, native-stream `wasmcloud:blobstore@0.1.0` *plainly* — no
+// `(implements ..)` label. A component should get a working default backend from
+// the host without labeling the import, which is what this fixture exercises.
+world blobstore-default {
+    import wasmcloud:blobstore/blobstore@0.1.0;
+    import wasmcloud:blobstore/container@0.1.0;
+    import wasmcloud:blobstore/types@0.1.0;
+
+    export wasi:http/handler@0.3.0;
+}

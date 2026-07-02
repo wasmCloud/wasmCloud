@@ -35,7 +35,9 @@ members = [
     "ephemeral-callee-p3",
     "ephemeral-caller-p3",
     "blobstore-implements-p3",
+    "blobstore-default-p3",
     "keyvalue-implements-p3",
+    "keyvalue-default-p3",
 ]
 
 [workspace.dependencies]
