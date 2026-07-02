@@ -1,0 +1,19 @@
+version: 2.0.0
+
+build:
+  command: cargo build --target wasm32-wasip2 --release --locked
+  component_path: target/wasm32-wasip2/release/oci_registry.wasm
+
+dev:
+  # Give the plain (unlabeled) `wasmcloud:blobstore` import a filesystem-backed
+  # default (rooted at tmp/blobstore), so registry contents persist across
+  # `wash dev` restarts. Omit this entry to fall back to the in-memory backend.
+  # No `name:` — this is the default route for an unlabeled import.
+  host_interfaces:
+    - namespace: wasmcloud
+      package: blobstore
+      interfaces: [blobstore]
+      version: "0.1.0"
+      config:
+        backend: filesystem
+        root: tmp/blobstore
