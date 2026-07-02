@@ -83,7 +83,6 @@ const P2_FIXTURES: &[&str] = &[
     "cron-service",
     "cron-component",
     "http-blobstore",
-    "http-webgpu",
     "cpu-usage-service",
     "messaging-handler",
     "messaging-echo",
@@ -115,7 +114,7 @@ const P3_FIXTURES: &[&str] = &[
     "blobstore-implements-p3",
     "blobstore-default-p3",
     "keyvalue-implements-p3",
-    "keyvalue-default-p3",
+    "http-webgpu",
 ];
 
 // Fixtures with local-only WIT worlds (no wasi imports). Copying shared

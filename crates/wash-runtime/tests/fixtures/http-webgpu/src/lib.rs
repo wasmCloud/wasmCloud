@@ -1,8 +1,13 @@
 use anyhow::Context;
-use std::borrow::Cow;
-use wgpu::util::DeviceExt;
+use bindings::wasi::webgpu::webgpu;
 use wstd::http::body::Body;
 use wstd::http::{Request, Response, StatusCode};
+
+mod bindings {
+    wit_bindgen::generate!({
+        generate_all,
+    });
+}
 
 #[wstd::http_server]
 async fn main(request: Request<Body>) -> anyhow::Result<Response<Body>> {
@@ -44,51 +49,43 @@ var<storage, read_write> v_indices: array<u32>; // this is used as both input an
 @compute
 @workgroup_size(1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    v_indices[global_id.x] = v_indices[global_id.x] * 2;
+    v_indices[global_id.x] = v_indices[global_id.x] * 3;
 }
 "#;
 
 async fn double_numbers_on_gpu(numbers: &[u32]) -> anyhow::Result<Vec<u32>> {
-    // Instantiates instance of WebGPU
-    let instance = wgpu::Instance::default();
+    let gpu = webgpu::get_gpu();
 
     // `request_adapter` instantiates the general connection to the GPU
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions::default())
+    let adapter = gpu
+        .request_adapter(None)
         .await
         .context("failed to request adapter")?;
 
     // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
     //  `features` being the available features.
-    let (device, queue) = adapter
-        .request_device(
-            &wgpu::DeviceDescriptor {
-                label: None,
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
-            },
-            None,
-        )
-        .await?;
+    let device = adapter.request_device(None).await?;
+    let queue = device.queue();
 
     // Loads the shader from WGSL
-    let cs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+    let cs_module = device.create_shader_module(&webgpu::GpuShaderModuleDescriptor {
         label: None,
-        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SHADER)),
+        code: SHADER.to_string(),
+        compilation_hints: None,
     });
 
     // Gets the size in bytes of the buffer.
-    let size = std::mem::size_of_val(numbers) as wgpu::BufferAddress;
+    let size = std::mem::size_of_val(numbers) as u64;
 
     // Instantiates buffer without data.
     // `usage` of buffer specifies how it can be used:
     //   `BufferUsages::MAP_READ` allows it to be read (outside the shader).
     //   `BufferUsages::COPY_DST` allows it to be the destination of the copy.
-    let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+    let staging_buffer = device.create_buffer(&webgpu::GpuBufferDescriptor {
         label: None,
         size,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
+        usage: webgpu::GpuBufferUsage::MAP_READ | webgpu::GpuBufferUsage::COPY_DST,
+        mapped_at_creation: None,
     });
 
     // Instantiates buffer with data (`numbers`).
@@ -96,13 +93,20 @@ async fn double_numbers_on_gpu(numbers: &[u32]) -> anyhow::Result<Vec<u32>> {
     //   A storage buffer (can be bound within a bind group and thus available to a shader).
     //   The destination of a copy.
     //   The source of a copy.
-    let storage_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Storage Buffer"),
-        contents: bytemuck::cast_slice(numbers),
-        usage: wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_DST
-            | wgpu::BufferUsages::COPY_SRC,
+    let storage_buffer_contents = bytemuck::cast_slice(numbers);
+    let storage_buffer = device.create_buffer(&webgpu::GpuBufferDescriptor {
+        label: Some("Storage Buffer".to_string()),
+        size: storage_buffer_contents.len() as _,
+        usage: webgpu::GpuBufferUsage::STORAGE
+            | webgpu::GpuBufferUsage::COPY_DST
+            | webgpu::GpuBufferUsage::COPY_SRC,
+
+        mapped_at_creation: Some(true),
     });
+    storage_buffer
+        .get_mapped_range_get_with_copy(None, None)?
+        .copy_from_slice(storage_buffer_contents);
+    storage_buffer.unmap()?;
 
     // A bind group defines how buffers are accessed by shaders.
     // It is to WebGPU what a descriptor set is to Vulkan.
@@ -111,75 +115,63 @@ async fn double_numbers_on_gpu(numbers: &[u32]) -> anyhow::Result<Vec<u32>> {
     // A pipeline specifies the operation of a shader
 
     // Instantiates the pipeline.
-    let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+    let compute_pipeline = device.create_compute_pipeline(webgpu::GpuComputePipelineDescriptor {
         label: None,
-        layout: None,
-        module: &cs_module,
-        entry_point: "main",
+        layout: webgpu::GpuLayoutMode::Auto,
+        compute: webgpu::GpuProgrammableStage {
+            module: &cs_module,
+            entry_point: Some("main".to_string()),
+            constants: None,
+        },
     });
 
     // Instantiates the bind group, once again specifying the binding of buffers.
     let bind_group_layout = compute_pipeline.get_bind_group_layout(0);
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+    let bind_group = device.create_bind_group(&webgpu::GpuBindGroupDescriptor {
         label: None,
         layout: &bind_group_layout,
-        entries: &[wgpu::BindGroupEntry {
+        entries: vec![webgpu::GpuBindGroupEntry {
             binding: 0,
-            resource: storage_buffer.as_entire_binding(),
+            resource: webgpu::GpuBindingResource::GpuBuffer(&storage_buffer),
         }],
     });
 
     // A command encoder executes one or many pipelines.
     // It is to WebGPU what a command buffer is to Vulkan.
-    let mut encoder =
-        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    {
-        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: None,
-            timestamp_writes: None,
-        });
-        cpass.set_pipeline(&compute_pipeline);
-        cpass.set_bind_group(0, &bind_group, &[]);
-        cpass.insert_debug_marker("double numbers on gpu");
-        cpass.dispatch_workgroups(numbers.len() as u32, 1, 1); // Number of cells to run, the (x,y,z) size of item being processed
-    }
+    let encoder = device.create_command_encoder(None);
+    let cpass = encoder.begin_compute_pass(None);
+    cpass.set_pipeline(&compute_pipeline);
+    cpass.set_bind_group(0, Some(&bind_group), None, None, None)?;
+    cpass.insert_debug_marker("double numbers on gpu");
+    cpass.dispatch_workgroups(numbers.len() as u32, Some(1), Some(1)); // Number of cells to run, the (x,y,z) size of item being processed
+    cpass.end();
+
     // Sets adds copy operation to command encoder.
     // Will copy data from storage buffer on GPU to staging buffer on CPU.
-    encoder.copy_buffer_to_buffer(&storage_buffer, 0, &staging_buffer, 0, size);
+    encoder.copy_buffer_to_buffer(&storage_buffer, None, &staging_buffer, None, None);
 
     // Submits command encoder for processing
-    queue.submit(Some(encoder.finish()));
+    queue.submit(&[&encoder.finish(None)]);
 
-    // Note that we're not calling `.await` here.
-    let buffer_slice = staging_buffer.slice(..);
-    // Sets the buffer up for mapping, sending over the result of the mapping back to us when it is finished.
-    let (sender, receiver) = flume::bounded(1);
-    buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
+    staging_buffer
+        .map_async(webgpu::GpuMapMode::READ, None, None)
+        .await?;
 
-    // Poll the device in a blocking manner so that our future resolves.
-    // In an actual application, `device.poll(...)` should
-    // be called in an event loop or on another thread.
-    device.poll(wgpu::Maintain::wait()).panic_on_timeout();
+    // Gets contents of buffer
+    let data = staging_buffer.get_mapped_range_get_with_copy(None, None)?;
+    // Since contents are got in bytes, this converts these bytes back to u32
+    let result = bytemuck::cast_slice(&data).to_vec();
 
-    // Awaits until `buffer_future` can be read from
-    if let Ok(Ok(())) = receiver.recv_async().await {
-        // Gets contents of buffer
-        let data = buffer_slice.get_mapped_range();
-        // Since contents are got in bytes, this converts these bytes back to u32
-        let result = bytemuck::cast_slice(&data).to_vec();
+    // With the current interface, we have to make sure all mapped views are
+    // dropped before we unmap the buffer.
+    drop(data);
+    // Unmaps buffer from memory
+    // If you are familiar with C++ these 2 lines can be thought of similarly to:
+    //   delete myPointer;
+    //   myPointer = NULL;
+    // It effectively frees the memory
+    staging_buffer.unmap().unwrap();
 
-        // With the current interface, we have to make sure all mapped views are
-        // dropped before we unmap the buffer.
-        drop(data);
-        staging_buffer.unmap(); // Unmaps buffer from memory
-                                // If you are familiar with C++ these 2 lines can be thought of similarly to:
-                                //   delete myPointer;
-                                //   myPointer = NULL;
-                                // It effectively frees the memory
-
-        // Returns data from buffer
-        Ok(result)
-    } else {
-        Err(anyhow::anyhow!("failed to run compute on gpu!"))
-    }
+    // Returns data from buffer
+    Ok(result)
 }
