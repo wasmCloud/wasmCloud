@@ -882,11 +882,34 @@ impl EngineBuilder {
         self.proposals
             .insert(WasmProposal::WasmComponentModelImplements);
 
+        #[cfg(feature = "epoch-interruption")]
+        config.epoch_interruption(true);
+
         for proposal in &self.proposals {
             proposal.apply(&mut config);
         }
 
         let inner = wasmtime::Engine::new(&config)?;
+
+        #[cfg(feature = "epoch-interruption")]
+        {
+            let weak = inner.weak();
+            std::thread::Builder::new()
+                .name("wasmtime-epoch-ticker".to_string())
+                .spawn(move || {
+                    loop {
+                        use core::time::Duration;
+
+                        match weak.upgrade() {
+                            Some(engine) => engine.increment_epoch(),
+                            None => break,
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                })
+                .context("failed to spawn epoch ticker thread")?;
+        }
+
         let cache = Cache::builder()
             .max_capacity(self.compilation_cache_size.unwrap_or(100))
             .time_to_idle(

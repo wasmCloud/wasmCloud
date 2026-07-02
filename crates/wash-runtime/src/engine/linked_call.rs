@@ -240,6 +240,10 @@ pub(crate) async fn new_store_from_templates(
         is_service,
     )
     .await?;
+
+    #[cfg(feature = "epoch-interruption")]
+    let epoch_cancel_handle = active_ctx.cancel_handle.clone();
+
     let mut shared_ctx = SharedCtx::new(active_ctx);
 
     for linked in linked {
@@ -257,6 +261,25 @@ pub(crate) async fn new_store_from_templates(
     }
 
     let mut store = wasmtime::Store::new(engine, shared_ctx);
+
+    #[cfg(feature = "epoch-interruption")]
+    {
+        // Arm the epoch policy with this invocation's cancellation handle:
+        // on every epoch tick the callback re-arms and keeps running, unless
+        // the handle was tripped — then the guest traps mid-wasm
+        // we need to always set the epoch_deadline here because you need the mutable store
+        // and cant access that in the plugin
+        // Maybe we can / should add something to it so we can?
+        store.set_epoch_deadline(1);
+
+        store.epoch_deadline_callback(move |_| {
+            if epoch_cancel_handle.load(std::sync::atomic::Ordering::Relaxed) {
+                Ok(wasmtime::UpdateDeadline::Interrupt)
+            } else {
+                Ok(wasmtime::UpdateDeadline::Continue(1))
+            }
+        });
+    }
 
     let active_id = active.component_id.clone();
     for (linked_id, linked_pre) in linked_instances {

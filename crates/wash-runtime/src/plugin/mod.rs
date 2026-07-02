@@ -56,6 +56,9 @@ pub mod wasmcloud_messaging;
 #[cfg(feature = "wasm_component_model_implements")]
 pub mod multiplex;
 
+#[cfg(feature = "epoch-interruption")]
+pub mod cancellable_jobs;
+
 #[cfg(all(
     feature = "wasi-webgpu",
     not(target_os = "windows"),

@@ -4,6 +4,8 @@
 //! for wasmtime when executing WebAssembly components. It integrates WASI
 //! interfaces, HTTP capabilities, and plugin access into a unified context.
 
+#[cfg(feature = "epoch-interruption")]
+use core::sync::atomic::AtomicBool;
 use std::{
     any::Any,
     collections::HashMap,
@@ -240,6 +242,9 @@ pub struct Ctx {
     http_hooks: CtxHttpHooks,
     /// The HTTP hooks for outgoing HTTP requests (implements WasiHttpHooks for P3).
     http_hooks_p3: CtxHttpHooksP3,
+    /// Calling this handle will drop the store via epoch interruption trap
+    #[cfg(feature = "epoch-interruption")]
+    pub cancel_handle: Arc<AtomicBool>,
 }
 
 impl Ctx {
@@ -444,6 +449,8 @@ pub struct CtxBuilder {
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
+    #[cfg(feature = "epoch-interruption")]
+    cancel_handle: Arc<AtomicBool>,
 }
 
 impl CtxBuilder {
@@ -460,6 +467,8 @@ impl CtxBuilder {
             allowed_hosts: Default::default(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
+            #[cfg(feature = "epoch-interruption")]
+            cancel_handle: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -552,6 +561,8 @@ impl CtxBuilder {
             plugins,
             http_hooks,
             http_hooks_p3,
+            #[cfg(feature = "epoch-interruption")]
+            cancel_handle: self.cancel_handle,
         }
     }
 }
