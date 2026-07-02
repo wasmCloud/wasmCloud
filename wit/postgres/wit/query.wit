@@ -1,0 +1,52 @@
+package wasmcloud:postgres@0.2.0;
+
+/// Interface for querying a Postgres database.
+///
+/// Unlike `wasmcloud:postgres@0.1.1-draft`, every operation is an `async func`,
+/// so a single component can issue many in-flight queries concurrently without
+/// the `wasi:io/poll` ceremony required under wasip2. `query` also streams its
+/// result rows rather than buffering the whole result set in host memory before
+/// returning.
+interface query {
+  use types.{pg-value, column-name, row, error};
+
+  /// Query a Postgres database, leaving connection/session management to the
+  /// callee/implementer of this interface (normally a provider configured with
+  /// connection credentials).
+  ///
+  /// Queries *must* be parameterized, with named arguments in the form of
+  /// `$<integer>`, for example:
+  ///
+  /// ```
+  /// SELECT email,username FROM users WHERE uuid=$1;
+  /// ```
+  ///
+  /// On success the result is delivered in three parts:
+  ///
+  /// 1. `list<column-name>` — the result columns, in order, delivered once up
+  ///    front. Position `i` names the value at position `i` of every `row`.
+  /// 2. `stream<row>` — the result rows, produced incrementally as the database
+  ///    returns them. The caller owns the stream and drives it to completion (or
+  ///    drops it early to stop consuming).
+  /// 3. `future<result<_, error>>` — a completion signal that resolves once the
+  ///    row stream is exhausted. It reports an error encountered *after* the
+  ///    column header was sent (e.g. a failure partway through a large result),
+  ///    which the row stream itself has no way to surface.
+  ///
+  /// The outer `result` reports failures that occur before any rows stream, such
+  /// as a rejected statement or a lost connection.
+  query: async func(query: string, params: list<pg-value>)
+    -> result<tuple<list<column-name>, stream<row>, future<result<_, error>>>, error>;
+
+  /// Perform a batch query (which could contain multiple statements) against a
+  /// Postgres database, leaving connection/session management to the
+  /// callee/implementer of this interface (normally a provider configured with
+  /// connection credentials).
+  ///
+  /// No user-provided or untrusted data should be used with this query --
+  /// parameters are not allowed.
+  ///
+  /// This query *can* be used to execute multi-statement queries (common in
+  /// migrations).
+  query-batch: async func(query: string) -> result<_, error>;
+}

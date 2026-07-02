@@ -1,6 +1,16 @@
-//! Type conversions between WIT-generated PgValue types and tokio-postgres types.
-//!
-//! Ported from wasmCloud's provider-sqldb-postgres reference implementation.
+// `PgValue` <-> tokio-postgres conversions (the `FromSql`/`ToSql` impls and
+// helpers), ported from wasmCloud's provider-sqldb-postgres reference impl.
+//
+// This file is `include!`d into a small `conversions` module by *both* the sync
+// (`0.1.1-draft`) and async (`0.2.0`) bindings. bindgen emits a distinct-but-
+// identical `PgValue` type per package version, and a `FromSql` impl lives on a
+// concrete type, so each binding needs its own copy of the impls — but the logic
+// is identical, so it lives here once. It refers to `PgValue` and the value
+// sub-types (`Date`, `Time`, ...) by bare name; each including module brings its
+// binding's copies into scope via `use` before the `include!`.
+//
+// Because it is pasted mid-module, this file must not carry a `//!` module doc
+// or `use` the binding types itself.
 
 use core::net::IpAddr;
 use std::collections::HashMap;
@@ -21,12 +31,6 @@ use pg_bigdecimal::PgNumeric;
 use postgres_types::{FromSql, IsNull, PgLsn, ToSql, Type as PgType};
 use tokio_postgres::Row;
 use uuid::Uuid;
-
-use super::bindings::wasmcloud::postgres::query::{PgValue, ResultRow};
-use super::bindings::wasmcloud::postgres::types::{
-    Date, HashableF64, MacAddressEui48, MacAddressEui64, Numeric, Offset, ResultRowEntry, Time,
-    Timestamp, TimestampTz,
-};
 
 // ── Helper functions ────────────────────────────────────────────────────────
 
@@ -170,20 +174,6 @@ fn utc_to_timestamptz(dt: DateTime<Utc>) -> TimestampTz {
         offset: Offset::WesternHemisphereSecs(dt.offset().fix().local_minus_utc()),
         timestamp: naive_to_timestamp(dt.naive_local()),
     }
-}
-
-// ── into_result_row ─────────────────────────────────────────────────────────
-
-/// Build a `ResultRow` from a [`Row`]
-pub(super) fn into_result_row(r: Row) -> ResultRow {
-    let mut rr = Vec::new();
-    for (idx, col) in r.columns().iter().enumerate() {
-        rr.push(ResultRowEntry {
-            column_name: col.name().into(),
-            value: r.get(idx),
-        });
-    }
-    rr
 }
 
 // ── ToSql for MacAddressEui48 ───────────────────────────────────────────────
