@@ -38,6 +38,7 @@ members = [
     "blobstore-default-p3",
     "keyvalue-implements-p3",
     "keyvalue-default-p3",
+    "postgres-async-p3",
 ]
 
 [workspace.dependencies]

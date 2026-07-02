@@ -169,8 +169,10 @@ wasmtime-wasi-http = { workspace = true, features = ["p2"] }
 gag = "1.0"
 rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
 testcontainers = { workspace = true }
-# Raw redis client for the keyvalue redis interop test
+# redis client for the keyvalue redis interop test
 redis = { workspace = true }
+# postgres client for admin setup (create roles/tables) in tests
+tokio-postgres = { workspace = true, features = ["runtime"] }
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
 # Pinned to match the gungraun-runner version the bench host's Ansible
 # playbook installs (scripts/bench/ansible/provision.yml). gungraun

@@ -1,0 +1,16 @@
+package wasmcloud:postgres@0.2.0;
+
+/// The `wasmcloud:postgres/imports` world provides common APIs for querying a
+/// Postgres database. Components targeting this world can:
+///
+/// 1. Run parameterized queries whose result rows stream back incrementally
+///    (`query`), and run multi-statement batch queries (`query-batch`).
+/// 2. Prepare statements once and execute them repeatedly (`prepared`).
+///
+/// Every operation is an `async func`, so a component can keep many queries in
+/// flight concurrently.
+world imports {
+  import types;
+  import query;
+  import prepared;
+}

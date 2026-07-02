@@ -1,4 +1,32 @@
-mod conversions;
+mod async_p3;
+
+/// Sync (`0.1.1-draft`) `PgValue` <-> tokio-postgres conversions.
+///
+/// The conversion body lives in `conversions.rs` and is shared verbatim with the
+/// async (`0.2.0`) binding (see that file's header). `include!` pastes it here
+/// with this binding's generated types in scope; only `into_result_row` (the
+/// sync `result-row` of named entries) is specific to this binding.
+mod conversions {
+    use super::bindings::wasmcloud::postgres0_1_1_draft::query::{PgValue, ResultRow};
+    use super::bindings::wasmcloud::postgres0_1_1_draft::types::{
+        Date, HashableF64, MacAddressEui48, MacAddressEui64, Numeric, Offset, ResultRowEntry, Time,
+        Timestamp, TimestampTz,
+    };
+
+    include!("conversions.rs");
+
+    /// Build a `result-row` (a list of named `result-row-entry`) from a [`Row`].
+    pub(super) fn into_result_row(r: Row) -> ResultRow {
+        let mut rr = Vec::new();
+        for (idx, col) in r.columns().iter().enumerate() {
+            rr.push(ResultRowEntry {
+                column_name: col.name().into(),
+                value: r.get(idx),
+            });
+        }
+        rr
+    }
+}
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -33,7 +61,7 @@ const PLUGIN_POSTGRES_ID: &str = "wasmcloud-postgres";
 const DEFAULT_POOL_SIZE: usize = 10;
 
 // Two variants of the same `postgres` world. They generate identical
-// `bindings::wasmcloud::postgres::{types,query,prepared}` modules (so the legacy
+// `bindings::wasmcloud::postgres0_1_1_draft::{types,query,prepared}` modules (so the legacy
 // per-component path and `conversions` are unaffected); the implements variant
 // additionally generates `bindings::named_imports::*` for `(implements ..)`
 // routing. `types` carries no functions, so it is linked once and left unnamed.
@@ -60,9 +88,9 @@ mod bindings {
     });
 }
 
-use bindings::wasmcloud::postgres::prepared;
-use bindings::wasmcloud::postgres::query;
-use bindings::wasmcloud::postgres::types;
+use bindings::wasmcloud::postgres0_1_1_draft::prepared;
+use bindings::wasmcloud::postgres0_1_1_draft::query;
+use bindings::wasmcloud::postgres0_1_1_draft::types;
 
 // `pub` because these appear in `PgId`'s public query/exec API.
 pub use query::{PgValue, QueryError, ResultRow};
@@ -475,9 +503,12 @@ impl HostPlugin for WasmcloudPostgres {
 
     fn world(&self) -> WitWorld {
         WitWorld {
-            imports: HashSet::from([WitInterface::from(
-                "wasmcloud:postgres/types,query,prepared@0.1.1-draft",
-            )]),
+            imports: HashSet::from([
+                // Sync (wasip2) and async (wasip3) surfaces are both served by
+                // this plugin; a component may import either.
+                WitInterface::from("wasmcloud:postgres/types,query,prepared@0.1.1-draft"),
+                WitInterface::from("wasmcloud:postgres/types,query,prepared@0.2.0"),
+            ]),
             ..Default::default()
         }
     }
@@ -530,11 +561,13 @@ impl HostPlugin for WasmcloudPostgres {
             return Ok(());
         }
 
-        // A `(implements ..)` import is a *named* postgres interface routed to
-        // its own credentialed connection; an unnamed one keeps the legacy
-        // per-component-database behavior (one shared bouncer URL, database
-        // chosen by config).
-        let unnamed = pg.iter().find(|i| i.name.is_none()).copied();
+        // Split by package version: `0.1.1-draft` is the sync (wasip2) surface,
+        // `0.2.0`+ the async (wasip3) one. Both are served by this plugin off the
+        // same pools/prepared-statement registry.
+        let async_min = semver::Version::new(0, 2, 0);
+        let is_async = |i: &WitInterface| i.version.as_ref().is_some_and(|v| *v >= async_min);
+        let pg_async: Vec<&WitInterface> = pg.iter().copied().filter(|i| is_async(i)).collect();
+        let pg_sync: Vec<&WitInterface> = pg.iter().copied().filter(|i| !is_async(i)).collect();
 
         let component_id = component_handle.id().to_string();
         // Clone the component (cheap, Arc-backed) before taking the mutable
@@ -543,55 +576,105 @@ impl HostPlugin for WasmcloudPostgres {
         let component = component_handle.component().clone();
         let linker = component_handle.linker();
 
-        // `types` carries no functions and is shared by query/prepared; link the
-        // instance once regardless of named/unnamed routing.
-        bindings::wasmcloud::postgres::types::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
+        // ── sync `0.1.1-draft` (wasip2) ──────────────────────────────────────
+        if !pg_sync.is_empty() {
+            // A `(implements ..)` import is a *named* postgres interface routed
+            // to its own credentialed connection; an unnamed one keeps the
+            // per-component-database behavior (one shared bouncer URL, database
+            // chosen by config).
+            let unnamed = pg_sync.iter().find(|i| i.name.is_none()).copied();
 
-        if let Some(i) = unnamed {
-            let Some(database) = i.config.get("database").cloned() else {
-                bail!("wasmcloud:postgres requires a 'database' config parameter")
-            };
-            tracing::debug!(
-                component_id = %component_id,
-                database = %database,
-                "Binding postgres plugin to component (per-component database)"
-            );
-            self.component_databases
-                .write()
-                .await
-                .insert(component_id, database);
-            bindings::wasmcloud::postgres::query::add_to_linker::<_, SharedCtx>(
+            // `types` carries no functions and is shared by query/prepared; link
+            // the instance once regardless of named/unnamed routing.
+            bindings::wasmcloud::postgres0_1_1_draft::types::add_to_linker::<_, SharedCtx>(
                 linker,
                 extract_active_ctx,
             )?;
-            bindings::wasmcloud::postgres::prepared::add_to_linker::<_, SharedCtx>(
-                linker,
-                extract_active_ctx,
-            )?;
+
+            if let Some(i) = unnamed {
+                let Some(database) = i.config.get("database").cloned() else {
+                    bail!("wasmcloud:postgres requires a 'database' config parameter")
+                };
+                tracing::debug!(
+                    component_id = %component_id,
+                    database = %database,
+                    "Binding postgres plugin to component (per-component database)"
+                );
+                self.component_databases
+                    .write()
+                    .await
+                    .insert(component_id.clone(), database);
+                bindings::wasmcloud::postgres0_1_1_draft::query::add_to_linker::<_, SharedCtx>(
+                    linker,
+                    extract_active_ctx,
+                )?;
+                bindings::wasmcloud::postgres0_1_1_draft::prepared::add_to_linker::<_, SharedCtx>(
+                    linker,
+                    extract_active_ctx,
+                )?;
+            }
+
+            #[cfg(feature = "wasm_component_model_implements")]
+            if pg_sync.iter().any(|i| i.name.is_some()) {
+                let registry = self.build_named_pools(pg_sync.iter().copied()).await?;
+                tracing::debug!(
+                    imports = ?registry.keys().collect::<Vec<_>>(),
+                    "Binding postgres plugin to component (per-credential named imports)"
+                );
+                bindings::named_imports::wasmcloud::postgres0_1_1_draft::query::add_to_linker::<
+                    _,
+                    SharedCtx,
+                >(
+                    linker,
+                    &component,
+                    |name| self.mux.resolve(&registry, name),
+                    extract_active_ctx,
+                )?;
+                bindings::named_imports::wasmcloud::postgres0_1_1_draft::prepared::add_to_linker::<
+                    _,
+                    SharedCtx,
+                >(
+                    linker,
+                    &component,
+                    |name| self.mux.resolve(&registry, name),
+                    extract_active_ctx,
+                )?;
+            }
         }
 
-        #[cfg(feature = "wasm_component_model_implements")]
-        if pg.iter().any(|i| i.name.is_some()) {
-            let registry = self.build_named_pools(pg.iter().copied()).await?;
-            tracing::debug!(
-                imports = ?registry.keys().collect::<Vec<_>>(),
-                "Binding postgres plugin to component (per-credential named imports)"
-            );
-            bindings::named_imports::wasmcloud::postgres::query::add_to_linker::<_, SharedCtx>(
-                linker,
-                &component,
-                |name| self.mux.resolve(&registry, name),
-                extract_active_ctx,
-            )?;
-            bindings::named_imports::wasmcloud::postgres::prepared::add_to_linker::<_, SharedCtx>(
-                linker,
-                &component,
-                |name| self.mux.resolve(&registry, name),
-                extract_active_ctx,
-            )?;
+        // ── async `0.2.0` (wasip3) ───────────────────────────────────────────
+        if !pg_async.is_empty() {
+            // `types` carries no functions and is shared by query/prepared; link
+            // it once regardless of default/named routing.
+            async_p3::add_types_to_linker(linker)?;
+
+            // An unnamed import is the default, per-component-database path; a
+            // `(implements ..)` import is a named one routed to its own pool.
+            if let Some(i) = pg_async.iter().find(|i| i.name.is_none()).copied() {
+                let Some(database) = i.config.get("database").cloned() else {
+                    bail!("wasmcloud:postgres requires a 'database' config parameter")
+                };
+                tracing::debug!(
+                    component_id = %component_id,
+                    database = %database,
+                    "Binding async postgres plugin to component (per-component database)"
+                );
+                self.component_databases
+                    .write()
+                    .await
+                    .insert(component_id.clone(), database);
+                async_p3::add_default_to_linker(linker)?;
+            }
+
+            #[cfg(feature = "wasm_component_model_implements")]
+            if pg_async.iter().any(|i| i.name.is_some()) {
+                let registry = self.build_named_pools(pg_async.iter().copied()).await?;
+                tracing::debug!(
+                    imports = ?registry.keys().collect::<Vec<_>>(),
+                    "Binding async postgres plugin to component (per-credential named imports)"
+                );
+                async_p3::add_named_to_linker(linker, &component, &registry, &self.mux)?;
+            }
         }
 
         Ok(())
