@@ -98,6 +98,12 @@ pub struct Multiplexer<Id> {
     /// Whether the background idle-reaper task has been spawned yet (spawned
     /// lazily on the first pooled bind, when a tokio runtime is guaranteed).
     reaper_started: AtomicBool,
+    /// Per-workload default backend (the unnamed `""` route), recorded at bind so
+    /// a plugin's *standard* (non-`(implements)`) binding can serve a **plain**
+    /// (unlabeled) import — the shared mechanism that lets every multiplexed
+    /// plugin default without requiring a label. A `std::sync::Mutex` because the
+    /// critical section is a tiny map touch with no `await` held across it.
+    defaults: Arc<std::sync::Mutex<HashMap<Arc<str>, Id>>>,
 }
 
 impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
@@ -118,7 +124,30 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
             max_connections_by_backend: HashMap::new(),
             idle_ttl: DEFAULT_IDLE_TTL,
             reaper_started: AtomicBool::new(false),
+            defaults: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Record the workload's default (unnamed `""`) backend from a built
+    /// registry, so a plugin's standard binding can serve a plain import for this
+    /// workload. No-op if the workload declared no default (`""`) route.
+    pub fn set_default(&self, workload_id: impl Into<Arc<str>>, registry: &HashMap<String, Id>) {
+        if let Some(default) = registry.get("") {
+            self.defaults
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(workload_id.into(), default.clone());
+        }
+    }
+
+    /// The default backend a plain (unnamed) import should route to for this
+    /// workload, if one was recorded at bind via [`Multiplexer::set_default`].
+    pub fn default_for(&self, workload_id: &str) -> Option<Id> {
+        self.defaults
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(workload_id)
+            .cloned()
     }
 
     /// Register a backend provider keyed by its `backend_type()`.
@@ -266,24 +295,24 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
 
     /// Resolve a component import name (the implements id) to a backend, given a
     /// registry from [`Multiplexer::build_registry`]. The import name is matched
-    /// directly against the host-interface name; unnamed imports fall through to
-    /// the default (`""`) route.
+    /// directly against the host-interface name. The unnamed default is keyed
+    /// `""`, so an unnamed import matches it directly.
+    ///
+    /// A named label that matches no configured interface is an error: silently
+    /// falling back to the default would route that import's traffic to a backend
+    /// (and credentials) it never asked for.
     pub fn resolve(
         &self,
         registry: &HashMap<String, Id>,
         import_name: &str,
     ) -> wasmtime::Result<Id> {
-        registry
-            .get(import_name)
-            .or_else(|| registry.get(""))
-            .cloned()
-            .ok_or_else(|| {
-                wasmtime::format_err!(
-                    "no {}:{} backend bound for import '{import_name}'",
-                    self.namespace,
-                    self.package
-                )
-            })
+        registry.get(import_name).cloned().ok_or_else(|| {
+            wasmtime::format_err!(
+                "no {}:{} backend bound for import '{import_name}'",
+                self.namespace,
+                self.package
+            )
+        })
     }
 
     /// Spawn the background idle-reaper once, on the first pooled bind (where a
@@ -385,12 +414,34 @@ mod tests {
     }
 
     #[test]
-    fn resolve_routes_by_import_name_with_default_fallback() {
+    fn resolve_matches_by_import_name_including_the_unnamed_default() {
         let reg = registry(&[("team-a", 1), ("", 99)]);
         let mux = mux();
         assert_eq!(mux.resolve(&reg, "team-a").unwrap(), 1);
-        // Unknown import name falls through to the default ("") route.
-        assert_eq!(mux.resolve(&reg, "other").unwrap(), 99);
+        // The unnamed default is keyed "" and matched directly.
+        assert_eq!(mux.resolve(&reg, "").unwrap(), 99);
+        // An unmatched named label is an error, not a silent fallback to the
+        // default — routing it there would use the wrong backend/credentials.
+        let err = mux.resolve(&reg, "other").unwrap_err();
+        assert!(
+            err.to_string().contains("other"),
+            "error should name the unmatched import: {err}"
+        );
+    }
+
+    #[test]
+    fn set_default_records_the_unnamed_route_per_workload() {
+        let mux = mux();
+        // A workload whose registry carries an unnamed (`""`) route gets that
+        // backend recorded as its default; a plain import looks it up here.
+        mux.set_default("wl-1", &registry(&[("team-a", 1), ("", 99)]));
+        assert_eq!(mux.default_for("wl-1"), Some(99));
+        // Defaults are per-workload: an unknown workload has none.
+        assert_eq!(mux.default_for("wl-unknown"), None);
+        // A registry with no unnamed route records nothing (a labeled-only
+        // workload has no plain-import default to fall back to).
+        mux.set_default("wl-2", &registry(&[("team-a", 1)]));
+        assert_eq!(mux.default_for("wl-2"), None);
     }
 
     #[test]

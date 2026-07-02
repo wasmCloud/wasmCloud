@@ -199,6 +199,54 @@ impl<T: 'static + Send> bindings::named_imports::wasmcloud::keyvalue::store::Hos
 
 impl bindings::named_imports::wasmcloud::keyvalue::store::Host for ActiveCtx<'_> {}
 
+/// A plain (unlabeled) `store.open`: route to the workload's default backend
+/// (recorded on the multiplexer at bind) so a component that imports
+/// `wasmcloud:keyvalue/store` *without* an `(implements ..)` label still gets a
+/// working backend — no label required. The label-routed `open` above is
+/// identical but for taking its `KvId` from the label instead of the default.
+impl<T: 'static + Send> bindings::wasmcloud::keyvalue::store::HostWithStore<T> for SharedCtx {
+    async fn open(
+        accessor: &Accessor<T, Self>,
+        identifier: String,
+    ) -> wasmtime::Result<Result<Resource<KvBucket>, AsyncKvError>> {
+        let Some(id) = default_backend(accessor).await? else {
+            return no_default_backend();
+        };
+        if let Err(e) = id.open(&identifier).await {
+            return Ok(Err(e.into()));
+        }
+        let resource = accessor.with(|mut a| a.get().table.push(KvBucket::new(id, identifier)))?;
+        Ok(Ok(resource))
+    }
+}
+
+impl bindings::wasmcloud::keyvalue::store::Host for ActiveCtx<'_> {}
+
+/// The workload's default `wasmcloud:keyvalue` backend for a PLAIN (unlabeled)
+/// import, recorded on the multiplexer at bind. `None` when the workload
+/// declared no default (`""`) route.
+async fn default_backend<T: 'static + Send>(
+    accessor: &Accessor<T, SharedCtx>,
+) -> wasmtime::Result<Option<KvId>> {
+    let (plugin, workload_id) = accessor.with(|mut a| {
+        let ctx = a.get();
+        (
+            ctx.try_get_plugin::<MultiplexedAsyncKeyValue>(MULTIPLEXED_ASYNC_KEYVALUE_ID),
+            ctx.workload_id.clone(),
+        )
+    });
+    let plugin = plugin?;
+    Ok(plugin.mux.default_for(&workload_id))
+}
+
+/// The error a plain `store.open` returns when the workload bound no default
+/// backend — the component imported keyvalue plainly but nothing provides it.
+fn no_default_backend<T2>() -> wasmtime::Result<Result<T2, AsyncKvError>> {
+    Ok(Err(AsyncKvError::Other(
+        "no default wasmcloud:keyvalue backend is bound for this component".to_string(),
+    )))
+}
+
 impl<T: 'static + Send> bindings::wasmcloud::keyvalue::atomics::HostWithStore<T> for SharedCtx {
     async fn increment(
         accessor: &Accessor<T, Self>,
@@ -372,6 +420,25 @@ impl HostPlugin for MultiplexedAsyncKeyValue {
         }
 
         let registry = self.build_registry(interfaces.iter()).await?;
+
+        // Does the component import keyvalue with an `(implements ..)` label, or
+        // plainly (unlabeled), or both? Bind only the matching `store` binding so a
+        // plain-only component doesn't also get the labeled instance (and vice
+        // versa) — `types`/`atomics`/`cas`/`batch` are bound standalone regardless.
+        let has_labeled = interfaces
+            .iter()
+            .any(|i| i.namespace == "wasmcloud" && i.package == "keyvalue" && i.name.is_some());
+        let has_plain = interfaces
+            .iter()
+            .any(|i| i.namespace == "wasmcloud" && i.package == "keyvalue" && i.name.is_none());
+
+        // A plain import routes to the workload's default backend (the `""` route
+        // from the registry), stashed on the multiplexer so the standard host impl
+        // can find it — the shared mechanism every multiplexed plugin uses.
+        if has_plain {
+            self.mux.set_default(item.workload_id(), &registry);
+        }
+
         let component = item.component().clone();
         let linker = item.linker();
 
@@ -380,12 +447,22 @@ impl HostPlugin for MultiplexedAsyncKeyValue {
         // standalone: a guest imports them unlabeled, and their methods operate on
         // a `bucket` whose `KvBucket` already carries the backend it was opened
         // through, so they route via the resource rather than a label.
-        bindings::named_imports::wasmcloud::keyvalue::store::add_to_linker::<_, SharedCtx>(
-            linker,
-            &component,
-            |name| self.mux.resolve(&registry, name),
-            extract_active_ctx,
-        )?;
+        if has_labeled {
+            bindings::named_imports::wasmcloud::keyvalue::store::add_to_linker::<_, SharedCtx>(
+                linker,
+                &component,
+                |name| self.mux.resolve(&registry, name),
+                extract_active_ctx,
+            )?;
+        }
+        // A plain (unlabeled) `store` import: bind the standard interface to the
+        // workload's default backend — no label required.
+        if has_plain {
+            bindings::wasmcloud::keyvalue::store::add_to_linker::<_, SharedCtx>(
+                linker,
+                extract_active_ctx,
+            )?;
+        }
         bindings::wasmcloud::keyvalue::types::add_to_linker::<_, SharedCtx>(
             linker,
             extract_active_ctx,
