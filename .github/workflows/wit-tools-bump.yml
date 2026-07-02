@@ -1,14 +1,13 @@
 name: wit-tools-bump
 
-# Opens a PR when bytecodealliance/wasm-tools or bytecodealliance/wasm-pkg-tools
-# (wkg) publishes a new stable GitHub release. The pinned versions live in
-# wit.yml's top-level `env:` block.
+# Opens a PR when bytecodealliance/wasm-tools publishes a new stable GitHub
+# release. The pinned version lives in wit.yml's top-level `env:` block.
 #
 # Why this exists: Dependabot's `github-actions` ecosystem tracks `uses:`
 # refs (the action SHA), not arbitrary `with:` inputs or versions fetched
 # at runtime. wasm-tools (installed via bytecodealliance/actions/wasm-tools/setup)
-# and wkg (downloaded by the validate job at its pinned version) are therefore
-# invisible to Dependabot, so we maintain them with a small custom updater.
+# is therefore invisible to Dependabot, so we maintain it with a small
+# custom updater.
 #
 # wash is installed via wasmcloud/setup-wash-action (which defaults to
 # the latest wash release) and is not tracked here.
@@ -63,7 +62,7 @@ jobs:
             dependencies
             github-actions
           body: |
-            Bumps the wit pipeline's pinned tool versions (wasm-tools, wkg) to upstream's latest stable releases.
+            Bumps the wit pipeline's pinned tool version (wasm-tools) to upstream's latest stable release.
 
             ${{ steps.update.outputs.body }}
 

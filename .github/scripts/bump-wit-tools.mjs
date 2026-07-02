@@ -8,7 +8,6 @@
 //
 // Tracked tools:
 //   WASM_TOOLS_VERSION ← bytecodealliance/wasm-tools
-//   WKG_VERSION        ← bytecodealliance/wasm-pkg-tools (wkg)
 //
 // Usage: node bump-wit-tools.mjs [path-to-wit.yml]
 //   Defaults to .github/workflows/wit.yml; the optional arg exists so the
@@ -32,11 +31,6 @@ const TOOLS = [
     var: 'WASM_TOOLS_VERSION',
     repo: 'bytecodealliance/wasm-tools',
     name: 'wasm-tools',
-  },
-  {
-    var: 'WKG_VERSION',
-    repo: 'bytecodealliance/wasm-pkg-tools',
-    name: 'wkg',
   },
 ];
 
