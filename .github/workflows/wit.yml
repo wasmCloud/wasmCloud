@@ -13,7 +13,7 @@ name: wit
 # Pipeline:
 #   validate  for each wit/<pkg>/: round-trips the WIT through
 #             wasm-tools as an independent sanity check, builds the
-#             component with `wkg wit build`, enriches it with
+#             component with `wash wit build`, enriches it with
 #             provenance via `wasm-tools metadata add` (source repo,
 #             commit SHA, license, etc.), asserts wit/<pkg>/wkg.lock
 #             is committed and in sync, and uploads the enriched wasm
@@ -55,14 +55,10 @@ permissions: {}
 # Kept in sync by .github/workflows/wit-tools-bump.yml, which opens a
 # weekly PR when upstream publishes a new stable release.
 #
-# These packages are built with `wkg` rather than `wash wit build`: the
-# wit-parser embedded in current `wash` releases (through v2.4.0) does not
-# yet understand wasip3 `async func` / `stream<T>` / `future<T>` syntax,
-# whereas wkg (the wasm-pkg-tools CLI wash itself wraps) does. wkg emits
-# the same wkg.lock format, so the lock-file verification below is unchanged.
+# wash itself is installed via wasmcloud/setup-wash-action (defaulting to
+# the latest release) and is not pinned here.
 env:
   WASM_TOOLS_VERSION: '1.252.0'
-  WKG_VERSION: '0.15.1'
 
 jobs:
   changes:
@@ -105,32 +101,16 @@ jobs:
         with:
           version: ${{ env.WASM_TOOLS_VERSION }}
 
-      - name: Setup wkg
-        # TODO: drop wkg and go back to `wash wit build` once the next wash
-        # release ships a wit-parser that understands wasip3 async syntax
-        # (`async func` / `stream<T>` / `future<T>`). wash through v2.4.0
-        # cannot parse it; until then we build with the pinned wkg binary.
-        #
-        # Pinned wkg binary (no published setup action); see the WKG_VERSION
-        # note above. Installed into a temp dir added to PATH rather than
-        # /usr/local/bin, which is not reliably writable without sudo across
-        # runner images.
-        run: |
-          set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/wkg-bin"
-          curl -fsSL --retry 3 --retry-all-errors -o "${RUNNER_TEMP}/wkg-bin/wkg" \
-            "https://github.com/bytecodealliance/wasm-pkg-tools/releases/download/v${WKG_VERSION}/wkg-x86_64-unknown-linux-gnu"
-          chmod +x "${RUNNER_TEMP}/wkg-bin/wkg"
-          echo "${RUNNER_TEMP}/wkg-bin" >> "${GITHUB_PATH}"
-          "${RUNNER_TEMP}/wkg-bin/wkg" --version
+      - name: Setup wash
+        uses: wasmcloud/setup-wash-action@47756fa211cc82f392c57e39504f43ef46fc0b3e # v2.1.0
 
       - name: Build and validate each WIT package
-        # Layout (per `wkg wit build`'s convention):
+        # Layout (per `wash wit build`'s convention):
         #   wit/<pkg>/
         #     wit/world.wit   ← WIT source
         #     wkg.lock        ← lock file at project root
         # For each <pkg>: wasm-tools round-trips the WIT source as an
-        # independent sanity check, then `wkg wit build` produces the
+        # independent sanity check, then `wash wit build` produces the
         # canonical component and the wkg.lock at the package root.
         # The raw wasm is then enriched with provenance metadata via
         # `wasm-tools metadata add`; those fields are surfaced as
@@ -160,9 +140,9 @@ jobs:
             echo "::group::wasm-tools component wit ${wit_dir} --wasm (round-trip)"
             wasm-tools component wit "${wit_dir}" --wasm --output "${BUILD_ABS}/.roundtrip/${name}.wasm"
             echo "::endgroup::"
-            echo "::group::wkg wit build ${pkg}"
+            echo "::group::wash wit build ${pkg}"
             raw="$(mktemp)"
-            ( cd "${pkg}" && wkg wit build --output "${raw}" )
+            ( cd "${pkg}" && wash wit build --output-file "${raw}" )
             wasm-tools metadata add "${raw}" \
               --output "${BUILD_ABS}/${name}.wasm" \
               --source "https://github.com/${GITHUB_REPOSITORY}" \
@@ -188,7 +168,7 @@ jobs:
           done
 
       - name: Verify wkg.lock files are committed and in sync
-        # `wkg wit build` writes wkg.lock at each package root.
+        # `wash wit build` writes wkg.lock at each package root.
         # We use `git status --porcelain` rather than `git diff --exit-code`
         # so that a *new* wit/<pkg>/wkg.lock (e.g. a contributor added a
         # brand-new package and forgot to commit its lock) also fails CI —
