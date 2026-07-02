@@ -9,6 +9,5 @@ crate-type = ["cdylib"]
 [dependencies]
 anyhow = { workspace = true }
 bytemuck = { workspace = true }
-flume = { workspace = true, features = ["spin"] }
 wstd = { workspace = true }
-wgpu = { workspace = true, default-features = false, features = ["wasi", "wgsl"] }
+wit-bindgen = { workspace = true, features = ["async-spawn", "inter-task-wakeup"] }

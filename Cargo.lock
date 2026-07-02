@@ -4349,6 +4349,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pastey"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
+
+[[package]]
 name = "pathdiff"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6020,11 +6026,11 @@ dependencies = [
 [[package]]
 name = "shared"
 version = "0.1.0"
-source = "git+https://github.com/wasi-gfx/wasi-gfx-runtime.git?rev=301716b5591bc6e08eca852b936fc8a17dea5379#301716b5591bc6e08eca852b936fc8a17dea5379"
+source = "git+https://github.com/wasi-gfx/wasi-gfx-runtime.git?rev=5761c3d82b99cab471919d409766d0ddff41110f#5761c3d82b99cab471919d409766d0ddff41110f"
 dependencies = [
  "async-broadcast",
- "async-trait",
- "wasmtime-wasi-io",
+ "futures",
+ "wasmtime",
 ]
 
 [[package]]
@@ -7471,7 +7477,6 @@ dependencies = [
  "ulid",
  "url",
  "uuid",
- "wasi-graphics-context-wasmtime",
  "wasi-webgpu-wasmtime",
  "wasmtime",
  "wasmtime-wasi",
@@ -7499,17 +7504,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasi-graphics-context-wasmtime"
-version = "0.1.0"
-source = "git+https://github.com/wasi-gfx/wasi-gfx-runtime.git?rev=301716b5591bc6e08eca852b936fc8a17dea5379#301716b5591bc6e08eca852b936fc8a17dea5379"
-dependencies = [
- "raw-window-handle",
- "wasmtime",
- "wasmtime-wasi",
- "wasmtime-wasi-io",
-]
-
-[[package]]
 name = "wasi-preview1-component-adapter-provider"
 version = "45.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7518,18 +7512,17 @@ checksum = "17218dd1de5aa7b0b5c7afec3cdd69d780632eb31f3925a8b8728cd6e29ebb73"
 [[package]]
 name = "wasi-webgpu-wasmtime"
 version = "0.1.0"
-source = "git+https://github.com/wasi-gfx/wasi-gfx-runtime.git?rev=301716b5591bc6e08eca852b936fc8a17dea5379#301716b5591bc6e08eca852b936fc8a17dea5379"
+source = "git+https://github.com/wasi-gfx/wasi-gfx-runtime.git?rev=5761c3d82b99cab471919d409766d0ddff41110f#5761c3d82b99cab471919d409766d0ddff41110f"
 dependencies = [
  "async-broadcast",
  "callback-future",
  "futures",
  "log",
+ "pastey",
  "raw-window-handle",
  "shared",
- "wasi-graphics-context-wasmtime",
  "wasmtime",
  "wasmtime-wasi",
- "wasmtime-wasi-io",
  "wgpu-core",
  "wgpu-types",
 ]

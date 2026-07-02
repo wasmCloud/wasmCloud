@@ -252,6 +252,21 @@ impl Ctx {
             .expect("plugin not found")
     }
 
+    /// Get a reference to a plugin by its string ID and downcast to the expected type
+    ///
+    /// Unlike [`Ctx::get_plugin`], this borrows the plugin from `self` instead of
+    /// cloning the `Arc`, allowing callers to return references tied to `&self`.
+    ///
+    /// **Panics** if the plugin is not found or does not match the expected type.
+    #[allow(clippy::expect_used)] // Infallible accessor by contract, mirrors `get_plugin`
+    pub fn get_plugin_ref<T: HostPlugin + 'static>(&self, plugin_id: &str) -> &T {
+        self.plugins
+            .get(plugin_id)
+            .expect("plugin not found")
+            .downcast_ref::<T>()
+            .expect("failed to downcast plugin to expected type")
+    }
+
     /// Get a plugin by its string ID and downcast to the expected type, if it exists
     pub fn try_get_plugin<T: HostPlugin + 'static>(
         &self,

@@ -68,28 +68,13 @@ impl Default for WebGpu {
     }
 }
 
-impl wasi_graphics_context_wasmtime::WasiGraphicsContextView for SharedCtx {}
-
-struct UiThreadSpawner;
-impl wasi_webgpu_wasmtime::MainThreadSpawner for UiThreadSpawner {
-    async fn spawn<F, T>(&self, f: F) -> T
-    where
-        F: FnOnce() -> T + Send + 'static,
-        T: Send + 'static,
-    {
-        f()
-    }
-}
-
-impl wasi_webgpu_wasmtime::WasiWebGpuView for SharedCtx {
-    #[allow(clippy::expect_used)] // Trait doesn't return Result; plugin is registered at startup
-    fn instance(&self) -> Arc<wasi_webgpu_wasmtime::reexports::wgpu_core::global::Global> {
-        let plugin = self.active_ctx.get_plugin::<WebGpu>(WASI_WEBGPU_ID);
-        Arc::clone(&plugin.gpu)
-    }
-
-    fn ui_thread_spawner(&self) -> Box<impl wasi_webgpu_wasmtime::MainThreadSpawner + 'static> {
-        Box::new(UiThreadSpawner)
+impl wasi_webgpu_wasmtime::WasiWebGpuCtxView for SharedCtx {
+    fn webgpu_ctx(&mut self) -> wasi_webgpu_wasmtime::WasiWebGpuCtx<'_> {
+        let plugin = self.active_ctx.get_plugin_ref::<WebGpu>(WASI_WEBGPU_ID);
+        wasi_webgpu_wasmtime::WasiWebGpuCtx {
+            instance: &plugin.gpu,
+            table: &mut self.table,
+        }
     }
 }
 
@@ -102,7 +87,6 @@ impl HostPlugin for WebGpu {
     fn world(&self) -> WitWorld {
         WitWorld {
             exports: HashSet::from([
-                WitInterface::from("wasi:graphics-context/graphics-context"),
                 WitInterface::from("wasi:webgpu/webgpu"),
             ]),
             ..Default::default()
@@ -130,7 +114,6 @@ impl HostPlugin for WebGpu {
         let linker = component_handle.linker();
 
         wasi_webgpu_wasmtime::add_to_linker(linker)?;
-        wasi_graphics_context_wasmtime::add_to_linker(linker)?;
 
         let id = component_handle.id();
         tracing::debug!(
