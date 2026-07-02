@@ -1,0 +1,14 @@
+# Rust build artifacts
+target/
+
+# Wash build artifacts
+build
+
+# Local dev blobstore state (wash dev)
+tmp/
+
+# Demo artifacts pushed/pulled by `wash oci` / `oras` during the walkthrough
+/component.wasm
+/oci_registry.wasm
+/out.wasm
+
