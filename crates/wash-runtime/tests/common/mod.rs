@@ -264,6 +264,25 @@ pub async fn start_host_with_p3(addr: &str) -> Result<(std::net::SocketAddr, imp
     Ok((bound_addr, host))
 }
 
+/// Like [`start_host_with_p3`] but also returns the [`HttpServer`], so a test can
+/// drive host-side ingress hooks directly (e.g. deliver a message to a reactor's
+/// messaging handler via `deliver_reactor_message`).
+pub async fn start_host_with_p3_handler(
+    addr: &str,
+) -> Result<(std::net::SocketAddr, impl HostApi, Arc<HttpServer<DevRouter>>)> {
+    let engine = Engine::builder().build()?;
+    let http_server = Arc::new(HttpServer::new(DevRouter::default(), addr.parse()?).await?);
+    let bound_addr = http_server.addr();
+    let host = with_standard_plugins(
+        HostBuilder::new()
+            .with_engine(engine)
+            .with_http_handler(http_server.clone()),
+    )?
+    .build()?;
+    let host = host.start().await.context("Failed to start host")?;
+    Ok((bound_addr, host, http_server))
+}
+
 /// GET `http://{addr}/` with the given `HOST` header and a 10s timeout.
 pub async fn get_status(
     client: &reqwest::Client,

@@ -30,6 +30,7 @@ use crate::host::allowed_hosts::AllowedHost;
 use crate::wit::WitInterface;
 use crate::{engine::ctx::SharedCtx, observability::Meters};
 use crate::{engine::workload::ResolvedWorkload, observability::FuelConsumptionMeter};
+use crate::host::reactor::{BrokerMessage, MessagingJob};
 use anyhow::{Context, ensure};
 use http_body_util::BodyExt;
 use hyper::client::conn::http2;
@@ -497,6 +498,36 @@ pub trait HostHandler: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Register a long-lived reactor instance that handles inbound messages:
+    /// messages for `workload_id` are delivered over `sender` instead of
+    /// instantiating a component per message. Default: no-op.
+    async fn on_reactor_messaging_resolved(
+        &self,
+        _workload_id: &str,
+        _sender: tokio::sync::mpsc::Sender<MessagingJob>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    /// Unregister a reactor messaging instance. Default: no-op.
+    async fn on_reactor_messaging_unbind(&self, _workload_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+    /// Deliver a message to a workload's registered messaging reactor, returning
+    /// the handler's `result<_, string>`. Default: no messaging support.
+    async fn deliver_reactor_message(
+        &self,
+        _workload_id: &str,
+        _msg: BrokerMessage,
+    ) -> anyhow::Result<Result<(), String>> {
+        anyhow::bail!("this host does not support reactor messaging delivery")
+    }
+    /// Whether a long-lived reactor is registered to handle messages for
+    /// `workload_id` (so a host ingress can deliver to it instead of
+    /// instantiating per message). Default: false.
+    async fn has_reactor_messaging(&self, _workload_id: &str) -> bool {
+        false
+    }
+
     /// Handle an outgoing HTTP request from a workload
     fn outgoing_request(
         &self,
@@ -620,6 +651,11 @@ pub type ServiceHttpJob = (
 pub type ServiceHandlers =
     Arc<RwLock<HashMap<String, tokio::sync::mpsc::Sender<ServiceHttpJob>>>>;
 
+/// A map from workload id to the channel of a reactor's messaging handler
+/// instance. Empty unless a workload's service exports a messaging handler.
+pub type MessagingHandlers =
+    Arc<RwLock<HashMap<String, tokio::sync::mpsc::Sender<MessagingJob>>>>;
+
 /// HTTP server plugin that handles incoming HTTP requests for WebAssembly components.
 ///
 /// This plugin implements the `wasi:http/incoming-handler` interface and routes
@@ -642,6 +678,8 @@ pub struct HttpServer<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
     workload_handles: WorkloadHandles,
     /// Workloads whose long-lived service serves HTTP ingress directly.
     service_handlers: ServiceHandlers,
+    /// Workloads whose long-lived reactor serves messaging ingress directly.
+    messaging_handlers: MessagingHandlers,
     shutdown_tx: Arc<RwLock<Option<mpsc::Sender<()>>>>,
     tls_acceptor: Option<TlsAcceptor>,
     listener: Arc<tokio::sync::Mutex<Option<TcpListener>>>,
@@ -762,6 +800,7 @@ impl<T: Router, O: OutgoingHandler> HttpServerBuilder<T, O> {
             addr,
             workload_handles: Arc::default(),
             service_handlers: Arc::default(),
+            messaging_handlers: Arc::default(),
             shutdown_tx: Arc::new(RwLock::new(None)),
             tls_acceptor,
             listener: Arc::new(tokio::sync::Mutex::new(Some(listener))),
@@ -889,6 +928,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
 
         self.workload_handles.write().await.remove(workload_id);
         self.service_handlers.write().await.remove(workload_id);
+        self.messaging_handlers.write().await.remove(workload_id);
 
         Ok(())
     }
@@ -909,6 +949,50 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
     async fn on_service_http_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
         self.service_handlers.write().await.remove(workload_id);
         Ok(())
+    }
+
+    async fn on_reactor_messaging_resolved(
+        &self,
+        workload_id: &str,
+        sender: tokio::sync::mpsc::Sender<MessagingJob>,
+    ) -> anyhow::Result<()> {
+        self.messaging_handlers
+            .write()
+            .await
+            .insert(workload_id.to_string(), sender);
+        Ok(())
+    }
+
+    async fn on_reactor_messaging_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
+        self.messaging_handlers.write().await.remove(workload_id);
+        Ok(())
+    }
+
+    async fn deliver_reactor_message(
+        &self,
+        workload_id: &str,
+        msg: BrokerMessage,
+    ) -> anyhow::Result<Result<(), String>> {
+        let sender = self
+            .messaging_handlers
+            .read()
+            .await
+            .get(workload_id)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!("no messaging reactor registered for workload {workload_id}")
+            })?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        sender
+            .send((msg, tx))
+            .await
+            .map_err(|_| anyhow::anyhow!("reactor messaging instance is not running"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("reactor dropped the message response"))
+    }
+
+    async fn has_reactor_messaging(&self, workload_id: &str) -> bool {
+        self.messaging_handlers.read().await.contains_key(workload_id)
     }
 
     fn outgoing_request(

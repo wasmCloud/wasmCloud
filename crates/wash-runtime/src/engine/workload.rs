@@ -555,14 +555,14 @@ impl ResolvedWorkload {
             .as_ref()
             .is_some_and(|s| s.metadata.targets_p3())
         {
-            // A p3 service that also exports `wasi:http/handler` drives both
-            // `cli/run` and HTTP ingress on one instance (see `service_http`).
-            if self
-                .service
-                .as_ref()
-                .is_some_and(|s| crate::engine::exports_wasi_http(&s.metadata.component))
-            {
-                return self.execute_service_http().await;
+            // A p3 service that also exports a host-invoked handler (today
+            // `wasi:http/handler`) co-drives it with `cli/run` on one instance
+            // (see the `reactor` module).
+            if self.service.as_ref().is_some_and(|s| {
+                crate::engine::exports_wasi_http(&s.metadata.component)
+                    || crate::engine::exports_messaging_handler(&s.metadata.component)
+            }) {
+                return self.execute_service_reactor().await;
             }
             return self.execute_service_p3().await;
         }
@@ -667,14 +667,14 @@ impl ResolvedWorkload {
         }
     }
 
-    /// Execute a p3 service that ALSO exports `wasi:http/handler`: one instance
-    /// drives both `cli/run` and HTTP ingress under a single `run_concurrent`
-    /// (see [`crate::host::service_http`]). The service runs in its own
-    /// long-lived store; stream-carrying backend calls are routed to ephemeral
-    /// relocated stores (see [`crate::engine`] linked-call routing), so a
-    /// backend's `block_on` can't freeze the service's run loop. `is_service =
-    /// true` lets the `cli/run` side bind its loopback socket.
-    async fn execute_service_http(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
+    /// Execute a p3 service that also exports a host-invoked handler (today
+    /// `wasi:http/handler`): one instance co-drives `cli/run` and the handler
+    /// under a single `run_concurrent` (see [`crate::host::reactor`]). The
+    /// service runs in its own long-lived store; stream-carrying backend calls
+    /// are routed to ephemeral relocated stores (see the linked-call routing),
+    /// so a backend's `block_on` can't freeze the service's run loop.
+    /// `is_service = true` lets the `cli/run` side bind its loopback socket.
+    async fn execute_service_reactor(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
         let Some(pre) = self.service.as_mut().map(|s| s.pre_instantiate_raw()) else {
             return Ok(None);
         };
@@ -688,13 +688,50 @@ impl ResolvedWorkload {
             self.new_store_from_metadata(&service.metadata, true).await?
         };
 
-        let svc = crate::host::service_http::ServiceHttpService::spawn(store, pre)?;
-        self.http_handler
-            .on_service_http_resolved(self.id(), svc.sender.clone())
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to register service HTTP handler: {e:#}"))?;
+        let (serves_http, serves_messaging) = {
+            let Some(service) = self.service.as_ref() else {
+                bail!("service unexpectedly missing during execution");
+            };
+            (
+                crate::engine::exports_wasi_http(&service.metadata.component),
+                crate::engine::exports_messaging_handler(&service.metadata.component),
+            )
+        };
 
-        let handle = Arc::new(svc.driver);
+        // Build the reactor's host-invoked ingresses. Each paired sender is
+        // registered with its host-side ingress (the HTTP server, the messaging
+        // subscriber), which then delivers to this live instance instead of
+        // instantiating a component per request/message.
+        let mut ingresses = Vec::new();
+        let http_tx = serves_http.then(|| {
+            let (tx, rx) = tokio::sync::mpsc::channel(256);
+            ingresses.push(crate::host::reactor::Ingress::Http(rx));
+            tx
+        });
+        let messaging_tx = serves_messaging.then(|| {
+            let (tx, rx) = tokio::sync::mpsc::channel(256);
+            ingresses.push(crate::host::reactor::Ingress::Messaging(rx));
+            tx
+        });
+
+        let reactor = crate::host::reactor::Reactor::spawn(store, pre, ingresses)?;
+
+        if let Some(http_tx) = http_tx {
+            self.http_handler
+                .on_service_http_resolved(self.id(), http_tx)
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to register service HTTP handler: {e:#}"))?;
+        }
+        if let Some(messaging_tx) = messaging_tx {
+            self.http_handler
+                .on_reactor_messaging_resolved(self.id(), messaging_tx)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!("failed to register reactor messaging handler: {e:#}")
+                })?;
+        }
+
+        let handle = Arc::new(reactor.driver);
         if let Some(s) = self.service.as_mut() {
             s.handle = Some(Arc::clone(&handle));
         }
@@ -1223,6 +1260,13 @@ impl ResolvedWorkload {
     /// Gets the unique identifier of the workload
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// The host-side handler this workload's ingress registers with (the HTTP
+    /// server / reactor messaging registry). Lets host plugins (e.g. the NATS
+    /// messaging subscriber) deliver to a long-lived reactor instance.
+    pub fn http_handler(&self) -> &Arc<dyn crate::host::http::HostHandler> {
+        &self.http_handler
     }
 
     /// Gets the name of the workload

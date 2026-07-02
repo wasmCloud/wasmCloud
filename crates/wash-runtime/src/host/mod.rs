@@ -65,7 +65,7 @@ use sysinfo::SystemMonitor;
 pub mod allowed_hosts;
 pub mod http;
 pub mod http_p3;
-pub mod service_http;
+pub mod reactor;
 
 /// The API for interacting with a wasmcloud host.
 ///

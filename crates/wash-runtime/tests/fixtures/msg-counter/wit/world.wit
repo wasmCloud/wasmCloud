@@ -1,0 +1,15 @@
+package wasmcloud:test-msg@0.1.0;
+
+/// A p3 service that exports cli/run (a p3 tick loop), the p2
+/// `wasmcloud:messaging/handler`, AND `wasi:http/handler` (reporting the message
+/// count). Exercises the Reactor co-driving a p2 sync message handler and a p3
+/// http handler alongside a p3 async cli/run on one long-lived instance; the
+/// http endpoint makes the message count observable end-to-end.
+world msg-counter {
+    import wasi:clocks/types@0.3.0;
+    import wasi:clocks/monotonic-clock@0.3.0;
+    import wasi:http/types@0.3.0;
+    export wasi:cli/run@0.3.0;
+    export wasi:http/handler@0.3.0;
+    export wasmcloud:messaging/handler@0.2.0;
+}

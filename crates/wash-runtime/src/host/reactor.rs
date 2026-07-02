@@ -1,24 +1,33 @@
-//! Co-driver for a **service that also exports `wasi:http/handler`**.
+//! Reactor: a long-lived service instance that co-drives `wasi:cli/run`
+//! alongside one or more host-invoked handler exports on a single instance.
 //!
 //! A wasmCloud service is a long-lived `wasi:cli/run` component. When that same
-//! component also exports `wasi:http/handler@0.3`, this driver runs BOTH on a
-//! single instance, under one [`Store::run_concurrent`]:
+//! component also exports a host-invoked handler (today `wasi:http/handler@0.3`),
+//! the Reactor runs BOTH on one instance under a single [`Store::run_concurrent`]:
 //!
 //! - the `cli/run` export drives the service's own long-running work (e.g. a
 //!   connection pooler listening on a loopback socket), and
-//! - inbound HTTP is delivered over a channel and each request is handled by
-//!   the `wasi:http/handler` export via [`Accessor::spawn`].
+//! - each host-invoked export is served as concurrent per-invocation tasks on
+//!   the same instance, so the long-running work and the handlers share the
+//!   instance's in-memory state.
 //!
-//! This is what lets one Service be both the stateful egress (the pool) and the
-//! HTTP ingress/router for the rest of the workload, on the same instance.
+//! Each host-invoked export is an [`Ingress`]: the host-side plugin (the HTTP
+//! server, ...) pushes invocations into the ingress's channel and the Reactor
+//! serves them via [`Accessor::spawn`]. Adding another host-invoked interface
+//! (e.g. a messaging handler) is a new [`Ingress`] variant plus a serve arm —
+//! the `cli/run` driving and the single-instance `run_concurrent` are reused.
 
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
 use http_body_util::BodyExt;
 use wasmtime::Store;
-use wasmtime::component::{Accessor, AccessorTask, InstancePre};
+use wasmtime::component::{
+    Accessor, AccessorTask, ComponentExportIndex, Instance, InstancePre, Val,
+};
+use wasmtime::error::Context as _;
 use wasmtime_wasi::p3::bindings::Command;
 use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
 // The p2 and p3 `ErrorCode`s are distinct types: `HyperOutgoingBody` (the body
@@ -30,6 +39,260 @@ use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
 
 use crate::engine::ctx::SharedCtx;
 use crate::host::http::ServiceHttpJob;
+
+/// An inbound message delivered to the service's `wasmcloud:messaging/handler`
+/// export. Mirrors the `broker-message` record.
+pub struct BrokerMessage {
+    pub subject: String,
+    pub body: Vec<u8>,
+    pub reply_to: Option<String>,
+}
+
+/// A messaging invocation: the message plus a oneshot carrying the handler's
+/// `result<_, string>` outcome back to the host-side ingress (to ack/log).
+pub type MessagingJob = (BrokerMessage, tokio::sync::oneshot::Sender<Result<(), String>>);
+
+/// A host-invoked handler export the Reactor serves, carrying the receiver end
+/// of its delivery channel. The paired sender is handed to the host-side ingress
+/// (the HTTP server, the messaging subscriber, ...) so it can deliver
+/// invocations to this live instance.
+pub enum Ingress {
+    /// `wasi:http/handler@0.3` — the HTTP server delivers requests here.
+    Http(tokio::sync::mpsc::Receiver<ServiceHttpJob>),
+    /// `wasmcloud:messaging/handler@0.2.0` — the messaging subscriber delivers
+    /// received messages here.
+    Messaging(tokio::sync::mpsc::Receiver<MessagingJob>),
+}
+
+/// Interface + function names for the messaging handler export.
+const MESSAGING_HANDLER: &str = "wasmcloud:messaging/handler@0.2.0";
+const HANDLE_MESSAGE: &str = "handle-message";
+
+impl Ingress {
+    /// Build this ingress's binding view over the shared instance. Done before
+    /// `run_concurrent` (which needs `&mut store`), mirroring the `cli` view.
+    fn prepare(
+        self,
+        store: &mut Store<SharedCtx>,
+        instance: &Instance,
+    ) -> anyhow::Result<PreparedIngress> {
+        match self {
+            Ingress::Http(rx) => {
+                let service = Service::new(store, instance)
+                    .map_err(|e| e.context("service is missing wasi:http/handler export"))?;
+                Ok(PreparedIngress::Http {
+                    service: Arc::new(service),
+                    rx,
+                })
+            }
+            Ingress::Messaging(rx) => {
+                // Look up the p2 `handle-message` export up front; it's invoked
+                // dynamically (there is no accessor-driven p3 messaging binding).
+                let iface = instance
+                    .get_export(&mut *store, None, MESSAGING_HANDLER)
+                    .with_context(|| format!("service is missing {MESSAGING_HANDLER} export"))?
+                    .1;
+                let func_idx = instance
+                    .get_export(&mut *store, Some(&iface), HANDLE_MESSAGE)
+                    .with_context(|| format!("{MESSAGING_HANDLER} is missing {HANDLE_MESSAGE}"))?
+                    .1;
+                Ok(PreparedIngress::Messaging {
+                    instance: *instance,
+                    func_idx,
+                    rx,
+                })
+            }
+        }
+    }
+}
+
+/// An [`Ingress`] with its binding view built, ready to serve invocations under
+/// `run_concurrent`.
+enum PreparedIngress {
+    Http {
+        service: Arc<Service>,
+        rx: tokio::sync::mpsc::Receiver<ServiceHttpJob>,
+    },
+    Messaging {
+        instance: Instance,
+        func_idx: ComponentExportIndex,
+        rx: tokio::sync::mpsc::Receiver<MessagingJob>,
+    },
+}
+
+impl PreparedIngress {
+    /// Serve inbound invocations until the delivery channel closes, spawning one
+    /// concurrent task per invocation on the shared instance.
+    async fn serve(self, accessor: &Accessor<SharedCtx>) {
+        match self {
+            PreparedIngress::Http { service, mut rx } => {
+                while let Some((req, resp_tx)) = rx.recv().await {
+                    accessor.spawn(HttpTask {
+                        service: Arc::clone(&service),
+                        req,
+                        resp_tx,
+                    });
+                }
+            }
+            PreparedIngress::Messaging {
+                instance,
+                func_idx,
+                mut rx,
+            } => {
+                while let Some((msg, result_tx)) = rx.recv().await {
+                    accessor.spawn(MessagingTask {
+                        instance,
+                        func_idx,
+                        msg,
+                        result_tx,
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// A running service instance co-driving `cli/run` and its host-invoked handler
+/// exports on one instance.
+pub struct Reactor {
+    /// The driver task: instantiates once and runs cli/run + every ingress
+    /// concurrently.
+    pub driver: tokio::task::JoinHandle<()>,
+}
+
+impl Reactor {
+    /// Instantiate the service once and start driving its `cli/run` export plus
+    /// every `ingress` on the same instance under one `run_concurrent`.
+    pub fn spawn(
+        mut store: Store<SharedCtx>,
+        pre: InstancePre<SharedCtx>,
+        ingresses: Vec<Ingress>,
+    ) -> anyhow::Result<Self> {
+        let driver = tokio::spawn(async move {
+            let instance = match pre.instantiate_async(&mut store).await {
+                Ok(i) => i,
+                Err(e) => {
+                    tracing::error!(err = %e, "failed to instantiate reactor service");
+                    return;
+                }
+            };
+            let command = match Command::new(&mut store, &instance) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(err = %e, "service is missing wasi:cli/run export");
+                    return;
+                }
+            };
+            // Build each ingress's binding view before entering run_concurrent.
+            let mut prepared = Vec::with_capacity(ingresses.len());
+            for ingress in ingresses {
+                match ingress.prepare(&mut store, &instance) {
+                    Ok(p) => prepared.push(p),
+                    Err(e) => {
+                        tracing::error!(err = %e, "failed to prepare reactor ingress");
+                        return;
+                    }
+                }
+            }
+
+            let result = store
+                .run_concurrent(async move |accessor| {
+                    // Drive the service's own long-running work (e.g. the pooler).
+                    accessor.spawn(RunTask { command });
+                    // Serve every ingress concurrently on this same instance; the
+                    // driver runs until all ingress channels close (workload stop).
+                    futures::future::join_all(prepared.into_iter().map(|p| p.serve(accessor)))
+                        .await;
+                    Ok::<(), anyhow::Error>(())
+                })
+                .await;
+            if let Err(e) = result {
+                tracing::error!(err = %e, "reactor driver exited");
+            }
+        });
+
+        Ok(Reactor { driver })
+    }
+}
+
+/// Drives the service's `wasi:cli/run` export (its long-running work).
+struct RunTask {
+    command: Command,
+}
+
+impl AccessorTask<SharedCtx> for RunTask {
+    async fn run(self, accessor: &Accessor<SharedCtx>) -> wasmtime::Result<()> {
+        match self.command.wasi_cli_run().call_run(accessor).await {
+            Ok(Ok(())) => tracing::info!("service cli/run exited successfully"),
+            Ok(Err(())) => tracing::error!("service cli/run exited with error"),
+            Err(e) => tracing::error!(err = %e, "service cli/run trapped"),
+        }
+        Ok(())
+    }
+}
+
+/// Handles one inbound message on the shared service instance by invoking the
+/// p2 `handle-message` export via the dynamic concurrent path (there is no
+/// accessor-driven p3 messaging binding), and reports its `result<_, string>`.
+struct MessagingTask {
+    instance: Instance,
+    func_idx: ComponentExportIndex,
+    msg: BrokerMessage,
+    result_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+}
+
+impl AccessorTask<SharedCtx> for MessagingTask {
+    async fn run(self, accessor: &Accessor<SharedCtx>) -> wasmtime::Result<()> {
+        let MessagingTask {
+            instance,
+            func_idx,
+            msg,
+            result_tx,
+        } = self;
+
+        let func = match accessor.with(|mut store| instance.get_func(&mut store, func_idx)) {
+            Some(func) => func,
+            None => {
+                let _ = result_tx.send(Err("handle-message export not found".to_string()));
+                return Ok(());
+            }
+        };
+
+        // Lower the `broker-message` record to a `Val`.
+        let message = Val::Record(vec![
+            ("subject".to_string(), Val::String(msg.subject)),
+            (
+                "body".to_string(),
+                Val::List(msg.body.into_iter().map(Val::U8).collect()),
+            ),
+            (
+                "reply-to".to_string(),
+                Val::Option(msg.reply_to.map(|s| Box::new(Val::String(s)))),
+            ),
+        ]);
+
+        let mut results = vec![Val::Bool(false)];
+        let outcome = match func.call_concurrent(accessor, &[message], &mut results).await {
+            Ok(()) => lift_handle_result(results.first()),
+            Err(e) => Err(format!("handle-message trapped: {e:#}")),
+        };
+        let _ = result_tx.send(outcome);
+        Ok(())
+    }
+}
+
+/// Lift the `result<_, string>` returned by `handle-message`.
+fn lift_handle_result(v: Option<&Val>) -> Result<(), String> {
+    match v {
+        Some(Val::Result(Ok(_))) => Ok(()),
+        Some(Val::Result(Err(Some(boxed)))) => match &**boxed {
+            Val::String(s) => Err(s.clone()),
+            other => Err(format!("{other:?}")),
+        },
+        Some(Val::Result(Err(None))) => Err(String::new()),
+        other => Err(format!("unexpected handle-message result: {other:?}")),
+    }
+}
 
 /// Response body that yields frames forwarded from the [`HttpTask`] over a
 /// bounded channel, so a service response streams to the client incrementally
@@ -51,92 +314,9 @@ impl hyper::body::Body for ChannelBody {
     }
 }
 
-/// A running service instance that serves HTTP ingress from its
-/// `wasi:http/handler` export while its `cli/run` export keeps running.
-pub struct ServiceHttpService {
-    /// Send inbound HTTP here; the paired oneshot receives the response.
-    pub sender: tokio::sync::mpsc::Sender<ServiceHttpJob>,
-    /// The driver task: instantiates once and runs cli/run + HTTP concurrently.
-    pub driver: tokio::task::JoinHandle<()>,
-}
-
-impl ServiceHttpService {
-    /// Instantiate the service once and start driving both its `cli/run` and
-    /// `wasi:http/handler` exports on the same instance.
-    pub fn spawn(
-        mut store: Store<SharedCtx>,
-        pre: InstancePre<SharedCtx>,
-    ) -> anyhow::Result<Self> {
-        let (sender, mut rx) = tokio::sync::mpsc::channel::<ServiceHttpJob>(256);
-
-        let driver = tokio::spawn(async move {
-            // One instance, two views: the cli `Command` and the http `Service`.
-            let instance = match pre.instantiate_async(&mut store).await {
-                Ok(i) => i,
-                Err(e) => {
-                    tracing::error!(err = %e, "failed to instantiate HTTP service");
-                    return;
-                }
-            };
-            let command = match Command::new(&mut store, &instance) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::error!(err = %e, "service is missing wasi:cli/run export");
-                    return;
-                }
-            };
-            let service = match Service::new(&mut store, &instance) {
-                Ok(s) => std::sync::Arc::new(s),
-                Err(e) => {
-                    tracing::error!(err = %e, "service is missing wasi:http/handler export");
-                    return;
-                }
-            };
-
-            let result = store
-                .run_concurrent(async move |accessor| {
-                    // Drive the service's own long-running work (e.g. the pooler).
-                    accessor.spawn(RunTask { command });
-                    // Serve inbound HTTP: one concurrent task per request, all on
-                    // this same instance.
-                    while let Some((req, resp_tx)) = rx.recv().await {
-                        accessor.spawn(HttpTask {
-                            service: std::sync::Arc::clone(&service),
-                            req,
-                            resp_tx,
-                        });
-                    }
-                    Ok::<(), anyhow::Error>(())
-                })
-                .await;
-            if let Err(e) = result {
-                tracing::error!(err = %e, "HTTP service driver exited");
-            }
-        });
-
-        Ok(ServiceHttpService { sender, driver })
-    }
-}
-
-/// Drives the service's `wasi:cli/run` export (its long-running work).
-struct RunTask {
-    command: Command,
-}
-
-impl AccessorTask<SharedCtx> for RunTask {
-    async fn run(self, accessor: &Accessor<SharedCtx>) -> wasmtime::Result<()> {
-        match self.command.wasi_cli_run().call_run(accessor).await {
-            Ok(Ok(())) => tracing::info!("service cli/run exited successfully"),
-            Ok(Err(())) => tracing::error!("service cli/run exited with error"),
-            Err(e) => tracing::error!(err = %e, "service cli/run trapped"),
-        }
-        Ok(())
-    }
-}
-
 /// Handles one inbound HTTP request on the shared service instance.
 struct HttpTask {
-    service: std::sync::Arc<Service>,
+    service: Arc<Service>,
     req: hyper::Request<hyper::body::Incoming>,
     resp_tx: tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
 }
@@ -268,8 +448,7 @@ mod tests {
     /// checks that end-of-stream is signalled when the producer drops its sender.
     #[tokio::test]
     async fn channel_body_streams_frames_incrementally() {
-        let (tx, rx) =
-            tokio::sync::mpsc::channel::<Result<Frame<Bytes>, P2ErrorCode>>(4);
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, P2ErrorCode>>(4);
         // Gates the producer's second frame on the consumer acknowledging the
         // first, proving the first was delivered before the producer completed.
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<()>();
