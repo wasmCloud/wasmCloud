@@ -116,6 +116,7 @@ const P3_FIXTURES: &[&str] = &[
     "blobstore-default-p3",
     "keyvalue-implements-p3",
     "keyvalue-default-p3",
+    "postgres-async-p3",
 ];
 
 // Fixtures with local-only WIT worlds (no wasi imports). Copying shared

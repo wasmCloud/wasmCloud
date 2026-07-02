@@ -1,0 +1,430 @@
+package wasmcloud:postgres@0.2.0;
+
+/// Types shared across the postgres interfaces.
+///
+/// The value model (`pg-value`) and the error model (`error`, `db-error`) live
+/// here so that `query` and `prepared` `use` the *same* types. That matters for
+/// the component-model `(implements ..)` mechanism: a host can route each
+/// labeled `query`/`prepared` import to its own credentialed connection, and the
+/// values and errors flowing through one label unify with the (unlabeled)
+/// interfaces because they all reference this one `types` package.
+interface types {
+  /// A structured error reported by the database itself.
+  ///
+  /// The fields mirror what Postgres returns in an error response, so that a
+  /// guest can branch on machine-readable fields — notably `code`, the
+  /// five-character SQLSTATE — rather than parsing `message`. For example, a
+  /// unique-constraint violation is SQLSTATE `23505`.
+  record db-error {
+    /// The five-character SQLSTATE code, e.g. `23505` for a unique-constraint
+    /// violation. See the Postgres "Error Codes" appendix.
+    code: string,
+    /// The severity as reported by the database, e.g. `ERROR`, `FATAL`, or
+    /// `PANIC`.
+    severity: string,
+    /// The primary human-readable error message.
+    message: string,
+    /// An optional secondary message carrying more detail about the problem.
+    detail: option<string>,
+    /// Any additional fields the database provided that are not captured above,
+    /// as `(field-name, value)` pairs.
+    extras: list<tuple<string, string>>,
+  }
+
+  /// The set of errors which may be raised by functions in this package.
+  ///
+  /// Following the wasip3 convention, this enumerates specific named cases
+  /// rather than leaning on stringly-typed errors. It is intentionally
+  /// non-exhaustive: future versions may add cases, and generated bindings are
+  /// marked non-exhaustive accordingly, so consumers must always include a
+  /// catch-all arm. Backend-specific failures that do not map to a named case
+  /// are reported via `other`.
+  variant error {
+    /// The host could not establish or maintain a connection to the database.
+    /// The operation may succeed if retried once the database is reachable.
+    connection-failed(string),
+    /// A query parameter was invalid: the wrong number of parameters, a value
+    /// whose type does not match the target column, or a value that could not
+    /// be encoded for the wire protocol.
+    invalid-params(string),
+    /// The SQL statement was rejected before it reached the database (e.g. by
+    /// host-side validation). Statements rejected by the database itself are
+    /// reported via `query-failed` instead.
+    invalid-query(string),
+    /// The database rejected or failed the statement. `db-error` carries the
+    /// structured detail (SQLSTATE `code`, `severity`, ...); branch on
+    /// `db-error.code` to distinguish conditions such as a unique-constraint
+    /// violation (`23505`).
+    query-failed(db-error),
+    /// A value returned by the database could not be converted into a
+    /// `pg-value` (e.g. an unsupported column type).
+    value-conversion-failed(string),
+    /// The prepared-statement token is not recognized: it was never prepared by
+    /// this component, or has since been evicted.
+    unknown-prepared-statement,
+    /// The requesting component is not permitted to reach the requested
+    /// database.
+    access-denied,
+    /// The operation did not complete within the host- or backend-imposed time
+    /// limit.
+    timeout,
+    /// Some other implementation-specific error has occurred (e.g. I/O). Used
+    /// for backend-specific failures that do not map to a named case above.
+    other(string),
+  }
+
+  /// This type of floating point is necessary as rust does not allow Eq/PartialEq/Hash on real `f64`
+  /// Instead we use a sign + mantissa + exponent
+  ///
+  /// see: https://docs.rs/num/latest/num/trait.Float.html#tymethod.integer_decode
+  type hashable-f64 = tuple<u64, s16, s8>;
+
+  type hashable-f32 = hashable-f64;
+
+  type point = tuple<hashable-f64, hashable-f64>;
+
+  type lower-left-point = point;
+
+  type upper-right-point = point;
+
+  type start-point = point;
+
+  type end-point = point;
+
+  type center-point = point;
+
+  type radius = hashable-f64;
+
+  type ipv4-addr = string;
+
+  type ipv6-addr = string;
+
+  type subnet = string;
+
+  type xmin = s64;
+
+  type xmax = s64;
+
+  type xip-list = list<s64>;
+
+  type logfile-num = u32;
+
+  type logfile-byte-offset = u32;
+
+  type column-name = string;
+
+  /// Arbitrary precision numeric type
+  type numeric = string;
+
+  /// Chosen weight of a Lexeme
+  enum lexeme-weight {
+    A,
+    B,
+    C,
+    D,
+  }
+
+  /// Represents an arbitrary precision numeric type
+  record lexeme {
+    /// Position (1->16383)
+    position: option<u16>,
+    /// Weight of the lexeme (in a relevant ts-vector)
+    weight: option<lexeme-weight>,
+    /// Data
+    data: string,
+  }
+
+  /// Offsets are expressed in seconds of timezone difference in either from the
+  /// eastern hemisphere or western hemisphere.
+  ///
+  /// ex. "America/New York", which is UTC-4 can be expressed as western-hemisphere-secs(4 * 3600)
+  variant offset {
+    eastern-hemisphere-secs(s32),
+    western-hemisphere-secs(s32),
+  }
+
+  /// Dates are represented similarly to tokio-postgres implementation
+  /// see: https://docs.rs/postgres-types/0.2.6/postgres_types/enum.Date.html#variant.Value
+  variant date {
+    positive-infinity,
+    negative-infinity,
+    ymd(tuple<s32, u32, u32>),
+  }
+
+  record interval {
+    start: date,
+    start-inclusive: bool,
+    end: date,
+    end-inclusive: bool,
+  }
+
+  record time {
+    hour: u32,
+    min: u32,
+    sec: u32,
+    micro: u32,
+  }
+
+  record time-tz {
+    timesonze: string,
+    time: time,
+  }
+
+  record timestamp {
+    date: date,
+    time: time,
+  }
+
+  record timestamp-tz {
+    timestamp: timestamp,
+    offset: offset,
+  }
+
+  record mac-address-eui48 {
+    bytes: tuple<u8, u8, u8, u8, u8, u8>,
+  }
+
+  record mac-address-eui64 {
+    bytes: tuple<u8, u8, u8, u8, u8, u8, u8, u8>,
+  }
+
+  /// Postgres data values, usable as parameters or via queries
+  /// see: https://www.postgresql.org/docs/current/datatype.html
+  ///
+  /// This datatype is primarily intended to be used with the `raw` encoding scheme.
+  ///
+  /// NOTE: all numeric values are little-endian unless otherwise specified
+  variant pg-value {
+    null,
+    /// Numeric
+    big-int(s64),
+    int8(s64),
+    int8-array(list<s64>),
+    big-serial(s64),
+    serial8(s64),
+    %bool(bool),
+    boolean(bool),
+    bool-array(list<bool>),
+    double(hashable-f64),
+    float8(hashable-f64),
+    float8-array(list<hashable-f64>),
+    real(hashable-f32),
+    float4(hashable-f32),
+    float4-array(list<hashable-f32>),
+    integer(s32),
+    int(s32),
+    int4(s32),
+    int4-array(list<s32>),
+    numeric(numeric),
+    decimal(numeric),
+    numeric-array(list<numeric>),
+    serial(u32),
+    serial4(u32),
+    small-int(s16),
+    int2(s16),
+    int2-array(list<s16>),
+    int2-vector(list<s16>),
+    int2-vector-array(list<list<s16>>),
+    small-serial(s16),
+    serial2(s16),
+    /// note: matches tokio-postgres
+    /// Bytes
+    ///
+    /// For bit & bit-varying, see the encoding scheme used by bit-vec:
+    /// https://contain-rs.github.io/bit-vec/bit_vec/struct.BitVec.html#method.to_bytes
+    bit(tuple<u32, list<u8>>),
+    bit-array(list<tuple<u32, list<u8>>>),
+    bit-varying(tuple<option<u32>, list<u8>>),
+    varbit(tuple<option<u32>, list<u8>>),
+    varbit-array(list<tuple<option<u32>, list<u8>>>),
+    bytea(list<u8>),
+    bytea-array(list<list<u8>>),
+    /// Characters
+    /// TODO: specify text encoding, to negotiate possible component/DB mismatch?
+    %char(tuple<u32, list<u8>>),
+    char-array(list<tuple<u32, list<u8>>>),
+    varchar(tuple<option<u32>, list<u8>>),
+    varchar-array(list<tuple<option<u32>, list<u8>>>),
+    /// Networking
+    cidr(string),
+    cidr-array(list<string>),
+    inet(string),
+    inet-array(list<string>),
+    macaddr(mac-address-eui48),
+    /// EUI-48
+    macaddr-array(list<mac-address-eui48>),
+    /// EUI-48
+    macaddr8(mac-address-eui64),
+    /// EUI-64 (deprecated)
+    macaddr8-array(list<mac-address-eui64>),
+    /// EUI-64 (deprecated)
+    /// Geo
+    box(tuple<lower-left-point, upper-right-point>),
+    box-array(list<tuple<lower-left-point, upper-right-point>>),
+    circle(tuple<center-point, radius>),
+    circle-array(list<tuple<center-point, radius>>),
+    line(tuple<start-point, end-point>),
+    line-array(list<tuple<start-point, end-point>>),
+    lseg(tuple<start-point, end-point>),
+    lseg-array(list<tuple<start-point, end-point>>),
+    path(list<point>),
+    path-array(list<list<point>>),
+    point(point),
+    point-array(list<point>),
+    polygon(list<point>),
+    polygon-array(list<list<point>>),
+    /// Date-time
+    date(date),
+    date-array(list<date>),
+    interval(interval),
+    interval-array(list<interval>),
+    time(time),
+    time-array(list<time>),
+    time-tz(time-tz),
+    time-tz-array(list<time-tz>),
+    timestamp(timestamp),
+    timestamp-array(list<timestamp>),
+    timestamp-tz(timestamp-tz),
+    timestamp-tz-array(list<timestamp-tz>),
+    /// JSON
+    json(string),
+    json-array(list<string>),
+    jsonb(string),
+    jsonb-array(list<string>),
+    /// Money (use is discouraged)
+    ///
+    /// fractional precision is determined by the database's `lc_monetary` setting.
+    ///
+    /// NOTE: if you are storing currency amounts, consider
+    /// using integer (whole number) counts of smallest indivisible pieces of currency
+    /// (ex. cent amounts to represent United States Dollars; 100 cents = 1 USD)
+    money(numeric),
+    money-array(list<numeric>),
+    /// Postgres-internal
+    pg-lsn(u64),
+    pg-lsn-array(list<u64>),
+    /// see: https://www.postgresql.org/docs/current/functions-info.html#FUNCTIONS-PG-SNAPSHOT-PARTS
+    pg-snapshot(tuple<xmin, xmax, xip-list>),
+    txid-snapshot(s64),
+    /// Text
+    name(string),
+    name-array(list<string>),
+    text(string),
+    text-array(list<string>),
+    xml(string),
+    xml-array(list<string>),
+    /// Full Text Search
+    ts-query(string),
+    ts-vector(list<lexeme>),
+    /// UUIDs
+    uuid(string),
+    uuid-array(list<string>),
+    /// Containers
+    hstore(list<tuple<string, option<string>>>),
+  }
+
+  /// A single row of a query result.
+  ///
+  /// Values are positional: the value at index `i` corresponds to the column
+  /// name at index `i` of the accompanying `list<column-name>` header returned
+  /// by `query`. Carrying the column names once alongside the row stream (rather
+  /// than repeating a name with every value) keeps large result sets compact.
+  type row = list<pg-value>;
+}
+
+/// Interface for querying a Postgres database with prepared statements.
+///
+/// Unlike `wasmcloud:postgres@0.1.1-draft`, every operation is an `async func`,
+/// so preparing and executing statements does not block the component and many
+/// executions can be in flight concurrently.
+interface prepared {
+  use types.{pg-value, error};
+
+  /// A token that represents a previously created prepared statement.
+  ///
+  /// This token can be expected to be somewhat opaque to users.
+  type prepared-statement-token = string;
+
+  /// Prepare a statement against a Postgres database, leaving connection/session
+  /// management to the callee/implementer of this interface (normally a provider
+  /// configured with connection credentials).
+  ///
+  /// Queries *must* be parameterized, with named arguments in the form of
+  /// `$<integer>`, for example:
+  ///
+  /// ```
+  /// SELECT email,username FROM users WHERE uuid=$1;
+  /// ```
+  prepare: async func(statement: string) -> result<prepared-statement-token, error>;
+
+  /// Execute a prepared statement, returning the number of rows affected.
+  ///
+  /// If the token is not recognized, this fails with
+  /// `error::unknown-prepared-statement`.
+  exec: async func(stmt-token: prepared-statement-token, params: list<pg-value>) -> result<u64, error>;
+}
+
+/// Interface for querying a Postgres database.
+///
+/// Unlike `wasmcloud:postgres@0.1.1-draft`, every operation is an `async func`,
+/// so a single component can issue many in-flight queries concurrently without
+/// the `wasi:io/poll` ceremony required under wasip2. `query` also streams its
+/// result rows rather than buffering the whole result set in host memory before
+/// returning.
+interface query {
+  use types.{pg-value, column-name, row, error};
+
+  /// Query a Postgres database, leaving connection/session management to the
+  /// callee/implementer of this interface (normally a provider configured with
+  /// connection credentials).
+  ///
+  /// Queries *must* be parameterized, with named arguments in the form of
+  /// `$<integer>`, for example:
+  ///
+  /// ```
+  /// SELECT email,username FROM users WHERE uuid=$1;
+  /// ```
+  ///
+  /// On success the result is delivered in three parts:
+  ///
+  /// 1. `list<column-name>` — the result columns, in order, delivered once up
+  ///    front. Position `i` names the value at position `i` of every `row`.
+  /// 2. `stream<row>` — the result rows, produced incrementally as the database
+  ///    returns them. The caller owns the stream and drives it to completion (or
+  ///    drops it early to stop consuming).
+  /// 3. `future<result<_, error>>` — a completion signal that resolves once the
+  ///    row stream is exhausted. It reports an error encountered *after* the
+  ///    column header was sent (e.g. a failure partway through a large result),
+  ///    which the row stream itself has no way to surface.
+  ///
+  /// The outer `result` reports failures that occur before any rows stream, such
+  /// as a rejected statement or a lost connection.
+  query: async func(query: string, params: list<pg-value>) -> result<tuple<list<column-name>, stream<row>, future<result<_, error>>>, error>;
+
+  /// Perform a batch query (which could contain multiple statements) against a
+  /// Postgres database, leaving connection/session management to the
+  /// callee/implementer of this interface (normally a provider configured with
+  /// connection credentials).
+  ///
+  /// No user-provided or untrusted data should be used with this query --
+  /// parameters are not allowed.
+  ///
+  /// This query *can* be used to execute multi-statement queries (common in
+  /// migrations).
+  query-batch: async func(query: string) -> result<_, error>;
+}
+
+/// The `wasmcloud:postgres/imports` world provides common APIs for querying a
+/// Postgres database. Components targeting this world can:
+///
+/// 1. Run parameterized queries whose result rows stream back incrementally
+///    (`query`), and run multi-statement batch queries (`query-batch`).
+/// 2. Prepare statements once and execute them repeatedly (`prepared`).
+///
+/// Every operation is an `async func`, so a component can keep many queries in
+/// flight concurrently.
+world imports {
+  import types;
+  import query;
+  import prepared;
+}

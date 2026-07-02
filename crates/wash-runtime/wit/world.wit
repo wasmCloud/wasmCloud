@@ -51,6 +51,12 @@ world async-keyvalue {
   import wasmcloud:keyvalue/batch@0.1.0;
 }
 
+world async-postgres {
+  import wasmcloud:postgres/types@0.2.0;
+  import wasmcloud:postgres/query@0.2.0;
+  import wasmcloud:postgres/prepared@0.2.0;
+}
+
 
 world otel {
     import wasi:otel/types@0.2.0-rc.2;

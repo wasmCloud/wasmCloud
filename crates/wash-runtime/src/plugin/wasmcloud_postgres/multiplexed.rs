@@ -83,7 +83,9 @@ fn build_pool_from_url(url: &str) -> anyhow::Result<Pool> {
 }
 
 impl PgId {
-    async fn client(&self) -> Result<deadpool_postgres::Client, String> {
+    /// Acquire a pooled connection for this named import. `pub(super)` so the
+    /// async (`0.2.0`) binding can stream from the same per-credential pool.
+    pub(super) async fn client(&self) -> Result<deadpool_postgres::Client, String> {
         self.pool
             .get()
             .await
@@ -246,7 +248,7 @@ impl WasmcloudPostgres {
     }
 }
 
-impl<'a> bindings::named_imports::wasmcloud::postgres::query::Host for ActiveCtx<'a> {
+impl<'a> bindings::named_imports::wasmcloud::postgres0_1_1_draft::query::Host for ActiveCtx<'a> {
     async fn query(
         &mut self,
         id: PgId,
@@ -265,7 +267,7 @@ impl<'a> bindings::named_imports::wasmcloud::postgres::query::Host for ActiveCtx
     }
 }
 
-impl<'a> bindings::named_imports::wasmcloud::postgres::prepared::Host for ActiveCtx<'a> {
+impl<'a> bindings::named_imports::wasmcloud::postgres0_1_1_draft::prepared::Host for ActiveCtx<'a> {
     async fn prepare(
         &mut self,
         id: PgId,

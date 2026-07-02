@@ -1,0 +1,33 @@
+package wasmcloud:postgres@0.2.0;
+
+/// Interface for querying a Postgres database with prepared statements.
+///
+/// Unlike `wasmcloud:postgres@0.1.1-draft`, every operation is an `async func`,
+/// so preparing and executing statements does not block the component and many
+/// executions can be in flight concurrently.
+interface prepared {
+  use types.{pg-value, error};
+
+  /// A token that represents a previously created prepared statement.
+  ///
+  /// This token can be expected to be somewhat opaque to users.
+  type prepared-statement-token = string;
+
+  /// Prepare a statement against a Postgres database, leaving connection/session
+  /// management to the callee/implementer of this interface (normally a provider
+  /// configured with connection credentials).
+  ///
+  /// Queries *must* be parameterized, with named arguments in the form of
+  /// `$<integer>`, for example:
+  ///
+  /// ```
+  /// SELECT email,username FROM users WHERE uuid=$1;
+  /// ```
+  prepare: async func(statement: string) -> result<prepared-statement-token, error>;
+
+  /// Execute a prepared statement, returning the number of rows affected.
+  ///
+  /// If the token is not recognized, this fails with
+  /// `error::unknown-prepared-statement`.
+  exec: async func(stmt-token: prepared-statement-token, params: list<pg-value>) -> result<u64, error>;
+}
