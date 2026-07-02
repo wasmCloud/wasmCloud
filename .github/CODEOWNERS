@@ -46,3 +46,8 @@
 # Examples and project templates
 /examples/              @wasmCloud/examples-maintainers
 /templates/             @wasmCloud/examples-maintainers
+
+# Adding an example registers it in the examples CI matrix, so example
+# maintainers own that workflow to keep new examples reviewable by them
+# alone. This override comes after /.github/ so it takes precedence.
+/.github/workflows/examples.yml         @wasmCloud/examples-maintainers @wasmCloud/ci-maintainers
