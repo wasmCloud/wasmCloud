@@ -1,0 +1,10 @@
+package wasmcloud:cancellable-jobs@0.1.0;
+
+interface control {
+	variant register-error {
+		duplicate-key(string),
+	}
+
+	register: func(request-id: string) -> result<_, register-error>;
+	cancel: func(request-id: string) -> bool;
+}

@@ -114,10 +114,10 @@ impl HostPlugin for CancellableJobsPlugin {
     ) -> anyhow::Result<()> {
         if !interfaces
             .iter()
-            .any(|i| i.namespace == "wasmcloud" && i.package == "cancellable_jobs")
+            .any(|i| i.namespace == "wasmcloud" && i.package == "cancellable-jobs")
         {
             tracing::warn!(
-                "TracingLogger plugin requested for non-wasmcloud:cancellable_jobs interface(s): {:?}",
+                "CancellableJobs plugin requested for non-wasmcloud:cancellable-jobs interface(s): {:?}",
                 interfaces
             );
 

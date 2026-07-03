@@ -1,0 +1,18 @@
+package wasmcloud:cancel-example;
+
+interface producer {
+    /// Produce a stream of `n` numbers, one per second, each formatted as
+    /// `"<k>\n"` bytes. Returned as a `stream<u8>` so the handle can cross the
+    /// dynamic linker into `cancellable-component`. The one-per-second pacing
+    /// is what makes the streaming invocation long-lived enough to cancel
+    /// mid-flight.
+    produce: async func(n: u32) -> stream<u8>;
+}
+
+world cancellable-producer {
+    import wasi:cli/types@0.3.0;
+    import wasi:clocks/types@0.3.0;
+    import wasi:clocks/monotonic-clock@0.3.0;
+
+    export producer;
+}

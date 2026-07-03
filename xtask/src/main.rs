@@ -107,6 +107,8 @@ const P3_FIXTURES: &[&str] = &[
     "stream-producer-p3",
     "stream-consumer-p3",
     "stream-pacer-p3",
+    "cancellable-producer",
+    "cancellable-component",
     "res-producer-p3",
     "res-sink-p3",
     "res-caller-p3",

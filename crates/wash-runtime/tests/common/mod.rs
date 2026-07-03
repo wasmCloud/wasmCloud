@@ -133,6 +133,28 @@ pub fn http_blobstore_host_interfaces(host_header: &str) -> Vec<WitInterface> {
     ]
 }
 
+/// The `wasmcloud:cancellable-jobs/control@0.1.0` host interface, backed by
+/// the `CancellableJobsPlugin`.
+pub fn cancellable_jobs_control_interface() -> WitInterface {
+    WitInterface {
+        namespace: "wasmcloud".to_string(),
+        package: "cancellable-jobs".to_string(),
+        interfaces: ["control".to_string()].into_iter().collect(),
+        version: Some(semver::Version::parse("0.1.0").unwrap()),
+        config: HashMap::new(),
+        name: None,
+    }
+}
+
+/// HTTP incoming-handler plus the cancellable-jobs control interface, for the
+/// streaming-cancellation fixtures.
+pub fn http_cancellable_host_interfaces(host_header: &str) -> Vec<WitInterface> {
+    vec![
+        http_incoming_handler_interface(host_header, None),
+        cancellable_jobs_control_interface(),
+    ]
+}
+
 pub fn component_workload_request(
     component_name: &str,
     workload_name: &str,
@@ -259,6 +281,31 @@ pub async fn start_host_with_p3(addr: &str) -> Result<(std::net::SocketAddr, imp
             .with_engine(engine)
             .with_http_handler(Arc::new(http_server)),
     )?
+    .build()?;
+    let host = host.start().await.context("Failed to start host")?;
+    Ok((bound_addr, host))
+}
+
+/// Like `start_host_with_p3` but also registers the `CancellableJobsPlugin`,
+/// which backs the `wasmcloud:cancellable-jobs/control` interface used to
+/// register and cancel long-running streaming invocations. Requires the
+/// `epoch-interruption` feature (the plugin and its epoch machinery only
+/// compile under it).
+#[cfg(feature = "epoch-interruption")]
+pub async fn start_host_with_p3_cancellable(
+    addr: &str,
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    use wash_runtime::plugin::cancellable_jobs::CancellableJobsPlugin;
+
+    let engine = Engine::builder().build()?;
+    let http_server = HttpServer::new(DevRouter::default(), addr.parse()?).await?;
+    let bound_addr = http_server.addr();
+    let host = with_standard_plugins(
+        HostBuilder::new()
+            .with_engine(engine)
+            .with_http_handler(Arc::new(http_server)),
+    )?
+    .with_plugin(Arc::new(CancellableJobsPlugin::default()))?
     .build()?;
     let host = host.start().await.context("Failed to start host")?;
     Ok((bound_addr, host))

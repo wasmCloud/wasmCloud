@@ -36,6 +36,8 @@ members = [
     "ephemeral-caller-p3",
     "blobstore-implements-p3",
     "keyvalue-implements-p3",
+    "cancellable-producer",
+    "cancellable-component",
 ]
 
 [workspace.dependencies]
