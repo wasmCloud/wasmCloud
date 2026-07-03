@@ -36,7 +36,7 @@ runs:
   using: "composite"
   steps:
       - name: Set up Helm
-        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5.0.0
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: ${{ inputs.helm-version }}
 
@@ -48,7 +48,7 @@ runs:
           password: ${{ inputs.registry-password }}
 
       - name: Update dependencies with Helmfile
-        uses: helmfile/helmfile-action@daefb3e1fa5a91b7a88d30870d20da4896944818 # v2.4.5
+        uses: helmfile/helmfile-action@54b1d14bdfb9ae815b1f4ef213273a9025b6bdee # v2.4.6
         with:
           helmfile-args: deps
           helmfile-version: ${{ inputs.helmfile-version }}

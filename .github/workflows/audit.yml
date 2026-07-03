@@ -58,7 +58,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install cargo-audit
-        uses: taiki-e/install-action@b8cecb83565409bcc297b2df6e77f030b2a468d5 # v2.82.0
+        uses: taiki-e/install-action@bffeee26d4db9be238a4ea78d8826604ebcb594d # v2.82.5
         env:
           # Authenticate the action's GitHub API calls so they aren't throttled
           # by the 60/hr anonymous per-IP limit shared across hosted runners.
