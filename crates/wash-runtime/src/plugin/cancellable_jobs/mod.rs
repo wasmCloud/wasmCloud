@@ -167,13 +167,11 @@ impl HostPlugin for CancellableJobsPlugin {
         let before = registrations.len();
         registrations.retain(|_, reg| reg.workload_id.as_ref() != workload_id);
         let removed = before - registrations.len();
-        if removed > 0 {
-            debug!(
-                workload_id,
-                count = removed,
-                "removed workload registrations on unbind"
-            );
-        }
+        debug!(
+            workload_id,
+            count = removed,
+            "removed workload registrations on unbind"
+        );
         Ok(())
     }
 }
