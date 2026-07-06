@@ -264,12 +264,9 @@ pub(crate) async fn new_store_from_templates(
 
     #[cfg(feature = "epoch-interruption")]
     {
-        // Arm the epoch policy with this invocation's cancellation handle:
-        // on every epoch tick the callback re-arms and keeps running, unless
-        // the handle was tripped — then the guest traps mid-wasm
-        // we need to always set the epoch_deadline here because you need the mutable store
-        // and cant access that in the plugin
-        // Maybe we can / should add something to it so we can?
+        // We need to set the epoch deadline to always trigger because we cant get a mutable reference in the host plugin to set it.
+        // In the callback we check if we really should cancel it.
+        // It might be nice if we can change wasmtime to create a helper method on the store that we can set this?
         store.set_epoch_deadline(1);
 
         store.epoch_deadline_callback(move |_| {

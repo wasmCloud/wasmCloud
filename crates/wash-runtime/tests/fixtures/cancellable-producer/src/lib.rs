@@ -25,7 +25,6 @@ use wit_bindgen::StreamReader;
 
 struct Component;
 
-/// Gap between emitted numbers.
 const TICK_NS: u64 = 1_000_000_000; // 1s
 
 impl Guest for Component {

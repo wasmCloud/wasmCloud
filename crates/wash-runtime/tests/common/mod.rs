@@ -133,8 +133,6 @@ pub fn http_blobstore_host_interfaces(host_header: &str) -> Vec<WitInterface> {
     ]
 }
 
-/// The `wasmcloud:cancellable-jobs/control@0.1.0` host interface, backed by
-/// the `CancellableJobsPlugin`.
 pub fn cancellable_jobs_control_interface() -> WitInterface {
     WitInterface {
         namespace: "wasmcloud".to_string(),
@@ -146,8 +144,6 @@ pub fn cancellable_jobs_control_interface() -> WitInterface {
     }
 }
 
-/// HTTP incoming-handler plus the cancellable-jobs control interface, for the
-/// streaming-cancellation fixtures.
 pub fn http_cancellable_host_interfaces(host_header: &str) -> Vec<WitInterface> {
     vec![
         http_incoming_handler_interface(host_header, None),

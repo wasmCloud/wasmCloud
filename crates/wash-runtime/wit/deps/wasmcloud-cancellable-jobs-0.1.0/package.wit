@@ -7,4 +7,5 @@ interface control {
 
 	register: func(request-id: string) -> result<_, register-error>;
 	cancel: func(request-id: string) -> bool;
+	complete: func(request-id: string);
 }

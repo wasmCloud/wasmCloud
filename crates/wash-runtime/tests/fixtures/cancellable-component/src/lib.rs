@@ -41,17 +41,14 @@ impl Handler for Component {
 
         if path.starts_with("/cancel") {
             let cancelled = control::cancel(&id);
-            // This is asserted in test.
             let msg = if cancelled { "cancelled\n" } else { "not-registered\n" };
             return Ok(send_response(msg.as_bytes().to_vec()));
         }
 
-        // Normal request route that registers and performs a normal long-running call
         if let Err(e) = control::register(&id) {
             return Ok(send_response(format!("register failed: {e:?}\n").into_bytes()));
         }
 
-        // produce 10 numbers.
         let mut upstream = producer::produce(10).await;
 
         let headers = Fields::new();
@@ -66,6 +63,8 @@ impl Handler for Component {
                 tx.write_all(vec![byte]).await;
             }
             drop(tx);
+            // Mark as complete so that we remove the registration from hashmap
+            control::complete(&id);
             if let Err(e) = trailers_tx.write(Ok(None)).await {
                 tracing::debug!(?e, "trailers receivers gone; consumer likely disconnected");
             }
