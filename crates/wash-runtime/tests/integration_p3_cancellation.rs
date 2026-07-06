@@ -216,3 +216,124 @@ async fn test_p3_cancel_stops_streaming_midway() -> Result<()> {
 
     Ok(())
 }
+
+/// A duplicate request-id sent while the first invocation is still streaming is
+/// rejected with a DuplicateKey error (surfaced in the response body).
+#[tokio::test]
+async fn test_p3_duplicate_id_rejected_while_in_flight() -> Result<()> {
+    const HOST: &str = "p3-duplicatekey-error";
+    const DUPLICATE_ID: &str = "alternative-duplicate-key";
+
+    let (addr, host) = start_host_with_p3_cancellable("127.0.0.1:0").await?;
+    host.workload_start(cancellable_workload(HOST))
+        .await
+        .context("cancellable workload should start")?;
+
+    let client = reqwest::Client::new();
+    let response = timeout(
+        Duration::from_secs(20),
+        client
+            .get(format!("http://{addr}/?id={DUPLICATE_ID}"))
+            .header("HOST", HOST)
+            .send(),
+    )
+    .await
+    .context("request timed out")?
+    .context("request failed")?;
+    assert!(
+        response.status().is_success(),
+        "streaming handler should return 2xx, got {}",
+        response.status()
+    );
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Send request with duplicate request-id before the first request's body is collected
+
+    let duplicate_response = timeout(
+        Duration::from_secs(20),
+        client
+            .get(format!("http://{addr}/?id={DUPLICATE_ID}"))
+            .header("HOST", HOST)
+            .send(),
+    )
+    .await
+    .context("request timed out")?
+    .context("request failed")?;
+    let dup_body = collect_body(duplicate_response).await?;
+    assert!(
+        dup_body.contains("register failed") && dup_body.contains("DuplicateKey"),
+        "duplicate-id should be rejected with DuplicateKey, got body: {dup_body:?}"
+    );
+
+    let body = collect_body(response).await?;
+    assert_eq!(
+        parse_numbers(&body),
+        EXPECTED_FULL,
+        "an un-cancelled invocation should stream all ten numbers"
+    );
+    Ok(())
+}
+
+/// A cancel sent with an id that was never registered is a no-op: the job
+/// running under a different id is unaffected and streams to completion, and
+/// the cancel reports the id was not registered.
+#[tokio::test]
+async fn test_p3_cancel_with_mismatched_id_is_noop() -> Result<()> {
+    const HOST: &str = "p3-mismatched-cancel";
+    const JOB_ID: &str = "real-job";
+    const WRONG_ID: &str = "wrong-id";
+    const DELAY_LENGTH: u64 = 5;
+
+    let (addr, host) = start_host_with_p3_cancellable("127.0.0.1:0").await?;
+    host.workload_start(cancellable_workload(HOST))
+        .await
+        .context("cancellable workload should start")?;
+
+    let client = reqwest::Client::new();
+
+    // Fire a cancel for a DIFFERENT id ~5s into the real job's stream.
+    let cancel_client = client.clone();
+    let cancel_response = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(DELAY_LENGTH)).await;
+        cancel_client
+            .get(format!("http://{addr}/cancel?id={WRONG_ID}"))
+            .header("HOST", HOST)
+            .send()
+            .await
+    });
+
+    let response = timeout(
+        Duration::from_secs(20),
+        client
+            .get(format!("http://{addr}/?id={JOB_ID}"))
+            .header("HOST", HOST)
+            .send(),
+    )
+    .await
+    .context("request timed out")?
+    .context("request failed")?;
+    assert!(response.status().is_success(), "got {}", response.status());
+
+    let body = collect_body(response).await?;
+
+    let cancel_body = cancel_response
+        .await
+        .context("cancel task panicked")?
+        .context("cancel request failed")?
+        .text()
+        .await
+        .context("reading cancel response failed")?;
+
+    assert_eq!(
+        cancel_body.trim(),
+        "not-registered",
+        "cancelling an unknown id should report not-registered"
+    );
+    assert_eq!(
+        parse_numbers(&body),
+        EXPECTED_FULL,
+        "a job cancelled by the wrong id should stream all ten numbers"
+    );
+    Ok(())
+}
