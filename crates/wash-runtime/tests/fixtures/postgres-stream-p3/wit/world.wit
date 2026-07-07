@@ -1,10 +1,10 @@
-package wasmcloud:postgres-async-p3;
+package wasmcloud:postgres-stream-p3;
 
 // Drives the async (wasip3) `wasmcloud:postgres@0.2.0` surface: the unnamed
 // (default) `query` import, whose streaming result crosses the host's async
 // host binding. The component is an HTTP handler so a test can trigger it over
 // the wire and read back what the guest streamed out of the row stream.
-world postgres-async-p3 {
+world postgres-stream-p3 {
     import wasi:http/types@0.3.0;
     import wasi:clocks/types@0.3.0;
     import wasmcloud:postgres/types@0.2.0;

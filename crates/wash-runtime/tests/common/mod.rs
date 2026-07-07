@@ -10,6 +10,9 @@
 #[cfg(feature = "wasi-tls")]
 pub mod tls;
 
+#[cfg(feature = "wasmcloud-postgres")]
+pub mod postgres;
+
 use anyhow::{Context, Result};
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 use tokio::time::timeout;

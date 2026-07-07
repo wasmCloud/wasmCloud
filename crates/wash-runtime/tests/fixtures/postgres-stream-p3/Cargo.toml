@@ -1,5 +1,5 @@
 [package]
-name = "postgres-async-p3"
+name = "postgres-stream-p3"
 edition = "2021"
 version = "0.0.0"
 
