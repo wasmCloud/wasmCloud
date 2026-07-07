@@ -1,13 +1,15 @@
 # OCI Registry
 
 A minimal [OCI Distribution Spec][oci-dist] (v2) registry implemented as a single
-**wasip3** WebAssembly component. It exports `wasi:http/handler@0.3.0` to serve
+**wasip3** WebAssembly component. 
+
+This component exports `wasi:http/handler@0.3.0` to serve
 the registry API and stores every blob, manifest, and tag through the async,
 native-stream [`wasmcloud:blobstore@0.1.0`][wasmcloud-blobstore] interface, so it
 runs against any blobstore backend (in-memory, filesystem, NATS, …) without code
 changes.
 
-It is spec compliant and can be used as a drop-in target for real clients such as
+The registry implementation this component provides is spec compliant and can be used as a drop-in target for real clients such as
 [`oras`][oras] and `docker`/`podman`: blob CRUD, manifest CRUD, resumable
 uploads, tag listing, and the referrers API.
 
