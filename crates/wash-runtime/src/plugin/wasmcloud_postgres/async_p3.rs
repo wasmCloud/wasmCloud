@@ -44,35 +44,14 @@ use crate::plugin::multiplex::Multiplexer;
 /// before the task blocks — bounds host memory and applies backpressure.
 const ROW_CHANNEL_CAPACITY: usize = 16;
 
-#[cfg(not(feature = "wasm_component_model_implements"))]
-mod bindings {
-    crate::wasmtime::component::bindgen!({
-        world: "async-postgres",
-        imports: { default: store | async | trappable | tracing },
-    });
-}
-
-#[cfg(feature = "wasm_component_model_implements")]
-mod bindings {
-    crate::wasmtime::component::bindgen!({
-        world: "async-postgres",
-        imports: { default: store | async | trappable | tracing },
-        // Allow a component to import `wasmcloud:postgres@0.2.0` multiple times
-        // via `(implements ..)`, routing each named import to its own
-        // credentialed connection pool (the embedder-chosen `id`).
-        named_imports: {
-            "wasmcloud:postgres/query@0.2.0": crate::plugin::wasmcloud_postgres::PgId,
-            "wasmcloud:postgres/prepared@0.2.0": crate::plugin::wasmcloud_postgres::PgId,
-        },
-    });
-}
+mod bindings;
 
 use bindings::wasmcloud::postgres0_2_0::types::{DbError, Error, PgValue, Row};
 use bindings::wasmcloud::postgres0_2_0::{prepared, query, types};
 
 /// The completion `future<result<_, error>>` end returned alongside a query's
 /// row stream.
-type ResultFuture = FutureReader<Result<(), Error>>;
+type CompletionFuture = FutureReader<Result<(), Error>>;
 
 /// `PgValue` <-> tokio-postgres conversions for the async binding.
 ///
@@ -150,7 +129,7 @@ async fn stream_query<U>(
     client: deadpool_postgres::Client,
     q: String,
     params: Vec<PgValue>,
-) -> wasmtime::Result<Result<(Vec<String>, StreamReader<Row>, ResultFuture), Error>> {
+) -> wasmtime::Result<Result<(Vec<String>, StreamReader<Row>, CompletionFuture), Error>> {
     let stmt = match client.prepare(&q).await {
         Ok(s) => s,
         Err(e) => return Ok(Err(to_wit_error(&e))),
@@ -170,7 +149,7 @@ async fn stream_query<U>(
 
     store.with(|mut access| {
         let stream = StreamReader::new(&mut access, RowStreamProducer { rows: row_rx })?;
-        let future = ResultFuture::new(&mut access, done_rx)?;
+        let future = CompletionFuture::new(&mut access, done_rx)?;
         wasmtime::Result::Ok(Ok((columns, stream, future)))
     })
 }
@@ -335,7 +314,7 @@ impl<U> query::HostWithStore<U> for SharedCtx {
         store: &Accessor<U, Self>,
         q: String,
         params: Vec<PgValue>,
-    ) -> wasmtime::Result<Result<(Vec<String>, StreamReader<Row>, ResultFuture), Error>> {
+    ) -> wasmtime::Result<Result<(Vec<String>, StreamReader<Row>, CompletionFuture), Error>> {
         let (plugin, component_id) = plugin_and_component(store)?;
         let Some(database) = plugin.database_for_component(&component_id).await else {
             return Ok(Err(Error::Other(
@@ -417,7 +396,7 @@ impl<U> bindings::named_imports::wasmcloud::postgres0_2_0::query::HostWithStore<
         id: PgId,
         q: String,
         params: Vec<PgValue>,
-    ) -> wasmtime::Result<Result<(Vec<String>, StreamReader<Row>, ResultFuture), Error>> {
+    ) -> wasmtime::Result<Result<(Vec<String>, StreamReader<Row>, CompletionFuture), Error>> {
         let client = match id.client().await {
             Ok(c) => c,
             Err(e) => return Ok(Err(Error::ConnectionFailed(e))),
