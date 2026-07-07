@@ -576,7 +576,7 @@ impl HostPlugin for WasmcloudPostgres {
         let component = component_handle.component().clone();
         let linker = component_handle.linker();
 
-        // ── sync `0.1.1-draft` (wasip2) ──────────────────────────────────────
+        // Sync `0.1.1-draft` (wasip2).
         if !pg_sync.is_empty() {
             // A `(implements ..)` import is a *named* postgres interface routed
             // to its own credentialed connection; an unnamed one keeps the
@@ -642,7 +642,7 @@ impl HostPlugin for WasmcloudPostgres {
             }
         }
 
-        // ── async `0.2.0` (wasip3) ───────────────────────────────────────────
+        // Async `0.2.0` (wasip3).
         if !pg_async.is_empty() {
             // `types` carries no functions and is shared by query/prepared; link
             // it once regardless of default/named routing.
