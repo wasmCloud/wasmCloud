@@ -39,6 +39,7 @@ env:
       {"key": "http-handler",                         "workdir": "templates/http-handler"},
       {"key": "http-hello-world",                     "workdir": "templates/http-hello-world"},
       {"key": "http-kv-handler",                      "workdir": "templates/http-kv-handler"},
+      {"key": "http-sqlx-postgres",                   "workdir": "templates/http-sqlx-postgres"},
       {"key": "service-tcp",                          "workdir": "templates/service-tcp"}
     ]
   # When these change, every template rebuilds.

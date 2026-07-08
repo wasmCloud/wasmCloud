@@ -1,0 +1,11 @@
+# Rust build artifacts
+/target/
+
+# WIT dependencies, fetched from the registry into wit/deps/ by `wash build`.
+/wit/deps/
+
+# Lock file regenerated on each fetch (the p3 WASI drafts move quickly).
+/wkg.lock
+
+# Trash
+.DS_Store

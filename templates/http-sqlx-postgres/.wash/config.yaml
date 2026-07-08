@@ -1,0 +1,39 @@
+version: 0.1.0
+
+build:
+  # All three components share the top-level wit/ (one `wasmcloud:app` package,
+  # one world each). `wash build` fetches its WASI 0.3 deps into wit/deps/
+  # before running this command, so an ordinary workspace build is all that's
+  # left.
+  command: cargo build --workspace --target wasm32-wasip2 --release
+  # The Service is the main component: it is the cli/run pool AND, because it
+  # also exports wasi:http/handler, the runtime routes inbound HTTP to it.
+  component_path: target/wasm32-wasip2/release/service.wasm
+
+# Config reaches the Service (the main/service component) only; the stateless
+# users/todos sidecars get none of it — in particular, they never see the
+# database credentials. They use the fixed loopback pool address instead.
+workload:
+  environment:
+    config:
+      # Real upstream Postgres. NON-loopback, host-reachable (see README).
+      UPSTREAM_ADDR: "192.168.1.100:5432"
+      # Credentials the Service authenticates its pooled sessions with
+      # (matching docker-compose.yml). Held only by the Service.
+      UPSTREAM_USER: "app"
+      UPSTREAM_PASSWORD: "app"
+      UPSTREAM_DB: "app"
+
+dev:
+  wasip3: true
+  # Make the Service the long-lived wasi:cli/run service.
+  service: true
+  # The stateless backends the Service routes to.
+  components:
+    - name: users
+      file: target/wasm32-wasip2/release/users.wasm
+    - name: todos
+      file: target/wasm32-wasip2/release/todos.wasm
+
+new:
+  command: cargo fetch
