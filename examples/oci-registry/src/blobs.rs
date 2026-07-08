@@ -3,8 +3,9 @@
 
 use crate::bindings;
 use crate::http::{error_response, method_not_allowed, respond, respond_owned, stream_response};
+use crate::keys::blob_key;
 use crate::storage::{
-    blob_err, blob_key, copy_object, delete_object, has_object, object_size, open_object_stream,
+    blob_err, copy_object, delete_object, has_object, object_size, open_object_stream,
 };
 use crate::uploads::begin_upload_session;
 use crate::{Container, Method, Request, Response};

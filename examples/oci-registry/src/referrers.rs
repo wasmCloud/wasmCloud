@@ -2,7 +2,8 @@
 //! `subject`, as an OCI image index.
 
 use crate::http::respond_owned;
-use crate::storage::{list_keys, read_object, referrer_prefix};
+use crate::keys::referrer_prefix;
+use crate::storage::{list_keys, read_object};
 use crate::util::query_param;
 use crate::{Container, Response};
 

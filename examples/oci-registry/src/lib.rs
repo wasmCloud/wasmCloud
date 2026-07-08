@@ -24,9 +24,9 @@
 //! | List referrers     | GET    | `/v2/<name>/referrers/<digest>`               |
 //!
 //! The registry logic is split by functionality: [`route`] (URL parsing),
-//! [`storage`] (blobstore + key naming), [`http`] (response building), [`util`]
-//! (digests/queries), and one module per resource: [`blobs`], [`manifests`],
-//! [`tags`], [`referrers`], [`uploads`].
+//! [`storage`] (blobstore access), [`keys`] (object-key naming), [`http`]
+//! (response building), [`util`] (digests/queries), and one module per resource:
+//! [`blobs`], [`manifests`], [`tags`], [`referrers`], [`uploads`].
 
 mod bindings {
     wit_bindgen::generate!({
@@ -38,6 +38,7 @@ mod bindings {
 
 mod blobs;
 mod http;
+mod keys;
 mod manifests;
 mod referrers;
 mod route;
@@ -55,10 +56,11 @@ pub(crate) use bindings::wasmcloud::blobstore::container::Container;
 
 use crate::blobs::{handle_blob, mount_blob, stream_and_finalize};
 use crate::http::{error_response, header_str, method_not_allowed, read_request_body, respond};
+use crate::keys::upload_key;
 use crate::manifests::handle_manifest;
 use crate::referrers::handle_referrers;
 use crate::route::Route;
-use crate::storage::{delete_object, ensure_container, read_object, upload_key};
+use crate::storage::{delete_object, ensure_container, read_object};
 use crate::tags::handle_tags_list;
 use crate::uploads::{begin_upload_session, handle_upload};
 use crate::util::query_param;

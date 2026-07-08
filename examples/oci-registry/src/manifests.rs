@@ -1,10 +1,8 @@
 //! Manifest push/pull/delete and the `subject`/referrer metadata extracted on push.
 
 use crate::http::{error_response, method_not_allowed, respond, respond_owned};
-use crate::storage::{
-    delete_object, has_object, manifest_key, media_type_key, read_object, referrer_key, tag_key,
-    write_object,
-};
+use crate::keys::{manifest_key, media_type_key, referrer_key, tag_key};
+use crate::storage::{delete_object, has_object, read_object, write_object};
 use crate::util::{is_digest, sha256_digest};
 use crate::{Container, Method, Response};
 
