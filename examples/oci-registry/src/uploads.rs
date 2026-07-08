@@ -4,7 +4,8 @@
 //! streaming fast-path in `crate::dispatch` (see [`crate::blobs`]).
 
 use crate::http::{error_response, method_not_allowed, respond_owned};
-use crate::storage::{has_object, object_size, read_object, upload_key, write_object};
+use crate::keys::upload_key;
+use crate::storage::{has_object, object_size, read_object, write_object};
 use crate::util::{new_session_id, range_header, range_start};
 use crate::{Container, Method, Response};
 
