@@ -1,0 +1,4 @@
+package wasmcloud:todos@0.1.0;
+world todos {
+    export wasmcloud:app/todos@0.1.0;
+}

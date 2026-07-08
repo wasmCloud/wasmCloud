@@ -1,0 +1,16 @@
+package wasmcloud:service@0.1.0;
+
+/// The single long-lived Service. It is BOTH:
+///   * the HTTP ingress + router (exports wasi:http/handler; the runtime routes
+///     inbound HTTP here because this is the service), and
+///   * the egress connection pooler (exports wasi:cli/run, which listens on a
+///     loopback Postgres port and multiplexes a pre-authenticated upstream pool).
+/// The stateless `users`/`todos` components connect to the loopback pooler with
+/// ordinary sqlx and are invoked by the router over host-linked WIT calls.
+world service {
+    import wasi:sockets/types@0.3.0;
+    import wasmcloud:app/users@0.1.0;
+    import wasmcloud:app/todos@0.1.0;
+    export wasi:cli/run@0.3.0;
+    export wasi:http/handler@0.3.0;
+}

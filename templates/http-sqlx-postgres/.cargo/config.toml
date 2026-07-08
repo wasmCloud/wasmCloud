@@ -1,0 +1,5 @@
+# tokio's networking on wasm targets is gated behind the `tokio_unstable` cfg
+# (see tokio docs: "enables the use of tokio::net on the wasm32-wasi target").
+# sqlx's runtime-tokio backend needs it to open TCP sockets to Postgres.
+[target.wasm32-wasip2]
+rustflags = ["--cfg", "tokio_unstable"]
