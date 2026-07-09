@@ -118,11 +118,11 @@ jobs:
           RUST_BACKTRACE: "1"
         run: |
           cargo test --workspace
-      - name: Test with wasi-tls + wasm_component_model_implements
+      - name: Test with wasi-tls + wasm_component_model_implements + epoch-interruption
         env:
           RUST_BACKTRACE: "1"
         run: |
-          cargo test -p wash-runtime --features wasi-tls,wasm_component_model_implements
+          cargo test -p wash-runtime --features wasi-tls,wasm_component_model_implements,epoch-interruption
       # Docker/registry-backed `#[ignore]` integration tests, Linux only: the
       # macOS/Windows hosted runners have no Docker daemon (and macOS can't get
       # one — no nested virtualization). `-- --ignored` runs ONLY the ignored
@@ -179,7 +179,7 @@ jobs:
           cargo +nightly fmt -- --check
       - name: Lint
         run: |
-          cargo clippy --workspace --features wasm_component_model_implements,wasi-tls
+          cargo clippy --workspace --features wasm_component_model_implements,wasi-tls,epoch-interruption
       - name: Lint anyhow context message casing
         run: |
           # anyhow `.context()` / `.with_context()` strings are error messages,
