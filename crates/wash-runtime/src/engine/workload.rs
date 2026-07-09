@@ -1416,8 +1416,11 @@ impl UnresolvedWorkload {
         // This tracks which interfaces each component still needs to be bound
         let mut unmatched_interfaces: HashMap<IdFlavor, HashSet<WitInterface>> = HashMap::new();
         let host_interfaces = {
-            // filter out Plugins fulfilled by host
-            let http_iface = WitInterface::from("wasi:http/incoming-handler,outgoing-handler");
+            // filter out Plugins fulfilled by host. `handler` is the unified
+            // WASI P3 http interface (covers both incoming and outgoing);
+            // `incoming-handler`/`outgoing-handler` are its P2 equivalents.
+            let http_iface =
+                WitInterface::from("wasi:http/incoming-handler,outgoing-handler,handler");
             self.host_interfaces
                 .iter()
                 .filter(|wit_interface| !http_iface.contains(wit_interface))
@@ -1723,11 +1726,10 @@ impl UnresolvedWorkload {
         };
 
         let incoming_http_component = {
-            let http_iface = WitInterface::from("wasi:http/incoming-handler");
             match self
                 .host_interfaces
                 .iter()
-                .any(|hi| hi.contains(&http_iface))
+                .any(|hi| hi.is_incoming_http_handler())
             {
                 // http was not part of the requested interfaces
                 false => None,
@@ -2520,6 +2522,56 @@ mod tests {
 
         // The test verifies the error path exists and works correctly
         // In practice, this would fail if a component imports blobstore but no plugin provides it
+    }
+
+    /// A component exporting the unified WASI P3 `wasi:http/handler` interface
+    /// must bind with no HTTP plugin present, exactly like a P2
+    /// `incoming-handler` component: HTTP is served by the host, so the
+    /// requested interface must not fall through to plugin matching.
+    #[tokio::test]
+    async fn test_p3_http_handler_served_by_host() {
+        let engine = wasmtime::Engine::default();
+        let wasm = wat::parse_str(
+            r#"(component
+                (component $empty)
+                (instance $i (instantiate $empty))
+                (export "wasi:http/handler@0.3.0" (instance $i))
+            )"#,
+        )
+        .unwrap();
+        let component = Component::new(&engine, &wasm).unwrap();
+        let workload_component = WorkloadComponent::new(
+            "workload-p3-http".to_string(),
+            "test-workload-p3-http".to_string(),
+            "test-namespace".to_string(),
+            "test-component".to_string(),
+            component,
+            Linker::new(&engine),
+            Vec::new(),
+            LocalResources::default(),
+            Arc::default(),
+        );
+
+        let mut http_interface = WitInterface::from("wasi:http/handler");
+        http_interface
+            .config
+            .insert("host".to_string(), "localhost".to_string());
+        assert!(http_interface.is_incoming_http_handler());
+
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![workload_component],
+            vec![http_interface],
+        );
+
+        let bound_plugins = workload.bind_plugins(&HashMap::new()).await.unwrap();
+        assert!(
+            bound_plugins.is_empty(),
+            "host-served wasi:http/handler must not require a plugin"
+        );
     }
 
     /// Tests that plugin callbacks are invoked in the correct order:
