@@ -148,25 +148,25 @@ impl ClusterHost {
     pub fn host(&self) -> &Host {
         &self.prepared_host
     }
-}
 
-pub async fn run_cluster_host(
-    cluster_host: ClusterHost,
-) -> anyhow::Result<impl Future<Output = anyhow::Result<()>>, anyhow::Error> {
-    let (one_shot_tx, mut one_shot_rx) = oneshot::channel();
-    let nats_client = cluster_host.nats_client.clone();
-    let host = cluster_host
-        .prepared_host
-        .start()
-        .await
-        .context("failed to start host")?;
+    /// Start the cluser host
+    pub async fn start(
+        self,
+    ) -> anyhow::Result<(impl HostApi, impl Future<Output = anyhow::Result<()>>)> {
+        let (one_shot_tx, mut one_shot_rx) = oneshot::channel();
+        let nats_client = self.nats_client.clone();
+        let host = self
+            .prepared_host
+            .start()
+            .await
+            .context("failed to start host")?;
 
-    let heartbeat_interval = cluster_host.heartbeat_interval;
-    let cleanup_interval = cluster_host.cleanup_interval;
-    let host_id = host.id().to_string();
-    let host = host.clone();
+        let heartbeat_interval = self.heartbeat_interval;
+        let cleanup_interval = self.cleanup_interval;
+        let host_id = host.id().to_string();
+        let host = host.clone();
 
-    info!(
+        info!(
         host_id=?host_id,
         friendly_name=?host.friendly_name(),
         host_name=?host.hostname(),
@@ -174,64 +174,80 @@ pub async fn run_cluster_host(
         version=?host.version(),
         "Host started");
 
-    host.log_interfaces();
+        host.log_interfaces();
 
-    let task = tokio::task::spawn(async move {
-        let host_subject = host_subject(host_id.as_ref());
+        let task = tokio::task::spawn({
+            let host = host.clone();
+            async move {
+                let host_subject = host_subject(host_id.as_ref());
 
-        let heartbeat_subject = heartbeat_subject(host_id.as_ref());
+                let heartbeat_subject = heartbeat_subject(host_id.as_ref());
 
-        let mut api_subscription = nats_client
-            .subscribe(host_subject)
-            .await
-            .context("failed to subscribe for API requests")?;
-        let mut heartbeat_timer = tokio::time::interval(heartbeat_interval);
+                let mut api_subscription = nats_client
+                    .subscribe(host_subject)
+                    .await
+                    .context("failed to subscribe for API requests")?;
+                let mut heartbeat_timer = tokio::time::interval(heartbeat_interval);
 
-        let mut oci_cleanup_timer = tokio::time::interval(cleanup_interval);
+                let mut oci_cleanup_timer = tokio::time::interval(cleanup_interval);
 
-        loop {
-            tokio::select! {
-                // Shutdown signal
-                _ = &mut one_shot_rx => {
-                    api_subscription.unsubscribe().await.context("failed to unsubscribe from API requests")?;
-                    return host.stop().await.context("failed to stop host");
-                }
-                // OCI cache cleanup
-                _ = oci_cleanup_timer.tick() => {
-                    if let Some(cache_dir) = host.config().oci_cache_dir.as_ref() &&
-                    let Err(e) = oci::cleanup_cache(cache_dir, cluster_host.cleanup_age).await {
-                        error!("error during OCI cache cleanup: {e}");
-                    }
-                }
-                // Send heartbeat
-                _ = heartbeat_timer.tick() => {
-                    let heartbeat = host_heartbeat(&host).await?;
-                    let heartbeat_bytes = serde_json::to_vec(&heartbeat)
-                        .context("failed to serialize heartbeat")?;
-                    nats_client.publish(heartbeat_subject.clone(), heartbeat_bytes.into()).await.context("failed to publish heartbeat")?;
-                }
-                // Handle API requests
-                Some(msg) = api_subscription.next() => {
-                    let response = handle_command(host.as_ref(), &msg, host.config()).await;
-                    match response {
-                        Ok(resp_bytes) => {
-                            if let Some(reply_to) = msg.reply {
-                                nats_client.publish(reply_to, resp_bytes.into()).await.context("failed to publish API response")?;
+                loop {
+                    tokio::select! {
+                        // Shutdown signal
+                        _ = &mut one_shot_rx => {
+                            api_subscription.unsubscribe().await.context("failed to unsubscribe from API requests")?;
+                            return host.stop().await.context("failed to stop host");
+                        }
+                        // OCI cache cleanup
+                        _ = oci_cleanup_timer.tick() => {
+                            if let Some(cache_dir) = host.config().oci_cache_dir.as_ref() &&
+                            let Err(e) = oci::cleanup_cache(cache_dir, self.cleanup_age).await {
+                                error!("error during OCI cache cleanup: {e}");
                             }
                         }
-                        Err(e) => {
-                            error!("error handling command: {e}");
+                        // Send heartbeat
+                        _ = heartbeat_timer.tick() => {
+                            let heartbeat = host_heartbeat(&host).await?;
+                            let heartbeat_bytes = serde_json::to_vec(&heartbeat)
+                                .context("failed to serialize heartbeat")?;
+                            nats_client.publish(heartbeat_subject.clone(), heartbeat_bytes.into()).await.context("failed to publish heartbeat")?;
+                        }
+                        // Handle API requests
+                        Some(msg) = api_subscription.next() => {
+                            let response = handle_command(host.as_ref(), &msg, host.config()).await;
+                            match response {
+                                Ok(resp_bytes) => {
+                                    if let Some(reply_to) = msg.reply {
+                                        nats_client.publish(reply_to, resp_bytes.into()).await.context("failed to publish API response")?;
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("error handling command: {e}");
+                                }
+                            }
                         }
                     }
                 }
             }
-        }
-    });
+        });
 
-    Ok(async move {
-        let _ = one_shot_tx.send(());
-        task.await?
-    })
+        Ok((host, async move {
+            let _ = one_shot_tx.send(());
+            task.await?
+        }))
+    }
+
+    /// Run the cluster host, with no API access
+    pub async fn run(self) -> anyhow::Result<impl Future<Output = anyhow::Result<()>>> {
+        let (_host, cleanup) = self.start().await?;
+        Ok(cleanup)
+    }
+}
+
+pub async fn run_cluster_host(
+    cluster_host: ClusterHost,
+) -> anyhow::Result<impl Future<Output = anyhow::Result<()>>> {
+    cluster_host.run().await
 }
 
 /// Configuration options for NATS connections
