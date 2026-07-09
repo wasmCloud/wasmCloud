@@ -112,8 +112,8 @@ use tracing::{debug, info, instrument};
 
 use crate::{
     cli::{CliCommand, CliContext, CommandOutput},
-    config::{Config, load_config},
-    wit::{CommonPackageArgs, WkgFetcher, load_lock_file},
+    config::Config,
+    wit::{WkgFetcher, load_lock_file},
 };
 
 /// Manage WIT dependencies for wasmCloud components
@@ -391,26 +391,11 @@ async fn handle_fetch(ctx: &CliContext, config: &Config, clean: bool) -> Result<
     // Load or create lock file
     let mut lock_file = load_lock_file(&project_dir).await?;
 
-    // Setup package fetcher
-    let args = CommonPackageArgs {
-        config: None,
-        cache: Some(ctx.cache_dir().join("package_cache")),
-    };
-    let wkg_config = wasm_pkg_core::config::Config::default();
-
-    let mut fetcher = WkgFetcher::from_common(&args, wkg_config).await?;
-
-    // Apply WIT source overrides from config if present
-    let config = load_config(&ctx.user_config_path(), Some(project_dir), None::<Config>).ok();
-    if let Some(config) = config
-        && let Some(wit_config) = &config.wit
-        && !wit_config.sources.is_empty()
-    {
-        debug!("applying WIT source overrides: {:?}", wit_config.sources);
-        fetcher
-            .resolve_extended_pull_configs(&wit_config.sources, &project_dir)
-            .await
-            .context("failed to resolve WIT source overrides")?;
+    // Setup package fetcher and apply the project's `[wit]` config
+    let mut fetcher =
+        WkgFetcher::for_project(ctx.cache_dir().join("package_cache"), project_dir).await?;
+    if let Some(wit_config) = &config.wit {
+        fetcher.apply_wit_config(wit_config, project_dir).await?;
     }
 
     // Fetch dependencies
@@ -788,13 +773,12 @@ async fn handle_build(
     // Load or create lock file
     let mut lock_file = load_lock_file(&project_dir).await?;
 
-    // Setup package client using the same pattern as fetch
-    let args = CommonPackageArgs {
-        config: None,
-        cache: Some(ctx.cache_dir().join("package_cache")),
-    };
-    let wkg_config = wasm_pkg_core::config::Config::default();
-    let fetcher = WkgFetcher::from_common(&args, wkg_config).await?;
+    // Setup package client and apply the project's `[wit]` config, matching `wash wit fetch`
+    let mut fetcher =
+        WkgFetcher::for_project(ctx.cache_dir().join("package_cache"), project_dir).await?;
+    if let Some(wit_config) = &config.wit {
+        fetcher.apply_wit_config(wit_config, project_dir).await?;
+    }
 
     // Build the package
     info!("Building WIT package...");

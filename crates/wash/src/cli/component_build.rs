@@ -12,7 +12,7 @@ use crate::wit::WitConfig;
 use crate::{
     cli::{CliCommand, CliContext, CommandOutput},
     config::Config,
-    wit::{CommonPackageArgs, WkgFetcher, load_lock_file},
+    wit::{WkgFetcher, load_lock_file},
 };
 
 /// CLI command for building components
@@ -245,24 +245,15 @@ impl ComponentBuilder {
 
         debug!(path = ?wit_dir.display(), "fetching WIT dependencies");
 
-        // Create WIT fetcher from configuration
+        // Create WIT fetcher and apply the project's `[wit]` config
         let mut lock_file = load_lock_file(&self.project_path).await?;
-        let args = CommonPackageArgs {
-            config: None, // TODO(#1): config
-            cache: Some(ctx.cache_dir().join("package_cache")),
-        };
-        let wkg_config = wasm_pkg_core::config::Config::default();
-        let mut fetcher = WkgFetcher::from_common(&args, wkg_config).await?;
-
-        // Apply WIT source overrides if present in configuration
-        if let Some(wit_config) = &config.wit
-            && !wit_config.sources.is_empty()
-        {
-            debug!("applying WIT source overrides: {:?}", wit_config.sources);
+        let mut fetcher =
+            WkgFetcher::for_project(ctx.cache_dir().join("package_cache"), &self.project_path)
+                .await?;
+        if let Some(wit_config) = &config.wit {
             fetcher
-                .resolve_extended_pull_configs(&wit_config.sources, &self.project_path)
-                .await
-                .context("failed to resolve WIT source overrides")?;
+                .apply_wit_config(wit_config, &self.project_path)
+                .await?;
         }
 
         // Fetch dependencies
