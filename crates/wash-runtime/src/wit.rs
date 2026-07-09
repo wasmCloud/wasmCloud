@@ -215,6 +215,17 @@ impl WitInterface {
 
         self.interfaces.is_superset(&other.interfaces)
     }
+
+    /// Returns `true` if this interface is an incoming `wasi:http` handler.
+    ///
+    /// This recognises both the WASI P2 `incoming-handler` interface and the
+    /// unified WASI P3 `handler` interface, so HTTP entrypoints are detected
+    /// regardless of which WASI version a component targets.
+    pub fn is_incoming_http_handler(&self) -> bool {
+        self.namespace == "wasi"
+            && self.package == "http"
+            && (self.interfaces.contains("incoming-handler") || self.interfaces.contains("handler"))
+    }
 }
 
 impl Display for WitInterface {
@@ -449,6 +460,29 @@ mod tests {
         assert!(interface_a.contains(&interface_b));
         // Different versions should not match
         assert!(!interface_a.contains(&interface_c));
+    }
+
+    #[test]
+    fn test_is_incoming_http_handler() {
+        // P2 incoming handler
+        let p2 = WitInterface::from("wasi:http/incoming-handler");
+        assert!(p2.is_incoming_http_handler());
+
+        // Unified P3 handler, with and without version
+        let p3 = WitInterface::from("wasi:http/handler");
+        assert!(p3.is_incoming_http_handler());
+        let p3_versioned = WitInterface::from("wasi:http/handler@0.3.0");
+        assert!(p3_versioned.is_incoming_http_handler());
+
+        // Outgoing-only is not an incoming handler
+        let outgoing = WitInterface::from("wasi:http/outgoing-handler");
+        assert!(!outgoing.is_incoming_http_handler());
+
+        // Same interface name in a different package does not match
+        let messaging = WitInterface::from("wasmcloud:messaging/handler");
+        assert!(!messaging.is_incoming_http_handler());
+        let other_ns = WitInterface::from("wasi:messaging/incoming-handler");
+        assert!(!other_ns.is_incoming_http_handler());
     }
 
     #[test]

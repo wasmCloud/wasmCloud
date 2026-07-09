@@ -27,7 +27,6 @@ use std::{
 };
 
 use crate::host::allowed_hosts::AllowedHost;
-use crate::wit::WitInterface;
 use crate::{engine::ctx::SharedCtx, observability::Meters};
 use crate::{engine::workload::ResolvedWorkload, observability::FuelConsumptionMeter};
 use anyhow::{Context, ensure};
@@ -186,13 +185,14 @@ impl Router for DynamicRouter {
         resolved_handle: &ResolvedWorkload,
         _component_id: &str,
     ) -> anyhow::Result<()> {
-        let incoming_handler_interface = WitInterface::from("wasi:http/incoming-handler");
         let Some(http_iface) = resolved_handle
             .host_interfaces()
             .iter()
-            .find(|iface| iface.contains(&incoming_handler_interface))
+            .find(|iface| iface.is_incoming_http_handler())
         else {
-            anyhow::bail!("workload did not request wasi:http/incoming-handler interface");
+            anyhow::bail!(
+                "workload did not request wasi:http/incoming-handler or wasi:http/handler interface"
+            );
         };
 
         let primary_host = http_iface
