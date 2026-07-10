@@ -53,7 +53,7 @@ impl WitConfig {
                     reg.url
                 ));
             }
-            if let Err(err) = reg.credentials() {
+            if let Err(err) = reg.basic_auth_credentials() {
                 errors.push(err.to_string());
             }
         }
@@ -113,7 +113,7 @@ impl WitRegistry {
 
     /// Basic-auth credentials for this entry, or `None` when unset. Errors when exactly one of
     /// `username`/`token` is set, since basic auth requires both.
-    fn credentials(&self) -> Result<Option<(&str, &str)>> {
+    fn basic_auth_credentials(&self) -> Result<Option<(&str, &str)>> {
         match (self.username.as_deref(), self.token.as_deref()) {
             (Some(username), Some(token)) => Ok(Some((username, token))),
             (None, None) => Ok(None),
@@ -128,18 +128,12 @@ impl WitRegistry {
 /// Extract a wkg [`Registry`] (host`[:port]`) from a `wit.registries` `url`, accepting both a
 /// bare authority (`ghcr.io`) and a full URL (`https://ghcr.io`).
 fn registry_authority(url: &str) -> Result<Registry> {
-    if let Ok(parsed) = Url::parse(url)
-        && let Some(host) = parsed.host_str()
-    {
-        let authority = match parsed.port() {
-            Some(port) => format!("{host}:{port}"),
-            None => host.to_string(),
-        };
-        return authority
-            .parse()
-            .with_context(|| format!("invalid registry host [{url}]"));
-    }
-    url.parse()
+    let authority = match Url::parse(url) {
+        Ok(parsed) if !parsed.authority().is_empty() => parsed.authority().to_string(),
+        _ => url.to_string(),
+    };
+    authority
+        .parse()
         .with_context(|| format!("invalid registry host [{url}]"))
 }
 
@@ -391,7 +385,7 @@ impl WkgFetcher {
     /// credentials for each registry host. Entries without credentials are ignored.
     pub fn apply_registry_auth(&mut self, registries: &[WitRegistry]) -> Result<()> {
         for reg in registries {
-            let Some((username, token)) = reg.credentials()? else {
+            let Some((username, token)) = reg.basic_auth_credentials()? else {
                 continue;
             };
             let oci_config = OciRegistryConfig {
