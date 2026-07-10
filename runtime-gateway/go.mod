@@ -5,7 +5,7 @@ go 1.26.0
 tool github.com/air-verse/air
 
 require (
-	go.wasmcloud.dev/runtime-operator/v2 v2.4.0
+	go.wasmcloud.dev/runtime-operator/v2 v2.5.1
 	k8s.io/api v0.36.2
 	k8s.io/apimachinery v0.36.2
 	sigs.k8s.io/controller-runtime v0.24.1
@@ -13,6 +13,7 @@ require (
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
+	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/air-verse/air v1.65.2 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
