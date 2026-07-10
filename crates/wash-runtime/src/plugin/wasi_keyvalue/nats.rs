@@ -32,6 +32,44 @@ mod bindings {
 
 use bindings::wasi::keyvalue::store::{Error as StoreError, KeyResponse};
 
+// Collect one `list-keys` page from `keys`, skipping the first `cursor_skip` keys.
+// This will read up to `LIST_KEYS_BATCH_SIZE` + 1 keys from the steam. That way the 
+// caller will know if there are more keys to read.
+async fn collect_key_page<S, E>(keys: S, cursor_skip: u64) -> Result<KeyResponse, String>
+where
+    S: futures::Stream<Item = Result<String, E>>,
+    E: std::fmt::Display,
+{
+    let mut resp = KeyResponse {
+        keys: vec![],
+        cursor: None,
+    };
+
+    let mut stream = std::pin::pin!(keys);
+    let mut skipped: u64 = 0;
+
+    while let Some(key) = stream.next().await {
+        // Unwrap the item before deciding whether it is skipped. This prevents
+        // an error being counted toward the skip budget, which would silently swallow 
+        // the error and start the page one key early.
+        let key = key.map_err(|e| e.to_string())?;
+
+        if skipped < cursor_skip {
+            skipped += 1;
+            continue;
+        }
+
+        if resp.keys.len() >= LIST_KEYS_BATCH_SIZE {
+            resp.cursor = Some(cursor_skip + LIST_KEYS_BATCH_SIZE as u64);
+            break;
+        }
+
+        resp.keys.push(key);
+    }
+
+    Ok(resp)
+}
+
 /// Resource representation for a bucket (key-value store)
 pub struct BucketHandle {
     kv: async_nats::jetstream::kv::Store,
@@ -252,28 +290,13 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
             }
         };
 
-        let mut resp = KeyResponse {
-            keys: vec![],
-            cursor: None,
-        };
-
-        let cursor_skip = cursor.unwrap_or(0) as usize;
-
-        let mut stream = keys_iter
-            .skip(cursor_skip)
-            .take(LIST_KEYS_BATCH_SIZE + 1)
-            .boxed();
-
-        while let Some(Ok(key)) = stream.next().await {
-            if resp.keys.len() > LIST_KEYS_BATCH_SIZE {
-                resp.cursor = Some(cursor_skip as u64 + LIST_KEYS_BATCH_SIZE as u64);
-                break;
+        match collect_key_page(keys_iter, cursor.unwrap_or(0)).await {
+            Ok(resp) => Ok(Ok(resp)),
+            Err(e) => {
+                tracing::error!("JetStream error listing keys: {e}");
+                Ok(Err(StoreError::Other(format!("JetStream error: {e}"))))
             }
-
-            resp.keys.push(key);
         }
-
-        Ok(Ok(resp))
     }
 
     async fn drop(&mut self, rep: Resource<BucketHandle>) -> wasmtime::Result<()> {
@@ -533,15 +556,116 @@ impl HostPlugin for NatsKeyValue {
 
 #[cfg(test)]
 mod tests {
-    //! Tests for the private `get_or_create_bucket` path that `open` relies on.
+    //! Tests for the private `get_or_create_bucket` path that `open` relies
+    //! on, and for the `collect_key_page` pagination helper `list_keys`
+    //! delegates to.
     //!
-    //! These live here (rather than under `tests/`) because they exercise a
-    //! private method directly; the repo's `tests/integration_nats_*` files can
-    //! only reach the public host API. They spin up a real JetStream via
-    //! testcontainers. Requires Docker; marked `#[ignore]`, run with
-    //! `cargo test --include-ignored`.
+    //! These live here (rather than under `tests/`) because they exercise
+    //! private items directly; the repo's `tests/integration_nats_*` files can
+    //! only reach the public host API. The bucket tests spin up a real
+    //! JetStream via testcontainers (require Docker; marked `#[ignore]`, run
+    //! with `cargo test --include-ignored`). The pagination tests run on
+    //! synthetic streams and need nothing.
 
     use super::*;
+
+    /// A stream of `n` distinct `Ok` keys (`key-0`, `key-1`, ...), typed with
+    /// a displayable error so it satisfies `collect_key_page`'s bounds.
+    fn ok_keys(n: usize) -> impl futures::Stream<Item = Result<String, String>> {
+        futures::stream::iter((0..n).map(|i| Ok(format!("key-{i}"))))
+    }
+
+    /// A page shorter than the batch size is returned whole with no cursor.
+    #[tokio::test]
+    async fn collect_key_page_short_page_has_no_cursor() {
+        let resp = collect_key_page(ok_keys(3), 0).await.expect("must succeed");
+        assert_eq!(resp.keys.len(), 3);
+        assert_eq!(resp.cursor, None);
+    }
+
+    /// Exactly one full batch: everything fits on one page, so no cursor.
+    #[tokio::test]
+    async fn collect_key_page_exact_batch_has_no_cursor() {
+        let resp = collect_key_page(ok_keys(LIST_KEYS_BATCH_SIZE), 0)
+            .await
+            .expect("must succeed");
+        assert_eq!(resp.keys.len(), LIST_KEYS_BATCH_SIZE);
+        assert_eq!(resp.cursor, None);
+    }
+
+    /// One key more than a batch: the page is capped at the batch size and
+    /// the cursor points at the next page. This is the regression case — the
+    /// pre-fix implementation never set the cursor, so callers silently saw
+    /// only the first page of large buckets.
+    #[tokio::test]
+    async fn collect_key_page_overfull_batch_sets_cursor() {
+        let resp = collect_key_page(ok_keys(LIST_KEYS_BATCH_SIZE + 1), 0)
+            .await
+            .expect("must succeed");
+        assert_eq!(resp.keys.len(), LIST_KEYS_BATCH_SIZE);
+        assert_eq!(resp.cursor, Some(LIST_KEYS_BATCH_SIZE as u64));
+    }
+
+    /// Walking the cursor to the end visits every key exactly once.
+    #[tokio::test]
+    async fn collect_key_page_cursor_walk_covers_all_keys() {
+        let total = 2 * LIST_KEYS_BATCH_SIZE + 5;
+        let mut seen = Vec::new();
+        let mut cursor = 0;
+        loop {
+            let resp = collect_key_page(ok_keys(total), cursor)
+                .await
+                .expect("must succeed");
+            seen.extend(resp.keys);
+            match resp.cursor {
+                Some(next) => cursor = next,
+                None => break,
+            }
+        }
+        let expected: Vec<String> = (0..total).map(|i| format!("key-{i}")).collect();
+        assert_eq!(seen, expected);
+    }
+
+    /// A cursor past the end of the listing yields an empty final page.
+    #[tokio::test]
+    async fn collect_key_page_cursor_past_end_is_empty() {
+        let resp = collect_key_page(ok_keys(4), 10)
+            .await
+            .expect("must succeed");
+        assert!(resp.keys.is_empty());
+        assert_eq!(resp.cursor, None);
+    }
+
+    /// A stream error surfaces as `Err` instead of silently truncating the
+    /// page: a partial `Ok` response is indistinguishable from a complete one.
+    #[tokio::test]
+    async fn collect_key_page_stream_error_is_surfaced() {
+        let stream = futures::stream::iter(vec![
+            Ok("key-0".to_string()),
+            Err("connection reset".to_string()),
+            Ok("key-2".to_string()),
+        ]);
+        let err = collect_key_page(stream, 0)
+            .await
+            .expect_err("must surface the stream error");
+        assert!(err.contains("connection reset"));
+    }
+
+    /// An error inside the skipped cursor prefix surfaces as `Err` too — a
+    /// count-based skip would swallow it and shift the page one key early.
+    #[tokio::test]
+    async fn collect_key_page_error_in_skipped_prefix_is_surfaced() {
+        let stream = futures::stream::iter(vec![
+            Ok("key-0".to_string()),
+            Err("connection reset".to_string()),
+            Ok("key-2".to_string()),
+            Ok("key-3".to_string()),
+        ]);
+        let err = collect_key_page(stream, 3)
+            .await
+            .expect_err("must surface the error even though it was skipped over");
+        assert!(err.contains("connection reset"));
+    }
     use testcontainers::{
         ContainerAsync, GenericImage, ImageExt,
         core::{IntoContainerPort, WaitFor},
