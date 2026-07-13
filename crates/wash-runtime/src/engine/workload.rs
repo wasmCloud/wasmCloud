@@ -2323,20 +2323,15 @@ mod tests {
     /// Verifies that `on_workload_bind` is called before `on_workload_item_bind`.
     #[tokio::test]
     async fn test_single_plugin_single_component() {
-        // Use the actual interfaces that http_counter.wasm uses
-        let http_interface = WitInterface {
-            namespace: "wasi".to_string(),
-            package: "blobstore".to_string(),
-            interfaces: ["container".to_string()].into_iter().collect(),
-            version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
-            config: std::collections::HashMap::new(),
-            name: None,
-        };
+        // An interface the http_counter.wasm fixture actually imports. Declared
+        // without a version so the test tracks the fixture across rebuilds; a
+        // versionless interface matches any version (see WitInterface::same_package).
+        let blobstore_interface = WitInterface::from("wasi:blobstore/container");
 
         let plugin = Arc::new(MockPlugin::new(
             "blobstore-plugin",
             vec![],
-            vec![http_interface.clone()],
+            vec![blobstore_interface.clone()],
         ));
 
         let mut plugins = HashMap::new();
@@ -2351,7 +2346,7 @@ mod tests {
             "test-namespace".to_string(),
             None,
             components,
-            vec![http_interface.clone()],
+            vec![blobstore_interface.clone()],
         );
 
         let bound_plugins = workload.bind_plugins(&plugins).await.unwrap();
@@ -2379,9 +2374,9 @@ mod tests {
     /// Verifies that each plugin gets called once for workload binding.
     #[tokio::test]
     async fn test_multiple_plugins_multiple_components() {
-        let http_interface = WitInterface::from("wasi:http/incoming-handler@0.2.0");
-        let blobstore_interface = WitInterface::from("wasi:blobstore/blobstore@0.2.0");
-        let keyvalue_interface = WitInterface::from("wasi:keyvalue/store@0.2.0");
+        let http_interface = WitInterface::from("wasi:http/incoming-handler");
+        let blobstore_interface = WitInterface::from("wasi:blobstore/blobstore");
+        let keyvalue_interface = WitInterface::from("wasi:keyvalue/store");
 
         let http_plugin = Arc::new(MockPlugin::new(
             "http-plugin",
@@ -2441,7 +2436,7 @@ mod tests {
     /// only one plugin gets bound to avoid duplicate interface handling.
     #[tokio::test]
     async fn test_no_duplicate_bindings() {
-        let http_interface = WitInterface::from("wasi:http/incoming-handler@0.2.0");
+        let http_interface = WitInterface::from("wasi:http/incoming-handler");
 
         // Two plugins that both provide HTTP
         let plugin1 = Arc::new(MockPlugin::new(
@@ -2489,8 +2484,8 @@ mod tests {
     /// The binding should fail gracefully with a descriptive error message.
     #[tokio::test]
     async fn test_missing_interface_fails() {
-        let http_interface = WitInterface::from("wasi:http/incoming-handler@0.2.0");
-        let blobstore_interface = WitInterface::from("wasi:blobstore/blobstore@0.2.0");
+        let http_interface = WitInterface::from("wasi:http/incoming-handler");
+        let blobstore_interface = WitInterface::from("wasi:blobstore/blobstore");
 
         // Plugin only provides HTTP
         let plugin = Arc::new(MockPlugin::new(
@@ -2516,12 +2511,17 @@ mod tests {
             vec![http_interface.clone(), blobstore_interface.clone()],
         );
 
-        // This should fail if a component actually needs blobstore but it's not provided
-        // Note: The actual failure depends on what the component's world() returns
-        let _result = workload.bind_plugins(&plugins).await;
-
-        // The test verifies the error path exists and works correctly
-        // In practice, this would fail if a component imports blobstore but no plugin provides it
+        // The component imports wasi:blobstore but no plugin provides it, so
+        // binding must fail. (The http interface is host-served and never
+        // requires a plugin.)
+        let err = match workload.bind_plugins(&plugins).await {
+            Ok(_) => panic!("binding should fail for an unprovided interface"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("not available on this host"),
+            "unexpected error: {err}"
+        );
     }
 
     /// A component exporting the unified WASI P3 `wasi:http/handler` interface
@@ -2578,7 +2578,7 @@ mod tests {
     /// `on_workload_bind` first, then `on_workload_item_bind` for each component.
     #[tokio::test]
     async fn test_plugin_callback_order() {
-        let interface1 = WitInterface::from("test:interface/handler@0.1.0");
+        let interface1 = WitInterface::from("test:interface/handler");
 
         let plugin = Arc::new(MockPlugin::new(
             "test-plugin",
@@ -2628,16 +2628,14 @@ mod tests {
     #[tokio::test]
     async fn test_world_includes_bidirectional() {
         let world = WitWorld {
-            imports: HashSet::from([WitInterface::from("wasmcloud:messaging/handler@0.1.0")]),
-            exports: HashSet::from([WitInterface::from(
-                "wasmcloud:messaging/consumer,types@0.1.0",
-            )]),
+            imports: HashSet::from([WitInterface::from("wasmcloud:messaging/handler")]),
+            exports: HashSet::from([WitInterface::from("wasmcloud:messaging/consumer,types")]),
         };
 
-        let interface1 = WitInterface::from("wasmcloud:messaging/handler@0.1.0");
-        let interface2 = WitInterface::from("wasmcloud:messaging/consumer,types@0.1.0");
-        let interface3 = WitInterface::from("wasmcloud:messaging/handler,consumer,types@0.1.0");
-        let interface4 = WitInterface::from("wasmcloud:messaging/producer@0.1.0");
+        let interface1 = WitInterface::from("wasmcloud:messaging/handler");
+        let interface2 = WitInterface::from("wasmcloud:messaging/consumer,types");
+        let interface3 = WitInterface::from("wasmcloud:messaging/handler,consumer,types");
+        let interface4 = WitInterface::from("wasmcloud:messaging/producer");
 
         assert!(world.includes_bidirectional(&interface1));
         assert!(world.includes_bidirectional(&interface2));

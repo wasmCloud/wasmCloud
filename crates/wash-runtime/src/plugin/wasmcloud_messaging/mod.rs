@@ -11,6 +11,15 @@ pub use multiplexed::{
 };
 pub use nats::NatsMessaging;
 
+/// Returns `true` if the world exports the `wasmcloud:messaging/handler`
+/// interface at any version. Matches via [`WitInterface::contains`] rather
+/// than set equality, so an exported `handler@0.2.x` is recognized no matter
+/// which exact version the component was built against.
+pub(crate) fn exports_messaging_handler(world: &crate::wit::WitWorld) -> bool {
+    let handler = crate::wit::WitInterface::from("wasmcloud:messaging/handler");
+    world.exports.iter().any(|e| e.contains(&handler))
+}
+
 /// Parses a comma-separated `subscriptions` config value into trimmed,
 /// non-empty subjects. Shared by the in-memory and NATS backends so they
 /// agree on how a configured subscription string maps to subjects.
@@ -26,7 +35,41 @@ pub(crate) fn parse_subscriptions(raw: Option<&str>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_subscriptions;
+    use super::{exports_messaging_handler, parse_subscriptions};
+    use crate::wit::{WitInterface, WitWorld};
+    use std::collections::HashSet;
+
+    #[test]
+    fn recognizes_exported_handler_at_any_version() {
+        for export in [
+            "wasmcloud:messaging/handler",
+            "wasmcloud:messaging/handler@0.2.0",
+            "wasmcloud:messaging/handler@0.2.2",
+        ] {
+            let world = WitWorld {
+                imports: HashSet::new(),
+                exports: HashSet::from([WitInterface::from(export)]),
+            };
+            assert!(exports_messaging_handler(&world), "should match {export}");
+        }
+    }
+
+    #[test]
+    fn ignores_non_handler_worlds() {
+        // Importing the handler is not exporting it
+        let importer = WitWorld {
+            imports: HashSet::from([WitInterface::from("wasmcloud:messaging/handler@0.2.0")]),
+            exports: HashSet::new(),
+        };
+        assert!(!exports_messaging_handler(&importer));
+
+        // Exporting other messaging interfaces does not count
+        let consumer = WitWorld {
+            imports: HashSet::new(),
+            exports: HashSet::from([WitInterface::from("wasmcloud:messaging/consumer,types")]),
+        };
+        assert!(!exports_messaging_handler(&consumer));
+    }
 
     #[test]
     fn parses_single_subject() {
