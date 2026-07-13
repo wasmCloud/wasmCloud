@@ -205,11 +205,7 @@ impl HostPlugin for NatsMessaging {
         // messaging handler, mirroring the in-memory backend. This works
         // whether or not the workload declares a `wasmcloud:messaging` host
         // interface entry.
-        if component_handle
-            .world()
-            .exports
-            .contains(&WitInterface::from("wasmcloud:messaging/handler@0.2.0"))
-        {
+        if super::exports_messaging_handler(&component_handle.world()) {
             let raw = local_subscriptions.or(interface_subscriptions);
             let raw_subscriptions = super::parse_subscriptions(raw.as_deref());
 

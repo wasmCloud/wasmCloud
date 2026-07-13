@@ -313,11 +313,7 @@ impl HostPlugin for InMemoryMessaging {
             return Ok(());
         };
 
-        if component_handle
-            .world()
-            .exports
-            .contains(&WitInterface::from("wasmcloud:messaging/handler@0.2.0"))
-        {
+        if super::exports_messaging_handler(&component_handle.world()) {
             debug!(?subscriptions, "Tracking component in in-memory messaging");
             self.tracker.write().await.add_component(
                 component_handle,
