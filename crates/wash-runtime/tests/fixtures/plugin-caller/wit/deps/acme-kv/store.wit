@@ -1,0 +1,83 @@
+package acme:kv@0.1.0;
+
+/// A bespoke, handle-free key-value capability. Every operation is an
+/// `async func` over primitives (no `resource` handles), so a workload's import
+/// of this interface can be satisfied by a host component plugin across the
+/// store boundary using only the handle-free relocation fast path.
+interface store {
+    /// Store `value` under `key`, overwriting any existing value. Global —
+    /// shared across all callers.
+    set: async func(key: string, value: list<u8>);
+
+    /// Return the value stored under `key`, or `none` if absent. Global.
+    get: async func(key: string) -> option<list<u8>>;
+
+    /// Store `value` under `key` in the CALLING WORKLOAD's own partition
+    /// (isolated per caller via the host identity import).
+    pset: async func(key: string, value: list<u8>);
+
+    /// Return `key` from the calling workload's own partition, or `none`.
+    pget: async func(key: string) -> option<list<u8>>;
+
+    /// Remove `key` if present.
+    delete: async func(key: string);
+
+    /// Cooperatively wait `millis` milliseconds, then echo it back. Used by
+    /// tests to hold one capability call open — yielding the executor at the
+    /// await — while asserting a concurrent fast call still completes. Proves
+    /// the plugin store spawns one task per call and never serializes them.
+    slow: async func(millis: u64) -> u64;
+
+    /// Total the bytes of a caller-provided `stream<u8>` (caller -> plugin
+    /// stream relocation).
+    total: async func(data: stream<u8>) -> u64;
+
+    /// Return a `stream<u8>` of `count` bytes (plugin -> caller stream
+    /// relocation; the persistent plugin store feeds it as the caller drains).
+    emit: async func(count: u64) -> stream<u8>;
+
+    /// Return a `future<u64>` that resolves to `value` (plugin -> caller future
+    /// relocation via the one-shot pump).
+    eventually: async func(value: u64) -> future<u64>;
+
+    /// Re-entrant recursion for exercising the cross-store call-depth guard:
+    /// returns `n` by calling itself `n` times through the plugin's own
+    /// (self-imported) capability. A large `n` exceeds the depth cap and the
+    /// outgoing call traps with a diagnostic instead of recursing forever.
+    recurse: async func(n: u64) -> u64;
+
+    /// Deliberately trap (guest panic) — a negative test that one caller's trap
+    /// does not permanently poison the shared plugin store for other callers.
+    boom: async func();
+
+    /// An isolated key-value partition, exercising cross-store `resource`
+    /// proxying: `open` returns `own<bucket>` (a proxy in the caller), methods
+    /// take `borrow<bucket>` (routed to the real resource in the plugin store),
+    /// and dropping the handle frees the real resource.
+    resource bucket {
+        get: async func(key: string) -> option<list<u8>>;
+        set: async func(key: string, value: list<u8>);
+    }
+
+    /// Open a fresh, empty bucket.
+    open: async func(name: string) -> bucket;
+
+    /// Number of `bucket` resources dropped so far — proves a caller dropping its
+    /// proxy routes a drop that frees the real resource (no leak).
+    dropped-buckets: async func() -> u64;
+
+    /// Register the calling invocation's host job under `name`, then tick `ticks`
+    /// times, waiting `tick-ms` between ticks and recording progress — a
+    /// long-running, cancellable call. Returns the tick count reached (`ticks` if
+    /// it ran to completion; fewer if cancelled). Uses `wasmcloud:host/cancel`.
+    begin: async func(name: string, ticks: u64, tick-ms: u64) -> u64;
+
+    /// Cancel the job registered under `name` via the host cancel import,
+    /// returning whether it was aborted — `false` if unknown or the caller is a
+    /// different workload than the job's owner (unauthorized).
+    cancel-job: async func(name: string) -> bool;
+
+    /// Ticks the `begin` under `name` has completed — lets a test observe
+    /// truncation after a cancel without depending on the cancelled caller.
+    progress: async func(name: string) -> u64;
+}

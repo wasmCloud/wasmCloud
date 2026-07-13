@@ -25,7 +25,7 @@ mod common;
 use common::{
     http_blobstore_host_interfaces as p3_http_blobstore_host_interfaces,
     http_counter_host_interfaces, http_only_host_interfaces as p3_http_host_interfaces,
-    start_host_with_p3 as start_p3_host,
+    start_host_with_p3_http_handler as start_p3_host,
 };
 
 // P3 fixtures

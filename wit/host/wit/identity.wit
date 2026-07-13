@@ -1,0 +1,12 @@
+package wasmcloud:host@0.1.0;
+
+/// Provided by the host to a component plugin so it can partition state by the
+/// workload currently calling it. The host answers based on the in-flight
+/// capability call, resolved from the caller's own guest task, so it is exact
+/// under concurrency no matter when in the call the plugin reads it.
+interface identity {
+    /// The workload id of the caller currently invoking this plugin.
+    get-workload-id: func() -> string;
+    /// The component id of the caller currently invoking this plugin.
+    get-component-id: func() -> string;
+}

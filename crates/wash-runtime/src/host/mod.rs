@@ -65,6 +65,9 @@ use sysinfo::SystemMonitor;
 pub mod allowed_hosts;
 pub mod http;
 pub mod http_p3;
+#[cfg(feature = "host-component-plugins")]
+pub(crate) mod job_registry;
+pub mod trigger_service;
 
 /// The API for interacting with a wasmcloud host.
 ///

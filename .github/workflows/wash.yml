@@ -50,9 +50,11 @@ jobs:
           filters: |
             relevant:
               - '.github/workflows/wash.yml'
+              - '.github/scripts/**'
               - 'crates/**'
               - 'src/**'
               - 'tests/**'
+              - 'wit/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
@@ -122,7 +124,7 @@ jobs:
         env:
           RUST_BACKTRACE: "1"
         run: |
-          cargo test -p wash-runtime --features wasi-tls,wasm_component_model_implements
+          cargo test -p wash-runtime --features wasi-tls,wasm_component_model_implements,host-component-plugins
       # Docker/registry-backed `#[ignore]` integration tests, Linux only: the
       # macOS/Windows hosted runners have no Docker daemon (and macOS can't get
       # one — no nested virtualization). `-- --ignored` runs ONLY the ignored
@@ -134,7 +136,7 @@ jobs:
         env:
           RUST_BACKTRACE: "1"
         run: |
-          cargo test -p wash-runtime --features wasm_component_model_implements,wasi-tls -- --ignored
+          cargo test -p wash-runtime --features wasm_component_model_implements,wasi-tls,host-component-plugins -- --ignored
           cargo test -p wash --test integration_oci -- --ignored
       - name: Build benchmarks
         if: matrix.os == 'ubuntu-latest'
@@ -179,7 +181,7 @@ jobs:
           cargo +nightly fmt -- --check
       - name: Lint
         run: |
-          cargo clippy --workspace --features wasm_component_model_implements,wasi-tls
+          cargo clippy --workspace --features wasm_component_model_implements,wasi-tls,host-component-plugins
       - name: Lint anyhow context message casing
         run: |
           # anyhow `.context()` / `.with_context()` strings are error messages,
@@ -198,6 +200,12 @@ jobs:
       - name: Check for unused dependencies
         run: |
           cargo machete
+      - name: Check wasmcloud:host WIT parity
+        run: |
+          # Every vendored copy of the wasmcloud:host interfaces (identity,
+          # cancel) must stay byte-identical to the canonical wit/host/wit/ so a
+          # fixture copy cannot silently drift from the shape the runtime installs.
+          node .github/scripts/wit-host-parity.mjs
 
   # Build the wash runtime image per-arch with the buildx GHA cache, push
   # each arch by digest, and export a docker tarball per arch. The operator

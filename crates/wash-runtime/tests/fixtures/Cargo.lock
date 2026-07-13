@@ -110,6 +110,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d8c1fef690941d3e7788d328517591fecc684c084084702d6ff1641e993699a"
 
 [[package]]
+name = "bridge-backend"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.58.0",
+]
+
+[[package]]
+name = "bridge-service"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.58.0",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -802,6 +816,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
+name = "kv-plugin"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.58.0",
+]
+
+[[package]]
 name = "leb128"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -907,6 +928,13 @@ dependencies = [
  "log",
  "objc",
  "paste",
+]
+
+[[package]]
+name = "msg-counter"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.58.0",
 ]
 
 [[package]]
@@ -1045,6 +1073,13 @@ name = "pkg-config"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
+
+[[package]]
+name = "plugin-caller"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.58.0",
+]
 
 [[package]]
 name = "postgres-implements"
@@ -1307,6 +1342,13 @@ dependencies = [
 
 [[package]]
 name = "stream-producer-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.58.0",
+]
+
+[[package]]
+name = "svc-counter"
 version = "0.0.0"
 dependencies = [
  "wit-bindgen 0.58.0",

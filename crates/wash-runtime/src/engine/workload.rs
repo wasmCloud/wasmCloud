@@ -23,9 +23,9 @@ use crate::{
     engine::{
         ctx::SharedCtx,
         linked_call::{
-            ComponentCtxTemplate, EphemeralLinkedCall, LinkedExportInvocation,
-            func_is_ephemeral_safe, invoke_linked_async_export, invoke_linked_sync_export,
-            new_store_from_templates,
+            ComponentCtxTemplate, EphemeralCallMode, EphemeralLinkedCall, LinkedExportInvocation,
+            func_is_bridge_safe, func_is_ephemeral_safe, invoke_linked_async_export,
+            invoke_linked_sync_export, new_store_from_templates,
         },
         volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map},
     },
@@ -315,6 +315,16 @@ impl WorkloadService {
         Ok(command)
     }
 
+    /// Pre-instantiate the raw component, leaving binding-view construction
+    /// (e.g. both cli `Command` and http `Service`) to the caller. Used when a
+    /// p3 service also serves HTTP and must drive both exports on one instance.
+    pub fn pre_instantiate_raw(
+        &mut self,
+    ) -> anyhow::Result<wasmtime::component::InstancePre<SharedCtx>> {
+        let component = self.metadata.component.clone();
+        Ok(self.metadata.linker.instantiate_pre(&component)?)
+    }
+
     /// Whether or not the service is currently running.
     pub fn is_running(&self) -> bool {
         self.handle.is_some()
@@ -535,6 +545,33 @@ impl std::fmt::Debug for ResolvedWorkload {
     }
 }
 
+/// Build a trigger service's host-invoked ingresses, returning them alongside the
+/// paired senders to register with the host-side HTTP/messaging ingresses. Called
+/// once per incarnation (start and each restart) so a restarted service gets fresh
+/// channels whose senders replace the stale registrations.
+#[allow(clippy::type_complexity)]
+fn build_trigger_ingresses(
+    serves_http: bool,
+    serves_messaging: bool,
+) -> (
+    Vec<crate::host::trigger_service::Ingress>,
+    Option<tokio::sync::mpsc::Sender<crate::host::http::ServiceHttpJob>>,
+    Option<tokio::sync::mpsc::Sender<crate::host::trigger_service::MessagingJob>>,
+) {
+    let mut ingresses = Vec::new();
+    let http_tx = serves_http.then(|| {
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        ingresses.push(crate::host::trigger_service::Ingress::Http(rx));
+        tx
+    });
+    let messaging_tx = serves_messaging.then(|| {
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        ingresses.push(crate::host::trigger_service::Ingress::Messaging(rx));
+        tx
+    });
+    (ingresses, http_tx, messaging_tx)
+}
+
 impl ResolvedWorkload {
     /// Executes the service, if present, and returns whether it was run.
     #[instrument(name="execute_service", skip_all, fields(workload.id = self.id.as_ref(), workload.name = self.name.as_ref(), workload.namespace = self.namespace.as_ref()))]
@@ -544,6 +581,15 @@ impl ResolvedWorkload {
             .as_ref()
             .is_some_and(|s| s.metadata.targets_p3())
         {
+            // A p3 service that also exports a host-invoked handler (today
+            // `wasi:http/handler`) co-drives it with `cli/run` on one instance
+            // (see the `trigger service` module).
+            if self.service.as_ref().is_some_and(|s| {
+                crate::engine::exports_wasi_http(&s.metadata.component)
+                    || crate::engine::exports_messaging_handler(&s.metadata.component)
+            }) {
+                return self.execute_trigger_service().await;
+            }
             return self.execute_service_p3().await;
         }
 
@@ -645,6 +691,121 @@ impl ResolvedWorkload {
         } else {
             Ok(None)
         }
+    }
+
+    /// Execute a p3 service that also exports a host-invoked handler (today
+    /// `wasi:http/handler` and `wasmcloud:messaging`): one instance co-drives
+    /// `cli/run` and the handler
+    /// under a single `run_concurrent` (see [`crate::host::trigger_service`]). The
+    /// service runs in its own long-lived store; stream-carrying backend calls
+    /// are routed to ephemeral relocated stores (see the linked-call routing),
+    /// so a backend's `block_on` can't freeze the service's run loop.
+    /// `is_service = true` lets the `cli/run` side bind its loopback socket.
+    async fn execute_trigger_service(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
+        let Some(pre) = self.service.as_mut().map(|s| s.pre_instantiate_raw()) else {
+            return Ok(None);
+        };
+        let pre = pre?;
+        self.resolve_service_volume_mounts().await?;
+
+        let mut store = {
+            let Some(service) = self.service.as_ref() else {
+                bail!("service unexpectedly missing during execution");
+            };
+            self.new_store_from_metadata(&service.metadata, true)
+                .await?
+        };
+
+        let (serves_http, serves_messaging, max_restarts) = {
+            let Some(service) = self.service.as_ref() else {
+                bail!("service unexpectedly missing during execution");
+            };
+            (
+                crate::engine::exports_wasi_http(&service.metadata.component),
+                crate::engine::exports_messaging_handler(&service.metadata.component),
+                service.max_restarts,
+            )
+        };
+        let http_handler = self.http_handler.clone();
+        let workload_id: Arc<str> = Arc::from(self.id());
+
+        // Build the first incarnation's host-invoked ingresses. Each paired sender
+        // is registered with its host-side ingress (the HTTP server, the messaging
+        // subscriber), which then delivers to this live instance instead of
+        // instantiating a component per request/message. The first registration is
+        // synchronous (before the driver spawns) so a delivery immediately after
+        // start finds the handler; restarts re-register from inside the supervisor.
+        let (ingresses, http_tx, messaging_tx) =
+            build_trigger_ingresses(serves_http, serves_messaging);
+        if let Some(http_tx) = http_tx {
+            self.http_handler
+                .on_service_http_resolved(self.id(), http_tx)
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to register service HTTP handler: {e:#}"))?;
+        }
+        if let Some(messaging_tx) = messaging_tx {
+            self.http_handler
+                .on_trigger_service_messaging_resolved(self.id(), messaging_tx)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!("failed to register trigger service messaging handler: {e:#}")
+                })?;
+        }
+
+        // Supervise the driver: on a fault (e.g. a guest trap in `cli/run` or a
+        // handler), re-instantiate into the same store, rebuild the ingresses, and
+        // re-register their handlers (swapping the stale senders) until the restart
+        // budget is exhausted. A clean exit (every channel closed) stops it.
+        let handle = tokio::spawn(async move {
+            let mut first = Some(ingresses);
+            let mut restarts = max_restarts;
+            loop {
+                let ingresses = match first.take() {
+                    Some(ingresses) => ingresses,
+                    None => {
+                        let (ingresses, http_tx, messaging_tx) =
+                            build_trigger_ingresses(serves_http, serves_messaging);
+                        if let Some(http_tx) = http_tx
+                            && let Err(e) = http_handler
+                                .on_service_http_resolved(&workload_id, http_tx)
+                                .await
+                        {
+                            error!(err = %e, "failed to re-register service HTTP handler on restart");
+                        }
+                        if let Some(messaging_tx) = messaging_tx
+                            && let Err(e) = http_handler
+                                .on_trigger_service_messaging_resolved(&workload_id, messaging_tx)
+                                .await
+                        {
+                            error!(err = %e, "failed to re-register trigger service messaging handler on restart");
+                        }
+                        ingresses
+                    }
+                };
+                match crate::host::trigger_service::run_trigger_driver(&mut store, &pre, ingresses)
+                    .await
+                {
+                    Ok(()) => {
+                        info!("trigger service exited");
+                        break;
+                    }
+                    Err(e) if restarts == 0 => {
+                        error!(err = %e, "trigger service faulted; max restarts reached");
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(err = %e, retries = restarts, "trigger service faulted; restarting");
+                        restarts = restarts.saturating_sub(1);
+                    }
+                }
+            }
+        });
+
+        let handle = Arc::new(handle);
+        if let Some(s) = self.service.as_mut() {
+            s.handle = Some(Arc::clone(&handle));
+        }
+        Ok(Some(handle))
     }
 
     /// Aborts the running service [`JoinHandle`] if it exists.
@@ -883,6 +1044,15 @@ impl ResolvedWorkload {
         let mut linked_components = HashSet::new();
         let ty = component.component_type();
         let imports: Vec<_> = ty.imports(component.engine()).collect();
+        // The cross-store stream bridge engages only for a p3-service workload:
+        // there a long-lived service store must never be pinned/frozen by a
+        // stream-carrying backend call, so such calls run ephemerally (relocated)
+        // instead of on the shared store. In service-less / per-request workloads
+        // stream-carrying calls stay on the shared store.
+        let is_service_workload = self
+            .service
+            .as_ref()
+            .is_some_and(|s| s.metadata.targets_p3());
 
         for (import_name, import_item) in imports.into_iter() {
             match import_item.ty {
@@ -992,9 +1162,27 @@ impl ResolvedWorkload {
                                     "linking function import"
                                 );
                                 let export_is_async = func_ty.async_();
-                                let ephemeral_call = if export_is_async
-                                    && func_is_ephemeral_safe(&func_ty)
+                                // Plain-value async calls always run ephemerally
+                                // (params copied). In a p3-service workload, a call
+                                // carrying only relocatable `stream<T>` handles also
+                                // runs ephemerally — its args/results are relocated
+                                // (see `relocate`) rather than copied — so a
+                                // stream-carrying backend call can't pin or freeze
+                                // the service store.
+                                let plain_safe = func_is_ephemeral_safe(&func_ty);
+                                let relocate = !plain_safe
+                                    && is_service_workload
+                                    && func_is_bridge_safe(&func_ty);
+                                let ephemeral_call = if export_is_async && (plain_safe || relocate)
                                 {
+                                    let mode = if relocate {
+                                        EphemeralCallMode::Relocated {
+                                            param_tys: func_ty.params().map(|(_, ty)| ty).collect(),
+                                            result_tys: func_ty.results().collect(),
+                                        }
+                                    } else {
+                                        EphemeralCallMode::PlainValue
+                                    };
                                     Some(Arc::new(EphemeralLinkedCall {
                                         engine: plugin_engine.clone(),
                                         http_handler: self.http_handler.clone(),
@@ -1003,6 +1191,7 @@ impl ResolvedWorkload {
                                         linked_component_ids: nested_linked_component_ids.clone(),
                                         #[cfg(feature = "wasi-tls")]
                                         tls_provider: self.tls_provider.clone(),
+                                        mode,
                                     }))
                                 } else {
                                     None
@@ -1139,6 +1328,13 @@ impl ResolvedWorkload {
     /// Gets the unique identifier of the workload
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// The host-side handler this workload's ingress registers with (the HTTP
+    /// server / trigger service messaging registry). Lets host plugins (e.g. the NATS
+    /// messaging subscriber) deliver to a long-lived trigger service instance.
+    pub fn http_handler(&self) -> &Arc<dyn crate::host::http::HostHandler> {
+        &self.http_handler
     }
 
     /// Gets the name of the workload
@@ -1294,6 +1490,22 @@ impl ResolvedWorkload {
                     self.http_handler.on_workload_unbind(self.id()).await,
                     "failed to notify HTTP handler of workload",
                 )?;
+            }
+        }
+
+        // A trigger service registered its HTTP/messaging handlers at start
+        // (`execute_trigger_service`); drop those registrations on stop so it no
+        // longer receives host-invoked deliveries on a torn-down instance.
+        if self.service.is_some() {
+            if let Err(e) = self.http_handler.on_service_http_unbind(self.id()).await {
+                tracing::warn!(workload.id = %self.id(), err = %e, "failed to unbind service HTTP handler, continuing");
+            }
+            if let Err(e) = self
+                .http_handler
+                .on_trigger_service_messaging_unbind(self.id())
+                .await
+            {
+                tracing::warn!(workload.id = %self.id(), err = %e, "failed to unbind trigger service messaging handler, continuing");
             }
         }
 

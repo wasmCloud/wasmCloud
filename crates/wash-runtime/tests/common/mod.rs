@@ -17,6 +17,8 @@ use anyhow::{Context, Result};
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 use tokio::time::timeout;
 
+#[cfg(feature = "host-component-plugins")]
+use wash_runtime::plugin::component_host::ComponentHostPlugin;
 use wash_runtime::{
     engine::Engine,
     host::{
@@ -126,6 +128,30 @@ pub fn http_counter_host_interfaces_with_aliases(
 /// `http-handler-p3`): just the HTTP incoming-handler interface.
 pub fn http_only_host_interfaces(host_header: &str) -> Vec<WitInterface> {
     vec![http_incoming_handler_interface(host_header, None)]
+}
+
+/// The bespoke `acme:kv/store@0.1.0` capability, provided by the `kv-plugin`
+/// host component plugin.
+#[cfg(feature = "host-component-plugins")]
+pub fn acme_kv_interface() -> WitInterface {
+    WitInterface {
+        namespace: "acme".to_string(),
+        package: "kv".to_string(),
+        interfaces: ["store".to_string()].into_iter().collect(),
+        version: Some(semver::Version::parse("0.1.0").unwrap()),
+        config: HashMap::new(),
+        name: None,
+    }
+}
+
+/// Interfaces for the `plugin-caller` workload: HTTP ingress plus the imported
+/// `acme:kv/store` capability the host component plugin satisfies.
+#[cfg(feature = "host-component-plugins")]
+pub fn plugin_caller_host_interfaces(host_header: &str) -> Vec<WitInterface> {
+    vec![
+        http_incoming_handler_interface(host_header, None),
+        acme_kv_interface(),
+    ]
 }
 
 /// Interfaces for P3 HTTP + blobstore components.
@@ -253,7 +279,9 @@ pub async fn start_host_with_tls(
 
 /// Start a host with `wasip3` enabled on the engine, a `DevRouter` backed
 /// HTTP server, and the standard plugin set.
-pub async fn start_host_with_p3(addr: &str) -> Result<(std::net::SocketAddr, impl HostApi)> {
+pub async fn start_host_with_p3_http_handler(
+    addr: &str,
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let engine = Engine::builder().build()?;
     let http_server = HttpServer::new(DevRouter::default(), addr.parse()?).await?;
     let bound_addr = http_server.addr();
@@ -265,6 +293,80 @@ pub async fn start_host_with_p3(addr: &str) -> Result<(std::net::SocketAddr, imp
     .build()?;
     let host = host.start().await.context("Failed to start host")?;
     Ok((bound_addr, host))
+}
+
+/// Start a p3 host with the standard plugin set plus a [`ComponentHostPlugin`]
+/// built from `plugin_wasm` (a host component plugin exporting a capability).
+/// Used to test workloads that import a component-provided host capability.
+#[cfg(feature = "host-component-plugins")]
+pub async fn start_host_with_component_plugin(
+    addr: &str,
+    plugin_id: &'static str,
+    plugin_wasm: &'static [u8],
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    let engine = Engine::builder().build()?;
+    let http_server = HttpServer::new(DevRouter::default(), addr.parse()?).await?;
+    let bound_addr = http_server.addr();
+    let plugin = ComponentHostPlugin::new(plugin_id, plugin_wasm, engine.clone())
+        .context("failed to build host component plugin")?;
+    let host = with_standard_plugins(
+        HostBuilder::new()
+            .with_engine(engine)
+            .with_http_handler(Arc::new(http_server)),
+    )?
+    .with_plugin(Arc::new(plugin))?
+    .build()?;
+    let host = host.start().await.context("Failed to start host")?;
+    Ok((bound_addr, host))
+}
+
+/// Like [`start_host_with_component_plugin`] but with a `DynamicRouter` that
+/// routes by `Host` header — so distinct workloads are reachable individually
+/// (the `DevRouter` sends every request to the last-resolved workload). Needed
+/// to test per-caller behavior across genuinely separate workloads.
+#[cfg(feature = "host-component-plugins")]
+pub async fn start_host_with_component_plugin_by_host(
+    addr: &str,
+    plugin_id: &'static str,
+    plugin_wasm: &'static [u8],
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    let engine = Engine::builder().build()?;
+    let http_server = HttpServer::new(DynamicRouter::default(), addr.parse()?).await?;
+    let bound_addr = http_server.addr();
+    let plugin = ComponentHostPlugin::new(plugin_id, plugin_wasm, engine.clone())
+        .context("failed to build host component plugin")?;
+    let host = with_standard_plugins(
+        HostBuilder::new()
+            .with_engine(engine)
+            .with_http_handler(Arc::new(http_server)),
+    )?
+    .with_plugin(Arc::new(plugin))?
+    .build()?;
+    let host = host.start().await.context("Failed to start host")?;
+    Ok((bound_addr, host))
+}
+
+/// Like [`start_host_with_p3_http_handler`] but also returns the [`HttpServer`], so a test can
+/// drive host-side ingress hooks directly (e.g. deliver a message to a trigger service's
+/// messaging handler via `deliver_trigger_service_message`).
+pub async fn start_host_with_p3_handler(
+    addr: &str,
+) -> Result<(
+    std::net::SocketAddr,
+    impl HostApi,
+    Arc<HttpServer<DevRouter>>,
+)> {
+    let engine = Engine::builder().build()?;
+    let http_server = Arc::new(HttpServer::new(DevRouter::default(), addr.parse()?).await?);
+    let bound_addr = http_server.addr();
+    let host = with_standard_plugins(
+        HostBuilder::new()
+            .with_engine(engine)
+            .with_http_handler(http_server.clone()),
+    )?
+    .build()?;
+    let host = host.start().await.context("Failed to start host")?;
+    Ok((bound_addr, host, http_server))
 }
 
 /// GET `http://{addr}/` with the given `HOST` header and a 10s timeout.

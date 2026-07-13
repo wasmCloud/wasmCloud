@@ -39,6 +39,12 @@ members = [
     "keyvalue-implements-p3",
     "keyvalue-default-p3",
     "postgres-stream-p3",
+    "svc-counter",
+    "msg-counter",
+    "bridge-backend",
+    "bridge-service",
+    "kv-plugin",
+    "plugin-caller",
 ]
 
 [workspace.dependencies]

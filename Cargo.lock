@@ -7406,6 +7406,7 @@ name = "wash-runtime"
 version = "2.5.2"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-nats",
  "async-trait",
  "bigdecimal 0.4.10",

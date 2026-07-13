@@ -1,0 +1,64 @@
+//! Runtime-tunable timeouts for the cross-store call and trigger-service paths.
+//!
+//! Each has a compile-time default that can be overridden at process start via an
+//! environment variable holding a whole number of seconds. Values are read and
+//! cached on first use, so an override must be set before the runtime starts. A
+//! builder-level configuration API can layer over these later.
+
+use std::sync::LazyLock;
+use std::time::Duration;
+
+/// Parse `var` as whole seconds, falling back to `default_secs` if it is unset or
+/// not a valid `u64`.
+fn env_secs(var: &str, default_secs: u64) -> Duration {
+    let secs = std::env::var(var)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(default_secs);
+    Duration::from_secs(secs)
+}
+
+macro_rules! timeout {
+    ($(#[$doc:meta])* $name:ident = ($var:literal, $default:literal)) => {
+        $(#[$doc])*
+        pub(crate) fn $name() -> Duration {
+            static VALUE: LazyLock<Duration> = LazyLock::new(|| env_secs($var, $default));
+            *VALUE
+        }
+    };
+}
+
+timeout! {
+    /// Max wall-clock for a single ephemeral cross-store linked call.
+    ephemeral_call = ("WASH_EPHEMERAL_CALL_TIMEOUT_SECS", 600)
+}
+timeout! {
+    /// Max wall-clock to drain an ephemeral call's result streams before its
+    /// throwaway store is torn down.
+    stream_drain = ("WASH_STREAM_DRAIN_TIMEOUT_SECS", 600)
+}
+timeout! {
+    /// Max wall-clock for a single shared-store dynamic linked call.
+    shared_store_call = ("WASH_SHARED_STORE_CALL_TIMEOUT_SECS", 30)
+}
+timeout! {
+    /// Max wall-clock for a trigger service to produce an HTTP response.
+    http_response = ("WASH_HTTP_RESPONSE_TIMEOUT_SECS", 600)
+}
+timeout! {
+    /// How long `stop()` waits for a host component plugin's supervisor to exit
+    /// before aborting it.
+    #[cfg(feature = "host-component-plugins")]
+    plugin_stop = ("WASH_PLUGIN_STOP_TIMEOUT_SECS", 5)
+}
+timeout! {
+    /// Uptime a host component plugin's driver must reach before a later fault
+    /// resets its restart budget.
+    #[cfg(feature = "host-component-plugins")]
+    plugin_healthy_uptime = ("WASH_PLUGIN_HEALTHY_UPTIME_SECS", 60)
+}
+timeout! {
+    /// Upper bound on a host component plugin's pre-restart backoff.
+    #[cfg(feature = "host-component-plugins")]
+    plugin_restart_backoff_max = ("WASH_PLUGIN_RESTART_BACKOFF_MAX_SECS", 5)
+}

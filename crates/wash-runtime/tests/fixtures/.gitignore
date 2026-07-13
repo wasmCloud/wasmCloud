@@ -8,6 +8,10 @@
 # (not populated from shared). Un-ignore so they stay committed.
 !cron-service/wit/deps/
 !cron-component/wit/deps/
+!bridge-backend/wit/deps/
+!bridge-service/wit/deps/
+!kv-plugin/wit/deps/
+!plugin-caller/wit/deps/
 
 *-p3/wkg.lock
 *-p3-*/wkg.lock
