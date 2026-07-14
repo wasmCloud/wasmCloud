@@ -253,11 +253,13 @@ jobs:
         with:
           context: .
           outputs: type=docker,dest=/tmp/wash-image.tar,name=localhost/wasmcloud-wash:e2e
-          # Build the e2e host with `(implements ..)` multiplexing enabled so the
-          # implements spec's named keyvalue imports resolve, and with host
-          # component plugins — the SAME features as the canary image below, so
-          # the canary bytes are the bytes e2e exercised (and the second build
-          # hits this build's cache).
+          # Build the e2e host with ALL optional host features enabled —
+          # `(implements ..)` multiplexing (so the implements spec's named
+          # keyvalue imports resolve) and host component plugins — so
+          # operator-e2e exercises them. This is a feature-COVERAGE build and is
+          # deliberately NOT what ships: the canary image and the release
+          # binaries are built with default features only (see below), so those
+          # differ from this image.
           build-args: |
             CARGO_FEATURES=wasm_component_model_implements,host-component-plugins
           # head_ref on PRs (the source branch, shared across re-pushes
@@ -278,10 +280,11 @@ jobs:
         with:
           context: .
           outputs: type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
-          # Enable wasm_component_model_implements and host-component-plugins on
-          # the wasm host image for canary builds
-          build-args: |
-            CARGO_FEATURES=wasm_component_model_implements,host-component-plugins
+          # The canary image ships with DEFAULT features only: neither
+          # `(implements ..)` multiplexing nor host component plugins go into a
+          # release build. They are still built and exercised by the e2e image
+          # above, just not shipped here. No `build-args`, so the Dockerfile's
+          # `CARGO_FEATURES=""` default applies (a plain `cargo build`).
           cache-from: |
             type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
             type=gha,scope=wash-${{ matrix.arch }}-main
@@ -617,7 +620,9 @@ jobs:
           # aggressively than cargo's default of 3.
           CARGO_NET_RETRY: "10"
         run: |
-          ${{ matrix.buildCommand }} --release --target ${{ matrix.buildTarget || matrix.target }} -p wash --features wasm_component_model_implements,host-component-plugins
+          # Release binaries ship with default features only — no
+          # `(implements ..)` multiplexing and no host component plugins.
+          ${{ matrix.buildCommand }} --release --target ${{ matrix.buildTarget || matrix.target }} -p wash
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} ${{ matrix.artifact }}
 
       - name: Create Windows zip archive
