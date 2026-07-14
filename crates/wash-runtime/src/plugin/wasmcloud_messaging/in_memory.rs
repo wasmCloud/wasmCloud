@@ -9,7 +9,7 @@ use crate::wit::{WitInterface, WitWorld};
 use anyhow::Context;
 use opentelemetry::KeyValue;
 use tokio::sync::{Notify, RwLock, oneshot};
-use tracing::{Instrument, debug, instrument, warn};
+use tracing::{Instrument, debug, instrument, trace, warn};
 
 const PLUGIN_MESSAGING_MEMORY_ID: &str = "wasmcloud-messaging-memory";
 const MAX_QUEUE_SIZE: usize = 10000;
@@ -131,6 +131,28 @@ impl InMemoryMessaging {
             tracker: Arc::new(RwLock::new(WorkloadTracker::default())),
             meters: Default::default(),
         }
+    }
+
+    /// Route a message to a workload's subscribers, exactly as an inbound publish
+    /// would: it is enqueued to every component whose subscriptions match
+    /// `subject`, then processed by that component's receive loop. Lets a host or
+    /// test inject a message without a component-side `consumer.publish`.
+    pub async fn publish(
+        &self,
+        workload_id: &str,
+        subject: &str,
+        body: Vec<u8>,
+    ) -> Result<(), String> {
+        route_to_subscribers(
+            self,
+            workload_id,
+            &types::BrokerMessage {
+                subject: subject.to_string(),
+                reply_to: None,
+                body,
+            },
+        )
+        .await
     }
 }
 
@@ -308,11 +330,10 @@ impl HostPlugin for InMemoryMessaging {
                 .map(String::as_str),
         );
 
-        let WorkloadItem::Component(component_handle) = component_handle else {
-            // Only track components
-            return Ok(());
-        };
-
+        // Track a handler component OR a long-lived handler service:
+        // `WorkloadItem` derefs to the underlying metadata for both, so the
+        // subscriber loop is set up either way (and its receive loop delivers to
+        // the running service when one is registered).
         if super::exports_messaging_handler(&component_handle.world()) {
             debug!(?subscriptions, "Tracking component in in-memory messaging");
             self.tracker.write().await.add_component(
@@ -347,11 +368,20 @@ impl HostPlugin for InMemoryMessaging {
             }
         };
 
-        let instance_pre = workload.instantiate_pre(component_id).await?;
-
-        let pre = bindings::MessagingPre::new(instance_pre)
-            .map_err(anyhow::Error::from)
-            .context("failed to instantiate messaging pre")?;
+        // A long-lived handler service has no per-component instance to
+        // pre-instantiate; its receive loop delivers to the running service
+        // instead. Only components get a `MessagingPre` for per-message work.
+        let pre = match workload.instantiate_pre(component_id).await {
+            Ok(instance_pre) => Some(
+                bindings::MessagingPre::new(instance_pre)
+                    .map_err(anyhow::Error::from)
+                    .context("failed to instantiate messaging pre")?,
+            ),
+            Err(e) => {
+                trace!(component_id, error = %e, "no per-message instance (long-lived service); messages delivered to the service");
+                None
+            }
+        };
 
         let workload = workload.clone();
         let component_id = component_id.to_string();
@@ -380,6 +410,43 @@ impl HostPlugin for InMemoryMessaging {
 
                         debug!(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>"), "Processing message");
 
+                        // If this workload runs a long-lived trigger service for
+                        // messaging, deliver to it (preserving its in-memory
+                        // state) rather than instantiating a component per message.
+                        if workload
+                            .http_handler()
+                            .has_trigger_service_messaging(workload.id())
+                            .await
+                        {
+                            let broker = crate::host::trigger_service::BrokerMessage {
+                                subject: msg.subject.clone(),
+                                body: msg.body.clone(),
+                                reply_to: msg.reply_to.clone(),
+                            };
+                            match workload
+                                .http_handler()
+                                .deliver_trigger_service_message(workload.id(), broker)
+                                .await
+                            {
+                                Ok(Ok(())) => debug!(subject = %msg.subject, "trigger service handled message"),
+                                Ok(Err(e)) => {
+                                    warn!(subject = %msg.subject, error = %e, "trigger service message handler returned error")
+                                }
+                                Err(e) => {
+                                    warn!(subject = %msg.subject, error = %e, "failed to deliver message to trigger service")
+                                }
+                            }
+                            continue;
+                        }
+
+                        let Some(pre) = &pre else {
+                            warn!(
+                                subject = %msg.subject,
+                                component_id = %component_id,
+                                "no trigger service registered and no per-message instance; dropping message"
+                            );
+                            continue;
+                        };
                         let mut store = match workload.new_store(&component_id).await {
                             Err(e) => {
                                 warn!("failed to create store for component {component_id}: {e}");

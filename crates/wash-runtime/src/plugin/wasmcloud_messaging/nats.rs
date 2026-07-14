@@ -10,7 +10,7 @@ use async_nats::Subscriber;
 use futures::stream::StreamExt;
 use opentelemetry::KeyValue;
 use tokio::sync::RwLock;
-use tracing::{Instrument, debug, instrument, warn};
+use tracing::{Instrument, debug, instrument, trace, warn};
 use wasmtime::error::Context as _;
 
 const PLUGIN_MESSAGING_ID: &str = "wasmcloud-messaging";
@@ -195,16 +195,12 @@ impl HostPlugin for NatsMessaging {
             .get("subscriptions")
             .cloned();
 
-        // Only components are tracked as handlers; services just get the
-        // consumer linker wired above.
-        let WorkloadItem::Component(component_handle) = component_handle else {
-            return Ok(());
-        };
-
-        // Track this component as a subscriber when its world exports the
-        // messaging handler, mirroring the in-memory backend. This works
-        // whether or not the workload declares a `wasmcloud:messaging` host
-        // interface entry.
+        // Track a handler component OR a long-lived handler service:
+        // `WorkloadItem` derefs to the underlying metadata for both, so the
+        // subscriber loop is set up either way (and its receive loop delivers to
+        // the running service when one is registered). Works whether or not the
+        // workload declares a `wasmcloud:messaging` host interface entry, and
+        // matches the handler export version-tolerantly.
         if super::exports_messaging_handler(&component_handle.world()) {
             let raw = local_subscriptions.or(interface_subscriptions);
             let raw_subscriptions = super::parse_subscriptions(raw.as_deref());
@@ -253,11 +249,19 @@ impl HostPlugin for NatsMessaging {
             return Ok(());
         }
 
-        let instance_pre = workload.instantiate_pre(component_id).await?;
-        debug!("instantiate_pre succeeded");
-
-        let pre = bindings::MessagingPre::new(instance_pre)
-            .context("failed to instantiate messaging pre")?;
+        // A long-lived handler service has no per-component instance to
+        // pre-instantiate; its receive loop delivers to the running service
+        // instead. Only components get a `MessagingPre` for per-message work.
+        let pre = match workload.instantiate_pre(component_id).await {
+            Ok(instance_pre) => Some(
+                bindings::MessagingPre::new(instance_pre)
+                    .context("failed to instantiate messaging pre")?,
+            ),
+            Err(e) => {
+                trace!(component_id, error = %e, "no per-message instance (long-lived service); messages delivered to the service");
+                None
+            }
+        };
 
         let workload = workload.clone();
         let component_id = component_id.to_string();
@@ -324,6 +328,47 @@ impl HostPlugin for NatsMessaging {
                             }
                         };
 
+                        let subject = msg.subject.to_string();
+                        let reply_to = msg.reply.as_ref().map(|r| r.to_string());
+                        let body: Vec<u8> = msg.payload.into();
+
+                        // If this workload runs a long-lived trigger service for
+                        // messaging, deliver to it (preserving its in-memory
+                        // state) rather than instantiating a component per message.
+                        if workload
+                            .http_handler()
+                            .has_trigger_service_messaging(workload.id())
+                            .await
+                        {
+                            let broker = crate::host::trigger_service::BrokerMessage {
+                                subject: subject.clone(),
+                                body,
+                                reply_to,
+                            };
+                            match workload
+                                .http_handler()
+                                .deliver_trigger_service_message(workload.id(), broker)
+                                .await
+                            {
+                                Ok(Ok(())) => debug!(%subject, "trigger service handled message"),
+                                Ok(Err(e)) => {
+                                    warn!(%subject, error = %e, "trigger service message handler returned error")
+                                }
+                                Err(e) => {
+                                    warn!(%subject, error = %e, "failed to deliver message to trigger service")
+                                }
+                            }
+                            continue;
+                        }
+
+                        let Some(pre) = &pre else {
+                            warn!(
+                                %subject,
+                                component_id = %component_id,
+                                "no trigger service registered and no per-message instance; dropping message"
+                            );
+                            continue;
+                        };
                         let mut store = match workload.new_store(&component_id).await {
                             Err(e) => {
                                 warn!("failed to create store for component {component_id}: {e}");
@@ -338,11 +383,10 @@ impl HostPlugin for NatsMessaging {
                             }
                             Ok(p) => p,
                         };
-                        let reply_to = msg.reply.as_ref().map(|r| r.to_string());
                         let msg = types::BrokerMessage {
-                            subject: msg.subject.to_string(),
+                            subject,
                             reply_to,
-                            body: msg.payload.into(),
+                            body,
                         };
 
                         let span = tracing::span!(

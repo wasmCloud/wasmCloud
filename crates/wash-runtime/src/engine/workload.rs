@@ -1350,6 +1350,15 @@ impl ResolvedWorkload {
         &self.id
     }
 
+    /// The host-side handler this workload's ingress registers with (the HTTP
+    /// server / trigger-service messaging registry). Lets a host plugin (e.g.
+    /// the messaging subscriber) deliver an inbound message to a long-lived
+    /// trigger-service instance instead of instantiating a component per
+    /// message.
+    pub fn http_handler(&self) -> &Arc<dyn crate::host::http::HostHandler> {
+        &self.http_handler
+    }
+
     /// Gets the name of the workload
     pub fn name(&self) -> &str {
         &self.name
