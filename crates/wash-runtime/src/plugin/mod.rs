@@ -28,7 +28,7 @@ use std::{collections::HashMap, path::Path};
 
 use crate::engine::workload::WorkloadItem;
 use crate::{
-    engine::workload::{ResolvedWorkload, UnresolvedWorkload, WorkloadComponent},
+    engine::workload::{ResolvedWorkload, UnresolvedWorkload, WorkloadMetadata},
     wit::WitWorld,
 };
 
@@ -344,9 +344,12 @@ impl<T, Y> WorkloadTracker<T, Y> {
         }
     }
 
-    pub fn add_component(&mut self, workload_component: &WorkloadComponent, data: Y) {
-        let component_id = workload_component.id();
-        let workload_id = workload_component.workload_id();
+    /// Track an item (a component or a long-lived service) by its metadata. Both
+    /// `WorkloadComponent` and `WorkloadService` deref to `WorkloadMetadata`, so
+    /// existing `&WorkloadComponent` callers coerce unchanged.
+    pub fn add_component(&mut self, metadata: &WorkloadMetadata, data: Y) {
+        let component_id = metadata.id();
+        let workload_id = metadata.workload_id();
         let item = self
             .workloads
             .entry(workload_id.to_string())
