@@ -579,7 +579,7 @@ checksum = "3a8241f3ebb85c056b509d4327ad0358fbbba6ffb340bf388f26350aeda225b1"
 
 [[package]]
 name = "bench-tools"
-version = "2.5.2"
+version = "2.5.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -7355,7 +7355,7 @@ dependencies = [
 
 [[package]]
 name = "wash"
-version = "2.5.2"
+version = "2.5.3"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -7403,7 +7403,7 @@ dependencies = [
 
 [[package]]
 name = "wash-runtime"
-version = "2.5.2"
+version = "2.5.3"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -9250,7 +9250,7 @@ checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 
 [[package]]
 name = "xtask"
-version = "2.5.2"
+version = "2.5.3"
 dependencies = [
  "anyhow",
  "clap",
