@@ -23,9 +23,9 @@ use crate::{
     engine::{
         ctx::SharedCtx,
         linked_call::{
-            ComponentCtxTemplate, EphemeralLinkedCall, LinkedExportInvocation,
-            func_is_ephemeral_safe, invoke_linked_async_export, invoke_linked_sync_export,
-            new_store_from_templates,
+            ComponentCtxTemplate, EphemeralCallMode, EphemeralLinkedCall, LinkedExportInvocation,
+            func_is_bridge_safe, func_is_ephemeral_safe, invoke_linked_async_export,
+            invoke_linked_sync_export, new_store_from_templates,
         },
         volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map},
     },
@@ -1092,6 +1092,15 @@ impl ResolvedWorkload {
         let mut linked_components = HashSet::new();
         let ty = component.component_type();
         let imports: Vec<_> = ty.imports(component.engine()).collect();
+        // The cross-store stream bridge engages only for a p3-service workload:
+        // there a long-lived service store must never be pinned/frozen by a
+        // stream-carrying backend call, so such calls run ephemerally (relocated)
+        // instead of on the shared store. In service-less / per-request workloads
+        // stream-carrying calls stay on the shared store.
+        let is_service_workload = self
+            .service
+            .as_ref()
+            .is_some_and(|s| s.metadata.targets_p3());
 
         for (import_name, import_item) in imports.into_iter() {
             match import_item.ty {
@@ -1201,9 +1210,27 @@ impl ResolvedWorkload {
                                     "linking function import"
                                 );
                                 let export_is_async = func_ty.async_();
-                                let ephemeral_call = if export_is_async
-                                    && func_is_ephemeral_safe(&func_ty)
+                                // Plain-value async calls always run ephemerally
+                                // (params copied). In a p3-service workload, a call
+                                // carrying only relocatable `stream<T>` handles also
+                                // runs ephemerally — its args/results are relocated
+                                // (see `relocate`) rather than copied — so a
+                                // stream-carrying backend call can't pin or freeze
+                                // the service store.
+                                let plain_safe = func_is_ephemeral_safe(&func_ty);
+                                let relocate = !plain_safe
+                                    && is_service_workload
+                                    && func_is_bridge_safe(&func_ty);
+                                let ephemeral_call = if export_is_async && (plain_safe || relocate)
                                 {
+                                    let mode = if relocate {
+                                        EphemeralCallMode::Relocated {
+                                            param_tys: func_ty.params().map(|(_, ty)| ty).collect(),
+                                            result_tys: func_ty.results().collect(),
+                                        }
+                                    } else {
+                                        EphemeralCallMode::PlainValue
+                                    };
                                     Some(Arc::new(EphemeralLinkedCall {
                                         engine: plugin_engine.clone(),
                                         http_handler: self.http_handler.clone(),
@@ -1212,6 +1239,7 @@ impl ResolvedWorkload {
                                         linked_component_ids: nested_linked_component_ids.clone(),
                                         #[cfg(feature = "wasi-tls")]
                                         tls_provider: self.tls_provider.clone(),
+                                        mode,
                                     }))
                                 } else {
                                     None

@@ -53,6 +53,13 @@ macro_rules! declare_timeouts {
 }
 
 declare_timeouts! {
+    /// Max wall-clock for a single ephemeral cross-store linked call.
+    ephemeral_call = ("WASH_EPHEMERAL_CALL_TIMEOUT_SECS", 600);
+    /// Max wall-clock to drain an ephemeral call's result streams before its
+    /// throwaway store is torn down.
+    stream_drain = ("WASH_STREAM_DRAIN_TIMEOUT_SECS", 600);
+    /// Max wall-clock for a single shared-store dynamic linked call.
+    shared_store_call = ("WASH_SHARED_STORE_CALL_TIMEOUT_SECS", 30);
     /// Max wall-clock for a trigger service to produce an HTTP response.
     http_response = ("WASH_HTTP_RESPONSE_TIMEOUT_SECS", 600);
 }

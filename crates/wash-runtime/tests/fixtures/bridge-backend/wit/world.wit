@@ -1,0 +1,7 @@
+package wasmcloud:backend@0.1.0;
+
+/// Stateless backend reached across the host bridge. A fresh instance handles
+/// every call, then is dropped.
+world backend {
+    export wasmcloud:bridge/ops@0.1.0;
+}

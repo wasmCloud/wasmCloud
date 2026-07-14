@@ -110,6 +110,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d8c1fef690941d3e7788d328517591fecc684c084084702d6ff1641e993699a"
 
 [[package]]
+name = "bridge-backend"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
+name = "bridge-service"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
