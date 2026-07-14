@@ -47,6 +47,10 @@ wasi-blobstore = []
 wasi-keyvalue = []
 # Component-model `(implements ..)` / `named_imports` multiplexing
 wasm_component_model_implements = []
+# Host component plugins: a component providing a host capability from its own
+# long-lived, supervised store, serving cross-store capability calls.
+# See `plugin::component_host` for the adapter and how it wires up.
+host-component-plugins = []
 wasi-webgpu = ["dep:wasi-webgpu-wasmtime"]
 wasmcloud-postgres = [
     "dep:tokio-postgres", "dep:tokio-postgres-rustls",
@@ -59,6 +63,7 @@ wasi-tls = ["dep:wasmtime-wasi-tls"]
 
 [dependencies]
 anyhow = { workspace = true }
+arc-swap = { workspace = true }
 async-nats = { workspace = true, features = ["aws-lc-rs"] }
 async-trait = { workspace = true }
 bon = { workspace = true }
