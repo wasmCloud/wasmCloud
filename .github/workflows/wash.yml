@@ -247,47 +247,59 @@ jobs:
       # on one call confuses `digest` output (last write to
       # `containerimage.digest` wins → docker-tarball envelope, not
       # registry). The second call hits the cache the first wrote.
-      - name: Build wash runtime image (tarball for operator-e2e)
-        id: build_tar
+      # RELEASE image — DEFAULT features only: exactly what we ship. The
+      # operator-e2e `release` leg loads this tarball, so we test the bytes we
+      # release. build_push below reuses this build's cache (same features), so
+      # the pushed canary is byte-identical to what that e2e leg exercised.
+      - name: Build wash runtime image — release / default features (tarball for operator-e2e)
+        id: build_tar_release
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          outputs: type=docker,dest=/tmp/wash-image.tar,name=localhost/wasmcloud-wash:e2e
-          # Build the e2e host with ALL optional host features enabled —
-          # `(implements ..)` multiplexing (so the implements spec's named
-          # keyvalue imports resolve) and host component plugins — so
-          # operator-e2e exercises them. This is a feature-COVERAGE build and is
-          # deliberately NOT what ships: the canary image and the release
-          # binaries are built with default features only (see below), so those
-          # differ from this image.
+          outputs: type=docker,dest=/tmp/wash-image-release.tar,name=localhost/wasmcloud-wash:e2e
+          # No `build-args`: the Dockerfile's `CARGO_FEATURES=""` default applies
+          # (a plain `cargo build`, default features).
+          # head_ref on PRs (the source branch, shared across re-pushes and
+          # across PRs from the same branch); falls back to ref_name on main
+          # ("main"), then the main scope for cold-cache reads on first push.
+          cache-from: |
+            type=gha,scope=wash-release-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-release-${{ matrix.arch }}-main
+          cache-to: type=gha,scope=wash-release-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }},mode=max
+      # ALL-FEATURES image — every optional host feature on (`(implements ..)`
+      # multiplexing and host component plugins). NOT shipped: a coverage build
+      # the operator-e2e `all-features` leg loads to exercise the implements
+      # spec (which a released host can't run). amd64 only — the sole consumer
+      # is that e2e leg.
+      - name: Build wash runtime image — all features (tarball for operator-e2e)
+        id: build_tar_all_features
+        if: matrix.arch == 'amd64'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          outputs: type=docker,dest=/tmp/wash-image-all-features.tar,name=localhost/wasmcloud-wash:e2e
           build-args: |
             CARGO_FEATURES=wasm_component_model_implements,host-component-plugins
-          # head_ref on PRs (the source branch, shared across re-pushes
-          # and across PRs from the same branch); falls back to ref_name
-          # on main pushes ("main"). Always falls back to the main scope
-          # for cold-cache reads on first push.
           cache-from: |
-            type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
-            type=gha,scope=wash-${{ matrix.arch }}-main
-          cache-to: type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }},mode=max
+            type=gha,scope=wash-all-features-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-all-features-${{ matrix.arch }}-main
+          cache-to: type=gha,scope=wash-all-features-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }},mode=max
       - name: Push wash runtime image to GHCR by digest (main only)
         # PRs lack org-package write access; only push on main so
         # canary-publish can assemble the manifest after all gates pass.
-        # No `cache-to` here — the first build already wrote it.
+        # Ships DEFAULT features only — byte-identical to the RELEASE tarball
+        # above (whose cache this reuses), so the pushed canary is the exact
+        # bytes the operator-e2e `release` leg tested. No `cache-to` — the
+        # release build already wrote it.
         if: github.event_name != 'pull_request'
         id: build_push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           outputs: type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
-          # The canary image ships with DEFAULT features only: neither
-          # `(implements ..)` multiplexing nor host component plugins go into a
-          # release build. They are still built and exercised by the e2e image
-          # above, just not shipped here. No `build-args`, so the Dockerfile's
-          # `CARGO_FEATURES=""` default applies (a plain `cargo build`).
           cache-from: |
-            type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
-            type=gha,scope=wash-${{ matrix.arch }}-main
+            type=gha,scope=wash-release-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-release-${{ matrix.arch }}-main
       - name: Export digest
         if: github.event_name != 'pull_request'
         env:
@@ -308,11 +320,23 @@ jobs:
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
-      - name: Upload image tarball
+      # Only amd64 tarballs are consumed (operator-e2e runs on amd64). The
+      # release image also builds on arm64 above to prime build_push's cache
+      # there, but its tarball isn't uploaded.
+      - name: Upload release image tarball
+        if: matrix.arch == 'amd64'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: wash-image-tarball-${{ matrix.arch }}
-          path: /tmp/wash-image.tar
+          name: wash-image-tarball-release-${{ matrix.arch }}
+          path: /tmp/wash-image-release.tar
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload all-features image tarball
+        if: matrix.arch == 'amd64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wash-image-tarball-all-features-${{ matrix.arch }}
+          path: /tmp/wash-image-all-features.tar
           if-no-files-found: error
           retention-days: 1
 
@@ -336,6 +360,23 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    # Run the suite twice, against two host images:
+    #   release      — the exact DEFAULT-features bytes we ship (build_push).
+    #                  This leg is the guarantee that we test what we release;
+    #                  IMPLEMENTS_E2E_IMAGE is empty so the implements spec
+    #                  self-skips (a released host has no `(implements ..)`).
+    #   all-features — a coverage build (NOT shipped) with every optional host
+    #                  feature on; this leg exercises the implements spec.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: release
+            tarball: wash-image-tarball-release-amd64
+            implements_image: ""
+          - variant: all-features
+            tarball: wash-image-tarball-all-features-amd64
+            implements_image: ghcr.io/wasmcloud/components/keyvalue-implements:0.1.0
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -343,10 +384,12 @@ jobs:
       - uses: ./.github/actions/setup-go
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: wash-image-tarball-amd64
+          name: ${{ matrix.tarball }}
           path: /tmp
-      - name: Load wash runtime image
-        run: docker load -i /tmp/wash-image.tar
+      - name: Load wash runtime image (${{ matrix.variant }})
+        # Exactly one tarball is downloaded per leg; both tag as
+        # localhost/wasmcloud-wash:e2e, the tag the operator chart deploys.
+        run: docker load -i /tmp/*.tar
       - name: Build runtime-operator image
         working-directory: runtime-operator
         run: make docker-build IMG=localhost/runtime-operator:e2e
@@ -354,7 +397,7 @@ jobs:
         with:
           cluster_name: wasmcloud-e2e
           config: deploy/kind/kind-config.yaml
-      - name: Run runtime-operator e2e against locally-built wash
+      - name: Run runtime-operator e2e (${{ matrix.variant }}) against locally-built wash
         working-directory: runtime-operator
         run: make test-e2e
         env:
@@ -363,10 +406,13 @@ jobs:
           SKIP_IMAGE_BUILD: "true"
           BUILD_RUNTIME_IMAGE: "true"
           SKIP_RUNTIME_BUILD: "true"
-          # Exercise the messaging spec — this is the regression test for
-          # #5074 and is the whole reason the gate exists.
+          # Messaging runs on BOTH legs — it's the #5074 regression and the
+          # whole reason the gate exists (a core capability the released host
+          # runs too).
           MESSAGING_E2E_IMAGE: ghcr.io/wasmcloud/components/messaging-echo-rust:0.1.0
-          IMPLEMENTS_E2E_IMAGE: ghcr.io/wasmcloud/components/keyvalue-implements:0.1.0
+          # Only the `all-features` leg sets this; empty on `release`, so the
+          # implements spec self-skips there (the released host lacks the feature).
+          IMPLEMENTS_E2E_IMAGE: ${{ matrix.implements_image }}
           PROMETHEUS_INSTALL_SKIP: "true"
           CERT_MANAGER_INSTALL_SKIP: "true"
           KIND_CLUSTER_NAME: wasmcloud-e2e
