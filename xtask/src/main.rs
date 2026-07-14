@@ -117,6 +117,7 @@ const P3_FIXTURES: &[&str] = &[
     "keyvalue-implements-p3",
     "keyvalue-default-p3",
     "postgres-stream-p3",
+    "svc-counter",
 ];
 
 // Fixtures with local-only WIT worlds (no wasi imports). Copying shared
