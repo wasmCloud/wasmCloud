@@ -111,73 +111,53 @@ where
     Ok((factory, done))
 }
 
-/// Whether a `stream<T>`/`future<T>` of this element type can be relocated
-/// across stores. Mirrors the dispatch in [`stream_factory`]/[`future_factory`]:
-/// the supported elements are the scalar types and `string`.
-pub fn bridgeable_element_type(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Bool
-            | Type::S8
-            | Type::U8
-            | Type::S16
-            | Type::U16
-            | Type::S32
-            | Type::U32
-            | Type::S64
-            | Type::U64
-            | Type::Float32
-            | Type::Float64
-            | Type::Char
-            | Type::String
-    )
-}
+/// Defines the pump-supported `stream<T>`/`future<T>` element types — the
+/// scalar types and `string` — in one place, generating the classification
+/// ([`bridgeable_element_type`]) and both typed dispatches ([`stream_factory`],
+/// [`future_factory`]) from the same list.
+macro_rules! bridgeable_elements {
+    ($($variant:ident => $t:ty),* $(,)?) => {
+        /// Whether a `stream<T>`/`future<T>` of this element type can be
+        /// relocated across stores.
+        pub fn bridgeable_element_type(ty: &Type) -> bool {
+            matches!(ty, $(Type::$variant)|*)
+        }
 
-/// Dispatch a `stream<T>` to a typed pump by its element type.
-fn stream_factory(
-    src: StoreContextMut<SharedCtx>,
-    any: StreamAny,
-    payload: &Type,
-) -> wasmtime::Result<(ValFactory, Done)> {
-    macro_rules! dispatch {
-        ($($variant:ident => $t:ty),* $(,)?) => {
+        /// Dispatch a `stream<T>` to a typed pump by its element type.
+        fn stream_factory(
+            src: StoreContextMut<SharedCtx>,
+            any: StreamAny,
+            payload: &Type,
+        ) -> wasmtime::Result<(ValFactory, Done)> {
             match payload {
                 $(Type::$variant => bridge_stream::<$t>(src, any),)*
                 other => wasmtime::bail!(
                     "cross-store bridge: unsupported stream element type {other:?}"
                 ),
             }
-        };
-    }
-    dispatch!(
-        Bool => bool, S8 => i8, U8 => u8, S16 => i16, U16 => u16,
-        S32 => i32, U32 => u32, S64 => i64, U64 => u64,
-        Float32 => f32, Float64 => f64, Char => char, String => String,
-    )
-}
+        }
 
-/// Dispatch a `future<T>` to a typed pump by its element type.
-fn future_factory(
-    src: StoreContextMut<SharedCtx>,
-    any: FutureAny,
-    payload: &Type,
-) -> wasmtime::Result<(ValFactory, Done)> {
-    macro_rules! dispatch {
-        ($($variant:ident => $t:ty),* $(,)?) => {
+        /// Dispatch a `future<T>` to a typed pump by its element type.
+        fn future_factory(
+            src: StoreContextMut<SharedCtx>,
+            any: FutureAny,
+            payload: &Type,
+        ) -> wasmtime::Result<(ValFactory, Done)> {
             match payload {
                 $(Type::$variant => bridge_future::<$t>(src, any),)*
                 other => wasmtime::bail!(
                     "cross-store bridge: unsupported future element type {other:?}"
                 ),
             }
-        };
-    }
-    dispatch!(
-        Bool => bool, S8 => i8, U8 => u8, S16 => i16, U16 => u16,
-        S32 => i32, U32 => u32, S64 => i64, U64 => u64,
-        Float32 => f32, Float64 => f64, Char => char, String => String,
-    )
+        }
+    };
 }
+
+bridgeable_elements!(
+    Bool => bool, S8 => i8, U8 => u8, S16 => i16, U16 => u16,
+    S32 => i32, U32 => u32, S64 => i64, U64 => u64,
+    Float32 => f32, Float64 => f64, Char => char, String => String,
+);
 
 /// Whether `val` contains a store-bound handle (`stream`/`future`/`resource`/
 /// `error-context`) anywhere, so we know whether structural relocation is
@@ -277,25 +257,19 @@ pub fn extract(
         return Ok(Relocated::Val(val.clone()));
     }
     match (val, ty) {
-        (Val::Stream(_), Type::Stream(st)) => {
+        (Val::Stream(any), Type::Stream(st)) => {
             let payload = st
                 .ty()
                 .ok_or_else(|| wasmtime::format_err!("stream is missing its element type"))?;
-            let Val::Stream(any) = val.clone() else {
-                unreachable!()
-            };
-            let (factory, done) = stream_factory(store, any, &payload)?;
+            let (factory, done) = stream_factory(store, any.clone(), &payload)?;
             dones.push(done);
             Ok(Relocated::Stream(factory))
         }
-        (Val::Future(_), Type::Future(ft)) => {
+        (Val::Future(any), Type::Future(ft)) => {
             let payload = ft
                 .ty()
                 .ok_or_else(|| wasmtime::format_err!("future is missing its element type"))?;
-            let Val::Future(any) = val.clone() else {
-                unreachable!()
-            };
-            let (factory, done) = future_factory(store, any, &payload)?;
+            let (factory, done) = future_factory(store, any.clone(), &payload)?;
             dones.push(done);
             Ok(Relocated::Future(factory))
         }

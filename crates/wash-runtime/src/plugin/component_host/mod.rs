@@ -674,15 +674,7 @@ async fn run_supervisor(
             rx,
             registry,
         };
-        let trigger_service = match TriggerService::spawn(store, pre.clone(), vec![ingress]) {
-            Ok(trigger_service) => trigger_service,
-            Err(e) => {
-                error!(id = state.id, err = %e, "failed to spawn host component plugin driver");
-                state.tx.store(None);
-                state.registry.store(None);
-                return;
-            }
-        };
+        let trigger_service = TriggerService::spawn(store, pre.clone(), vec![ingress]);
 
         // The driver runs until the capability channel closes (clean shutdown)
         // or the store faults (e.g. a guest trap).
@@ -759,51 +751,30 @@ fn build_plugin_store(engine: &Engine, id: &'static str) -> Store<SharedCtx> {
 /// Introspect a plugin component's exported interfaces and their functions from
 /// its component type.
 fn introspect_exports(component: &Component) -> anyhow::Result<Vec<ExportedInterface>> {
-    let engine = component.engine();
     let ty = component.component_type();
-    let mut exported = Vec::new();
-
-    for (iface_name, iface_item) in ty.exports(engine) {
-        let ComponentItem::ComponentInstance(instance_ty) = iface_item.ty else {
-            // A top-level exported func (not inside an interface) is not a
-            // capability interface we route; skip it.
-            continue;
-        };
-
-        let mut funcs = Vec::new();
-        let mut resources = Vec::new();
-        for (func_name, func_item) in instance_ty.exports(engine) {
-            match func_item.ty {
-                ComponentItem::ComponentFunc(func_ty) => funcs.push(ExportedFunc {
-                    name: func_name.into(),
-                    param_tys: func_ty.params().map(|(_, ty)| ty).collect(),
-                    result_tys: func_ty.results().collect(),
-                }),
-                ComponentItem::Resource(_) => resources.push(func_name.into()),
-                _ => {}
-            }
-        }
-
-        exported.push(ExportedInterface {
-            name: iface_name.into(),
-            wit: WitInterface::from(iface_name),
-            funcs,
-            resources,
-        });
-    }
-
-    Ok(exported)
+    introspect_interfaces(component, ty.exports(component.engine()))
 }
 
 /// Introspect a plugin component's *imported* interfaces and their functions.
 /// Used to wire self-imports (an interface the plugin both imports and exports)
 /// back to the plugin's own capability channel.
 fn introspect_imports(component: &Component) -> anyhow::Result<Vec<ExportedInterface>> {
-    let engine = component.engine();
     let ty = component.component_type();
-    let mut imported = Vec::new();
+    introspect_interfaces(component, ty.imports(component.engine()))
+}
 
-    for (iface_name, iface_item) in ty.imports(engine) {
+/// Collect the capability interfaces (and their functions and resource types)
+/// from one side of a component's type — its exports or its imports. A
+/// top-level func not inside an interface is not a capability we route, so it
+/// is skipped.
+fn introspect_interfaces<'a>(
+    component: &Component,
+    items: impl Iterator<Item = (&'a str, wasmtime::component::types::ComponentExtern<'a>)>,
+) -> anyhow::Result<Vec<ExportedInterface>> {
+    let engine = component.engine();
+    let mut interfaces = Vec::new();
+
+    for (iface_name, iface_item) in items {
         let ComponentItem::ComponentInstance(instance_ty) = iface_item.ty else {
             continue;
         };
@@ -822,7 +793,7 @@ fn introspect_imports(component: &Component) -> anyhow::Result<Vec<ExportedInter
             }
         }
 
-        imported.push(ExportedInterface {
+        interfaces.push(ExportedInterface {
             name: iface_name.into(),
             wit: WitInterface::from(iface_name),
             funcs,
@@ -830,5 +801,5 @@ fn introspect_imports(component: &Component) -> anyhow::Result<Vec<ExportedInter
         });
     }
 
-    Ok(imported)
+    Ok(interfaces)
 }

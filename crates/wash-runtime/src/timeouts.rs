@@ -8,13 +8,25 @@
 use std::sync::LazyLock;
 use std::time::Duration;
 
-/// Parse `var` as whole seconds, falling back to `default_secs` if it is unset or
-/// not a valid `u64`.
+/// Parse `var` as whole seconds, falling back to `default_secs` if it is unset.
+/// A set-but-unparseable value also falls back, with a warning — silently
+/// ignoring it would leave an operator's typo undetected.
 fn env_secs(var: &str, default_secs: u64) -> Duration {
-    let secs = std::env::var(var)
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(default_secs);
+    let secs = match std::env::var(var) {
+        Ok(v) => match v.parse::<u64>() {
+            Ok(secs) => secs,
+            Err(_) => {
+                tracing::warn!(
+                    var,
+                    value = %v,
+                    default_secs,
+                    "ignoring unparseable timeout override (want whole seconds)"
+                );
+                default_secs
+            }
+        },
+        Err(_) => default_secs,
+    };
     Duration::from_secs(secs)
 }
 

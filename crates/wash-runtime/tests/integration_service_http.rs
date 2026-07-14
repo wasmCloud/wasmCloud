@@ -19,22 +19,16 @@ use wash_runtime::host::HostApi;
 use wash_runtime::types::{LocalResources, Service, Workload, WorkloadStartRequest};
 
 mod common;
-use common::{http_only_host_interfaces, start_host_with_p3_http_handler};
+use common::{http_only_host_interfaces, json_u64_field, start_host_with_p3_http_handler};
 
 const SVC_COUNTER_WASM: &[u8] = include_bytes!("wasm/svc_counter.wasm");
 
 /// Parse `{"cli_ticks":N,"http_calls":M}` without pulling in a JSON dep.
 fn parse_counter(body: &str) -> (u64, u64) {
-    let field = |name: &str| -> u64 {
-        let key = format!("\"{name}\":");
-        let start = body.find(&key).expect("field present") + key.len();
-        let rest = &body[start..];
-        let end = rest
-            .find(|c: char| !c.is_ascii_digit())
-            .unwrap_or(rest.len());
-        rest[..end].parse().expect("numeric field")
-    };
-    (field("cli_ticks"), field("http_calls"))
+    (
+        json_u64_field(body, "cli_ticks"),
+        json_u64_field(body, "http_calls"),
+    )
 }
 
 fn svc_counter_request(host: &str) -> WorkloadStartRequest {
@@ -67,7 +61,11 @@ async fn test_service_http_co_drives_cli_run() -> Result<()> {
         .await
         .context("failed to start p3 service-http workload")?;
 
-    let client = reqwest::Client::new();
+    // No connection pooling: a GET retried on a stale pooled connection would
+    // land twice on the instance and break the exactly-once http_calls counts.
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .build()?;
 
     let get = || async {
         let resp = timeout(

@@ -99,6 +99,12 @@ impl Guest for Component {
             .and_then(|partition| partition.get(&key).cloned())
     }
 
+    async fn whoami() -> String {
+        let workload = bindings::wasmcloud::host::identity::get_workload_id();
+        let component = bindings::wasmcloud::host::identity::get_component_id();
+        format!("{workload}|{component}")
+    }
+
     async fn slow(millis: u64) -> u64 {
         // Await a timer so this task YIELDS the store's cooperative executor.
         // A concurrent fast call spawned as its own task can therefore run to

@@ -21,7 +21,7 @@ use wash_runtime::host::HostApi;
 use wash_runtime::types::{Component, LocalResources, Service, Workload, WorkloadStartRequest};
 
 mod common;
-use common::{http_only_host_interfaces, start_host_with_p3_http_handler};
+use common::{http_only_host_interfaces, json_u64_field, start_host_with_p3_http_handler};
 
 const BRIDGE_SERVICE_WASM: &[u8] = include_bytes!("wasm/bridge_service.wasm");
 const BRIDGE_BACKEND_WASM: &[u8] = include_bytes!("wasm/bridge_backend.wasm");
@@ -78,16 +78,10 @@ async fn call(
         resp.status()
     );
     let body = resp.text().await?;
-    let field = |name: &str| -> u64 {
-        let key = format!("\"{name}\":");
-        let start = body.find(&key).expect("field present") + key.len();
-        let rest = &body[start..];
-        let end = rest
-            .find(|c: char| !c.is_ascii_digit())
-            .unwrap_or(rest.len());
-        rest[..end].parse().expect("numeric field")
-    };
-    Ok((field("result"), field("expected")))
+    Ok((
+        json_u64_field(&body, "result"),
+        json_u64_field(&body, "expected"),
+    ))
 }
 
 /// #2: a handle-free `async func` import is linked via `func_new_concurrent` and
@@ -137,8 +131,16 @@ async fn test_service_survives_client_cancellation() -> Result<()> {
     let host = "bridge-cancel";
     let (addr, h) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
     h.workload_start(bridge_workload(host)).await?;
+    let client = reqwest::Client::new();
 
-    // Fire a streaming request, then abort it before it can complete.
+    // Warm up first so the workload is resolved and serving — otherwise the
+    // abort below can land before the request ever reaches the service, and the
+    // disconnect path silently goes unexercised.
+    let (result, _) = call(&client, &addr, host, "/add").await?;
+    assert_eq!(result, 42, "service should be serving before the cancel");
+
+    // Fire a slow streaming request (4 MiB through the bounded bridge channel
+    // takes well past this abort), then abort it mid-flight.
     let cancelled = tokio::spawn(async move {
         let client = reqwest::Client::new();
         client
@@ -147,12 +149,11 @@ async fn test_service_survives_client_cancellation() -> Result<()> {
             .send()
             .await
     });
-    tokio::time::sleep(Duration::from_millis(5)).await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
     cancelled.abort();
     let _ = cancelled.await;
 
     // The service must still serve subsequent requests.
-    let client = reqwest::Client::new();
     let (result, _) = call(&client, &addr, host, "/add").await?;
     assert_eq!(
         result, 42,
@@ -201,6 +202,27 @@ async fn test_bridge_stream_relocation() -> Result<()> {
     Ok(())
 }
 
+/// #5 edge shapes: a zero-byte stream in each direction (writer dropped without
+/// writing) closes cleanly through the relocation pump, and the payload-less
+/// variant case crosses a stream-relocatable signature intact.
+#[tokio::test]
+async fn test_bridge_stream_empty_shapes() -> Result<()> {
+    let host = "bridge-empty";
+    let (addr, h) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
+    h.workload_start(bridge_workload(host)).await?;
+    let client = reqwest::Client::new();
+
+    for path in ["/consume-empty", "/produce-empty", "/relay-none"] {
+        let (result, expected) = call(&client, &addr, host, path).await?;
+        assert_eq!(expected, 0, "{path} is a zero-byte / payload-less shape");
+        assert_eq!(
+            result, expected,
+            "{path}: an empty shape must cross the bridge cleanly (got {result})"
+        );
+    }
+    Ok(())
+}
+
 /// #3: while a backend call busy-spins (monopolizing its own ephemeral store),
 /// the long-lived service keeps serving other HTTP requests. If the backend
 /// shared the service's store, the spin would freeze the service's HTTP ingress
@@ -236,8 +258,12 @@ async fn test_bridge_isolation_under_blocking_backend() -> Result<()> {
 
     let block_result = timeout(Duration::from_secs(30), block).await???;
     assert_eq!(block_result.0, 1, "/block should complete cleanly");
+    // Require MORE than one: a frozen service could still let exactly one
+    // queued request complete the instant the block resolves, which `>= 1`
+    // would wrongly accept. Several completing mid-block proves the backend
+    // spin never touched the service's store.
     assert!(
-        served_during_block >= 1,
+        served_during_block >= 2,
         "the service must serve requests while a backend call blocks its own \
          store (served {served_during_block}); a shared store would freeze ingress"
     );

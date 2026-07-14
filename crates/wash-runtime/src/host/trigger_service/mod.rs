@@ -29,7 +29,7 @@
 //! as optional and simply omits the co-driven run loop when it is absent.
 
 #[cfg(feature = "host-component-plugins")]
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use wasmtime::Store;
@@ -127,8 +127,8 @@ impl Ingress {
                 // map lookup rather than a per-call export search.
                 // Nested by interface so a call resolves its index with borrowed
                 // `&str` lookups (`Arc<str>: Borrow<str>`) — no per-call key clone.
-                let mut func_map: HashMap<Arc<str>, HashMap<Arc<str>, ComponentExportIndex>> =
-                    HashMap::new();
+                let mut func_map: BTreeMap<Arc<str>, BTreeMap<Arc<str>, ComponentExportIndex>> =
+                    BTreeMap::new();
                 for CapabilityFunc { interface, func } in funcs {
                     let iface = instance
                         .get_export(&mut *store, None, &interface)
@@ -170,7 +170,7 @@ enum PreparedIngress {
     #[cfg(feature = "host-component-plugins")]
     Capability {
         instance: Instance,
-        func_map: HashMap<Arc<str>, HashMap<Arc<str>, ComponentExportIndex>>,
+        func_map: BTreeMap<Arc<str>, BTreeMap<Arc<str>, ComponentExportIndex>>,
         rx: tokio::sync::mpsc::Receiver<CapabilityJob>,
         registry: Arc<JobRegistry>,
         in_flight: Arc<std::sync::atomic::AtomicUsize>,
@@ -317,14 +317,14 @@ impl TriggerService {
         mut store: Store<SharedCtx>,
         pre: InstancePre<SharedCtx>,
         ingresses: Vec<Ingress>,
-    ) -> anyhow::Result<Self> {
+    ) -> Self {
         let driver = tokio::spawn(async move {
             if let Err(e) = run_trigger_driver(&mut store, &pre, ingresses).await {
                 tracing::error!(err = %e, "trigger service driver faulted");
             }
         });
 
-        Ok(TriggerService { driver })
+        TriggerService { driver }
     }
 }
 
@@ -355,10 +355,11 @@ pub(crate) async fn run_trigger_driver(
     // Build each ingress's binding view before entering run_concurrent.
     let mut prepared = Vec::with_capacity(ingresses.len());
     for ingress in ingresses {
-        prepared.push(anyhow::Context::context(
-            ingress.prepare(&mut *store, &instance),
-            "failed to prepare trigger service ingress",
-        )?);
+        prepared.push(
+            ingress
+                .prepare(&mut *store, &instance)
+                .map_err(|e| e.context("failed to prepare trigger service ingress"))?,
+        );
     }
 
     // Drive serving in a loop. A proxied-resource drop needs top-level store

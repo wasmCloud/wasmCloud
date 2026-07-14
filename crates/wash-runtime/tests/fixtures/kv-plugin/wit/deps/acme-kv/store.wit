@@ -19,6 +19,11 @@ interface store {
     /// Return `key` from the calling workload's own partition, or `none`.
     pget: async func(key: string) -> option<list<u8>>;
 
+    /// The calling workload's identity as the plugin sees it via the host
+    /// identity import, as `"{workload-id}|{component-id}"` — lets a test assert
+    /// both halves of the ambient caller identity end-to-end.
+    whoami: async func() -> string;
+
     /// Remove `key` if present.
     delete: async func(key: string);
 

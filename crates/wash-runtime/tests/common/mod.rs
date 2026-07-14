@@ -296,19 +296,25 @@ pub async fn start_host_with_p3_http_handler(
 }
 
 /// Start a p3 host with the standard plugin set plus a [`ComponentHostPlugin`]
-/// built from `plugin_wasm` (a host component plugin exporting a capability).
-/// Used to test workloads that import a component-provided host capability.
+/// built from `plugin_wasm`, routed by `router`, with `max_restarts` overriding
+/// the plugin's supervision budget when given. The named wrappers below cover
+/// the common shapes.
 #[cfg(feature = "host-component-plugins")]
-pub async fn start_host_with_component_plugin(
+async fn start_host_with_component_plugin_router(
     addr: &str,
+    router: impl wash_runtime::host::http::Router,
     plugin_id: &'static str,
     plugin_wasm: &'static [u8],
+    max_restarts: Option<u32>,
 ) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let engine = Engine::builder().build()?;
-    let http_server = HttpServer::new(DevRouter::default(), addr.parse()?).await?;
+    let http_server = HttpServer::new(router, addr.parse()?).await?;
     let bound_addr = http_server.addr();
-    let plugin = ComponentHostPlugin::new(plugin_id, plugin_wasm, engine.clone())
+    let mut plugin = ComponentHostPlugin::new(plugin_id, plugin_wasm, engine.clone())
         .context("failed to build host component plugin")?;
+    if let Some(max_restarts) = max_restarts {
+        plugin = plugin.with_max_restarts(max_restarts);
+    }
     let host = with_standard_plugins(
         HostBuilder::new()
             .with_engine(engine)
@@ -318,6 +324,25 @@ pub async fn start_host_with_component_plugin(
     .build()?;
     let host = host.start().await.context("Failed to start host")?;
     Ok((bound_addr, host))
+}
+
+/// Start a p3 host with the standard plugin set plus a [`ComponentHostPlugin`]
+/// built from `plugin_wasm` (a host component plugin exporting a capability).
+/// Used to test workloads that import a component-provided host capability.
+#[cfg(feature = "host-component-plugins")]
+pub async fn start_host_with_component_plugin(
+    addr: &str,
+    plugin_id: &'static str,
+    plugin_wasm: &'static [u8],
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    start_host_with_component_plugin_router(
+        addr,
+        DevRouter::default(),
+        plugin_id,
+        plugin_wasm,
+        None,
+    )
+    .await
 }
 
 /// Like [`start_host_with_component_plugin`] but with a `DynamicRouter` that
@@ -330,20 +355,33 @@ pub async fn start_host_with_component_plugin_by_host(
     plugin_id: &'static str,
     plugin_wasm: &'static [u8],
 ) -> Result<(std::net::SocketAddr, impl HostApi)> {
-    let engine = Engine::builder().build()?;
-    let http_server = HttpServer::new(DynamicRouter::default(), addr.parse()?).await?;
-    let bound_addr = http_server.addr();
-    let plugin = ComponentHostPlugin::new(plugin_id, plugin_wasm, engine.clone())
-        .context("failed to build host component plugin")?;
-    let host = with_standard_plugins(
-        HostBuilder::new()
-            .with_engine(engine)
-            .with_http_handler(Arc::new(http_server)),
-    )?
-    .with_plugin(Arc::new(plugin))?
-    .build()?;
-    let host = host.start().await.context("Failed to start host")?;
-    Ok((bound_addr, host))
+    start_host_with_component_plugin_router(
+        addr,
+        DynamicRouter::default(),
+        plugin_id,
+        plugin_wasm,
+        None,
+    )
+    .await
+}
+
+/// Like [`start_host_with_component_plugin`] but overriding the plugin's
+/// supervision restart budget — for tests that exhaust it.
+#[cfg(feature = "host-component-plugins")]
+pub async fn start_host_with_component_plugin_max_restarts(
+    addr: &str,
+    plugin_id: &'static str,
+    plugin_wasm: &'static [u8],
+    max_restarts: u32,
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    start_host_with_component_plugin_router(
+        addr,
+        DevRouter::default(),
+        plugin_id,
+        plugin_wasm,
+        Some(max_restarts),
+    )
+    .await
 }
 
 /// Like [`start_host_with_p3_http_handler`] but also returns the [`HttpServer`], so a test can
@@ -367,6 +405,19 @@ pub async fn start_host_with_p3_handler(
     .build()?;
     let host = host.start().await.context("Failed to start host")?;
     Ok((bound_addr, host, http_server))
+}
+
+/// Extract the numeric value of `"name":N` from a flat JSON body without
+/// pulling in a JSON dependency. Panics (failing the test) if the field is
+/// missing or non-numeric.
+pub fn json_u64_field(body: &str, name: &str) -> u64 {
+    let key = format!("\"{name}\":");
+    let start = body.find(&key).expect("field present in body") + key.len();
+    let rest = &body[start..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    rest[..end].parse().expect("numeric field")
 }
 
 /// GET `http://{addr}/` with the given `HOST` header and a 10s timeout.

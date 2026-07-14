@@ -23,7 +23,8 @@ use wash_runtime::types::{LocalResources, WorkloadState, WorkloadStopRequest};
 mod common;
 use common::{
     component_workload_request, plugin_caller_host_interfaces, start_host_with_component_plugin,
-    start_host_with_component_plugin_by_host, start_host_with_p3_http_handler,
+    start_host_with_component_plugin_by_host, start_host_with_component_plugin_max_restarts,
+    start_host_with_p3_http_handler,
 };
 
 const KV_PLUGIN_WASM: &[u8] = include_bytes!("wasm/kv_plugin.wasm");
@@ -91,6 +92,12 @@ async fn test_component_plugin_set_get_roundtrip() -> Result<()> {
         "/get of an absent key should be 404 (none)"
     );
 
+    // delete removes the key: the next get sees none.
+    let (status, _) = req(&client, &addr, host, "/delete?key=greeting").await?;
+    assert!(status.is_success(), "/delete should succeed, got {status}");
+    let (status, _) = req(&client, &addr, host, "/get?key=greeting").await?;
+    assert_eq!(status.as_u16(), 404, "a deleted key reads back as none");
+
     Ok(())
 }
 
@@ -110,9 +117,12 @@ async fn test_component_plugin_missing_provider_errors() -> Result<()> {
         resp.workload_status.workload_state,
         resp.workload_status.message
     );
+    // The message embeds the unmatched `WitInterface` debug form, so the
+    // namespace and package appear as separate fields.
     assert!(
-        resp.workload_status.message.contains("acme:kv")
-            || resp.workload_status.message.contains("not available"),
+        resp.workload_status.message.contains("not available")
+            && resp.workload_status.message.contains("acme")
+            && resp.workload_status.message.contains("kv"),
         "error should name the unsatisfied interface, got: {}",
         resp.workload_status.message
     );
@@ -121,10 +131,15 @@ async fn test_component_plugin_missing_provider_errors() -> Result<()> {
 
 /// B: the plugin is a host-scoped singleton — two workloads bound to it reach
 /// the SAME instance, so state written through one is visible through the other.
-#[tokio::test]
+///
+/// Uses the host-header router so the two callers are genuinely distinct
+/// workloads (the `DevRouter` would send both requests to the last-resolved
+/// workload, making the assertion vacuous). Multi-threaded: the host-header
+/// router uses `block_in_place`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_component_plugin_shared_across_workloads() -> Result<()> {
     let (addr, h) =
-        start_host_with_component_plugin("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM).await?;
+        start_host_with_component_plugin_by_host("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM).await?;
     h.workload_start(caller_workload("caller-a")).await?;
     h.workload_start(caller_workload("caller-b")).await?;
     let client = reqwest::Client::new();
@@ -285,17 +300,18 @@ async fn test_component_plugin_reentrancy_and_ceiling() -> Result<()> {
 /// D (resilience): a guest trap in one capability call must not permanently
 /// poison the shared plugin store. `/boom` panics inside the plugin; the
 /// caller's request fails, but the plugin recovers under supervision and keeps
-/// serving other callers.
+/// serving other callers — genuinely distinct workloads via the host-header
+/// router (the `DevRouter` would collapse both callers onto one workload).
 ///
 /// NOTE on blast radius: because the plugin is a host-scoped singleton, a guest
 /// trap faults the driver and the supervisor restarts the whole store — so all
 /// tenants' in-memory state is lost on recovery (a documented consequence of
 /// the shared-singleton model). This test asserts *recovery* (the plugin serves
 /// again), not state survival.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_component_plugin_survives_guest_trap() -> Result<()> {
     let (addr, h) =
-        start_host_with_component_plugin("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM).await?;
+        start_host_with_component_plugin_by_host("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM).await?;
     h.workload_start(caller_workload("boom-a")).await?;
     h.workload_start(caller_workload("boom-b")).await?;
     let client = reqwest::Client::new();
@@ -328,6 +344,68 @@ async fn test_component_plugin_survives_guest_trap() -> Result<()> {
         "plugin must recover and serve requests after a guest trap poisons its instance"
     );
 
+    Ok(())
+}
+
+/// D (resilience): a guest trap must fail sibling IN-FLIGHT calls promptly —
+/// not leave them hanging. A long-running `begin` from one workload is
+/// mid-flight when another workload traps the store; the begin request must
+/// complete with an error (its reply channel died with the incarnation), and
+/// the plugin must then recover.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_component_plugin_trap_fails_inflight_calls_cleanly() -> Result<()> {
+    let (addr, h) =
+        start_host_with_component_plugin_by_host("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM).await?;
+    h.workload_start(caller_workload("mid-a")).await?;
+    h.workload_start(caller_workload("mid-b")).await?;
+    let client = reqwest::Client::new();
+
+    // A long begin (~200 * 25ms ≈ 5s) owned by workload "mid-b".
+    let inflight = tokio::spawn({
+        let client = client.clone();
+        async move {
+            req(
+                &client,
+                &addr,
+                "mid-b",
+                "/begin?name=mid&ticks=200&tick-ms=25",
+            )
+            .await
+        }
+    });
+
+    // Only trap once the begin is observably running on the plugin store.
+    let seen = wait_progress(&client, &addr, "mid-b", "mid", 2).await?;
+    assert!(
+        seen >= 2,
+        "begin should be running before the trap (saw {seen})"
+    );
+    let (status, _) = req(&client, &addr, "mid-a", "/boom").await?;
+    assert!(
+        status.is_server_error(),
+        "the trapping call must fail, got {status}"
+    );
+
+    // The in-flight begin must fail promptly (5xx), not hang until its own
+    // 5s duration or a timeout: its task died with the faulted incarnation.
+    let (status, _) = timeout(Duration::from_secs(3), inflight).await???;
+    assert!(
+        status.is_server_error(),
+        "an in-flight call must error when the store faults, got {status}"
+    );
+
+    // And the plugin recovers for both workloads.
+    let mut recovered = false;
+    for _ in 0..50 {
+        if let Ok((s, _)) = req(&client, &addr, "mid-b", "/set?key=r&value=1").await
+            && s.is_success()
+        {
+            recovered = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(recovered, "plugin must recover after the trap");
     Ok(())
 }
 
@@ -414,60 +492,30 @@ async fn test_component_plugin_resource_roundtrip_and_drop() -> Result<()> {
     Ok(())
 }
 
-/// F (resources under concurrency): many concurrent requests each open a bucket,
-/// use it, and drop it. Each drop makes the plugin driver step out of
-/// `run_concurrent` to free the real resource; this must not break the other
-/// in-flight capability calls (which are preserved across the step-out) — all
-/// requests complete correctly.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_component_plugin_concurrent_resources() -> Result<()> {
-    let host = "kv-res-concurrent";
-    let (addr, h) =
-        start_host_with_component_plugin("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM).await?;
-    h.workload_start(caller_workload(host)).await?;
-    let client = reqwest::Client::new();
-
-    let mut handles = Vec::new();
-    for i in 0..40u32 {
-        let client = client.clone();
-        let host = host.to_string();
-        handles.push(tokio::spawn(async move {
-            let (s, body) = req(
-                &client,
-                &addr,
-                &host,
-                &format!("/bucket?name=b{i}&key=k&value=v{i}"),
-            )
-            .await?;
-            anyhow::ensure!(
-                s.as_u16() == 200 && body == format!("v{i}"),
-                "bucket {i} got {s}: {body}"
-            );
-            Ok::<(), anyhow::Error>(())
-        }));
-    }
-    for handle in handles {
-        timeout(Duration::from_secs(30), handle).await???;
-    }
-    Ok(())
-}
-
-/// F (resources — leak): churn a large volume of open→use→drop cycles and
-/// require every real resource to be reclaimed exactly once. The plugin's
-/// host-side `ResourceRegistry` holds a real per `open`; a proxy drop that failed
-/// to route back would leave reals accumulating in the long-lived store until
-/// restart. The guest's destructor counter (`/dropped-buckets`) is the
-/// observable: a real's destructor runs only when the host takes it out of the
-/// registry and drops it, so the count advancing by exactly the number opened
-/// proves no real leaked (would fall short) and none was freed twice (would
-/// overshoot).
+/// F (resources — churn/leak): waves of concurrent open→use→drop cycles, each
+/// drop making the plugin driver step out of `run_concurrent` to free the real
+/// resource without breaking the other in-flight calls (preserved across the
+/// step-out) — every request completes correctly, and every real is reclaimed
+/// exactly once. The plugin's host-side `ResourceRegistry` holds a real per
+/// `open`; a proxy drop that failed to route back would leave reals
+/// accumulating in the long-lived store until restart. The guest's destructor
+/// counter (`/dropped-buckets`) is the observable: a real's destructor runs
+/// only when the host takes it out of the registry and drops it, so the count
+/// advancing by exactly the number opened proves no real leaked (would fall
+/// short) and none was freed twice (would overshoot).
+///
+/// The client pools no connections (`pool_max_idle_per_host(0)`): a pooled GET
+/// retried on a stale connection would silently re-open an extra bucket and
+/// break the exactly-once accounting.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_component_plugin_resource_no_leak_under_churn() -> Result<()> {
     let host = "kv-res-leak";
     let (addr, h) =
         start_host_with_component_plugin("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM).await?;
     h.workload_start(caller_workload(host)).await?;
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .build()?;
 
     let (_, base) = req(&client, &addr, host, "/dropped-buckets").await?;
     let baseline: u64 = base.parse().unwrap_or(0);
@@ -482,14 +530,17 @@ async fn test_component_plugin_resource_no_leak_under_churn() -> Result<()> {
             let client = client.clone();
             let host = host.to_string();
             handles.push(tokio::spawn(async move {
-                let (s, _) = req(
+                let (s, body) = req(
                     &client,
                     &addr,
                     &host,
-                    &format!("/bucket?name=w{wave}-{i}&key=k&value=v"),
+                    &format!("/bucket?name=w{wave}-{i}&key=k&value=w{wave}v{i}"),
                 )
                 .await?;
-                anyhow::ensure!(s.as_u16() == 200, "wave {wave} bucket {i} got {s}");
+                anyhow::ensure!(
+                    s.as_u16() == 200 && body == format!("w{wave}v{i}"),
+                    "wave {wave} bucket {i} got {s}: {body}"
+                );
                 Ok::<(), anyhow::Error>(())
             }));
         }
@@ -530,24 +581,40 @@ async fn test_component_plugin_resource_no_leak_under_churn() -> Result<()> {
     Ok(())
 }
 
-/// F (resources): two workloads sharing the singleton plugin get independent
-/// buckets — a value set in one workload's bucket is not visible in another's.
-#[tokio::test]
+/// F (resources): every `open` returns an independent bucket — a key set in one
+/// bucket is ABSENT from a freshly opened one (buckets are distinct resources,
+/// not views onto one shared map), including across two genuinely distinct
+/// workloads (host-header routing).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_component_plugin_resource_isolation() -> Result<()> {
     let (addr, h) =
-        start_host_with_component_plugin("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM).await?;
+        start_host_with_component_plugin_by_host("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM).await?;
     h.workload_start(caller_workload("res-a")).await?;
     h.workload_start(caller_workload("res-b")).await?;
     let client = reqwest::Client::new();
 
-    // Each request opens its OWN bucket, so a key set in A's bucket is absent in
-    // a freshly opened bucket in B (distinct resources behind distinct proxies).
+    // A sets a key in its own bucket (and reads it back through the proxy).
     let (s, body) = req(&client, &addr, "res-a", "/bucket?name=x&key=only-a&value=1").await?;
     assert_eq!(s.as_u16(), 200);
     assert_eq!(body, "1");
 
-    let (s, _) = req(&client, &addr, "res-b", "/bucket?name=x&key=absent&value=2").await?;
-    assert_eq!(s.as_u16(), 200, "B's fresh bucket serves its own key");
+    // A fresh bucket opened by ANOTHER workload must not see that key. If the
+    // plugin backed all buckets with one shared map this would return 200 "1".
+    let (s, _) = req(&client, &addr, "res-b", "/bucket-get?name=x&key=only-a").await?;
+    assert_eq!(
+        s.as_u16(),
+        404,
+        "a fresh bucket in another workload must not see A's key"
+    );
+
+    // Nor does a fresh bucket in the SAME workload: isolation is per-resource,
+    // not per-caller.
+    let (s, _) = req(&client, &addr, "res-a", "/bucket-get?name=x&key=only-a").await?;
+    assert_eq!(
+        s.as_u16(),
+        404,
+        "a fresh bucket in the same workload must not see the earlier bucket's key"
+    );
     Ok(())
 }
 
@@ -849,6 +916,116 @@ async fn test_component_plugin_cancel_is_tenant_isolated() -> Result<()> {
     assert_eq!(
         body, "20",
         "an unauthorized cancel does not truncate the run"
+    );
+    Ok(())
+}
+
+/// Cancellation racing completion: cancelling AFTER the target invocation has
+/// completed is refused — the job was retired with its task, so the stale job id
+/// no longer authorizes anything (and cannot alias a newer job: ids are never
+/// reused within an incarnation).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_component_plugin_cancel_after_completion_is_refused() -> Result<()> {
+    let (addr, h) =
+        start_host_with_component_plugin_by_host("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM).await?;
+    h.workload_start(caller_workload("late")).await?;
+    let client = reqwest::Client::new();
+
+    // Run a short begin to completion; its job retires as the call returns.
+    let (s, body) = req(
+        &client,
+        &addr,
+        "late",
+        "/begin?name=done&ticks=2&tick-ms=10",
+    )
+    .await?;
+    assert_eq!(s.as_u16(), 200);
+    assert_eq!(body, "2", "the begin ran to completion");
+
+    // The plugin still remembers the (now stale) job id under this name; the
+    // cancel request must be refused, even from the owning workload.
+    let (s, body) = req(&client, &addr, "late", "/cancel-job?name=done").await?;
+    assert_eq!(s.as_u16(), 200);
+    assert_eq!(
+        body, "false",
+        "cancelling a completed (retired) job must be refused"
+    );
+    Ok(())
+}
+
+/// E (identity): both halves of the ambient caller identity — workload id AND
+/// component id — resolve end-to-end through the `wasmcloud:host/identity`
+/// import while the call is in flight.
+#[tokio::test]
+async fn test_component_plugin_caller_identity_both_halves() -> Result<()> {
+    let (addr, h) =
+        start_host_with_component_plugin("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM).await?;
+    let request = caller_workload("who");
+    let workload_id = request.workload_id.clone();
+    h.workload_start(request).await?;
+    let client = reqwest::Client::new();
+
+    let (s, body) = req(&client, &addr, "who", "/whoami").await?;
+    assert_eq!(s.as_u16(), 200);
+    let (seen_workload, seen_component) = body
+        .split_once('|')
+        .with_context(|| format!("whoami returns 'workload|component', got {body}"))?;
+    assert_eq!(
+        seen_workload, workload_id,
+        "the plugin must see the calling workload's id"
+    );
+    assert!(
+        !seen_component.is_empty(),
+        "the plugin must see a non-empty calling component id (empty means the \
+         identity lookup fell back to 'unknown caller')"
+    );
+    Ok(())
+}
+
+/// Supervision budget: with a budget of zero restarts, the first fault kills the
+/// plugin for good — subsequent capability calls fail promptly with a clear
+/// error (the plugin is not running) instead of hanging or queueing forever, and
+/// stay failing (no zombie incarnation comes back).
+#[tokio::test]
+async fn test_component_plugin_restart_budget_exhaustion() -> Result<()> {
+    let host = "kv-budget";
+    let (addr, h) =
+        start_host_with_component_plugin_max_restarts("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM, 0)
+            .await?;
+    h.workload_start(caller_workload(host)).await?;
+    let client = reqwest::Client::new();
+
+    // Healthy before the fault.
+    let (s, _) = req(&client, &addr, host, "/set?key=pre&value=1").await?;
+    assert!(s.is_success(), "plugin serves before the fault");
+
+    // One trap exhausts the zero-restart budget.
+    let (s, _) = req(&client, &addr, host, "/boom").await?;
+    assert!(s.is_server_error(), "the trapping call fails, got {s}");
+
+    // Once the supervisor gives up it clears the capability channel, so every
+    // later call errors promptly. Poll past the brief window where the dying
+    // incarnation's channel still accepts sends.
+    let mut dead = false;
+    for _ in 0..50 {
+        let (s, _) = req(&client, &addr, host, "/get?key=pre").await?;
+        if s.is_server_error() {
+            dead = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        dead,
+        "past its restart budget the plugin must fail calls, not serve or hang"
+    );
+
+    // And it STAYS dead — no delayed restart sneaks back.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let (s, _) = req(&client, &addr, host, "/get?key=pre").await?;
+    assert!(
+        s.is_server_error(),
+        "a plugin past its restart budget must not come back, got {s}"
     );
     Ok(())
 }

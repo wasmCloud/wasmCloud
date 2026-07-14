@@ -174,11 +174,14 @@ pub(crate) fn func_is_ephemeral_safe(func_ty: &ComponentFunc) -> bool {
 ///
 /// True when the type is either:
 /// - handle-free, or
-/// - carrying only `stream<T>` handles whose element type is relocatable (nested
-///   anywhere in aggregates).
+/// - carrying only `stream<T>`/`future<T>` handles whose element type is
+///   relocatable (nested anywhere in aggregates).
 ///
-/// `future`, `resource` (`own`/`borrow`), and `error-context` handles are not
-/// relocatable, so a type carrying any of them is not bridge-safe.
+/// `resource` (`own`/`borrow`) and `error-context` handles are not relocatable
+/// between two ephemeral-call stores, so a type carrying either is not
+/// bridge-safe. (A `resource` crosses only the host-component-plugin bridge,
+/// where a plugin-side registry exists — see
+/// [`crate::engine::store::resource_bridge`].)
 fn type_is_bridge_safe(ty: &Type) -> bool {
     if !carries_cross_store_handle(ty) {
         return true;
@@ -198,14 +201,14 @@ fn type_is_bridge_safe(ty: &Type) -> bool {
                 && t.err().is_none_or(|t| type_is_bridge_safe(&t))
         }
         Type::Map(t) => type_is_bridge_safe(&t.key()) && type_is_bridge_safe(&t.value()),
-        // future / resource (own/borrow) / error-context: not relocatable.
+        // resource (own/borrow) / error-context: not relocatable here.
         _ => false,
     }
 }
 
 /// Whether every param/result of `func_ty` is [`type_is_bridge_safe`], so a call
-/// carrying a `stream<T>` can still run in an ephemeral store (with relocation)
-/// instead of being pinned to the shared store.
+/// carrying a `stream<T>`/`future<T>` can still run in an ephemeral store (with
+/// relocation) instead of being pinned to the shared store.
 pub(crate) fn func_is_bridge_safe(func_ty: &ComponentFunc) -> bool {
     func_ty.params().all(|(_, ty)| type_is_bridge_safe(&ty))
         && func_ty.results().all(|ty| type_is_bridge_safe(&ty))
@@ -576,13 +579,14 @@ async fn invoke_ephemeral_relocated(
                         Ok((func, arg_vals))
                     })?;
                     let mut results_buf = vec![Val::Bool(false); result_tys.len()];
+                    let call_timeout = crate::timeouts::ephemeral_call();
                     timeout(
-                        crate::timeouts::ephemeral_call(),
+                        call_timeout,
                         func.call_concurrent(accessor, &arg_vals, &mut results_buf),
                     )
                     .await
                     .map_err(|e| {
-                        wasmtime::format_err!("function call timed out after 600 seconds: {e}")
+                        wasmtime::format_err!("function call timed out after {call_timeout:?}: {e}")
                     })??;
                     // Extract result streams in THIS store before it is dropped.
                     accessor.with(
@@ -697,13 +701,14 @@ async fn invoke_ephemeral_plain(
                         )
                     })
                 })?;
+                let call_timeout = crate::timeouts::ephemeral_call();
                 timeout(
-                    crate::timeouts::ephemeral_call(),
+                    call_timeout,
                     func.call_concurrent(accessor, &params_buf, &mut results_buf),
                 )
                 .await
                 .map_err(|e| {
-                    wasmtime::format_err!("function call timed out after 600 seconds: {e}")
+                    wasmtime::format_err!("function call timed out after {call_timeout:?}: {e}")
                 })??;
                 Ok::<Vec<Val>, wasmtime::Error>(results_buf)
             })
@@ -822,12 +827,15 @@ pub(crate) async fn invoke_linked_sync_export(
 
         let mut results_buf = vec![Val::Bool(false); results.len()];
 
+        let call_timeout = crate::timeouts::shared_store_call();
         timeout(
-            crate::timeouts::shared_store_call(),
+            call_timeout,
             func.call_async(&mut store, &params_buf, &mut results_buf),
         )
         .await
-        .map_err(|e| wasmtime::format_err!("function call timed out after 30 seconds: {e}"))??;
+        .map_err(|e| {
+            wasmtime::format_err!("function call timed out after {call_timeout:?}: {e}")
+        })??;
 
         lift_results(store, results_buf, results)?;
         trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoked dynamic export");

@@ -32,7 +32,7 @@
 //!   that smuggles one kind's proxy into another kind's method is caught by the
 //!   plugin-side `call_concurrent` type check (a trap, not memory corruption).
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use wasmtime::component::{ResourceAny, ResourceType};
@@ -70,7 +70,7 @@ pub fn proxy_resource_type() -> ResourceType {
 /// out of `run_concurrent` (see [`crate::host::trigger_service`]).
 #[derive(Default)]
 pub struct ResourceRegistry {
-    reals: HashMap<u64, ResourceAny>,
+    reals: BTreeMap<u64, ResourceAny>,
     pending_drops: Vec<ResourceAny>,
 }
 
@@ -121,7 +121,7 @@ impl ResourceRegistry {
     /// Every real resource still owned by the plugin (registered or staged),
     /// draining the registry — used on store teardown to drop them all.
     pub fn drain_all(&mut self) -> Vec<ResourceAny> {
-        let mut all: Vec<ResourceAny> = self.reals.drain().map(|(_, real)| real).collect();
+        let mut all: Vec<ResourceAny> = std::mem::take(&mut self.reals).into_values().collect();
         all.append(&mut self.pending_drops);
         all
     }

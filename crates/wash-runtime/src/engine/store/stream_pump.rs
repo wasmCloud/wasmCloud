@@ -104,7 +104,13 @@ where
         if buf.is_empty() {
             return Poll::Ready(Ok(StreamResult::Completed));
         }
-        let _ = this.tx.start_send(buf);
+        // `poll_ready` reserved a slot above, so this only fails if the receiver
+        // disconnected in between; report the drop instead of losing the chunk
+        // silently.
+        if this.tx.start_send(buf).is_err() {
+            this.finish();
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        }
         Poll::Ready(Ok(StreamResult::Completed))
     }
 }

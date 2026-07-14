@@ -71,7 +71,7 @@ async fn deliver(
 #[tokio::test]
 async fn test_trigger_service_co_drives_messaging_handler() -> Result<()> {
     let workload_id = uuid::Uuid::new_v4().to_string();
-    let (_addr, host, http_server) = start_host_with_p3_handler("127.0.0.1:0").await?;
+    let (addr, host, http_server) = start_host_with_p3_handler("127.0.0.1:0").await?;
 
     host.workload_start(msg_counter_request(&workload_id, 0))
         .await
@@ -92,6 +92,30 @@ async fn test_trigger_service_co_drives_messaging_handler() -> Result<()> {
         r2,
         Err("2:second".to_string()),
         "second message hits the same long-lived instance (count persists)"
+    );
+
+    // Multi-ingress: the same instance also serves HTTP (`wasi:http/handler`
+    // is a second co-driven ingress), and its response reads the SAME
+    // process-global count the messaging handler advanced — proving both
+    // ingresses share one live instance.
+    let client = reqwest::Client::new();
+    let resp = timeout(
+        Duration::from_secs(10),
+        client.get(format!("http://{addr}/")).send(),
+    )
+    .await
+    .context("HTTP request to the co-driven instance timed out")??;
+    anyhow::ensure!(
+        resp.status().is_success(),
+        "the co-driven instance should serve HTTP, got {}",
+        resp.status()
+    );
+    let body = resp.text().await?;
+    assert_eq!(
+        common::json_u64_field(&body, "count"),
+        2,
+        "the HTTP ingress must observe the messaging ingress's state (one shared \
+         instance), got {body}"
     );
 
     Ok(())

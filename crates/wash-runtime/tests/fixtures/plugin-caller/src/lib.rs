@@ -129,6 +129,20 @@ impl HttpGuest for Component {
             store::boom().await;
             return Ok(make_response(200, b"unreachable".to_vec()));
         }
+        if route.starts_with("/bucket-get") {
+            // Open a FRESH bucket and read a key WITHOUT setting it — 404 unless
+            // buckets leak state into each other (they must not: each `open` is
+            // its own resource, so a fresh bucket never sees another's keys).
+            let name = query_get(query, "name").unwrap_or_default();
+            let key = query_get(query, "key").unwrap_or_default();
+            let bucket = store::open(name).await;
+            let got = bucket.get(key).await;
+            drop(bucket);
+            return match got {
+                Some(v) => Ok(make_response(200, v)),
+                None => Ok(make_response(404, Vec::new())),
+            };
+        }
         if route.starts_with("/bucket") {
             // Cross-store resource: open a bucket (own<bucket> proxy), set then
             // get a key through it (borrow<bucket> methods), and drop it so the
@@ -145,14 +159,21 @@ impl HttpGuest for Component {
                 None => Ok(make_response(404, Vec::new())),
             };
         }
+        if route.starts_with("/whoami") {
+            // Ambient caller identity as the plugin sees it, both halves
+            // ("{workload-id}|{component-id}").
+            let id = store::whoami().await;
+            return Ok(make_response(200, id.into_bytes()));
+        }
         if route.starts_with("/dropped-buckets") {
             let n = store::dropped_buckets().await;
             return Ok(make_response(200, n.to_string().into_bytes()));
         }
         if route.starts_with("/begin") {
-            // Long-running, cancellable plugin call. If cancelled mid-flight the
-            // capability call is aborted and this request fails; `/progress`
-            // observes how far it got.
+            // Long-running, cancellable plugin call. A cancel is cooperative: the
+            // plugin observes it on its next tick and returns early, so this
+            // request still gets a normal response carrying the partial tick
+            // count; `/progress` observes how far it got independently.
             let name = query_get(query, "name").unwrap_or_default();
             let ticks: u64 = query_get(query, "ticks")
                 .and_then(|s| s.parse().ok())

@@ -9,6 +9,10 @@
 //! - `/sum`     -> `ops.sum(stream<u32>)`      non-u8 element type
 //! - `/relay`   -> `ops.relay(variant data(stream<u8>))`  nested-in-variant
 //! - `/delayed` -> `ops.delayed(v)`            component -> service `future<u64>`
+//!
+//! Edge shapes: `/consume-empty` (arg stream closed with zero bytes),
+//! `/produce-empty` (zero-byte result stream), `/relay-none` (the variant case
+//! with no payload through a relocatable signature). Unknown paths are 404.
 
 mod bindings;
 
@@ -38,6 +42,19 @@ impl HttpGuest for Component {
             // service's store, in which case the spin would freeze it.
             let _acc = ops::block(300_000_000).await;
             "{\"result\":1,\"expected\":1}".to_string()
+        } else if path.starts_with("/produce-empty") {
+            // Zero-byte result stream: the backend drops its writer without
+            // writing, so the relocated stream must close cleanly with 0 bytes.
+            let mut rx = ops::produce(0).await;
+            let mut total: u64 = 0;
+            loop {
+                let (result, chunk) = rx.read(Vec::with_capacity(64)).await;
+                total += chunk.len() as u64;
+                if matches!(result, wit_bindgen::StreamResult::Dropped) {
+                    break;
+                }
+            }
+            format!("{{\"result\":{total},\"expected\":0}}")
         } else if path.starts_with("/produce-drop-early") {
             // Read only the first chunk of a large component-produced stream,
             // then drop the reader. The backend's writer side must unwind
@@ -77,6 +94,12 @@ impl HttpGuest for Component {
             let reader = ops::delayed(expected).await;
             let v = reader.await;
             format!("{{\"result\":{v},\"expected\":{expected}}}")
+        } else if path.starts_with("/relay-none") {
+            // The payload-less variant case through a stream-relocatable
+            // signature: no handle to pump, but the value still crosses the
+            // relocation path structurally.
+            let v = ops::relay(ops::Chunked::None).await;
+            format!("{{\"result\":{v},\"expected\":0}}")
         } else if path.starts_with("/relay") {
             let (mut tx, rx) = bindings::wit_stream::new();
             wit_bindgen::spawn_local(async move {
@@ -87,6 +110,13 @@ impl HttpGuest for Component {
             });
             let v = ops::relay(ops::Chunked::Data(rx)).await;
             format!("{{\"result\":{v},\"expected\":50000}}")
+        } else if path.starts_with("/consume-empty") {
+            // Zero-byte argument stream: the writer drops before writing, so the
+            // backend's read must observe a clean immediate close (total 0).
+            let (tx, rx) = bindings::wit_stream::new();
+            drop(tx);
+            let v = ops::consume(rx).await;
+            format!("{{\"result\":{v},\"expected\":0}}")
         } else if path.starts_with("/consume-large") {
             // ~4 MiB through the bounded relocation channel (capacity is a
             // handful of chunks): must complete without buffering the whole
@@ -104,8 +134,7 @@ impl HttpGuest for Component {
             });
             let v = ops::consume(rx).await;
             format!("{{\"result\":{v},\"expected\":{expected}}}")
-        } else {
-            // `/consume`
+        } else if path.starts_with("/consume") {
             const CHUNK: &[u8] = b"hello world from the service........0123456789AB\n"; // 49 bytes
             const CHUNKS: usize = 1234;
             let (mut tx, rx) = bindings::wit_stream::new();
@@ -118,6 +147,8 @@ impl HttpGuest for Component {
             let v = ops::consume(rx).await;
             let expected = (CHUNK.len() * CHUNKS) as u64;
             format!("{{\"result\":{v},\"expected\":{expected}}}")
+        } else {
+            return Ok(make_response(404, Vec::new()));
         };
 
         Ok(make_response(200, body.into_bytes()))

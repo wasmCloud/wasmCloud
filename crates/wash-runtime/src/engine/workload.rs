@@ -319,10 +319,12 @@ impl WorkloadService {
     /// (e.g. both cli `Command` and http `Service`) to the caller. Used when a
     /// p3 service also serves HTTP and must drive both exports on one instance.
     pub fn pre_instantiate_raw(
-        &mut self,
+        &self,
     ) -> anyhow::Result<wasmtime::component::InstancePre<SharedCtx>> {
-        let component = self.metadata.component.clone();
-        Ok(self.metadata.linker.instantiate_pre(&component)?)
+        Ok(self
+            .metadata
+            .linker
+            .instantiate_pre(&self.metadata.component)?)
     }
 
     /// Whether or not the service is currently running.
@@ -702,10 +704,15 @@ impl ResolvedWorkload {
     /// so a backend's `block_on` can't freeze the service's run loop.
     /// `is_service = true` lets the `cli/run` side bind its loopback socket.
     async fn execute_trigger_service(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
-        let Some(pre) = self.service.as_mut().map(|s| s.pre_instantiate_raw()) else {
+        let Some(service) = self.service.as_ref() else {
             return Ok(None);
         };
-        let pre = pre?;
+        let pre = service.pre_instantiate_raw()?;
+        let (serves_http, serves_messaging, max_restarts) = (
+            crate::engine::exports_wasi_http(&service.metadata.component),
+            crate::engine::exports_messaging_handler(&service.metadata.component),
+            service.max_restarts,
+        );
         self.resolve_service_volume_mounts().await?;
 
         let mut store = {
@@ -714,17 +721,6 @@ impl ResolvedWorkload {
             };
             self.new_store_from_metadata(&service.metadata, true)
                 .await?
-        };
-
-        let (serves_http, serves_messaging, max_restarts) = {
-            let Some(service) = self.service.as_ref() else {
-                bail!("service unexpectedly missing during execution");
-            };
-            (
-                crate::engine::exports_wasi_http(&service.metadata.component),
-                crate::engine::exports_messaging_handler(&service.metadata.component),
-                service.max_restarts,
-            )
         };
         let http_handler = self.http_handler.clone();
         let workload_id: Arc<str> = Arc::from(self.id());
@@ -1328,13 +1324,6 @@ impl ResolvedWorkload {
     /// Gets the unique identifier of the workload
     pub fn id(&self) -> &str {
         &self.id
-    }
-
-    /// The host-side handler this workload's ingress registers with (the HTTP
-    /// server / trigger service messaging registry). Lets host plugins (e.g. the NATS
-    /// messaging subscriber) deliver to a long-lived trigger service instance.
-    pub fn http_handler(&self) -> &Arc<dyn crate::host::http::HostHandler> {
-        &self.http_handler
     }
 
     /// Gets the name of the workload
