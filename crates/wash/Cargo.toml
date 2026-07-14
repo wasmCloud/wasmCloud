@@ -19,6 +19,9 @@ wasi-tls = ["wash-runtime/wasi-tls"]
 # keyvalue plugin (the unnamed/default import keeps its standalone backend, so
 # normal workloads are unaffected). Needs a wasmtime build with resource-implements.
 wasm_component_model_implements = ["wash-runtime/wasm_component_model_implements"]
+# Host component plugins: host capabilities provided by wasm components running
+# in their own supervised stores (wash-runtime's `plugin::component_host`).
+host-component-plugins = ["wash-runtime/host-component-plugins"]
 # On by default. Pulls in git-only wasi-gfx deps (no crates.io release);
 # disable with `--no-default-features` for a build without the git sources.
 wasi-webgpu = ["wash-runtime/wasi-webgpu"]

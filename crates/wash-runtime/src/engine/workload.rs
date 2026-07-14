@@ -547,11 +547,11 @@ impl std::fmt::Debug for ResolvedWorkload {
     }
 }
 
-/// Everything needed to rebuild a trigger service's store, captured by its
-/// supervisor so each incarnation gets a FRESH store: after a guest trap the
-/// old store can no longer enter ANY component instance ("cannot enter
-/// component instance"), so reusing it would leave every restarted incarnation
-/// permanently broken.
+/// Everything needed to rebuild a p3 service's store (plain `cli/run` or
+/// trigger service), captured by its supervisor so each incarnation gets a
+/// FRESH store: after a guest trap the old store can no longer enter ANY
+/// component instance ("cannot enter component instance"), so reusing it would
+/// leave every restarted incarnation permanently broken.
 struct ServiceStoreRecipe {
     engine: wasmtime::Engine,
     http_handler: Arc<dyn crate::host::http::HostHandler>,
@@ -670,12 +670,18 @@ impl ResolvedWorkload {
 
         if let Some((Ok(pre), mut max_restarts)) = service {
             self.resolve_service_volume_mounts().await?;
-            let mut store = if let Some(service) = self.service.as_ref() {
-                self.new_store_from_metadata(&service.metadata, true)
-                    .await?
-            } else {
-                bail!("service unexpectedly missing during execution");
+            // Capture the store recipe so each restarted incarnation gets a
+            // FRESH store: a trapped store cannot re-enter any component
+            // instance, so reuse after a fault would leave every restart
+            // permanently broken (and even a clean restart would accumulate
+            // stale instances in a reused store).
+            let recipe = {
+                let Some(service) = self.service.as_ref() else {
+                    bail!("service unexpectedly missing during execution");
+                };
+                self.service_store_recipe(&service.metadata).await?
             };
+            let mut store = recipe.build().await?;
             let handle = tokio::spawn(async move {
                 loop {
                     let instance = match pre.instantiate_async(&mut store).await {
@@ -711,6 +717,13 @@ impl ResolvedWorkload {
                         }
                     }
                     max_restarts = max_restarts.saturating_sub(1);
+                    match recipe.build().await {
+                        Ok(fresh) => store = fresh,
+                        Err(e) => {
+                            error!(err = %e, "failed to rebuild P3 service store; giving up");
+                            break;
+                        }
+                    }
                 }
             });
 
