@@ -12,9 +12,9 @@
 //! buffered at the boundary.
 //!
 //! `future<T>` relocates the same way as a stream (a one-shot pump). A
-//! `resource` handle is not relocatable here: it is a capability into one
-//! store's table with no meaning elsewhere, so a signature carrying one stays
-//! on the shared-store path.
+//! `resource` handle relocates as a cross-store **proxy** for host component
+//! plugins (see [`resource_bridge`]): the plugin store keeps the real resource,
+//! the caller holds an opaque proxy, and method calls and drops route back.
 //!
 //! `error-context` is rejected here, and cannot be relocated with wasmtime's
 //! current public API: its `Val` carries a store-scoped table index (a `rep`
@@ -26,11 +26,12 @@
 //! the boundary as a plain `result<_, string>` instead.
 
 use wasmtime::component::{
-    FutureAny, FutureReader, Lift, Lower, StreamAny, StreamReader, Type, Val,
+    FutureAny, FutureReader, Lift, Lower, ResourceAny, StreamAny, StreamReader, Type, Val,
 };
 use wasmtime::{AsContextMut as _, StoreContextMut};
 
 use crate::engine::ctx::SharedCtx;
+use crate::engine::store::resource_bridge::{self, ProxyResource};
 use crate::engine::store::stream_pump::{self, Done};
 
 /// A value prepared to cross the store boundary: a copyable `Val`, or a
@@ -44,6 +45,13 @@ pub enum Relocated {
     /// A `future<T>`, carried the same way as a stream — a closure that builds
     /// the destination future from the paired receiver.
     Future(ValFactory),
+    /// A `resource` handle, carried as a `proxy_id` into the plugin store's
+    /// [`resource_bridge::ResourceRegistry`]. `owned` records whether it crossed
+    /// as `own` (ownership transferred) or `borrow` (lent for the call).
+    Resource {
+        proxy_id: u64,
+        owned: bool,
+    },
     List(Vec<Relocated>),
     Tuple(Vec<Relocated>),
     Record(Vec<(String, Relocated)>),
@@ -168,6 +176,74 @@ fn contains_handle(val: &Val) -> bool {
     }
 }
 
+/// Relocate a `resource` handle across the boundary. On a **caller** store the
+/// handle is one of our proxies, so its `proxy_id` is read out (removing the
+/// proxy for an `own` transfer, leaving it for a `borrow`). On a **plugin** store
+/// the handle is a real resource, so it is registered — kept alive and reachable
+/// by later method calls and the eventual drop. A store with neither role rejects
+/// it (resources cross only between a host component plugin and its callers).
+fn extract_resource(
+    mut store: StoreContextMut<SharedCtx>,
+    any: ResourceAny,
+    owned: bool,
+) -> wasmtime::Result<Relocated> {
+    if any.ty() == resource_bridge::proxy_resource_type() {
+        let res = any.try_into_resource::<ProxyResource>(store.as_context_mut())?;
+        let proxy_id = if owned {
+            store.data_mut().table.delete(res)?.proxy_id
+        } else {
+            store
+                .data_mut()
+                .table
+                .get(&res)
+                .map_err(|e| wasmtime::format_err!("proxy resource not in caller table: {e}"))?
+                .proxy_id
+        };
+        Ok(Relocated::Resource { proxy_id, owned })
+    } else if let Some(registry) = store.data_mut().resource_registry.as_mut() {
+        let proxy_id = registry.register(any);
+        Ok(Relocated::Resource { proxy_id, owned })
+    } else {
+        wasmtime::bail!(
+            "cross-store bridge: a `resource` handle reached a store with no resource bridge \
+             (resources cross only between a host component plugin and its callers)"
+        )
+    }
+}
+
+/// Rebuild a relocated `resource` handle in `store`. On a **plugin** store this
+/// looks up the real resource for an incoming call argument (removing it for an
+/// `own` transfer, borrowing it otherwise); on a **caller** store it mints a
+/// fresh proxy referencing the plugin-side real.
+fn inject_resource(
+    mut store: StoreContextMut<SharedCtx>,
+    proxy_id: u64,
+    owned: bool,
+) -> wasmtime::Result<Val> {
+    if store.data().resource_registry.is_some() {
+        let real = {
+            let registry =
+                store.data_mut().resource_registry.as_mut().ok_or_else(|| {
+                    wasmtime::format_err!("resource registry unexpectedly missing")
+                })?;
+            if owned {
+                registry.take(proxy_id)
+            } else {
+                registry.get(proxy_id)
+            }
+        };
+        let real = real.ok_or_else(|| {
+            wasmtime::format_err!("cross-store bridge: unknown proxied resource {proxy_id}")
+        })?;
+        Ok(Val::Resource(real))
+    } else {
+        let res = store.data_mut().table.push(ProxyResource { proxy_id })?;
+        Ok(Val::Resource(
+            res.try_into_resource_any(store.as_context_mut())?,
+        ))
+    }
+}
+
 /// Extract a value from `store` (its origin), setting up a live channel pump for
 /// each `stream<T>` (`reader.pipe` → no buffering) and pushing the pump's drain
 /// signal into `dones`. Handle-free values/subtrees are copied wholesale.
@@ -197,12 +273,8 @@ pub fn extract(
             dones.push(done);
             Ok(Relocated::Future(factory))
         }
-        // A `resource` handle is a capability into its origin store's table;
-        // there is no way to rebuild it elsewhere, so it cannot cross. The
-        // bridge-safety classification keeps such signatures off this path.
-        (Val::Resource(_), _) => {
-            wasmtime::bail!("cross-store bridge does not transfer `resource` handles")
-        }
+        (Val::Resource(any), Type::Own(_)) => extract_resource(store, *any, true),
+        (Val::Resource(any), Type::Borrow(_)) => extract_resource(store, *any, false),
         // An error-context's `Val` is a store-scoped table index with no
         // host-side API to read its message or rebuild it in another store, so it
         // cannot cross the boundary; steer callers to a plain error type carrying
@@ -300,6 +372,7 @@ pub fn inject(mut store: StoreContextMut<SharedCtx>, r: Relocated) -> wasmtime::
     match r {
         Relocated::Val(v) => Ok(v),
         Relocated::Stream(factory) | Relocated::Future(factory) => factory(store),
+        Relocated::Resource { proxy_id, owned } => inject_resource(store, proxy_id, owned),
         Relocated::List(rs) => {
             let mut out = Vec::with_capacity(rs.len());
             for r in rs {

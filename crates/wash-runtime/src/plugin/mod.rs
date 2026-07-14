@@ -52,6 +52,11 @@ pub mod wasi_otel;
 
 pub mod wasmcloud_messaging;
 
+/// Host capabilities provided by a WebAssembly component running in its own
+/// supervised store (rather than by a Rust plugin running in-store).
+#[cfg(feature = "host-component-plugins")]
+pub mod component_host;
+
 /// Shared `(implements ..)` multiplexing core
 #[cfg(feature = "wasm_component_model_implements")]
 pub mod multiplex;

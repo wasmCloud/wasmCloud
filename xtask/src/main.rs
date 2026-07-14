@@ -120,6 +120,8 @@ const P3_FIXTURES: &[&str] = &[
     "bridge-backend",
     "bridge-service",
     "http-webgpu",
+    "kv-plugin",
+    "kv-plugin-caller",
 ];
 
 fn build_fixtures(workspace: &Path) -> Result<()> {

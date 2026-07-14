@@ -562,6 +562,37 @@ impl Engine {
             // component.max_invocations,
         ))
     }
+
+    /// Compile a host component plugin and build a linker with WASI (and
+    /// `wasi:http` if the component uses it) added.
+    ///
+    /// Unlike a workload component, a host component plugin is host-scoped: it is
+    /// instantiated once at host start into its own long-lived store. The caller
+    /// may install additional shims on the returned [`Linker`] (e.g. to route a
+    /// plugin's own capability imports back to itself) before calling
+    /// [`Linker::instantiate_pre`]; the [`Component`] is returned alongside for
+    /// exported- and imported-type introspection.
+    pub fn prepare_host_component(
+        &self,
+        bytes: &[u8],
+    ) -> anyhow::Result<(Component, Linker<SharedCtx>)> {
+        let component = Component::new(&self.inner, bytes)
+            .map_err(anyhow::Error::from)
+            .context("failed to compile host component plugin")?;
+
+        let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
+        add_wasi_to_linker(&mut linker).context("failed to add WASI to plugin linker")?;
+        if uses_wasi_http(&component) {
+            wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
+                .map_err(anyhow::Error::from)
+                .context("failed to add wasi:http/types to plugin linker")?;
+            wasmtime_wasi_http::p3::add_to_linker(&mut linker).map_err(|e| {
+                anyhow::anyhow!(e).context("failed to add wasi:http p3 to plugin linker")
+            })?;
+        }
+
+        Ok((component, linker))
+    }
 }
 
 /// A wasmtime WebAssembly proposal that can be opted into on the engine.

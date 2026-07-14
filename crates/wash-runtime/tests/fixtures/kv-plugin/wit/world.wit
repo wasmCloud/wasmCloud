@@ -1,0 +1,22 @@
+package acme:kvplugin@0.1.0;
+
+/// Host component plugin: a long-lived, host-scoped component that provides the
+/// bespoke `acme:kv/store` capability out of its own supervised store. It
+/// exports ONLY the capability (no `wasi:cli/run`), so it also exercises the
+/// TriggerService's optional-`cli/run` path — a pure capability plugin with no
+/// background `cli/run` work of its own. It imports only the monotonic clock,
+/// used by the `slow` op to yield cooperatively.
+world kv-plugin {
+    import wasi:clocks/monotonic-clock@0.3.0;
+    // Host identity import: lets the plugin partition state by the calling
+    // workload (the host answers based on the in-flight capability call).
+    import wasmcloud:host/identity@0.1.0;
+    // Host cancel import: lets the plugin cancel one of its own in-flight
+    // invocations by the host-minted job id, exercised by `begin`/`cancel-job`.
+    import wasmcloud:host/cancel@0.1.0;
+    // Self-import: the plugin depends on its own capability so `recurse` can
+    // re-enter across the store boundary. The host wires this back to the
+    // plugin itself.
+    import acme:kv/store@0.1.0;
+    export acme:kv/store@0.1.0;
+}

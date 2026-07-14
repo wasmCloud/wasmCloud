@@ -62,4 +62,15 @@ declare_timeouts! {
     shared_store_call = ("WASH_SHARED_STORE_CALL_TIMEOUT_SECS", 30);
     /// Max wall-clock for a trigger service to produce an HTTP response.
     http_response = ("WASH_HTTP_RESPONSE_TIMEOUT_SECS", 600);
+    /// How long `stop()` waits for a host component plugin's supervisor to exit
+    /// before aborting it.
+    #[cfg(feature = "host-component-plugins")]
+    plugin_stop = ("WASH_PLUGIN_STOP_TIMEOUT_SECS", 5);
+    /// Uptime a host component plugin's driver must reach before a later fault
+    /// resets its restart budget.
+    #[cfg(feature = "host-component-plugins")]
+    plugin_healthy_uptime = ("WASH_PLUGIN_HEALTHY_UPTIME_SECS", 60);
+    /// Upper bound on a host component plugin's pre-restart backoff.
+    #[cfg(feature = "host-component-plugins")]
+    plugin_restart_backoff_max = ("WASH_PLUGIN_RESTART_BACKOFF_MAX_SECS", 5);
 }
