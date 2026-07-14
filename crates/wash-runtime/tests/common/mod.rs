@@ -253,7 +253,9 @@ pub async fn start_host_with_tls(
 
 /// Start a host with `wasip3` enabled on the engine, a `DevRouter` backed
 /// HTTP server, and the standard plugin set.
-pub async fn start_host_with_p3(addr: &str) -> Result<(std::net::SocketAddr, impl HostApi)> {
+pub async fn start_host_with_p3_http_handler(
+    addr: &str,
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let engine = Engine::builder().build()?;
     let http_server = HttpServer::new(DevRouter::default(), addr.parse()?).await?;
     let bound_addr = http_server.addr();
@@ -265,6 +267,19 @@ pub async fn start_host_with_p3(addr: &str) -> Result<(std::net::SocketAddr, imp
     .build()?;
     let host = host.start().await.context("Failed to start host")?;
     Ok((bound_addr, host))
+}
+
+/// Extract the numeric value of `"name":N` from a flat JSON body without
+/// pulling in a JSON dependency. Panics (failing the test) if the field is
+/// missing or non-numeric.
+pub fn json_u64_field(body: &str, name: &str) -> u64 {
+    let key = format!("\"{name}\":");
+    let start = body.find(&key).expect("field present in body") + key.len();
+    let rest = &body[start..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    rest[..end].parse().expect("numeric field")
 }
 
 /// GET `http://{addr}/` with the given `HOST` header and a 10s timeout.

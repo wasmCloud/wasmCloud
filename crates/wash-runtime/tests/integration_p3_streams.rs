@@ -40,7 +40,7 @@ use wash_runtime::{
 };
 
 mod common;
-use common::{http_only_host_interfaces, start_host_with_p3};
+use common::{http_only_host_interfaces, start_host_with_p3_http_handler};
 
 const STREAM_PRODUCER_P3_WASM: &[u8] = include_bytes!("wasm/stream_producer_p3.wasm");
 const STREAM_CONSUMER_P3_WASM: &[u8] = include_bytes!("wasm/stream_consumer_p3.wasm");
@@ -48,7 +48,7 @@ const STREAM_PACER_P3_WASM: &[u8] = include_bytes!("wasm/stream_pacer_p3.wasm");
 
 #[tokio::test]
 async fn test_p3_cross_component_stream_to_http() -> Result<()> {
-    let (addr, host) = start_host_with_p3("127.0.0.1:0").await?;
+    let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
 
     // The consumer exports wasi:http/handler and is the workload's incoming
     // entrypoint; the producer is linked in and supplies the byte stream.
@@ -130,7 +130,7 @@ async fn test_p3_cross_component_stream_to_http() -> Result<()> {
 /// streaming path. Margins are deliberately loose to stay CI-stable.
 #[tokio::test]
 async fn test_p3_incoming_handler_streams_incrementally() -> Result<()> {
-    let (addr, host) = start_host_with_p3("127.0.0.1:0").await?;
+    let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
 
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
@@ -244,7 +244,7 @@ async fn test_p3_incoming_handler_streams_incrementally() -> Result<()> {
 /// which only asserts the final bytes and so passes even on a buffered path.
 #[tokio::test]
 async fn test_p3_cross_component_stream_streams_incrementally() -> Result<()> {
-    let (addr, host) = start_host_with_p3("127.0.0.1:0").await?;
+    let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
 
     // Same two-component workload as the byte-for-byte test; here we measure
     // *when* the producer's bytes arrive, not just that they all do.

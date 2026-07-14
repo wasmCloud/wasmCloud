@@ -1313,6 +1313,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "svc-counter"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"

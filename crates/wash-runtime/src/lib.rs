@@ -5,6 +5,7 @@ pub mod host;
 pub mod observability;
 pub mod plugin;
 pub mod sockets;
+mod timeouts;
 pub mod types;
 pub mod wit;
 

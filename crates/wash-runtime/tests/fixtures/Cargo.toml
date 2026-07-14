@@ -39,6 +39,7 @@ members = [
     "keyvalue-implements-p3",
     "keyvalue-default-p3",
     "postgres-stream-p3",
+    "svc-counter",
 ]
 
 [workspace.dependencies]
