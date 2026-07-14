@@ -119,15 +119,18 @@ const P3_FIXTURES: &[&str] = &[
     "postgres-stream-p3",
     "svc-counter",
     "msg-counter",
+    "bridge-backend",
+    "bridge-service",
 ];
 
 // Fixtures with local-only WIT worlds (no wasi imports). Copying shared
 // deps into these would pollute their wit resolution with unneeded packages.
 const P2_SKIP_SHARED_WIT: &[&str] = &["cron-service", "cron-component"];
 
-// P3 fixtures that vendor their own `wit/deps` (a custom contract plus the
-// wasi packages they reference). Copying the shared p3-wit-deps over them
-// would pull every wasi package into their `generate_all` surface.
+// No P3 fixture vendors its own `wit/deps`: every dep, including the bespoke
+// test contracts (e.g. `wasmcloud:bridge`), lives once in the shared
+// `p3-wit-deps/` and is staged in at build time. Kept as a (currently empty)
+// list for symmetry with `P2_SKIP_SHARED_WIT`.
 const P3_SKIP_SHARED_WIT: &[&str] = &[];
 
 fn build_fixtures(workspace: &Path) -> Result<()> {

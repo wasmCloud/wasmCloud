@@ -219,6 +219,7 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
 
 pub mod ctx;
 mod linked_call;
+pub(crate) mod store;
 mod value;
 mod volumes;
 pub mod workload;
