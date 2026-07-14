@@ -547,6 +547,35 @@ impl std::fmt::Debug for ResolvedWorkload {
     }
 }
 
+/// Everything needed to rebuild a trigger service's store, captured by its
+/// supervisor so each incarnation gets a FRESH store: after a guest trap the
+/// old store can no longer enter ANY component instance ("cannot enter
+/// component instance"), so reusing it would leave every restarted incarnation
+/// permanently broken.
+struct ServiceStoreRecipe {
+    engine: wasmtime::Engine,
+    http_handler: Arc<dyn crate::host::http::HostHandler>,
+    active_template: ComponentCtxTemplate,
+    linked_templates: Vec<ComponentCtxTemplate>,
+    linked_instances: Vec<(Arc<str>, wasmtime::component::InstancePre<SharedCtx>)>,
+}
+
+impl ServiceStoreRecipe {
+    /// Build a fresh service store (`is_service = true` so `cli/run` may bind
+    /// its loopback socket).
+    async fn build(&self) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
+        new_store_from_templates(
+            &self.engine,
+            self.http_handler.clone(),
+            &self.active_template,
+            &self.linked_templates,
+            &self.linked_instances,
+            true,
+        )
+        .await
+    }
+}
+
 /// Build a trigger service's host-invoked ingresses, returning them alongside the
 /// paired senders to register with the host-side HTTP/messaging ingresses. Called
 /// once per incarnation (start and each restart) so a restarted service gets fresh
@@ -697,11 +726,9 @@ impl ResolvedWorkload {
 
     /// Execute a p3 service that also exports a host-invoked handler (today
     /// `wasi:http/handler` and `wasmcloud:messaging`): one instance co-drives
-    /// `cli/run` and the handler
-    /// under a single `run_concurrent` (see [`crate::host::trigger_service`]). The
-    /// service runs in its own long-lived store; stream-carrying backend calls
-    /// are routed to ephemeral relocated stores (see the linked-call routing),
-    /// so a backend's `block_on` can't freeze the service's run loop.
+    /// `cli/run` and the handler under a single `run_concurrent` (see
+    /// [`crate::host::trigger_service`]). The service runs in its own
+    /// long-lived store.
     /// `is_service = true` lets the `cli/run` side bind its loopback socket.
     async fn execute_trigger_service(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
         let Some(service) = self.service.as_ref() else {
@@ -715,13 +742,16 @@ impl ResolvedWorkload {
         );
         self.resolve_service_volume_mounts().await?;
 
-        let mut store = {
+        // Capture the store recipe so the supervisor below can rebuild a FRESH
+        // store per incarnation: a trapped store cannot re-enter any component
+        // instance, so a restart must never reuse it.
+        let recipe = {
             let Some(service) = self.service.as_ref() else {
                 bail!("service unexpectedly missing during execution");
             };
-            self.new_store_from_metadata(&service.metadata, true)
-                .await?
+            self.service_store_recipe(&service.metadata).await?
         };
+        let mut store = recipe.build().await?;
         let http_handler = self.http_handler.clone();
         let workload_id: Arc<str> = Arc::from(self.id());
 
@@ -792,6 +822,15 @@ impl ResolvedWorkload {
                     Err(e) => {
                         warn!(err = %e, retries = restarts, "trigger service faulted; restarting");
                         restarts = restarts.saturating_sub(1);
+                        // The faulted store cannot re-enter any component
+                        // instance; the next incarnation needs a fresh one.
+                        match recipe.build().await {
+                            Ok(fresh) => store = fresh,
+                            Err(e) => {
+                                error!(err = %e, "failed to rebuild trigger service store; giving up");
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -1366,6 +1405,25 @@ impl ResolvedWorkload {
         metadata: &WorkloadMetadata,
         is_service: bool,
     ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
+        let recipe = self.service_store_recipe(metadata).await?;
+        new_store_from_templates(
+            &recipe.engine,
+            recipe.http_handler.clone(),
+            &recipe.active_template,
+            &recipe.linked_templates,
+            &recipe.linked_instances,
+            is_service,
+        )
+        .await
+    }
+
+    /// Capture everything needed to (re)build this service's store, so the
+    /// trigger-service supervisor can construct a fresh store per incarnation
+    /// without borrowing `self`.
+    async fn service_store_recipe(
+        &self,
+        metadata: &WorkloadMetadata,
+    ) -> anyhow::Result<ServiceStoreRecipe> {
         let linked_component_ids = metadata
             .linked_components
             .iter()
@@ -1398,15 +1456,13 @@ impl ResolvedWorkload {
             ));
         }
 
-        new_store_from_templates(
-            metadata.engine(),
-            self.http_handler.clone(),
-            &active_template,
-            &linked_templates,
-            &linked_instances,
-            is_service,
-        )
-        .await
+        Ok(ServiceStoreRecipe {
+            engine: metadata.engine().clone(),
+            http_handler: self.http_handler.clone(),
+            active_template,
+            linked_templates,
+            linked_instances,
+        })
     }
 
     pub async fn instantiate_pre(

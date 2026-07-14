@@ -29,6 +29,12 @@ pub(super) const HANDLE_MESSAGE: &str = "handle-message";
 /// Handles one inbound message on the shared service instance by invoking the
 /// p2 `handle-message` export via the dynamic concurrent path (there is no
 /// accessor-driven p3 messaging binding), and reports its `result<_, string>`.
+///
+/// A handler `Err(string)` is an ordinary application outcome, reported on
+/// `result_tx` only. A guest *trap*, however, leaves the shared instance
+/// unenterable for every later message, so after reporting it the task returns
+/// the error — faulting `run_concurrent` so the driver exits and the service
+/// supervisor restarts (and re-registers) a fresh instance.
 pub(super) struct MessagingTask {
     pub(super) instance: Instance,
     pub(super) func_idx: ComponentExportIndex,
@@ -72,7 +78,10 @@ impl AccessorTask<SharedCtx> for MessagingTask {
             .await
         {
             Ok(()) => lift_result_string(results.first()),
-            Err(e) => Err(format!("handle-message trapped: {e:#}")),
+            Err(e) => {
+                let _ = result_tx.send(Err(format!("handle-message trapped: {e:#}")));
+                return Err(e.context("messaging handler trapped; restarting the trigger service"));
+            }
         };
         let _ = result_tx.send(outcome);
         Ok(())

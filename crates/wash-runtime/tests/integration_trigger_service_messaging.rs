@@ -170,15 +170,14 @@ async fn test_trigger_service_stop_drops_messaging_subscription() -> Result<()> 
 /// it within `max_restarts` and re-registers the messaging handler, so delivery
 /// resumes on a FRESH instance (its per-instance count reset to 1, not 2).
 ///
-/// IGNORED — documents a known gap. The supervision loop
-/// (`execute_trigger_service` + `run_trigger_driver`) restarts on a *propagating*
-/// fault, but a guest handler trap does not propagate: the serve loop spawns
-/// `MessagingTask`s fire-and-forget, and `run_concurrent` does not surface a
-/// spawned task's trap, so the driver keeps serving the (poisoned) instance and
-/// never faults. Making a handler trap restart the service needs the serve loop
-/// to detect the poisoned instance and fault (a shared fault signal +
-/// `ServeOutcome` variant); tracked as a follow-up.
-#[ignore = "handler-trap does not fault the driver yet; see doc comment"]
+/// A trap leaves the shared instance unenterable for every later message, so
+/// [`MessagingTask`] reports it and then faults the driver out of
+/// `run_concurrent`, letting the workload supervisor re-instantiate and
+/// re-register. An ordinary handler `Err(string)` outcome does NOT fault the
+/// driver — the co-drive test above proves consecutive deliveries keep the
+/// instance.
+///
+/// [`MessagingTask`]: wash_runtime::host::trigger_service
 #[tokio::test]
 async fn test_trigger_service_restarts_and_resubscribes_on_fault() -> Result<()> {
     let workload_id = uuid::Uuid::new_v4().to_string();
@@ -200,10 +199,15 @@ async fn test_trigger_service_restarts_and_resubscribes_on_fault() -> Result<()>
 
     // After the restart, delivery resumes (re-subscribed) on a fresh instance
     // whose per-instance count starts over at 1. The restart is async, so poll
-    // until delivery succeeds again.
+    // until a delivery is HANDLED again — a `{count}:{subject}` echo. A delivery
+    // that races the teardown of the poisoned incarnation surfaces a trap error
+    // string instead ("cannot enter component instance"); keep polling through
+    // those rather than mistaking them for a handled message.
     let mut got = None;
     for _ in 0..100 {
-        if let Ok(Err(s)) = deliver(&http_server, &workload_id, "after").await {
+        if let Ok(Err(s)) = deliver(&http_server, &workload_id, "after").await
+            && s.ends_with(":after")
+        {
             got = Some(s);
             break;
         }
