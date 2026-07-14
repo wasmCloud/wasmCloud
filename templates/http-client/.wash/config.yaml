@@ -1,3 +1,9 @@
 build:
   command: cargo build --target wasm32-wasip2 --release
   component_path: target/wasm32-wasip2/release/http_client.wasm
+
+# Outbound HTTP is gated by the host runtime. Hosts listed here are
+# allowed; add new hosts before targeting them.
+workload:
+  allowedHosts:
+    - httpbin.org

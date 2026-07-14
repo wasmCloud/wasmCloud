@@ -19,6 +19,8 @@ wash -C component-client dev
 
 Navigate to [http://localhost:8000](http://localhost:8000)
 
+Outbound HTTP from the component to `localhost:50051` is gated by the host runtime and permitted via `workload.allowedHosts` in [`component-client/.wash/config.yaml`](component-client/.wash/config.yaml).
+
 ## Component as gRPC Server
 
 Start the gRPC Server using wash dev:
