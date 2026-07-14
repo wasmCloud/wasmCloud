@@ -1565,14 +1565,14 @@ impl ResolvedWorkload {
         // longer receives host-invoked deliveries on a torn-down instance.
         if self.service.is_some() {
             if let Err(e) = self.http_handler.on_service_http_unbind(self.id()).await {
-                tracing::warn!(workload.id = %self.id(), err = %e, "failed to unbind service HTTP handler, continuing");
+                tracing::error!(workload.id = %self.id(), err = %e, "failed to unbind service HTTP handler, continuing");
             }
             if let Err(e) = self
                 .http_handler
                 .on_trigger_service_messaging_unbind(self.id())
                 .await
             {
-                tracing::warn!(workload.id = %self.id(), err = %e, "failed to unbind trigger service messaging handler, continuing");
+                tracing::error!(workload.id = %self.id(), err = %e, "failed to unbind trigger service messaging handler, continuing");
             }
         }
 

@@ -48,12 +48,8 @@ wasi-keyvalue = []
 # Component-model `(implements ..)` / `named_imports` multiplexing
 wasm_component_model_implements = []
 # Host component plugins: a component providing a host capability from its own
-# long-lived, supervised store, serving cross-store capability calls. Gates the
-# `ComponentHostPlugin` adapter, the trigger service's `Capability` ingress, and
-# the per-call job registry. The cross-store relocation layer it builds on
-# (`engine::store::{relocate,resource_bridge,stream_pump}`) is shared with the
-# ephemeral bridge and stays compiled; its resource-drop lifecycle is dormant
-# unless a plugin store activates it.
+# long-lived, supervised store, serving cross-store capability calls.
+# See `plugin::component_host` for the adapter and how it wires up.
 host-component-plugins = []
 wasi-webgpu = ["dep:wasi-webgpu-wasmtime", "dep:wasi-graphics-context-wasmtime"]
 wasmcloud-postgres = [

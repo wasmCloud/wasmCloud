@@ -937,10 +937,22 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
         sender: tokio::sync::mpsc::Sender<ServiceHttpJob>,
     ) -> anyhow::Result<()> {
         self.router.on_service_http_resolved(workload_id).await?;
-        self.service_handlers
+        // A workload registers exactly one HTTP-serving service instance at a
+        // time: a stop/restart must unbind (`on_service_http_unbind`) before
+        // re-resolving. If a live mapping is still here we'd silently orphan the
+        // previous instance's channel, so surface it rather than overwrite quietly.
+        if let Some(_stale) = self
+            .service_handlers
             .write()
             .await
-            .insert(workload_id.to_string(), sender);
+            .insert(workload_id.to_string(), sender)
+        {
+            error!(
+                host = %workload_id,
+                "service HTTP handler resolved while a previous mapping was still bound; \
+                 the earlier instance was expected to unbind first"
+            );
+        }
         Ok(())
     }
 
@@ -954,10 +966,21 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
         workload_id: &str,
         sender: tokio::sync::mpsc::Sender<MessagingJob>,
     ) -> anyhow::Result<()> {
-        self.messaging_handlers
+        // As with the HTTP handler: a workload holds one messaging service
+        // instance at a time, and unbind must precede re-resolve. A live mapping
+        // still present here means we'd orphan the previous instance's channel.
+        if let Some(_stale) = self
+            .messaging_handlers
             .write()
             .await
-            .insert(workload_id.to_string(), sender);
+            .insert(workload_id.to_string(), sender)
+        {
+            error!(
+                host = %workload_id,
+                "messaging trigger service resolved while a previous mapping was still bound; \
+                 the earlier instance was expected to unbind first"
+            );
+        }
         Ok(())
     }
 

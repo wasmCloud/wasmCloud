@@ -44,7 +44,7 @@ members = [
     "bridge-backend",
     "bridge-service",
     "kv-plugin",
-    "plugin-caller",
+    "kv-plugin-caller",
 ]
 
 [workspace.dependencies]

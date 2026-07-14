@@ -9,7 +9,7 @@ use crate::wit::{WitInterface, WitWorld};
 use anyhow::Context;
 use opentelemetry::KeyValue;
 use tokio::sync::{Notify, RwLock, oneshot};
-use tracing::{Instrument, debug, instrument, warn};
+use tracing::{Instrument, debug, instrument, trace, warn};
 
 const PLUGIN_MESSAGING_MEMORY_ID: &str = "wasmcloud-messaging-memory";
 const MAX_QUEUE_SIZE: usize = 10000;
@@ -382,7 +382,7 @@ impl HostPlugin for InMemoryMessaging {
                     .context("failed to instantiate messaging pre")?,
             ),
             Err(e) => {
-                debug!(component_id, error = %e, "no per-message instance (long-lived service); messages delivered to the service");
+                trace!(component_id, error = %e, "no per-message instance (long-lived service); messages delivered to the service");
                 None
             }
         };

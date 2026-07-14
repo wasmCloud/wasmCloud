@@ -10,7 +10,7 @@ use async_nats::Subscriber;
 use futures::stream::StreamExt;
 use opentelemetry::KeyValue;
 use tokio::sync::RwLock;
-use tracing::{Instrument, debug, instrument, warn};
+use tracing::{Instrument, debug, instrument, trace, warn};
 use wasmtime::error::Context as _;
 
 const PLUGIN_MESSAGING_ID: &str = "wasmcloud-messaging";
@@ -261,7 +261,7 @@ impl HostPlugin for NatsMessaging {
                     .context("failed to instantiate messaging pre")?,
             ),
             Err(e) => {
-                debug!(component_id, error = %e, "no per-message instance (long-lived service); messages delivered to the service");
+                trace!(component_id, error = %e, "no per-message instance (long-lived service); messages delivered to the service");
                 None
             }
         };

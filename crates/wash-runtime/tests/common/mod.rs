@@ -144,10 +144,10 @@ pub fn acme_kv_interface() -> WitInterface {
     }
 }
 
-/// Interfaces for the `plugin-caller` workload: HTTP ingress plus the imported
+/// Interfaces for the `kv-plugin-caller` workload: HTTP ingress plus the imported
 /// `acme:kv/store` capability the host component plugin satisfies.
 #[cfg(feature = "host-component-plugins")]
-pub fn plugin_caller_host_interfaces(host_header: &str) -> Vec<WitInterface> {
+pub fn kv_plugin_caller_host_interfaces(host_header: &str) -> Vec<WitInterface> {
     vec![
         http_incoming_handler_interface(host_header, None),
         acme_kv_interface(),

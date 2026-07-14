@@ -152,9 +152,9 @@ pub(crate) struct EphemeralLinkedCall {
 pub(crate) enum EphemeralCallMode {
     /// Handle-free call: params/results are copied directly.
     PlainValue,
-    /// The signature carries a bridgeable `stream<T>`, so args/results are
-    /// relocated across the boundary (see [`relocate`]), driven by these
-    /// param/result types.
+    /// The signature carries a bridgeable `stream<T>` or `future<T>`, so
+    /// args/results are relocated across the boundary (see [`relocate`]), driven
+    /// by these param/result types.
     Relocated {
         param_tys: Arc<[Type]>,
         result_tys: Arc<[Type]>,
@@ -530,7 +530,7 @@ async fn invoke_ephemeral_relocated(
     let (ready_tx, ready_rx) =
         futures::channel::oneshot::channel::<wasmtime::Result<Vec<Relocated>>>();
     let ephemeral_call = Arc::clone(ephemeral_call);
-    let call_pre = inv.pre.clone();
+    let callee_pre = inv.pre.clone();
     let func_idx = inv.func_idx;
     let import_name = inv.import_name.clone();
     let export_name = inv.export_name.clone();
@@ -554,7 +554,7 @@ async fn invoke_ephemeral_relocated(
                 return;
             }
         };
-        let instance = match call_pre.instantiate_async(&mut store).await {
+        let instance = match callee_pre.instantiate_async(&mut store).await {
             Ok(i) => i,
             Err(e) => {
                 let _ = ready_tx.send(Err(e));
@@ -680,7 +680,7 @@ async fn invoke_ephemeral_plain(
     let mut results_buf = vec![Val::Bool(false); results.len()];
     let call_import_name = inv.import_name.clone();
     let call_export_name = inv.export_name.clone();
-    let call_pre = inv.pre.clone();
+    let callee_pre = inv.pre.clone();
     let func_idx = inv.func_idx;
 
     trace!(
@@ -691,7 +691,7 @@ async fn invoke_ephemeral_plain(
     );
 
     let mut task = AbortOnDrop(tokio::task::spawn(async move {
-        let instance = call_pre.instantiate_async(&mut store).await?;
+        let instance = callee_pre.instantiate_async(&mut store).await?;
         store
             .run_concurrent(async move |accessor| {
                 let func = accessor.with(|mut access| -> wasmtime::Result<_> {

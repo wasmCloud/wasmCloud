@@ -77,6 +77,13 @@ pub struct CapabilityCall {
 /// a blocking acquire — so a re-entrant call can never deadlock waiting on a slot
 /// held by an ancestor that is itself waiting on the re-entrant call. Unlike a
 /// per-store depth counter, an atomic count is exact under concurrent calls.
+///
+/// This is deliberately not a [`tokio::sync::Semaphore`]: the admission check
+/// must REJECT over the ceiling rather than await a permit. A semaphore
+/// `acquire().await` would let an ancestor hold a permit while suspended on a
+/// re-entrant sub-call that can never acquire one — a self-deadlock. A
+/// `try_acquire` semaphore would behave like this counter but carries a waiter
+/// queue and fairness machinery we never use, so a plain atomic is lighter.
 pub(super) const MAX_INFLIGHT_CAPABILITY_CALLS: usize = 512;
 
 /// Serves one cross-store capability call on the shared plugin instance: looks
@@ -104,7 +111,9 @@ pub(super) struct CapabilityTask {
 }
 
 /// Decrements a plugin store's in-flight capability-call counter on drop, so a
-/// slot is reclaimed whether the task completes normally or is cancelled.
+/// slot is reclaimed whether the task completes normally or is cancelled. Backs
+/// the non-blocking admission ceiling (see [`MAX_INFLIGHT_CAPABILITY_CALLS`] for
+/// why a plain atomic rather than a [`tokio::sync::Semaphore`]).
 pub(super) struct InFlightGuard(Arc<AtomicUsize>);
 
 impl InFlightGuard {

@@ -12,7 +12,7 @@
 !bridge-backend/wit/deps/
 !bridge-service/wit/deps/
 !kv-plugin/wit/deps/
-!plugin-caller/wit/deps/
+!kv-plugin-caller/wit/deps/
 
 *-p3/wkg.lock
 *-p3-*/wkg.lock

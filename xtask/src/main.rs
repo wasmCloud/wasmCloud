@@ -122,7 +122,7 @@ const P3_FIXTURES: &[&str] = &[
     "bridge-backend",
     "bridge-service",
     "kv-plugin",
-    "plugin-caller",
+    "kv-plugin-caller",
 ];
 
 // Fixtures with local-only WIT worlds (no wasi imports). Copying shared
@@ -138,7 +138,7 @@ const P3_SKIP_SHARED_WIT: &[&str] = &[
     "bridge-service",
     "msg-counter",
     "kv-plugin",
-    "plugin-caller",
+    "kv-plugin-caller",
 ];
 
 fn build_fixtures(workspace: &Path) -> Result<()> {

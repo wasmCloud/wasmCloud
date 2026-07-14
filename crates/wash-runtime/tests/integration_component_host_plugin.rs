@@ -1,6 +1,6 @@
 //! Integration tests for host component plugins: a bespoke, handle-free
 //! `acme:kv/store` capability provided by the `kv-plugin` component running in
-//! its own persistent, host-scoped store, imported by the `plugin-caller`
+//! its own persistent, host-scoped store, imported by the `kv-plugin-caller`
 //! workload and driven over HTTP.
 //!
 //! Covers the technical-plan P0 areas:
@@ -22,13 +22,13 @@ use wash_runtime::types::{LocalResources, WorkloadState, WorkloadStopRequest};
 
 mod common;
 use common::{
-    component_workload_request, plugin_caller_host_interfaces, start_host_with_component_plugin,
+    component_workload_request, kv_plugin_caller_host_interfaces, start_host_with_component_plugin,
     start_host_with_component_plugin_by_host, start_host_with_component_plugin_max_restarts,
     start_host_with_p3_http_handler,
 };
 
 const KV_PLUGIN_WASM: &[u8] = include_bytes!("wasm/kv_plugin.wasm");
-const PLUGIN_CALLER_WASM: &[u8] = include_bytes!("wasm/plugin_caller.wasm");
+const KV_PLUGIN_CALLER_WASM: &[u8] = include_bytes!("wasm/kv_plugin_caller.wasm");
 const PLUGIN_ID: &str = "acme-kv-plugin";
 
 /// GET `http://{addr}{path}` with the `HOST` header selecting the workload,
@@ -53,14 +53,14 @@ async fn req(
     Ok((status, body))
 }
 
-/// A `plugin-caller` workload addressed by `host`.
+/// A `kv-plugin-caller` workload addressed by `host`.
 fn caller_workload(host: &str) -> wash_runtime::types::WorkloadStartRequest {
     component_workload_request(
-        "plugin-caller",
+        "kv-plugin-caller",
         host,
-        PLUGIN_CALLER_WASM,
+        KV_PLUGIN_CALLER_WASM,
         LocalResources::default(),
-        plugin_caller_host_interfaces(host),
+        kv_plugin_caller_host_interfaces(host),
     )
 }
 
