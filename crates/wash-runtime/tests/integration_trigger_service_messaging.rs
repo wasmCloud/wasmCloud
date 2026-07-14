@@ -18,15 +18,22 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use tokio::time::timeout;
 
-use wash_runtime::host::HostApi;
+use wash_runtime::engine::Engine;
 use wash_runtime::host::http::{DevRouter, HostHandler, HttpServer};
 use wash_runtime::host::trigger_service::BrokerMessage;
+use wash_runtime::host::{HostApi, HostBuilder};
+use wash_runtime::plugin::wasmcloud_messaging::InMemoryMessaging;
+use wash_runtime::plugin::{
+    wasi_blobstore::InMemoryBlobstore, wasi_config::DynamicConfig, wasi_keyvalue::InMemoryKeyValue,
+    wasi_logging::TracingLogger,
+};
 use wash_runtime::types::{
     LocalResources, Service, Workload, WorkloadStartRequest, WorkloadStopRequest,
 };
+use wash_runtime::wit::WitInterface;
 
 mod common;
-use common::start_host_with_p3_handler;
+use common::{http_only_host_interfaces, start_host_with_p3_handler};
 
 const MSG_COUNTER_WASM: &[u8] = include_bytes!("wasm/msg_counter.wasm");
 
@@ -217,6 +224,119 @@ async fn test_trigger_service_restarts_and_resubscribes_on_fault() -> Result<()>
         got,
         Some("1:after".to_string()),
         "after a fault the supervisor re-subscribes on a fresh instance (count reset)"
+    );
+
+    Ok(())
+}
+
+/// The `wasmcloud:messaging/handler` host interface, so the messaging plugin
+/// binds to the service (empty config → the service subscribes to everything).
+fn messaging_handler_interface() -> WitInterface {
+    WitInterface {
+        namespace: "wasmcloud".to_string(),
+        package: "messaging".to_string(),
+        interfaces: ["handler".to_string()].into_iter().collect(),
+        version: Some(semver::Version::new(0, 2, 0)),
+        config: HashMap::new(),
+        name: None,
+    }
+}
+
+fn msg_counter_e2e_request(workload_id: &str, host: &str) -> WorkloadStartRequest {
+    let mut host_interfaces = http_only_host_interfaces(host);
+    host_interfaces.push(messaging_handler_interface());
+    WorkloadStartRequest {
+        workload_id: workload_id.to_string(),
+        workload: Workload {
+            namespace: "test".to_string(),
+            name: host.to_string(),
+            annotations: HashMap::new(),
+            service: Some(Service {
+                digest: None,
+                bytes: bytes::Bytes::from_static(MSG_COUNTER_WASM),
+                local_resources: LocalResources::default(),
+                max_restarts: 0,
+            }),
+            components: vec![],
+            host_interfaces,
+            volumes: vec![],
+        },
+    }
+}
+
+/// Read the trigger service's `{"count":N}` over HTTP.
+async fn get_count(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    host: &str,
+) -> Result<u64> {
+    let resp = timeout(
+        Duration::from_secs(10),
+        client
+            .get(format!("http://{addr}/count"))
+            .header("HOST", host)
+            .send(),
+    )
+    .await
+    .context("GET /count timed out")??;
+    anyhow::ensure!(resp.status().is_success(), "GET /count: {}", resp.status());
+    let body = resp.text().await?;
+    Ok(common::json_u64_field(&body, "count"))
+}
+
+/// End-to-end: a message published through the in-memory messaging backend is
+/// delivered to the long-lived trigger service (not a fresh per-message
+/// instance), so the count observed over the service's HTTP handler advances.
+#[tokio::test]
+async fn test_trigger_service_messaging_via_in_memory_backend() -> Result<()> {
+    let engine = Engine::builder().build()?;
+    let http_server =
+        Arc::new(HttpServer::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?);
+    let addr = http_server.addr();
+    let messaging = Arc::new(InMemoryMessaging::new());
+    let host = HostBuilder::new()
+        .with_engine(engine)
+        .with_http_handler(http_server.clone())
+        .with_plugin(Arc::new(InMemoryBlobstore::new(None)))?
+        .with_plugin(Arc::new(InMemoryKeyValue::new()))?
+        .with_plugin(Arc::new(TracingLogger::default()))?
+        .with_plugin(Arc::new(DynamicConfig::default()))?
+        .with_plugin(messaging.clone())?
+        .build()?;
+    let host = host.start().await.context("failed to start host")?;
+
+    let workload_id = uuid::Uuid::new_v4().to_string();
+    let host_header = "msg-e2e";
+    host.workload_start(msg_counter_e2e_request(&workload_id, host_header))
+        .await
+        .context("failed to start msg-counter trigger service workload")?;
+
+    let client = reqwest::Client::new();
+    assert_eq!(
+        get_count(&client, addr, host_header).await?,
+        0,
+        "no messages handled yet"
+    );
+
+    // Publish through the in-memory backend; it routes to the subscribed trigger
+    // service, whose receive loop delivers to the co-driven instance.
+    messaging
+        .publish(&workload_id, "test.subject", b"hello".to_vec())
+        .await
+        .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?;
+
+    // Delivery + handling is async; poll until the count reflects it.
+    let mut observed = 0;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        observed = get_count(&client, addr, host_header).await?;
+        if observed >= 1 {
+            break;
+        }
+    }
+    assert_eq!(
+        observed, 1,
+        "the published message was handled on the co-driven trigger service instance"
     );
 
     Ok(())
