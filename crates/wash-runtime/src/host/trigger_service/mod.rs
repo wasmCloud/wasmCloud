@@ -12,18 +12,18 @@
 //!   instance's in-memory state.
 //!
 //! Each host-invoked export is an [`Ingress`]: the host-side plugin (the HTTP
-//! server, ...) pushes invocations into the ingress's channel and the TriggerService
-//! serves them via [`Accessor::spawn`]. Adding another host-invoked interface
-//! (e.g. a messaging handler) is a new [`Ingress`] variant plus a serve arm —
-//! the `cli/run` driving and the single-instance `run_concurrent` are reused.
-//! Each ingress kind lives in its own submodule ([`http`]); this module holds
-//! the shared [`Ingress`] enum, the `prepare`/`serve` dispatch, and the
-//! [`run_trigger_driver`] loop.
+//! server, the messaging subscriber, ...) pushes invocations into the ingress's
+//! channel and the TriggerService serves them via [`Accessor::spawn`]. Adding
+//! another host-invoked interface is a new [`Ingress`] variant plus a serve arm
+//! — the `cli/run` driving and the single-instance `run_concurrent` are reused.
+//! Each ingress kind lives in its own submodule ([`http`], [`messaging`]); this
+//! module holds the shared [`Ingress`] enum, the `prepare`/`serve` dispatch,
+//! and the [`run_trigger_driver`] loop.
 
 use std::sync::Arc;
 
 use wasmtime::Store;
-use wasmtime::component::{Accessor, AccessorTask, Instance, InstancePre};
+use wasmtime::component::{Accessor, AccessorTask, ComponentExportIndex, Instance, InstancePre};
 use wasmtime::error::Context as _;
 use wasmtime_wasi::p3::bindings::Command;
 use wasmtime_wasi_http::p3::bindings::Service;
@@ -32,16 +32,24 @@ use crate::engine::ctx::SharedCtx;
 use crate::host::http::ServiceHttpJob;
 
 mod http;
+mod messaging;
+
+pub use messaging::{BrokerMessage, MessagingJob};
 
 use http::HttpTask;
+use messaging::{HANDLE_MESSAGE, MESSAGING_HANDLER, MessagingTask};
 
 /// A host-invoked handler export the TriggerService serves, carrying the receiver end
 /// of its delivery channel. The paired sender is handed to the host-side ingress
-/// (the HTTP server, ...) so it can deliver invocations to this live instance.
+/// (the HTTP server, the messaging subscriber, ...) so it can deliver
+/// invocations to this live instance.
 #[non_exhaustive]
 pub enum Ingress {
     /// `wasi:http/handler@0.3` — the HTTP server delivers requests here.
     Http(tokio::sync::mpsc::Receiver<ServiceHttpJob>),
+    /// `wasmcloud:messaging/handler@0.2.0` — the messaging subscriber delivers
+    /// received messages here.
+    Messaging(tokio::sync::mpsc::Receiver<MessagingJob>),
 }
 
 impl Ingress {
@@ -61,6 +69,23 @@ impl Ingress {
                     rx,
                 })
             }
+            Ingress::Messaging(rx) => {
+                // Look up the p2 `handle-message` export up front; it's invoked
+                // dynamically (there is no accessor-driven p3 messaging binding).
+                let iface = instance
+                    .get_export(&mut *store, None, MESSAGING_HANDLER)
+                    .with_context(|| format!("service is missing {MESSAGING_HANDLER} export"))?
+                    .1;
+                let func_idx = instance
+                    .get_export(&mut *store, Some(&iface), HANDLE_MESSAGE)
+                    .with_context(|| format!("{MESSAGING_HANDLER} is missing {HANDLE_MESSAGE}"))?
+                    .1;
+                Ok(PreparedIngress::Messaging {
+                    instance: *instance,
+                    func_idx,
+                    rx,
+                })
+            }
         }
     }
 }
@@ -71,6 +96,11 @@ enum PreparedIngress {
     Http {
         service: Arc<Service>,
         rx: tokio::sync::mpsc::Receiver<ServiceHttpJob>,
+    },
+    Messaging {
+        instance: Instance,
+        func_idx: ComponentExportIndex,
+        rx: tokio::sync::mpsc::Receiver<MessagingJob>,
     },
 }
 
@@ -86,6 +116,20 @@ impl PreparedIngress {
                         service: Arc::clone(service),
                         req,
                         resp_tx,
+                    });
+                }
+            }
+            PreparedIngress::Messaging {
+                instance,
+                func_idx,
+                rx,
+            } => {
+                while let Some((msg, result_tx)) = rx.recv().await {
+                    accessor.spawn(MessagingTask {
+                        instance: *instance,
+                        func_idx: *func_idx,
+                        msg,
+                        result_tx,
                     });
                 }
             }

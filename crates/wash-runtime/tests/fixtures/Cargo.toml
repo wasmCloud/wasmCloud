@@ -40,6 +40,7 @@ members = [
     "keyvalue-default-p3",
     "postgres-stream-p3",
     "svc-counter",
+    "msg-counter",
 ]
 
 [workspace.dependencies]
