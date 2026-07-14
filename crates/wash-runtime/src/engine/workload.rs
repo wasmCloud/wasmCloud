@@ -547,16 +547,47 @@ impl std::fmt::Debug for ResolvedWorkload {
     }
 }
 
+/// Everything needed to rebuild a p3 service's store (plain `cli/run` or
+/// trigger service), captured by its supervisor so each incarnation gets a
+/// FRESH store: after a guest trap the old store can no longer enter ANY
+/// component instance ("cannot enter component instance"), so reusing it would
+/// leave every restarted incarnation permanently broken.
+struct ServiceStoreRecipe {
+    engine: wasmtime::Engine,
+    http_handler: Arc<dyn crate::host::http::HostHandler>,
+    active_template: ComponentCtxTemplate,
+    linked_templates: Vec<ComponentCtxTemplate>,
+    linked_instances: Vec<(Arc<str>, wasmtime::component::InstancePre<SharedCtx>)>,
+}
+
+impl ServiceStoreRecipe {
+    /// Build a fresh service store (`is_service = true` so `cli/run` may bind
+    /// its loopback socket).
+    async fn build(&self) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
+        new_store_from_templates(
+            &self.engine,
+            self.http_handler.clone(),
+            &self.active_template,
+            &self.linked_templates,
+            &self.linked_instances,
+            true,
+        )
+        .await
+    }
+}
+
 /// Build a trigger service's host-invoked ingresses, returning them alongside the
-/// paired senders to register with the host-side ingresses. Called once per
-/// incarnation (start and each restart) so a restarted service gets fresh
+/// paired senders to register with the host-side HTTP/messaging ingresses. Called
+/// once per incarnation (start and each restart) so a restarted service gets fresh
 /// channels whose senders replace the stale registrations.
 #[allow(clippy::type_complexity)]
 fn build_trigger_ingresses(
     serves_http: bool,
+    serves_messaging: bool,
 ) -> (
     Vec<crate::host::trigger_service::Ingress>,
     Option<tokio::sync::mpsc::Sender<crate::host::http::ServiceHttpJob>>,
+    Option<tokio::sync::mpsc::Sender<crate::host::trigger_service::MessagingJob>>,
 ) {
     let mut ingresses = Vec::new();
     let http_tx = serves_http.then(|| {
@@ -564,7 +595,12 @@ fn build_trigger_ingresses(
         ingresses.push(crate::host::trigger_service::Ingress::Http(rx));
         tx
     });
-    (ingresses, http_tx)
+    let messaging_tx = serves_messaging.then(|| {
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        ingresses.push(crate::host::trigger_service::Ingress::Messaging(rx));
+        tx
+    });
+    (ingresses, http_tx, messaging_tx)
 }
 
 impl ResolvedWorkload {
@@ -579,11 +615,10 @@ impl ResolvedWorkload {
             // A p3 service that also exports a host-invoked handler (today
             // `wasi:http/handler`) co-drives it with `cli/run` on one instance
             // (see the `trigger service` module).
-            if self
-                .service
-                .as_ref()
-                .is_some_and(|s| crate::engine::exports_wasi_http(&s.metadata.component))
-            {
+            if self.service.as_ref().is_some_and(|s| {
+                crate::engine::exports_wasi_http(&s.metadata.component)
+                    || crate::engine::exports_messaging_handler(&s.metadata.component)
+            }) {
                 return self.execute_trigger_service().await;
             }
             return self.execute_service_p3().await;
@@ -635,12 +670,18 @@ impl ResolvedWorkload {
 
         if let Some((Ok(pre), mut max_restarts)) = service {
             self.resolve_service_volume_mounts().await?;
-            let mut store = if let Some(service) = self.service.as_ref() {
-                self.new_store_from_metadata(&service.metadata, true)
-                    .await?
-            } else {
-                bail!("service unexpectedly missing during execution");
+            // Capture the store recipe so each restarted incarnation gets a
+            // FRESH store: a trapped store cannot re-enter any component
+            // instance, so reuse after a fault would leave every restart
+            // permanently broken (and even a clean restart would accumulate
+            // stale instances in a reused store).
+            let recipe = {
+                let Some(service) = self.service.as_ref() else {
+                    bail!("service unexpectedly missing during execution");
+                };
+                self.service_store_recipe(&service.metadata).await?
             };
+            let mut store = recipe.build().await?;
             let handle = tokio::spawn(async move {
                 loop {
                     let instance = match pre.instantiate_async(&mut store).await {
@@ -676,6 +717,13 @@ impl ResolvedWorkload {
                         }
                     }
                     max_restarts = max_restarts.saturating_sub(1);
+                    match recipe.build().await {
+                        Ok(fresh) => store = fresh,
+                        Err(e) => {
+                            error!(err = %e, "failed to rebuild P3 service store; giving up");
+                            break;
+                        }
+                    }
                 }
             });
 
@@ -690,43 +738,57 @@ impl ResolvedWorkload {
     }
 
     /// Execute a p3 service that also exports a host-invoked handler (today
-    /// `wasi:http/handler`): one instance co-drives `cli/run` and the handler
-    /// under a single `run_concurrent` (see [`crate::host::trigger_service`]).
-    /// The service runs in its own long-lived store.
+    /// `wasi:http/handler` and `wasmcloud:messaging`): one instance co-drives
+    /// `cli/run` and the handler under a single `run_concurrent` (see
+    /// [`crate::host::trigger_service`]). The service runs in its own
+    /// long-lived store.
     /// `is_service = true` lets the `cli/run` side bind its loopback socket.
     async fn execute_trigger_service(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
         let Some(service) = self.service.as_ref() else {
             return Ok(None);
         };
         let pre = service.pre_instantiate_raw()?;
-        let (serves_http, max_restarts) = (
+        let (serves_http, serves_messaging, max_restarts) = (
             crate::engine::exports_wasi_http(&service.metadata.component),
+            crate::engine::exports_messaging_handler(&service.metadata.component),
             service.max_restarts,
         );
         self.resolve_service_volume_mounts().await?;
 
-        let mut store = {
+        // Capture the store recipe so the supervisor below can rebuild a FRESH
+        // store per incarnation: a trapped store cannot re-enter any component
+        // instance, so a restart must never reuse it.
+        let recipe = {
             let Some(service) = self.service.as_ref() else {
                 bail!("service unexpectedly missing during execution");
             };
-            self.new_store_from_metadata(&service.metadata, true)
-                .await?
+            self.service_store_recipe(&service.metadata).await?
         };
+        let mut store = recipe.build().await?;
         let http_handler = self.http_handler.clone();
         let workload_id: Arc<str> = Arc::from(self.id());
 
         // Build the first incarnation's host-invoked ingresses. Each paired sender
-        // is registered with its host-side ingress (the HTTP server), which then
-        // delivers to this live instance instead of instantiating a component per
-        // request. The first registration is synchronous (before the driver
-        // spawns) so a delivery immediately after start finds the handler;
-        // restarts re-register from inside the supervisor.
-        let (ingresses, http_tx) = build_trigger_ingresses(serves_http);
+        // is registered with its host-side ingress (the HTTP server, the messaging
+        // subscriber), which then delivers to this live instance instead of
+        // instantiating a component per request/message. The first registration is
+        // synchronous (before the driver spawns) so a delivery immediately after
+        // start finds the handler; restarts re-register from inside the supervisor.
+        let (ingresses, http_tx, messaging_tx) =
+            build_trigger_ingresses(serves_http, serves_messaging);
         if let Some(http_tx) = http_tx {
             self.http_handler
                 .on_service_http_resolved(self.id(), http_tx)
                 .await
                 .map_err(|e| anyhow::anyhow!("failed to register service HTTP handler: {e:#}"))?;
+        }
+        if let Some(messaging_tx) = messaging_tx {
+            self.http_handler
+                .on_trigger_service_messaging_resolved(self.id(), messaging_tx)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!("failed to register trigger service messaging handler: {e:#}")
+                })?;
         }
 
         // Supervise the driver: on a fault (e.g. a guest trap in `cli/run` or a
@@ -740,13 +802,21 @@ impl ResolvedWorkload {
                 let ingresses = match first.take() {
                     Some(ingresses) => ingresses,
                     None => {
-                        let (ingresses, http_tx) = build_trigger_ingresses(serves_http);
+                        let (ingresses, http_tx, messaging_tx) =
+                            build_trigger_ingresses(serves_http, serves_messaging);
                         if let Some(http_tx) = http_tx
                             && let Err(e) = http_handler
                                 .on_service_http_resolved(&workload_id, http_tx)
                                 .await
                         {
                             error!(err = %e, "failed to re-register service HTTP handler on restart");
+                        }
+                        if let Some(messaging_tx) = messaging_tx
+                            && let Err(e) = http_handler
+                                .on_trigger_service_messaging_resolved(&workload_id, messaging_tx)
+                                .await
+                        {
+                            error!(err = %e, "failed to re-register trigger service messaging handler on restart");
                         }
                         ingresses
                     }
@@ -765,6 +835,15 @@ impl ResolvedWorkload {
                     Err(e) => {
                         warn!(err = %e, retries = restarts, "trigger service faulted; restarting");
                         restarts = restarts.saturating_sub(1);
+                        // The faulted store cannot re-enter any component
+                        // instance; the next incarnation needs a fresh one.
+                        match recipe.build().await {
+                            Ok(fresh) => store = fresh,
+                            Err(e) => {
+                                error!(err = %e, "failed to rebuild trigger service store; giving up");
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -1311,6 +1390,25 @@ impl ResolvedWorkload {
         metadata: &WorkloadMetadata,
         is_service: bool,
     ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
+        let recipe = self.service_store_recipe(metadata).await?;
+        new_store_from_templates(
+            &recipe.engine,
+            recipe.http_handler.clone(),
+            &recipe.active_template,
+            &recipe.linked_templates,
+            &recipe.linked_instances,
+            is_service,
+        )
+        .await
+    }
+
+    /// Capture everything needed to (re)build this service's store, so the
+    /// trigger-service supervisor can construct a fresh store per incarnation
+    /// without borrowing `self`.
+    async fn service_store_recipe(
+        &self,
+        metadata: &WorkloadMetadata,
+    ) -> anyhow::Result<ServiceStoreRecipe> {
         let linked_component_ids = metadata
             .linked_components
             .iter()
@@ -1343,15 +1441,13 @@ impl ResolvedWorkload {
             ));
         }
 
-        new_store_from_templates(
-            metadata.engine(),
-            self.http_handler.clone(),
-            &active_template,
-            &linked_templates,
-            &linked_instances,
-            is_service,
-        )
-        .await
+        Ok(ServiceStoreRecipe {
+            engine: metadata.engine().clone(),
+            http_handler: self.http_handler.clone(),
+            active_template,
+            linked_templates,
+            linked_instances,
+        })
     }
 
     pub async fn instantiate_pre(
@@ -1427,13 +1523,20 @@ impl ResolvedWorkload {
             }
         }
 
-        // A trigger service registered its HTTP handler at start
-        // (`execute_trigger_service`); drop that registration on stop so it no
+        // A trigger service registered its HTTP/messaging handlers at start
+        // (`execute_trigger_service`); drop those registrations on stop so it no
         // longer receives host-invoked deliveries on a torn-down instance.
-        if self.service.is_some()
-            && let Err(e) = self.http_handler.on_service_http_unbind(self.id()).await
-        {
-            tracing::error!(workload.id = %self.id(), err = %e, "failed to unbind service HTTP handler, continuing");
+        if self.service.is_some() {
+            if let Err(e) = self.http_handler.on_service_http_unbind(self.id()).await {
+                tracing::error!(workload.id = %self.id(), err = %e, "failed to unbind service HTTP handler, continuing");
+            }
+            if let Err(e) = self
+                .http_handler
+                .on_trigger_service_messaging_unbind(self.id())
+                .await
+            {
+                tracing::error!(workload.id = %self.id(), err = %e, "failed to unbind trigger service messaging handler, continuing");
+            }
         }
 
         Ok(())

@@ -916,6 +916,16 @@ pub fn exports_wasi_http(component: &Component) -> bool {
         .any(|(export, _item)| export.starts_with("wasi:http"))
 }
 
+/// Whether a component exports the `wasmcloud:messaging/handler` interface (the
+/// inbound message handler the host invokes).
+pub fn exports_messaging_handler(component: &Component) -> bool {
+    let ty: wasmtime::component::types::Component = component.component_type();
+    let engine = component.engine();
+
+    ty.exports(engine)
+        .any(|(export, _item)| export.starts_with("wasmcloud:messaging/handler"))
+}
+
 pub fn imports_wasi_http(component: &Component) -> bool {
     let ty: wasmtime::component::types::Component = component.component_type();
     let engine = component.engine();

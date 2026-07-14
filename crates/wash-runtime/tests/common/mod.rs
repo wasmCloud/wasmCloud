@@ -269,6 +269,29 @@ pub async fn start_host_with_p3_http_handler(
     Ok((bound_addr, host))
 }
 
+/// Like [`start_host_with_p3_http_handler`] but also returns the [`HttpServer`], so a test can
+/// drive host-side ingress hooks directly (e.g. deliver a message to a trigger service's
+/// messaging handler via `deliver_trigger_service_message`).
+pub async fn start_host_with_p3_handler(
+    addr: &str,
+) -> Result<(
+    std::net::SocketAddr,
+    impl HostApi,
+    Arc<HttpServer<DevRouter>>,
+)> {
+    let engine = Engine::builder().build()?;
+    let http_server = Arc::new(HttpServer::new(DevRouter::default(), addr.parse()?).await?);
+    let bound_addr = http_server.addr();
+    let host = with_standard_plugins(
+        HostBuilder::new()
+            .with_engine(engine)
+            .with_http_handler(http_server.clone()),
+    )?
+    .build()?;
+    let host = host.start().await.context("Failed to start host")?;
+    Ok((bound_addr, host, http_server))
+}
+
 /// Extract the numeric value of `"name":N` from a flat JSON body without
 /// pulling in a JSON dependency. Panics (failing the test) if the field is
 /// missing or non-numeric.

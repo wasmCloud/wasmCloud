@@ -910,6 +910,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "msg-counter"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
 name = "naga"
 version = "0.19.0"
 source = "git+https://github.com/wasi-gfx/wgpu.git?rev=898122bf2cace048e63f065181a86459edb28205#898122bf2cace048e63f065181a86459edb28205"
