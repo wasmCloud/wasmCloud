@@ -47,7 +47,7 @@ wasi-blobstore = []
 wasi-keyvalue = []
 # Component-model `(implements ..)` / `named_imports` multiplexing
 wasm_component_model_implements = []
-wasi-webgpu = ["dep:wasi-webgpu-wasmtime", "dep:wasi-graphics-context-wasmtime"]
+wasi-webgpu = ["dep:wasi-webgpu-wasmtime"]
 wasmcloud-postgres = [
     "dep:tokio-postgres", "dep:tokio-postgres-rustls",
     "dep:deadpool-postgres", "dep:postgres-types",
@@ -142,8 +142,7 @@ webpki-roots = { workspace = true }
 # fails to build on Windows and s390x, so the deps are gated to match the
 # `#[cfg]` on `plugin::wasi_webgpu`.
 [target.'cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))'.dependencies]
-wasi-graphics-context-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "301716b5591bc6e08eca852b936fc8a17dea5379", optional = true }
-wasi-webgpu-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "301716b5591bc6e08eca852b936fc8a17dea5379", optional = true }
+wasi-webgpu-wasmtime = { version = "0.1", optional = true }
 
 # Proto codegen only. Wasm fixtures are built by `cargo xtask
 # build-fixtures` (see /xtask), which owns wit-component and the WASI

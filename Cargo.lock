@@ -3582,6 +3582,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pastey"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
+
+[[package]]
 name = "pbjson"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4875,16 +4881,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shared"
-version = "0.1.0"
-source = "git+https://github.com/wasi-gfx/wasi-gfx-runtime.git?rev=301716b5591bc6e08eca852b936fc8a17dea5379#301716b5591bc6e08eca852b936fc8a17dea5379"
-dependencies = [
- "async-broadcast",
- "async-trait",
- "wasmtime-wasi-io",
-]
-
-[[package]]
 name = "shell-words"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6019,7 +6015,7 @@ dependencies = [
  "url",
  "uuid",
  "wash-runtime",
- "wasi-preview1-component-adapter-provider",
+ "wasi-preview1-component-adapter-provider 46.0.1",
  "wasm-metadata 0.253.0",
  "wasm-pkg-client",
  "wasm-pkg-core",
@@ -6097,7 +6093,6 @@ dependencies = [
  "ulid",
  "url",
  "uuid",
- "wasi-graphics-context-wasmtime",
  "wasi-webgpu-wasmtime",
  "wasmtime",
  "wasmtime-wasi",
@@ -6125,15 +6120,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasi-graphics-context-wasmtime"
-version = "0.1.0"
-source = "git+https://github.com/wasi-gfx/wasi-gfx-runtime.git?rev=301716b5591bc6e08eca852b936fc8a17dea5379#301716b5591bc6e08eca852b936fc8a17dea5379"
+name = "wasi-gfx-runtime-shared"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ace83d996af0f746fa0b878ce74f44fd9020ae51b6461daeb4032aa414ef49ed"
 dependencies = [
- "raw-window-handle",
+ "async-broadcast",
+ "futures",
  "wasmtime",
- "wasmtime-wasi",
- "wasmtime-wasi-io",
 ]
+
+[[package]]
+name = "wasi-preview1-component-adapter-provider"
+version = "45.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b62c065538924eb463e52c96d863943809e1d61b79bd4d6e7cdafb990419a26a"
 
 [[package]]
 name = "wasi-preview1-component-adapter-provider"
@@ -6143,19 +6144,19 @@ checksum = "1b6c48003fe59c201c97a7786ff55feabe6b6f83b598aa9ff5bcc4f94d940bf3"
 
 [[package]]
 name = "wasi-webgpu-wasmtime"
-version = "0.1.0"
-source = "git+https://github.com/wasi-gfx/wasi-gfx-runtime.git?rev=301716b5591bc6e08eca852b936fc8a17dea5379#301716b5591bc6e08eca852b936fc8a17dea5379"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae442a284775e6b80f1aefefc4eee0320f5570b0d57dbde97e8d7beb5cecc20d"
 dependencies = [
  "async-broadcast",
  "callback-future",
  "futures",
  "log",
+ "pastey",
  "raw-window-handle",
- "shared",
- "wasi-graphics-context-wasmtime",
+ "wasi-gfx-runtime-shared",
  "wasmtime",
  "wasmtime-wasi",
- "wasmtime-wasi-io",
  "wgpu-core",
  "wgpu-types",
 ]
@@ -7746,6 +7747,8 @@ version = "2.5.3"
 dependencies = [
  "anyhow",
  "clap",
+ "wasi-preview1-component-adapter-provider 45.0.3",
+ "wit-component 0.253.0",
 ]
 
 [[package]]

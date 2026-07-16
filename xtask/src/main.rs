@@ -83,7 +83,6 @@ const P2_FIXTURES: &[&str] = &[
     "cron-service",
     "cron-component",
     "http-blobstore",
-    "http-webgpu",
     "cpu-usage-service",
     "messaging-handler",
     "messaging-echo",
@@ -121,6 +120,7 @@ const P3_FIXTURES: &[&str] = &[
     "msg-counter",
     "bridge-backend",
     "bridge-service",
+    "http-webgpu",
 ];
 
 // Fixtures with local-only WIT worlds (no wasi imports). Copying shared
