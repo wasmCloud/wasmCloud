@@ -7394,6 +7394,7 @@ dependencies = [
  "url",
  "uuid",
  "wash-runtime",
+ "wasi-preview1-component-adapter-provider",
  "wasm-metadata 0.253.0",
  "wasm-pkg-client",
  "wasm-pkg-core",
@@ -7511,9 +7512,9 @@ dependencies = [
 
 [[package]]
 name = "wasi-preview1-component-adapter-provider"
-version = "45.0.2"
+version = "46.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17218dd1de5aa7b0b5c7afec3cdd69d780632eb31f3925a8b8728cd6e29ebb73"
+checksum = "1b6c48003fe59c201c97a7786ff55feabe6b6f83b598aa9ff5bcc4f94d940bf3"
 
 [[package]]
 name = "wasi-webgpu-wasmtime"
