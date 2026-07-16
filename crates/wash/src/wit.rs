@@ -218,7 +218,7 @@ fn oci_registry_mapping(
 /// Wrapper around a `wasm_pkg_client::Client` including configuration for fetching WIT dependencies.
 /// Primarily enables reuse of functionality to override dependencies and properly setup the client.
 pub struct WkgFetcher {
-    wkg_config: wasm_pkg_core::config::Config,
+    wkg_config: wasm_pkg_core::manifest::Manifest,
     wkg_client_config: wasm_pkg_client::Config,
     cache: FileCache,
 }
@@ -325,7 +325,7 @@ impl CommonPackageArgs {
 
 impl WkgFetcher {
     pub const fn new(
-        wkg_config: wasm_pkg_core::config::Config,
+        wkg_config: wasm_pkg_core::manifest::Manifest,
         wkg_client_config: wasm_pkg_client::Config,
         cache: FileCache,
     ) -> Self {
@@ -336,10 +336,10 @@ impl WkgFetcher {
         }
     }
 
-    /// Load a `WkgFetcher` from a `CommonPackageArgs` and a `wasm_pkg_core::config::Config`
+    /// Load a `WkgFetcher` from a `CommonPackageArgs` and a `wasm_pkg_core::manifest::Manifest`
     pub async fn from_common(
         common: &CommonPackageArgs,
-        wkg_config: wasm_pkg_core::config::Config,
+        wkg_config: wasm_pkg_core::manifest::Manifest,
     ) -> Result<Self> {
         let cache = common
             .load_cache()
@@ -569,12 +569,12 @@ fn parse_wit_package_name(target: &str) -> Result<(String, Vec<String>, Option<S
 
 /// Set override for the target WIT package using the wkg config overrides map
 fn set_override_for_target(
-    overrides: &mut std::collections::HashMap<String, wasm_pkg_core::config::Override>,
+    overrides: &mut std::collections::HashMap<String, wasm_pkg_core::manifest::Override>,
     namespace: &str,
     packages: &[String],
     path: PathBuf,
 ) {
-    use wasm_pkg_core::config::Override;
+    use wasm_pkg_core::manifest::Override;
 
     if packages.is_empty() {
         // Namespace-level override: "namespace" = { path = "..." }
@@ -781,17 +781,17 @@ pub async fn load_lock_file(project_dir: impl AsRef<Path>) -> Result<LockFile> {
 /// standalone `wkg` tool honors them.
 pub async fn load_wkg_config(
     project_dir: impl AsRef<Path>,
-) -> Result<wasm_pkg_core::config::Config> {
+) -> Result<wasm_pkg_core::manifest::Manifest> {
     let config_path = project_dir
         .as_ref()
-        .join(wasm_pkg_core::config::CONFIG_FILE_NAME);
+        .join(wasm_pkg_core::manifest::MANIFEST_FILE_NAME);
     if tokio::fs::try_exists(&config_path).await.unwrap_or(false) {
         debug!(path = %config_path.display(), "loading wkg.toml overrides");
-        wasm_pkg_core::config::Config::load_from_path(&config_path)
+        wasm_pkg_core::manifest::Manifest::load_from_path(&config_path)
             .await
             .with_context(|| format!("failed to load {}", config_path.display()))
     } else {
-        Ok(wasm_pkg_core::config::Config::default())
+        Ok(wasm_pkg_core::manifest::Manifest::default())
     }
 }
 
@@ -806,7 +806,7 @@ mod tests {
     async fn test_fetcher(dir: &Path) -> WkgFetcher {
         let cache = FileCache::new(dir.to_path_buf()).await.unwrap();
         WkgFetcher::new(
-            wasm_pkg_core::config::Config::default(),
+            wasm_pkg_core::manifest::Manifest::default(),
             wasm_pkg_client::Config::default(),
             cache,
         )
@@ -1295,7 +1295,7 @@ mod tests {
     async fn load_wkg_config_reads_project_overrides() {
         let tmp = tempfile::tempdir().unwrap();
         tokio::fs::write(
-            tmp.path().join(wasm_pkg_core::config::CONFIG_FILE_NAME),
+            tmp.path().join(wasm_pkg_core::manifest::MANIFEST_FILE_NAME),
             "[overrides]\n\"wasmcloud:app\" = { path = \"../wasmcloud-app\" }\n",
         )
         .await
