@@ -1,16 +1,12 @@
-# Fixture WIT deps are populated at build time from the shared
-# p2-wit-deps/ and p3-wit-deps/ directories (see `cargo xtask
-# build-fixtures` in /xtask). The shared dirs themselves are *not*
-# matched by this pattern because they don't contain a `wit/` subtree.
+# Fixture WIT deps are materialized at build time by `wash build` — its
+# `wit fetch` resolves the local file refs in each fixture's wkg.toml (see
+# `cargo xtask build-fixtures` in /xtask). The shared p2-wit-deps/ and
+# p3-wit-deps/ dirs (and the bespoke wasmcloud-bridge/ contract) are not
+# matched by this pattern because they have no `wit/` subtree.
 */wit/deps/
 
-# Fixtures with local-only WIT worlds manage their own deps
-# (not populated from shared). Un-ignore so they stay committed.
-!cron-service/wit/deps/
-!cron-component/wit/deps/
-
-*-p3/wkg.lock
-*-p3-*/wkg.lock
+# Lock files written by the fetch
+*/wkg.lock
 
 # Build artifacts
 */target/
