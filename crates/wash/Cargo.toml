@@ -65,6 +65,7 @@ tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true, features = ["attributes"] }
 url = { workspace = true }
 uuid = { workspace = true }
+wasi-preview1-component-adapter-provider = "46"
 wasm-metadata = { workspace = true }
 wasm-pkg-client = { workspace = true }
 wasm-pkg-core = { workspace = true }
