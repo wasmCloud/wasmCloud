@@ -13,6 +13,8 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
+mod e2e_images;
+
 #[derive(Parser)]
 #[command(name = "xtask", about = "wasmCloud workspace tasks", version)]
 struct Cli {
@@ -25,6 +27,10 @@ enum Task {
     /// Build the wash-runtime wasm test fixtures into
     /// `crates/wash-runtime/tests/wasm/`.
     BuildFixtures,
+    /// Build the runtime-operator e2e fixture components, deploy the in-cluster
+    /// oci-registry, and push the fixtures into it. Configured via env
+    /// (E2E_IMAGES_MODE, E2E_FIXTURES_DIR); see the e2e_images module.
+    E2eImages,
 }
 
 fn main() -> Result<()> {
@@ -32,6 +38,7 @@ fn main() -> Result<()> {
     let workspace = workspace_dir().context("failed to locate workspace root")?;
     match cli.task {
         Task::BuildFixtures => build_fixtures(&workspace),
+        Task::E2eImages => e2e_images::run(&workspace),
     }
 }
 
@@ -146,7 +153,7 @@ fn build_fixtures(workspace: &Path) -> Result<()> {
 /// each fixture's WIT deps from its `wkg.toml` local file refs, runs its
 /// `cargo build`, and wraps a wasip1 core module into a component. Build `wash`
 /// if no compiled copy is present.
-fn ensure_wash(workspace: &Path) -> Result<PathBuf> {
+pub(crate) fn ensure_wash(workspace: &Path) -> Result<PathBuf> {
     // `cargo build -p wash` writes under CARGO_TARGET_DIR when the environment
     // sets one (the bench hosts point it outside the workspace so the cargo
     // cache survives `actions/checkout --clean`), and under `<workspace>/target`

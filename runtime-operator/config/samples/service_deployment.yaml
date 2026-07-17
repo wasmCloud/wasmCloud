@@ -26,6 +26,9 @@ spec:
       name: hello-workload
   template:
     spec:
+      # Schedule onto the chart's default hostgroup.
+      hostSelector:
+        hostgroup: default
       hostInterfaces:
         - namespace: wasi
           package: http

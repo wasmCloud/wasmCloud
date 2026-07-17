@@ -20,6 +20,12 @@ kubeadmConfigPatches:
 nodes:
   - role: control-plane
     extraPortMappings:
+      # Pinned to 127.0.0.1 (kind's default is 0.0.0.0, which claims :80 on every
+      # local address). The e2e's `make e2e-images` port-forwards the in-cluster
+      # oci-registry to 127.0.0.2:80 to push fixtures; pinning this mapping to
+      # 127.0.0.1 keeps 127.0.0.2:80 free. The http specs still reach the gateway
+      # via localhost:80 (= 127.0.0.1:80).
       - containerPort: 30950
         hostPort: 80
+        listenAddress: "127.0.0.1"
         protocol: TCP

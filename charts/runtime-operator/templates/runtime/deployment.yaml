@@ -1,7 +1,13 @@
-{{- $registry := .Values.runtime.image.registry | default .Values.global.image.registry -}}
 {{- $top := . }}
 {{- range .Values.runtime.hostGroups }}
 {{- $ns := default $top.Release.Namespace .namespace }}
+{{- /* Per-hostgroup image: `.image.{registry,repository,tag}` override the
+       chart-wide runtime.image, so one release can mix host versions (e.g. an
+       all-features host for one group and the shipped image for another). */}}
+{{- $hi := default (dict) .image }}
+{{- $imgRegistry := $hi.registry | default $top.Values.runtime.image.registry | default $top.Values.global.image.registry }}
+{{- $imgRepo := $hi.repository | default $top.Values.runtime.image.repository }}
+{{- $imgTag := $hi.tag | default $top.Values.runtime.image.tag | default $top.Chart.AppVersion }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -62,7 +68,7 @@ spec:
       {{- include "runtime-operator.imagePullSecrets" $top | nindent 6 }}
       containers:
         - name: host
-          image: {{ if $registry }}{{ printf "%s/%s" $registry $top.Values.runtime.image.repository }}{{ else }}{{ $top.Values.runtime.image.repository }}{{ end }}:{{ $top.Values.runtime.image.tag | default $top.Chart.AppVersion }}
+          image: {{ if $imgRegistry }}{{ printf "%s/%s" $imgRegistry $imgRepo }}{{ else }}{{ $imgRepo }}{{ end }}:{{ $imgTag }}
           env:
             # wash resolves its XDG data/config/cache dirs under $HOME; point it
             # at the writable /tmp emptyDir so the host runs with a read-only root
