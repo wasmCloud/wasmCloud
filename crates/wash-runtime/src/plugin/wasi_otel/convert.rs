@@ -2,9 +2,9 @@
 
 use opentelemetry::logs::{AnyValue, LogRecord as OtelLogRecord};
 use opentelemetry::trace::{
-    SpanContext, SpanId, SpanKind, Status, TraceFlags, TraceId, TraceState,
+    SpanContext, SpanId, SpanKind, Status, TraceContextExt, TraceFlags, TraceId, TraceState,
 };
-use opentelemetry::{Key, KeyValue};
+use opentelemetry::{Context, Key, KeyValue};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::bindings::wasi::otel::logs::LogRecord as WasiLogRecord;
@@ -323,6 +323,43 @@ pub fn wit_span_context_to_otel(ctx: &WitSpanContext) -> SpanContext {
     .unwrap_or_default();
 
     SpanContext::new(trace_id, span_id, trace_flags, ctx.is_remote, trace_state)
+}
+
+/// Build the parent [`Context`] for a WASI span from its `parent_span_id`.
+///
+/// The guest already tracks its own span nesting (e.g. `compute` parented under
+/// `handler`); that relationship is carried over the wire as `parent_span_id` on
+/// `SpanData`. Without using it here, `Tracer::build` falls back to whatever OTel
+/// context is ambient on the host when `on-end` is processed, which flattens every
+/// guest span onto the host's current span instead of preserving guest-side nesting.
+pub fn wasi_span_parent_context(span: &wasi_tracing::SpanData) -> Context {
+    let Ok(parent_span_id) = SpanId::from_hex(&span.parent_span_id) else {
+        return Context::new();
+    };
+    if parent_span_id == SpanId::INVALID {
+        return Context::new();
+    }
+
+    let trace_id = TraceId::from_hex(&span.span_context.trace_id).unwrap_or(TraceId::INVALID);
+    let trace_flags = if span
+        .span_context
+        .trace_flags
+        .contains(WitTraceFlags::SAMPLED)
+    {
+        TraceFlags::SAMPLED
+    } else {
+        TraceFlags::default()
+    };
+
+    let parent_span_context = SpanContext::new(
+        trace_id,
+        parent_span_id,
+        trace_flags,
+        true,
+        TraceState::default(),
+    );
+
+    Context::new().with_remote_span_context(parent_span_context)
 }
 
 /// Convert WASI span kind to OTel SpanKind
