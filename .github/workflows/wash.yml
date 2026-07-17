@@ -107,8 +107,8 @@ jobs:
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
       # Compile the wash-runtime wasm test fixtures. The test/bench targets
-      # `include_bytes!` these, so they must exist before `cargo test`/`cargo
-      # bench` below. Targets wasm32-wasip2/wasip1 come from setup-rust.
+      # `include_bytes!` these, so they must exist before the `cargo test`
+      # steps below. Targets wasm32-wasip2/wasip1 come from setup-rust.
       - name: Build test fixtures
         run: cargo xtask build-fixtures
       - name: Build
@@ -136,10 +136,18 @@ jobs:
         run: |
           cargo test -p wash-runtime --features wasm_component_model_implements,wasi-tls -- --ignored
           cargo test -p wash --test integration_oci -- --ignored
+      # Bitrot guard: the benches must still compile. Built via `cargo test
+      # --benches` rather than `cargo bench --no-run` because the `bench`
+      # profile inherits `release`, which shares no artifacts with the dev/test
+      # builds above and so rebuilds the whole tree (wasmtime included) just to
+      # compile-check four targets; the test profile reuses them. wash-runtime
+      # gates no code on `debug_assertions`, so both profiles compile the same
+      # source. Optimized bench builds happen only in bench.yml (manual
+      # dispatch), so an opt-level-only break surfaces there, not here.
       - name: Build benchmarks
         if: matrix.os == 'ubuntu-latest'
         run: |
-          cargo bench -p wash-runtime --no-run
+          cargo test -p wash-runtime --benches --no-run
 
   lint:
     needs:
