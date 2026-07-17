@@ -310,15 +310,18 @@ func buildBaseHelmSets() []string {
 		sets = append(sets,
 			"runtime.hostGroups[0].extraArgs[0]=--allow-insecure-registries",
 			// hostGroups[1]: the `registry` hostgroup. Stays on HTTPS so it can
-			// pull the oci-registry component from ghcr, and enables wasip3 for
-			// its p3 wasi:http/handler export. It runs only the oci-registry
-			// workload (testdata/oci-registry.yaml, hostSelector: hostgroup=registry).
+			// pull the oci-registry component from ghcr. It runs only the
+			// oci-registry workload (testdata/oci-registry.yaml, hostSelector:
+			// hostgroup=registry). The oci-registry exports a p3 async
+			// wasi:http/handler and imports the async wasmcloud:blobstore plugin;
+			// the all-features engine enables the component-model-async proposal
+			// by default (crates/wash-runtime/src/engine/mod.rs build()), so no
+			// extra host flag is required.
 			"runtime.hostGroups[1].name=registry",
 			"runtime.hostGroups[1].replicas=1",
 			"runtime.hostGroups[1].service.type=ClusterIP",
 			"runtime.hostGroups[1].http.enabled=true",
 			"runtime.hostGroups[1].http.port=80",
-			"runtime.hostGroups[1].wasip3.enabled=true",
 			"runtime.hostGroups[1].webgpu.enabled=false",
 			"runtime.hostGroups[1].resources.requests.memory=64Mi",
 			"runtime.hostGroups[1].resources.requests.cpu=250m",
