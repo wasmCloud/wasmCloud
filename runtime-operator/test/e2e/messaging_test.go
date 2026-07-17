@@ -18,7 +18,6 @@ package e2e
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -35,17 +34,14 @@ import (
 // Before the fix, the WorkloadDeployment reached Ready=True but no SUB ever
 // landed on NATS, so requests on the configured subject silently timed out.
 //
-// To run this test fully, two pieces of infrastructure are required:
-//
-//  1. MESSAGING_E2E_IMAGE — an OCI ref the cluster can pull, pointing at a
-//     wasm component that exports wasmcloud:messaging/handler@0.2.0 and
-//     replies to incoming messages by publishing the body back on
-//     msg.reply_to. The fixture under
-//     crates/wash-runtime/tests/fixtures/messaging-handler does exactly that;
-//     publish it (e.g. `ghcr.io/wasmcloud/components/messaging-echo-rust:0.1.0`).
-//  2. BUILD_RUNTIME_IMAGE=true — builds the wash-runtime (host) image from
-//     the local tree so the host pod actually exercises the code under
-//     test. Without this the e2e runs against the published canary image.
+// The component under test is the messaging-handler fixture
+// (crates/wash-runtime/tests/fixtures/messaging-handler): it exports
+// wasmcloud:messaging/handler@0.2.0 and replies to incoming messages by
+// publishing the body back on msg.reply_to. Like every e2e fixture it is built
+// and served from the in-cluster registry (make e2e-images) rather than a
+// published image; it runs on any host, so it runs on both wash.yml legs (the
+// release and all-features fixture hosts) and self-skips only where the registry
+// flow is off.
 //
 // On failure, the spec dumps hostgroup pod logs (with RUST_LOG bumped to
 // debug for `wash_runtime`) so the NatsMessaging plugin's instrumentation
@@ -57,11 +53,15 @@ var _ = Describe("Messaging Subscription", Ordered, func() {
 	var componentImage string
 
 	BeforeAll(func() {
-		componentImage = os.Getenv("MESSAGING_E2E_IMAGE")
-		if componentImage == "" {
-			Skip("MESSAGING_E2E_IMAGE not set; skipping messaging e2e " +
-				"(see runtime-operator/test/e2e/messaging_test.go for setup)")
+		// The messaging-handler fixture is built and served from the in-cluster
+		// registry (make e2e-images), like every other e2e fixture, and it runs on
+		// any host — so this spec runs on both wash.yml legs (the release and
+		// all-features fixture hosts both pull it from the registry). It self-skips
+		// only where the registry flow is off (the canary job, plain local runs).
+		if !inClusterRegistry {
+			Skip("in-cluster registry disabled; skipping messaging e2e")
 		}
+		componentImage = registryRef("messaging-handler")
 
 		// Earlier specs (Finalizer) may have scaled the hostgroup to zero;
 		// scale back up and wait for a host to be Ready so this spec is
@@ -171,6 +171,10 @@ spec:
   replicas: 1
   template:
     spec:
+      # Pin to the insecure default hostgroup; the registry hostgroup stays on
+      # HTTPS and can't pull this fixture from the in-cluster (plain-HTTP) registry.
+      hostSelector:
+        hostgroup: default
       hostInterfaces:
         - namespace: wasmcloud
           package: messaging
