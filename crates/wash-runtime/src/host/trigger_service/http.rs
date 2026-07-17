@@ -42,6 +42,10 @@ pub(super) struct HttpTask {
     pub(super) req: hyper::Request<hyper::body::Incoming>,
     pub(super) resp_tx:
         tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
+    /// Concurrency-cap permit for pooled members (None on the trigger-service
+    /// path). Held for the task's lifetime; dropping it on completion returns
+    /// capacity to the member's semaphore, which the rotation drain awaits.
+    pub(super) _permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 impl AccessorTask<SharedCtx> for HttpTask {
@@ -50,6 +54,7 @@ impl AccessorTask<SharedCtx> for HttpTask {
             service,
             req,
             resp_tx,
+            _permit,
         } = self;
 
         let (parts, body) = req.into_parts();

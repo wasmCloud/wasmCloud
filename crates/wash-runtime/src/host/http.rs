@@ -1017,38 +1017,72 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
 
             // `poolSize` ≥ 1 on a p3 handler component: keep a pool of warm
             // long-lived instances and round-robin requests across them
-            // instead of instantiating per request. Each member is a
-            // handler-only trigger-service driver on its own store.
-            // `maxInvocations` bounds each member's delivery channel
-            // (backpressure); 0 = default depth.
+            // instead of instantiating per request. Semantics track the
+            // pinned wasmtime-wasi-http `handler::ProxyHandler` (what
+            // `wasmtime serve` uses for p3): `maxInvocations` caps in-flight
+            // invocations per member (default 16, ProxyHandler's
+            // `max_instance_concurrent_reuse_count`), and each member's
+            // store is retired and rebuilt after `WASH_POOL_INSTANCE_REUSE`
+            // invocations (default 128, ProxyHandler's
+            // `max_instance_reuse_count`; 0 = unlimited) so a leaky guest
+            // can't accumulate state forever.
             if crate::engine::targets_wasip3_http(instance_pre.component())
                 && let Some((pool_size, max_invocations)) =
                     resolved_handle.component_pool_config(component_id).await
                 && pool_size > 0
             {
-                let channel_depth = if max_invocations > 0 {
+                let max_concurrent = if max_invocations > 0 {
                     max_invocations
                 } else {
-                    256
+                    16
                 };
+                let reuse_budget = std::env::var("WASH_POOL_INSTANCE_REUSE")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(128);
+                let channel_depth = (max_concurrent * 2).max(64);
                 let mut senders = Vec::with_capacity(pool_size);
                 let mut drivers = Vec::with_capacity(pool_size);
                 for member in 0..pool_size {
-                    let store = resolved_handle.new_store(component_id).await.map_err(|e| {
-                        e.context(format!("failed to build store for pool member {member}"))
-                    })?;
-                    let (tx, rx) = tokio::sync::mpsc::channel(channel_depth);
-                    let ts = crate::host::trigger_service::TriggerService::spawn(
-                        store,
-                        instance_pre.clone(),
-                        vec![crate::host::trigger_service::Ingress::Http(rx)],
-                    );
+                    let (tx, mut rx) = tokio::sync::mpsc::channel(channel_depth);
+                    let resolved = resolved_handle.clone();
+                    let pre = instance_pre.clone();
+                    let cid = component_id.to_string();
+                    drivers.push(tokio::spawn(async move {
+                        loop {
+                            let mut store = match resolved.new_store(&cid).await {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    error!(err = ?e, member, "failed to build pool member store; member going dark");
+                                    break;
+                                }
+                            };
+                            match crate::host::trigger_service::run_pool_member_incarnation(
+                                &mut store,
+                                &pre,
+                                &mut rx,
+                                reuse_budget,
+                                max_concurrent,
+                            )
+                            .await
+                            {
+                                Ok(true) => break, // channel closed: pool torn down
+                                Ok(false) => {
+                                    debug!(member, "pool member reuse budget exhausted; rotating store");
+                                    continue;
+                                }
+                                Err(e) => {
+                                    warn!(err = ?e, member, "pool member incarnation faulted; rebuilding store");
+                                    continue;
+                                }
+                            }
+                        }
+                    }));
                     senders.push(tx);
-                    drivers.push(ts.driver);
                 }
                 info!(
                     workload_id = resolved_handle.id(),
-                    pool_size, channel_depth, "started warm instance pool"
+                    pool_size, max_concurrent, reuse_budget, "started warm instance pool"
                 );
                 self.component_pools.write().await.insert(
                     resolved_handle.id().to_string(),

@@ -116,6 +116,7 @@ impl PreparedIngress {
                         service: Arc::clone(service),
                         req,
                         resp_tx,
+                        _permit: None,
                     });
                 }
             }
@@ -208,6 +209,76 @@ pub(crate) async fn run_trigger_driver(
         .await
         .context("trigger service driver exited")?;
     Ok(())
+}
+
+/// Drive one incarnation of a warm-pool member: serve HTTP jobs on a
+/// long-lived instance with an in-flight concurrency cap, retiring after
+/// `reuse_budget` invocations.
+///
+/// Semantics mirror the pinned wasmtime-wasi-http `handler::ProxyHandler`
+/// (the machinery `wasmtime serve` uses for p3): `reuse_budget` ≙
+/// `max_instance_reuse_count` (bounds state accumulation in a leaky guest;
+/// 0 = unlimited) and `max_concurrent` ≙ `max_instance_concurrent_reuse_count`.
+/// Rotation is drain-safe: `run_concurrent` only drives spawned tasks while
+/// this closure runs, so before returning we re-acquire every permit,
+/// guaranteeing no in-flight request is dropped by the store teardown.
+///
+/// Returns `Ok(true)` when the delivery channel closed (pool teardown) and
+/// `Ok(false)` when the budget was exhausted (caller rebuilds the store —
+/// a retired store is never re-entered, matching the trigger-service
+/// supervisor's fresh-store-per-incarnation rule).
+pub(crate) async fn run_pool_member_incarnation(
+    store: &mut Store<SharedCtx>,
+    pre: &InstancePre<SharedCtx>,
+    rx: &mut tokio::sync::mpsc::Receiver<ServiceHttpJob>,
+    reuse_budget: usize,
+    max_concurrent: usize,
+) -> anyhow::Result<bool> {
+    let instance = pre
+        .instantiate_async(&mut *store)
+        .await
+        .context("failed to instantiate pool member")?;
+    let service = Arc::new(
+        Service::new(&mut *store, &instance)
+            .map_err(|e| e.context("pool member is missing wasi:http/handler export"))?,
+    );
+    let max_concurrent = max_concurrent.max(1);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
+
+    let closed = store
+        .run_concurrent(async |accessor| {
+            let mut served = 0usize;
+            let closed = loop {
+                if reuse_budget > 0 && served >= reuse_budget {
+                    break false;
+                }
+                // Acquire capacity BEFORE taking a job so a member at its
+                // concurrency cap back-pressures the channel instead of
+                // queueing unbounded in-flight work.
+                let Ok(permit) = Arc::clone(&semaphore).acquire_owned().await else {
+                    // Semaphore is never closed; unreachable, but fail safe.
+                    break false;
+                };
+                let Some((req, resp_tx)) = rx.recv().await else {
+                    break true;
+                };
+                served += 1;
+                accessor.spawn(HttpTask {
+                    service: Arc::clone(&service),
+                    req,
+                    resp_tx,
+                    _permit: Some(permit),
+                });
+            };
+            // Drain: all permits back = every in-flight task completed.
+            let _ = semaphore
+                .acquire_many(u32::try_from(max_concurrent).unwrap_or(u32::MAX))
+                .await;
+            closed
+        })
+        .await
+        .context("pool member driver exited")?;
+    Ok(closed)
 }
 
 /// Drives the service's `wasi:cli/run` export (its long-running work).
