@@ -4,7 +4,7 @@
 #
 #   sudo WASMCLOUD_BENCH_RUNNER_TOKEN=<TOKEN> bash scripts/bench/install-runner.sh \
 #     [--repo  wasmCloud/wasmCloud] \
-#     [--version 2.334.0]
+#     [--version 2.335.1]
 #
 # The registration token is one-shot. Get one from:
 #   GitHub Repo > Settings > Actions > Runners > New self-hosted runner
@@ -30,7 +30,7 @@
 set -euo pipefail
 
 REPO="wasmCloud/wasmCloud"
-RUNNER_VERSION="2.334.0"
+RUNNER_VERSION="2.335.1"
 # Default to the actual hostname of the box (set by installimage). Override with
 # --name if needed. No hardcoded value here — the box's identity isn't in the repo.
 RUNNER_NAME="$(hostname)"
@@ -42,7 +42,7 @@ TARGET_DIR="/var/lib/bench/target"
 # SHA256 of actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz, copied from
 # https://github.com/actions/runner/releases/tag/v${RUNNER_VERSION}. Bump
 # both `RUNNER_VERSION` and this constant together.
-RUNNER_SHA256="048024cd2c848eb6f14d5646d56c13a4def2ae7ee3ad12122bee960c56f3d271"
+RUNNER_SHA256="4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf"
 
 usage() {
   sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
