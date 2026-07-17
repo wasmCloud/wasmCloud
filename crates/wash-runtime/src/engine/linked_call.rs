@@ -94,6 +94,22 @@ pub(crate) fn component_ctx_template_from_metadata(
     ComponentCtxTemplate::from_metadata(metadata)
 }
 
+/// Test-only minimal template so perf benches can build stores without a
+/// full workload resolution pass.
+#[cfg(test)]
+pub(crate) fn bench_ctx_template(component_id: &str, workload_id: &str) -> ComponentCtxTemplate {
+    ComponentCtxTemplate {
+        component_id: component_id.into(),
+        workload_id: workload_id.into(),
+        local_resources: crate::types::LocalResources::default(),
+        volume_mounts: Vec::new(),
+        plugins: None,
+        loopback: Arc::new(std::sync::Mutex::new(loopback::Network::default())),
+        #[cfg(feature = "wasi-tls")]
+        tls_provider: None,
+    }
+}
+
 #[cfg(feature = "wasi-tls")]
 pub(crate) fn component_ctx_template_from_metadata_with_tls(
     metadata: &WorkloadMetadata,
