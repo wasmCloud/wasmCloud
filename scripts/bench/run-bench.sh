@@ -49,7 +49,9 @@ log="${CARGO_TARGET_DIR}/run-${bench}-${GITHUB_RUN_ID:-local}.log"
   echo "cpu:    $(awk -F: '/^model name/{print $2; exit}' /proc/cpuinfo | sed 's/^ //')"
   echo "online: $(nproc) cpu(s)"
   echo "git:    $(git rev-parse HEAD)"
-  echo "ref:    ${GITHUB_REF_NAME:-?}"
+  # Match what bench-tools/meta.rs records (WASMCLOUD_BENCH_REF), not the
+  # dispatch ref, so this log header agrees with the emitted data rows.
+  echo "ref:    ${WASMCLOUD_BENCH_REF:-${GITHUB_REF_NAME:-?}}"
   echo "ts:     $(date -u +%FT%TZ)"
   echo
 } | tee "$log"

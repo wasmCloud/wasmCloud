@@ -78,6 +78,10 @@ jobs:
           else
             echo "benches=[\"${INPUT_BENCH}\"]" >> "$GITHUB_OUTPUT"
             ref="${INPUT_REF:-${DEFAULT_REF}}"
+            # Normalize to the short name (main, v2.5.2) so it matches
+            # GITHUB_REF_NAME's style and, when it's a tag, passes the
+            # releases view's strict-semver ref filter.
+            ref="${ref#refs/heads/}"; ref="${ref#refs/tags/}"
             echo "ref=${ref}" >> "$GITHUB_OUTPUT"
           fi
 
@@ -101,6 +105,13 @@ jobs:
       # actions/checkout's clean step doesn't blow it away every run.
       CARGO_TARGET_DIR: /var/lib/bench/target
       CARGO_INCREMENTAL: "0"
+      # The ref recorded on each data row — bench-tools/meta.rs reads this as
+      # the single source of truth for what was benched. It's the resolved,
+      # normalized matrix ref (the tag for `release`, the checked-out ref for a
+      # dispatch). meta.rs deliberately ignores GITHUB_REF_NAME, which is the
+      # *dispatch* ref (e.g. `main` even when the `ref` input is v2.5.2) and
+      # would hide tag runs from the semver-filtered releases view.
+      WASMCLOUD_BENCH_REF: ${{ needs.matrix.outputs.ref }}
     steps:
       - name: checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
