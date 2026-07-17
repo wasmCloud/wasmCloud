@@ -130,9 +130,6 @@ spec:
             {{- if and (.webgpu) (.webgpu.enabled) }}
             - "--wasi-webgpu"
             {{- end }}
-            {{- if and (.wasip3) (.wasip3.enabled) }}
-            - "--wasip3"
-            {{- end }}
             {{- range .wasmProposals }}
             - "--wasm-proposal={{ . }}"
             {{- end }}

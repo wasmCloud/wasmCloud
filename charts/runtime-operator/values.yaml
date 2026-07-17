@@ -350,8 +350,6 @@ runtime:
         type: ClusterIP
       webgpu:
         enabled: false
-      wasip3:
-        enabled: false
       # -- Additional wasm proposals to enable on this host group's engine,
       # rendered as `--wasm-proposal=<name>` args. Accepted names:
       # component-model-async, gc, exception-handling, wide-arithmetic,
