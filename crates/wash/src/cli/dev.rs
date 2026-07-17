@@ -446,14 +446,18 @@ async fn create_workload(
         });
     }
 
-    let service_file_bytes = if let Some(service_path) = &dev_config.service_file {
-        let raw = tokio::fs::read(service_path).await.with_context(|| {
-            format!("failed to read service file at {}", service_path.display())
-        })?;
-        Some(Bytes::from(raw))
-    } else {
-        None
-    };
+    let (service_file_bytes, service_interfaces) =
+        if let Some(service_path) = &dev_config.service_file {
+            let raw = tokio::fs::read(service_path).await.with_context(|| {
+                format!("failed to read service file at {}", service_path.display())
+            })?;
+            let interfaces = host
+                .intersect_interfaces(&raw)
+                .context("failed to extract service file interfaces")?;
+            (Some(Bytes::from(raw)), Some(interfaces))
+        } else {
+            (None, None)
+        };
 
     Ok(build_workload(
         &dev_config,
@@ -461,6 +465,7 @@ async fn create_workload(
         dev_interfaces,
         sidecars,
         service_file_bytes,
+        service_interfaces,
         resolved_workload,
     ))
 }
@@ -486,6 +491,7 @@ fn build_workload(
     dev_interfaces: HashSet<WitInterface>,
     sidecars: Vec<LoadedComponent>,
     service_file_bytes: Option<Bytes>,
+    service_interfaces: Option<HashSet<WitInterface>>,
     resolved_workload: &ResolvedWorkload,
 ) -> Workload {
     let mut volumes = Vec::<Volume>::new();
@@ -506,10 +512,13 @@ fn build_workload(
         });
     }
 
-    let mut all_component_interfaces = Vec::with_capacity(1 + sidecars.len());
+    let mut all_component_interfaces = Vec::with_capacity(1 + sidecars.len() + 1);
     all_component_interfaces.push(dev_interfaces);
     for s in &sidecars {
         all_component_interfaces.push(s.interfaces.clone());
+    }
+    if let Some(svc_interfaces) = service_interfaces {
+        all_component_interfaces.push(svc_interfaces);
     }
 
     let host_interfaces = build_workload_host_interfaces(
@@ -754,6 +763,7 @@ mod tests {
             HashSet::new(),
             sidecars,
             None,
+            None,
             &resolved,
         );
 
@@ -806,6 +816,7 @@ mod tests {
             HashSet::new(),
             sidecars,
             None,
+            None,
             &resolved,
         );
 
@@ -854,6 +865,7 @@ mod tests {
             HashSet::new(),
             Vec::new(),
             None,
+            None,
             &resolved,
         );
 
@@ -883,6 +895,7 @@ mod tests {
             HashSet::new(),
             Vec::new(),
             Some(fake_bytes("svc-sidecar")),
+            None,
             &resolved,
         );
 
@@ -915,6 +928,7 @@ mod tests {
             HashSet::new(),
             sidecars,
             Some(fake_bytes("svc")),
+            None,
             &ResolvedWorkload::default(),
         );
 
@@ -962,6 +976,7 @@ mod tests {
             HashSet::from([iface("wasi", "http")]),
             sidecars,
             None,
+            None,
             &resolved,
         );
 
@@ -993,6 +1008,7 @@ mod tests {
             fake_bytes("dev"),
             HashSet::new(),
             sidecars,
+            None,
             None,
             &ResolvedWorkload::default(),
         );
