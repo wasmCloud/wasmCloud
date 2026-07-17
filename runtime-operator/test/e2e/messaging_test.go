@@ -183,6 +183,14 @@ spec:
             - handler
           config:
             subscriptions: "%s"
+        # The messaging-handler fixture also imports wasi:logging; declare it so
+        # the host binds the logging plugin, otherwise the component fails to
+        # instantiate with "wasi:logging/logging import not satisfied".
+        - namespace: wasi
+          package: logging
+          version: "0.1.0-draft"
+          interfaces:
+            - logging
       components:
         - name: messaging-echo
           image: %s

@@ -253,11 +253,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("waiting for Workload CRs to be cleaned up")
 			verifyCleanup := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
-					"-n", namespace, "-o", "jsonpath={.items}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("[]"))
+				expectNoTestWorkloads(g, namespace)
 			}
 			Eventually(verifyCleanup).WithTimeout(1 * time.Minute).Should(Succeed())
 		})
@@ -354,11 +350,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("waiting for Workload CRs to be cleaned up")
 			verifyCleanup := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
-					"-n", namespace, "-o", "jsonpath={.items}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("[]"))
+				expectNoTestWorkloads(g, namespace)
 			}
 			Eventually(verifyCleanup).WithTimeout(1 * time.Minute).Should(Succeed())
 		})
@@ -1005,6 +997,27 @@ func rewriteWorkloadImages(manifest string) string {
 		return manifest
 	}
 	return strings.ReplaceAll(manifest, httpHelloWorldImage, registryRef("http-handler-p2"))
+}
+
+// expectNoTestWorkloads asserts that no Workload CRs remain in ns once the
+// in-cluster oci-registry infrastructure workload is excluded. The registry runs
+// as a long-lived Workload in this namespace for the whole suite (serving every
+// fixture image), so a bare "the items list is empty" check no longer holds on
+// the legs that run it. When the registry flow is off, nothing is filtered and
+// this is equivalent to asserting the list is empty.
+func expectNoTestWorkloads(g Gomega, ns string) {
+	cmd := exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
+		"-n", ns, "-o", "jsonpath={.items[*].metadata.name}")
+	output, err := utils.Run(cmd)
+	g.Expect(err).NotTo(HaveOccurred())
+	var remaining []string
+	for _, name := range strings.Fields(output) {
+		if strings.HasPrefix(name, "oci-registry") {
+			continue
+		}
+		remaining = append(remaining, name)
+	}
+	g.Expect(remaining).To(BeEmpty(), "test Workload CRs were not cleaned up")
 }
 
 // verifyWorkloadDeploy applies a WorkloadDeployment manifest and verifies the
