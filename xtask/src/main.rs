@@ -147,8 +147,21 @@ fn build_fixtures(workspace: &Path) -> Result<()> {
 /// `cargo build`, and wraps a wasip1 core module into a component. Build `wash`
 /// if no compiled copy is present.
 fn ensure_wash(workspace: &Path) -> Result<PathBuf> {
+    // `cargo build -p wash` writes under CARGO_TARGET_DIR when the environment
+    // sets one (the bench hosts point it outside the workspace so the cargo
+    // cache survives `actions/checkout --clean`), and under `<workspace>/target`
+    // otherwise. Resolve the binary against the same directory cargo uses, or
+    // the built `wash` is looked for at a path nothing was written to.
+    // Join against workspace so a relative CARGO_TARGET_DIR resolves the same
+    // way cargo resolves it (cargo runs below with current_dir = workspace); an
+    // absolute value replaces the base, matching cargo too.
+    let target_dir = workspace.join(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("target")),
+    );
     for profile in ["release", "debug"] {
-        let candidate = workspace.join(format!("target/{profile}/wash"));
+        let candidate = target_dir.join(profile).join("wash");
         if candidate.exists() {
             return Ok(candidate);
         }
@@ -162,7 +175,7 @@ fn ensure_wash(workspace: &Path) -> Result<PathBuf> {
     if !status.success() {
         bail!("failed to build the wash binary");
     }
-    Ok(workspace.join("target/debug/wash"))
+    Ok(target_dir.join("debug").join("wash"))
 }
 
 /// Build one fixture through `wash build` and stage the resulting component
