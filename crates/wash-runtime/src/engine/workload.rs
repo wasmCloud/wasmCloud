@@ -784,9 +784,11 @@ impl ResolvedWorkload {
         // start finds the handler; restarts re-register from inside the supervisor.
         let (ingresses, http_tx, messaging_tx) =
             build_trigger_ingresses(serves_http, serves_messaging);
+        let ingress_hostnames =
+            crate::host::http::http_ingress_hostnames(self.host_interfaces());
         if let Some(http_tx) = http_tx {
             self.http_handler
-                .on_service_http_resolved(self.id(), http_tx)
+                .on_service_http_resolved(self.id(), ingress_hostnames.clone(), http_tx)
                 .await
                 .map_err(|e| anyhow::anyhow!("failed to register service HTTP handler: {e:#}"))?;
         }
@@ -814,7 +816,11 @@ impl ResolvedWorkload {
                             build_trigger_ingresses(serves_http, serves_messaging);
                         if let Some(http_tx) = http_tx
                             && let Err(e) = http_handler
-                                .on_service_http_resolved(&workload_id, http_tx)
+                                .on_service_http_resolved(
+                                    &workload_id,
+                                    ingress_hostnames.clone(),
+                                    http_tx,
+                                )
                                 .await
                         {
                             error!(err = %e, "failed to re-register service HTTP handler on restart");

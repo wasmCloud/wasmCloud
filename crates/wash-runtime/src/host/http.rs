@@ -64,6 +64,30 @@ use tokio::sync::{RwLock, mpsc};
 use tokio_rustls::TlsAcceptor;
 
 /// Validates a hostname according to RFC 1123.
+/// Extract the HTTP ingress hostnames (primary `host` + `host-aliases`) from a
+/// workload's host interfaces. Used to register hostname-keyed routing for
+/// trigger-service workloads, which never pass through `on_workload_resolved`.
+pub(crate) fn http_ingress_hostnames(interfaces: &[crate::wit::WitInterface]) -> Vec<String> {
+    let Some(http_iface) = interfaces.iter().find(|i| i.is_incoming_http_handler()) else {
+        return Vec::new();
+    };
+    let mut hosts = Vec::new();
+    if let Some(primary) = http_iface.config.get("host")
+        && is_valid_hostname(primary)
+    {
+        hosts.push(primary.clone());
+    }
+    if let Some(aliases) = http_iface.config.get("host-aliases") {
+        hosts.extend(
+            aliases
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty() && is_valid_hostname(s)),
+        );
+    }
+    hosts
+}
+
 fn is_valid_hostname(host: &str) -> bool {
     !host.is_empty()
         && host.len() <= 253
@@ -139,9 +163,15 @@ pub trait Router: Send + Sync + 'static {
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()>;
 
     /// Register a workload whose long-lived service handles HTTP ingress (the
-    /// service exports `wasi:http/handler`). Routers that key off a component
-    /// can use this to map the workload for routing. Default: no-op.
-    async fn on_service_http_resolved(&self, _workload_id: &str) -> anyhow::Result<()> {
+    /// service exports `wasi:http/handler`). `hostnames` carries the
+    /// primary host + aliases from the workload's `wasi:http` interface
+    /// config so hostname-keyed routers can map service-only workloads
+    /// (which never pass through `on_workload_resolved`). Default: no-op.
+    async fn on_service_http_resolved(
+        &self,
+        _workload_id: &str,
+        _hostnames: &[String],
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -178,10 +208,32 @@ pub trait Router: Send + Sync + 'static {
 /// Router that routes requests by 'Host' header, configured via WitInterface config
 #[derive(Default)]
 pub struct DynamicRouter {
+    /// Round-robin cursor over workloads sharing a hostname. Without it,
+    /// `HashSet::iter().next()` pins every request for a hostname to one
+    /// arbitrary workload and N replicas on a host add no throughput.
+    rr: std::sync::atomic::AtomicUsize,
     host_to_workload: tokio::sync::RwLock<HashMap<String, HashSet<String>>>,
     /// Maps workload_id -> all hostnames (primary + aliases) registered for it.
     /// Used by on_workload_unbind to remove all entries cleanly.
     workload_to_host: tokio::sync::RwLock<HashMap<String, Vec<String>>>,
+}
+
+impl DynamicRouter {
+    /// Map every hostname in `hostnames` to `workload_id` (and record the
+    /// reverse mapping for unbind).
+    async fn register_hostnames(&self, workload_id: &str, hostnames: Vec<String>) {
+        {
+            let mut lock = self.workload_to_host.write().await;
+            lock.insert(workload_id.to_string(), hostnames.clone());
+        }
+        {
+            let mut lock = self.host_to_workload.write().await;
+            for host in hostnames {
+                let entry = lock.entry(host).or_insert_with(HashSet::new);
+                entry.insert(workload_id.to_string());
+            }
+        }
+    }
 }
 
 /// Implementation of Router that maps Host headers to workload IDs
@@ -229,20 +281,29 @@ impl Router for DynamicRouter {
         }
 
         let workload_id = resolved_handle.id().to_string();
+        self.register_hostnames(&workload_id, all_hosts).await;
 
-        {
-            let mut lock = self.workload_to_host.write().await;
-            lock.insert(workload_id.clone(), all_hosts.clone());
-        }
+        Ok(())
+    }
 
-        {
-            let mut lock = self.host_to_workload.write().await;
-            for host in &all_hosts {
-                let entry = lock.entry(host.clone()).or_insert_with(HashSet::new);
-                entry.insert(workload_id.clone());
-            }
-        }
-
+    async fn on_service_http_resolved(
+        &self,
+        workload_id: &str,
+        hostnames: &[String],
+    ) -> anyhow::Result<()> {
+        // Service-only workloads never pass through `on_workload_resolved`
+        // (that fires per resolved *component*), so their hostname mapping is
+        // registered here. Re-registration on service restart is idempotent.
+        let valid: Vec<String> = hostnames
+            .iter()
+            .filter(|h| is_valid_hostname(h))
+            .cloned()
+            .collect();
+        anyhow::ensure!(
+            !valid.is_empty(),
+            "service workload '{workload_id}' has no valid hostname in its wasi:http interface config"
+        );
+        self.register_hostnames(workload_id, valid).await;
         Ok(())
     }
 
@@ -297,9 +358,17 @@ impl Router for DynamicRouter {
 
             // Entry exists but is empty so treat it as "no workload bound" from the
             // caller's perspective; same 404 status
+            if workload_set.is_empty() {
+                return Err(RouteError::NoWorkloadForHost(workload_host.to_string()));
+            }
+            // Round-robin across workloads sharing this hostname. HashSet
+            // iteration order is arbitrary but stable between mutations, so a
+            // striding cursor spreads requests evenly; `iter().next()` would
+            // pin every request to one arbitrary replica.
+            let idx = self.rr.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let workload_id = workload_set
                 .iter()
-                .next()
+                .nth(idx % workload_set.len())
                 .ok_or_else(|| RouteError::NoWorkloadForHost(workload_host.to_string()))?;
 
             Ok(workload_id.clone())
@@ -417,7 +486,11 @@ impl Router for DevRouter {
         Ok(())
     }
 
-    async fn on_service_http_resolved(&self, workload_id: &str) -> anyhow::Result<()> {
+    async fn on_service_http_resolved(
+        &self,
+        workload_id: &str,
+        _hostnames: &[String],
+    ) -> anyhow::Result<()> {
         // A service-handled workload routes the same way as a component one:
         // DevRouter sends all requests to the most-recently resolved workload.
         let mut lock = self
@@ -484,11 +557,15 @@ pub trait HostHandler: Send + Sync + 'static {
 
     /// Register a long-lived service instance that serves HTTP ingress: inbound
     /// requests for `workload_id` are delivered over `sender` instead of
-    /// instantiating a component per request. Default: no-op (the workload
-    /// keeps the per-request path).
+    /// instantiating a component per request. `hostnames` is the primary
+    /// host + aliases from the workload's `wasi:http` interface config, for
+    /// hostname-keyed routers (service-only workloads never pass through
+    /// `on_workload_resolved`). Default: no-op (the workload keeps the
+    /// per-request path).
     async fn on_service_http_resolved(
         &self,
         _workload_id: &str,
+        _hostnames: Vec<String>,
         _sender: tokio::sync::mpsc::Sender<ServiceHttpJob>,
     ) -> anyhow::Result<()> {
         Ok(())
@@ -934,9 +1011,12 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
     async fn on_service_http_resolved(
         &self,
         workload_id: &str,
+        hostnames: Vec<String>,
         sender: tokio::sync::mpsc::Sender<ServiceHttpJob>,
     ) -> anyhow::Result<()> {
-        self.router.on_service_http_resolved(workload_id).await?;
+        self.router
+            .on_service_http_resolved(workload_id, &hostnames)
+            .await?;
         // A re-resolve without an intervening unbind is expected: the trigger
         // service supervisor re-registers a fresh sender on every restart (see
         // `execute_trigger_service`) to swap in the new incarnation. Overwriting
