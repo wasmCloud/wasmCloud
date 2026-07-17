@@ -29,12 +29,18 @@
     repo_url: "https://github.com/wasmCloud/wasmCloud.git"
     repo_dir: /opt/wasmcloud
     # gungraun enforces equality between the runner binary version and the
-    # gungraun crate version at run time. Derive the runner version from the
-    # crate dep in crates/wash-runtime/Cargo.toml so a `cargo update gungraun`
-    # bump there is the single source of truth.
+    # RESOLVED gungraun crate version at run time. Derive from Cargo.lock, NOT
+    # the `gungraun = "X.Y.Z"` caret requirement in crates/wash-runtime/
+    # Cargo.toml: that requirement resolves up to the latest patch (e.g.
+    # "0.19.1" → 0.19.2), so reading it pins the runner too low and the bench
+    # fails with a version-skew error. install-runner.sh derives it the same way.
     gungraun_version: >-
-      {{ (lookup('file', playbook_dir + '/../../../crates/wash-runtime/Cargo.toml')
-          | regex_findall('(?m)^gungraun = "([^"]+)"'))[0] }}
+      {{ (lookup('file', playbook_dir + '/../../../Cargo.lock')
+          | regex_findall('name = "gungraun"\s+version = "([^"]+)"'))[0] }}
+    # wasm-component-ld pin — see the "Install or upgrade wasm-component-ld"
+    # task for why. Keep in sync with install-runner.sh's
+    # WASM_COMPONENT_LD_VERSION.
+    wasm_component_ld_version: "0.5.26"
     # CPU index reserved by isolcpus / nohz_full / rcu_nocbs. Must match
     # WASMCLOUD_BENCH_ISOLATED_CPU in scripts/bench/run-bench.sh.
     isolated_cpu: 5
@@ -169,17 +175,23 @@
         state: present
       tags: [toolchain, nodejs]
 
-    - name: List cargo-installed binaries (root)
-      ansible.builtin.command: /root/.cargo/bin/cargo install --list
+    # gungraun-runner and wasm-component-ld are standalone tools (not tied to a
+    # rustup toolchain) that BOTH the CI runner (the `bench` user) and manual
+    # root benches in /opt/wasmcloud need. Install them once, to the shared
+    # /usr/local (on every user's default PATH), so there is a single copy and a
+    # single source of truth per version. install-runner.sh wires the bench user
+    # up to these; it does not re-install them.
+    - name: List cargo-installed binaries under /usr/local
+      ansible.builtin.command: /root/.cargo/bin/cargo install --list --root /usr/local
       register: cargo_installed
       changed_when: false
-      tags: [toolchain, gungraun]
+      tags: [toolchain, gungraun, wasm-component-ld]
 
     - name: Install or upgrade gungraun-runner
       ansible.builtin.shell: |
         set -euo pipefail
         . "$HOME/.cargo/env"
-        cargo install gungraun-runner --version {{ gungraun_version }}
+        cargo install gungraun-runner --version {{ gungraun_version }} --root /usr/local
       args:
         executable: /bin/bash
       # `cargo install --list` is the canonical way to query installed
@@ -189,6 +201,41 @@
       # regex, no split/last on a possibly-empty value).
       when: ('gungraun-runner v' ~ gungraun_version ~ ':') not in cargo_installed.stdout
       tags: [toolchain, gungraun]
+
+    # wasm-component-ld: rust-toolchain.toml pins Rust 1.96.0, whose bundled
+    # wasm-component-ld (0.5.22) can't decode the component-type section
+    # wit-bindgen >=0.58 emits for the fixtures' component-model `implements`
+    # feature (wasip2 build dies with "invalid leading byte (0x2) for import
+    # name"). Install a new-enough one and point the wasip2 linker at it.
+    # Remove once rust-toolchain.toml bundles >=0.5.25.
+    - name: Install or upgrade wasm-component-ld
+      ansible.builtin.shell: |
+        set -euo pipefail
+        . "$HOME/.cargo/env"
+        cargo install wasm-component-ld --version {{ wasm_component_ld_version }} --root /usr/local
+      args:
+        executable: /bin/bash
+      when: ('wasm-component-ld v' ~ wasm_component_ld_version ~ ':') not in cargo_installed.stdout
+      tags: [toolchain, wasm-component-ld]
+
+    # Point root's cargo at the shared wasm-component-ld, for manual
+    # /opt/wasmcloud benches run as root (rustc resolves the wasip2 linker via
+    # cargo config, not PATH). Append the table only if absent, so a re-run — or
+    # a config already written by hand — doesn't create a duplicate table and
+    # break the TOML. install-runner.sh does the same for the bench user.
+    - name: Point root's wasm32-wasip2 linker at the shared wasm-component-ld
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cfg="$HOME/.cargo/config.toml"
+        if [ ! -f "$cfg" ] || ! grep -q '^\[target\.wasm32-wasip2\]' "$cfg"; then
+          printf '\n[target.wasm32-wasip2]\nlinker = "/usr/local/bin/wasm-component-ld"\n' >> "$cfg"
+          echo CHANGED
+        fi
+      args:
+        executable: /bin/bash
+      register: wcl_cfg
+      changed_when: "'CHANGED' in wcl_cfg.stdout"
+      tags: [toolchain, wasm-component-ld]
 
     # ── Repo clone for ad-hoc / manual benches ────────────────────────────
     - name: Clone wasmCloud repo to {{ repo_dir }}
