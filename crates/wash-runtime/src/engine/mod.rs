@@ -1040,6 +1040,18 @@ fn new_pooling_config(instances: u32) -> PoolingAllocationConfig {
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_MEMORY_SIZE") {
         config.max_memory_size(v);
     }
+    if let Some(v) = getenv("WASMTIME_POOLING_LINEAR_MEMORY_KEEP_RESIDENT") {
+        config.linear_memory_keep_resident(v);
+    }
+    if let Some(v) = getenv("WASMTIME_POOLING_TABLE_KEEP_RESIDENT") {
+        config.table_keep_resident(v);
+    }
+    if let Some(v) = getenv("WASMTIME_POOLING_ASYNC_STACK_KEEP_RESIDENT") {
+        config.async_stack_keep_resident(v);
+    }
+    if let Some(v) = getenv("WASMTIME_POOLING_DECOMMIT_BATCH_SIZE") {
+        config.decommit_batch_size(v);
+    }
     #[cfg(not(windows))]
     if let Some(v) = getenv("WASMTIME_POOLING_TOTAL_GC_HEAPS") {
         config.total_gc_heaps(v);
