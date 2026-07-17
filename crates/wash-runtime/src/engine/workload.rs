@@ -394,6 +394,14 @@ impl WorkloadComponent {
         self.metadata.linker.instantiate_pre(&component)
     }
 
+    /// Like [`Self::pre_instantiate`] but without requiring `&mut self`:
+    /// `Linker::instantiate_pre` only needs `&self`, so callers holding a read
+    /// lock on the component map can pre-instantiate without serializing on a
+    /// write lock.
+    pub fn pre_instantiate_ref(&self) -> wasmtime::Result<InstancePre<SharedCtx>> {
+        self.metadata.linker.instantiate_pre(&self.metadata.component)
+    }
+
     pub fn metadata(&self) -> &WorkloadMetadata {
         &self.metadata
     }
@@ -1395,21 +1403,48 @@ impl ResolvedWorkload {
     }
 
     /// Helper to create a new wasmtime Store for multiple components and set active given component in the workload.
+    ///
+    /// Perf-critical: runs once per HTTP request. Builds everything under a
+    /// single read lock without cloning `WorkloadMetadata` (whose by-value
+    /// `Linker` clone costs ~50µs per request — see perf notebook H7) and
+    /// pre-instantiates linked components via `pre_instantiate_ref` (read
+    /// access) instead of the write-locking `instantiate_pre`.
     pub async fn new_store(
         &self,
         component_id: &str,
     ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
-        // Clone + drop the lock before building: the store factory write-locks
-        // `components`, so a held read lock would deadlock.
-        let metadata = {
+        let (engine, active_template, linked_templates, linked_instances) = {
             let components = self.components.read().await;
-            components
+            let component = components
                 .get(component_id)
-                .context("component ID not found in workload")?
-                .metadata
-                .clone()
+                .context("component ID not found in workload")?;
+            let metadata = &component.metadata;
+            let active_template = self.component_ctx_template(metadata);
+            let mut linked_templates = Vec::with_capacity(metadata.linked_components.len());
+            let mut linked_instances = Vec::with_capacity(metadata.linked_components.len());
+            for linked_id in &metadata.linked_components {
+                let linked = components.get(linked_id).with_context(|| {
+                    format!("linked component '{linked_id}' not found in workload")
+                })?;
+                linked_templates.push(self.component_ctx_template(&linked.metadata));
+                linked_instances.push((linked_id.clone(), linked.pre_instantiate_ref()?));
+            }
+            (
+                metadata.engine().clone(),
+                active_template,
+                linked_templates,
+                linked_instances,
+            )
         };
-        self.new_store_from_metadata(&metadata, false).await
+        new_store_from_templates(
+            &engine,
+            self.http_handler.clone(),
+            &active_template,
+            &linked_templates,
+            &linked_instances,
+            false,
+        )
+        .await
     }
 
     /// Creates a new wasmtime Store for multiple components from the given workload metadata.

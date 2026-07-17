@@ -6019,7 +6019,7 @@ dependencies = [
  "url",
  "uuid",
  "wash-runtime",
- "wasi-preview1-component-adapter-provider",
+ "wasi-preview1-component-adapter-provider 46.0.1",
  "wasm-metadata 0.253.0",
  "wasm-pkg-client",
  "wasm-pkg-core",
@@ -6134,6 +6134,12 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-io",
 ]
+
+[[package]]
+name = "wasi-preview1-component-adapter-provider"
+version = "45.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b62c065538924eb463e52c96d863943809e1d61b79bd4d6e7cdafb990419a26a"
 
 [[package]]
 name = "wasi-preview1-component-adapter-provider"
@@ -7746,6 +7752,8 @@ version = "2.5.3"
 dependencies = [
  "anyhow",
  "clap",
+ "wasi-preview1-component-adapter-provider 45.0.3",
+ "wit-component 0.253.0",
 ]
 
 [[package]]
