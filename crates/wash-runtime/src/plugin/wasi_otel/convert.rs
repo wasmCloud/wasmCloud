@@ -304,15 +304,20 @@ fn convert_key_values(attrs: &[super::bindings::wasi::otel::types::KeyValue]) ->
         .collect()
 }
 
+/// Convert WASI trace flags to OTel `TraceFlags`, preserving the sampled bit.
+fn wit_trace_flags_to_otel(flags: WitTraceFlags) -> TraceFlags {
+    if flags.contains(WitTraceFlags::SAMPLED) {
+        TraceFlags::SAMPLED
+    } else {
+        TraceFlags::default()
+    }
+}
+
 /// Convert WASI span context to OTel SpanContext
 pub fn wit_span_context_to_otel(ctx: &WitSpanContext) -> SpanContext {
     let trace_id = TraceId::from_hex(&ctx.trace_id).unwrap_or(TraceId::INVALID);
     let span_id = SpanId::from_hex(&ctx.span_id).unwrap_or(SpanId::INVALID);
-    let trace_flags = if ctx.trace_flags.contains(WitTraceFlags::SAMPLED) {
-        TraceFlags::SAMPLED
-    } else {
-        TraceFlags::default()
-    };
+    let trace_flags = wit_trace_flags_to_otel(ctx.trace_flags);
 
     // Convert trace state from list of tuples
     let trace_state = TraceState::from_key_value(
@@ -341,15 +346,7 @@ pub fn wasi_span_parent_context(span: &wasi_tracing::SpanData) -> Context {
     }
 
     let trace_id = TraceId::from_hex(&span.span_context.trace_id).unwrap_or(TraceId::INVALID);
-    let trace_flags = if span
-        .span_context
-        .trace_flags
-        .contains(WitTraceFlags::SAMPLED)
-    {
-        TraceFlags::SAMPLED
-    } else {
-        TraceFlags::default()
-    };
+    let trace_flags = wit_trace_flags_to_otel(span.span_context.trace_flags);
 
     let parent_span_context = SpanContext::new(
         trace_id,
