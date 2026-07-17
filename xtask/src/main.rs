@@ -143,13 +143,15 @@ fn build_fixtures(workspace: &Path) -> Result<()> {
     fs::create_dir_all(&wasm_dir)
         .with_context(|| format!("failed to create {}", wasm_dir.display()))?;
 
-    build_kind(
-        &fixtures_dir,
-        &wasm_dir,
-        FixtureKind::P2,
-        P2_FIXTURES,
-        P2_SKIP_SHARED_WIT,
-    )?;
+    if std::env::var("XTASK_SKIP_P2").is_err() {
+        build_kind(
+            &fixtures_dir,
+            &wasm_dir,
+            FixtureKind::P2,
+            P2_FIXTURES,
+            P2_SKIP_SHARED_WIT,
+        )?;
+    }
     build_kind(
         &fixtures_dir,
         &wasm_dir,
