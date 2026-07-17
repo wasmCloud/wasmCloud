@@ -731,6 +731,22 @@ pub type ServiceHandlers = Arc<RwLock<HashMap<String, tokio::sync::mpsc::Sender<
 /// instance. Empty unless a workload's service exports a messaging handler.
 pub type MessagingHandlers = Arc<RwLock<HashMap<String, tokio::sync::mpsc::Sender<MessagingJob>>>>;
 
+/// A pool of warm long-lived instances serving a component workload's HTTP
+/// ingress (manifest `poolSize` ≥ 1, p3 handler components only). Requests
+/// round-robin across the members; each member is a [`TriggerService`]-driven
+/// store+instance fed over its own channel.
+pub(crate) struct ComponentPool {
+    senders: Vec<tokio::sync::mpsc::Sender<ServiceHttpJob>>,
+    rr: std::sync::atomic::AtomicUsize,
+    /// Driver task handles, held so a pool teardown can be observed/aborted.
+    /// Dropping the senders (map removal) already ends each driver cleanly.
+    _drivers: Vec<tokio::task::JoinHandle<()>>,
+}
+
+/// A map from workload id to its warm-instance pool. Empty unless a component
+/// sets `poolSize` ≥ 1.
+pub(crate) type ComponentPools = Arc<RwLock<HashMap<String, Arc<ComponentPool>>>>;
+
 /// HTTP server plugin that handles incoming HTTP requests for WebAssembly components.
 ///
 /// This plugin implements the `wasi:http/incoming-handler` interface and routes
@@ -753,6 +769,8 @@ pub struct HttpServer<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
     workload_handles: WorkloadHandles,
     /// Workloads whose long-lived service serves HTTP ingress directly.
     service_handlers: ServiceHandlers,
+    /// Warm-instance pools for component workloads with `poolSize` ≥ 1.
+    component_pools: ComponentPools,
     /// Workloads whose long-lived trigger service serves messaging ingress directly.
     messaging_handlers: MessagingHandlers,
     shutdown_tx: Arc<RwLock<Option<mpsc::Sender<()>>>>,
@@ -875,6 +893,7 @@ impl<T: Router, O: OutgoingHandler> HttpServerBuilder<T, O> {
             addr,
             workload_handles: Arc::default(),
             service_handlers: Arc::default(),
+            component_pools: Arc::default(),
             messaging_handlers: Arc::default(),
             shutdown_tx: Arc::new(RwLock::new(None)),
             tls_acceptor,
@@ -920,6 +939,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
         let shutdown_tx_clone = self.shutdown_tx.clone();
         let workload_handles = self.workload_handles.clone();
         let service_handlers = self.service_handlers.clone();
+        let component_pools = self.component_pools.clone();
         let tls_acceptor = self.tls_acceptor.clone();
 
         // Store the shutdown sender
@@ -947,6 +967,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
                 handler,
                 workload_handles,
                 service_handlers,
+                component_pools,
                 &mut shutdown_rx,
                 tls_acceptor,
                 fuel_meter,
@@ -989,10 +1010,55 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
                 resolved_handle.id().to_string(),
                 (
                     resolved_handle.clone(),
-                    instance_pre,
+                    instance_pre.clone(),
                     component_id.to_string(),
                 ),
             );
+
+            // `poolSize` ≥ 1 on a p3 handler component: keep a pool of warm
+            // long-lived instances and round-robin requests across them
+            // instead of instantiating per request. Each member is a
+            // handler-only trigger-service driver on its own store.
+            // `maxInvocations` bounds each member's delivery channel
+            // (backpressure); 0 = default depth.
+            if crate::engine::targets_wasip3_http(instance_pre.component())
+                && let Some((pool_size, max_invocations)) =
+                    resolved_handle.component_pool_config(component_id).await
+                && pool_size > 0
+            {
+                let channel_depth = if max_invocations > 0 {
+                    max_invocations
+                } else {
+                    256
+                };
+                let mut senders = Vec::with_capacity(pool_size);
+                let mut drivers = Vec::with_capacity(pool_size);
+                for member in 0..pool_size {
+                    let store = resolved_handle.new_store(component_id).await.map_err(|e| {
+                        e.context(format!("failed to build store for pool member {member}"))
+                    })?;
+                    let (tx, rx) = tokio::sync::mpsc::channel(channel_depth);
+                    let ts = crate::host::trigger_service::TriggerService::spawn(
+                        store,
+                        instance_pre.clone(),
+                        vec![crate::host::trigger_service::Ingress::Http(rx)],
+                    );
+                    senders.push(tx);
+                    drivers.push(ts.driver);
+                }
+                info!(
+                    workload_id = resolved_handle.id(),
+                    pool_size, channel_depth, "started warm instance pool"
+                );
+                self.component_pools.write().await.insert(
+                    resolved_handle.id().to_string(),
+                    Arc::new(ComponentPool {
+                        senders,
+                        rr: std::sync::atomic::AtomicUsize::new(0),
+                        _drivers: drivers,
+                    }),
+                );
+            }
         }
 
         Ok(())
@@ -1004,6 +1070,9 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
         self.workload_handles.write().await.remove(workload_id);
         self.service_handlers.write().await.remove(workload_id);
         self.messaging_handlers.write().await.remove(workload_id);
+        // Dropping the pool drops its senders; each member's driver sees its
+        // channel close and exits cleanly, releasing the store.
+        self.component_pools.write().await.remove(workload_id);
 
         Ok(())
     }
@@ -1165,6 +1234,7 @@ async fn run_http_server<T: Router>(
     handler: Arc<T>,
     workload_handles: WorkloadHandles,
     service_handlers: ServiceHandlers,
+    component_pools: ComponentPools,
     shutdown_rx: &mut mpsc::Receiver<()>,
     tls_acceptor: Option<TlsAcceptor>,
     fuel_meter: FuelConsumptionMeter,
@@ -1184,6 +1254,7 @@ async fn run_http_server<T: Router>(
 
                         let handles_clone = workload_handles.clone();
                         let service_handlers_clone = service_handlers.clone();
+                        let component_pools_clone = component_pools.clone();
                         let tls_acceptor_clone = tls_acceptor.clone();
                         let handler_clone = handler.clone();
                         let fuel_meter = fuel_meter.clone();
@@ -1191,6 +1262,7 @@ async fn run_http_server<T: Router>(
                             let service = hyper::service::service_fn(move |req| {
                                 let handles = handles_clone.clone();
                                 let service_handlers = service_handlers_clone.clone();
+                                let component_pools = component_pools_clone.clone();
                                 let handler = handler_clone.clone();
                                 let fuel_meter = fuel_meter.clone();
                                 async move {
@@ -1198,7 +1270,7 @@ async fn run_http_server<T: Router>(
                                     let remote_context =
                                         opentelemetry::global::get_text_map_propagator(|propagator| propagator.extract(&extractor));
 
-                                    handle_http_request(handler, req, handles, service_handlers, fuel_meter).with_context(remote_context).await
+                                    handle_http_request(handler, req, handles, service_handlers, component_pools, fuel_meter).with_context(remote_context).await
                                 }
                             });
 
@@ -1291,6 +1363,7 @@ async fn handle_http_request<T: Router>(
     req: hyper::Request<hyper::body::Incoming>,
     workload_handles: WorkloadHandles,
     service_handlers: ServiceHandlers,
+    component_pools: ComponentPools,
     fuel_meter: FuelConsumptionMeter,
 ) -> Result<hyper::Response<HyperOutgoingBody>, hyper::Error> {
     let method = req.method().clone();
@@ -1343,6 +1416,42 @@ async fn handle_http_request<T: Router>(
         record_response_status(&response);
         return Ok(response);
     }
+
+    // Warm-instance pool (`poolSize` ≥ 1): deliver to a pooled long-lived
+    // instance, round-robin. On delivery failure (a pool member's driver
+    // faulted and its channel closed) fall through to the per-request path
+    // so requests degrade instead of erroring.
+    let pool = component_pools.read().await.get(&workload_id).cloned();
+    let req = if let Some(pool) = pool {
+        let idx = pool.rr.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let sender = &pool.senders[idx % pool.senders.len()];
+        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+        match sender.send((req, resp_tx)).await {
+            Ok(()) => {
+                let response = match resp_rx.await {
+                    Ok(Ok(resp)) => resp,
+                    Ok(Err(e)) => {
+                        error!(err = ?e, "pooled HTTP handler failed");
+                        error_response(500)
+                    }
+                    Err(_) => {
+                        error!("pooled HTTP instance dropped the response");
+                        error_response(500)
+                    }
+                };
+                record_response_status(&response);
+                let response = response
+                    .map(|body| MeteredBody::new(body, tracing::Span::current()).boxed_unsync());
+                return Ok(response);
+            }
+            Err(tokio::sync::mpsc::error::SendError((req, _))) => {
+                warn!(host = %workload_id, "pool member unavailable, falling back to per-request instantiation");
+                req
+            }
+        }
+    } else {
+        req
+    };
 
     // NOTE(lxf): Separate HTTP / GRPC handling
 

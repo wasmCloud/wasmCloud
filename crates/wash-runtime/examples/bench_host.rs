@@ -25,12 +25,20 @@ use wash_runtime::wit::WitInterface;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("error")),
+        )
+        .init();
     let mut addr = "127.0.0.1:8090".to_string();
     let mut service_path: Option<String> = None;
     let mut component_paths: Vec<String> = Vec::new();
     let mut router = "dev".to_string();
     let mut hostname = "bench".to_string();
     let mut replicas: u32 = 1;
+    let mut pool_size: i32 = 0;
+    let mut max_invocations: i32 = 0;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -45,6 +53,20 @@ async fn main() -> anyhow::Result<()> {
                     .expect("--replicas needs a value")
                     .parse()
                     .expect("--replicas must be a number")
+            }
+            "--pool" => {
+                pool_size = args
+                    .next()
+                    .expect("--pool needs a value")
+                    .parse()
+                    .expect("--pool must be a number")
+            }
+            "--max-inv" => {
+                max_invocations = args
+                    .next()
+                    .expect("--max-inv needs a value")
+                    .parse()
+                    .expect("--max-inv must be a number")
             }
             _ => component_paths.push(a),
         }
@@ -122,8 +144,8 @@ async fn main() -> anyhow::Result<()> {
                             bytes: b.clone(),
                             digest: None,
                             local_resources: LocalResources::default(),
-                            pool_size: 1,
-                            max_invocations: 0,
+                            pool_size,
+                            max_invocations,
                         })
                         .collect(),
                     host_interfaces: vec![WitInterface {

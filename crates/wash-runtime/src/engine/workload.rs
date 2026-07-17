@@ -365,6 +365,8 @@ impl WorkloadComponent {
         volume_mounts: Vec<(PathBuf, VolumeMount)>,
         local_resources: LocalResources,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
+        pool_size: usize,
+        max_invocations: usize,
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
@@ -382,10 +384,20 @@ impl WorkloadComponent {
                 linked_components: Default::default(),
             },
             name: component_name.into(),
-            // TODO: Implement pooling and instance limits
-            pool_size: 0,
-            max_invocations: 0,
+            pool_size,
+            max_invocations,
         }
+    }
+
+    /// Number of warm instances to keep for this component (0 = no pool,
+    /// per-request instantiation).
+    pub fn pool_size(&self) -> usize {
+        self.pool_size
+    }
+
+    /// Maximum concurrent invocations per warm instance (0 = default).
+    pub fn max_invocations(&self) -> usize {
+        self.max_invocations
     }
 
     /// Pre-instantiate the component to prepare for instantiation.
@@ -885,6 +897,17 @@ impl ResolvedWorkload {
 
     pub fn components(&self) -> Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>> {
         self.components.clone()
+    }
+
+    /// The `(pool_size, max_invocations)` configured for a component, if it
+    /// exists in this workload. Used by the HTTP plugin to decide whether to
+    /// keep a pool of warm instances for the per-request path.
+    pub async fn component_pool_config(&self, component_id: &str) -> Option<(usize, usize)> {
+        self.components
+            .read()
+            .await
+            .get(component_id)
+            .map(|c| (c.pool_size(), c.max_invocations()))
     }
 
     pub fn host_interfaces(&self) -> &Vec<WitInterface> {
@@ -2489,6 +2512,8 @@ mod tests {
             Vec::new(),
             local_resources,
             Arc::default(),
+            0,
+            0,
         )
     }
 
@@ -2511,6 +2536,8 @@ mod tests {
             Vec::new(),
             local_resources,
             Arc::default(),
+            0,
+            0,
         )
     }
 
@@ -2602,6 +2629,8 @@ mod tests {
                 Vec::new(),
                 LocalResources::default(),
                 Arc::default(),
+                0,
+                0,
             )
         };
         for (plugin, iface) in cases {
@@ -2861,6 +2890,8 @@ mod tests {
             Vec::new(),
             LocalResources::default(),
             Arc::default(),
+            0,
+            0,
         );
 
         let mut http_interface = WitInterface::from("wasi:http/handler");

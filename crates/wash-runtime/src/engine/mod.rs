@@ -559,9 +559,8 @@ impl Engine {
             component_volume_mounts,
             component.local_resources,
             loopback,
-            // TODO: implement pooling and instance limits
-            // component.pool_size,
-            // component.max_invocations,
+            component.pool_size.max(0) as usize,
+            component.max_invocations.max(0) as usize,
         ))
     }
 }
