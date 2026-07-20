@@ -101,7 +101,7 @@ pub struct LocalResources {
     /// for this component. Not settable over the wire (proto has no such
     /// field) — this is always host-controlled, overwritten by
     /// [`crate::engine::Engine`] from its own `allow_ip_name_lookup` setting
-    /// (`wash host --enabled-allow-ip-name-lookup` / `wash dev`'s
+    /// (`wash host --allow-ip-name-lookup` / `wash dev`'s
     /// `dev.allow_ip_name_lookup`) when a workload is initialized.
     pub allow_ip_name_lookup: bool,
 }

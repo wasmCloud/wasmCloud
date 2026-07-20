@@ -105,8 +105,8 @@ pub struct HostCommand {
     pub allow_insecure_registries: bool,
 
     /// Enable `wasi:sockets/ip-name-lookup` (DNS resolution via `resolve-addresses`) for components
-    #[arg(long = "enabled-allow-ip-name-lookup", default_value_t = false)]
-    pub enabled_allow_ip_name_lookup: bool,
+    #[arg(long = "allow-ip-name-lookup", default_value_t = false)]
+    pub allow_ip_name_lookup: bool,
 
     /// Timeout for pulling artifacts from OCI registries
     #[arg(long = "registry-pull-timeout", value_parser = humantime::parse_duration, default_value = "30s")]
@@ -174,7 +174,7 @@ impl CliCommand for HostCommand {
         let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
             .with_fuel_consumption(ctx.enable_meters())
-            .with_allow_ip_name_lookup(self.enabled_allow_ip_name_lookup);
+            .with_allow_ip_name_lookup(self.allow_ip_name_lookup);
         for proposal in &self.wasm_proposals {
             engine_builder = engine_builder.with_wasm_proposal(*proposal);
         }
