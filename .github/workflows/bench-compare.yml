@@ -19,9 +19,10 @@ name: bench-compare
 #   - Even gated on `author_association` ∈ {OWNER,MEMBER,COLLABORATOR},
 #     the model trusts every member's PR equally with merged code, which
 #     is a higher bar than we want for a single workflow's plumbing.
-#   - Maintainers who want a PR comparison can run this workflow manually
-#     with `ref_a = main`, `ref_b = <PR head sha>` — same delta, no new
-#     attack surface.
+#   - Maintainers who want a PR comparison run this workflow manually with
+#     `ref_a = main`, `ref_b = #<PR number>` (or a raw head sha). Both
+#     forms resolve and run the same fork head commit on the bench host —
+#     the manual workflow_dispatch trigger is the trust gate.
 #
 # Comparison runs do NOT push to S3 or update history.json. They are
 # ephemeral by design — for "did this PR move the numbers?" only.
@@ -39,11 +40,11 @@ on:
           - wasmtime_baseline
           - wasmtime_serve
       ref_a:
-        description: baseline ref (branch, tag, or sha)
+        description: baseline ref (branch, tag, sha, or #PR)
         type: string
         default: main
       ref_b:
-        description: candidate ref (branch, tag, or sha) — required
+        description: candidate ref (branch, tag, sha, or #PR) — required
         type: string
         required: true
 
