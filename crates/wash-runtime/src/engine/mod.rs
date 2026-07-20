@@ -237,6 +237,11 @@ pub struct Engine {
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
+    /// Whether components on this engine may use `wasi:sockets/ip-name-lookup`
+    /// (`resolve-addresses`). Applied to every component's [`LocalResources`](crate::types::LocalResources)
+    /// at workload-initialization time, overriding whatever came in over the
+    /// wire (see [`EngineBuilder::with_allow_ip_name_lookup`]).
+    pub(crate) allow_ip_name_lookup: bool,
 }
 
 impl std::fmt::Debug for Engine {
@@ -441,6 +446,12 @@ impl Engine {
             }
         }
 
+        // `allow_ip_name_lookup` is never set over the wire — always host-controlled.
+        let local_resources = crate::types::LocalResources {
+            allow_ip_name_lookup: self.allow_ip_name_lookup,
+            ..service.local_resources
+        };
+
         let service = WorkloadService::new(
             workload_id.as_ref(),
             workload_name.as_ref(),
@@ -448,7 +459,7 @@ impl Engine {
             wasmtime_component,
             linker,
             component_volume_mounts,
-            service.local_resources,
+            local_resources,
             service.max_restarts,
             loopback,
         );
@@ -546,6 +557,12 @@ impl Engine {
             }
         }
 
+        // `allow_ip_name_lookup` is never set over the wire — always host-controlled.
+        let local_resources = crate::types::LocalResources {
+            allow_ip_name_lookup: self.allow_ip_name_lookup,
+            ..component.local_resources
+        };
+
         // Create the WorkloadComponent with volume mounts
         Ok(WorkloadComponent::new(
             workload_id.as_ref(),
@@ -555,7 +572,7 @@ impl Engine {
             wasmtime_component,
             linker,
             component_volume_mounts,
-            component.local_resources,
+            local_resources,
             loopback,
             // TODO: implement pooling and instance limits
             // component.pool_size,
@@ -704,6 +721,7 @@ pub struct EngineBuilder {
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
+    allow_ip_name_lookup: bool,
 }
 
 impl EngineBuilder {
@@ -810,6 +828,13 @@ impl EngineBuilder {
         self.tls_provider = Some(provider);
         self
     }
+
+    /// Enables or disables `wasi:sockets/ip-name-lookup` (`resolve-addresses`)
+    /// for every component run on this engine. Disabled by default.
+    pub fn with_allow_ip_name_lookup(mut self, enable: bool) -> Self {
+        self.allow_ip_name_lookup = enable;
+        self
+    }
 }
 
 impl EngineBuilder {
@@ -900,6 +925,7 @@ impl EngineBuilder {
             cache,
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
+            allow_ip_name_lookup: self.allow_ip_name_lookup,
         })
     }
 }

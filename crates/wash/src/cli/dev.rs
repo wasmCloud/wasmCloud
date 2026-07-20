@@ -65,7 +65,8 @@ impl CliCommand for DevCommand {
 
         let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
-            .with_fuel_consumption(ctx.enable_meters());
+            .with_fuel_consumption(ctx.enable_meters())
+            .with_allow_ip_name_lookup(dev_config.allow_ip_name_lookup);
         for name in &dev_config.wasm_proposals {
             let proposal: WasmProposal = name
                 .parse()

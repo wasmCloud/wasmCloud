@@ -97,6 +97,13 @@ pub struct LocalResources {
     /// wire (proto / wash YAML) are parsed at conversion time, so the
     /// request hot path matches against the typed enum directly.
     pub allowed_hosts: Arc<[AllowedHost]>,
+    /// Whether `wasi:sockets/ip-name-lookup` (`resolve-addresses`) is permitted
+    /// for this component. Not settable over the wire (proto has no such
+    /// field) — this is always host-controlled, overwritten by
+    /// [`crate::engine::Engine`] from its own `allow_ip_name_lookup` setting
+    /// (`wash host --enabled-allow-ip-name-lookup` / `wash dev`'s
+    /// `dev.allow_ip_name_lookup`) when a workload is initialized.
+    pub allow_ip_name_lookup: bool,
 }
 
 impl Default for LocalResources {
@@ -108,6 +115,7 @@ impl Default for LocalResources {
             environment: HashMap::new(),
             volume_mounts: Vec::new(),
             allowed_hosts: Default::default(),
+            allow_ip_name_lookup: false,
         }
     }
 }

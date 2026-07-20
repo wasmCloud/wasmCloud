@@ -648,6 +648,9 @@ impl TryFrom<types::v2::LocalResources> for crate::types::LocalResources {
             volume_mounts: lr.volume_mounts.into_iter().map(Into::into).collect(),
             allowed_hosts,
             environment: lr.environment,
+            // Not carried over the wire; set later by `Engine` from its
+            // host-wide `allow_ip_name_lookup` setting.
+            allow_ip_name_lookup: false,
         })
     }
 }

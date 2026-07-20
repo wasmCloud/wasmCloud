@@ -249,7 +249,10 @@ async fn build_ctx_from_template(
             })
         }),
         loopback: Arc::clone(&template.loopback),
-        ..Default::default()
+        allowed_network_uses: sockets::AllowedNetworkUses {
+            ip_name_lookup: template.local_resources.allow_ip_name_lookup,
+            ..Default::default()
+        },
     };
 
     for mount in all_volume_mounts {
