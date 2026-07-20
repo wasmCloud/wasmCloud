@@ -446,8 +446,12 @@ async fn create_workload(
         });
     }
 
-    let (service_file_bytes, service_interfaces) =
-        if let Some(service_path) = &dev_config.service_file {
+    // The service file is only deployed as a service when the dev component
+    // isn't itself the service (`dev.service = false`); see `build_workload`.
+    // When `dev.service` is true the file is ignored, so there's no point
+    // reading it or folding its imports into the workload host interfaces.
+    let (service_file_bytes, service_interfaces) = match &dev_config.service_file {
+        Some(service_path) if !dev_config.service => {
             let raw = tokio::fs::read(service_path).await.with_context(|| {
                 format!("failed to read service file at {}", service_path.display())
             })?;
@@ -455,9 +459,9 @@ async fn create_workload(
                 .intersect_interfaces(&raw)
                 .context("failed to extract service file interfaces")?;
             (Some(Bytes::from(raw)), Some(interfaces))
-        } else {
-            (None, None)
-        };
+        }
+        _ => (None, None),
+    };
 
     Ok(build_workload(
         &dev_config,
@@ -512,7 +516,8 @@ fn build_workload(
         });
     }
 
-    let mut all_component_interfaces = Vec::with_capacity(1 + sidecars.len() + 1);
+    // dev component + sidecars + optional service file.
+    let mut all_component_interfaces = Vec::with_capacity(2 + sidecars.len());
     all_component_interfaces.push(dev_interfaces);
     for s in &sidecars {
         all_component_interfaces.push(s.interfaces.clone());
@@ -983,6 +988,31 @@ mod tests {
         let entry = find_iface(&workload.host_interfaces, "wasi", "config")
             .expect("sidecar import should have triggered wasi:config injection");
         assert_eq!(entry.config.get("KEY").unwrap(), "value");
+    }
+
+    #[test]
+    fn build_workload_service_file_interfaces_reach_host_interfaces() {
+        // Regression for #5351: a service_file that imports a plugin
+        // interface (e.g. wasi:keyvalue) must have that interface folded into
+        // the workload's host_interfaces so the plugin binds to the service.
+        // Here neither the dev component nor any sidecar imports it, so the
+        // interface can only reach host_interfaces via the service file.
+        let dev_cfg = DevConfig::default();
+
+        let workload = build_workload(
+            &dev_cfg,
+            fake_bytes("dev"),
+            HashSet::new(),
+            Vec::new(),
+            Some(fake_bytes("svc")),
+            Some(HashSet::from([iface("wasi", "keyvalue")])),
+            &ResolvedWorkload::default(),
+        );
+
+        assert!(
+            find_iface(&workload.host_interfaces, "wasi", "keyvalue").is_some(),
+            "service file import should appear in host_interfaces"
+        );
     }
 
     #[test]
