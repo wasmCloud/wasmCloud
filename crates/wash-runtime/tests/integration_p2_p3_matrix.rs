@@ -589,7 +589,6 @@ async fn test_p2_regression_with_p3_enabled() -> Result<()> {
                     volume_mounts: vec![],
                     // http-counter calls example.com
                     allowed_hosts: vec!["example.com".parse().unwrap()].into(),
-                    allow_ip_name_lookup: false,
                 },
                 pool_size: 1,
                 max_invocations: 100,

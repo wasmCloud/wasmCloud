@@ -50,7 +50,6 @@ async fn test_http_counter_integration() -> Result<()> {
             volume_mounts: vec![],
             // http-counter calls example.com
             allowed_hosts: vec!["example.com".parse().unwrap()].into(),
-            allow_ip_name_lookup: false,
         },
     );
 

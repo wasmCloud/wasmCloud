@@ -396,6 +396,7 @@ impl Engine {
             workload_components,
             host_interfaces,
         );
+        let workload = workload.with_allow_ip_name_lookup(self.allow_ip_name_lookup);
 
         #[cfg(feature = "wasi-tls")]
         let workload = workload.maybe_with_tls_provider(self.tls_provider.clone());
@@ -446,12 +447,6 @@ impl Engine {
             }
         }
 
-        // `allow_ip_name_lookup` is never set over the wire — always host-controlled.
-        let local_resources = crate::types::LocalResources {
-            allow_ip_name_lookup: self.allow_ip_name_lookup,
-            ..service.local_resources
-        };
-
         let service = WorkloadService::new(
             workload_id.as_ref(),
             workload_name.as_ref(),
@@ -459,7 +454,7 @@ impl Engine {
             wasmtime_component,
             linker,
             component_volume_mounts,
-            local_resources,
+            service.local_resources,
             service.max_restarts,
             loopback,
         );
@@ -557,12 +552,6 @@ impl Engine {
             }
         }
 
-        // `allow_ip_name_lookup` is never set over the wire — always host-controlled.
-        let local_resources = crate::types::LocalResources {
-            allow_ip_name_lookup: self.allow_ip_name_lookup,
-            ..component.local_resources
-        };
-
         // Create the WorkloadComponent with volume mounts
         Ok(WorkloadComponent::new(
             workload_id.as_ref(),
@@ -572,7 +561,7 @@ impl Engine {
             wasmtime_component,
             linker,
             component_volume_mounts,
-            local_resources,
+            component.local_resources,
             loopback,
             // TODO: implement pooling and instance limits
             // component.pool_size,
