@@ -2,7 +2,7 @@
 
 use opentelemetry::logs::{AnyValue, LogRecord as OtelLogRecord};
 use opentelemetry::trace::{
-    SpanContext, SpanId, SpanKind, Status, TraceContextExt, TraceFlags, TraceId, TraceState,
+    Link, SpanContext, SpanId, SpanKind, Status, TraceContextExt, TraceFlags, TraceId, TraceState,
 };
 use opentelemetry::{Context, Key, KeyValue};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -25,8 +25,26 @@ pub fn otel_span_context_to_wit(ctx: &SpanContext) -> WitSpanContext {
             WitTraceFlags::empty()
         },
         is_remote: ctx.is_remote(),
-        trace_state: vec![],
+        trace_state: otel_trace_state_to_wit(ctx.trace_state()),
     }
+}
+
+/// Convert an OTel `TraceState` into the WIT list-of-tuples representation.
+///
+/// `TraceState` exposes its entries only via the W3C header form
+/// (`key1=value1,key2=value2`), so we render that and split it back into pairs.
+fn otel_trace_state_to_wit(trace_state: &TraceState) -> Vec<(String, String)> {
+    let header = trace_state.header();
+    if header.is_empty() {
+        return vec![];
+    }
+    header
+        .split(',')
+        .filter_map(|entry| {
+            let (key, value) = entry.split_once('=')?;
+            Some((key.to_string(), value.to_string()))
+        })
+        .collect()
 }
 
 /// Converts a WASI OTEL LogRecord to populate an OpenTelemetry LogRecord
@@ -441,6 +459,20 @@ pub fn extract_span_events(
                 e.name.clone(),
                 convert_datetime(&e.time),
                 convert_key_values(&e.attributes),
+            )
+        })
+        .collect()
+}
+
+/// Extract span links, preserving each link's span context and attributes.
+pub fn extract_span_links(span: &wasi_tracing::SpanData) -> Vec<Link> {
+    span.links
+        .iter()
+        .map(|link| {
+            Link::new(
+                wit_span_context_to_otel(&link.span_context),
+                convert_key_values(&link.attributes),
+                0,
             )
         })
         .collect()
