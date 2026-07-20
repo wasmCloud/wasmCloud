@@ -34,8 +34,8 @@ import (
 // Before the fix, the WorkloadDeployment reached Ready=True but no SUB ever
 // landed on NATS, so requests on the configured subject silently timed out.
 //
-// The component under test is the messaging-handler fixture
-// (crates/wash-runtime/tests/fixtures/messaging-handler): it exports
+// The component under test is the messaging-echo fixture
+// (crates/wash-runtime/tests/fixtures/messaging-echo): it exports
 // wasmcloud:messaging/handler@0.2.0 and replies to incoming messages by
 // publishing the body back on msg.reply_to. Like every e2e fixture it is built
 // and served from the in-cluster registry (make e2e-images) rather than a
@@ -53,7 +53,7 @@ var _ = Describe("Messaging Subscription", Ordered, func() {
 	var componentImage string
 
 	BeforeAll(func() {
-		// The messaging-handler fixture is built and served from the in-cluster
+		// The messaging-echo fixture is built and served from the in-cluster
 		// registry (make e2e-images), like every other e2e fixture, and it runs on
 		// any host — so this spec runs on both wash.yml legs (the release and
 		// all-features fixture hosts both pull it from the registry). It self-skips
@@ -61,7 +61,7 @@ var _ = Describe("Messaging Subscription", Ordered, func() {
 		if !inClusterRegistry {
 			Skip("in-cluster registry disabled; skipping messaging e2e")
 		}
-		componentImage = registryRef("messaging-handler")
+		componentImage = registryRef("messaging-echo")
 
 		// Earlier specs (Finalizer) may have scaled the hostgroup to zero;
 		// scale back up and wait for a host to be Ready so this spec is
@@ -183,14 +183,6 @@ spec:
             - handler
           config:
             subscriptions: "%s"
-        # The messaging-handler fixture also imports wasi:logging; declare it so
-        # the host binds the logging plugin, otherwise the component fails to
-        # instantiate with "wasi:logging/logging import not satisfied".
-        - namespace: wasi
-          package: logging
-          version: "0.1.0-draft"
-          interfaces:
-            - logging
       components:
         - name: messaging-echo
           image: %s
