@@ -37,11 +37,7 @@ use anyhow::{Context, Result, bail};
 /// and push. Each is a wasm32-wasip2 cdylib served at
 /// <registry>/fixtures/<name>:e2e. To add a fixture: drop a wash-buildable dir,
 /// add a row here, and reference `registryRef("<name>")` in a spec.
-const FIXTURES: &[&str] = &[
-    "messaging-handler",
-    "keyvalue-implements",
-    "http-handler-p2",
-];
+const FIXTURES: &[&str] = &["messaging-echo", "keyvalue-implements", "http-handler-p2"];
 
 /// Fixed so it always matches the pull side (registryImageTag in
 /// e2e_suite_test.go) — the two have no shared source, so this isn't a knob.
