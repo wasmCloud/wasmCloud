@@ -42,7 +42,7 @@ use opentelemetry_semantic_conventions::attribute::{
     HTTP_REQUEST_METHOD, HTTP_RESPONSE_BODY_SIZE, HTTP_RESPONSE_STATUS_CODE, OTEL_STATUS_CODE,
     RPC_GRPC_STATUS_CODE, SERVER_ADDRESS, SERVER_PORT, URL_FULL, URL_PATH,
 };
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 use tracing::{Instrument, debug, error, info, instrument, warn};
 use wasmtime::Store;
@@ -1079,6 +1079,19 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
     }
 }
 
+/// Configure a freshly accepted connection before it is served.
+///
+/// Disables Nagle's algorithm. Responses are written as a head segment followed
+/// by body frames streamed from the guest (see [`crate::host::http_p3`]); with
+/// Nagle on, the small body segment is held until the client ACKs the head, and
+/// the client's delayed ACK adds a ~40ms stall to every request (write-write-read
+/// deadlock). `wasmtime serve` sets `TCP_NODELAY` for the same reason.
+fn prepare_accepted_conn(stream: &TcpStream) {
+    if let Err(e) = stream.set_nodelay(true) {
+        warn!(err = ?e, "failed to set TCP_NODELAY on accepted connection");
+    }
+}
+
 /// HTTP server implementation that routes to workload components
 async fn run_http_server<T: Router>(
     listener: TcpListener,
@@ -1101,6 +1114,8 @@ async fn run_http_server<T: Router>(
                 match result {
                     Ok((client, client_addr)) => {
                         debug!(addr = ?client_addr, "new HTTP client connection");
+
+                        prepare_accepted_conn(&client);
 
                         let handles_clone = workload_handles.clone();
                         let service_handlers_clone = service_handlers.clone();
@@ -2070,6 +2085,29 @@ mod tests {
             .uri(uri)
             .body(HyperOutgoingBody::default())
             .unwrap()
+    }
+
+    /// Guards the P3 streaming regression fix: `run_http_server` must disable
+    /// Nagle on accepted sockets. A streamed head-then-body response otherwise
+    /// stalls ~40ms per request on the client's delayed ACK. The precondition
+    /// asserts the socket starts with Nagle on, so this proves the helper
+    /// actually flips it rather than reading a coincidental default.
+    #[tokio::test]
+    async fn accepted_connections_disable_nagle() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _client = TcpStream::connect(addr).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+
+        assert!(
+            !server.nodelay().unwrap(),
+            "precondition: a freshly accepted socket should start with Nagle enabled"
+        );
+        prepare_accepted_conn(&server);
+        assert!(
+            server.nodelay().unwrap(),
+            "run_http_server must set TCP_NODELAY on accepted connections"
+        );
     }
 
     // --- check_allowed_hosts tests ---

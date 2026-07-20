@@ -340,11 +340,15 @@ runtime:
       envFrom: []
       # -- Per-host-group extra CLI args, appended after `runtime.extraArgs`.
       extraArgs: []
+      # -- Per-host-group host image override. Any of `registry`, `repository`,
+      # `tag` set here take precedence over the chart-wide `runtime.image`; unset
+      # keys inherit it. Lets one release mix host versions (e.g. run one host
+      # group on a newer/feature build). Omit to use `runtime.image` for the group.
+      # image:
+      #   tag: "some-other-tag"
       service:
         type: ClusterIP
       webgpu:
-        enabled: false
-      wasip3:
         enabled: false
       # -- Additional wasm proposals to enable on this host group's engine,
       # rendered as `--wasm-proposal=<name>` args. Accepted names:

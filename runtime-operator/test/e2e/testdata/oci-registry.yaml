@@ -1,0 +1,71 @@
+# In-cluster OCI registry for the e2e suite.
+#
+# The `oci-registry` example component (a spec-compliant OCI v2 registry that
+# stores through wasmcloud:blobstore) runs as a WorkloadDeployment on the
+# `registry` hostgroup — the one hostgroup left on HTTPS so it can pull this
+# component from ghcr. Every other e2e fixture is then built locally and pushed
+# into this registry, and the insecure `default` hostgroup pulls them back over
+# plain HTTP. See runtime-operator/test/e2e/README or the `e2e-images` Make
+# target for the surrounding flow.
+#
+# Reachability: the host's HTTP server demuxes by an exact-match Host header and
+# rejects any hostname containing a port, so the registry must answer on port 80
+# (clients omit the default port) and every authority a client uses must be
+# registered as `host`/`host-aliases`:
+#   - pull (in-cluster host): oci-registry.wasmcloud-system.svc
+#   - push (CI runner / dev):  127.0.0.2  (the Make target port-forwards here)
+# The operator only injects Service-DNS aliases for p2 `incoming-handler`, so a
+# p3 `handler` interface keeps exactly the aliases set below.
+#
+# TODO(wash release): the port-80 requirement + the 127.0.0.2 push alias exist
+# only because the host router matches the Host header exactly and rejects a
+# host carrying a port. Once the router matches host-without-port, this can serve
+# on a normal port and drop the extra push alias.
+apiVersion: v1
+kind: Service
+metadata:
+  name: oci-registry
+  namespace: wasmcloud-system
+spec:
+  # No selector: the operator maintains the route EndpointSlice pointing at the
+  # registry hostgroup pod (keyed on this Service name). port 80 -> the host's
+  # HTTP port (the registry hostgroup runs http.port=80).
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+---
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: oci-registry
+  namespace: wasmcloud-system
+spec:
+  replicas: 1
+  kubernetes:
+    service:
+      name: oci-registry
+  template:
+    spec:
+      hostSelector:
+        hostgroup: registry
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          version: "0.3.0"
+          interfaces:
+            - handler
+          config:
+            host: oci-registry
+            host-aliases: oci-registry.wasmcloud-system,oci-registry.wasmcloud-system.svc,127.0.0.2
+        - namespace: wasmcloud
+          package: blobstore
+          version: "0.1.0"
+          interfaces:
+            - blobstore
+          config:
+            backend: in-memory
+      components:
+        - name: oci-registry
+          image: ghcr.io/wasmcloud/components/oci-registry:0.1.0

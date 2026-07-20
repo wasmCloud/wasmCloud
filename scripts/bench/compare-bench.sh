@@ -4,6 +4,10 @@
 #
 #   ./scripts/bench/compare-bench.sh <bench> <ref_a> <ref_b>
 #
+#   Each ref may be a sha, tag, branch (on the base repo), or a pull
+#   request written "#123" / "pull/123" / "pr/123" — fork PRs included.
+#   See resolve_sha below for how each form is resolved.
+#
 # Variance handling (per the design call — see scripts/bench/README.md §9.4):
 #   - gungraun: 1 run per ref (instruction counts are deterministic).
 #   - criterion benches: 3 interleaved runs per ref (a₁ b₁ a₂ b₂ a₃ b₃);
@@ -41,10 +45,43 @@ else
   iters=3
 fi
 
+# Resolve a ref to a full commit sha, accepting more than a literal revision:
+#   * sha / tag / local branch  → used as-is.
+#   * a base-repo branch name   → falls back to origin/<ref>. A
+#     fetch-depth:0 checkout leaves every branch except the dispatch ref
+#     only as a remote-tracking ref (refs/remotes/origin/*), and
+#     `git rev-parse <bare-name>` never DWIMs a bare name to origin/<name>.
+#   * a pull request "#123" / "pull/123" / "pr/123" → fetches
+#     refs/pull/123/head from origin, which GitHub populates even for PRs
+#     opened from a fork. This runs the fork's head commit on the bench
+#     host — the same untrusted code a maintainer would run by pasting the
+#     head sha, and still gated behind a manual workflow_dispatch (see the
+#     workflow header comment for the trust rationale).
+resolve_sha() {
+  local ref="$1" num
+  case "$ref" in
+    '#'* | pull/* | pr/*)
+      num="${ref#\#}"; num="${num#pull/}"; num="${num#pr/}"
+      if ! [[ "$num" =~ ^[0-9]+$ ]]; then
+        echo "invalid pull-request ref '${ref}' (expected #N, pull/N, or pr/N)" >&2
+        return 1
+      fi
+      git fetch --quiet --no-tags origin "refs/pull/${num}/head" \
+        || { echo "cannot fetch PR #${num} head from origin" >&2; return 1; }
+      git rev-parse --verify --quiet 'FETCH_HEAD^{commit}'
+      ;;
+    *)
+      git rev-parse --verify --quiet "${ref}^{commit}" \
+        || git rev-parse --verify --quiet "refs/remotes/origin/${ref}^{commit}" \
+        || { echo "cannot resolve ref '${ref}' locally or on origin" >&2; return 1; }
+      ;;
+  esac
+}
+
 # Resolve refs to full SHAs once so the rest of the script logs an unambiguous
 # identifier even if a branch tip moves underneath us mid-run.
-sha_a=$(git rev-parse "$ref_a")
-sha_b=$(git rev-parse "$ref_b")
+sha_a=$(resolve_sha "$ref_a")
+sha_b=$(resolve_sha "$ref_b")
 short_a=$(git rev-parse --short=12 "$sha_a")
 short_b=$(git rev-parse --short=12 "$sha_b")
 saved_head=$(git rev-parse HEAD)

@@ -175,7 +175,7 @@ jobs:
           rust-toolchain: nightly
           rust-components: rustfmt
       - name: Install cargo-machete
-        uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2.82.8
+        uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2.83.1
         env:
           # Authenticate the action's GitHub API calls so they aren't throttled
           # by the 60/hr anonymous per-IP limit shared across hosted runners.
@@ -339,6 +339,47 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # Build ONLY the e2e fixture components (not the whole `check` matrix) plus the
+  # in-repo wash, and upload them. The runtime-operator-e2e all-features leg then
+  # pushes them into the in-cluster registry without a Rust build on that leg.
+  #
+  # TODO(wash release): the in-repo wash is built here (and uploaded for the push
+  # side) only because the released wash can't build fixtures from their local
+  # wkg.toml refs. Once it can, use setup-wash-action instead and drop the protoc
+  # step below (needed only to compile wash, not the fixtures).
+  e2e-fixtures:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/free-disk-space
+      - name: Setup protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "29.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/setup-rust
+      - name: Build e2e fixture components + wash
+        working-directory: runtime-operator
+        run: make e2e-images
+        env:
+          E2E_IMAGES_MODE: build
+          E2E_FIXTURES_DIR: ${{ runner.temp }}/e2e-fixtures
+      - name: Upload e2e fixture components + wash
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-fixtures
+          path: ${{ runner.temp }}/e2e-fixtures
+          if-no-files-found: error
+          retention-days: 1
+
   # Integration gate: install the shared wash image alongside the
   # runtime-operator chart in a kind cluster, and run the operator's e2e
   # suite (including the messaging round-trip from #5074) against it. The
@@ -348,47 +389,77 @@ jobs:
   runtime-operator-e2e:
     needs:
       - wash-image
+      - e2e-fixtures
     # `wash-image` runs via `if: always() && ...` to bypass the skipped
     # `changes` job on main pushes. Without an explicit `if:` here, GHA
     # propagates the skipped state of that indirect upstream through and
     # marks this job skipped even though `wash-image` itself succeeded.
     # Result: canary-publish never fires on main. Explicit gate on
     # wash-image's actual result is the documented workaround.
-    if: always() && needs.wash-image.result == 'success'
+    if: always() && needs.wash-image.result == 'success' && needs.e2e-fixtures.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     permissions:
       contents: read
-    # Run the suite twice, against two host images:
-    #   release      — the exact DEFAULT-features bytes we ship (build_push).
-    #                  This leg is the guarantee that we test what we release;
-    #                  IMPLEMENTS_E2E_IMAGE is empty so the implements spec
-    #                  self-skips (a released host has no `(implements ..)`).
-    #   all-features — a coverage build (NOT shipped) with every optional host
-    #                  feature on; this leg exercises the implements spec.
+    # Run the suite twice. Both legs stand up an in-cluster oci-registry on a
+    # pinned all-features `registry` hostgroup and serve every fixture from it;
+    # the legs differ only in the image the DEFAULT (fixture) hostgroup runs:
+    #   release      — the shipped DEFAULT-features build. Validates that the
+    #                  shipped host pulls the fixtures from the registry (insecure
+    #                  HTTP) and runs them. `implements` self-skips (it needs a
+    #                  feature host); http + messaging run.
+    #   all-features — every optional host feature on; runs the full set incl.
+    #                  `implements`. Not shipped — a coverage build.
+    # default_tag/registry_tag select the per-hostgroup images (loaded below); the
+    # registry host is always all-features (it needs the async wasmcloud:blobstore
+    # plugin).
     strategy:
       fail-fast: false
       matrix:
         include:
           - variant: release
-            tarball: wash-image-tarball-release-amd64
-            implements_image: ""
+            default_tag: release
+            registry_tag: all-features
           - variant: all-features
-            tarball: wash-image-tarball-all-features-amd64
-            implements_image: ghcr.io/wasmcloud/components/keyvalue-implements:0.1.0
+            default_tag: all-features
+            registry_tag: all-features
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-go
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      # The fixture components + the in-repo wash were built by the e2e-fixtures
+      # job; download them so `make e2e-images` (push mode) just deploys the
+      # registry and pushes — no Rust build on this leg. Both legs push fixtures.
+      - name: Download e2e fixture components + wash
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ matrix.tarball }}
+          name: e2e-fixtures
+          path: ${{ runner.temp }}/e2e-fixtures
+      # The registry host is always all-features; load it as :all-features on both
+      # legs. The tarballs internally tag localhost/wasmcloud-wash:e2e, so retag.
+      - name: Download all-features host image
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wash-image-tarball-all-features-amd64
           path: /tmp
-      - name: Load wash runtime image (${{ matrix.variant }})
-        # Exactly one tarball is downloaded per leg; both tag as
-        # localhost/wasmcloud-wash:e2e, the tag the operator chart deploys.
-        run: docker load -i /tmp/*.tar
+      - name: Load all-features host image
+        run: |
+          docker load -i /tmp/wash-image-all-features.tar
+          docker tag localhost/wasmcloud-wash:e2e localhost/wasmcloud-wash:all-features
+      # The release leg's fixture host is the shipped build; load it as :release
+      # alongside the all-features registry host so one cluster runs both.
+      - name: Download release host image
+        if: matrix.variant == 'release'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wash-image-tarball-release-amd64
+          path: /tmp
+      - name: Load release host image
+        if: matrix.variant == 'release'
+        run: |
+          docker load -i /tmp/wash-image-release.tar
+          docker tag localhost/wasmcloud-wash:e2e localhost/wasmcloud-wash:release
       - name: Build runtime-operator image
         working-directory: runtime-operator
         run: make docker-build IMG=localhost/runtime-operator:e2e
@@ -405,13 +476,16 @@ jobs:
           SKIP_IMAGE_BUILD: "true"
           BUILD_RUNTIME_IMAGE: "true"
           SKIP_RUNTIME_BUILD: "true"
-          # Messaging runs on BOTH legs — it's the #5074 regression and the
-          # whole reason the gate exists (a core capability the released host
-          # runs too).
-          MESSAGING_E2E_IMAGE: ghcr.io/wasmcloud/components/messaging-echo-rust:0.1.0
-          # Only the `all-features` leg sets this; empty on `release`, so the
-          # implements spec self-skips there (the released host lacks the feature).
-          IMPLEMENTS_E2E_IMAGE: ${{ matrix.implements_image }}
+          # Both legs run the in-cluster registry. The default (fixture) hostgroup
+          # runs default_tag; the registry hostgroup runs registry_tag (always
+          # all-features). implements self-skips when they differ (release leg).
+          E2E_IN_CLUSTER_REGISTRY: "true"
+          E2E_RUNTIME_IMAGE_TAG: ${{ matrix.default_tag }}
+          E2E_REGISTRY_HOST_IMAGE_TAG: ${{ matrix.registry_tag }}
+          # Reuse the components + wash the e2e-fixtures job built (downloaded
+          # above): `make e2e-images` pushes them rather than rebuilding.
+          E2E_IMAGES_MODE: push
+          E2E_FIXTURES_DIR: ${{ runner.temp }}/e2e-fixtures
           PROMETHEUS_INSTALL_SKIP: "true"
           CERT_MANAGER_INSTALL_SKIP: "true"
           KIND_CLUSTER_NAME: wasmcloud-e2e
@@ -436,6 +510,7 @@ jobs:
       - check
       - lint
       - wash-image
+      - e2e-fixtures
       - runtime-operator-e2e
       - canary-publish
       - canary-binaries
