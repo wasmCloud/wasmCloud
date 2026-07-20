@@ -1088,7 +1088,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
 /// deadlock). `wasmtime serve` sets `TCP_NODELAY` for the same reason.
 fn prepare_accepted_conn(stream: &TcpStream) {
     if let Err(e) = stream.set_nodelay(true) {
-        debug!(err = ?e, "failed to set TCP_NODELAY on accepted connection");
+        warn!(err = ?e, "failed to set TCP_NODELAY on accepted connection");
     }
 }
 
