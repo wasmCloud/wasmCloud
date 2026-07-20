@@ -7,8 +7,9 @@ mod convert;
 pub use convert::otel_span_context_to_wit;
 use convert::{
     convert_span_kind, convert_status, convert_wasi_log_record, extract_counter_values,
-    extract_gauge_values, extract_span_attributes, extract_span_events, summarize_resource_metrics,
-    summarize_span_data, wasi_span_parent_context, wit_span_context_to_otel,
+    extract_gauge_values, extract_span_attributes, extract_span_events, extract_span_links,
+    summarize_resource_metrics, summarize_span_data, wasi_span_parent_context,
+    wit_span_context_to_otel,
 };
 
 use anyhow::bail;
@@ -428,13 +429,15 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
                 let status = convert_status(&span_data.status);
                 let attributes = extract_span_attributes(&span_data);
                 let events = extract_span_events(&span_data);
+                let links = extract_span_links(&span_data);
 
                 // Create a span builder with the WASI span data
                 let mut builder = SpanBuilder::from_name(span_data.name.clone())
                     .with_trace_id(wasi_span_context.trace_id())
                     .with_span_id(wasi_span_context.span_id())
                     .with_kind(span_kind)
-                    .with_attributes(attributes);
+                    .with_attributes(attributes)
+                    .with_links(links);
 
                 // Set start time
                 builder = builder.with_start_time(summary.start_time);
