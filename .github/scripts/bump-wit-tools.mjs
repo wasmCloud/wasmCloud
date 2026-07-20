@@ -1,17 +1,21 @@
 #!/usr/bin/env node
-// Bumps the wit pipeline's pinned tool versions in wit.yml to upstream's
-// latest stable GitHub releases. Driven by wit-tools-bump.yml.
+// Bumps the wit pipeline's pinned tool versions to upstream's latest stable
+// GitHub releases. Driven by wit-tools-bump.yml.
 //
-// Each tracked tool has a `<VAR>: '<bare-semver>'` line in wit.yml's
-// workflow-level env: block. For each, this resolves the latest
+// Each tracked tool has a `<VAR>=<bare-semver>` line in
+// .github/wit-tools-versions.env. For each, this resolves the latest
 // non-prerelease, non-draft release and rewrites the pin in place.
+//
+// The pins live in that .env file rather than wit.yml because the bump
+// workflow pushes with the default GITHUB_TOKEN, which GitHub forbids from
+// updating files under .github/workflows/.
 //
 // Tracked tools:
 //   WASM_TOOLS_VERSION ← bytecodealliance/wasm-tools
 //
-// Usage: node bump-wit-tools.mjs [path-to-wit.yml]
-//   Defaults to .github/workflows/wit.yml; the optional arg exists so the
-//   script can be exercised against a copy without touching the real file.
+// Usage: node bump-wit-tools.mjs [path-to-versions.env]
+//   Defaults to .github/wit-tools-versions.env; the optional arg exists so
+//   the script can be exercised against a copy without touching the real file.
 //
 // Env:
 //   GH_TOKEN / GITHUB_TOKEN   optional; raises the GitHub API rate limit.
@@ -55,14 +59,14 @@ async function latestVersion(repo, token) {
   return tag.replace(/^v/, '');
 }
 
-// The regex is anchored to the two-space indent that the workflow-level
-// env: block uses; if that indent changes, this extractor must change too.
+// Matches a `NAME=<value>` pin line in the versions .env file. The value
+// runs to end-of-line (no quotes); if the file format changes, update this.
 function pinRe(name) {
-  return new RegExp(`^(  ${name}: ')([^']+)(')`, 'm');
+  return new RegExp(`^(${name}=)(\\S+)$`, 'm');
 }
 
 async function main() {
-  const file = process.argv[2] ?? '.github/workflows/wit.yml';
+  const file = process.argv[2] ?? '.github/wit-tools-versions.env';
 
   const githubOutput = process.env.GITHUB_OUTPUT;
   if (!githubOutput) {
@@ -88,7 +92,7 @@ async function main() {
       console.log(`${tool.name} is already at ${latest} — nothing to do`);
       continue;
     }
-    content = content.replace(re, `$1${latest}$3`);
+    content = content.replace(re, `$1${latest}`);
     bumps.push(
       `- ${tool.name} \`${current}\` → \`${latest}\` ` +
         `([release notes](https://github.com/${tool.repo}/releases/tag/v${latest}))`,

@@ -1,7 +1,7 @@
 name: wit-tools-bump
 
 # Opens a PR when bytecodealliance/wasm-tools publishes a new stable GitHub
-# release. The pinned version lives in wit.yml's top-level `env:` block.
+# release. The pinned version lives in .github/wit-tools-versions.env.
 #
 # Why this exists: Dependabot's `github-actions` ecosystem tracks `uses:`
 # refs (the action SHA), not arbitrary `with:` inputs or versions fetched
