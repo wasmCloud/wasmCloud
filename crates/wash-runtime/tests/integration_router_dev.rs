@@ -52,6 +52,7 @@ fn http_handler_p2_request(host_header: &str) -> WorkloadStartRequest {
             environment: HashMap::new(),
             volume_mounts: vec![],
             allowed_hosts: Default::default(),
+            allow_ip_name_lookup: false,
         },
         http_only_host_interfaces(host_header),
     )
