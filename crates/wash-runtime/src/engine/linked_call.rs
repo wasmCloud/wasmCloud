@@ -382,8 +382,7 @@ async fn new_ephemeral_store(
     };
 
     #[cfg(not(feature = "wasi-tls"))]
-    let active =
-        component_ctx_template_from_metadata(&active_metadata, call.allow_ip_name_lookup);
+    let active = component_ctx_template_from_metadata(&active_metadata, call.allow_ip_name_lookup);
     #[cfg(feature = "wasi-tls")]
     let active = component_ctx_template_from_metadata_with_tls(
         &active_metadata,
