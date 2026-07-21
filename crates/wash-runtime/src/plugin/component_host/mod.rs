@@ -357,7 +357,7 @@ fn install_host_identity(
         .func_new(
             "get-workload-id",
             move |mut store, _ty, _params, results| {
-                let root = store.async_call_stack().last();
+                let root = store.async_call_stack().ok().and_then(|stack| stack.last());
                 let id = root
                     .and_then(|task| workload_state.registry()?.caller_for_task(task))
                     .map(|c| c.workload_id.to_string())
@@ -374,7 +374,7 @@ fn install_host_identity(
         .func_new(
             "get-component-id",
             move |mut store, _ty, _params, results| {
-                let root = store.async_call_stack().last();
+                let root = store.async_call_stack().ok().and_then(|stack| stack.last());
                 let id = root
                     .and_then(|task| component_state.registry()?.caller_for_task(task))
                     .map(|c| c.component_id.to_string())
@@ -411,7 +411,7 @@ fn install_host_cancel(
     let current_state = Arc::clone(state);
     instance
         .func_new("current-job", move |mut store, _ty, _params, results| {
-            let root = store.async_call_stack().last();
+            let root = store.async_call_stack().ok().and_then(|stack| stack.last());
             let job = root
                 .and_then(|task| current_state.registry()?.job_for_task(task))
                 .unwrap_or(0);
@@ -428,7 +428,7 @@ fn install_host_cancel(
                 Some(Val::U64(job)) => *job,
                 _ => wasmtime::bail!("request-cancel expects a single u64 job id"),
             };
-            let root = store.async_call_stack().last();
+            let root = store.async_call_stack().ok().and_then(|stack| stack.last());
             let accepted = match (root, cancel_state.registry()) {
                 (Some(task), Some(registry)) => match registry.caller_for_task(task) {
                     Some(requester) => registry.request_cancel(job, &requester),
@@ -445,7 +445,7 @@ fn install_host_cancel(
     let is_cancelled_state = Arc::clone(state);
     instance
         .func_new("is-cancelled", move |mut store, _ty, _params, results| {
-            let root = store.async_call_stack().last();
+            let root = store.async_call_stack().ok().and_then(|stack| stack.last());
             let cancelled = root
                 .and_then(|task| {
                     let registry = is_cancelled_state.registry()?;

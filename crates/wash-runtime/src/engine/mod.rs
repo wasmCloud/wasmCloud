@@ -626,12 +626,14 @@ pub enum WasmProposal {
     /// crate feature.
     #[cfg(feature = "wasm_component_model_implements")]
     WasmComponentModelImplements,
-    /// Garbage collection. Enables `wasm_function_references` (a prerequisite)
-    /// and `wasm_gc`.
+    /// Garbage collection (with its `wasm_function_references` prerequisite).
+    /// Enabled by default in wasmtime >= 47; accepted for compatibility.
     Gc,
-    /// Exception handling. Enables `wasm_exceptions`.
+    /// Exception handling. Enabled by default in wasmtime >= 47; accepted for
+    /// compatibility.
     ExceptionHandling,
-    /// 128-bit wide arithmetic. Enables `wasm_wide_arithmetic`.
+    /// 128-bit wide arithmetic. Enabled by default in wasmtime >= 47; accepted
+    /// for compatibility.
     WideArithmetic,
     /// Shared-memory threads. Enables `wasm_threads`.
     Threads,
@@ -650,17 +652,11 @@ impl WasmProposal {
             WasmProposal::WasmComponentModelImplements => {
                 cfg.wasm_component_model_implements(true);
             }
-            WasmProposal::Gc => {
-                // GC builds on the function-references proposal.
-                cfg.wasm_function_references(true);
-                cfg.wasm_gc(true);
-            }
-            WasmProposal::ExceptionHandling => {
-                cfg.wasm_exceptions(true);
-            }
-            WasmProposal::WideArithmetic => {
-                cfg.wasm_wide_arithmetic(true);
-            }
+            // GC (with its `wasm_function_references` prerequisite), exception
+            // handling, and wide arithmetic are all enabled by default in
+            // wasmtime >= 47, so opting into them needs no config change. The
+            // variants stay accepted for CLI/config compatibility.
+            WasmProposal::Gc | WasmProposal::ExceptionHandling | WasmProposal::WideArithmetic => {}
             WasmProposal::Threads => {
                 cfg.wasm_threads(true);
             }

@@ -199,11 +199,13 @@ impl PreparedIngress {
         match self {
             PreparedIngress::Http { service, rx } => {
                 while let Some((req, resp_tx)) = rx.recv().await {
-                    accessor.spawn(HttpTask {
+                    if let Err(e) = accessor.spawn(HttpTask {
                         service: Arc::clone(service),
                         req,
                         resp_tx,
-                    });
+                    }) {
+                        tracing::error!(err = %e, "failed to spawn HTTP invocation task");
+                    }
                 }
                 ServeOutcome::Shutdown
             }
@@ -213,12 +215,14 @@ impl PreparedIngress {
                 rx,
             } => {
                 while let Some((msg, result_tx)) = rx.recv().await {
-                    accessor.spawn(MessagingTask {
+                    if let Err(e) = accessor.spawn(MessagingTask {
                         instance: *instance,
                         func_idx: *func_idx,
                         msg,
                         result_tx,
-                    });
+                    }) {
+                        tracing::error!(err = %e, "failed to spawn messaging invocation task");
+                    }
                 }
                 ServeOutcome::Shutdown
             }
@@ -286,13 +290,15 @@ impl PreparedIngress {
                             // itself.
                             let job = registry.admit(call.caller.clone());
                             let job_guard = JobGuard::new(Arc::clone(registry), job);
-                            accessor.spawn(CapabilityTask {
+                            if let Err(e) = accessor.spawn(CapabilityTask {
                                 instance: *instance,
                                 func_idx,
                                 call,
                                 in_flight: guard,
                                 job_guard,
-                            });
+                            }) {
+                                tracing::error!(err = %e, "failed to spawn capability call task");
+                            }
                         }
                     }
                 }
@@ -375,7 +381,9 @@ pub(crate) async fn run_trigger_driver(
             .run_concurrent(async |accessor| {
                 // Spawn the cli/run co-driver once (first entry only).
                 if let Some(command) = command.take() {
-                    accessor.spawn(RunTask { command });
+                    if let Err(e) = accessor.spawn(RunTask { command }) {
+                        tracing::error!(err = %e, "failed to spawn cli/run co-driver task");
+                    }
                 }
                 // `join_all` steps out only once EVERY ingress serve returns, so a
                 // `FlushDrops` is prompt only when the Capability ingress is served

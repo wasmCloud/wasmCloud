@@ -573,6 +573,13 @@ impl NetworkTcpSocket {
         Ok(())
     }
 
+    /// Whether this socket is still unbound (in its default post-create
+    /// state). A subsequent `listen` implicitly binds it, so the host's
+    /// `socket_addr_check` must run against the implicit bind address first.
+    pub(crate) fn is_unbound(&self) -> bool {
+        matches!(self.tcp_state, TcpState::Default(_))
+    }
+
     /// Start listening using P3 semantics (with implicit bind).
     ///
     /// Returns the shared listener so callers (and tests) can build accept
@@ -1377,6 +1384,14 @@ impl TcpSocket {
             _ => return Err(ErrorCode::InvalidState),
         };
         take_loopback_listen_info(lo)
+    }
+
+    /// Whether `listen` on this socket would perform an implicit bind to a
+    /// real network address. Only a freshly created, still-unbound socket
+    /// does; loopback and unspecified sockets have already been bound (and
+    /// checked) by an explicit `bind`.
+    pub(crate) fn needs_implicit_bind(&self) -> bool {
+        matches!(self, Self::Network(net) if net.is_unbound())
     }
 
     /// Listen using P3 semantics (with implicit bind).
