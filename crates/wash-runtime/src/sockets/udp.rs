@@ -119,6 +119,12 @@ impl NetworkUdpSocket {
         matches!(self.udp_state, UdpState::Connected(..) | UdpState::Bound)
     }
 
+    /// Whether this socket is still unbound (in its default post-create state),
+    /// the precondition for an implicit bind.
+    fn is_unbound(&self) -> bool {
+        matches!(self.udp_state, UdpState::Default)
+    }
+
     fn disconnect(&mut self) -> Result<(), ErrorCode> {
         if !self.is_connected() {
             return Err(ErrorCode::InvalidState);
@@ -349,7 +355,7 @@ impl UdpSocket {
     /// does; loopback and unspecified sockets have already been bound (and
     /// checked) by an explicit `bind`.
     pub(crate) fn needs_implicit_bind(&self) -> bool {
-        matches!(self, Self::Network(_)) && !self.is_bound()
+        matches!(self, Self::Network(net) if net.is_unbound())
     }
 
     pub(crate) fn disconnect(

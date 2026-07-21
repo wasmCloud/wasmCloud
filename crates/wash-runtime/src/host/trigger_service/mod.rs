@@ -380,10 +380,10 @@ pub(crate) async fn run_trigger_driver(
         let outcomes = store
             .run_concurrent(async |accessor| {
                 // Spawn the cli/run co-driver once (first entry only).
-                if let Some(command) = command.take() {
-                    if let Err(e) = accessor.spawn(RunTask { command }) {
-                        tracing::error!(err = %e, "failed to spawn cli/run co-driver task");
-                    }
+                if let Some(command) = command.take()
+                    && let Err(e) = accessor.spawn(RunTask { command })
+                {
+                    tracing::error!(err = %e, "failed to spawn cli/run co-driver task");
                 }
                 // `join_all` steps out only once EVERY ingress serve returns, so a
                 // `FlushDrops` is prompt only when the Capability ingress is served

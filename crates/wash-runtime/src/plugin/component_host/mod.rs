@@ -45,11 +45,11 @@ use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
 use tracing::{debug, error, warn};
 use wasmtime::AsContextMut;
-use wasmtime::Store;
 use wasmtime::component::types::Type;
 use wasmtime::component::{
-    Accessor, Component, InstancePre, Linker, Resource, Val, types::ComponentItem,
+    Accessor, Component, GuestTaskId, InstancePre, Linker, Resource, Val, types::ComponentItem,
 };
+use wasmtime::{Store, StoreContextMut};
 
 use crate::engine::Engine;
 use crate::engine::ctx::{CallerIdentity, Ctx, SharedCtx};
@@ -337,6 +337,21 @@ fn build_plugin_linker(
 /// state by caller.
 const HOST_IDENTITY_INTERFACE: &str = "wasmcloud:host/identity@0.1.0";
 
+/// The caller's root guest task, or `None` if it can't be determined.
+///
+/// [`StoreContextMut::async_call_stack`] only errors in unusual states (e.g.
+/// called outside a guest invocation); treat that as "no caller" but leave a
+/// trace so the degradation isn't silent. Its last item is the root call.
+fn caller_root_task(store: &mut StoreContextMut<'_, SharedCtx>) -> Option<GuestTaskId> {
+    match store.async_call_stack() {
+        Ok(stack) => stack.last(),
+        Err(e) => {
+            debug!(err = %e, "async call stack unavailable; treating as no caller task");
+            None
+        }
+    }
+}
+
 /// Install the `wasmcloud:host/identity` import on the plugin's own linker: two
 /// no-argument funcs returning the workload/component id of the caller whose
 /// capability call is currently running. Each walks its async call stack back to
@@ -357,7 +372,7 @@ fn install_host_identity(
         .func_new(
             "get-workload-id",
             move |mut store, _ty, _params, results| {
-                let root = store.async_call_stack().ok().and_then(|stack| stack.last());
+                let root = caller_root_task(&mut store);
                 let id = root
                     .and_then(|task| workload_state.registry()?.caller_for_task(task))
                     .map(|c| c.workload_id.to_string())
@@ -374,7 +389,7 @@ fn install_host_identity(
         .func_new(
             "get-component-id",
             move |mut store, _ty, _params, results| {
-                let root = store.async_call_stack().ok().and_then(|stack| stack.last());
+                let root = caller_root_task(&mut store);
                 let id = root
                     .and_then(|task| component_state.registry()?.caller_for_task(task))
                     .map(|c| c.component_id.to_string())
@@ -411,7 +426,7 @@ fn install_host_cancel(
     let current_state = Arc::clone(state);
     instance
         .func_new("current-job", move |mut store, _ty, _params, results| {
-            let root = store.async_call_stack().ok().and_then(|stack| stack.last());
+            let root = caller_root_task(&mut store);
             let job = root
                 .and_then(|task| current_state.registry()?.job_for_task(task))
                 .unwrap_or(0);
@@ -428,7 +443,7 @@ fn install_host_cancel(
                 Some(Val::U64(job)) => *job,
                 _ => wasmtime::bail!("request-cancel expects a single u64 job id"),
             };
-            let root = store.async_call_stack().ok().and_then(|stack| stack.last());
+            let root = caller_root_task(&mut store);
             let accepted = match (root, cancel_state.registry()) {
                 (Some(task), Some(registry)) => match registry.caller_for_task(task) {
                     Some(requester) => registry.request_cancel(job, &requester),
@@ -445,7 +460,7 @@ fn install_host_cancel(
     let is_cancelled_state = Arc::clone(state);
     instance
         .func_new("is-cancelled", move |mut store, _ty, _params, results| {
-            let root = store.async_call_stack().ok().and_then(|stack| stack.last());
+            let root = caller_root_task(&mut store);
             let cancelled = root
                 .and_then(|task| {
                     let registry = is_cancelled_state.registry()?;
