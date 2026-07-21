@@ -7,11 +7,17 @@
 //!
 //! ```text
 //! target/gungraun/
-//!   <package>/<bench_target>/<function>.<id>/
-//!     callgrind.out
-//!     summary.json     (we don't use this — schema changes across versions)
-//!     callgrind.out.old (baseline if any)
+//!   <package>/<bench_target>/<group>/<param>/
+//!     callgrind.<param>.t<thread>.p<part>.out   (one per thread/part)
+//!     callgrind.<param>.log
 //! ```
+//!
+//! Older gungraun/iai-callgrind versions wrote a single `callgrind.out` per
+//! bench dir; current versions split it into one file per `(thread, part)`,
+//! e.g. `callgrind.cold_invocation.p2.t1.p1.out`. Idle secondary threads
+//! still emit a file whose `summary:` is `0`, so a bench's true `Ir` is the
+//! **sum** across all of its files. We match both layouts (`callgrind.*.out`)
+//! and sum per bench directory — see [`walk`].
 //!
 //! The file format itself is callgrind's, set by valgrind, and is stable
 //! across the gungraun rename — so this parser's name stays `callgrind`
@@ -29,6 +35,7 @@
 //! corresponding number out of `summary:`. That's the metric we report —
 //! instruction reads, i.e. total instructions executed.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -44,78 +51,84 @@ pub struct Row {
     pub ir: u64,
 }
 
-/// Walk `gungraun_dir`, returning one [`Row`] per `callgrind.out` found.
+/// Walk `gungraun_dir`, returning one [`Row`] per bench `(group, param)`.
 ///
-/// Every accepted file is logged to stderr in the form
-/// `bench-tools callgrind: <path> → (<group>, <param>) Ir=<ir>` so an
-/// operator can audit exactly which files contributed to the output —
-/// because we derive `(group, param)` from path components, a stray
-/// callgrind.out in the tree (e.g. leftover from manual debugging) would
-/// otherwise silently appear as a real bench row.
+/// A bench emits several callgrind output files — one per `(thread, part)`,
+/// named `callgrind.<id>.t<thread>.p<part>.out` (older versions wrote a
+/// single `callgrind.out`). A bench's `Ir` is the **sum** across all of its
+/// files, since idle secondary threads still write a `summary: 0` file. We
+/// therefore group by the containing directory — which uniquely identifies
+/// one `(group, param)` bench — and sum.
+///
+/// Every accepted file is logged to stderr as
+/// `bench-tools callgrind: <path> Ir=<ir>`, and every emitted bench as
+/// `bench-tools callgrind: (<group>, <param>) Ir=<ir>`, so an operator can
+/// audit exactly which files contributed — because we derive `(group, param)`
+/// from path components, a stray `callgrind.*.out` in the tree (e.g. leftover
+/// from manual debugging) would otherwise silently appear as a real row.
 pub fn walk(gungraun_dir: &Path) -> Result<Vec<Row>> {
     if !gungraun_dir.exists() {
         return Ok(Vec::new());
     }
-    let mut rows = Vec::new();
+    // Sum Ir per containing directory. BTreeMap gives a deterministic,
+    // path-sorted output order.
+    let mut totals: BTreeMap<PathBuf, u64> = BTreeMap::new();
     for entry in WalkDir::new(gungraun_dir).sort_by_file_name() {
         let entry = entry?;
         if !entry.file_type().is_file() {
             continue;
         }
-        if entry.file_name() != "callgrind.out" {
+        if !is_callgrind_out(entry.file_name()) {
             continue;
         }
-        let Some(row) = parse_one(gungraun_dir, entry.path())? else {
+        let Some(ir) = read_ir(entry.path())? else {
             continue;
         };
-        eprintln!(
-            "bench-tools callgrind: {} → ({}, {}) Ir={}",
-            entry.path().display(),
-            row.group,
-            row.param,
-            row.ir,
-        );
-        rows.push(row);
+        let Some(dir) = entry.path().parent() else {
+            continue;
+        };
+        eprintln!("bench-tools callgrind: {} Ir={ir}", entry.path().display());
+        *totals.entry(dir.to_path_buf()).or_insert(0) += ir;
+    }
+
+    let mut rows = Vec::new();
+    for (dir, ir) in totals {
+        let Some((group, param)) = group_param_from_dir(gungraun_dir, &dir) else {
+            continue;
+        };
+        eprintln!("bench-tools callgrind: ({group}, {param}) Ir={ir}");
+        rows.push(Row { group, param, ir });
     }
     Ok(rows)
 }
 
-fn parse_one(gungraun_dir: &Path, path: &Path) -> Result<Option<Row>> {
-    let rel = path
-        .strip_prefix(gungraun_dir)
-        .with_context(|| format!("strip_prefix({})", gungraun_dir.display()))?;
+/// gungraun output files are named `callgrind.out` (old layout) or
+/// `callgrind.<id>.t<thread>.p<part>.out` (current). Match both: any file
+/// whose name starts with `callgrind.` and ends with `.out`.
+fn is_callgrind_out(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|n| n.starts_with("callgrind.") && n.ends_with(".out"))
+}
 
-    // `<package>/<group>/<param>/callgrind.out`
-    // We pick the last two non-file components as (group, param). This is
-    // robust against gungraun nesting one or more extra levels above
-    // <group>, which it has done in some versions (e.g. <package>/<binary>/…).
-    let components: Vec<_> = rel
+/// Derive `(group, param)` from a bench's directory: the last two path
+/// components relative to `gungraun_dir` (`…/<group>/<param>`). `None` if the
+/// directory sits fewer than two levels below `gungraun_dir`. Robust against
+/// gungraun nesting extra levels above `<group>` (e.g. `<package>/<binary>/…`).
+fn group_param_from_dir(gungraun_dir: &Path, dir: &Path) -> Option<(String, String)> {
+    let rel = dir.strip_prefix(gungraun_dir).ok()?;
+    let components: Vec<&str> = rel
         .components()
         .filter_map(|c| match c {
             std::path::Component::Normal(s) => s.to_str(),
             _ => None,
         })
         .collect();
-    if components.len() < 3 {
-        return Ok(None);
-    }
-    let len = components.len();
-    let Some(group) = components.get(len - 3) else {
-        return Ok(None);
-    };
-    let Some(param) = components.get(len - 2) else {
-        return Ok(None);
-    };
-
-    let ir = match read_ir(path)? {
-        Some(v) => v,
-        None => return Ok(None),
-    };
-    Ok(Some(Row {
-        group: (*group).to_string(),
-        param: (*param).to_string(),
-        ir,
-    }))
+    // Last two components are `<group>/<param>`; `None` if the directory sits
+    // fewer than two levels below `gungraun_dir`.
+    let mut tail = components.iter().rev();
+    let param = tail.next()?;
+    let group = tail.next()?;
+    Some(((*group).to_string(), (*param).to_string()))
 }
 
 /// Return the `Ir` column of the `summary:` line, looked up by index in
