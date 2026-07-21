@@ -1,20 +1,21 @@
 #!/usr/bin/env node
-// Bumps the wit pipeline's pinned tool versions to upstream's latest stable
-// GitHub releases. Driven by wit-tools-bump.yml.
+// Bumps the CI pipeline's pinned tool versions to upstream's latest stable
+// GitHub releases. Driven by tools-bump.yml.
 //
 // Each tracked tool has a `<VAR>=<bare-semver>` line in
-// .github/wit-tools-versions.env. For each, this resolves the latest
+// .github/tool-versions.env. For each, this resolves the latest
 // non-prerelease, non-draft release and rewrites the pin in place.
 //
-// The pins live in that .env file rather than wit.yml because the bump
+// The pins live in that .env file rather than a workflow because the bump
 // workflow pushes with the default GITHUB_TOKEN, which GitHub forbids from
 // updating files under .github/workflows/.
 //
 // Tracked tools:
 //   WASM_TOOLS_VERSION ← bytecodealliance/wasm-tools
+//   PROTOC_VERSION     ← protocolbuffers/protobuf
 //
-// Usage: node bump-wit-tools.mjs [path-to-versions.env]
-//   Defaults to .github/wit-tools-versions.env; the optional arg exists so
+// Usage: node bump-tool-versions.mjs [path-to-versions.env]
+//   Defaults to .github/tool-versions.env; the optional arg exists so
 //   the script can be exercised against a copy without touching the real file.
 //
 // Env:
@@ -35,6 +36,11 @@ const TOOLS = [
     var: 'WASM_TOOLS_VERSION',
     repo: 'bytecodealliance/wasm-tools',
     name: 'wasm-tools',
+  },
+  {
+    var: 'PROTOC_VERSION',
+    repo: 'protocolbuffers/protobuf',
+    name: 'protoc',
   },
 ];
 
@@ -66,7 +72,7 @@ function pinRe(name) {
 }
 
 async function main() {
-  const file = process.argv[2] ?? '.github/wit-tools-versions.env';
+  const file = process.argv[2] ?? '.github/tool-versions.env';
 
   const githubOutput = process.env.GITHUB_OUTPUT;
   if (!githubOutput) {
@@ -109,7 +115,7 @@ async function main() {
   // survive into the PR title/body. The delimiter cannot appear in the body.
   const body = bumps.join('\n');
   appendFileSync(githubOutput, `changed=${changed}\n`);
-  appendFileSync(githubOutput, `body<<WIT_TOOLS_BUMP_EOF\n${body}\nWIT_TOOLS_BUMP_EOF\n`);
+  appendFileSync(githubOutput, `body<<TOOLS_BUMP_EOF\n${body}\nTOOLS_BUMP_EOF\n`);
 }
 
 await main();

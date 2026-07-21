@@ -1,0 +1,64 @@
+name: "Setup protoc"
+description: >
+  Install the pinned protoc (Protocol Buffers compiler) from the official
+  protocolbuffers/protobuf GitHub releases. The version is read from
+  .github/tool-versions.env (PROTOC_VERSION), kept current by tools-bump.yml.
+  Downloads the release asset directly over HTTPS, so it needs no GitHub API
+  version resolution or token and runs on any Node version the runner defaults
+  to. Requires the repository to be checked out first.
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install protoc (Linux/macOS)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        set -euo pipefail
+        version="$(grep -E '^PROTOC_VERSION=' "${GITHUB_WORKSPACE}/.github/tool-versions.env" | head -n1 | cut -d= -f2)"
+        if [ -z "${version}" ]; then
+          echo "::error::PROTOC_VERSION not found in .github/tool-versions.env"
+          exit 1
+        fi
+        case "${RUNNER_OS}" in
+          Linux) os="linux" ;;
+          macOS) os="osx" ;;
+          *) echo "::error::Unsupported runner OS: ${RUNNER_OS}"; exit 1 ;;
+        esac
+        case "${RUNNER_ARCH}" in
+          X64) arch="x86_64" ;;
+          ARM64) arch="aarch_64" ;;
+          *) echo "::error::Unsupported runner arch: ${RUNNER_ARCH}"; exit 1 ;;
+        esac
+        asset="protoc-${version}-${os}-${arch}.zip"
+        url="https://github.com/protocolbuffers/protobuf/releases/download/v${version}/${asset}"
+        dest="${RUNNER_TEMP}/protoc"
+        echo "Downloading ${url}"
+        curl -fsSL --retry 3 --retry-delay 5 -o "${RUNNER_TEMP}/${asset}" "${url}"
+        rm -rf "${dest}"
+        mkdir -p "${dest}"
+        unzip -q "${RUNNER_TEMP}/${asset}" -d "${dest}"
+        echo "${dest}/bin" >> "${GITHUB_PATH}"
+        "${dest}/bin/protoc" --version
+
+    - name: Install protoc (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $ProgressPreference = "SilentlyContinue"
+        $envFile = Join-Path $env:GITHUB_WORKSPACE ".github/tool-versions.env"
+        $pin = Select-String -Path $envFile -Pattern '^PROTOC_VERSION=' | Select-Object -First 1
+        if (-not $pin) { throw "PROTOC_VERSION not found in .github/tool-versions.env" }
+        $version = $pin.Line.Split('=', 2)[1].Trim()
+        $arch = if ($env:RUNNER_ARCH -eq "X86") { "win32" } else { "win64" }
+        $asset = "protoc-$version-$arch.zip"
+        $url = "https://github.com/protocolbuffers/protobuf/releases/download/v$version/$asset"
+        $dest = Join-Path $env:RUNNER_TEMP "protoc"
+        $zip = Join-Path $env:RUNNER_TEMP $asset
+        Write-Host "Downloading $url"
+        Invoke-WebRequest -Uri $url -OutFile $zip -MaximumRetryCount 3 -RetryIntervalSec 5
+        if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+        Expand-Archive -Path $zip -DestinationPath $dest -Force
+        Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $dest "bin")
+        & (Join-Path $dest "bin\protoc.exe") --version
