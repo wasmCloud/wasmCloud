@@ -345,9 +345,10 @@ impl Host {
 
     /// Stop the host and shut down all plugins.
     ///
-    /// Attempts to gracefully stop all plugins with a 3-second timeout
-    /// for each. Errors are logged but don't prevent other plugins from
-    /// being stopped.
+    /// Attempts to gracefully stop all plugins, allowing each the
+    /// `WASH_PLUGIN_STOP_TIMEOUT_SECS` budget plus a one-second grace.
+    /// Errors are logged but don't prevent other plugins from being
+    /// stopped.
     ///
     /// # Returns
     /// Ok if the shutdown process completes (even with plugin errors).
@@ -357,15 +358,29 @@ impl Host {
             .await
             .context("failed to stop HTTP handler")?;
 
-        // Stop all plugins, log errors but continue stopping others
+        // Stop all plugins, log errors but continue stopping others. The cap
+        // must outlast the plugin-stop budget: a host component plugin's
+        // `stop()` waits the full budget for its supervisor and only then
+        // aborts it, and if the outer timeout fired first it would drop that
+        // future — and the supervisor's JoinHandle with it — detaching a
+        // wedged task instead of aborting it. The one-second grace covers the
+        // abort-and-return tail past the inner wait; that tail must stay
+        // synchronous (or bounded well under the grace) for the guarantee to
+        // hold, so keep awaits out of the post-timeout path in
+        // `ComponentHostPlugin::stop`.
+        let stop_timeout = crate::timeouts::plugin_stop() + std::time::Duration::from_secs(1);
         for (id, plugin) in &self.plugins {
             let stop_fut = plugin.stop();
-            match tokio::time::timeout(std::time::Duration::from_secs(3), stop_fut).await {
+            match tokio::time::timeout(stop_timeout, stop_fut).await {
                 Ok(Err(e)) => {
                     tracing::error!(id = id, err = ?e, "failed to stop plugin");
                 }
                 Err(_) => {
-                    tracing::error!(id = id, "plugin stop timed out after 3 seconds");
+                    tracing::error!(
+                        id = id,
+                        timeout_secs = stop_timeout.as_secs(),
+                        "plugin stop timed out"
+                    );
                 }
                 _ => {}
             }
@@ -1013,6 +1028,54 @@ impl HostBuilder {
 mod tests {
     use super::*;
     use crate::types::Component;
+
+    /// `Host::stop`'s per-plugin timeout must outlast the plugin-stop budget.
+    /// A host component plugin's `stop()` waits the full budget for its
+    /// supervisor and only then runs its abort-and-cleanup tail; if the outer
+    /// timeout fired first it would drop that future mid-wait, detaching the
+    /// supervisor's JoinHandle instead of aborting it. The mock below mirrors
+    /// that shape: sleep the budget, then record that the tail ran.
+    #[tokio::test(start_paused = true)]
+    async fn test_stop_outlasts_plugin_stop_budget() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct SlowStopPlugin {
+            cleanup_ran: Arc<AtomicBool>,
+        }
+
+        #[async_trait::async_trait]
+        impl HostPlugin for SlowStopPlugin {
+            fn id(&self) -> &'static str {
+                "slow-stop"
+            }
+
+            fn world(&self) -> WitWorld {
+                WitWorld::default()
+            }
+
+            async fn stop(&self) -> anyhow::Result<()> {
+                tokio::time::sleep(crate::timeouts::plugin_stop()).await;
+                self.cleanup_ran.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+
+        let cleanup_ran = Arc::new(AtomicBool::new(false));
+        let host = Host::builder()
+            .with_plugin(Arc::new(SlowStopPlugin {
+                cleanup_ran: Arc::clone(&cleanup_ran),
+            }))
+            .expect("failed to register plugin")
+            .build()
+            .expect("failed to build host");
+
+        Arc::new(host).stop().await.expect("failed to stop host");
+
+        assert!(
+            cleanup_ran.load(Ordering::SeqCst),
+            "plugin stop's post-budget cleanup must run before Host::stop gives up on it"
+        );
+    }
 
     #[tokio::test]
     async fn test_workload_start_failed() {
