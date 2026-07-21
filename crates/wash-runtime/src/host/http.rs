@@ -19,10 +19,10 @@
 //! ```
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     net::SocketAddr,
     path::Path,
-    sync::Arc,
+    sync::{Arc, atomic::AtomicUsize},
     time::Duration,
 };
 
@@ -76,6 +76,41 @@ fn is_valid_hostname(host: &str) -> bool {
                 && !label.starts_with('-')
                 && !label.ends_with('-')
         })
+}
+
+/// Collect the ingress hostnames a workload's HTTP handler serves on: the
+/// `host` config plus any comma-separated `host-aliases`, keeping only entries
+/// that are valid RFC 1123 hostnames.
+///
+/// Unlike [`DynamicRouter::on_workload_resolved`], which fails a component
+/// workload that declares no valid host, this is lenient: it returns whatever
+/// valid hostnames exist (possibly none). Service workloads call it from their
+/// startup path, where a missing host must not abort the service. It simply
+/// won't be reachable via a hostname router (matching how the host-agnostic
+/// `DevRouter` ignores hostnames entirely).
+pub(crate) fn http_ingress_hostnames(interfaces: &[crate::wit::WitInterface]) -> Vec<String> {
+    let Some(http_iface) = interfaces
+        .iter()
+        .find(|iface| iface.is_incoming_http_handler())
+    else {
+        return Vec::new();
+    };
+
+    let mut hosts = Vec::new();
+    if let Some(primary) = http_iface.config.get("host")
+        && is_valid_hostname(primary)
+    {
+        hosts.push(primary.clone());
+    }
+    if let Some(aliases) = http_iface.config.get("host-aliases") {
+        hosts.extend(
+            aliases
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty() && is_valid_hostname(s)),
+        );
+    }
+    hosts
 }
 
 /// Why a request could not be routed to a workload.
@@ -139,9 +174,15 @@ pub trait Router: Send + Sync + 'static {
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()>;
 
     /// Register a workload whose long-lived service handles HTTP ingress (the
-    /// service exports `wasi:http/handler`). Routers that key off a component
-    /// can use this to map the workload for routing. Default: no-op.
-    async fn on_service_http_resolved(&self, _workload_id: &str) -> anyhow::Result<()> {
+    /// service exports `wasi:http/handler`). `hostnames` are the ingress
+    /// hostnames the service serves on (see [`http_ingress_hostnames`]); a
+    /// hostname-keyed router registers the workload under each so requests
+    /// resolve to it. Default: no-op.
+    async fn on_service_http_resolved(
+        &self,
+        _workload_id: &str,
+        _hostnames: &[String],
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -178,10 +219,64 @@ pub trait Router: Send + Sync + 'static {
 /// Router that routes requests by 'Host' header, configured via WitInterface config
 #[derive(Default)]
 pub struct DynamicRouter {
-    host_to_workload: tokio::sync::RwLock<HashMap<String, HashSet<String>>>,
+    /// Maps a hostname to every workload replica bound to it. Ordered so the
+    /// round-robin cursor below strides a stable sequence between mutations.
+    host_to_workload: tokio::sync::RwLock<HashMap<String, BTreeSet<String>>>,
     /// Maps workload_id -> all hostnames (primary + aliases) registered for it.
     /// Used by on_workload_unbind to remove all entries cleanly.
     workload_to_host: tokio::sync::RwLock<HashMap<String, Vec<String>>>,
+    /// Round-robin cursor. Each routed request strides it once so successive
+    /// requests for one hostname fan out across all bound replicas instead of
+    /// pinning to one. Relaxed ordering suffices: we only need each request to
+    /// read a distinct-enough counter value, not a total order across threads.
+    rr: AtomicUsize,
+}
+
+impl DynamicRouter {
+    /// Register `workload_id` under every hostname in `hosts`, updating both the
+    /// forward (host -> replicas) and reverse (workload -> hosts) maps so
+    /// [`Router::on_workload_unbind`] can later remove every entry cleanly.
+    /// Idempotent: re-registering the same workload (e.g. a service restart)
+    /// leaves the maps unchanged.
+    async fn register_hostnames(&self, workload_id: &str, hosts: &[String]) {
+        {
+            let mut lock = self.workload_to_host.write().await;
+            lock.insert(workload_id.to_string(), hosts.to_vec());
+        }
+        {
+            let mut lock = self.host_to_workload.write().await;
+            for host in hosts {
+                lock.entry(host.clone())
+                    .or_default()
+                    .insert(workload_id.to_string());
+            }
+        }
+    }
+
+    /// Pick one replica bound to `host`, striding the round-robin cursor so
+    /// successive calls fan out across every replica. Split out from
+    /// [`Router::route_incoming_request`] so the selection logic is unit-testable
+    /// without constructing a [`hyper::body::Incoming`].
+    fn select_workload(&self, host: &str) -> Result<String, RouteError> {
+        let lock = self
+            .host_to_workload
+            .try_read()
+            .map_err(|_| RouteError::Unavailable)?;
+        let Some(workload_set) = lock.get(host) else {
+            return Err(RouteError::NoWorkloadForHost(host.to_string()));
+        };
+        // An entry can exist but be empty; treat that as "no workload bound"
+        // (same 404) and, importantly, avoid the `% 0` below.
+        if workload_set.is_empty() {
+            return Err(RouteError::NoWorkloadForHost(host.to_string()));
+        }
+        let idx = self.rr.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let workload_id = workload_set
+            .iter()
+            .nth(idx % workload_set.len())
+            .ok_or_else(|| RouteError::NoWorkloadForHost(host.to_string()))?;
+        Ok(workload_id.clone())
+    }
 }
 
 /// Implementation of Router that maps Host headers to workload IDs
@@ -228,21 +323,27 @@ impl Router for DynamicRouter {
             );
         }
 
-        let workload_id = resolved_handle.id().to_string();
+        self.register_hostnames(resolved_handle.id(), &all_hosts).await;
 
-        {
-            let mut lock = self.workload_to_host.write().await;
-            lock.insert(workload_id.clone(), all_hosts.clone());
+        Ok(())
+    }
+
+    async fn on_service_http_resolved(
+        &self,
+        workload_id: &str,
+        hostnames: &[String],
+    ) -> anyhow::Result<()> {
+        // A service-only workload (a p3 trigger service serving HTTP) reaches
+        // routing here rather than through `on_workload_resolved`. Register its
+        // hostnames exactly like a component workload so requests resolve to it.
+        if hostnames.is_empty() {
+            warn!(
+                workload_id,
+                "service resolved with no valid ingress hostnames; requests will not route to it under the hostname router"
+            );
+            return Ok(());
         }
-
-        {
-            let mut lock = self.host_to_workload.write().await;
-            for host in &all_hosts {
-                let entry = lock.entry(host.clone()).or_insert_with(HashSet::new);
-                entry.insert(workload_id.clone());
-            }
-        }
-
+        self.register_hostnames(workload_id, hostnames).await;
         Ok(())
     }
 
@@ -275,35 +376,19 @@ impl Router for DynamicRouter {
         check_allowed_hosts(request, allowed_hosts)
     }
 
-    /// Pick a workload ID based on the incoming request
+    /// Pick a workload ID based on the incoming request, round-robining across
+    /// every replica bound to the request's `Host`.
     fn route_incoming_request(
         &self,
         req: &hyper::Request<hyper::body::Incoming>,
     ) -> Result<String, RouteError> {
-        tokio::task::block_in_place(move || {
-            let lock = self
-                .host_to_workload
-                .try_read()
-                .map_err(|_| RouteError::Unavailable)?;
-            let workload_host = req
-                .headers()
-                .get(hyper::header::HOST)
-                .and_then(|h| h.to_str().ok())
-                .or_else(|| req.uri().authority().map(|a| a.as_str()))
-                .ok_or(RouteError::MissingHost)?;
-            let Some(workload_set) = lock.get(workload_host) else {
-                return Err(RouteError::NoWorkloadForHost(workload_host.to_string()));
-            };
-
-            // Entry exists but is empty so treat it as "no workload bound" from the
-            // caller's perspective; same 404 status
-            let workload_id = workload_set
-                .iter()
-                .next()
-                .ok_or_else(|| RouteError::NoWorkloadForHost(workload_host.to_string()))?;
-
-            Ok(workload_id.clone())
-        })
+        let workload_host = req
+            .headers()
+            .get(hyper::header::HOST)
+            .and_then(|h| h.to_str().ok())
+            .or_else(|| req.uri().authority().map(|a| a.as_str()))
+            .ok_or(RouteError::MissingHost)?;
+        tokio::task::block_in_place(move || self.select_workload(workload_host))
     }
 }
 
@@ -417,9 +502,14 @@ impl Router for DevRouter {
         Ok(())
     }
 
-    async fn on_service_http_resolved(&self, workload_id: &str) -> anyhow::Result<()> {
+    async fn on_service_http_resolved(
+        &self,
+        workload_id: &str,
+        _hostnames: &[String],
+    ) -> anyhow::Result<()> {
         // A service-handled workload routes the same way as a component one:
-        // DevRouter sends all requests to the most-recently resolved workload.
+        // DevRouter sends all requests to the most-recently resolved workload,
+        // so it ignores hostnames.
         let mut lock = self
             .last_workload_id
             .write()
@@ -484,11 +574,14 @@ pub trait HostHandler: Send + Sync + 'static {
 
     /// Register a long-lived service instance that serves HTTP ingress: inbound
     /// requests for `workload_id` are delivered over `sender` instead of
-    /// instantiating a component per request. Default: no-op (the workload
-    /// keeps the per-request path).
+    /// instantiating a component per request. `hostnames` are the ingress
+    /// hostnames the service serves on, forwarded to the router so a
+    /// hostname-keyed router can resolve requests to this workload. Default:
+    /// no-op (the workload keeps the per-request path).
     async fn on_service_http_resolved(
         &self,
         _workload_id: &str,
+        _hostnames: &[String],
         _sender: tokio::sync::mpsc::Sender<ServiceHttpJob>,
     ) -> anyhow::Result<()> {
         Ok(())
@@ -934,9 +1027,12 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
     async fn on_service_http_resolved(
         &self,
         workload_id: &str,
+        hostnames: &[String],
         sender: tokio::sync::mpsc::Sender<ServiceHttpJob>,
     ) -> anyhow::Result<()> {
-        self.router.on_service_http_resolved(workload_id).await?;
+        self.router
+            .on_service_http_resolved(workload_id, hostnames)
+            .await?;
         // A re-resolve without an intervening unbind is expected: the trigger
         // service supervisor re-registers a fresh sender on every restart (see
         // `execute_trigger_service`) to swap in the new incarnation. Overwriting
@@ -951,6 +1047,9 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
     }
 
     async fn on_service_http_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
+        // Drop the router registration too, so a stopped service replica leaves
+        // the hostname's round-robin rotation.
+        self.router.on_workload_unbind(workload_id).await?;
         self.service_handlers.write().await.remove(workload_id);
         Ok(())
     }
@@ -2439,6 +2538,192 @@ mod tests {
         assert!(
             result.is_err(),
             "NullServer P3 outgoing request should return an error"
+        );
+    }
+
+    /// A `wasi:http/incoming-handler` interface carrying `host` and, optionally,
+    /// a comma-separated `host-aliases` config — mirrors what the wash config
+    /// layer injects.
+    fn http_iface(host: Option<&str>, aliases: Option<&str>) -> crate::wit::WitInterface {
+        let mut config = HashMap::new();
+        if let Some(host) = host {
+            config.insert("host".to_string(), host.to_string());
+        }
+        if let Some(aliases) = aliases {
+            config.insert("host-aliases".to_string(), aliases.to_string());
+        }
+        crate::wit::WitInterface {
+            namespace: "wasi".to_string(),
+            package: "http".to_string(),
+            interfaces: ["incoming-handler".to_string()].into_iter().collect(),
+            version: Some(semver::Version::parse("0.2.2").unwrap()),
+            config,
+            name: None,
+        }
+    }
+
+    #[test]
+    fn http_ingress_hostnames_collects_primary_and_valid_aliases() {
+        let ifaces = vec![http_iface(Some("primary.local"), Some("a.local, b.local"))];
+        assert_eq!(
+            http_ingress_hostnames(&ifaces),
+            vec![
+                "primary.local".to_string(),
+                "a.local".to_string(),
+                "b.local".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn http_ingress_hostnames_filters_invalid_and_empty_entries() {
+        // Underscores are not valid RFC 1123 hostname chars, and leading/trailing
+        // hyphens are rejected: the bad primary is dropped and only the valid
+        // aliases survive.
+        let ifaces = vec![http_iface(
+            Some("bad_host"),
+            Some("ok.local,,-nope-,also_bad,fine.local"),
+        )];
+        assert_eq!(
+            http_ingress_hostnames(&ifaces),
+            vec!["ok.local".to_string(), "fine.local".to_string()],
+        );
+    }
+
+    #[test]
+    fn http_ingress_hostnames_empty_without_http_interface() {
+        let kv = crate::wit::WitInterface {
+            namespace: "wasi".to_string(),
+            package: "keyvalue".to_string(),
+            interfaces: ["store".to_string()].into_iter().collect(),
+            version: None,
+            config: HashMap::new(),
+            name: None,
+        };
+        assert!(http_ingress_hostnames(&[kv]).is_empty());
+    }
+
+    /// Regression guard for the "N replicas serve like one" defect: with several
+    /// workloads bound to one hostname, `route_incoming_request` used to pin every
+    /// request to a single arbitrary replica (`HashSet::iter().next()`). The
+    /// round-robin cursor must instead spread requests evenly across all of them.
+    #[tokio::test]
+    async fn dynamic_router_round_robins_across_replicas() {
+        let router = DynamicRouter::default();
+        let replicas = ["r0", "r1", "r2", "r3"];
+        for id in replicas {
+            router
+                .on_service_http_resolved(id, &["svc.local".to_string()])
+                .await
+                .unwrap();
+        }
+
+        let mut counts: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for _ in 0..(replicas.len() * 2) {
+            let id = router.select_workload("svc.local").unwrap();
+            *counts.entry(id).or_default() += 1;
+        }
+
+        assert_eq!(
+            counts.len(),
+            replicas.len(),
+            "every replica should receive traffic, got {counts:?}"
+        );
+        for (id, hits) in counts {
+            assert_eq!(hits, 2, "replica {id} should get an even 2-of-8 share");
+        }
+    }
+
+    /// A service-only workload (defect #1) reaches routing through
+    /// `on_service_http_resolved`, not `on_workload_resolved`. The router must
+    /// register its hostnames so requests resolve. Previously this was a no-op
+    /// and every hostname 404'd.
+    #[tokio::test]
+    async fn dynamic_router_registers_service_http_hostnames() {
+        let router = DynamicRouter::default();
+        assert!(
+            matches!(
+                router.select_workload("svc.local"),
+                Err(RouteError::NoWorkloadForHost(_))
+            ),
+            "host should not resolve before the service is registered"
+        );
+
+        router
+            .on_service_http_resolved(
+                "svc-1",
+                &["svc.local".to_string(), "svc.internal".to_string()],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(router.select_workload("svc.local").unwrap(), "svc-1");
+        assert_eq!(router.select_workload("svc.internal").unwrap(), "svc-1");
+    }
+
+    /// A service resolving with no valid hostnames (e.g. under a host-agnostic
+    /// deployment) must not register anything or error.
+    #[tokio::test]
+    async fn dynamic_router_service_http_empty_hostnames_is_noop() {
+        let router = DynamicRouter::default();
+        router.on_service_http_resolved("svc-1", &[]).await.unwrap();
+        assert!(matches!(
+            router.select_workload("anything.local"),
+            Err(RouteError::NoWorkloadForHost(_))
+        ));
+    }
+
+    /// Unbinding one replica drops it from the rotation; the hostname keeps
+    /// routing to whoever remains.
+    #[tokio::test]
+    async fn dynamic_router_unbind_removes_replica_from_rotation() {
+        let router = DynamicRouter::default();
+        router
+            .on_service_http_resolved("r0", &["svc.local".to_string()])
+            .await
+            .unwrap();
+        router
+            .on_service_http_resolved("r1", &["svc.local".to_string()])
+            .await
+            .unwrap();
+
+        router.on_workload_unbind("r0").await.unwrap();
+
+        for _ in 0..4 {
+            assert_eq!(
+                router.select_workload("svc.local").unwrap(),
+                "r1",
+                "only the surviving replica should be selected after unbind"
+            );
+        }
+    }
+
+    /// Stopping a service-only workload calls `on_service_http_unbind` but not
+    /// `on_workload_unbind`. That hook must still drop the router registration,
+    /// otherwise a stopped replica lingers in the hostname's rotation and
+    /// requests round-robined onto it 404.
+    #[tokio::test]
+    async fn service_http_unbind_removes_router_registration() {
+        let server = HttpServer::builder(DynamicRouter::default(), "127.0.0.1:0".parse().unwrap())
+            .build()
+            .await
+            .unwrap();
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        server
+            .on_service_http_resolved("svc-1", &["svc.local".to_string()], tx)
+            .await
+            .unwrap();
+        assert_eq!(server.router.select_workload("svc.local").unwrap(), "svc-1");
+
+        server.on_service_http_unbind("svc-1").await.unwrap();
+        assert!(
+            matches!(
+                server.router.select_workload("svc.local"),
+                Err(RouteError::NoWorkloadForHost(_))
+            ),
+            "hostname must stop routing once the service unbinds"
         );
     }
 }

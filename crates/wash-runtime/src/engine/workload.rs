@@ -777,6 +777,11 @@ impl ResolvedWorkload {
         let mut store = recipe.build().await?;
         let http_handler = self.http_handler.clone();
         let workload_id: Arc<str> = Arc::from(self.id());
+        // The hostnames this service serves HTTP on, derived once from the
+        // workload's declared interfaces. Passed to every HTTP registration
+        // (the first below and each restart re-registration in the supervisor)
+        // so a hostname-keyed router can resolve requests to this service.
+        let ingress_hostnames = crate::host::http::http_ingress_hostnames(self.host_interfaces());
 
         // Build the first incarnation's host-invoked ingresses. Each paired sender
         // is registered with its host-side ingress (the HTTP server, the messaging
@@ -788,7 +793,7 @@ impl ResolvedWorkload {
             build_trigger_ingresses(serves_http, serves_messaging);
         if let Some(http_tx) = http_tx {
             self.http_handler
-                .on_service_http_resolved(self.id(), http_tx)
+                .on_service_http_resolved(self.id(), &ingress_hostnames, http_tx)
                 .await
                 .map_err(|e| anyhow::anyhow!("failed to register service HTTP handler: {e:#}"))?;
         }
@@ -816,7 +821,7 @@ impl ResolvedWorkload {
                             build_trigger_ingresses(serves_http, serves_messaging);
                         if let Some(http_tx) = http_tx
                             && let Err(e) = http_handler
-                                .on_service_http_resolved(&workload_id, http_tx)
+                                .on_service_http_resolved(&workload_id, &ingress_hostnames, http_tx)
                                 .await
                         {
                             error!(err = %e, "failed to re-register service HTTP handler on restart");
