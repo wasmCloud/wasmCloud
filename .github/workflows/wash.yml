@@ -53,6 +53,7 @@ jobs:
               - 'crates/**'
               - 'src/**'
               - 'tests/**'
+              - 'wit/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
@@ -100,10 +101,7 @@ jobs:
         with:
           version: "1.247.0"
       - name: Setup protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: "29.x"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        uses: ./.github/actions/setup-protoc
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
       # Compile the wash-runtime wasm test fixtures. The test/bench targets
@@ -122,7 +120,7 @@ jobs:
         env:
           RUST_BACKTRACE: "1"
         run: |
-          cargo test -p wash-runtime --features wasi-tls,wasm_component_model_implements
+          cargo test -p wash-runtime --features wasi-tls,wasm_component_model_implements,host-component-plugins
       # Docker/registry-backed `#[ignore]` integration tests, Linux only: the
       # macOS/Windows hosted runners have no Docker daemon (and macOS can't get
       # one — no nested virtualization). `-- --ignored` runs ONLY the ignored
@@ -134,7 +132,7 @@ jobs:
         env:
           RUST_BACKTRACE: "1"
         run: |
-          cargo test -p wash-runtime --features wasm_component_model_implements,wasi-tls -- --ignored
+          cargo test -p wash-runtime --features wasm_component_model_implements,wasi-tls,host-component-plugins -- --ignored
           cargo test -p wash --test integration_oci -- --ignored
       # Bitrot guard: the benches must still compile. Built via `cargo test
       # --benches` rather than `cargo bench --no-run` because the `bench`
@@ -165,10 +163,7 @@ jobs:
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
       - name: Setup protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: "29.x"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        uses: ./.github/actions/setup-protoc
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
         with:
@@ -187,7 +182,7 @@ jobs:
           cargo +nightly fmt -- --check
       - name: Lint
         run: |
-          cargo clippy --workspace --features wasm_component_model_implements,wasi-tls
+          cargo clippy --workspace --features wasm_component_model_implements,wasi-tls,host-component-plugins
       - name: Lint anyhow context message casing
         run: |
           # anyhow `.context()` / `.with_context()` strings are error messages,
@@ -267,9 +262,10 @@ jobs:
             type=gha,scope=wash-release-${{ matrix.arch }}-main
           cache-to: type=gha,scope=wash-release-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }},mode=max
       # ALL-FEATURES image — every optional host feature on (`(implements ..)`
-      # multiplexing). NOT shipped: a coverage build the operator-e2e
-      # `all-features` leg loads to exercise the implements spec, which a
-      # released host can't run. amd64 only — the sole consumer is that e2e leg.
+      # multiplexing AND host component plugins). NOT shipped: a coverage build
+      # the operator-e2e `all-features` leg loads to exercise those features on a
+      # host built with them (a released host can't run them). amd64 only — the
+      # sole consumer is that e2e leg.
       - name: Build wash runtime image — all features (tarball for operator-e2e)
         id: build_tar_all_features
         if: matrix.arch == 'amd64'
@@ -278,7 +274,7 @@ jobs:
           context: .
           outputs: type=docker,dest=/tmp/wash-image-all-features.tar,name=localhost/wasmcloud-wash:e2e
           build-args: |
-            CARGO_FEATURES=wasm_component_model_implements
+            CARGO_FEATURES=wasm_component_model_implements,host-component-plugins
           cache-from: |
             type=gha,scope=wash-all-features-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
             type=gha,scope=wash-all-features-${{ matrix.arch }}-main
@@ -361,10 +357,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/free-disk-space
       - name: Setup protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: "29.x"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        uses: ./.github/actions/setup-protoc
       - uses: ./.github/actions/setup-rust
       - name: Build e2e fixture components + wash
         working-directory: runtime-operator
@@ -720,10 +713,7 @@ jobs:
           rust-targets: "${{ matrix.target }}"
 
       - name: Setup protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: "29.x"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        uses: ./.github/actions/setup-protoc
 
       - name: Set SOURCE_DATE_EPOCH from commit timestamp
         # Pin embedded timestamps in the binary to the merge commit's author

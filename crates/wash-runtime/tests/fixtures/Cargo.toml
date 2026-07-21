@@ -43,6 +43,8 @@ members = [
     "msg-counter",
     "bridge-backend",
     "bridge-service",
+    "kv-plugin",
+    "kv-plugin-caller",
 ]
 
 [workspace.dependencies]

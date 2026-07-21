@@ -1,0 +1,9 @@
+[overrides]
+"wasi:clocks" = { path = "../p3-wit-deps/wasi-clocks-0.3.0" }
+# `wasmcloud:host` is defined and installed by the runtime itself, so its
+# canonical WIT lives in-repo at wit/host/wit/. Reference that source directly —
+# rather than a vendored copy under p3-wit-deps/ — so the fixture cannot drift
+# from the shape the host provides. This is the only override that reaches
+# outside the fixtures tree; every other one points into the shared p3-wit-deps/.
+"wasmcloud:host" = { path = "../../../../../wit/host/wit" }
+"acme:kv" = { path = "../acme-kv" }

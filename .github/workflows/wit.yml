@@ -43,7 +43,7 @@ on:
     # users always see a result.
     paths:
       - '.github/workflows/wit.yml'
-      - '.github/wit-tools-versions.env'
+      - '.github/tool-versions.env'
       - 'wit/**'
 
 concurrency:
@@ -52,8 +52,8 @@ concurrency:
 
 permissions: {}
 
-# Pinned tool versions live in .github/wit-tools-versions.env (outside
-# .github/workflows/ so wit-tools-bump.yml's GITHUB_TOKEN can push updates
+# Pinned tool versions live in .github/tool-versions.env (outside
+# .github/workflows/ so tools-bump.yml's GITHUB_TOKEN can push updates
 # to them). The validate job loads that file into $GITHUB_ENV below.
 #
 # wash itself is installed via wasmcloud/setup-wash-action (defaulting to
@@ -78,7 +78,7 @@ jobs:
           filters: |
             relevant:
               - '.github/workflows/wit.yml'
-              - '.github/wit-tools-versions.env'
+              - '.github/tool-versions.env'
               - 'wit/**'
 
   validate:
@@ -100,7 +100,7 @@ jobs:
         # Appends the KEY=VALUE lines from the pins file to $GITHUB_ENV,
         # skipping comment and blank lines. Subsequent steps then see
         # e.g. ${{ env.WASM_TOOLS_VERSION }}.
-        run: grep -vE '^[[:space:]]*(#|$)' .github/wit-tools-versions.env >> "${GITHUB_ENV}"
+        run: grep -vE '^[[:space:]]*(#|$)' .github/tool-versions.env >> "${GITHUB_ENV}"
 
       - name: Setup wasm-tools
         uses: bytecodealliance/actions/wasm-tools/setup@9152e710e9f7182e4c29ad218e4f335a7b203613 # v1.1.3

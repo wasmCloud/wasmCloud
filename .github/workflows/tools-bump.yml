@@ -1,19 +1,22 @@
-name: wit-tools-bump
+name: tools-bump
 
-# Opens a PR when bytecodealliance/wasm-tools publishes a new stable GitHub
-# release. The pinned version lives in .github/wit-tools-versions.env.
+# Opens a PR when a tracked upstream tool publishes a new stable GitHub
+# release. The pinned versions live in .github/tool-versions.env:
+#   - wasm-tools (bytecodealliance/wasm-tools), consumed by wit.yml
+#   - protoc (protocolbuffers/protobuf), consumed by the setup-protoc action
 #
 # Why this exists: Dependabot's `github-actions` ecosystem tracks `uses:`
 # refs (the action SHA), not arbitrary `with:` inputs or versions fetched
-# at runtime. wasm-tools (installed via bytecodealliance/actions/wasm-tools/setup)
-# is therefore invisible to Dependabot, so we maintain it with a small
-# custom updater.
+# at runtime. Both tools are installed by version string rather than a
+# pinned `uses:`, so they're invisible to Dependabot and we maintain them
+# with a small custom updater.
 #
 # wash is installed via wasmcloud/setup-wash-action (which defaults to
 # the latest wash release) and is not tracked here.
 #
 # Caveat: PRs opened by GITHUB_TOKEN do not trigger downstream workflow
-# runs (GitHub's recursion guard), so `wit.yml` won't auto-run on the
+# runs (GitHub's recursion guard), so the workflows that consume these
+# pins (wit.yml, wash.yml, examples.yml, codeql.yml) won't auto-run on the
 # bump PR. Close-and-reopen the PR (or push an empty commit) to validate.
 # To remove that step, swap GITHUB_TOKEN here for a PAT or GitHub App
 # token stored as a repo secret.
@@ -45,28 +48,29 @@ jobs:
         id: update
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .github/scripts/bump-wit-tools.mjs
+        run: node .github/scripts/bump-tool-versions.mjs
 
       - name: Open / update PR
         if: steps.update.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          branch: bump/wit-tools
+          branch: bump/tool-versions
           delete-branch: true
-          title: 'ci(wit): bump pinned wit tool versions'
+          title: 'ci: bump pinned CI tool versions'
           commit-message: |
-            ci(wit): bump pinned wit tool versions
+            ci: bump pinned CI tool versions
 
             ${{ steps.update.outputs.body }}
           labels: |
             dependencies
             github-actions
           body: |
-            Bumps the wit pipeline's pinned tool version (wasm-tools) to upstream's latest stable release.
+            Bumps the CI pipeline's pinned tool versions (wasm-tools, protoc) to upstream's latest stable releases.
 
             ${{ steps.update.outputs.body }}
 
             > [!NOTE]
             > GitHub doesn't trigger downstream workflows for PRs opened by `GITHUB_TOKEN`,
-            > so `wit.yml` will not auto-run here. Close-and-reopen this PR (or push
+            > so the workflows consuming these pins (wit.yml, wash.yml, examples.yml,
+            > codeql.yml) will not auto-run here. Close-and-reopen this PR (or push
             > an empty commit) to validate.

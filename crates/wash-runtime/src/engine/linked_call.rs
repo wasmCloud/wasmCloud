@@ -356,75 +356,53 @@ async fn new_ephemeral_store(
     component_ids.dedup();
     resolve_component_volume_mounts_in_map(&call.components, &component_ids).await?;
 
-    let (active_metadata, linked_metadata) = {
-        let components = call.components.read().await;
-        let active = components
-            .get(&call.active_component_id)
-            .with_context(|| {
-                format!(
-                    "ephemeral linked component '{}' not found",
-                    call.active_component_id
-                )
-            })?
-            .metadata
-            .clone();
-        let linked = call
-            .linked_component_ids
-            .iter()
-            .map(|component_id| {
-                components
-                    .get(component_id)
-                    .with_context(|| format!("linked component '{component_id}' not found"))
-                    .map(|component| component.metadata.clone())
-            })
-            .collect::<wasmtime::Result<Vec<_>>>()?;
-        (active, linked)
+    // One read-lock scope, no `WorkloadMetadata` clones: cloning metadata would
+    // deep-clone its by-value `Linker`, and `pre_instantiate_ref` needs only
+    // read access, so concurrent ephemeral calls don't serialize on a write
+    // lock. Nothing is retained past this store.
+    #[cfg(feature = "wasi-tls")]
+    let template_of = |metadata: &WorkloadMetadata| {
+        component_ctx_template_from_metadata_with_tls(
+            metadata,
+            call.tls_provider.clone(),
+            call.allow_ip_name_lookup,
+        )
+    };
+    #[cfg(not(feature = "wasi-tls"))]
+    let template_of = |metadata: &WorkloadMetadata| {
+        component_ctx_template_from_metadata(metadata, call.allow_ip_name_lookup)
     };
 
-    #[cfg(not(feature = "wasi-tls"))]
-    let active = component_ctx_template_from_metadata(&active_metadata, call.allow_ip_name_lookup);
-    #[cfg(feature = "wasi-tls")]
-    let active = component_ctx_template_from_metadata_with_tls(
-        &active_metadata,
-        call.tls_provider.clone(),
-        call.allow_ip_name_lookup,
-    );
-
-    #[cfg(not(feature = "wasi-tls"))]
-    let linked = linked_metadata
-        .iter()
-        .map(|metadata| component_ctx_template_from_metadata(metadata, call.allow_ip_name_lookup))
-        .collect::<Vec<_>>();
-    #[cfg(feature = "wasi-tls")]
-    let linked = linked_metadata
-        .iter()
-        .map(|metadata| {
-            component_ctx_template_from_metadata_with_tls(
-                metadata,
-                call.tls_provider.clone(),
-                call.allow_ip_name_lookup,
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let linked_instances = {
-        let mut components = call.components.write().await;
-        call.linked_component_ids
-            .iter()
-            .map(|component_id| {
-                let component = components.get_mut(component_id).ok_or_else(|| {
-                    wasmtime::format_err!("linked component '{component_id}' not found")
-                })?;
-                component
-                    .pre_instantiate()
-                    .map(|pre| (component_id.clone(), pre))
-            })
-            .collect::<wasmtime::Result<Vec<_>>>()
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to pre-instantiate linked components for ephemeral call: {e}"
-                )
-            })?
+    let (active, linked, linked_instances) = {
+        let components = call.components.read().await;
+        let active = template_of(
+            &components
+                .get(&call.active_component_id)
+                .with_context(|| {
+                    format!(
+                        "ephemeral linked component '{}' not found",
+                        call.active_component_id
+                    )
+                })?
+                .metadata,
+        );
+        let mut linked = Vec::with_capacity(call.linked_component_ids.len());
+        let mut linked_instances = Vec::with_capacity(call.linked_component_ids.len());
+        for component_id in &call.linked_component_ids {
+            let component = components
+                .get(component_id)
+                .with_context(|| format!("linked component '{component_id}' not found"))?;
+            linked.push(template_of(&component.metadata));
+            linked_instances.push((
+                component_id.clone(),
+                component.pre_instantiate_ref().map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to pre-instantiate linked components for ephemeral call: {e}"
+                    )
+                })?,
+            ));
+        }
+        (active, linked, linked_instances)
     };
 
     new_store_from_templates(
