@@ -19,7 +19,10 @@ use wash_runtime::host::HostApi;
 use wash_runtime::types::{LocalResources, Service, Workload, WorkloadStartRequest};
 
 mod common;
-use common::{http_only_host_interfaces, json_u64_field, start_host_with_p3_http_handler};
+use common::{
+    http_only_host_interfaces, json_u64_field, start_host_with_dynamic_router,
+    start_host_with_p3_http_handler,
+};
 
 const SVC_COUNTER_WASM: &[u8] = include_bytes!("wasm/svc_counter.wasm");
 
@@ -121,6 +124,64 @@ async fn test_service_http_co_drives_cli_run() -> Result<()> {
     assert!(
         saw_growth,
         "cli/run should be co-driven concurrently with HTTP serving — cli_ticks never grew between requests"
+    );
+
+    Ok(())
+}
+
+/// Regression for "N service replicas on one host serve like one". Two defects
+/// combined to pin all traffic to a single replica: service workloads never
+/// registered their hostname with the `DynamicRouter` (so a hostname router
+/// 404'd them), and `route_incoming_request` picked one arbitrary replica per
+/// host. With both fixed, four `svc-counter` replicas bound to ONE hostname must
+/// each take an equal share.
+///
+/// Each replica keeps an independent `http_calls` counter, so 8 sequential
+/// requests spread round-robin over 4 replicas land 2 each: the sorted
+/// `http_calls` values across the 8 responses are `[1,1,1,1,2,2,2,2]`. A single
+/// pinned replica would instead read `[1,2,3,4,5,6,7,8]`.
+#[tokio::test]
+async fn test_service_http_round_robins_across_replicas() -> Result<()> {
+    let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
+
+    const REPLICAS: usize = 4;
+    for _ in 0..REPLICAS {
+        host.workload_start(svc_counter_request("svc-rr"))
+            .await
+            .context("failed to start svc-counter replica")?;
+    }
+
+    // No connection pooling: a GET retried on a stale pooled connection would
+    // land twice on one instance and skew the per-replica counts.
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .build()?;
+
+    let mut http_calls = Vec::new();
+    for _ in 0..(REPLICAS * 2) {
+        let resp = timeout(
+            Duration::from_secs(10),
+            client
+                .get(format!("http://{addr}/"))
+                .header("HOST", "svc-rr")
+                .send(),
+        )
+        .await??;
+        anyhow::ensure!(
+            resp.status().is_success(),
+            "each replica should serve requests, got {}",
+            resp.status()
+        );
+        let (_cli_ticks, calls) = parse_counter(&resp.text().await?);
+        http_calls.push(calls);
+    }
+
+    http_calls.sort_unstable();
+    assert_eq!(
+        http_calls,
+        vec![1, 1, 1, 1, 2, 2, 2, 2],
+        "8 requests across 4 replicas should land 2 each (round-robin); got {http_calls:?} \
+         — a single pinned replica would read [1,2,3,4,5,6,7,8]"
     );
 
     Ok(())
