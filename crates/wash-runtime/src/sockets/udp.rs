@@ -344,6 +344,14 @@ impl UdpSocket {
         }
     }
 
+    /// Whether a `send-to` on this socket would perform an implicit bind to a
+    /// real network address. Only a freshly created, still-unbound socket
+    /// does; loopback and unspecified sockets have already been bound (and
+    /// checked) by an explicit `bind`.
+    pub(crate) fn needs_implicit_bind(&self) -> bool {
+        matches!(self, Self::Network(_)) && !self.is_bound()
+    }
+
     pub(crate) fn disconnect(
         &mut self,
         loopback: &mut super::loopback::Network,
