@@ -13,7 +13,10 @@ runs:
     - name: Install protoc (Linux/macOS)
       if: runner.os != 'Windows'
       shell: bash
-      run: |
+      # Adds protoc's bin dir (under $RUNNER_TEMP) to PATH. The written value is
+      # runner-controlled, not attacker input, so the $GITHUB_PATH write is safe;
+      # zizmor's github-env audit flags every such write regardless.
+      run: | # zizmor: ignore[github-env]
         set -euo pipefail
         version="$(grep -E '^PROTOC_VERSION=' "${GITHUB_WORKSPACE}/.github/tool-versions.env" | head -n1 | cut -d= -f2)"
         if [ -z "${version}" ]; then
@@ -44,7 +47,10 @@ runs:
     - name: Install protoc (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
-      run: |
+      # Adds protoc's bin dir (under $RUNNER_TEMP) to PATH. The written value is
+      # runner-controlled, not attacker input, so the $GITHUB_PATH write is safe;
+      # zizmor's github-env audit flags every such write regardless.
+      run: | # zizmor: ignore[github-env]
         $ErrorActionPreference = "Stop"
         $ProgressPreference = "SilentlyContinue"
         $envFile = Join-Path $env:GITHUB_WORKSPACE ".github/tool-versions.env"
