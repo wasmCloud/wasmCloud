@@ -657,6 +657,11 @@ impl WasmProposal {
             // wasmtime >= 47, so opting into them needs no config change. The
             // variants stay accepted for CLI/config compatibility.
             WasmProposal::Gc | WasmProposal::ExceptionHandling | WasmProposal::WideArithmetic => {}
+            // Threads and tail calls are also on by default in wasmtime >= 47,
+            // but only conditionally — `wasm_threads` follows the `threads`
+            // crate feature and `wasm_tail_call` is off under the Winch compiler
+            // — so these set their flag explicitly to stay correct regardless of
+            // build or config.
             WasmProposal::Threads => {
                 cfg.wasm_threads(true);
             }

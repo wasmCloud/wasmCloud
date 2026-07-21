@@ -8,11 +8,7 @@ repository = "https://github.com/wasmCloud/wasmCloud"
 authors = ["The wasmCloud Team"]
 categories = ["wasm"]
 readme = "README.md"
-# Not published to crates.io: the optional `wasi-webgpu` feature pulls in
-# git-only deps (`wasi-graphics-context-wasmtime`, `wasi-webgpu-wasmtime`
-# from wasi-gfx/wasi-gfx-runtime) that have no crates.io release, and
-# cargo's publish manifest check rejects deps without a version
-# requirement. Revisit once those crates are on crates.io or vendored.
+# Not published to crates.io: this is an internal runtime crate.
 publish = false
 # Allowlist preserved for the eventual re-enable of publishing. Cargo
 # always includes Cargo.toml, Cargo.lock, Cargo.toml.orig, and
