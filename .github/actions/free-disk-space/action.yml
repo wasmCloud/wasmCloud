@@ -5,8 +5,8 @@ description: >
   don't ENOSPC partway through. Combines the rm -rf list from
   https://dev.to/mathio/squeezing-disk-space-from-github-actions-runners-an-engineers-guide-3pjg
   with the apt-purge and swap-off steps from jlumbroso/free-disk-space.
-  Leaves /opt/hostedtoolcache intact so setup-go, setup-tinygo, setup-protoc,
-  etc. don't re-download their tools.
+  Leaves /opt/hostedtoolcache intact so setup-go, setup-tinygo, etc. don't
+  re-download their tools.
 
 runs:
   using: "composite"
