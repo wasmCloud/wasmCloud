@@ -202,13 +202,16 @@ jobs:
         run: |
           cargo machete
 
-  # Build the wash runtime image per-arch with the buildx GHA cache, push
-  # each arch by digest, and export a docker tarball per arch. The operator
-  # e2e gate loads the amd64 tarball, so the bytes exercised in e2e are the
-  # same bytes canary-publish later assembles into the multi-arch manifest
-  # list (`canary`, `sha-<full-sha>`, and via release-tag.yml the released
-  # `vX.Y.Z`). arm64 builds on every PR too so Dockerfile regressions are
-  # caught before merge.
+  # Build the shipped wash runtime image (DEFAULT features) on arm64 — the
+  # primary arch for the e2e gate and one leg of the canary multi-arch
+  # manifest. Exports a docker tarball the operator-e2e `release` leg loads
+  # (so the bytes exercised in e2e are the bytes we ship) and, on main, pushes
+  # the arm64 image to GHCR by digest for canary-publish to assemble into the
+  # multi-arch list (`canary`, `sha-<full-sha>`, and via release-tag.yml the
+  # released `vX.Y.Z`). The matching amd64 leg builds in `wash-image-amd64`
+  # (main only); the ALL-FEATURES coverage build runs in parallel in
+  # `wash-image-all-features` so the e2e gate waits on the slower of the two
+  # arm64 builds, not their sum.
   wash-image:
     needs:
       - changes
@@ -216,15 +219,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-latest
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -258,27 +253,9 @@ jobs:
           # across PRs from the same branch); falls back to ref_name on main
           # ("main"), then the main scope for cold-cache reads on first push.
           cache-from: |
-            type=gha,scope=wash-release-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
-            type=gha,scope=wash-release-${{ matrix.arch }}-main
-          cache-to: type=gha,scope=wash-release-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }},mode=max
-      # ALL-FEATURES image — every optional host feature on (`(implements ..)`
-      # multiplexing AND host component plugins). NOT shipped: a coverage build
-      # the operator-e2e `all-features` leg loads to exercise those features on a
-      # host built with them (a released host can't run them). amd64 only — the
-      # sole consumer is that e2e leg.
-      - name: Build wash runtime image — all features (tarball for operator-e2e)
-        id: build_tar_all_features
-        if: matrix.arch == 'amd64'
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          outputs: type=docker,dest=/tmp/wash-image-all-features.tar,name=localhost/wasmcloud-wash:e2e
-          build-args: |
-            CARGO_FEATURES=wasm_component_model_implements,host-component-plugins
-          cache-from: |
-            type=gha,scope=wash-all-features-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
-            type=gha,scope=wash-all-features-${{ matrix.arch }}-main
-          cache-to: type=gha,scope=wash-all-features-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }},mode=max
+            type=gha,scope=wash-release-arm64-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-release-arm64-main
+          cache-to: type=gha,scope=wash-release-arm64-${{ github.head_ref || github.ref_name }},mode=max
       - name: Push wash runtime image to GHCR by digest (main only)
         # PRs lack org-package write access; only push on main so
         # canary-publish can assemble the manifest after all gates pass.
@@ -293,8 +270,8 @@ jobs:
           context: .
           outputs: type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
           cache-from: |
-            type=gha,scope=wash-release-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
-            type=gha,scope=wash-release-${{ matrix.arch }}-main
+            type=gha,scope=wash-release-arm64-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-release-arm64-main
       - name: Export digest
         if: github.event_name != 'pull_request'
         env:
@@ -311,33 +288,127 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: wash-image-digest-${{ matrix.arch }}
+          name: wash-image-digest-arm64
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
-      # Only amd64 tarballs are consumed (operator-e2e runs on amd64). The
-      # release image also builds on arm64 above to prime build_push's cache
-      # there, but its tarball isn't uploaded.
       - name: Upload release image tarball
-        if: matrix.arch == 'amd64'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: wash-image-tarball-release-${{ matrix.arch }}
+          name: wash-image-tarball-release-arm64
           path: /tmp/wash-image-release.tar
           if-no-files-found: error
           retention-days: 1
+
+  # ALL-FEATURES coverage image on arm64 — every optional host feature on
+  # (`(implements ..)` multiplexing AND host component plugins). NOT shipped:
+  # the operator-e2e `all-features` leg loads this tarball to exercise those
+  # features on a host built with them (a released host can't run them). Runs
+  # in parallel with `wash-image` (a separate job, not a second step) so the
+  # e2e gate waits on max(release, all-features), not their sum. Never pushed,
+  # so no digest.
+  wash-image-all-features:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'))
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build wash runtime image — all features (tarball for operator-e2e)
+        id: build_tar_all_features
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          outputs: type=docker,dest=/tmp/wash-image-all-features.tar,name=localhost/wasmcloud-wash:e2e
+          build-args: |
+            CARGO_FEATURES=wasm_component_model_implements,host-component-plugins
+          cache-from: |
+            type=gha,scope=wash-all-features-arm64-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-all-features-arm64-main
+          cache-to: type=gha,scope=wash-all-features-arm64-${{ github.head_ref || github.ref_name }},mode=max
       - name: Upload all-features image tarball
-        if: matrix.arch == 'amd64'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: wash-image-tarball-all-features-${{ matrix.arch }}
+          name: wash-image-tarball-all-features-arm64
           path: /tmp/wash-image-all-features.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  # Build the shipped wash runtime image (DEFAULT features) on amd64 and push
+  # it to GHCR by digest — the other leg of the canary multi-arch manifest.
+  # Main only: the e2e gate runs on arm64 (see `wash-image`), so amd64 is not
+  # on any PR's critical path. The Dockerfile is arch-agnostic (a plain
+  # `cargo build`), so a successful arm64 build on the PR is strong evidence
+  # amd64 builds too; we don't spend a PR runner on the slower amd64 build.
+  # No tarball upload — no consumer runs on amd64.
+  wash-image-amd64:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main')
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Login to ghcr.io
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      # Single build+push: no tarball is exported on amd64 (nothing loads it),
+      # so unlike the arm64 leg this needs only one call. Ships DEFAULT
+      # features — the same build the arm64 leg ships, differing only by arch.
+      - name: Push wash runtime image to GHCR by digest
+        id: build_push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          outputs: type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
+          cache-from: |
+            type=gha,scope=wash-release-amd64-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-release-amd64-main
+          cache-to: type=gha,scope=wash-release-amd64-${{ github.head_ref || github.ref_name }},mode=max
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build_push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          if [[ -z "$DIGEST" ]]; then
+            echo "no digest on build step output" >&2
+            exit 1
+          fi
+          touch "/tmp/digests/${DIGEST#sha256:}"
+      - name: Upload digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wash-image-digest-amd64
+          path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
 
   # Build ONLY the e2e fixture components (not the whole `check` matrix) plus the
   # in-repo wash, and upload them. The runtime-operator-e2e all-features leg then
   # pushes them into the in-cluster registry without a Rust build on that leg.
+  #
+  # Runs on arm64 because the staged `wash` binary is executed (not just its
+  # wasm outputs consumed) by runtime-operator-e2e to push fixtures — and that
+  # job now runs on arm64. A native-amd64 wash here would exec-format-error
+  # there. The fixture components themselves are wasm32-wasip2 (arch-neutral).
   #
   # TODO(wash release): the in-repo wash is built here (and uploaded for the push
   # side) only because the released wash can't build fixtures from their local
@@ -347,7 +418,7 @@ jobs:
     needs:
       - changes
     if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     permissions:
       contents: read
@@ -382,15 +453,22 @@ jobs:
   runtime-operator-e2e:
     needs:
       - wash-image
+      - wash-image-all-features
       - e2e-fixtures
-    # `wash-image` runs via `if: always() && ...` to bypass the skipped
+    # Runs on arm64 and loads the arm64 tarballs `wash-image` /
+    # `wash-image-all-features` built — so it no longer waits on the slower
+    # amd64 build, which now runs off this critical path in `wash-image-amd64`
+    # (main only). The two arm64 build jobs run in parallel, so this starts
+    # when the slower of them finishes.
+    #
+    # The upstreams run via `if: always() && ...` to bypass the skipped
     # `changes` job on main pushes. Without an explicit `if:` here, GHA
     # propagates the skipped state of that indirect upstream through and
-    # marks this job skipped even though `wash-image` itself succeeded.
-    # Result: canary-publish never fires on main. Explicit gate on
-    # wash-image's actual result is the documented workaround.
-    if: always() && needs.wash-image.result == 'success' && needs.e2e-fixtures.result == 'success'
-    runs-on: ubuntu-latest
+    # marks this job skipped even though the builds themselves succeeded.
+    # Result: canary-publish never fires on main. Explicit gate on the
+    # upstreams' actual results is the documented workaround.
+    if: always() && needs.wash-image.result == 'success' && needs.wash-image-all-features.result == 'success' && needs.e2e-fixtures.result == 'success'
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
     permissions:
       contents: read
@@ -434,7 +512,7 @@ jobs:
       - name: Download all-features host image
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: wash-image-tarball-all-features-amd64
+          name: wash-image-tarball-all-features-arm64
           path: /tmp
       - name: Load all-features host image
         run: |
@@ -446,7 +524,7 @@ jobs:
         if: matrix.variant == 'release'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: wash-image-tarball-release-amd64
+          name: wash-image-tarball-release-arm64
           path: /tmp
       - name: Load release host image
         if: matrix.variant == 'release'
@@ -503,6 +581,8 @@ jobs:
       - check
       - lint
       - wash-image
+      - wash-image-all-features
+      - wash-image-amd64
       - e2e-fixtures
       - runtime-operator-e2e
       - canary-publish
@@ -534,31 +614,33 @@ jobs:
           fi
 
   # Tag promotion: only push `canary` once check, lint, and the
-  # runtime-operator e2e have all passed against this commit. Assembles
-  # the multi-arch manifest list from the per-arch digests that
-  # wash-image already pushed (amd64 was also exercised by the e2e gate).
+  # runtime-operator e2e have all passed against this commit. Assembles the
+  # multi-arch manifest list from the per-arch digests that `wash-image`
+  # (arm64, also exercised by the e2e gate) and `wash-image-amd64` pushed.
   # The `sha-<full-sha>` tag is what release-tag.yml pins to when it
   # promotes this canary digest as the immutable vX.Y.Z release tag —
   # `canary` itself moves on every subsequent main push, so we cannot
   # rely on it.
   canary-publish:
     # Gate canary on the things that actually exercise the published bytes:
-    # `wash-image` is what gets pushed by digest, and `runtime-operator-e2e`
-    # loads that exact image into kind and runs the suite. `check`/`lint`
-    # are workspace-level signals that have no bearing on the image we're
-    # promoting, so they intentionally aren't gates here. `always()` is
-    # required to break the chained-skip propagation from the path-filter
-    # `changes` job (skipped on main) which would otherwise mark this job
-    # skipped before evaluating the explicit gate.
+    # the per-arch `wash-image*` jobs are what get pushed by digest, and
+    # `runtime-operator-e2e` loads the arm64 image into kind and runs the
+    # suite. `check`/`lint` are workspace-level signals that have no bearing
+    # on the image we're promoting, so they intentionally aren't gates here.
+    # `always()` is required to break the chained-skip propagation from the
+    # path-filter `changes` job (skipped on main) which would otherwise mark
+    # this job skipped before evaluating the explicit gate.
     if: |
       always() &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/main' &&
       needs.wash-image.result == 'success' &&
+      needs.wash-image-amd64.result == 'success' &&
       needs.runtime-operator-e2e.result == 'success'
     needs:
       - runtime-operator-e2e
       - wash-image
+      - wash-image-amd64
     runs-on: ubuntu-latest
     permissions:
       contents: write
