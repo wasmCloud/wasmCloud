@@ -22,9 +22,11 @@ use std::{
     collections::{BTreeSet, HashMap},
     net::SocketAddr,
     path::Path,
-    sync::{Arc, atomic::AtomicUsize},
+    sync::Arc,
     time::Duration,
 };
+
+use arc_swap::ArcSwap;
 
 use crate::host::allowed_hosts::AllowedHost;
 use crate::host::trigger_service::{BrokerMessage, MessagingJob};
@@ -219,17 +221,25 @@ pub trait Router: Send + Sync + 'static {
 /// Router that routes requests by 'Host' header, configured via WitInterface config
 #[derive(Default)]
 pub struct DynamicRouter {
-    /// Maps a hostname to every workload replica bound to it. Ordered so the
-    /// round-robin cursor below strides a stable sequence between mutations.
-    host_to_workload: tokio::sync::RwLock<HashMap<String, BTreeSet<String>>>,
-    /// Maps workload_id -> all hostnames (primary + aliases) registered for it.
-    /// Used by on_workload_unbind to remove all entries cleanly.
-    workload_to_host: tokio::sync::RwLock<HashMap<String, Vec<String>>>,
-    /// Round-robin cursor. Each routed request strides it once so successive
-    /// requests for one hostname fan out across all bound replicas instead of
-    /// pinning to one. Relaxed ordering suffices: we only need each request to
-    /// read a distinct-enough counter value, not a total order across threads.
-    rr: AtomicUsize,
+    /// Routing tables behind a single [`ArcSwap`] so the per-request read in
+    /// [`Self::select_workload`] is lock-free — a concurrent register/unbind can
+    /// never make a request wait or 503. Register and unbind are copy-on-write
+    /// via `rcu`; they happen on workload start/stop (rare relative to requests),
+    /// so cloning the tables is cheap next to the hot read path.
+    routes: ArcSwap<Routes>,
+}
+
+/// The `DynamicRouter` routing tables, swapped atomically as one unit so a
+/// reader never sees the forward and reverse maps disagree.
+#[derive(Default, Clone)]
+struct Routes {
+    /// Maps a hostname to every workload replica bound to it. A `BTreeSet` keeps
+    /// membership ordered and deterministic; a request picks one replica at
+    /// random (see [`DynamicRouter::select_workload`]).
+    host_to_workload: HashMap<String, BTreeSet<String>>,
+    /// Maps workload_id -> all hostnames (primary + aliases) registered for it,
+    /// so `on_workload_unbind` can remove all entries cleanly.
+    workload_to_host: HashMap<String, Vec<String>>,
 }
 
 impl DynamicRouter {
@@ -237,43 +247,46 @@ impl DynamicRouter {
     /// forward (host -> replicas) and reverse (workload -> hosts) maps so
     /// [`Router::on_workload_unbind`] can later remove every entry cleanly.
     /// Idempotent: re-registering the same workload (e.g. a service restart)
-    /// leaves the maps unchanged.
-    async fn register_hostnames(&self, workload_id: &str, hosts: &[String]) {
-        {
-            let mut lock = self.workload_to_host.write().await;
-            lock.insert(workload_id.to_string(), hosts.to_vec());
-        }
-        {
-            let mut lock = self.host_to_workload.write().await;
+    /// leaves the tables unchanged.
+    fn register_hostnames(&self, workload_id: &str, hosts: &[String]) {
+        self.routes.rcu(|cur| {
+            let mut routes = (**cur).clone();
+            routes
+                .workload_to_host
+                .insert(workload_id.to_string(), hosts.to_vec());
             for host in hosts {
-                lock.entry(host.clone())
+                routes
+                    .host_to_workload
+                    .entry(host.clone())
                     .or_default()
                     .insert(workload_id.to_string());
             }
-        }
+            routes
+        });
     }
 
-    /// Pick one replica bound to `host`, striding the round-robin cursor so
-    /// successive calls fan out across every replica. Split out from
-    /// [`Router::route_incoming_request`] so the selection logic is unit-testable
-    /// without constructing a [`hyper::body::Incoming`].
+    /// Pick one replica bound to `host` at random so requests fan out across
+    /// every replica instead of pinning to one. A per-thread PRNG
+    /// ([`fastrand`]) avoids the cross-core cache-line contention a shared
+    /// atomic cursor would incur under concurrent load, and spreads load just as
+    /// evenly in aggregate. Split out from [`Router::route_incoming_request`] so
+    /// the selection logic is unit-testable without constructing a
+    /// [`hyper::body::Incoming`].
     fn select_workload(&self, host: &str) -> Result<String, RouteError> {
-        let lock = self
-            .host_to_workload
-            .try_read()
-            .map_err(|_| RouteError::Unavailable)?;
-        let Some(workload_set) = lock.get(host) else {
+        // Lock-free read of a routing-table snapshot.
+        let routes = self.routes.load();
+        let Some(workload_set) = routes.host_to_workload.get(host) else {
             return Err(RouteError::NoWorkloadForHost(host.to_string()));
         };
         // An entry can exist but be empty; treat that as "no workload bound"
-        // (same 404) and, importantly, avoid the `% 0` below.
+        // (same 404) and, importantly, keep the range below non-empty.
         if workload_set.is_empty() {
             return Err(RouteError::NoWorkloadForHost(host.to_string()));
         }
-        let idx = self.rr.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let idx = fastrand::usize(..workload_set.len());
         let workload_id = workload_set
             .iter()
-            .nth(idx % workload_set.len())
+            .nth(idx)
             .ok_or_else(|| RouteError::NoWorkloadForHost(host.to_string()))?;
         Ok(workload_id.clone())
     }
@@ -323,7 +336,7 @@ impl Router for DynamicRouter {
             );
         }
 
-        self.register_hostnames(resolved_handle.id(), &all_hosts).await;
+        self.register_hostnames(resolved_handle.id(), &all_hosts);
 
         Ok(())
     }
@@ -337,32 +350,32 @@ impl Router for DynamicRouter {
         // routing here rather than through `on_workload_resolved`. Register its
         // hostnames exactly like a component workload so requests resolve to it.
         if hostnames.is_empty() {
-            warn!(
+            // debug, not warn: a service restart re-resolves, so a misconfigured one would spam.
+            debug!(
                 workload_id,
-                "service resolved with no valid ingress hostnames; requests will not route to it under the hostname router"
+                "service has no valid ingress hostnames; not routable by the hostname router"
             );
             return Ok(());
         }
-        self.register_hostnames(workload_id, hostnames).await;
+        self.register_hostnames(workload_id, hostnames);
         Ok(())
     }
 
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
-        let hostnames = {
-            let mut wth_lock = self.workload_to_host.write().await;
-            wth_lock.remove(workload_id)
-        };
-        if let Some(hostnames) = hostnames {
-            let mut htw_lock = self.host_to_workload.write().await;
-            for hostname in &hostnames {
-                if let Some(workload_set) = htw_lock.get_mut(hostname) {
-                    workload_set.remove(workload_id);
-                    if workload_set.is_empty() {
-                        htw_lock.remove(hostname);
+        self.routes.rcu(|cur| {
+            let mut routes = (**cur).clone();
+            if let Some(hostnames) = routes.workload_to_host.remove(workload_id) {
+                for hostname in &hostnames {
+                    if let Some(workload_set) = routes.host_to_workload.get_mut(hostname) {
+                        workload_set.remove(workload_id);
+                        if workload_set.is_empty() {
+                            routes.host_to_workload.remove(hostname);
+                        }
                     }
                 }
             }
-        }
+            routes
+        });
         Ok(())
     }
 
@@ -376,8 +389,8 @@ impl Router for DynamicRouter {
         check_allowed_hosts(request, allowed_hosts)
     }
 
-    /// Pick a workload ID based on the incoming request, round-robining across
-    /// every replica bound to the request's `Host`.
+    /// Pick a workload ID based on the incoming request, spreading load at
+    /// random across every replica bound to the request's `Host`.
     fn route_incoming_request(
         &self,
         req: &hyper::Request<hyper::body::Incoming>,
@@ -388,7 +401,10 @@ impl Router for DynamicRouter {
             .and_then(|h| h.to_str().ok())
             .or_else(|| req.uri().authority().map(|a| a.as_str()))
             .ok_or(RouteError::MissingHost)?;
-        tokio::task::block_in_place(move || self.select_workload(workload_host))
+        // `select_workload` does a lock-free `ArcSwap` load and an in-memory
+        // lookup, so it runs inline on the async worker — no `block_in_place`
+        // needed (and routing works on any runtime flavor).
+        self.select_workload(workload_host)
     }
 }
 
@@ -1048,7 +1064,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
 
     async fn on_service_http_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
         // Drop the router registration too, so a stopped service replica leaves
-        // the hostname's round-robin rotation.
+        // the hostname's replica set and stops being selected.
         self.router.on_workload_unbind(workload_id).await?;
         self.service_handlers.write().await.remove(workload_id);
         Ok(())
@@ -2604,11 +2620,16 @@ mod tests {
     }
 
     /// Regression guard for the "N replicas serve like one" defect: with several
-    /// workloads bound to one hostname, `route_incoming_request` used to pin every
-    /// request to a single arbitrary replica (`HashSet::iter().next()`). The
-    /// round-robin cursor must instead spread requests evenly across all of them.
+    /// workloads bound to one hostname, `route_incoming_request` used to pin
+    /// every request to a single arbitrary replica (`HashSet::iter().next()`).
+    /// Random selection must instead spread load across all of them.
+    ///
+    /// Selection is a per-thread PRNG, so this asserts a distribution rather than
+    /// exact counts. The band around the expected share is ~18σ wide for uniform
+    /// selection over these draws, so it cannot flake, yet the old pin-to-one
+    /// behavior (one replica takes everything, the rest zero) fails it outright.
     #[tokio::test]
-    async fn dynamic_router_round_robins_across_replicas() {
+    async fn dynamic_router_spreads_load_across_replicas() {
         let router = DynamicRouter::default();
         let replicas = ["r0", "r1", "r2", "r3"];
         for id in replicas {
@@ -2618,9 +2639,10 @@ mod tests {
                 .unwrap();
         }
 
+        const DRAWS: usize = 4_000;
         let mut counts: std::collections::BTreeMap<String, usize> =
             std::collections::BTreeMap::new();
-        for _ in 0..(replicas.len() * 2) {
+        for _ in 0..DRAWS {
             let id = router.select_workload("svc.local").unwrap();
             *counts.entry(id).or_default() += 1;
         }
@@ -2630,8 +2652,12 @@ mod tests {
             replicas.len(),
             "every replica should receive traffic, got {counts:?}"
         );
+        let expected = DRAWS / replicas.len();
         for (id, hits) in counts {
-            assert_eq!(hits, 2, "replica {id} should get an even 2-of-8 share");
+            assert!(
+                hits > expected / 2 && hits < expected * 2,
+                "replica {id} got {hits}, far from the expected ~{expected} — uneven spread"
+            );
         }
     }
 
@@ -2701,8 +2727,8 @@ mod tests {
 
     /// Stopping a service-only workload calls `on_service_http_unbind` but not
     /// `on_workload_unbind`. That hook must still drop the router registration,
-    /// otherwise a stopped replica lingers in the hostname's rotation and
-    /// requests round-robined onto it 404.
+    /// otherwise a stopped replica lingers in the hostname's replica set and
+    /// requests routed onto it 404.
     #[tokio::test]
     async fn service_http_unbind_removes_router_registration() {
         let server = HttpServer::builder(DynamicRouter::default(), "127.0.0.1:0".parse().unwrap())

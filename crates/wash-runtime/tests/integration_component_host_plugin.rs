@@ -134,8 +134,8 @@ async fn test_component_plugin_missing_provider_errors() -> Result<()> {
 ///
 /// Uses the host-header router so the two callers are genuinely distinct
 /// workloads (the `DevRouter` would send both requests to the last-resolved
-/// workload, making the assertion vacuous). Multi-threaded: the host-header
-/// router uses `block_in_place`.
+/// workload, making the assertion vacuous). Runs multi-threaded so the live
+/// HTTP server serves requests in parallel with the test's request loop.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_component_plugin_shared_across_workloads() -> Result<()> {
     let (addr, h) =
@@ -624,8 +624,8 @@ async fn test_component_plugin_resource_isolation() -> Result<()> {
 /// threading + the identity import; concurrent interleaving is covered by
 /// [`test_component_plugin_partitioning_under_concurrency`].
 ///
-/// Multi-threaded: the host-header router uses `block_in_place`, which a
-/// current-thread runtime cannot run.
+/// Runs multi-threaded so the live HTTP server serves requests in parallel with
+/// the test's request loop.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_component_plugin_per_caller_partitioning() -> Result<()> {
     let (addr, h) =
@@ -679,7 +679,7 @@ async fn test_component_plugin_per_caller_partitioning() -> Result<()> {
 /// (the cooperative store can lag a same-caller readback by a call — orthogonal to
 /// identity and not what this test guards).
 ///
-/// Multi-threaded: the host-header router uses `block_in_place`.
+/// Runs multi-threaded so requests are served in parallel under concurrency.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_component_plugin_partitioning_under_concurrency() -> Result<()> {
     let (addr, h) =
