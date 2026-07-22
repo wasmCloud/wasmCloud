@@ -62,13 +62,13 @@ fn workspace_dir() -> Result<PathBuf> {
 /// directly, `P3` builds a core module that we wrap with the WASI reactor
 /// adapter to produce a component.
 #[derive(Copy, Clone)]
-enum FixtureKind {
+pub(crate) enum FixtureKind {
     P2,
     P3,
 }
 
 impl FixtureKind {
-    fn target(self) -> &'static str {
+    pub(crate) fn target(self) -> &'static str {
         match self {
             FixtureKind::P2 => "wasm32-wasip2",
             FixtureKind::P3 => "wasm32-wasip1",
