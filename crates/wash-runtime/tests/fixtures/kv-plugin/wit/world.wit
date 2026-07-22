@@ -19,4 +19,8 @@ world kv-plugin {
     // plugin itself.
     import acme:kv/store@0.1.0;
     export acme:kv/store@0.1.0;
+    // Lifecycle export: the host calls these as workloads bind/unbind, letting
+    // the plugin capture per-workload manifest config eagerly (observed through
+    // the store interface's `bound-config`/`bind-info`/`lifecycle-log`).
+    export wasmcloud:host/workload-lifecycle@0.1.0;
 }

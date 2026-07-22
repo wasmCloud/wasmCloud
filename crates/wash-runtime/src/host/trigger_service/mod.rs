@@ -41,7 +41,7 @@ use wasmtime_wasi_http::p3::bindings::Service;
 use crate::engine::ctx::SharedCtx;
 use crate::host::http::ServiceHttpJob;
 #[cfg(feature = "host-component-plugins")]
-use crate::host::job_registry::{JobGuard, JobRegistry};
+use crate::host::job_registry::JobRegistry;
 
 #[cfg(feature = "host-component-plugins")]
 mod capability;
@@ -49,14 +49,14 @@ mod http;
 mod messaging;
 
 #[cfg(feature = "host-component-plugins")]
-pub use capability::{CapabilityCall, CapabilityFunc, CapabilityJob};
+pub use capability::{CapabilityCall, CapabilityFunc, CapabilityJob, LifecycleReplay};
 pub use messaging::{BrokerMessage, MessagingJob};
 
 #[cfg(feature = "host-component-plugins")]
-use capability::{
-    CapabilityTask, InFlightGuard, MAX_INFLIGHT_CAPABILITY_CALLS, drain_plugin_resources,
-    flush_pending_resource_drops,
-};
+pub(crate) use capability::decode_bind_reply;
+
+#[cfg(feature = "host-component-plugins")]
+use capability::{admit_and_spawn_call, drain_plugin_resources, flush_pending_resource_drops};
 use http::HttpTask;
 use messaging::{HANDLE_MESSAGE, MESSAGING_HANDLER, MessagingTask};
 
@@ -73,12 +73,15 @@ pub enum Ingress {
     Messaging(tokio::sync::mpsc::Receiver<MessagingJob>),
     /// Cross-store capability calls for a host component plugin. `funcs` lists
     /// every exported function to resolve up front; `rx` delivers the calls;
-    /// `registry` tracks each served call as a cancellable job.
+    /// `registry` tracks each served call as a cancellable job; `replay` holds
+    /// the lifecycle binds this incarnation must complete before serving `rx`
+    /// (the per-workload state rebuild after a restart).
     #[cfg(feature = "host-component-plugins")]
     Capability {
         funcs: Vec<CapabilityFunc>,
         rx: tokio::sync::mpsc::Receiver<CapabilityJob>,
         registry: Arc<JobRegistry>,
+        replay: Vec<LifecycleReplay>,
     },
 }
 
@@ -121,6 +124,7 @@ impl Ingress {
                 funcs,
                 rx,
                 registry,
+                replay,
             } => {
                 // Resolve every exported capability function to a call index up
                 // front (mirroring the messaging arm), so serving a call is a
@@ -148,6 +152,7 @@ impl Ingress {
                     func_map,
                     rx,
                     registry,
+                    replay,
                     in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 })
             }
@@ -173,6 +178,9 @@ enum PreparedIngress {
         func_map: BTreeMap<Arc<str>, BTreeMap<Arc<str>, ComponentExportIndex>>,
         rx: tokio::sync::mpsc::Receiver<CapabilityJob>,
         registry: Arc<JobRegistry>,
+        /// Lifecycle binds to complete before serving `rx`; drained on the
+        /// first `serve` entry (empty on re-entry after a drop flush).
+        replay: Vec<LifecycleReplay>,
         in_flight: Arc<std::sync::atomic::AtomicUsize>,
     },
 }
@@ -232,9 +240,54 @@ impl PreparedIngress {
                 func_map,
                 rx,
                 registry,
+                replay,
                 in_flight,
             } => {
-                use std::sync::atomic::Ordering;
+                // Replay lifecycle binds before serving capability calls, and
+                // await their COMPLETION (not just their spawn): a queued call
+                // from a rebound workload must never run before that workload's
+                // per-workload state has been rebuilt. Outcomes are logged, not
+                // fatal — the workloads are already running, so a rejected
+                // replay must not take the plugin down with them. Spawned in
+                // bounded chunks so a large bound set stays under the
+                // in-flight ceiling instead of silently dropping the overflow.
+                const REPLAY_CHUNK: usize = 64;
+                let replays = std::mem::take(replay);
+                let total = replays.len();
+                let mut pending = Vec::with_capacity(REPLAY_CHUNK.min(total));
+                for (i, replay) in replays.into_iter().enumerate() {
+                    let LifecycleReplay {
+                        interface,
+                        func,
+                        caller,
+                        args,
+                        result_tys,
+                    } = replay;
+                    let workload_id = Arc::clone(&caller.workload_id);
+                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                    admit_and_spawn_call(
+                        accessor,
+                        *instance,
+                        func_map,
+                        registry,
+                        in_flight,
+                        CapabilityCall {
+                            interface,
+                            func,
+                            caller,
+                            args,
+                            result_tys,
+                            reply: reply_tx,
+                        },
+                    );
+                    pending.push((workload_id, reply_rx));
+                    if pending.len() >= REPLAY_CHUNK || i + 1 == total {
+                        for (workload_id, reply_rx) in pending.drain(..) {
+                            await_replay_outcome(workload_id, reply_rx).await;
+                        }
+                    }
+                }
+
                 while let Some(job) = rx.recv().await {
                     match job {
                         CapabilityJob::DropResource { proxy_id, reply } => {
@@ -251,60 +304,60 @@ impl PreparedIngress {
                             return ServeOutcome::FlushDrops;
                         }
                         CapabilityJob::Call(call) => {
-                            // Admit the call only under the in-flight ceiling. A
-                            // non-blocking reservation (fetch_add + compare): the
-                            // serve loop NEVER blocks, so a re-entrant call is
-                            // always admitted while the store is under the ceiling
-                            // — no bounded-pool deadlock. A runaway self-recursion
-                            // consumes a slot per hop and is rejected at the cap.
-                            if in_flight.fetch_add(1, Ordering::SeqCst)
-                                >= MAX_INFLIGHT_CAPABILITY_CALLS
-                            {
-                                in_flight.fetch_sub(1, Ordering::SeqCst);
-                                let _ = call.reply.send(Err(wasmtime::format_err!(
-                                    "host component plugin is at its in-flight capability-call \
-                                     ceiling ({MAX_INFLIGHT_CAPABILITY_CALLS}); a call cycle or \
-                                     overload is likely"
-                                )));
-                                continue;
-                            }
-                            let guard = InFlightGuard::new(Arc::clone(in_flight));
-                            let Some(func_idx) = func_map
-                                .get(&*call.interface)
-                                .and_then(|fns| fns.get(&*call.func))
-                                .copied()
-                            else {
-                                let _ = call.reply.send(Err(wasmtime::format_err!(
-                                    "plugin does not export {}/{}",
-                                    call.interface,
-                                    call.func
-                                )));
-                                continue;
-                            };
-                            // Register the call as a cancellable job. The
-                            // `JobGuard` moves into the task and retires the job on
-                            // completion or drop. The `Accessor::spawn` handle is
-                            // not retained: wasmtime cannot hard-cancel the guest
-                            // subtask, so cancellation is cooperative —
-                            // `request-cancel` marks the job and the guest unwinds
-                            // itself.
-                            let job = registry.admit(call.caller.clone());
-                            let job_guard = JobGuard::new(Arc::clone(registry), job);
-                            if let Err(e) = accessor.spawn(CapabilityTask {
-                                instance: *instance,
-                                func_idx,
-                                call,
-                                in_flight: guard,
-                                job_guard,
-                            }) {
-                                tracing::error!(err = %e, "failed to spawn capability call task");
-                            }
+                            admit_and_spawn_call(
+                                accessor, *instance, func_map, registry, in_flight, call,
+                            );
                         }
                     }
                 }
                 ServeOutcome::Shutdown
             }
         }
+    }
+}
+
+/// Await one replayed bind's completion, bounded by
+/// [`crate::timeouts::plugin_lifecycle_call`], and log its outcome. The wait
+/// must be bounded: a replayed bind that itself calls one of the plugin's own
+/// capabilities (a self-import) cannot complete until replay ends and the
+/// channel is served, so an unbounded wait would wedge the incarnation. On
+/// expiry the bind keeps running as a concurrent task and finishes once
+/// serving starts — only its completes-before-serving guarantee is forfeited.
+#[cfg(feature = "host-component-plugins")]
+async fn await_replay_outcome(
+    workload_id: Arc<str>,
+    reply_rx: tokio::sync::oneshot::Receiver<
+        wasmtime::Result<Vec<crate::engine::store::relocate::Relocated>>,
+    >,
+) {
+    let reply = tokio::time::timeout(crate::timeouts::plugin_lifecycle_call(), reply_rx).await;
+    match reply {
+        Ok(Ok(Ok(results))) => match decode_bind_reply(&results) {
+            Ok(Ok(())) => {}
+            Ok(Err(msg)) => tracing::warn!(
+                %workload_id,
+                msg,
+                "plugin rejected a replayed workload bind"
+            ),
+            Err(e) => tracing::warn!(
+                %workload_id,
+                err = %e,
+                "replayed workload bind returned a malformed reply"
+            ),
+        },
+        Ok(Ok(Err(e))) => tracing::warn!(
+            %workload_id,
+            err = %e,
+            "replayed workload bind failed"
+        ),
+        Ok(Err(_)) => tracing::warn!(
+            %workload_id,
+            "replayed workload bind reply was dropped"
+        ),
+        Err(_) => tracing::warn!(
+            %workload_id,
+            "replayed workload bind did not complete in time; serving anyway"
+        ),
     }
 }
 

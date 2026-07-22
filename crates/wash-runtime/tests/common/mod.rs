@@ -148,9 +148,23 @@ pub fn acme_kv_interface() -> WitInterface {
 /// `acme:kv/store` capability the host component plugin satisfies.
 #[cfg(feature = "host-component-plugins")]
 pub fn kv_plugin_caller_host_interfaces(host_header: &str) -> Vec<WitInterface> {
+    kv_plugin_caller_host_interfaces_with_config(host_header, HashMap::new())
+}
+
+/// Like [`kv_plugin_caller_host_interfaces`] but carrying interface-level
+/// config on the `acme:kv` entry — delivered to a lifecycle-exporting plugin's
+/// `on-workload-bind`.
+#[cfg(feature = "host-component-plugins")]
+pub fn kv_plugin_caller_host_interfaces_with_config(
+    host_header: &str,
+    config: HashMap<String, String>,
+) -> Vec<WitInterface> {
     vec![
         http_incoming_handler_interface(host_header, None),
-        acme_kv_interface(),
+        WitInterface {
+            config,
+            ..acme_kv_interface()
+        },
     ]
 }
 
