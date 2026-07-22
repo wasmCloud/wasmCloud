@@ -216,12 +216,33 @@ cargo build
 cargo build --workspace
 ```
 
-The `wash-runtime` integration tests and benchmarks load precompiled wasm fixtures. Build them once with the `xtask` runner, and re-run whenever you change a fixture under `crates/wash-runtime/tests/fixtures/`:
+The `wash-runtime` integration tests and benchmarks load precompiled wasm fixtures. You can build the
+fixtures with the  `xtask` runner.
+
+> [!WARNING]
+> As the current version of `wasm-component-ld` that is in use in upstream Rust is
+> older and does not support certain Component Model features that wasmCloud does,
+> you may have to install `wasm-component-ld`:
+>
+> ```console
+> cargo install wasm-component-ld
+> ```
+> (consider also using `cargo binstall` if you have it installed)
+>
+> Once you have `wasm-component-ld` installed (any version greater than 0.5.24),
+> you can convince `cargo` to use it by settting the following environment variable
+> ```console
+> export CARGO_TARGET_WASM32_WASIP2_LINKER=$HOME/.cargo/bin/wasm-component-ld
+> ```
 
 ```bash
+# export CARGO_TARGET_WASM32_WASIP2_LINKER=$HOME/.cargo/bin/wasm-component-ld
 cargo xtask build-fixtures
 cargo test
 ```
+(NOTE: you do not have to use a modified linker for anything other than building fixtures)
+
+Remember to rebuild the fixtures if you change any code `crates/wash-runtime/tests/fixtures/`.
 
 For Go components (operator, gateway), see their respective `README.md` files and `make` targets.
 
