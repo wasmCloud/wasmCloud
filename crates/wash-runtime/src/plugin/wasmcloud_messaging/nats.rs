@@ -14,6 +14,93 @@ use tracing::{Instrument, debug, instrument, trace, warn};
 use wasmtime::error::Context as _;
 
 const PLUGIN_MESSAGING_ID: &str = "wasmcloud-messaging";
+const CONSUMER_GROUP_CONFIG: &str = "consumer_group";
+const BROADCAST_CONSUMER_GROUP: &str = "broadcast";
+const DEFAULT_CONSUMER_GROUP_PREFIX: &str = "wasmcloud";
+const MAX_DEFAULT_CONSUMER_GROUP_LEN: usize = 128;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ConsumerGroup {
+    Grouped(String),
+    Broadcast,
+}
+
+impl ConsumerGroup {
+    fn resolve(
+        configured: Option<&str>,
+        workload_namespace: &str,
+        workload_name: &str,
+        component_name: &str,
+    ) -> anyhow::Result<Self> {
+        match configured {
+            None => Ok(Self::Grouped(default_consumer_group(
+                workload_namespace,
+                workload_name,
+                component_name,
+            ))),
+            Some(value) if value == BROADCAST_CONSUMER_GROUP => Ok(Self::Broadcast),
+            Some(value) => {
+                validate_consumer_group(value)?;
+                Ok(Self::Grouped(value.to_string()))
+            }
+        }
+    }
+
+    fn name(&self) -> Option<&str> {
+        match self {
+            Self::Grouped(name) => Some(name),
+            Self::Broadcast => None,
+        }
+    }
+}
+
+fn validate_consumer_group(value: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !value.is_empty(),
+        "`{CONSUMER_GROUP_CONFIG}` cannot be empty; omit it for the default group or set it to `{BROADCAST_CONSUMER_GROUP}` for broadcast delivery"
+    );
+    anyhow::ensure!(
+        !value
+            .chars()
+            .any(|c| c.is_whitespace() || c == '*' || c == '>'),
+        "invalid `{CONSUMER_GROUP_CONFIG}` `{value}`: NATS consumer groups cannot contain whitespace, `*`, or `>`"
+    );
+    Ok(())
+}
+
+/// Return a stable, NATS-safe queue name for every replica of a logical
+/// component. The readable prefix helps operators identify the consumer while
+/// the FNV-1a suffix preserves distinctions lost through sanitization or
+/// truncation without adding a hashing dependency to the runtime.
+fn default_consumer_group(namespace: &str, workload: &str, component: &str) -> String {
+    let identity = format!("{namespace}\0{workload}\0{component}");
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in identity.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+
+    let readable = [namespace, workload, component]
+        .into_iter()
+        .map(|part| {
+            part.chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(".");
+    let suffix = format!(".{hash:016x}");
+    let max_readable_len = MAX_DEFAULT_CONSUMER_GROUP_LEN
+        .saturating_sub(DEFAULT_CONSUMER_GROUP_PREFIX.len() + 1 + suffix.len());
+    let readable = &readable[..readable.floor_char_boundary(max_readable_len)];
+    format!("{DEFAULT_CONSUMER_GROUP_PREFIX}.{readable}{suffix}")
+}
 
 /// Server-side synchronization barrier for the NATS client.
 ///
@@ -66,6 +153,7 @@ use crate::plugin::WorkloadTracker;
 
 pub struct ComponentData {
     subscriptions: Vec<String>,
+    consumer_group: ConsumerGroup,
     cancel_token: tokio_util::sync::CancellationToken,
     task_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -179,6 +267,7 @@ impl HostPlugin for NatsMessaging {
         // falling back to the workload-scoped host interface config. Capture
         // the host-interface fallback before borrowing the component.
         let interface_subscriptions = interface.config.get("subscriptions").cloned();
+        let interface_consumer_group = interface.config.get(CONSUMER_GROUP_CONFIG).cloned();
 
         bindings::wasmcloud::messaging::types::add_to_linker::<_, SharedCtx>(
             component_handle.linker(),
@@ -194,6 +283,11 @@ impl HostPlugin for NatsMessaging {
             .config
             .get("subscriptions")
             .cloned();
+        let local_consumer_group = component_handle
+            .local_resources()
+            .config
+            .get(CONSUMER_GROUP_CONFIG)
+            .cloned();
 
         // Track a handler component OR a long-lived handler service:
         // `WorkloadItem` derefs to the underlying metadata for both, so the
@@ -204,10 +298,23 @@ impl HostPlugin for NatsMessaging {
         if super::exports_messaging_handler(&component_handle.world()) {
             let raw = local_subscriptions.or(interface_subscriptions);
             let raw_subscriptions = super::parse_subscriptions(raw.as_deref());
+            let component_name = match component_handle {
+                WorkloadItem::Component(component) => component.name().to_string(),
+                WorkloadItem::Service(_) => "service".to_string(),
+            };
+            let consumer_group = ConsumerGroup::resolve(
+                local_consumer_group
+                    .as_deref()
+                    .or(interface_consumer_group.as_deref()),
+                component_handle.workload_namespace(),
+                component_handle.workload_name(),
+                &component_name,
+            )?;
 
             debug!(
                 component_id = component_handle.id(),
                 subscriptions = ?raw_subscriptions,
+                consumer_group = consumer_group.name().unwrap_or(BROADCAST_CONSUMER_GROUP),
                 "tracking handler component for NATS messaging"
             );
             self.tracker.write().await.add_component(
@@ -215,6 +322,7 @@ impl HostPlugin for NatsMessaging {
                 ComponentData {
                     cancel_token: tokio_util::sync::CancellationToken::new(),
                     subscriptions: raw_subscriptions,
+                    consumer_group,
                     task_handle: None,
                 },
             );
@@ -231,10 +339,14 @@ impl HostPlugin for NatsMessaging {
     ) -> anyhow::Result<()> {
         debug!("on_workload_resolved entered for NATS messaging");
 
-        let (cancel_token, subjects) = {
+        let (cancel_token, subjects, consumer_group) = {
             let lock = self.tracker.read().await;
             match lock.get_component_data(component_id) {
-                Some(data) => (data.cancel_token.clone(), data.subscriptions.clone()),
+                Some(data) => (
+                    data.cancel_token.clone(),
+                    data.subscriptions.clone(),
+                    data.consumer_group.clone(),
+                ),
                 None => {
                     debug!("no tracker entry for component, skipping subscription setup");
                     return Ok(());
@@ -269,8 +381,20 @@ impl HostPlugin for NatsMessaging {
 
         let mut subscriptions = Vec::<Subscriber>::new();
         for subject in &subjects {
-            debug!(%subject, "subscribing to NATS subject");
-            let sub = match self.client.subscribe(subject.clone()).await {
+            debug!(
+                %subject,
+                consumer_group = consumer_group.name().unwrap_or(BROADCAST_CONSUMER_GROUP),
+                "subscribing to NATS subject"
+            );
+            let result = match &consumer_group {
+                ConsumerGroup::Grouped(group) => {
+                    self.client
+                        .queue_subscribe(subject.clone(), group.clone())
+                        .await
+                }
+                ConsumerGroup::Broadcast => self.client.subscribe(subject.clone()).await,
+            };
+            let sub = match result {
                 Ok(sub) => sub,
                 Err(e) => {
                     for sub in subscriptions {
@@ -281,7 +405,11 @@ impl HostPlugin for NatsMessaging {
                     );
                 }
             };
-            debug!(%subject, "successfully subscribed");
+            debug!(
+                %subject,
+                consumer_group = consumer_group.name().unwrap_or(BROADCAST_CONSUMER_GROUP),
+                "successfully subscribed"
+            );
 
             subscriptions.push(sub);
         }
@@ -517,6 +645,7 @@ mod tests {
                 ComponentData {
                     cancel_token,
                     subscriptions: vec!["tasks.x".to_string()],
+                    consumer_group: ConsumerGroup::Grouped("workers".to_string()),
                     task_handle: None,
                 },
             );
@@ -528,6 +657,7 @@ mod tests {
             .get_component_data(&component_id)
             .expect("component should be retrievable");
         assert_eq!(data.subscriptions, vec!["tasks.x".to_string()]);
+        assert_eq!(data.consumer_group.name(), Some("workers"));
         assert!(!cancel_token_clone.is_cancelled());
 
         // Simulate on_workload_unbind's cleanup closure.
@@ -562,5 +692,80 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(50), clone.cancelled())
             .await
             .expect("cloned cancel token should observe the cancellation");
+    }
+
+    #[test]
+    fn default_group_is_stable_for_component_replicas() {
+        let first = default_consumer_group("orders", "processor", "worker");
+        let second = default_consumer_group("orders", "processor", "worker");
+
+        assert_eq!(first, second);
+        assert!(first.starts_with("wasmcloud.orders.processor.worker."));
+    }
+
+    #[test]
+    fn default_group_is_isolated_by_logical_component_identity() {
+        let base = default_consumer_group("orders", "processor", "worker");
+
+        assert_ne!(base, default_consumer_group("other", "processor", "worker"));
+        assert_ne!(base, default_consumer_group("orders", "other", "worker"));
+        assert_ne!(base, default_consumer_group("orders", "processor", "other"));
+    }
+
+    #[test]
+    fn default_group_is_nats_safe_and_bounded() {
+        let group = default_consumer_group(
+            "namespace with spaces.*",
+            &"workload".repeat(40),
+            "handler.>",
+        );
+
+        assert!(group.len() <= MAX_DEFAULT_CONSUMER_GROUP_LEN);
+        assert!(
+            !group
+                .chars()
+                .any(|c| c.is_whitespace() || c == '*' || c == '>')
+        );
+        assert_eq!(
+            group,
+            default_consumer_group(
+                "namespace with spaces.*",
+                &"workload".repeat(40),
+                "handler.>",
+            )
+        );
+    }
+
+    #[test]
+    fn consumer_group_configuration_selects_default_explicit_or_broadcast() {
+        let default = ConsumerGroup::resolve(None, "ns", "workload", "component").unwrap();
+        assert_eq!(
+            default,
+            ConsumerGroup::Grouped(default_consumer_group("ns", "workload", "component"))
+        );
+        assert_eq!(
+            ConsumerGroup::resolve(Some("shared-workers"), "ns", "workload", "component").unwrap(),
+            ConsumerGroup::Grouped("shared-workers".to_string())
+        );
+        assert_eq!(
+            ConsumerGroup::resolve(
+                Some(BROADCAST_CONSUMER_GROUP),
+                "ns",
+                "workload",
+                "component"
+            )
+            .unwrap(),
+            ConsumerGroup::Broadcast
+        );
+    }
+
+    #[test]
+    fn consumer_group_configuration_rejects_invalid_values() {
+        for value in ["", "two groups", "workers.*", "workers.>"] {
+            assert!(
+                ConsumerGroup::resolve(Some(value), "ns", "workload", "component").is_err(),
+                "expected `{value}` to be rejected"
+            );
+        }
     }
 }

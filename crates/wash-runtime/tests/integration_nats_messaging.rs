@@ -10,6 +10,7 @@
 //! Requires Docker (NATS); marked `#[ignore]`, run with `cargo test --include-ignored`.
 
 use anyhow::{Context, Result};
+use futures::StreamExt as _;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use testcontainers::{
     GenericImage, ImageExt,
@@ -135,9 +136,14 @@ async fn setup() -> Result<TestHarness> {
         },
     };
 
-    host.workload_start(req)
+    host.workload_start(req.clone())
         .await
         .context("Failed to start workload")?;
+    let mut replica = req;
+    replica.workload_id = uuid::Uuid::new_v4().to_string();
+    host.workload_start(replica)
+        .await
+        .context("Failed to start workload replica")?;
 
     Ok(TestHarness {
         nats_client,
@@ -171,6 +177,43 @@ async fn test_nats_messaging_handler_subscription_round_trip() -> Result<()> {
         response.payload.as_ref(),
         payload.as_slice(),
         "handler echoed wrong payload"
+    );
+
+    Ok(())
+}
+
+/// Both workload instances have different replica IDs but the same logical
+/// namespace/workload/component identity. Their default queue subscriptions
+/// must therefore compete, producing exactly one reply for one message.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn test_component_replicas_consume_each_message_once() -> Result<()> {
+    let harness = setup().await?;
+    let inbox = harness.nats_client.new_inbox();
+    let mut replies = harness
+        .nats_client
+        .subscribe(inbox.clone())
+        .await
+        .context("failed to subscribe to reply inbox")?;
+    let payload = bytes::Bytes::from_static(b"one-message");
+
+    harness
+        .nats_client
+        .publish_with_reply(SUBSCRIPTION_SUBJECT, inbox, payload.clone())
+        .await
+        .context("failed to publish test message")?;
+
+    let first = tokio::time::timeout(Duration::from_secs(5), replies.next())
+        .await
+        .context("timed out waiting for a replica to reply")?
+        .context("reply subscription closed unexpectedly")?;
+    assert_eq!(first.payload, payload);
+
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), replies.next())
+            .await
+            .is_err(),
+        "more than one component replica handled the same message"
     );
 
     Ok(())
