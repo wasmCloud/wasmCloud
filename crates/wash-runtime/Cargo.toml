@@ -65,6 +65,7 @@ async-trait = { workspace = true }
 bon = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
+fastrand = { workspace = true }
 futures = { workspace = true }
 hostname = { workspace = true }
 http = { workspace = true }

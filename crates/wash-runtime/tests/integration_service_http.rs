@@ -133,15 +133,21 @@ async fn test_service_http_co_drives_cli_run() -> Result<()> {
 /// combined to pin all traffic to a single replica: service workloads never
 /// registered their hostname with the `DynamicRouter` (so a hostname router
 /// 404'd them), and `route_incoming_request` picked one arbitrary replica per
-/// host. With both fixed, four `svc-counter` replicas bound to ONE hostname must
-/// each take an equal share.
+/// host. With both fixed, four `svc-counter` replicas bound to ONE hostname
+/// share the traffic.
 ///
-/// Each replica keeps an independent `http_calls` counter, so 8 sequential
-/// requests spread round-robin over 4 replicas land 2 each: the sorted
-/// `http_calls` values across the 8 responses are `[1,1,1,1,2,2,2,2]`. A single
-/// pinned replica would instead read `[1,2,3,4,5,6,7,8]`.
-#[tokio::test]
-async fn test_service_http_round_robins_across_replicas() -> Result<()> {
+/// Selection is random, so this asserts every replica gets used rather than an
+/// exact split. Each replica keeps an independent `http_calls` counter that
+/// starts at 0, so the first request routed to a given replica is the only one
+/// that reads back `http_calls == 1`. Counting the `== 1` responses therefore
+/// counts the distinct replicas that served at least once — which must be all
+/// four. The old pin-to-one behavior sends every request to one replica, so
+/// exactly one response reads `1` (and the rest climb `2,3,4,…`), failing this.
+///
+/// Runs on a multi-thread runtime so the HTTP server and the four co-driven p3
+/// service instances make progress in parallel with the request loop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_service_http_spreads_load_across_replicas() -> Result<()> {
     let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
 
     const REPLICAS: usize = 4;
@@ -157,8 +163,11 @@ async fn test_service_http_round_robins_across_replicas() -> Result<()> {
         .pool_max_idle_per_host(0)
         .build()?;
 
-    let mut http_calls = Vec::new();
-    for _ in 0..(REPLICAS * 2) {
+    // Enough requests that random selection hits all four replicas with
+    // overwhelming probability: P(any replica missed) <= 4 * (3/4)^80 ~= 4e-10.
+    const REQUESTS: usize = 80;
+    let mut distinct_replicas = 0;
+    for _ in 0..REQUESTS {
         let resp = timeout(
             Duration::from_secs(10),
             client
@@ -173,15 +182,15 @@ async fn test_service_http_round_robins_across_replicas() -> Result<()> {
             resp.status()
         );
         let (_cli_ticks, calls) = parse_counter(&resp.text().await?);
-        http_calls.push(calls);
+        if calls == 1 {
+            distinct_replicas += 1;
+        }
     }
 
-    http_calls.sort_unstable();
     assert_eq!(
-        http_calls,
-        vec![1, 1, 1, 1, 2, 2, 2, 2],
-        "8 requests across 4 replicas should land 2 each (round-robin); got {http_calls:?} \
-         — a single pinned replica would read [1,2,3,4,5,6,7,8]"
+        distinct_replicas, REPLICAS,
+        "all {REPLICAS} replicas should serve traffic (one `http_calls == 1` each); \
+         saw {distinct_replicas} — a single pinned replica would show exactly 1"
     );
 
     Ok(())
