@@ -40,7 +40,7 @@ struct TestHarness {
     _container: Box<dyn std::any::Any + Send>,
 }
 
-async fn setup() -> Result<TestHarness> {
+async fn setup(workloads: Vec<WorkloadStartRequest>) -> Result<TestHarness> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init()
@@ -96,17 +96,39 @@ async fn setup() -> Result<TestHarness> {
 
     let host = host.start().await.context("Failed to start host")?;
 
-    let mut subscription_config = HashMap::new();
-    subscription_config.insert(
-        "subscriptions".to_string(),
-        SUBSCRIPTION_SUBJECT.to_string(),
-    );
+    // Start all workloads
+    for req in workloads {
+        host.workload_start(req)
+            .await
+            .context("Failed to start workload")?;
+    }
 
-    let req = WorkloadStartRequest {
+    Ok(TestHarness {
+        nats_client,
+        monitoring_url,
+        _host: Box::new(host),
+        _container: Box::new(container),
+    })
+}
+
+#[derive(Default)]
+struct MessagingHandlerWorkloadConfig {
+    workload_name: Option<String>,
+    pool_size: Option<i32>,
+}
+
+/// Build a messaging workload with a variable amount of handlers
+fn messaging_handler_workload(
+    MessagingHandlerWorkloadConfig {
+        workload_name,
+        pool_size,
+    }: MessagingHandlerWorkloadConfig,
+) -> WorkloadStartRequest {
+    WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
             namespace: "test".to_string(),
-            name: "messaging-workload".to_string(),
+            name: workload_name.unwrap_or_else(|| "unnamed".into()),
             annotations: HashMap::new(),
             service: None,
             components: vec![Component {
@@ -121,7 +143,7 @@ async fn setup() -> Result<TestHarness> {
                     volume_mounts: vec![],
                     allowed_hosts: Default::default(),
                 },
-                pool_size: 1,
+                pool_size: pool_size.unwrap_or(1),
                 max_invocations: 100,
             }],
             host_interfaces: vec![WitInterface {
@@ -129,34 +151,22 @@ async fn setup() -> Result<TestHarness> {
                 package: "messaging".to_string(),
                 interfaces: ["handler".to_string()].into_iter().collect(),
                 version: Some(semver::Version::new(0, 2, 0)),
-                config: subscription_config,
+                config: HashMap::from([(
+                    "subscriptions".to_string(),
+                    SUBSCRIPTION_SUBJECT.to_string(),
+                )]),
                 name: None,
             }],
             volumes: vec![],
         },
-    };
-
-    host.workload_start(req.clone())
-        .await
-        .context("Failed to start workload")?;
-    let mut replica = req;
-    replica.workload_id = uuid::Uuid::new_v4().to_string();
-    host.workload_start(replica)
-        .await
-        .context("Failed to start workload replica")?;
-
-    Ok(TestHarness {
-        nats_client,
-        monitoring_url,
-        _host: Box::new(host),
-        _container: Box::new(container),
-    })
+    }
 }
 
 #[tokio::test]
 #[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn test_nats_messaging_handler_subscription_round_trip() -> Result<()> {
-    let harness = setup().await?;
+    // One distinct workload with 1 component
+    let harness = setup(vec![messaging_handler_workload(Default::default())]).await?;
 
     // Give the plugin a moment to flush its SUB to the server. The handler
     // pushes its reply via the consumer interface, and request() waits for
@@ -182,13 +192,70 @@ async fn test_nats_messaging_handler_subscription_round_trip() -> Result<()> {
     Ok(())
 }
 
-/// Both workload instances have different replica IDs but the same logical
-/// namespace/workload/component identity. Their default queue subscriptions
-/// must therefore compete, producing exactly one reply for one message.
+/// Multiple workload instances should receive duplicate messages from
+/// a given subscription.
+///
+/// NOTE: workloads must have different *names* to be considered distinct
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn test_distinct_workloads_recieve_duplicate_messages() -> Result<()> {
+    // Two distinct workloads with 1 component each, replying to the same return address
+    let harness = setup(vec![
+        messaging_handler_workload(MessagingHandlerWorkloadConfig {
+            workload_name: Some("worker-0".into()),
+            ..Default::default()
+        }),
+        messaging_handler_workload(MessagingHandlerWorkloadConfig {
+            workload_name: Some("worker-1".into()),
+            ..Default::default()
+        }),
+    ])
+    .await?;
+
+    let inbox = harness.nats_client.new_inbox();
+    let mut replies = harness
+        .nats_client
+        .subscribe(inbox.clone())
+        .await
+        .context("failed to subscribe to reply inbox")?;
+    let payload = bytes::Bytes::from_static(b"one-message");
+
+    harness
+        .nats_client
+        .publish_with_reply(SUBSCRIPTION_SUBJECT, inbox, payload.clone())
+        .await
+        .context("failed to publish test message")?;
+
+    let first = tokio::time::timeout(Duration::from_secs(5), replies.next())
+        .await
+        .context("timed out waiting for first workload component to reply")?
+        .context("reply subscription closed unexpectedly")?;
+    assert_eq!(first.payload, payload);
+
+    let second = tokio::time::timeout(Duration::from_secs(5), replies.next())
+        .await
+        .context("timed out waiting for second workload component  to reply")?
+        .context("reply subscription closed unexpectedly")?;
+    assert_eq!(second.payload, payload);
+
+    Ok(())
+}
+
+/// Multiple components in the same workload should share messages (i.e. round robin)
+/// for a given subscription
 #[tokio::test]
 #[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn test_component_replicas_consume_each_message_once() -> Result<()> {
-    let harness = setup().await?;
+    // One distinct workload with a component with 2 in pool
+    // (only one component will receive the message)
+    let harness = setup(vec![messaging_handler_workload(
+        MessagingHandlerWorkloadConfig {
+            pool_size: Some(2),
+            ..Default::default()
+        },
+    )])
+    .await?;
+
     let inbox = harness.nats_client.new_inbox();
     let mut replies = harness
         .nats_client
@@ -231,7 +298,7 @@ async fn test_component_replicas_consume_each_message_once() -> Result<()> {
 #[tokio::test]
 #[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn test_nats_messaging_subscription_registered_on_server() -> Result<()> {
-    let harness = setup().await?;
+    let harness = setup(vec![messaging_handler_workload(Default::default())]).await?;
 
     // Poll briefly to absorb the small lag between connect and the server's
     // /connz view becoming consistent. Each attempt fetches the full
