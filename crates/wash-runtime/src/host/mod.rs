@@ -664,9 +664,12 @@ impl HostApi for Host {
             if workloads.contains_key(&request.workload_id) {
                 return Ok(WorkloadStartResponse {
                     workload_status: WorkloadStatus {
-                        workload_id: request.workload_id,
+                        workload_id: request.workload_id.clone(),
                         workload_state: WorkloadState::Error,
-                        message: "Workload ID already exists".to_string(),
+                        message: format!(
+                            "Workload ID [{}] already exists (the exising workload must be stopped to reuse the ID)",
+                            request.workload_id
+                        ),
                     },
                 });
             }
