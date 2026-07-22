@@ -747,6 +747,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "svc-http-proxy"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"

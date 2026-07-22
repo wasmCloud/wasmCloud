@@ -1,0 +1,15 @@
+package wasmcloud:test-p3@0.1.0;
+
+/// A p3 proxy service: one long-lived instance co-drives `cli/run` and
+/// `http/handler`. A request carrying an `x-backend` header is forwarded to
+/// that authority through the imported `wasi:http/client` (the host's
+/// outbound HTTP path) and the backend's response is returned unchanged; a
+/// request without the header is answered directly from the service.
+world svc-http-proxy {
+    import wasi:http/types@0.3.0;
+    import wasi:http/client@0.3.0;
+    import wasi:clocks/types@0.3.0;
+    import wasi:clocks/monotonic-clock@0.3.0;
+    export wasi:cli/run@0.3.0;
+    export wasi:http/handler@0.3.0;
+}

@@ -34,43 +34,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use common::Flavor;
+use common::{Flavor, engine, http_host_interfaces};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use tokio::runtime::Runtime;
 
 use wash_runtime::{
-    engine::Engine,
     host::{
         HostApi, HostBuilder,
         http::{DevRouter, HttpServer},
     },
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
-    wit::WitInterface,
 };
-
-fn flavor_host_header(flavor: Flavor) -> &'static str {
-    match flavor {
-        Flavor::P2 => "bench-p2",
-        Flavor::P3 => "bench-p3",
-    }
-}
-
-fn engine() -> Engine {
-    Engine::builder().build().expect("failed to build engine")
-}
-
-fn http_host_interfaces(host: &str) -> Vec<WitInterface> {
-    let mut config = HashMap::new();
-    config.insert("host".to_string(), host.to_string());
-    vec![WitInterface {
-        namespace: "wasi".to_string(),
-        package: "http".to_string(),
-        interfaces: ["incoming-handler".to_string()].into_iter().collect(),
-        version: Some(semver::Version::parse("0.2.2").unwrap()),
-        config,
-        name: None,
-    }]
-}
 
 /// Holds a warm host bound to a concrete address with a workload resolved and
 /// ready to serve requests. Kept alive for the duration of a benchmark group.
@@ -111,7 +85,7 @@ async fn start_warm_host(flavor: Flavor) -> anyhow::Result<WarmHost> {
                 pool_size: 0,
                 max_invocations: 0,
             }],
-            host_interfaces: http_host_interfaces(flavor_host_header(flavor)),
+            host_interfaces: http_host_interfaces(flavor.host_header()),
             volumes: vec![],
         },
     };
@@ -127,7 +101,7 @@ async fn start_warm_host(flavor: Flavor) -> anyhow::Result<WarmHost> {
     // Correctness check  - also primes any one-time lazy caches before bench.
     let warmup = client
         .get(format!("http://{addr}/"))
-        .header("HOST", flavor_host_header(flavor))
+        .header("HOST", flavor.host_header())
         .send()
         .await?;
     anyhow::ensure!(
@@ -145,7 +119,7 @@ async fn start_warm_host(flavor: Flavor) -> anyhow::Result<WarmHost> {
         _host: Box::new(host),
         addr,
         client,
-        host_header: flavor_host_header(flavor),
+        host_header: flavor.host_header(),
     })
 }
 

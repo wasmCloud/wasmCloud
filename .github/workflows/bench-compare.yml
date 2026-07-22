@@ -36,6 +36,7 @@ on:
         default: gungraun
         options:
           - http_invoke
+          - service_http
           - gungraun
           - wasmtime_baseline
           - wasmtime_serve

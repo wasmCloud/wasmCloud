@@ -9,6 +9,7 @@ on:
         default: http_invoke
         options:
           - http_invoke
+          - service_http
           - gungraun
           - wasmtime_baseline
           - wasmtime_serve
@@ -61,7 +62,7 @@ jobs:
       # published`. wasmtime_* are reference baselines for wasmtime itself
       # and don't shift with our changes — run them on demand via
       # workflow_dispatch when wasmtime is upgraded.
-      RELEASE_BENCHES: '["http_invoke","gungraun"]'
+      RELEASE_BENCHES: '["http_invoke","service_http","gungraun"]'
     steps:
       - id: set
         env:
