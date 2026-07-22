@@ -1,11 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
-use crate::engine::workload::{ResolvedWorkload, WorkloadItem};
-use crate::observability::Meters;
-use crate::plugin::{HostPlugin, WitInterfaces};
-use crate::wit::{WitInterface, WitWorld};
 use async_nats::Subscriber;
 use futures::stream::StreamExt;
 use opentelemetry::KeyValue;
@@ -13,11 +8,35 @@ use tokio::sync::RwLock;
 use tracing::{Instrument, debug, instrument, trace, warn};
 use wasmtime::error::Context as _;
 
+mod bindings {
+    crate::wasmtime::component::bindgen!({
+        world: "messaging",
+        imports: { default: async | trappable | tracing },
+        exports: { default: async | tracing },
+    });
+}
+
+use bindings::wasmcloud::messaging::consumer::Host;
+use bindings::wasmcloud::messaging::types;
+
+use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::workload::{ResolvedWorkload, WorkloadItem};
+use crate::observability::Meters;
+use crate::plugin::{HostPlugin, WitInterfaces, WorkloadTracker};
+use crate::wit::{WitInterface, WitWorld};
+
 const PLUGIN_MESSAGING_ID: &str = "wasmcloud-messaging";
 const CONSUMER_GROUP_CONFIG: &str = "consumer_group";
 const BROADCAST_CONSUMER_GROUP: &str = "broadcast";
 const DEFAULT_CONSUMER_GROUP_PREFIX: &str = "wasmcloud";
 const MAX_DEFAULT_CONSUMER_GROUP_LEN: usize = 128;
+
+pub struct ComponentData {
+    subscriptions: Vec<String>,
+    consumer_group: ConsumerGroup,
+    cancel_token: tokio_util::sync::CancellationToken,
+    task_handle: Option<tokio::task::JoinHandle<()>>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ConsumerGroup {
@@ -52,110 +71,6 @@ impl ConsumerGroup {
             Self::Broadcast => None,
         }
     }
-}
-
-fn validate_consumer_group(value: &str) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !value.is_empty(),
-        "`{CONSUMER_GROUP_CONFIG}` cannot be empty; omit it for the default group or set it to `{BROADCAST_CONSUMER_GROUP}` for broadcast delivery"
-    );
-    anyhow::ensure!(
-        !value
-            .chars()
-            .any(|c| c.is_whitespace() || c == '*' || c == '>'),
-        "invalid `{CONSUMER_GROUP_CONFIG}` `{value}`: NATS consumer groups cannot contain whitespace, `*`, or `>`"
-    );
-    Ok(())
-}
-
-/// Return a stable, NATS-safe queue name for every replica of a logical
-/// component. The readable prefix helps operators identify the consumer while
-/// the FNV-1a suffix preserves distinctions lost through sanitization or
-/// truncation without adding a hashing dependency to the runtime.
-fn default_consumer_group(namespace: &str, workload: &str, component: &str) -> String {
-    let identity = format!("{namespace}\0{workload}\0{component}");
-    let mut hash = 0xcbf29ce484222325_u64;
-    for byte in identity.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-
-    let readable = [namespace, workload, component]
-        .into_iter()
-        .map(|part| {
-            part.chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                        c
-                    } else {
-                        '-'
-                    }
-                })
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join(".");
-    let suffix = format!(".{hash:016x}");
-    let max_readable_len = MAX_DEFAULT_CONSUMER_GROUP_LEN
-        .saturating_sub(DEFAULT_CONSUMER_GROUP_PREFIX.len() + 1 + suffix.len());
-    let readable = &readable[..readable.floor_char_boundary(max_readable_len)];
-    format!("{DEFAULT_CONSUMER_GROUP_PREFIX}.{readable}{suffix}")
-}
-
-/// Server-side synchronization barrier for the NATS client.
-///
-/// `client.flush()` in `async_nats` only flushes the local TCP write buffer
-/// — it does not wait for the server to acknowledge that prior SUBs have
-/// been registered. After flush returns, NATS may not yet have processed
-/// our subscriptions, so an immediate request on a subscribed subject can
-/// race ahead and hit "no responders" (this is exactly the failure mode
-/// of #5074 in environments where the data path is slow enough to widen
-/// the race window — kubernetes with TLS).
-///
-/// To bound the race, this helper subscribes to a fresh inbox, publishes a
-/// single byte to it, and awaits the round-tripped message. NATS processes
-/// per-connection commands in order, so once we receive the sentinel back
-/// every earlier SUB on this connection is guaranteed to be active.
-async fn sync_with_server(client: &async_nats::Client) -> anyhow::Result<()> {
-    use futures::stream::StreamExt;
-
-    let inbox = client.new_inbox();
-    let mut sentinel = client
-        .subscribe(inbox.clone())
-        .await
-        .context("failed to subscribe to sync inbox")?;
-    client
-        .publish(inbox, bytes::Bytes::from_static(&[0]))
-        .await
-        .context("failed to publish sync message")?;
-    // Tight bound — if NATS is genuinely unreachable we'll bail; otherwise
-    // the round trip is sub-millisecond locally, low single-digit ms in
-    // kubernetes.
-    match tokio::time::timeout(std::time::Duration::from_secs(5), sentinel.next()).await {
-        Ok(Some(_)) => Ok(()),
-        Ok(None) => anyhow::bail!("sync inbox subscription closed before sentinel arrived"),
-        Err(_) => anyhow::bail!("sync with NATS timed out after 5s"),
-    }
-}
-
-mod bindings {
-    crate::wasmtime::component::bindgen!({
-        world: "messaging",
-        imports: { default: async | trappable | tracing },
-        exports: { default: async | tracing },
-    });
-}
-
-use bindings::wasmcloud::messaging::consumer::Host;
-use bindings::wasmcloud::messaging::types;
-
-use crate::plugin::WorkloadTracker;
-
-pub struct ComponentData {
-    subscriptions: Vec<String>,
-    consumer_group: ConsumerGroup,
-    cancel_token: tokio_util::sync::CancellationToken,
-    task_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 #[derive(Clone)]
@@ -600,6 +515,90 @@ impl HostPlugin for NatsMessaging {
             .await;
 
         Ok(())
+    }
+}
+
+fn validate_consumer_group(value: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !value.is_empty(),
+        "`{CONSUMER_GROUP_CONFIG}` cannot be empty; omit it for the default group or set it to `{BROADCAST_CONSUMER_GROUP}` for broadcast delivery"
+    );
+    anyhow::ensure!(
+        !value
+            .chars()
+            .any(|c| c.is_whitespace() || c == '*' || c == '>'),
+        "invalid `{CONSUMER_GROUP_CONFIG}` `{value}`: NATS consumer groups cannot contain whitespace, `*`, or `>`"
+    );
+    Ok(())
+}
+
+/// Return a stable, NATS-safe queue name for every replica of a logical
+/// component. The readable prefix helps operators identify the consumer while
+/// the FNV-1a suffix preserves distinctions lost through sanitization or
+/// truncation without adding a hashing dependency to the runtime.
+fn default_consumer_group(namespace: &str, workload: &str, component: &str) -> String {
+    let identity = format!("{namespace}\0{workload}\0{component}");
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in identity.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+
+    let readable = [namespace, workload, component]
+        .into_iter()
+        .map(|part| {
+            part.chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(".");
+    let suffix = format!(".{hash:016x}");
+    let max_readable_len = MAX_DEFAULT_CONSUMER_GROUP_LEN
+        .saturating_sub(DEFAULT_CONSUMER_GROUP_PREFIX.len() + 1 + suffix.len());
+    let readable = &readable[..readable.floor_char_boundary(max_readable_len)];
+    format!("{DEFAULT_CONSUMER_GROUP_PREFIX}.{readable}{suffix}")
+}
+
+/// Server-side synchronization barrier for the NATS client.
+///
+/// `client.flush()` in `async_nats` only flushes the local TCP write buffer
+/// — it does not wait for the server to acknowledge that prior SUBs have
+/// been registered. After flush returns, NATS may not yet have processed
+/// our subscriptions, so an immediate request on a subscribed subject can
+/// race ahead and hit "no responders" (this is exactly the failure mode
+/// of #5074 in environments where the data path is slow enough to widen
+/// the race window — kubernetes with TLS).
+///
+/// To bound the race, this helper subscribes to a fresh inbox, publishes a
+/// single byte to it, and awaits the round-tripped message. NATS processes
+/// per-connection commands in order, so once we receive the sentinel back
+/// every earlier SUB on this connection is guaranteed to be active.
+async fn sync_with_server(client: &async_nats::Client) -> anyhow::Result<()> {
+    use futures::stream::StreamExt;
+
+    let inbox = client.new_inbox();
+    let mut sentinel = client
+        .subscribe(inbox.clone())
+        .await
+        .context("failed to subscribe to sync inbox")?;
+    client
+        .publish(inbox, bytes::Bytes::from_static(&[0]))
+        .await
+        .context("failed to publish sync message")?;
+    // Tight bound — if NATS is genuinely unreachable we'll bail; otherwise
+    // the round trip is sub-millisecond locally, low single-digit ms in
+    // kubernetes.
+    match tokio::time::timeout(std::time::Duration::from_secs(5), sentinel.next()).await {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => anyhow::bail!("sync inbox subscription closed before sentinel arrived"),
+        Err(_) => anyhow::bail!("sync with NATS timed out after 5s"),
     }
 }
 
