@@ -331,6 +331,21 @@ pub enum OciPullPolicy {
     Never,
 }
 
+impl std::str::FromStr for OciPullPolicy {
+    type Err = anyhow::Error;
+
+    /// Parse a pull policy name: `always`, `ifNotPresent`, or `never`
+    /// (case- and separator-insensitive).
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_ascii_lowercase().replace(['-', '_'], "").as_str() {
+            "always" => Ok(Self::Always),
+            "ifnotpresent" => Ok(Self::IfNotPresent),
+            "never" => Ok(Self::Never),
+            other => bail!("invalid pull policy {other:?}; expected always|ifNotPresent|never"),
+        }
+    }
+}
+
 /// Pull a WebAssembly component from an OCI registry
 ///
 /// This function pulls a WebAssembly component from an OCI-compliant registry,

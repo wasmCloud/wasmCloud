@@ -133,6 +133,11 @@ spec:
             {{- range .wasmProposals }}
             - "--wasm-proposal={{ . }}"
             {{- end }}
+            {{- /* Host component plugins: one --host-plugin flag per entry, each
+                   rendered into the CLI's `key=value` grammar. */}}
+            {{- range .hostPlugins }}
+            - "--host-plugin=id={{ .id }}{{ if .image }},image={{ .image }}{{ if .pullPolicy }},pull={{ .pullPolicy }}{{ end }}{{ if .digest }},digest={{ .digest }}{{ end }}{{ else if .file }},file={{ .file }}{{ end }}{{ if .maxRestarts }},max-restarts={{ .maxRestarts }}{{ end }}"
+            {{- end }}
             {{- /* Chart-wide runtime.extraArgs applies to every host group; per-host-group
                    .extraArgs is appended after it. */}}
             {{- with $top.Values.runtime.extraArgs }}

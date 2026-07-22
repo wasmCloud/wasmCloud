@@ -367,6 +367,91 @@ impl DevComponent {
     }
 }
 
+/// A host component plugin to load into the `wash dev` host: a WebAssembly
+/// component that provides a host capability, served to every workload that
+/// imports its interface. Provide exactly one of `file` (local path) or `image`
+/// (OCI reference). Requires a wash build with the `host-component-plugins`
+/// feature.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostPluginConfig {
+    /// Host-unique plugin id.
+    pub id: String,
+    /// Local wasm file path. Mutually exclusive with `image`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<PathBuf>,
+    /// OCI image reference. Mutually exclusive with `file`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// Pull policy for `image` sources: `always`, `ifNotPresent`, or `never`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_policy: Option<String>,
+    /// Supervised driver restarts before the plugin is declared dead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_restarts: Option<u32>,
+    /// OCI digest to pin (`image` sources only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_digest: Option<String>,
+}
+
+impl HostPluginConfig {
+    /// Convert to a runtime [`wash_runtime::plugin::ComponentPluginSpec`],
+    /// validating that exactly one source is set and that `pullPolicy`/
+    /// `expectedDigest` are used only with an `image` source.
+    pub fn to_spec(&self) -> Result<wash_runtime::plugin::ComponentPluginSpec> {
+        use wash_runtime::plugin::{ComponentPluginSpec, PluginSource};
+
+        if self.id.is_empty() {
+            bail!("dev.host_plugins entry is missing a non-empty `id`");
+        }
+        let source = match (&self.file, &self.image) {
+            (Some(file), None) => {
+                if self.pull_policy.is_some() {
+                    bail!(
+                        "dev.host_plugins '{}': pullPolicy applies only to image sources",
+                        self.id
+                    );
+                }
+                if self.expected_digest.is_some() {
+                    bail!(
+                        "dev.host_plugins '{}': expectedDigest applies only to image sources",
+                        self.id
+                    );
+                }
+                PluginSource::File(file.clone())
+            }
+            (None, Some(image)) => {
+                let pull_policy = match &self.pull_policy {
+                    Some(p) => p
+                        .parse::<wash_runtime::oci::OciPullPolicy>()
+                        .with_context(|| format!("dev.host_plugins '{}'", self.id))?,
+                    None => wash_runtime::oci::OciPullPolicy::IfNotPresent,
+                };
+                PluginSource::Oci {
+                    image: image.clone(),
+                    pull_policy,
+                }
+            }
+            (Some(_), Some(_)) => {
+                bail!(
+                    "dev.host_plugins '{}' sets both `file` and `image`; use exactly one",
+                    self.id
+                )
+            }
+            (None, None) => bail!(
+                "dev.host_plugins '{}' needs a `file` or `image` source",
+                self.id
+            ),
+        };
+        Ok(ComponentPluginSpec {
+            id: self.id.clone(),
+            source,
+            max_restarts: self.max_restarts,
+            expected_digest: self.expected_digest.clone(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DevConfig {
     /// Command to run the component in dev mode
@@ -394,6 +479,12 @@ pub struct DevConfig {
     /// Additional components to load alongside the main component
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<DevComponent>,
+
+    /// Host component plugins to load into the dev host: WebAssembly components
+    /// that provide host capabilities. Requires a wash build with the
+    /// `host-component-plugins` feature.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_plugins: Vec<HostPluginConfig>,
 
     /// Volumes to mount into the dev environment
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1165,6 +1256,72 @@ dev:
         assert!(component.environment.is_none());
         assert!(component.config.is_empty());
         assert!(component.allowed_hosts.is_none());
+    }
+
+    #[test]
+    fn dev_host_plugins_parse_from_yaml_and_convert_to_spec() {
+        use wash_runtime::plugin::PluginSource;
+        // The `dev.host_plugins` key follows DevConfig's snake_case; each entry's
+        // fields follow the camelCase used by other nested dev structs.
+        let yaml = r#"
+dev:
+  host_plugins:
+    - id: acme-kv
+      file: ./build/kv_plugin.wasm
+      maxRestarts: 3
+    - id: acme-widgets
+      image: ghcr.io/acme/widgets:1.2.0
+      pullPolicy: ifNotPresent
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let dev = config.dev();
+        assert_eq!(dev.host_plugins.len(), 2);
+
+        let kv = dev.host_plugins[0].to_spec().unwrap();
+        assert_eq!(kv.id, "acme-kv");
+        assert_eq!(
+            kv.source,
+            PluginSource::File("./build/kv_plugin.wasm".into())
+        );
+        assert_eq!(kv.max_restarts, Some(3));
+
+        let widgets = dev.host_plugins[1].to_spec().unwrap();
+        assert!(matches!(widgets.source, PluginSource::Oci { .. }));
+    }
+
+    #[test]
+    fn host_plugin_config_validation_rejects_ambiguous_specs() {
+        // Both sources set.
+        let both = HostPluginConfig {
+            id: "x".into(),
+            file: Some("a.wasm".into()),
+            image: Some("ghcr.io/x:1".into()),
+            ..Default::default()
+        };
+        assert!(both.to_spec().is_err());
+
+        // No source.
+        let neither = HostPluginConfig {
+            id: "x".into(),
+            ..Default::default()
+        };
+        assert!(neither.to_spec().is_err());
+
+        // pullPolicy with a file source.
+        let pull_on_file = HostPluginConfig {
+            id: "x".into(),
+            file: Some("a.wasm".into()),
+            pull_policy: Some("always".into()),
+            ..Default::default()
+        };
+        assert!(pull_on_file.to_spec().is_err());
+
+        // Empty id.
+        let empty_id = HostPluginConfig {
+            file: Some("a.wasm".into()),
+            ..Default::default()
+        };
+        assert!(empty_id.to_spec().is_err());
     }
 
     #[test]

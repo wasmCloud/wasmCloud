@@ -126,6 +126,74 @@ pub struct HostCommand {
         value_delimiter = ','
     )]
     pub wasm_proposals: Vec<WasmProposal>,
+
+    /// Load a host component plugin providing a host capability from its own supervised store.
+    ///
+    /// A WebAssembly component served to every workload that imports its
+    /// interface. Repeatable; separate multiple with `;` or repeat the flag.
+    /// Requires a wash build with the `host-component-plugins` feature. Each
+    /// value is comma-separated `key=value` fields — required `id` and exactly
+    /// one of `image`/`file`:
+    ///   id=<name>,image=<oci-ref>[,pull=always|ifNotPresent|never][,max-restarts=N][,digest=sha256:..]
+    ///   id=<name>,file=<path>[,max-restarts=N]
+    #[arg(
+        long = "host-plugin",
+        env = "WASH_HOST_PLUGINS",
+        value_delimiter = ';',
+        value_parser = parse_host_plugin_spec
+    )]
+    pub host_plugins: Vec<wash_runtime::plugin::ComponentPluginSpec>,
+
+    /// Username for authenticating to the registry when pulling host component
+    /// plugins. Pair with `--host-plugin-registry-password`. Read from the
+    /// environment so the credential never appears in a `--host-plugin` arg or
+    /// the pod spec — in Kubernetes, source it from a Secret via `secretKeyRef`
+    /// on the host container. When unset, plugin pulls fall back to the ambient
+    /// docker credential helper (e.g. a mounted imagePullSecret) and then
+    /// anonymous access. Applies to host-component-plugin pulls only; workload
+    /// components authenticate with their own per-workload image pull secret.
+    #[cfg(feature = "host-component-plugins")]
+    #[arg(
+        long = "host-plugin-registry-user",
+        env = "WASH_HOST_PLUGIN_REGISTRY_USER",
+        hide_env_values = true,
+        requires = "host_plugin_registry_password"
+    )]
+    pub host_plugin_registry_user: Option<String>,
+
+    /// Password paired with `--host-plugin-registry-user` /
+    /// `WASH_HOST_PLUGIN_REGISTRY_USER`. Both are required together.
+    #[cfg(feature = "host-component-plugins")]
+    #[arg(
+        long = "host-plugin-registry-password",
+        env = "WASH_HOST_PLUGIN_REGISTRY_PASSWORD",
+        hide_env_values = true,
+        requires = "host_plugin_registry_user"
+    )]
+    pub host_plugin_registry_password: Option<String>,
+}
+
+/// clap value parser for `--host-plugin`: parse one spec, flattening the
+/// `anyhow` error chain into the `String` clap wants.
+fn parse_host_plugin_spec(s: &str) -> Result<wash_runtime::plugin::ComponentPluginSpec, String> {
+    s.parse().map_err(|e: anyhow::Error| format!("{e:#}"))
+}
+
+/// Resolve explicit registry credentials for host-component-plugin pulls from
+/// the CLI/env `(user, password)` pair. The two are required together (clap
+/// `requires`); a lone half — reachable only defensively — is treated as no
+/// credentials, leaving the pull to fall back to the docker credential helper
+/// and then anonymous.
+#[cfg(feature = "host-component-plugins")]
+fn host_plugin_registry_credentials(
+    user: Option<&str>,
+    password: Option<&str>,
+) -> Option<(String, String)> {
+    match (user, password) {
+        (Some(user), Some(password)) => Some((user.to_string(), password.to_string())),
+        (None, None) => None,
+        (Some(_), None) | (None, Some(_)) => None,
+    }
 }
 
 impl CliCommand for HostCommand {
@@ -176,7 +244,7 @@ impl CliCommand for HostCommand {
         let engine = engine_builder.build()?;
 
         let mut cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default()
-            .with_engine(engine)
+            .with_engine(engine.clone())
             .with_host_config(host_config)
             .with_nats_client(Arc::new(scheduler_nats_client))
             .with_host_group(self.host_group.clone())
@@ -290,6 +358,44 @@ impl CliCommand for HostCommand {
                 .with_plugin(Arc::new(plugin::wasi_webgpu::WebGpu::default()))?;
         }
 
+        // Host component plugins: fetch each declared plugin's wasm and register
+        // it before the host starts. Host-operator controlled only — nothing in a
+        // workload request can register a host-global capability provider.
+        #[cfg(feature = "host-component-plugins")]
+        {
+            // Explicit registry credentials for plugin pulls, taken from the
+            // environment so the secret never appears in a --host-plugin arg or
+            // the pod spec. When unset, resolution falls back to the ambient
+            // docker credential helper (e.g. a mounted imagePullSecret) and then
+            // anonymous access.
+            let plugin_oci_config = wash_runtime::oci::OciConfig {
+                credentials: host_plugin_registry_credentials(
+                    self.host_plugin_registry_user.as_deref(),
+                    self.host_plugin_registry_password.as_deref(),
+                ),
+                insecure: self.allow_insecure_registries,
+                cache_dir: self.oci_cache_dir.clone(),
+                timeout: Some(self.registry_pull_timeout),
+            };
+            for spec in &self.host_plugins {
+                let plugin = wash_runtime::plugin::component_host::load_component_plugin(
+                    spec,
+                    &engine,
+                    plugin_oci_config.clone(),
+                )
+                .await
+                .with_context(|| format!("failed to load host component plugin '{}'", spec.id))?;
+                cluster_host_builder = cluster_host_builder.with_plugin(plugin)?;
+                info!(id = %spec.id, "loaded host component plugin");
+            }
+        }
+        #[cfg(not(feature = "host-component-plugins"))]
+        anyhow::ensure!(
+            self.host_plugins.is_empty(),
+            "--host-plugin/WASH_HOST_PLUGINS requires a wash build with the \
+             `host-component-plugins` feature"
+        );
+
         let cluster_host = cluster_host_builder
             .build()
             .context("failed to build cluster host")?;
@@ -309,5 +415,31 @@ impl CliCommand for HostCommand {
             "Host exited successfully".to_string(),
             None,
         ))
+    }
+}
+
+#[cfg(all(test, feature = "host-component-plugins"))]
+mod tests {
+    use super::host_plugin_registry_credentials;
+
+    #[test]
+    fn both_halves_yield_credentials() {
+        assert_eq!(
+            host_plugin_registry_credentials(Some("user"), Some("pass")),
+            Some(("user".to_string(), "pass".to_string())),
+        );
+    }
+
+    #[test]
+    fn neither_half_yields_no_credentials() {
+        assert_eq!(host_plugin_registry_credentials(None, None), None);
+    }
+
+    #[test]
+    fn a_half_pair_is_ignored_not_half_applied() {
+        // Only a username, or only a password, must resolve to no explicit
+        // credentials — never a basic auth with an empty half.
+        assert_eq!(host_plugin_registry_credentials(Some("user"), None), None);
+        assert_eq!(host_plugin_registry_credentials(None, Some("pass")), None);
     }
 }
