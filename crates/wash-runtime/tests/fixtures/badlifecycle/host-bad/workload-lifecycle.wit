@@ -1,0 +1,12 @@
+package wasmcloud:host@0.1.0;
+
+/// Deliberately-malformed `workload-lifecycle` for the registration-rejection
+/// test. The real interface is `on-workload-bind: func(workload-info) ->
+/// result<_, string>`; here the argument is a bare string (not the
+/// workload-info record), which the host's registration-time shape check must
+/// reject with a clear error rather than accepting the plugin and failing on
+/// the first deploy.
+interface workload-lifecycle {
+    on-workload-bind: func(id: string) -> u32;
+    on-workload-unbind: func(id: string);
+}

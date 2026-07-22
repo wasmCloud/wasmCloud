@@ -194,6 +194,26 @@ impl HttpGuest for Component {
             let p = store::progress(name).await;
             return Ok(make_response(200, p.to_string().into_bytes()));
         }
+        if route.starts_with("/bound-config") {
+            // Bind-time interface config for THIS workload, captured by the
+            // plugin's on-workload-bind handler.
+            let key = query_get(query, "key").unwrap_or_default();
+            return match store::bound_config(key).await {
+                Some(v) => Ok(make_response(200, v.into_bytes())),
+                None => Ok(make_response(404, Vec::new())),
+            };
+        }
+        if route.starts_with("/bind-info") {
+            let workload = query_get(query, "workload").unwrap_or_default();
+            return match store::bind_info(workload).await {
+                Some(v) => Ok(make_response(200, v.into_bytes())),
+                None => Ok(make_response(404, Vec::new())),
+            };
+        }
+        if route.starts_with("/lifecycle-log") {
+            let log = store::lifecycle_log().await;
+            return Ok(make_response(200, log.join("\n").into_bytes()));
+        }
 
         Ok(make_response(404, Vec::new()))
     }

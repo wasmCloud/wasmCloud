@@ -55,7 +55,7 @@ use wasmtime::component::Component;
 use crate::engine::workload::ResolvedWorkload;
 use crate::engine::{Engine, uses_wasi_http};
 use crate::observability::Meters;
-use crate::plugin::HostPlugin;
+use crate::plugin::{HostPlugin, WorkloadFailure, WorkloadFailureSink};
 use crate::types::*;
 use crate::wit::{WitInterface, WitWorld};
 
@@ -330,9 +330,19 @@ impl Host {
             .await
             .context("failed to start HTTP handler")?;
 
-        // Start all plugins, any errors means the host fails to start.
+        // A plugin can fail a workload out of band (a host component plugin
+        // evicting one whose lifecycle bind crash-loops). Give each plugin a
+        // sink to report that on, drained by a background task that transitions
+        // the workload to a failed state.
+        let (failure_tx, failure_rx) = tokio::sync::mpsc::unbounded_channel();
+        let failure_sink = WorkloadFailureSink::new(failure_tx);
+
+        // Start all plugins, any errors means the host fails to start. The
+        // failure sink is injected before `start` so a plugin that evicts a
+        // workload immediately still has somewhere to report it.
         for (id, plugin) in &self.plugins {
             plugin.inject_meters(&self.meters).await;
+            plugin.set_workload_failure_sink(failure_sink.clone());
 
             if let Err(e) = plugin.start().await {
                 tracing::error!(id = id, err = ?e, "failed to start plugin");
@@ -340,7 +350,48 @@ impl Host {
             }
         }
 
-        Ok(Arc::new(self))
+        let host = Arc::new(self);
+        // Weak, not strong: the sinks handed to the plugins live inside
+        // `host.plugins`, so the channel stays open for as long as the host
+        // does. A strong handle here would therefore be a cycle — the drain
+        // would keep the host alive, and the host would keep the drain's
+        // channel open — leaking the host, its engine, and every compiled
+        // component. `Host::stop` cannot break it either: it stops the plugins
+        // but never drops them.
+        tokio::spawn(consume_workload_failures(Arc::downgrade(&host), failure_rx));
+        Ok(host)
+    }
+
+    /// Transition a running workload to a failed state on a plugin's report
+    /// (e.g. an evicted crash-looping bind): swap it to `Error`, so its status
+    /// reports failed, and tear down its resources like a stop would. A workload
+    /// that is already gone or not running is left as-is.
+    async fn fail_workload(&self, workload_id: &str, reason: String) {
+        let resolved = {
+            let mut workloads = self.workloads.write().await;
+            match workloads.get_mut(workload_id) {
+                Some(slot) => {
+                    let previous = std::mem::replace(slot, HostWorkload::Error(reason.clone()));
+                    match previous {
+                        HostWorkload::Running(rw) => Some(*rw),
+                        // Not running (starting/stopping/already error): leave the
+                        // Error we just wrote, nothing to tear down.
+                        _ => None,
+                    }
+                }
+                None => None,
+            }
+        };
+        if let Some(resolved) = resolved {
+            resolved.stop_service();
+            if let Err(e) = resolved.unbind_all_plugins().await {
+                warn!(workload_id, error = ?e, "error unbinding plugins while failing workload");
+            }
+        }
+        warn!(
+            workload_id,
+            reason, "workload failed by a plugin; marked as errored"
+        );
     }
 
     /// Stop the host and shut down all plugins.
@@ -826,6 +877,29 @@ impl std::fmt::Debug for Host {
             .field("started_at", &self.started_at)
             .field("workloads", &self.workloads)
             .finish()
+    }
+}
+
+/// Drain plugin-reported workload failures for the lifetime of the host,
+/// transitioning each reported workload to a failed state. Ends when the host
+/// is dropped, or when the last [`WorkloadFailureSink`] is (a host with no
+/// plugin that keeps one).
+///
+/// The host is held weakly and upgraded per report so this task never keeps it
+/// alive — see the spawn site in [`Host::start`].
+async fn consume_workload_failures(
+    host: std::sync::Weak<Host>,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<WorkloadFailure>,
+) {
+    while let Some(WorkloadFailure {
+        workload_id,
+        reason,
+    }) = rx.recv().await
+    {
+        let Some(host) = host.upgrade() else {
+            break;
+        };
+        host.fail_workload(&workload_id, reason).await;
     }
 }
 

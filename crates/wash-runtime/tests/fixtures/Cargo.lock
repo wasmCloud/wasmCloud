@@ -27,6 +27,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b75356056920673b02621b35afd0f7dda9306d03c79a30f5c56c44cf256e3de"
 
 [[package]]
+name = "badlifecycle"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -458,6 +465,13 @@ dependencies = [
 
 [[package]]
 name = "kv-plugin-caller"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
+name = "kv-plugin-service"
 version = "0.0.0"
 dependencies = [
  "wit-bindgen 0.59.0",
