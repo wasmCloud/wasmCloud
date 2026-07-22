@@ -33,11 +33,23 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
+use crate::FixtureKind;
+
 /// The fixture directories (under crates/wash-runtime/tests/fixtures) to build
-/// and push. Each is a wasm32-wasip2 cdylib served at
-/// <registry>/fixtures/<name>:e2e. To add a fixture: drop a wash-buildable dir,
-/// add a row here, and reference `registryRef("<name>")` in a spec.
-const FIXTURES: &[&str] = &["messaging-echo", "keyvalue-implements", "http-handler-p2"];
+/// and push, each paired with its component-model preview — `FixtureKind` drives
+/// the build target triple (and thus where `wash build` leaves the component).
+/// Served at <registry>/fixtures/<name>:e2e. To add a fixture: drop a
+/// wash-buildable dir, add a row here, and reference `registryRef("<name>")` in a
+/// spec.
+const FIXTURES: &[(&str, FixtureKind)] = &[
+    ("messaging-echo", FixtureKind::P2),
+    ("keyvalue-implements", FixtureKind::P2),
+    ("http-handler-p2", FixtureKind::P2),
+    // Host component plugin fixtures (P3 async): kv-plugin serves acme:kv/store
+    // from its own supervised store; kv-plugin-caller imports it over HTTP.
+    ("kv-plugin", FixtureKind::P3),
+    ("kv-plugin-caller", FixtureKind::P3),
+];
 
 /// Fixed so it always matches the pull side (registryImageTag in
 /// e2e_suite_test.go) — the two have no shared source, so this isn't a knob.
@@ -115,12 +127,12 @@ fn build_phase(
         fs::copy(&wash, out.join("wash")).context("staging wash")?;
     }
 
-    for fixture in FIXTURES {
+    for &(fixture, kind) in FIXTURES {
         eprintln!(">>> e2e-images: wash build {fixture}");
         wash_build(&wash, &fixtures_dir.join(fixture))
             .with_context(|| format!("wash build {fixture}"))?;
         if let Some(out) = fixtures_out {
-            let built = built_component(fixtures_dir, fixture)?;
+            let built = built_component(fixtures_dir, fixture, kind)?;
             fs::copy(&built, out.join(component_name(fixture)))
                 .with_context(|| format!("staging {fixture}"))?;
         }
@@ -170,10 +182,10 @@ fn push_phase(
     let _pf = PortForward::start(&kubeconfig, namespace)?;
     wait_for_registry()?;
 
-    for fixture in FIXTURES {
+    for &(fixture, kind) in FIXTURES {
         let component = match (mode, fixtures_out) {
             (Mode::Push, Some(out)) => out.join(component_name(fixture)),
-            _ => built_component(fixtures_dir, fixture)?,
+            _ => built_component(fixtures_dir, fixture, kind)?,
         };
         let reference = format!("{PUSH_ADDR}/fixtures/{fixture}:{TAG}");
         eprintln!(">>> e2e-images: wash oci push {reference}");
@@ -248,15 +260,17 @@ fn wash_build(wash: &Path, fixture_dir: &Path) -> Result<()> {
     )
 }
 
-/// The built component filename: the wasm32-wasip2 cdylib underscore name.
+/// The built component filename: the fixture crate's underscore name.
 fn component_name(fixture: &str) -> String {
     format!("{}.wasm", fixture.replace('-', "_"))
 }
 
-/// The built component path for a fixture (all e2e fixtures are wasm32-wasip2).
-fn built_component(fixtures_dir: &Path, fixture: &str) -> Result<PathBuf> {
+/// The built component path for a fixture. `wash build` leaves the component in
+/// place under the release dir of the kind's target triple — a component
+/// directly for P2, the reactor-wrapped core module for P3.
+fn built_component(fixtures_dir: &Path, fixture: &str, kind: FixtureKind) -> Result<PathBuf> {
     let path = fixtures_dir
-        .join("target/wasm32-wasip2/release")
+        .join(format!("target/{}/release", kind.target()))
         .join(component_name(fixture));
     if !path.exists() {
         bail!("no wasm artifact for {fixture} at {}", path.display());

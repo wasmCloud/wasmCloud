@@ -63,6 +63,15 @@ var (
 	runtimeImageRepo  = "localhost/wasmcloud-wash"
 	buildRuntimeImage = os.Getenv("BUILD_RUNTIME_IMAGE") == envBoolTrue
 	skipRuntimeBuild  = os.Getenv("SKIP_RUNTIME_BUILD") == envBoolTrue
+	// gatewayImageRepo / gatewayImageTag identify the locally-built
+	// runtime-gateway image. When buildRuntimeImage is set, the e2e builds the
+	// gateway from the local tree — so branch changes to it (e.g. routing a p3
+	// wasi:http/handler workload) are actually exercised — instead of pulling the
+	// published canary. SKIP_GATEWAY_BUILD=true reuses a previously-built local
+	// image for fast iteration on non-gateway test code.
+	gatewayImageRepo = "localhost/runtime-gateway"
+	gatewayImageTag  = "e2e"
+	skipGatewayBuild = os.Getenv("SKIP_GATEWAY_BUILD") == envBoolTrue
 	// defaultHostImageTag is the wash-runtime image tag the default (fixture)
 	// hostgroup runs. The wash.yml legs set E2E_RUNTIME_IMAGE_TAG to the release
 	// or all-features build; unset (local) uses the locally-built operatorImageTag.
@@ -146,13 +155,16 @@ var _ = BeforeSuite(func() {
 	if buildRuntimeImage {
 		if !skipRuntimeBuild {
 			By("building the wash-runtime image from the local tree")
-			// Repo root sits one level above runtime-operator/. Build wash with
-			// `(implements ..)` multiplexing enabled. A local run builds a single
-			// feature image tagged defaultHostImageTag, which both the default and
-			// registry hostgroups use.
+			// Repo root sits one level above runtime-operator/. Build the
+			// all-features host — `(implements ..)` multiplexing and host
+			// component plugins — so the implements and host-plugin specs can run
+			// locally (both features are off in release builds). Matches the
+			// all-features wash-image build in wash.yml. A local run builds a
+			// single feature image tagged defaultHostImageTag, which both the
+			// default and registry hostgroups use.
 			ref := fmt.Sprintf("%s:%s", runtimeImageRepo, defaultHostImageTag)
 			cmd := exec.Command("docker", "build",
-				"--build-arg", "CARGO_FEATURES=wasm_component_model_implements",
+				"--build-arg", "CARGO_FEATURES=wasm_component_model_implements,host-component-plugins",
 				"-t", ref, "..")
 			_, err := utils.Run(cmd)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the wash-runtime image")
@@ -167,6 +179,22 @@ var _ = BeforeSuite(func() {
 			err := utils.LoadImageToKindClusterWithName(fmt.Sprintf("%s:%s", runtimeImageRepo, tag))
 			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the wash-runtime image into Kind")
 		}
+
+		// Build the runtime-gateway from the local tree too, so branch changes to
+		// it are exercised rather than the published canary. buildBaseHelmSets
+		// points gateway.image at this when buildRuntimeImage is set.
+		gatewayRef := fmt.Sprintf("%s:%s", gatewayImageRepo, gatewayImageTag)
+		if !skipGatewayBuild {
+			By("building the runtime-gateway image from the local tree")
+			// runtime-gateway/ sits one level above runtime-operator/; its
+			// Dockerfile resolves the operator API module from its own go.mod.
+			cmd := exec.Command("docker", "build", "-t", gatewayRef, "../runtime-gateway")
+			_, err := utils.Run(cmd)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the runtime-gateway image")
+		}
+		By("loading the runtime-gateway image into Kind")
+		err = utils.LoadImageToKindClusterWithName(gatewayRef)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the runtime-gateway image into Kind")
 	}
 
 	By("installing the runtime-operator via Helm")
@@ -276,7 +304,6 @@ func buildBaseHelmSets() []string {
 		fmt.Sprintf("operator.image.repository=%s", operatorImageRepo),
 		fmt.Sprintf("operator.image.tag=%s", operatorImageTag),
 		"operator.image.pull_policy=Never",
-		"gateway.image.tag=canary",
 		"gateway.service.type=NodePort",
 		"gateway.service.nodePort=30950",
 		"runtime.hostGroups[0].name=default",
@@ -338,13 +365,18 @@ func buildBaseHelmSets() []string {
 		}
 	}
 	if buildRuntimeImage {
-		// Point at the locally-built image and disable pull so kubelet
-		// uses the kind-loaded copy.
+		// Point at the locally-built images and disable pull so kubelet uses the
+		// kind-loaded copies — for both the host and the gateway (built from the
+		// local tree in BeforeSuite).
 		sets = append(sets,
 			"runtime.image.registry=",
 			fmt.Sprintf("runtime.image.repository=%s", runtimeImageRepo),
 			fmt.Sprintf("runtime.image.tag=%s", defaultHostImageTag),
 			"runtime.image.pull_policy=Never",
+			"gateway.image.registry=",
+			fmt.Sprintf("gateway.image.repository=%s", gatewayImageRepo),
+			fmt.Sprintf("gateway.image.tag=%s", gatewayImageTag),
+			"gateway.image.pull_policy=Never",
 		)
 	} else {
 		// Use IfNotPresent so kubelet prefers a locally-loaded image
@@ -355,6 +387,7 @@ func buildBaseHelmSets() []string {
 		sets = append(sets,
 			fmt.Sprintf("runtime.image.tag=%s", runtimeImageTag),
 			"runtime.image.pull_policy=IfNotPresent",
+			"gateway.image.tag=canary",
 		)
 	}
 	return sets
