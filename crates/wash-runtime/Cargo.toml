@@ -186,6 +186,10 @@ name = "http_invoke"
 harness = false
 
 [[bench]]
+name = "service_http"
+harness = false
+
+[[bench]]
 name = "gungraun"
 harness = false
 
