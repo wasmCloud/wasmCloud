@@ -10,6 +10,12 @@
 //! component). A cold-path measurement is included to track startup-cost
 //! drift (component compile + host build + first request).
 //!
+//! The `service` group is the instruction-count counterpart of the
+//! `service_http` wall-clock bench: a request served by a long-lived
+//! `svc-http-proxy` service instance (direct), the same request routed
+//! through the service's `wasi:http/client` import to a per-request HTTP
+//! component on a second host (p2/p3), and the service's cold start.
+//!
 //! Requires the `gungraun-runner` binary on `PATH` and `valgrind`
 //! installed:
 //! ```text
@@ -23,43 +29,20 @@ mod common;
 
 use std::{collections::HashMap, hint::black_box, sync::Arc};
 
-use common::Flavor;
+use common::{
+    BenchHost, DIRECT_BODY, Flavor, bench_client, checked_request, engine, http_host_interfaces,
+    service_request, start_backend_host, start_service_host,
+};
 use gungraun::{library_benchmark, library_benchmark_group, main};
 use tokio::runtime::Runtime;
 
 use wash_runtime::{
-    engine::Engine,
     host::{
         HostApi, HostBuilder,
         http::{DevRouter, HttpServer},
     },
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
-    wit::WitInterface,
 };
-
-fn flavor_host_header(flavor: Flavor) -> &'static str {
-    match flavor {
-        Flavor::P2 => "bench-p2",
-        Flavor::P3 => "bench-p3",
-    }
-}
-
-fn engine() -> Engine {
-    Engine::builder().build().expect("failed to build engine")
-}
-
-fn http_host_interfaces(host: &str) -> Vec<WitInterface> {
-    let mut config = HashMap::new();
-    config.insert("host".to_string(), host.to_string());
-    vec![WitInterface {
-        namespace: "wasi".to_string(),
-        package: "http".to_string(),
-        interfaces: ["incoming-handler".to_string()].into_iter().collect(),
-        version: Some(semver::Version::parse("0.2.2").unwrap()),
-        config,
-        name: None,
-    }]
-}
 
 /// Warm host bundled with the runtime that owns it. The host's drop impl
 /// must run inside its tokio runtime, so the two have to die together.
@@ -101,7 +84,7 @@ fn setup_warm(flavor: Flavor) -> Warm {
                     pool_size: 0,
                     max_invocations: 0,
                 }],
-                host_interfaces: http_host_interfaces(flavor_host_header(flavor)),
+                host_interfaces: http_host_interfaces(flavor.host_header()),
                 volumes: vec![],
             },
         };
@@ -116,7 +99,7 @@ fn setup_warm(flavor: Flavor) -> Warm {
         // Warmup primes any one-time lazy state and validates the fixture.
         let warmup = client
             .get(format!("http://{addr}/"))
-            .header("HOST", flavor_host_header(flavor))
+            .header("HOST", flavor.host_header())
             .send()
             .await
             .unwrap();
@@ -140,7 +123,7 @@ fn setup_warm(flavor: Flavor) -> Warm {
         _host: host,
         addr,
         client,
-        host_header: flavor_host_header(flavor),
+        host_header: flavor.host_header(),
     }
 }
 
@@ -187,9 +170,114 @@ fn cold_invocation(flavor: Flavor) -> Warm {
     setup_warm(flavor)
 }
 
+/// Warm service (plus optional routed backend) bundled with the runtime that
+/// owns them. Unlike the component hosts above, dropping is not enough at
+/// teardown: the service driver task keeps its store alive, so workload and
+/// host must be stopped explicitly — see [`shutdown_service`].
+struct WarmService {
+    rt: Runtime,
+    service: BenchHost,
+    backend: Option<BenchHost>,
+    client: reqwest::Client,
+}
+
+/// Start a warm, validated service host; with `backend` set, also a second
+/// host serving that flavor's HTTP component per-request, reached through the
+/// service's `wasi:http/client` import.
+fn setup_service(backend: Option<Flavor>) -> WarmService {
+    let rt = Runtime::new().expect("tokio runtime");
+    let (service, backend, client) = rt.block_on(async {
+        let service = start_service_host().await.unwrap();
+        let (backend, expected_body) = match backend {
+            Some(flavor) => (
+                Some(start_backend_host(flavor).await.unwrap()),
+                flavor.expected_body(),
+            ),
+            None => (None, DIRECT_BODY),
+        };
+        let client = bench_client();
+        checked_request(
+            &client,
+            service.addr,
+            backend.as_ref().map(|b| b.addr),
+            expected_body,
+        )
+        .await
+        .unwrap();
+        (service, backend, client)
+    });
+    WarmService {
+        rt,
+        service,
+        backend,
+        client,
+    }
+}
+
+/// Teardown outside the measurement window: stop the workload(s) and host(s).
+fn shutdown_service(warm: WarmService) {
+    let WarmService {
+        rt,
+        service,
+        backend,
+        client,
+    } = warm;
+    drop(client);
+    rt.block_on(async {
+        service.shutdown().await;
+        if let Some(backend) = backend {
+            backend.shutdown().await;
+        }
+    });
+}
+
+// Hot service path: one request answered directly by the long-lived service
+// instance (HTTP server -> ingress channel -> co-driven `http/handler`).
+#[library_benchmark]
+#[bench::direct(args = (None), setup = setup_service, teardown = shutdown_service)]
+fn hot_service(warm: WarmService) -> WarmService {
+    warm.rt.block_on(async {
+        let body = service_request(&warm.client, warm.service.addr, None)
+            .await
+            .unwrap();
+        let _ = black_box(body);
+    });
+    warm
+}
+
+// Routed service path: the request is forwarded through the service's
+// `wasi:http/client` import to a per-request HTTP component on a second host.
+#[library_benchmark]
+#[bench::p2(args = (Some(Flavor::P2)), setup = setup_service, teardown = shutdown_service)]
+#[bench::p3(args = (Some(Flavor::P3)), setup = setup_service, teardown = shutdown_service)]
+fn service_to_component(warm: WarmService) -> WarmService {
+    let backend_addr = warm.backend.as_ref().map(|b| b.addr);
+    warm.rt.block_on(async {
+        let body = service_request(&warm.client, warm.service.addr, backend_addr)
+            .await
+            .unwrap();
+        let _ = black_box(body);
+    });
+    warm
+}
+
+// Cold service path: host build + service workload start (trigger driver,
+// ingress registration) + first request, all counted. Teardown stops the
+// workload and host outside the measurement window.
+#[library_benchmark]
+#[bench::direct(args = (None), teardown = shutdown_service)]
+fn cold_service(backend: Option<Flavor>) -> WarmService {
+    setup_service(backend)
+}
+
 library_benchmark_group!(
     name = http;
     benchmarks = hot_invocation, cold_invocation
 );
 
-main!(library_benchmark_groups = http);
+library_benchmark_group!(
+    name = service;
+    benchmarks = hot_service, service_to_component, cold_service
+);
+
+main!(library_benchmark_groups = http, service);
