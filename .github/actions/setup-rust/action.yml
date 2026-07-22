@@ -127,38 +127,24 @@ runs:
     # `(implements ..)` imports that wit-bindgen now emits — linking such a
     # component fails with "decoding custom section ... invalid leading byte".
     # Drop once a Rust release bundles wasm-component-ld >= 0.5.23.
-    - name: Install cargo-binstall
-      uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2.83.1
-      env:
-        # Authenticate the action's GitHub API calls so they aren't throttled
-        # by the 60/hr anonymous per-IP limit shared across hosted runners.
-        GITHUB_TOKEN: ${{ github.token }}
-      with:
-        tool: cargo-binstall
     - name: Install wasm-component-ld
+      uses: taiki-e/cache-cargo-install-action@417450f3c33ee20393705369577571770643d4c7 # v3.0.7
+      with:
+        tool: wasm-component-ld@${{ inputs.wasm-component-ld-version }}
+    - name: Override bundled wasm-component-ld
       shell: bash
-      env:
-        VERSION: ${{ inputs.wasm-component-ld-version }}
-        # Authenticate cargo-binstall's GitHub API calls. Unauthenticated
-        # requests share a 60/hr per-IP limit that hosted runners blow through,
-        # returning 403. binstall then falls back to a source `cargo install`,
-        # which rejects the `--install-path` below and fails the job. The token
-        # raises the limit so the prebuilt release asset is used. `github.token`
-        # (not `secrets`) is the only token context available in a composite
-        # action; read-only access is sufficient for release-asset lookups.
-        GITHUB_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         # rustc resolves `wasm-component-ld` from the active toolchain's own
-        # sysroot (lib/rustlib/<host>/bin), NOT from PATH, so binstalling into
-        # ~/.cargo/bin would leave the build linking with the stale bundled
-        # copy. Install directly over the bundled binary instead. `rustc` is
-        # resolved from the repo root, so a checked-in rust-toolchain.toml pins
-        # the same toolchain the build below uses. Targeting the native sysroot
-        # dir keeps this working on Windows, where passing a bash-style linker
-        # path to cargo would not.
+        # sysroot (lib/rustlib/<host>/bin), NOT from PATH, so the standalone
+        # binary must be copied over the bundled one. The action above
+        # installs into ${RUNNER_TOOL_CACHE}/<crate>/bin; the wildcard covers
+        # the `.exe` suffix on Windows, and copying into the native sysroot
+        # dir keeps this working there, where passing a bash-style linker
+        # path to cargo would not. `rustc` is resolved from the repo root, so
+        # a checked-in rust-toolchain.toml pins the same toolchain the build
+        # below uses.
         bindir="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin"
-        cargo binstall --no-confirm --force \
-          --install-path "${bindir}" \
-          "wasm-component-ld@${VERSION}"
+        cd "${RUNNER_TOOL_CACHE}/wasm-component-ld/bin"
+        cp -f wasm-component-ld* "${bindir}/"
         "${bindir}/wasm-component-ld" --version
