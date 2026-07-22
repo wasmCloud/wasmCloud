@@ -79,13 +79,18 @@ pub struct SharedCtx {
     pub resource_registry: Option<crate::engine::store::resource_bridge::ResourceRegistry>,
 }
 
-/// The identity of a workload making a capability call — a `(workload_id,
-/// component_id)` pair, used by a host component plugin to partition state per
-/// caller.
+/// The identity of whoever is invoking a host component plugin, used to
+/// partition state per caller.
+///
+/// `component_id` is `None` when there is no component behind the call: a
+/// `wasmcloud:host/workload-lifecycle` hook is delivered by the host about a
+/// whole workload, not on behalf of any one of its items. Encoding that as a
+/// real id — an empty string, say — would make the host invent a component that
+/// does not exist, and would collide with a genuinely unresolvable caller.
 #[derive(Clone, Debug)]
 pub struct CallerIdentity {
     pub workload_id: Arc<str>,
-    pub component_id: Arc<str>,
+    pub component_id: Option<Arc<str>>,
 }
 
 impl SharedCtx {

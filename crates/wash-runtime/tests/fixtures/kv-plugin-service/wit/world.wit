@@ -1,0 +1,13 @@
+package acme:kvservice@0.1.0;
+
+/// A workload SERVICE (not a component) that imports the plugin-provided
+/// `acme:kv/store` capability. Services are the workload's long-lived item —
+/// bound to a plugin through the same path as a component, but reported in
+/// `workload-info.service` rather than `components`. This fixture is what
+/// exercises that: without it nothing deploys a service against a host
+/// component plugin.
+world kv-service {
+    import wasi:clocks/monotonic-clock@0.3.0;
+    import acme:kv/store@0.1.0;
+    export wasi:cli/run@0.3.0;
+}

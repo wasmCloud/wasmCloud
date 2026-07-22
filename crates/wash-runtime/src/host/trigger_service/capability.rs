@@ -3,6 +3,7 @@
 //!
 //! [`Ingress::Capability`]: super::Ingress::Capability
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
@@ -14,7 +15,7 @@ use wasmtime::error::Context as _;
 
 use crate::engine::ctx::{CallerIdentity, SharedCtx};
 use crate::engine::store::relocate::{self, Relocated};
-use crate::host::job_registry::JobGuard;
+use crate::host::job_registry::{JobGuard, JobRegistry};
 
 /// One exported capability function the TriggerService should be ready to serve,
 /// identified by its interface and function name (e.g. `acme:kv/store@0.1.0` /
@@ -65,6 +66,44 @@ pub struct CapabilityCall {
     pub reply: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<Relocated>>>,
 }
 
+/// A `wasmcloud:host/workload-lifecycle` bind a fresh plugin incarnation must
+/// complete before serving capability calls: the replay performed for every
+/// workload still bound, so the incarnation's per-workload state exists before
+/// any of those workloads' queued calls run.
+pub struct LifecycleReplay {
+    /// Instance name of the plugin's lifecycle export.
+    pub interface: Arc<str>,
+    /// The bind function's name within that interface.
+    pub func: Arc<str>,
+    /// The workload the bind concerns (its id, with an empty component id).
+    pub caller: CallerIdentity,
+    /// The `workload-info` argument (handle-free).
+    pub args: Vec<Relocated>,
+    /// The bind function's result types.
+    pub result_tys: Arc<[Type]>,
+}
+
+/// Interpret the reply of an `on-workload-bind` call (`result<_, string>`):
+/// `Ok(())` when the guest accepted the bind, `Err(msg)` when it rejected it.
+/// Any other reply shape is a contract violation surfaced as a `wasmtime`
+/// error.
+pub(crate) fn decode_bind_reply(results: &[Relocated]) -> wasmtime::Result<Result<(), String>> {
+    match results {
+        [Relocated::Val(Val::Result(Ok(_)))] => Ok(Ok(())),
+        [Relocated::Val(Val::Result(Err(Some(payload))))] => match payload.as_ref() {
+            Val::String(msg) => Ok(Err(msg.clone())),
+            other => {
+                wasmtime::bail!("on-workload-bind error payload is not a string: {other:?}")
+            }
+        },
+        [Relocated::Val(Val::Result(Err(None)))] => Ok(Err(String::new())),
+        other => wasmtime::bail!(
+            "on-workload-bind returned an unexpected reply shape ({} values)",
+            other.len()
+        ),
+    }
+}
+
 /// Hard ceiling on capability-call tasks in flight on one plugin instance at
 /// once, counting re-entrant hops (each hop of an `A -> plugin -> ... -> A`
 /// chain is a live task suspended awaiting the next). A call that would exceed
@@ -85,6 +124,64 @@ pub struct CapabilityCall {
 /// `try_acquire` semaphore would behave like this counter but carries a waiter
 /// queue and fairness machinery we never use, so a plain atomic is lighter.
 pub(super) const MAX_INFLIGHT_CAPABILITY_CALLS: usize = 512;
+
+/// Admit one capability call under the in-flight ceiling and spawn it as a
+/// concurrent task on the shared instance, or send the rejection/routing error
+/// on the call's reply. Shared by the serve loop (channel-delivered calls) and
+/// the lifecycle bind replay a fresh incarnation performs before serving.
+///
+/// Admission is a non-blocking reservation (fetch_add + compare): the caller
+/// NEVER blocks, so a re-entrant call is always admitted while the store is
+/// under the ceiling — no bounded-pool deadlock. A runaway self-recursion
+/// consumes a slot per hop and is rejected at the cap.
+pub(super) fn admit_and_spawn_call(
+    accessor: &Accessor<SharedCtx>,
+    instance: Instance,
+    func_map: &BTreeMap<Arc<str>, BTreeMap<Arc<str>, ComponentExportIndex>>,
+    registry: &Arc<JobRegistry>,
+    in_flight: &Arc<AtomicUsize>,
+    call: CapabilityCall,
+) {
+    use std::sync::atomic::Ordering;
+    if in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_INFLIGHT_CAPABILITY_CALLS {
+        in_flight.fetch_sub(1, Ordering::SeqCst);
+        let _ = call.reply.send(Err(wasmtime::format_err!(
+            "host component plugin is at its in-flight capability-call \
+             ceiling ({MAX_INFLIGHT_CAPABILITY_CALLS}); a call cycle or \
+             overload is likely"
+        )));
+        return;
+    }
+    let guard = InFlightGuard::new(Arc::clone(in_flight));
+    let Some(func_idx) = func_map
+        .get(&*call.interface)
+        .and_then(|fns| fns.get(&*call.func))
+        .copied()
+    else {
+        let _ = call.reply.send(Err(wasmtime::format_err!(
+            "plugin does not export {}/{}",
+            call.interface,
+            call.func
+        )));
+        return;
+    };
+    // Register the call as a cancellable job. The `JobGuard` moves into the
+    // task and retires the job on completion or drop. The `Accessor::spawn`
+    // handle is not retained: wasmtime cannot hard-cancel the guest subtask,
+    // so cancellation is cooperative — `request-cancel` marks the job and the
+    // guest unwinds itself.
+    let job = registry.admit(call.caller.clone());
+    let job_guard = JobGuard::new(Arc::clone(registry), job);
+    if let Err(e) = accessor.spawn(CapabilityTask {
+        instance,
+        func_idx,
+        call,
+        in_flight: guard,
+        job_guard,
+    }) {
+        tracing::error!(err = %e, "failed to spawn capability call task");
+    }
+}
 
 /// Serves one cross-store capability call on the shared plugin instance: looks
 /// up the resolved export, invokes it via the dynamic concurrent path

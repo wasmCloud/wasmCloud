@@ -112,6 +112,41 @@ impl<'a> WitInterfaces<'a> {
     }
 }
 
+/// A workload a plugin has failed out of band (after it was already running),
+/// delivered to the host so it can transition the workload to a failed state.
+/// Used when a host component plugin evicts a workload whose `on-workload-bind`
+/// crash-loops the shared store.
+pub struct WorkloadFailure {
+    /// The workload to fail.
+    pub workload_id: String,
+    /// Human-readable cause, surfaced in the workload's status message.
+    pub reason: String,
+}
+
+/// A cheap, cloneable handle a plugin uses to report a [`WorkloadFailure`] to
+/// the host. The host injects one into each plugin at start
+/// ([`HostPlugin::set_workload_failure_sink`]) and drains it on a background
+/// task, transitioning each reported workload to a failed state.
+#[derive(Clone)]
+pub struct WorkloadFailureSink(tokio::sync::mpsc::UnboundedSender<WorkloadFailure>);
+
+impl WorkloadFailureSink {
+    /// Wrap the sender end of the host's workload-failure channel.
+    pub fn new(tx: tokio::sync::mpsc::UnboundedSender<WorkloadFailure>) -> Self {
+        Self(tx)
+    }
+
+    /// Report that `workload_id` has failed for `reason`. Non-blocking and
+    /// infallible from the caller's view: if the host has torn down the
+    /// receiver, the report is dropped (the host is stopping anyway).
+    pub fn report(&self, workload_id: impl Into<String>, reason: impl Into<String>) {
+        let _ = self.0.send(WorkloadFailure {
+            workload_id: workload_id.into(),
+            reason: reason.into(),
+        });
+    }
+}
+
 /// The [`HostPlugin`] trait provides an interface for implementing built-in plugins for the host.
 /// A plugin is primarily responsible for implementing a specific [`WitWorld`] as a collection of
 /// imports and exports that will be directly linked to the workload's [`wasmtime::component::Linker`].
@@ -162,6 +197,14 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// # Arguments
     /// * `meters` - A `Meters` object containing the metrics to inject.
     async fn inject_meters(&self, _meters: &crate::observability::Meters) {}
+
+    /// Inject a sink the plugin can use to report that a workload it manages has
+    /// failed out of band — after it was already running — so the host
+    /// transitions it to a failed state. Called once during host start, before
+    /// [`HostPlugin::start`]. The default ignores it; a plugin only needs to
+    /// override this if it can fail a workload asynchronously (e.g. a host
+    /// component plugin evicting a workload whose lifecycle bind crash-loops).
+    fn set_workload_failure_sink(&self, _sink: WorkloadFailureSink) {}
 
     /// Called when the plugin is started during host initialization.
     ///

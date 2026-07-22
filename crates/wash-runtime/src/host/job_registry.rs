@@ -42,6 +42,29 @@ struct Inner {
     /// Maps a running guest task to its job and the caller that started it, so a
     /// host import can resolve either from the current async call stack.
     by_task: BTreeMap<GuestTaskId, (JobId, CallerIdentity)>,
+    /// Progress of this incarnation's lifecycle-bind replay, for post-fault
+    /// attribution. A guest trap short-circuits `run_concurrent` and drops the
+    /// serving future before its error handler runs, so a fault cannot be
+    /// attributed from the trapping task itself. Instead the serve loop replays
+    /// binds serially and records, *before* spawning each one, which workload it
+    /// is about to (re)bind; the supervisor reads this after the driver faults —
+    /// it survives the store because the registry outlives it (held via
+    /// `state.registry`). See [`ReplayProgress`] and [`JobRegistry::replay_progress`].
+    replay: ReplayProgress,
+}
+
+/// The serial lifecycle-bind replay's progress on one incarnation.
+#[derive(Default, Clone)]
+pub struct ReplayProgress {
+    /// The workload whose bind is currently being replayed, set before the
+    /// bind is spawned and cleared when it returns cleanly. If the driver
+    /// faults with this still set, that workload's replayed bind is the cause.
+    pub current: Option<CallerIdentity>,
+    /// Set once every replayed bind has completed. If the driver faults with
+    /// this still `false`, the fault happened during replay (attributable to
+    /// `current`); if `true`, it happened while serving and is not a replay's
+    /// fault.
+    pub completed: bool,
 }
 
 /// Registry of the cancellable jobs on one store incarnation. See the module
@@ -124,6 +147,32 @@ impl JobRegistry {
             .is_some_and(|entry| entry.cancelled)
     }
 
+    /// Record that `caller`'s bind is about to be replayed. Set before the bind
+    /// is spawned so that, if it traps, the fault is attributable to it even
+    /// though the trapping task's own error handler never runs.
+    pub fn replay_begin(&self, caller: CallerIdentity) {
+        self.lock().replay.current = Some(caller);
+    }
+
+    /// Record that the current replayed bind returned cleanly, clearing the
+    /// in-flight marker before the next one is replayed.
+    pub fn replay_finish(&self) {
+        self.lock().replay.current = None;
+    }
+
+    /// Record that every replayed bind has completed; a later fault is then a
+    /// serving fault, not a replay's.
+    pub fn replay_complete(&self) {
+        let mut inner = self.lock();
+        inner.replay.current = None;
+        inner.replay.completed = true;
+    }
+
+    /// Snapshot the replay progress, for the supervisor to attribute a fault.
+    pub fn replay_progress(&self) -> ReplayProgress {
+        self.lock().replay.clone()
+    }
+
     /// Remove a job and its task binding. Called by [`JobGuard`] on drop, so it
     /// runs whether the task completes normally or its future is dropped (e.g. on
     /// store teardown), with no store access required.
@@ -202,7 +251,7 @@ mod tests {
     fn caller(workload: &str, component: &str) -> CallerIdentity {
         CallerIdentity {
             workload_id: Arc::from(workload),
-            component_id: Arc::from(component),
+            component_id: Some(Arc::from(component)),
         }
     }
 

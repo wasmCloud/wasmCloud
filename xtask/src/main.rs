@@ -126,6 +126,8 @@ const P3_FIXTURES: &[&str] = &[
     "http-webgpu",
     "kv-plugin",
     "kv-plugin-caller",
+    "kv-plugin-service",
+    "badlifecycle",
 ];
 
 fn build_fixtures(workspace: &Path) -> Result<()> {
