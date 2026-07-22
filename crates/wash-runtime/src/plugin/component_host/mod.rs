@@ -60,6 +60,8 @@ use crate::host::job_registry::JobRegistry;
 use crate::host::trigger_service::{
     CapabilityCall, CapabilityFunc, CapabilityJob, Ingress, TriggerService,
 };
+use crate::oci::{self, OciConfig};
+use crate::plugin::component_plugin_spec::{ComponentPluginSpec, PluginSource};
 use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
 
@@ -201,6 +203,70 @@ impl ComponentHostPlugin {
         self.max_restarts = max_restarts;
         self
     }
+}
+
+/// Resolve a [`ComponentPluginSpec`] into a ready-to-register plugin: fetch its
+/// wasm (OCI pull or local file), verify an optional digest pin, and build the
+/// [`ComponentHostPlugin`]. The caller registers the result with
+/// `HostBuilder::with_plugin` before `Host::start`; this does not start it.
+pub async fn load_component_plugin(
+    spec: &ComponentPluginSpec,
+    engine: &Engine,
+    oci_config: OciConfig,
+) -> anyhow::Result<Arc<ComponentHostPlugin>> {
+    let (bytes, digest) = match &spec.source {
+        PluginSource::Oci { image, pull_policy } => {
+            oci::pull_component(image, oci_config, pull_policy.clone())
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to pull host component plugin '{}' from {image}",
+                        spec.id
+                    )
+                })?
+        }
+        PluginSource::File(path) => {
+            anyhow::ensure!(
+                spec.expected_digest.is_none(),
+                "host component plugin '{}': digest pinning applies only to `image=` sources",
+                spec.id
+            );
+            let bytes = tokio::fs::read(path).await.with_context(|| {
+                format!(
+                    "failed to read host component plugin '{}' from {}",
+                    spec.id,
+                    path.display()
+                )
+            })?;
+            (bytes, String::new())
+        }
+    };
+
+    if let Some(expected) = &spec.expected_digest {
+        anyhow::ensure!(
+            &digest == expected,
+            "host component plugin '{}' digest mismatch: pulled {digest}, expected {expected}",
+            spec.id
+        );
+    }
+
+    let id = intern_plugin_id(&spec.id);
+    let mut plugin = ComponentHostPlugin::new(id, &bytes, engine.clone())
+        .with_context(|| format!("failed to build host component plugin '{}'", spec.id))?;
+    if let Some(max_restarts) = spec.max_restarts {
+        plugin = plugin.with_max_restarts(max_restarts);
+    }
+    Ok(Arc::new(plugin))
+}
+
+/// Intern a config-supplied plugin id as `&'static str`, which is what a
+/// [`HostPlugin`] id must be. Host component plugins load once at host start
+/// from a bounded config and live for the whole process, so leaking these few
+/// ids is acceptable and bounded. If plugins ever load dynamically on a running
+/// host, the id must instead become an owned `Arc<str>` on the plugin so this
+/// does not grow without bound.
+fn intern_plugin_id(id: &str) -> &'static str {
+    Box::leak(id.to_owned().into_boxed_str())
 }
 
 #[async_trait]

@@ -75,7 +75,7 @@ impl CliCommand for DevCommand {
         let engine = engine_builder.build()?;
 
         let mut host_builder = Host::builder()
-            .with_engine(engine)
+            .with_engine(engine.clone())
             .with_meters(Meters::new(ctx.enable_meters()));
 
         // Enable wasi config. `copy_environment = true` surfaces each
@@ -137,6 +137,28 @@ impl CliCommand for DevCommand {
             ))?;
             debug!("WASI Blobstore plugin registered with in-memory backend");
         }
+
+        // Host component plugins: WebAssembly components that provide host
+        // capabilities, each in its own supervised store. Fetched (local file or
+        // OCI) and registered before the host starts.
+        #[cfg(feature = "host-component-plugins")]
+        for hp in &dev_config.host_plugins {
+            let spec = hp.to_spec()?;
+            let plugin = wash_runtime::plugin::component_host::load_component_plugin(
+                &spec,
+                &engine,
+                wash_runtime::oci::OciConfig::default(),
+            )
+            .await
+            .with_context(|| format!("failed to load host component plugin '{}'", spec.id))?;
+            host_builder = host_builder.with_plugin(plugin)?;
+            debug!(id = %spec.id, "host component plugin registered");
+        }
+        #[cfg(not(feature = "host-component-plugins"))]
+        ensure!(
+            dev_config.host_plugins.is_empty(),
+            "dev.host_plugins requires a wash build with the `host-component-plugins` feature"
+        );
 
         let http_handler = wash_runtime::host::http::DevRouter::default();
         // TODO(#19): Only spawn the server if the component exports wasi:http

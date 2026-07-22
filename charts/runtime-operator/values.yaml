@@ -355,6 +355,28 @@ runtime:
       # component-model-async, gc, exception-handling, wide-arithmetic,
       # threads, tail-call.
       wasmProposals: []
+      # -- Host component plugins for this host group: WebAssembly components
+      # that provide a host capability, each served from its own supervised
+      # store to every workload that imports its interface. Rendered as
+      # `--host-plugin=...` args.
+      #
+      # Requires a wash image built with the `host-component-plugins` feature
+      # (not enabled in release images yet); a host handed a plugin it cannot
+      # build fails to start.
+      #
+      # Each entry needs an `id` plus exactly one of `image` (OCI reference) or
+      # `file` (path in the container). Optional: `pullPolicy`
+      # (always | ifNotPresent | never, image only), `maxRestarts`, `digest`
+      # (image only).
+      #
+      # Example:
+      #
+      #   hostPlugins:
+      #     - id: acme-kv
+      #       image: ghcr.io/acme/kv-host:1.0.0
+      #       pullPolicy: ifNotPresent
+      #       maxRestarts: 3
+      hostPlugins: []
       http:
         enabled: true
         port: 9191

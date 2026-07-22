@@ -57,6 +57,13 @@ pub mod wasmcloud_messaging;
 #[cfg(feature = "host-component-plugins")]
 pub mod component_host;
 
+/// Declarative spec for a host component plugin (id + wasm source). Always
+/// compiled so front-ends can accept a plugin declaration and fail clearly when
+/// built without the `host-component-plugins` feature; the loader that consumes
+/// it lives in [`component_host`].
+pub mod component_plugin_spec;
+pub use component_plugin_spec::{ComponentPluginSpec, PluginSource};
+
 /// Shared `(implements ..)` multiplexing core
 #[cfg(feature = "wasm_component_model_implements")]
 pub mod multiplex;
