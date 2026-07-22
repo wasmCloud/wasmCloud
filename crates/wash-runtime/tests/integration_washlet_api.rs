@@ -236,7 +236,13 @@ async fn duplicate_workload_id_rejected_over_washlet_api() -> Result<()> {
     // replace the running workload.
     let duplicate = harness.start(&empty_start_request(workload_id)).await?;
     assert_eq!(duplicate.workload_state(), v2::WorkloadState::Error);
-    assert_eq!(duplicate.message, "Workload ID already exists");
+    assert!(
+        duplicate
+            .message
+            .contains(&format!("Workload ID [{workload_id}] already exists")),
+        "unexpected rejection message: {}",
+        duplicate.message
+    );
     // The rejection must echo the ID: `reconcilePlacement` records it from
     // the response without checking the state, then converges via status.
     assert_eq!(duplicate.workload_id, workload_id);
