@@ -6769,6 +6769,7 @@ dependencies = [
  "criterion",
  "deadpool-postgres",
  "docker_credential",
+ "fastrand",
  "futures",
  "gag",
  "geo-types",

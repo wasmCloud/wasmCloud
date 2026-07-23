@@ -656,11 +656,25 @@ impl HostApi for Host {
         &self,
         request: WorkloadStartRequest,
     ) -> anyhow::Result<WorkloadStartResponse> {
-        // Store the workload with initial state
-        self.workloads
-            .write()
-            .await
-            .insert(request.workload_id.clone(), HostWorkload::Starting);
+        // Reserve the workload ID while holding the write lock so concurrent
+        // starts cannot both observe it as available. An ID remains reserved
+        // in every lifecycle state until workload_stop removes it.
+        {
+            let mut workloads = self.workloads.write().await;
+            if workloads.contains_key(&request.workload_id) {
+                return Ok(WorkloadStartResponse {
+                    workload_status: WorkloadStatus {
+                        workload_id: request.workload_id.clone(),
+                        workload_state: WorkloadState::Error,
+                        message: format!(
+                            "Workload ID [{}] already exists (the exising workload must be stopped to reuse the ID)",
+                            request.workload_id
+                        ),
+                    },
+                });
+            }
+            workloads.insert(request.workload_id.clone(), HostWorkload::Starting);
+        }
 
         let workload_id = request.workload_id.clone();
         let resolved_workload = self.workload_start_inner(request).await;
@@ -1029,6 +1043,21 @@ mod tests {
     use super::*;
     use crate::types::Component;
 
+    fn empty_workload_start_request(workload_id: &str) -> WorkloadStartRequest {
+        WorkloadStartRequest {
+            workload_id: workload_id.to_string(),
+            workload: Workload {
+                namespace: "wasmcloud".to_string(),
+                name: "empty".to_string(),
+                annotations: Default::default(),
+                service: None,
+                components: vec![],
+                host_interfaces: vec![],
+                volumes: vec![],
+            },
+        }
+    }
+
     /// `Host::stop`'s per-plugin timeout must outlast the plugin-stop budget.
     /// A host component plugin's `stop()` waits the full budget for its
     /// supervisor and only then runs its abort-and-cleanup tail; if the outer
@@ -1075,6 +1104,79 @@ mod tests {
             cleanup_ran.load(Ordering::SeqCst),
             "plugin stop's post-budget cleanup must run before Host::stop gives up on it"
         );
+    }
+
+    #[tokio::test]
+    async fn test_workload_start_rejects_existing_id() {
+        let host = Host::builder().build().expect("failed to build host");
+        let request = empty_workload_start_request("duplicate");
+
+        let first = host
+            .workload_start(request.clone())
+            .await
+            .expect("first start should return a response");
+        assert_eq!(first.workload_status.workload_state, WorkloadState::Running);
+
+        let duplicate = host
+            .workload_start(request)
+            .await
+            .expect("duplicate start should return a response");
+        assert_eq!(
+            duplicate.workload_status.workload_state,
+            WorkloadState::Error
+        );
+        assert!(
+            duplicate
+                .workload_status
+                .message
+                .contains("Workload ID [duplicate] already exists"),
+            "unexpected rejection message: {}",
+            duplicate.workload_status.message
+        );
+
+        let workloads = host.workloads.read().await;
+        assert_eq!(workloads.len(), 1);
+        assert!(matches!(
+            workloads.get("duplicate"),
+            Some(HostWorkload::Running(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_workload_starts_reserve_id_atomically() {
+        let host = Host::builder().build().expect("failed to build host");
+        let request = empty_workload_start_request("concurrent-duplicate");
+
+        let (first, second) = tokio::join!(
+            host.workload_start(request.clone()),
+            host.workload_start(request)
+        );
+        let states = [
+            first
+                .expect("first start should return a response")
+                .workload_status
+                .workload_state,
+            second
+                .expect("second start should return a response")
+                .workload_status
+                .workload_state,
+        ];
+
+        assert_eq!(
+            states
+                .iter()
+                .filter(|state| **state == WorkloadState::Running)
+                .count(),
+            1
+        );
+        assert_eq!(
+            states
+                .iter()
+                .filter(|state| **state == WorkloadState::Error)
+                .count(),
+            1
+        );
+        assert_eq!(host.workloads.read().await.len(), 1);
     }
 
     #[tokio::test]
