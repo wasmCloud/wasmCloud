@@ -1,0 +1,5 @@
+# `wasmcloud:app` is this template's own interface, not a registry package.
+# Resolve it from the shared source at the workspace root instead of fetching;
+# `wash wit fetch` copies it into the (gitignored) wit/deps/.
+[overrides]
+"wasmcloud:app" = { path = "../wasmcloud-app" }

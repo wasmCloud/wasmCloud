@@ -1,0 +1,4 @@
+package wasmcloud:users@0.1.0;
+world users {
+    export wasmcloud:app/users@0.1.0;
+}

@@ -1,0 +1,14 @@
+# Rust build artifacts
+/target/
+
+# WIT dependencies, fetched into each crate by `wash build`. The WASI 0.3
+# packages come from the registry; the template's own `wasmcloud:app` interface
+# is resolved from the shared `wasmcloud-app/` source via each crate's wkg.toml.
+# `**/` so it matches every crate's wit/deps/, not just one at the root.
+**/wit/deps/
+
+# Lock files regenerated on each fetch (the p3 WASI drafts move quickly).
+**/wkg.lock
+
+# Trash
+.DS_Store

@@ -1,0 +1,47 @@
+package wasmcloud:app@0.1.0;
+
+/// Backend that serves the `/users` resource. The router service forwards
+/// every request whose path starts with `/users` to this component over a
+/// host-linked inter-component call (no socket hop).
+interface users {
+    /// A request the router parsed off a client socket and routed here.
+    record request {
+        /// HTTP method, e.g. `GET` or `POST`.
+        method: string,
+        /// Request path, e.g. `/users/42`.
+        path: string,
+        /// Raw query string without the leading `?` (empty when absent).
+        query: string,
+        /// Request body bytes (empty when absent).
+        body: list<u8>,
+    }
+    /// The response the router writes back to the client socket.
+    record response {
+        /// HTTP status code, e.g. `200` or `404`.
+        status: u16,
+        /// Value for the `Content-Type` header.
+        content-type: string,
+        /// Response body bytes.
+        body: list<u8>,
+    }
+    /// Handle a single routed request and return its response.
+    handle: async func(req: request) -> response;
+}
+
+/// Backend that serves the `/todos` resource. Mirrors `users` with its own
+/// distinct interface so the host links each backend to exactly one
+/// component (an interface may be exported by only one component).
+interface todos {
+    record request {
+        method: string,
+        path: string,
+        query: string,
+        body: list<u8>,
+    }
+    record response {
+        status: u16,
+        content-type: string,
+        body: list<u8>,
+    }
+    handle: async func(req: request) -> response;
+}

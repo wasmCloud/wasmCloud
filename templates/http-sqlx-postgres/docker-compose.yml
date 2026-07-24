@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+      # Cleartext password auth: the Service authenticates its pooled upstream
+      # sessions with these credentials (the stateless components never see
+      # them). Fine for local dev over a trusted network; production would use
+      # TLS + SCRAM in front of the pool.
+      POSTGRES_HOST_AUTH_METHOD: password
+    ports:
+      # Exposed on the host so the Service can reach it over wasi:sockets.
+      - "5432:5432"
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      timeout: 3s
+      retries: 20

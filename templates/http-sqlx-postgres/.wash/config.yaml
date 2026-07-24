@@ -1,0 +1,45 @@
+version: 0.1.0
+
+build:
+  # This is a workspace of three components, each with its own wit/ directory,
+  # so `wash`'s single-directory dependency fetch does not cover them. Fetch
+  # each crate's WIT deps (its wkg.toml resolves WASI 0.3 from the registry and
+  # the local wasmcloud:app via a path override) into its gitignored wit/deps/,
+  # then build them. `-C` targets each crate because `wash` otherwise walks up
+  # to this workspace's own .wash/config.yaml.
+  command: |
+    for crate in service users todos; do
+      wash -C "$crate" wit fetch || exit 1
+    done
+    cargo build --workspace --target wasm32-wasip2 --release
+  # The Service is the main component: it is the cli/run pooler AND, because it
+  # also exports wasi:http/handler, the runtime routes inbound HTTP to it.
+  component_path: target/wasm32-wasip2/release/service.wasm
+
+# Config reaches the Service (the main/service component) only; the stateless
+# users/todos sidecars get none of it — in particular, they never see the
+# database credentials. They use the fixed loopback pool address instead.
+workload:
+  environment:
+    config:
+      # Real upstream Postgres. NON-loopback, host-reachable (see README).
+      UPSTREAM_ADDR: "192.168.1.100:5432"
+      # Credentials the Service authenticates its pooled sessions with
+      # (matching docker-compose.yml). Held only by the Service.
+      UPSTREAM_USER: "app"
+      UPSTREAM_PASSWORD: "app"
+      UPSTREAM_DB: "app"
+
+dev:
+  wasip3: true
+  # Make the Service the long-lived wasi:cli/run service.
+  service: true
+  # The stateless backends the Service routes to.
+  components:
+    - name: users
+      file: target/wasm32-wasip2/release/users.wasm
+    - name: todos
+      file: target/wasm32-wasip2/release/todos.wasm
+
+new:
+  command: cargo fetch
