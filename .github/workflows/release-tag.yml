@@ -85,7 +85,7 @@ jobs:
       artifact-metadata: write
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # workflow_run / workflow_dispatch without a sha → main HEAD.
           # workflow_dispatch with sha → that exact release commit (recovery).
@@ -431,7 +431,7 @@ jobs:
         # shell equivalent has to re-implement idempotent re-run handling,
         # glob fail-on-empty, and prerelease detection — ~25 lines of bash
         # on a release-critical step.
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           name: ${{ steps.ver.outputs.tag }}
           tag_name: ${{ steps.ver.outputs.tag }}
