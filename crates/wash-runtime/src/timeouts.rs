@@ -71,6 +71,12 @@ declare_timeouts! {
     /// resets its restart budget.
     #[cfg(feature = "host-component-plugins")]
     plugin_healthy_uptime = ("WASH_PLUGIN_HEALTHY_UPTIME_SECS", 60);
+    /// Max wall-clock for one `wasmcloud:host/workload-lifecycle` call into a
+    /// host component plugin. Bounds how long a plugin's bind handler can hold
+    /// up a workload deploy (bind fails on expiry) and how long its unbind
+    /// handler can hold up a workload stop (unbind is abandoned on expiry).
+    #[cfg(feature = "host-component-plugins")]
+    plugin_lifecycle_call = ("WASH_PLUGIN_LIFECYCLE_CALL_TIMEOUT_SECS", 30);
     /// Upper bound on a host component plugin's pre-restart backoff.
     #[cfg(feature = "host-component-plugins")]
     plugin_restart_backoff_max = ("WASH_PLUGIN_RESTART_BACKOFF_MAX_SECS", 5);

@@ -17,6 +17,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use bindings::exports::acme::kv::store::{Bucket, Guest, GuestBucket};
+use bindings::exports::wasmcloud::host::workload_lifecycle::{
+    Guest as LifecycleGuest, InterfaceBinding, Version, WorkloadInfo,
+};
 use bindings::wasi::clocks::monotonic_clock;
 use bindings::wasmcloud::host::cancel;
 use wit_bindgen::{FutureReader, StreamReader, StreamResult};
@@ -55,6 +58,17 @@ static STORE: Mutex<BTreeMap<String, Vec<u8>>> = Mutex::new(BTreeMap::new());
 /// per-caller state isolation on the shared singleton.
 static PARTITIONS: Mutex<BTreeMap<String, BTreeMap<String, Vec<u8>>>> =
     Mutex::new(BTreeMap::new());
+
+/// Per-workload binds captured by `on-workload-bind`, keyed by workload id.
+/// The eager-provision pattern: bind stores the workload's manifest config
+/// here; capability calls correlate back via the identity import; unbind
+/// reclaims the entry.
+static BINDS: Mutex<BTreeMap<String, WorkloadInfo>> = Mutex::new(BTreeMap::new());
+
+/// Lifecycle events observed by this incarnation, oldest first — resets with
+/// the store on a supervised restart, which is what lets a test distinguish a
+/// replayed bind from surviving state.
+static LIFECYCLE_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// `begin` name -> the host job id it registered, so `cancel-job` can look it up.
 static BEGUN: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
@@ -207,6 +221,129 @@ impl Guest for Component {
     async fn progress(name: String) -> u64 {
         PROGRESS.lock().unwrap().get(&name).copied().unwrap_or(0)
     }
+
+    async fn bound_config(key: String) -> Option<String> {
+        // Correlate the call back to bind-time state via the identity import —
+        // same key the host used to deliver `on-workload-bind`.
+        let caller = bindings::wasmcloud::host::identity::get_workload_id();
+        BINDS.lock().unwrap().get(&caller).and_then(|info| {
+            info.interfaces.iter().find_map(|binding| {
+                binding
+                    .config
+                    .iter()
+                    .find(|entry| entry.key == key)
+                    .map(|entry| entry.value.clone())
+            })
+        })
+    }
+
+    async fn bind_info(workload: String) -> Option<String> {
+        BINDS.lock().unwrap().get(&workload).map(render_info)
+    }
+
+    async fn lifecycle_log() -> Vec<String> {
+        LIFECYCLE_LOG.lock().unwrap().clone()
+    }
+}
+
+impl LifecycleGuest for Component {
+    async fn on_workload_bind(workload: WorkloadInfo) -> Result<(), String> {
+        // Reject knob for the negative tests: a matched interface configured
+        // with a `reject` entry fails the bind with that entry's value.
+        for binding in &workload.interfaces {
+            for entry in &binding.config {
+                if entry.key == "reject" {
+                    return Err(entry.value.clone());
+                }
+            }
+        }
+        record_hook_identity("bind", &workload.id);
+        LIFECYCLE_LOG
+            .lock()
+            .unwrap()
+            .push(format!("bind:{}", workload.id));
+        BINDS.lock().unwrap().insert(workload.id.clone(), workload);
+        Ok(())
+    }
+
+    async fn on_workload_unbind(id: String) {
+        record_hook_identity("unbind", &id);
+        LIFECYCLE_LOG.lock().unwrap().push(format!("unbind:{id}"));
+        BINDS.lock().unwrap().remove(&id);
+    }
+}
+
+/// Ambient identity inside a lifecycle hook must be the workload the hook
+/// concerns, with an empty component id. A mismatch poisons the lifecycle log,
+/// so every exact-log test assertion enforces the contract for free.
+fn record_hook_identity(hook: &str, expected_workload: &str) {
+    let workload = bindings::wasmcloud::host::identity::get_workload_id();
+    let component = bindings::wasmcloud::host::identity::get_component_id();
+    if workload != expected_workload || !component.is_empty() {
+        LIFECYCLE_LOG
+            .lock()
+            .unwrap()
+            .push(format!("{hook}-ident-mismatch:{workload}|{component}"));
+    }
+}
+
+/// Render every typed field of a captured bind into one line a test can
+/// assert on: `id=..;name=..;ns=..;components=a+b;ifaces=ns:pkg/i@ver#label?k=v`.
+fn render_info(info: &WorkloadInfo) -> String {
+    let ifaces = info
+        .interfaces
+        .iter()
+        .map(render_binding)
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "id={};name={};ns={};components={};ifaces={ifaces}",
+        info.id,
+        info.name,
+        info.namespace,
+        info.components.join("+"),
+    )
+}
+
+fn render_binding(binding: &InterfaceBinding) -> String {
+    let mut s = format!(
+        "{}:{}/{}",
+        binding.namespace,
+        binding.package,
+        binding.interfaces.join(",")
+    );
+    if let Some(version) = &binding.version {
+        s.push('@');
+        s.push_str(&render_version(version));
+    }
+    if let Some(name) = &binding.name {
+        s.push('#');
+        s.push_str(name);
+    }
+    if !binding.config.is_empty() {
+        let config = binding
+            .config
+            .iter()
+            .map(|entry| format!("{}={}", entry.key, entry.value))
+            .collect::<Vec<_>>()
+            .join("&");
+        s.push('?');
+        s.push_str(&config);
+    }
+    s
+}
+
+fn render_version(version: &Version) -> String {
+    let mut s = format!("{}.{}.{}", version.major, version.minor, version.patch);
+    if let Some(pre) = &version.pre {
+        s.push('-');
+        s.push_str(pre);
+    }
+    if let Some(build) = &version.build {
+        s.push('+');
+        s.push_str(build);
+    }
+    s
 }
 
 mod export {

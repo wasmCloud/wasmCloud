@@ -1,0 +1,97 @@
+package wasmcloud:host@0.1.0;
+
+/// Optionally exported by a host component plugin. The host calls these as
+/// workloads that import the plugin's capabilities are bound and unbound,
+/// letting the plugin provision and reclaim per-workload state eagerly —
+/// validate interface config at deploy time, allocate per-tenant resources,
+/// and free them when the workload goes away.
+///
+/// A plugin that does not export this interface simply never hears about
+/// workload lifecycle; its capability calls behave as before.
+///
+/// During a lifecycle call, `wasmcloud:host/identity#get-workload-id` reports
+/// the workload the call concerns and `get-component-id` reports the empty
+/// string (lifecycle is workload-scoped, not component-scoped), so bind-time
+/// state keyed by workload id lines up with the identity seen on later
+/// capability calls.
+///
+/// Hooks should not invoke the plugin's own exported capabilities: during a
+/// post-restart replay such a self-call cannot be served until the replay
+/// completes, so the host times the hook out rather than waiting on it. A
+/// bind still running past the host's timeout may also observe the same
+/// workload's unbind delivered concurrently; state it provisions after that
+/// is reclaimed only by a later unbind or a plugin restart.
+interface workload-lifecycle {
+    /// Identifier of a workload; matches `identity.get-workload-id` for
+    /// capability calls made by the same workload.
+    type workload-id = string;
+
+    /// Identifier of a single component within a workload; matches
+    /// `identity.get-component-id`.
+    type component-id = string;
+
+    /// One key/value configuration entry from the workload manifest.
+    record config-entry {
+        key: string,
+        value: string,
+    }
+
+    /// Semantic version of an interface instance (e.g. `0.2.0-draft`).
+    record version {
+        major: u64,
+        minor: u64,
+        patch: u64,
+        /// Pre-release identifier, if any (e.g. `draft`, `rc.1`).
+        pre: option<string>,
+        /// Build metadata, if any.
+        build: option<string>,
+    }
+
+    /// One interface instance the workload matched on this plugin — e.g. the
+    /// `store` interface of `acme:kv@0.1.0`, labeled `cache`, with its
+    /// manifest config.
+    record interface-binding {
+        /// Interface namespace (e.g. `acme`).
+        namespace: string,
+        /// Package within the namespace (e.g. `kv`).
+        %package: string,
+        /// The matched interface names within the package (e.g. `store`).
+        interfaces: list<string>,
+        /// Version of the instance, if one was requested.
+        version: option<version>,
+        /// Instance label when the workload names multiple instances of the
+        /// same namespace:package, if any.
+        name: option<string>,
+        /// Interface-level configuration from the workload manifest.
+        config: list<config-entry>,
+    }
+
+    /// Identity and configuration of a workload binding to this plugin.
+    record workload-info {
+        /// Unique id of the workload instance.
+        id: workload-id,
+        /// Human-readable workload name.
+        name: string,
+        /// Namespace the workload was deployed under.
+        namespace: string,
+        /// Ids of the workload's items (its service, if any, then each
+        /// component).
+        components: list<component-id>,
+        /// Every interface instance the workload matched on this plugin.
+        interfaces: list<interface-binding>,
+    }
+
+    /// A workload importing one of this plugin's exported capabilities is
+    /// being bound. Runs to completion before any capability call from that
+    /// workload is delivered. Returning an error rejects the bind and the
+    /// workload fails to deploy.
+    ///
+    /// MUST be idempotent: after a plugin restart the host replays a bind for
+    /// every workload still bound, so the fresh incarnation can rebuild its
+    /// per-workload state before serving.
+    on-workload-bind: async func(workload: workload-info) -> result<_, string>;
+
+    /// The workload is gone — a normal stop, or cleanup after a failed bind.
+    /// Best-effort: must tolerate ids never bound or already unbound.
+    on-workload-unbind: async func(id: workload-id);
+}
