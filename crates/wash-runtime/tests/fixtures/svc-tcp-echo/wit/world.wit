@@ -1,0 +1,13 @@
+package wasmcloud:test-p3@0.1.0;
+
+/// A p3 `cli/run` service that serves a TCP echo protocol on the virtualized
+/// loopback (127.0.0.1:9099): accept connections, and for each one a spawned
+/// handler reads the request and passes the reply through a pure guest-waker
+/// handoff to a second spawned task that writes it. Deliberately tick-free —
+/// this fixture exists to probe whether guest-spawned tasks and guest-side
+/// wakes are driven without periodic host events.
+world svc-tcp-echo {
+    import wasi:sockets/types@0.3.0;
+
+    export wasi:cli/run@0.3.0;
+}

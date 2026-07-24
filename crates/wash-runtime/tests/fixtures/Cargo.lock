@@ -336,6 +336,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-loopback-gateway"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
 name = "http-webgpu"
 version = "0.1.0"
 dependencies = [
@@ -743,6 +751,21 @@ dependencies = [
 name = "svc-counter"
 version = "0.0.0"
 dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
+name = "svc-http-proxy"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
+name = "svc-tcp-echo"
+version = "0.0.0"
+dependencies = [
+ "futures",
  "wit-bindgen 0.59.0",
 ]
 
