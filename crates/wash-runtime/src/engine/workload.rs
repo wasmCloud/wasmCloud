@@ -1650,6 +1650,9 @@ pub struct UnresolvedWorkload {
     service: Option<WorkloadService>,
     /// All [`WorkloadComponent`]s in the workload
     components: HashMap<Arc<str>, WorkloadComponent>,
+    /// Component IDs in manifest order. Used to pick the first in the manifest
+    /// whenever the host can dispatch an export to only one component
+    component_order: Vec<Arc<str>>,
     /// TLS provider override for `wasi:tls` client connections in this workload.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -1677,6 +1680,7 @@ impl UnresolvedWorkload {
         components: impl IntoIterator<Item = WorkloadComponent>,
         host_interfaces: Vec<WitInterface>,
     ) -> Self {
+        let mut component_order = Vec::new();
         Self {
             id: id.into(),
             name: name.into(),
@@ -1685,14 +1689,46 @@ impl UnresolvedWorkload {
             components: components
                 .into_iter()
                 .map(|c| {
-                    let id = Arc::from(c.id());
+                    let id: Arc<str> = Arc::from(c.id());
+                    component_order.push(id.clone());
                     (id, c)
                 })
                 .collect(),
+            component_order,
             host_interfaces,
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
         }
+    }
+
+    /// Iterates the workload's components in manifest order.
+    fn components_in_manifest_order(&self) -> impl Iterator<Item = &WorkloadComponent> {
+        self.component_order
+            .iter()
+            .filter_map(|id| self.components.get(id))
+    }
+
+    /// Picks the component that serves a host-dispatched export. Used
+    /// whenever the host can route an export to only one component
+    /// per workload (e.g. the `wasi:http` entrypoint). When several
+    /// components carry the export, a warning will be logged.
+    fn select_exporter(
+        &self,
+        export: &str,
+        exports: impl Fn(&WorkloadComponent) -> bool,
+    ) -> Option<&WorkloadComponent> {
+        let mut exporters = self.components_in_manifest_order().filter(|c| exports(c));
+        let selected = exporters.next()?;
+        let ignored: Vec<&str> = exporters.map(|c| c.name()).collect();
+        if !ignored.is_empty() {
+            warn!(
+                export,
+                selected = selected.name(),
+                ?ignored,
+                "multiple components carry an export the host dispatches to only one component; routing to the first in manifest order and ignoring the rest"
+            );
+        }
+        Some(selected)
     }
 
     /// Override the TLS provider used for `wasi:tls` client connections in this workload.
@@ -2048,10 +2084,9 @@ impl UnresolvedWorkload {
             {
                 // http was not part of the requested interfaces
                 false => None,
+                // find first component in the manifest to serve the wasi:http export, if any
                 true => self
-                    .components
-                    .values()
-                    .find(|component| component.exports_wasi_http())
+                    .select_exporter("wasi:http", |c| c.exports_wasi_http())
                     .map(|c| c.id().to_string()),
             }
         };
@@ -2494,6 +2529,45 @@ mod tests {
             local_resources,
             Arc::default(),
         )
+    }
+
+    /// A host-dispatched export (like the `wasi:http` entrypoint) must go to
+    /// the first exporting component in manifest orderå.
+    #[test]
+    fn select_exporter_follows_manifest_order() {
+        // Enough components that an unordered scan almost never matches.
+        let components: Vec<WorkloadComponent> = (0..8)
+            .map(|i| create_test_component(&format!("component{i}")))
+            .collect();
+        let expected: Vec<Arc<str>> = components.iter().map(|c| Arc::from(c.id())).collect();
+
+        let workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            components,
+            vec![WitInterface::from("wasi:http/incoming-handler")],
+        );
+
+        assert_eq!(
+            workload.component_order, expected,
+            "component_order must preserve manifest order"
+        );
+        let order: Vec<Arc<str>> = workload
+            .components_in_manifest_order()
+            .map(|c| Arc::from(c.id()))
+            .collect();
+        assert_eq!(order, expected);
+
+        // All eight components export wasi:http; the first must win.
+        let selected = workload
+            .select_exporter("wasi:http", |c| c.exports_wasi_http())
+            .map(|c| Arc::<str>::from(c.id()));
+        assert_eq!(selected.as_ref(), expected.first());
+
+        // A predicate nothing matches selects nobody.
+        assert!(workload.select_exporter("wasi:none", |_| false).is_none());
     }
 
     fn create_test_messaging_component(id: &str) -> WorkloadComponent {
