@@ -117,6 +117,8 @@ const P3_FIXTURES: &[&str] = &[
     "postgres-stream-p3",
     "svc-counter",
     "svc-http-proxy",
+    "svc-tcp-echo",
+    "http-loopback-gateway",
     "msg-counter",
     "bridge-backend",
     "bridge-service",
