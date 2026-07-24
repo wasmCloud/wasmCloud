@@ -552,6 +552,11 @@ pub struct DevConfig {
     #[serde(default)]
     pub wasi_otel: bool,
 
+    /// Enable `wasi:sockets/ip-name-lookup` (DNS resolution via
+    /// `resolve-addresses`) for components in the dev session
+    #[serde(default)]
+    pub allow_ip_name_lookup: bool,
+
     /// Additional wasm proposals to enable on the engine, by name. Accepted
     /// names match `wash_runtime`'s `WasmProposal`: component-model-async, gc,
     /// exception-handling, wide-arithmetic, threads, tail-call.

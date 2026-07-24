@@ -68,12 +68,13 @@ pub(crate) struct ComponentCtxTemplate {
     volume_mounts: Vec<ResolvedVolumeMount>,
     plugins: Option<HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>>,
     loopback: Arc<std::sync::Mutex<loopback::Network>>,
+    allow_ip_name_lookup: bool,
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
 }
 
 impl ComponentCtxTemplate {
-    fn from_metadata(metadata: &WorkloadMetadata) -> Self {
+    fn from_metadata(metadata: &WorkloadMetadata, allow_ip_name_lookup: bool) -> Self {
         Self {
             component_id: metadata.id.clone(),
             workload_id: metadata.workload_id.clone(),
@@ -81,6 +82,7 @@ impl ComponentCtxTemplate {
             volume_mounts: metadata.resolved_volume_mounts.clone(),
             plugins: metadata.plugins.clone(),
             loopback: metadata.loopback.clone(),
+            allow_ip_name_lookup,
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
         }
@@ -90,16 +92,18 @@ impl ComponentCtxTemplate {
 #[cfg(not(feature = "wasi-tls"))]
 pub(crate) fn component_ctx_template_from_metadata(
     metadata: &WorkloadMetadata,
+    allow_ip_name_lookup: bool,
 ) -> ComponentCtxTemplate {
-    ComponentCtxTemplate::from_metadata(metadata)
+    ComponentCtxTemplate::from_metadata(metadata, allow_ip_name_lookup)
 }
 
 #[cfg(feature = "wasi-tls")]
 pub(crate) fn component_ctx_template_from_metadata_with_tls(
     metadata: &WorkloadMetadata,
     tls_provider: Option<SharedTlsProvider>,
+    allow_ip_name_lookup: bool,
 ) -> ComponentCtxTemplate {
-    let mut template = ComponentCtxTemplate::from_metadata(metadata);
+    let mut template = ComponentCtxTemplate::from_metadata(metadata, allow_ip_name_lookup);
     template.tls_provider = tls_provider;
     template
 }
@@ -140,6 +144,7 @@ pub(crate) struct EphemeralLinkedCall {
     pub(crate) components: Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>>,
     pub(crate) active_component_id: Arc<str>,
     pub(crate) linked_component_ids: Vec<Arc<str>>,
+    pub(crate) allow_ip_name_lookup: bool,
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
     /// How this call moves its args/results across the store boundary.
@@ -249,7 +254,10 @@ async fn build_ctx_from_template(
             })
         }),
         loopback: Arc::clone(&template.loopback),
-        ..Default::default()
+        allowed_network_uses: sockets::AllowedNetworkUses {
+            ip_name_lookup: template.allow_ip_name_lookup,
+            ..Default::default()
+        },
     };
 
     for mount in all_volume_mounts {
@@ -354,10 +362,16 @@ async fn new_ephemeral_store(
     // lock. Nothing is retained past this store.
     #[cfg(feature = "wasi-tls")]
     let template_of = |metadata: &WorkloadMetadata| {
-        component_ctx_template_from_metadata_with_tls(metadata, call.tls_provider.clone())
+        component_ctx_template_from_metadata_with_tls(
+            metadata,
+            call.tls_provider.clone(),
+            call.allow_ip_name_lookup,
+        )
     };
     #[cfg(not(feature = "wasi-tls"))]
-    let template_of = component_ctx_template_from_metadata;
+    let template_of = |metadata: &WorkloadMetadata| {
+        component_ctx_template_from_metadata(metadata, call.allow_ip_name_lookup)
+    };
 
     let (active, linked, linked_instances) = {
         let components = call.components.read().await;

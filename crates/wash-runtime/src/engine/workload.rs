@@ -530,6 +530,10 @@ pub struct ResolvedWorkload {
     service: Option<WorkloadService>,
     /// The requested host [`WitInterface`]s to resolve this workload
     host_interfaces: Vec<WitInterface>,
+    /// Whether components in this workload may use `wasi:sockets/ip-name-lookup`
+    /// (`resolve-addresses`), carried over from the [`UnresolvedWorkload`] this
+    /// was resolved from.
+    allow_ip_name_lookup: bool,
     /// TLS provider override for `wasi:tls` client connections in this workload.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -929,11 +933,15 @@ impl ResolvedWorkload {
             crate::engine::linked_call::component_ctx_template_from_metadata_with_tls(
                 metadata,
                 self.tls_provider.clone(),
+                self.allow_ip_name_lookup,
             )
         }
         #[cfg(not(feature = "wasi-tls"))]
         {
-            crate::engine::linked_call::component_ctx_template_from_metadata(metadata)
+            crate::engine::linked_call::component_ctx_template_from_metadata(
+                metadata,
+                self.allow_ip_name_lookup,
+            )
         }
     }
 
@@ -1252,6 +1260,7 @@ impl ResolvedWorkload {
                                         components: self.components.clone(),
                                         active_component_id: plugin_component_id.clone(),
                                         linked_component_ids: nested_linked_component_ids.clone(),
+                                        allow_ip_name_lookup: self.allow_ip_name_lookup,
                                         #[cfg(feature = "wasi-tls")]
                                         tls_provider: self.tls_provider.clone(),
                                         mode,
@@ -1655,6 +1664,11 @@ pub struct UnresolvedWorkload {
     service: Option<WorkloadService>,
     /// All [`WorkloadComponent`]s in the workload
     components: HashMap<Arc<str>, WorkloadComponent>,
+    /// Whether components in this workload may use `wasi:sockets/ip-name-lookup`
+    /// (`resolve-addresses`), set host-wide from [`crate::engine::Engine`]'s
+    /// `allow_ip_name_lookup` (`wash host --allow-ip-name-lookup` / `wash dev`'s
+    /// `dev.allow_ip_name_lookup`).
+    allow_ip_name_lookup: bool,
     /// TLS provider override for `wasi:tls` client connections in this workload.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -1695,9 +1709,17 @@ impl UnresolvedWorkload {
                 })
                 .collect(),
             host_interfaces,
+            allow_ip_name_lookup: false,
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
         }
+    }
+
+    /// Set whether components in this workload may use
+    /// `wasi:sockets/ip-name-lookup` (`resolve-addresses`).
+    pub fn with_allow_ip_name_lookup(mut self, enable: bool) -> Self {
+        self.allow_ip_name_lookup = enable;
+        self
     }
 
     /// Override the TLS provider used for `wasi:tls` client connections in this workload.
@@ -2070,6 +2092,7 @@ impl UnresolvedWorkload {
             service: self.service,
             host_interfaces: self.host_interfaces,
             http_handler: http_handler.clone(),
+            allow_ip_name_lookup: self.allow_ip_name_lookup,
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
         };

@@ -237,6 +237,11 @@ pub struct Engine {
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
+    /// Whether components on this engine may use `wasi:sockets/ip-name-lookup`
+    /// (`resolve-addresses`). Applied to every component's [`LocalResources`](crate::types::LocalResources)
+    /// at workload-initialization time, overriding whatever came in over the
+    /// wire (see [`EngineBuilder::with_allow_ip_name_lookup`]).
+    pub(crate) allow_ip_name_lookup: bool,
 }
 
 impl std::fmt::Debug for Engine {
@@ -391,6 +396,7 @@ impl Engine {
             workload_components,
             host_interfaces,
         );
+        let workload = workload.with_allow_ip_name_lookup(self.allow_ip_name_lookup);
 
         #[cfg(feature = "wasi-tls")]
         let workload = workload.maybe_with_tls_provider(self.tls_provider.clone());
@@ -736,6 +742,7 @@ pub struct EngineBuilder {
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
+    allow_ip_name_lookup: bool,
 }
 
 impl EngineBuilder {
@@ -842,6 +849,13 @@ impl EngineBuilder {
         self.tls_provider = Some(provider);
         self
     }
+
+    /// Enables or disables `wasi:sockets/ip-name-lookup` (`resolve-addresses`)
+    /// for every component run on this engine. Disabled by default.
+    pub fn with_allow_ip_name_lookup(mut self, enable: bool) -> Self {
+        self.allow_ip_name_lookup = enable;
+        self
+    }
 }
 
 impl EngineBuilder {
@@ -932,6 +946,7 @@ impl EngineBuilder {
             cache,
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
+            allow_ip_name_lookup: self.allow_ip_name_lookup,
         })
     }
 }
