@@ -61,7 +61,7 @@ use common::{
 /// iterations from accumulating live service instances without folding the
 /// stop path into the startup numbers.
 fn bench_cold(c: &mut Criterion) {
-    let rt = Runtime::new().expect("tokio runtime");
+    let rt = Runtime::new().expect("cold bench runtime");
     let mut group = c.benchmark_group("service_cold_invocation");
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(10));
@@ -88,7 +88,7 @@ fn bench_cold(c: &mut Criterion) {
 /// Hot latency of the direct path: client -> HTTP server -> service ingress
 /// channel -> live instance handler -> streamed response.
 fn bench_hot_direct(c: &mut Criterion) {
-    let rt = Runtime::new().expect("tokio runtime");
+    let rt = Runtime::new().expect("hot bench runtime");
     let mut group = c.benchmark_group("service_hot_invocation");
     group.throughput(Throughput::Elements(1));
     group.measurement_time(Duration::from_secs(10));
@@ -120,7 +120,7 @@ fn bench_throughput_direct(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("tokio runtime");
+        .expect("throughput bench runtime");
 
     let mut group = c.benchmark_group("service_http_throughput");
     group.throughput(Throughput::Elements(BATCH as u64));
@@ -216,7 +216,7 @@ fn bench_service_to_component(c: &mut Criterion) {
     /// Untimed requests absorbing the post-pause wake-up cost.
     const WARMERS: usize = 2;
 
-    let rt = Runtime::new().expect("tokio runtime");
+    let rt = Runtime::new().expect("svc->component runtime");
     let mut group = c.benchmark_group("service_to_component");
     group.throughput(Throughput::Elements(1));
     group.sample_size(20);

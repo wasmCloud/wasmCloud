@@ -1,5 +1,5 @@
-//! A p3 proxy service: `cli/run` parks forever while `http/handler` serves
-//! ingress on the same long-lived instance.
+//! A p3 proxy trigger service: `cli/run` parks forever while `http/handler`
+//! serves ingress on the same long-lived instance.
 //!
 //! A request carrying an `x-backend` header (an `authority` such as
 //! `127.0.0.1:8080`) is forwarded to that authority through the imported
@@ -13,10 +13,16 @@ mod bindings {
     wit_bindgen::generate!({ world: "svc-http-proxy", generate_all });
 }
 
+use std::sync::LazyLock;
+
 use bindings::exports::wasi::cli::run::Guest as RunGuest;
 use bindings::exports::wasi::http::handler::Guest as HttpGuest;
 use bindings::wasi::http::client as outbound;
 use bindings::wasi::http::types::{ErrorCode, Fields, Method, Request, Response, Scheme};
+
+/// Header name as the owned `String` the generated `Fields::get` borrows,
+/// built once instead of allocating per request.
+static X_BACKEND: LazyLock<String> = LazyLock::new(|| "x-backend".to_string());
 
 struct Component;
 
@@ -36,23 +42,17 @@ impl RunGuest for Component {
 
 impl HttpGuest for Component {
     async fn handle(request: Request) -> Result<Response, ErrorCode> {
-        match request
-            .get_headers()
-            .get(&"x-backend".to_string())
-            .into_iter()
-            .next()
-        {
-            Some(value) => {
-                let authority = String::from_utf8(value)
-                    .map_err(|_| internal("x-backend header is not UTF-8"))?;
-                proxy(&authority).await
-            }
-            None => Ok(direct_response()),
+        let mut values = request.get_headers().get(&X_BACKEND);
+        if values.is_empty() {
+            return Ok(direct_response());
         }
+        let authority = String::from_utf8(values.swap_remove(0))
+            .map_err(|_| internal_err("x-backend header is not UTF-8"))?;
+        proxy(&authority).await
     }
 }
 
-fn internal(msg: &str) -> ErrorCode {
+fn internal_err(msg: &str) -> ErrorCode {
     ErrorCode::InternalError(Some(msg.to_string()))
 }
 
@@ -67,16 +67,16 @@ async fn proxy(authority: &str) -> Result<Response, ErrorCode> {
     let (request, _sent) = Request::new(headers, None, trailers_rx, None);
     request
         .set_method(&Method::Get)
-        .map_err(|()| internal("set_method rejected GET"))?;
+        .map_err(|()| internal_err("set_method rejected GET"))?;
     request
         .set_scheme(Some(&Scheme::Http))
-        .map_err(|()| internal("set_scheme rejected http"))?;
+        .map_err(|()| internal_err("set_scheme rejected http"))?;
     request
         .set_authority(Some(authority))
-        .map_err(|()| internal("set_authority rejected the x-backend value"))?;
+        .map_err(|()| internal_err("set_authority rejected the x-backend value"))?;
     request
         .set_path_with_query(Some("/"))
-        .map_err(|()| internal("set_path_with_query rejected /"))?;
+        .map_err(|()| internal_err("set_path_with_query rejected /"))?;
     outbound::send(request).await
 }
 

@@ -181,10 +181,10 @@ struct WarmService {
     client: reqwest::Client,
 }
 
-/// Start a warm, validated service host; with `backend` set, also a second
-/// host serving that flavor's HTTP component per-request, reached through the
-/// service's `wasi:http/client` import.
-fn setup_service(backend: Option<Flavor>) -> WarmService {
+/// Start a service host (plus a backend host for that flavor's HTTP
+/// component when `backend` is set), validated with exactly one round-trip —
+/// the shape the cold benchmark measures.
+fn start_service(backend: Option<Flavor>) -> WarmService {
     let rt = Runtime::new().expect("tokio runtime");
     let (service, backend, client) = rt.block_on(async {
         let service = start_service_host().await.unwrap();
@@ -212,6 +212,24 @@ fn setup_service(backend: Option<Flavor>) -> WarmService {
         backend,
         client,
     }
+}
+
+/// [`start_service`] plus extra validated warmup round-trips, so a measured
+/// hot call starts from a steady state (on the routed path the extras also
+/// settle the backend's reused p3 instance) rather than right behind
+/// first-request setup. Setup for the hot benchmarks only — the cold
+/// benchmark measures [`start_service`] with its single round-trip.
+fn setup_service(backend: Option<Flavor>) -> WarmService {
+    let warm = start_service(backend);
+    warm.rt.block_on(async {
+        let backend_addr = warm.backend.as_ref().map(|b| b.addr);
+        for _ in 0..2 {
+            let _ = service_request(&warm.client, warm.service.addr, backend_addr)
+                .await
+                .unwrap();
+        }
+    });
+    warm
 }
 
 /// Teardown outside the measurement window: stop the workload(s) and host(s).
@@ -267,7 +285,7 @@ fn service_to_component(warm: WarmService) -> WarmService {
 #[library_benchmark]
 #[bench::direct(args = (None), teardown = shutdown_service)]
 fn cold_service(backend: Option<Flavor>) -> WarmService {
-    setup_service(backend)
+    start_service(backend)
 }
 
 library_benchmark_group!(
