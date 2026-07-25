@@ -6,6 +6,12 @@ interface compute {
     /// dispatches a call to it through the *ephemeral store* path
     /// (instantiate-call-drop in a throwaway store).
     run: async func(n: u32) -> u32;
+
+    /// Count of calls this *instance* has served, incremented per call and
+    /// held in the guest's linear memory. It reports `1` every time when each
+    /// call gets a fresh instance, and climbs when the instance is kept warm
+    /// and reused (`pool_size > 0`), so it reveals which path a call took.
+    calls: async func() -> u32;
 }
 
 world ephemeral-callee {
