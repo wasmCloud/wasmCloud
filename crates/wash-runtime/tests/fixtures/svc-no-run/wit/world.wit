@@ -1,0 +1,14 @@
+package wasmcloud:test-p3@0.1.0;
+
+/// A p3 service that exports `http/handler` and NOTHING else — in particular
+/// no `wasi:cli/run`. The handler is an async p3 export, which is all the host
+/// needs to drive it: the service instance is created once and each request is
+/// served as a concurrent task on it, so `cli/run` is only required by a
+/// service that actually has long-running work of its own to co-drive.
+///
+/// Paired with `svc-counter` (the same counter, but *with* a `cli/run` tick
+/// loop), so the two fixtures differ only in whether `cli/run` is present.
+world svc-no-run {
+    import wasi:http/types@0.3.0;
+    export wasi:http/handler@0.3.0;
+}
