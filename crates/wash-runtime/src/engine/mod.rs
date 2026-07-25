@@ -222,6 +222,7 @@ mod linked_call;
 pub(crate) mod store;
 mod value;
 mod volumes;
+mod file_backed;
 pub mod workload;
 
 /// The core WebAssembly engine for executing components and workloads.
@@ -467,38 +468,43 @@ impl Engine {
     }
 
     /// Load a WebAssembly component from raw bytes or yields a previously compiled one.
+    ///
+    /// When no digest is provided (e.g. components loaded from local files by
+    /// `wash dev`), a sha256 content digest is computed so identical bytes
+    /// still share one cached compilation.
     #[instrument(name = "load_component_bytes", skip_all, fields(digest = %digest.as_ref().map(|d| d.as_ref()).unwrap_or("none")))]
     fn load_component_bytes(
         &self,
         bytes: impl AsRef<[u8]>,
         digest: Option<impl AsRef<str>>,
     ) -> anyhow::Result<Component> {
-        match digest {
+        let key = CacheKey(match digest {
+            Some(digest) => digest.as_ref().to_string(),
             None => {
-                tracing::debug!("no digest provided, compiling component without caching");
-                let compiled = Component::new(&self.inner, bytes.as_ref())
-                    .map_err(anyhow::Error::from)
-                    .context("failed to compile component from bytes")?;
-                Ok(compiled)
+                use sha2::Digest as _;
+                let hash = sha2::Sha256::digest(bytes.as_ref());
+                let mut hex = String::with_capacity(7 + hash.len() * 2);
+                hex.push_str("sha256:");
+                for byte in hash {
+                    hex.push_str(&format!("{byte:02x}"));
+                }
+                hex
             }
-            Some(digest) => {
-                let key = CacheKey(digest.as_ref().to_string());
-                let inner = &self.inner;
-                let bytes_ref = bytes.as_ref();
+        });
+        let inner = &self.inner;
+        let bytes_ref = bytes.as_ref();
 
-                self.cache
-                    .try_get_with(key, || {
-                        Component::new(inner, bytes_ref)
-                            .map_err(anyhow::Error::from)
-                            .context("failed to compile component from bytes")
-                            .map(CacheValue)
-                    })
-                    .map_err(|e: Arc<anyhow::Error>| {
-                        anyhow::anyhow!(e).context("compilation cache error")
-                    })
-                    .map(|v| v.0)
-            }
-        }
+        self.cache
+            .try_get_with(key, || {
+                Component::new(inner, bytes_ref)
+                    .map_err(anyhow::Error::from)
+                    .context("failed to compile component from bytes")
+                    // Round-trip through a short-lived file so instantiation
+                    // can use a CoW memory image (see `file_backed`).
+                    .map(|compiled| CacheValue(file_backed::file_backed_component(inner, compiled)))
+            })
+            .map_err(|e: Arc<anyhow::Error>| anyhow::anyhow!(e).context("compilation cache error"))
+            .map(|v| v.0)
     }
 
     /// Initialize a component that is a part of a workload, add wasi@0.2 interfaces (and

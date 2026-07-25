@@ -34,7 +34,7 @@ workspace = true
 
 [features]
 default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasi-webgpu"]
-oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:sha2", "dep:wit-component"]
+oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:wit-component"]
 wasi-otel = []
 washlet = ["oci"]
 wasi-config = []
@@ -122,7 +122,7 @@ opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_ex
 docker_credential = { workspace = true, optional = true }
 oci-client = { workspace = true, optional = true, features = ["rustls-tls"] }
 oci-wasm = { workspace = true, optional = true, features = ["rustls-tls"] }
-sha2 = { workspace = true, optional = true }
+sha2 = { workspace = true }
 wit-component = { workspace = true, optional = true }
 
 # PostgreSQL dependencies (optional, behind 'wasmcloud-postgres' feature)
