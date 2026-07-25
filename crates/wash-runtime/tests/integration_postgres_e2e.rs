@@ -44,7 +44,7 @@ use common::{http_only_host_interfaces, start_host_with_p3_http_handler};
 const HOST: &str = "pg-e2e";
 
 /// The template's pool cap (`MAX_SESSIONS` in `service/src/lib.rs`).
-const POOL_CAP: i64 = 4;
+const POOL_CAP: i64 = 16;
 
 /// Schema + seed rows the backends read. Inlined (rather than `include_str!`d
 /// from the template) so this test compiles even where the template is absent;

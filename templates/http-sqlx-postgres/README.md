@@ -91,7 +91,7 @@ that by splitting the two across a workload:
    ```
 
 5. **Watch the pool do its job.** Hammer the endpoints, then count the real
-   connections Postgres sees — bounded by the pool cap (4), not by the number
+   connections Postgres sees — bounded by the pool cap (16), not by the number
    of requests:
 
    ```sh
@@ -110,14 +110,20 @@ that by splitting the two across a workload:
   workload) and replays the real server's parameters, then splices the client
   onto a checked-out upstream session. Sessions are dialed and authenticated
   (cleartext password, matching `POSTGRES_HOST_AUTH_METHOD=password` in
-  `docker-compose.yml`) up to a cap of 4, with 2 pre-warmed at startup;
-  checkouts past the cap wait for a return.
+  `docker-compose.yml`) up to a cap of 16, with 4 pre-warmed at startup;
+  checkouts past the cap wait for a return. When a session fails mid-use the
+  idle ones are discarded with it: they were dialed to the same upstream, and
+  nothing else is watching them, so this turns a database failover into one
+  failed request instead of one per parked session.
 - **`users/src/lib.rs`** / **`todos/src/lib.rs`** are plain sqlx: a
   `PgPool` against `postgres://app@127.0.0.1:6432/app` (note: no password),
   queried under `block_on` on a current-thread Tokio runtime (the sqlx
   `wasm32-wasip2` pattern). The client pool keeps the loopback connection warm
   while an instance lives; the Service's pool makes even a cold instance's
   first query hit a warm, already-authenticated database session.
+- **`.wash/config.yaml`** gives each backend `poolSize: 4`, which keeps that
+  many instances warm between calls — see *Warm instances* below for why that
+  is where most of the throughput comes from.
 - **Session reset**: when a client goes away, the Service sends
   `Sync` + `ROLLBACK` + `DISCARD ALL` and drains to `ReadyForQuery` before
   reusing the session, so no prepared statements, transactions, or session
@@ -131,12 +137,33 @@ that by splitting the two across a workload:
   `users-backend`, `todos-backend`). `wash build` fetches the WASI 0.3
   dependencies from the registry into the gitignored `wit/deps/`.
 
+### Warm instances
+
+By default a component is instantiated per call and its state is ephemeral. For
+a backend that means a fresh sqlx pool and a fresh loopback connection every
+request — and because that connection is then dropped, the Service has to run
+`ROLLBACK` + `DISCARD ALL` on the pooled session before the next request can
+use it. That reset costs more than the query it follows: about four upstream
+transactions per request where one would do.
+
+`poolSize: 4` on each backend keeps instances warm between calls, so the
+loopback connection stays open and the steady state is one upstream
+transaction per request. Measured on this template, that roughly doubles peak
+throughput.
+
+Two knobs bound it. `maxInvocations` retires an instance after that many calls
+if you want to cap how long guest state lives. And the cap arithmetic matters:
+each warm instance pins one upstream session for its lifetime, so the
+Service's `MAX_SESSIONS` (16) has to stay above the total warm-instance count
+(4 + 4), leaving room for requests served by cold instances during a burst.
+Raise them together.
+
 ### A note on concurrency
 
 sqlx runs on tokio, and tokio's reactor must be driven, so each backend drives
-its query under `block_on` and serializes at the query boundary. The win here
-is amortization — bounded, pre-authenticated, shared connections instead of a
-fresh TCP + auth round trip per request — not parallel query execution.
+its query under `block_on` and serializes at the query boundary. One warm
+instance therefore handles one query at a time; `poolSize` is what gives you
+several in flight at once.
 
 ### Scope
 

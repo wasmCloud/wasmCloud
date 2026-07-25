@@ -65,10 +65,18 @@ const POOLER_ADDR: Ipv4SocketAddress = Ipv4SocketAddress {
 
 /// Upper bound on concurrent upstream sessions. Checkouts past the cap wait
 /// for a session to be returned instead of dialing more.
-const MAX_SESSIONS: usize = 4;
+///
+/// This has to exceed the total number of warm backend instances
+/// (`poolSize` summed over `users` and `todos` in `.wash/config.yaml`, 8 as
+/// configured). A warm instance keeps its sqlx connection open for as long as
+/// it lives, which pins one session here for that whole time — so sizing the
+/// cap at or below the warm-instance count would leave a request served by a
+/// cold instance waiting for a session that is never coming back. The slack
+/// between the two is what serves bursts past the warm set.
+const MAX_SESSIONS: usize = 16;
 
 /// Sessions dialed and authenticated at startup, before the first request.
-const PREWARM_SESSIONS: usize = 2;
+const PREWARM_SESSIONS: usize = 4;
 
 /// Upper bound on messages drained during a session reset. A session that
 /// exceeds it is protocol-wedged (e.g. dropped mid-`COPY`) and is closed
@@ -367,11 +375,26 @@ impl Pool {
         self.grant_slot();
     }
 
-    /// Discard a broken session, freeing its capacity slot.
+    /// Discard a broken session, freeing its capacity slot — and with it the
+    /// idle sessions, which were dialed to the same upstream.
+    ///
+    /// A session almost only fails mid-use because the upstream went away: a
+    /// restart, a failover, an idle-session timeout. The parked sessions have
+    /// no pump running to notice that, so without this the pool hands them out
+    /// one at a time and each costs another client a failed request before it
+    /// is recognised as dead. Dropping them together means one request
+    /// discovers the outage and the next checkout dials fresh.
     fn close(&self, session: Session) {
         drop(session);
         self.live.set(self.live.get() - 1);
         self.grant_slot();
+
+        let stale: Vec<Session> = self.idle.borrow_mut().drain(..).collect();
+        for session in stale {
+            drop(session);
+            self.live.set(self.live.get() - 1);
+            self.grant_slot();
+        }
     }
 
     /// Hand the slot that was just freed to the longest-waiting checkout that
@@ -614,10 +637,18 @@ async fn serve_client(client_sock: TcpSocket, pool: Rc<Pool>) {
         session_tx.write_all(query_message("DISCARD ALL")).await;
     };
 
-    // Session -> client: forward messages while the client is connected; once
+    // Session -> client: forward responses while the client is connected; once
     // the reset starts, discard responses until `CommandComplete` for
     // `DISCARD ALL` followed by `ReadyForQuery` — the session is then clean
     // and reusable. `DRAIN_LIMIT` bounds a protocol-wedged session.
+    //
+    // This is the row-carrying direction, so it forwards a whole read at a
+    // time rather than a message at a time. Postgres sends one `DataRow` per
+    // row: copying each into its own buffer and giving each its own stream
+    // write is what made a large result set cost far more crossing the pool
+    // than it did in the database. Framing is still tracked — only complete
+    // messages are forwarded — so `session_buf` always resumes on a message
+    // boundary when the reset below takes over.
     let session_to_client = async {
         // Own the client's socket and write half so they drop the moment this
         // pump exits. When the upstream dies mid-session this is what unwinds
@@ -630,6 +661,27 @@ async fn serve_client(client_sock: TcpSocket, pool: Rc<Pool>) {
         let mut drained = 0usize;
         let mut discard_done = false;
         loop {
+            if end.get() == ClientEnd::Open {
+                if !fill(&mut session_rx, &mut session_buf).await {
+                    break; // upstream closed: not reusable
+                }
+                // The client may have gone away while this read was pending;
+                // re-check before forwarding so the reset's own traffic is
+                // never sent on to a client that is no longer there.
+                if end.get() != ClientEnd::Open {
+                    continue;
+                }
+                match complete_prefix(&session_buf) {
+                    Some(0) => {}           // only a partial message so far
+                    Some(prefix) => {
+                        let ready: Vec<u8> = session_buf.drain(..prefix).collect();
+                        client_tx.write_all(ready).await;
+                    }
+                    None => break, // malformed length: not reusable
+                }
+                continue;
+            }
+
             let msg = match read_pg_msg(&mut session_rx, &mut session_buf).await {
                 Some(msg) => msg,
                 None => break, // upstream closed: not reusable
@@ -749,6 +801,30 @@ fn startup_message(user: &str, database: &str) -> Vec<u8> {
     msg.extend_from_slice(&((4 + body.len()) as i32).to_be_bytes());
     msg.extend_from_slice(&body);
     msg
+}
+
+/// Length of the longest prefix of `buf` that holds only complete messages,
+/// so it can be forwarded verbatim in one write while leaving any trailing
+/// partial message behind for the next read. `None` when a length is
+/// malformed, which is fatal for the connection just as it is in
+/// [`read_pg_msg`].
+///
+/// Only lengths are read — bodies are never copied or inspected — so this
+/// costs a few bytes of scanning per message rather than a buffer per message.
+fn complete_prefix(buf: &[u8]) -> Option<usize> {
+    let mut prefix = 0;
+    while buf.len() - prefix >= 5 {
+        let len = be_i32(buf.get(prefix + 1..prefix + 5)?)?;
+        if !(4..=MAX_MESSAGE_LEN).contains(&len) {
+            return None;
+        }
+        let total = 1 + len as usize;
+        if buf.len() - prefix < total {
+            break; // body still arriving
+        }
+        prefix += total;
+    }
+    Some(prefix)
 }
 
 /// Read one regular message (type byte + i32 length + body) in wire form.

@@ -29,11 +29,28 @@ dev:
   # Make the Service the long-lived wasi:cli/run service.
   service: true
   # The stateless backends the Service routes to.
+  #
+  # `poolSize` keeps that many instances of each warm between calls. Without
+  # it every request builds a fresh instance, which means a fresh sqlx pool, a
+  # fresh loopback connection, and — because that connection is then dropped —
+  # a `ROLLBACK` + `DISCARD ALL` round trip on the pooled session before the
+  # next request can use it. That reset costs more than the query it follows.
+  # Keeping instances warm holds the loopback connection open instead, so the
+  # steady state is one upstream transaction per request rather than about
+  # four.
+  #
+  # The two `poolSize` values sum to 8, under the Service's `MAX_SESSIONS` of
+  # 16: each warm instance pins one upstream session for its lifetime, so the
+  # cap has to leave room for requests served by cold instances during a burst.
+  # Raise both together. Requests past the warm set are still served — from
+  # cold instances, at the higher per-request cost.
   components:
     - name: users
       file: target/wasm32-wasip2/release/users.wasm
+      poolSize: 4
     - name: todos
       file: target/wasm32-wasip2/release/todos.wasm
+      poolSize: 4
 
 new:
   command: cargo fetch

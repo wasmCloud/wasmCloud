@@ -452,10 +452,12 @@ async fn bench_postgres_shared_pool() -> Result<()> {
         .with_context(|| format!("host cannot reach published Postgres at {upstream}"))?;
 
     let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
+    // Defaults to the template's shipped `.wash/config.yaml` (`poolSize: 4`
+    // per backend); set BENCH_WARM=0 to measure the unpooled path.
     let warm: i32 = std::env::var("BENCH_WARM")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+        .unwrap_or(4);
     println!("\nbackend pool_size (warm instances each): {warm}");
     host.workload_start(workload(
         service_wasm,
