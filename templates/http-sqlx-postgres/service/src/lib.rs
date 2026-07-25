@@ -45,6 +45,7 @@ mod bindings {
 }
 
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::task::{Poll, Waker};
 
@@ -224,16 +225,27 @@ struct Upstream {
     database: String,
 }
 
+/// One checkout's place in the wait queue. Each freed slot is granted to
+/// exactly one ticket, so a return wakes one checkout rather than every
+/// waiter.
+#[derive(Default)]
+struct Ticket {
+    /// Set by the pool when this ticket may take the slot just freed. Only
+    /// the ticket at the head of the queue is ever granted.
+    granted: Cell<bool>,
+    waker: RefCell<Option<Waker>>,
+}
+
 /// The shared pool: idle pre-authenticated sessions, a live count against
-/// `MAX_SESSIONS`, and wakers for checkouts waiting at the cap. The guest is
+/// `MAX_SESSIONS`, and a queue of checkouts waiting at the cap. The guest is
 /// single-threaded, so `RefCell`/`Cell` are all the synchronization needed.
 struct Pool {
     upstream: Upstream,
     idle: RefCell<Vec<Session>>,
     /// Sessions currently open (idle + checked out).
     live: Cell<usize>,
-    /// Checkouts blocked at the cap, woken on return or close.
-    waiters: RefCell<Vec<Waker>>,
+    /// Checkouts blocked at the cap, oldest first.
+    waiters: RefCell<VecDeque<Rc<Ticket>>>,
     /// Raw `ParameterStatus` payloads captured from the first upstream
     /// handshake, replayed verbatim to every loopback client so it sees the
     /// real server's settings (encoding, version, ...).
@@ -256,7 +268,7 @@ impl Pool {
             upstream,
             idle: RefCell::new(Vec::new()),
             live: Cell::new(0),
-            waiters: RefCell::new(Vec::new()),
+            waiters: RefCell::new(VecDeque::new()),
             server_params: RefCell::new(Vec::new()),
             next_client_id: Cell::new(1),
         }
@@ -278,11 +290,11 @@ impl Pool {
                 Ok(session) => {
                     self.idle.borrow_mut().push(session);
                     // A checkout may be waiting at the cap for this session.
-                    self.wake_waiters();
+                    self.grant_slot();
                 }
                 Err(e) => {
                     self.live.set(self.live.get() - 1);
-                    self.wake_waiters();
+                    self.grant_slot();
                     eprintln!("service: prewarm failed (will retry on demand): {e}");
                     return;
                 }
@@ -293,15 +305,44 @@ impl Pool {
     /// Check out a session: reuse an idle one, dial a new one under the cap,
     /// or wait for a return.
     async fn acquire(self: &Rc<Self>) -> Result<Session, String> {
+        let ticket = Rc::new(Ticket::default());
+        let mut queued = false;
         let claimed = futures::future::poll_fn(|cx| {
-            if let Some(session) = self.idle.borrow_mut().pop() {
-                return Poll::Ready(Checkout::Reuse(session));
+            // A checkout takes a slot only when nothing is queued ahead of it,
+            // or when this ticket has been granted the slot the pool just
+            // freed. Together those keep checkouts FIFO and let a return wake
+            // exactly one of them: a fresh checkout cannot jump the queue, and
+            // a queued one is woken only when a slot is actually its to take.
+            let may_take = if queued {
+                ticket.granted.get()
+            } else {
+                self.waiters.borrow().is_empty()
+            };
+            if may_take {
+                // The ticket stays queued until the slot is in hand, so that a
+                // fresh checkout arriving in between still sees a non-empty
+                // queue and waits its turn.
+                let claim = |pool: &Self| {
+                    if queued {
+                        pool.leave_queue(&ticket);
+                    }
+                };
+                let idle = self.idle.borrow_mut().pop();
+                if let Some(session) = idle {
+                    claim(self);
+                    return Poll::Ready(Checkout::Reuse(session));
+                }
+                if self.live.get() < MAX_SESSIONS {
+                    self.live.set(self.live.get() + 1);
+                    claim(self);
+                    return Poll::Ready(Checkout::Dial);
+                }
             }
-            if self.live.get() < MAX_SESSIONS {
-                self.live.set(self.live.get() + 1);
-                return Poll::Ready(Checkout::Dial);
+            *ticket.waker.borrow_mut() = Some(cx.waker().clone());
+            if !queued {
+                self.waiters.borrow_mut().push_back(Rc::clone(&ticket));
+                queued = true;
             }
-            self.waiters.borrow_mut().push(cx.waker().clone());
             Poll::Pending
         })
         .await;
@@ -313,7 +354,7 @@ impl Pool {
                 Err(e) => {
                     // Release the claimed capacity slot.
                     self.live.set(self.live.get() - 1);
-                    self.wake_waiters();
+                    self.grant_slot();
                     Err(e)
                 }
             },
@@ -323,19 +364,52 @@ impl Pool {
     /// Return a healthy (reset) session for the next client.
     fn release(&self, session: Session) {
         self.idle.borrow_mut().push(session);
-        self.wake_waiters();
+        self.grant_slot();
     }
 
     /// Discard a broken session, freeing its capacity slot.
     fn close(&self, session: Session) {
         drop(session);
         self.live.set(self.live.get() - 1);
-        self.wake_waiters();
+        self.grant_slot();
     }
 
-    fn wake_waiters(&self) {
-        for waker in self.waiters.borrow_mut().drain(..) {
+    /// Hand the slot that was just freed to the longest-waiting checkout that
+    /// has not already been granted one. Exactly one slot is freed per call, so
+    /// exactly one checkout is woken — waking all of them would make every
+    /// checkout cost O(waiters).
+    ///
+    /// Skipping already-granted tickets is what makes a burst of returns
+    /// correct: several sessions can be freed before any woken checkout gets to
+    /// run (a database restart closes all of them at once), and each freed slot
+    /// has to reach a *different* checkout. Granting them all to the same
+    /// ticket would wake one checkout and strand the rest of the sessions.
+    fn grant_slot(&self) {
+        let mut waiters = self.waiters.borrow_mut();
+        // Discard tickets whose checkout has gone away (the queue holds the
+        // only reference left), so an abandoned checkout cannot strand a slot.
+        waiters.retain(|t| Rc::strong_count(t) > 1);
+        let waker = waiters
+            .iter()
+            .find(|t| !t.granted.get())
+            .and_then(|ticket| {
+                ticket.granted.set(true);
+                ticket.waker.borrow_mut().take()
+            });
+        // Wake outside the borrow: the woken task may re-enter the pool.
+        drop(waiters);
+        if let Some(waker) = waker {
             waker.wake();
+        }
+    }
+
+    /// Remove a checkout's ticket once it has its slot in hand. Removal is by
+    /// identity, not position: a granted ticket is not necessarily at the head
+    /// when several slots were freed at once.
+    fn leave_queue(&self, ticket: &Rc<Ticket>) {
+        let mut waiters = self.waiters.borrow_mut();
+        if let Some(pos) = waiters.iter().position(|t| Rc::ptr_eq(t, ticket)) {
+            waiters.remove(pos);
         }
     }
 
