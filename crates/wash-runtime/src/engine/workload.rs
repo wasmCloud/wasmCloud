@@ -534,6 +534,11 @@ pub struct ResolvedWorkload {
     /// All components in the workload. This is behind a `RwLock` to support mutable
     /// access to the component linkers.
     components: Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>>,
+    /// Bumped whenever component metadata in `components` is mutated after
+    /// linking (today: only the one-time volume-mount resolution). Cached
+    /// state derived from that metadata — e.g. warm-spare ephemeral stores —
+    /// records the generation it was built at and is discarded on mismatch.
+    components_generation: Arc<std::sync::atomic::AtomicU64>,
     /// The HTTP handler for outgoing HTTP requests
     http_handler: Arc<dyn crate::host::http::HostHandler>,
     /// An optional service component that runs once to completion or for the duration of the workload
@@ -906,7 +911,11 @@ impl ResolvedWorkload {
         &self,
         component_ids: &[Arc<str>],
     ) -> anyhow::Result<()> {
-        resolve_component_volume_mounts_in_map(&self.components, component_ids).await
+        if resolve_component_volume_mounts_in_map(&self.components, component_ids).await? {
+            self.components_generation
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        }
+        Ok(())
     }
 
     async fn resolve_service_volume_mounts(&mut self) -> anyhow::Result<()> {
@@ -1294,6 +1303,9 @@ impl ResolvedWorkload {
                                         #[cfg(feature = "wasi-tls")]
                                         tls_provider: self.tls_provider.clone(),
                                         mode,
+                                        spare_store: Arc::default(),
+                                        spare_refill_in_flight: Arc::default(),
+                                        components_generation: self.components_generation.clone(),
                                     }))
                                 } else {
                                     None
@@ -1562,7 +1574,10 @@ impl ResolvedWorkload {
         for linked_component_id in &linked_component_ids {
             // Same rule as `new_store`: eager instances only for exporters
             // reachable over a shared-store edge.
-            if metadata.store_linked_components.contains(linked_component_id) {
+            if metadata
+                .store_linked_components
+                .contains(linked_component_id)
+            {
                 linked_instances.push((
                     linked_component_id.clone(),
                     self.instantiate_pre(linked_component_id.as_ref()).await?,
@@ -2118,6 +2133,7 @@ impl UnresolvedWorkload {
             name: self.name.clone(),
             namespace: self.namespace.clone(),
             components: Arc::new(RwLock::new(self.components)),
+            components_generation: Arc::default(),
             service: self.service,
             host_interfaces: self.host_interfaces,
             http_handler: http_handler.clone(),

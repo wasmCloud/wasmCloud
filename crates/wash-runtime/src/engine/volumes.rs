@@ -74,10 +74,14 @@ pub(crate) async fn resolve_volume_mounts(
 /// canonicalization runs without holding the components lock; the resolved
 /// mounts are then written back under a single write lock. Components whose
 /// mounts are already resolved are skipped, so this is cheap to call repeatedly.
+///
+/// Returns `true` if any component's resolved mounts were written (callers use
+/// this to bump the workload's components generation so cached state built
+/// from earlier metadata — e.g. warm-spare ephemeral stores — is invalidated).
 pub(crate) async fn resolve_component_volume_mounts_in_map(
     components: &Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>>,
     component_ids: &[Arc<str>],
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let pending = {
         let components = components.read().await;
         let mut pending = Vec::new();
@@ -98,7 +102,7 @@ pub(crate) async fn resolve_component_volume_mounts_in_map(
     };
 
     if pending.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
 
     let mut resolved = Vec::with_capacity(pending.len());
@@ -107,14 +111,16 @@ pub(crate) async fn resolve_component_volume_mounts_in_map(
     }
 
     let mut components = components.write().await;
+    let mut wrote = false;
     for (component_id, resolved_volume_mounts) in resolved {
         let component = components
             .get_mut(&component_id)
             .with_context(|| format!("component '{component_id}' not found"))?;
         if component.metadata.resolved_volume_mounts.is_empty() {
             component.metadata.resolved_volume_mounts = resolved_volume_mounts;
+            wrote = true;
         }
     }
 
-    Ok(())
+    Ok(wrote)
 }

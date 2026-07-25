@@ -150,6 +150,101 @@ pub(crate) struct EphemeralLinkedCall {
     pub(crate) tls_provider: Option<SharedTlsProvider>,
     /// How this call moves its args/results across the store boundary.
     pub(crate) mode: EphemeralCallMode,
+    /// Warm spare for the plain-value path: one pre-built (store, instance)
+    /// pair, taken at call time and refilled in the background, so the
+    /// store-build + callee-instantiation cost leaves the caller's critical
+    /// path. Every call still runs in a store no call has used before.
+    pub(crate) spare_store: Arc<tokio::sync::Mutex<Option<PreparedEphemeralStore>>>,
+    /// Guards against refill stampedes: only one background rebuild at a time.
+    pub(crate) spare_refill_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    /// Generation of the workload's components map this call reads from; a
+    /// spare built at an older generation is discarded instead of used.
+    pub(crate) components_generation: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// A pre-built ephemeral store with the callee already instantiated, ready
+/// for `run_concurrent`. See [`EphemeralLinkedCall::spare_store`].
+pub(crate) struct PreparedEphemeralStore {
+    store: wasmtime::Store<SharedCtx>,
+    instance: wasmtime::component::Instance,
+    /// Value of `EphemeralLinkedCall::components_generation` when this spare
+    /// was built.
+    generation: u64,
+}
+
+/// Whether warm-spare ephemeral stores are disabled via
+/// `WASH_NO_WARM_EPHEMERAL_STORES`.
+fn warm_spares_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var_os("WASH_NO_WARM_EPHEMERAL_STORES").is_some_and(|v| !v.is_empty())
+    })
+}
+
+/// Take the warm spare if one is present and was built at the current
+/// components generation; a stale spare is dropped (reclaiming its slots).
+async fn take_spare(
+    call: &EphemeralLinkedCall,
+) -> Option<(wasmtime::Store<SharedCtx>, wasmtime::component::Instance)> {
+    if warm_spares_disabled() {
+        return None;
+    }
+    let prepared = call.spare_store.lock().await.take()?;
+    if prepared.generation
+        != call
+            .components_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+    {
+        trace!("discarding stale warm ephemeral store");
+        return None;
+    }
+    Some((prepared.store, prepared.instance))
+}
+
+/// Rebuild the warm spare in the background (at most one rebuild in flight).
+/// The spare is stored only if the slot is still empty and the components
+/// generation did not move while building.
+fn spawn_spare_refill(call: &Arc<EphemeralLinkedCall>, callee_pre: InstancePre<SharedCtx>) {
+    use std::sync::atomic::Ordering;
+    if warm_spares_disabled() || call.spare_refill_in_flight.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let call = Arc::clone(call);
+    tokio::task::spawn(async move {
+        let generation = call.components_generation.load(Ordering::Acquire);
+        let built = async {
+            let mut store = new_ephemeral_store(&call).await?;
+            let instance = callee_pre
+                .instantiate_async(&mut store)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!("failed to instantiate callee for warm ephemeral store: {e}")
+                })?;
+            anyhow::Ok(PreparedEphemeralStore {
+                store,
+                instance,
+                generation,
+            })
+        }
+        .await;
+        match built {
+            Ok(prepared) => {
+                let mut slot = call.spare_store.lock().await;
+                if slot.is_none()
+                    && prepared.generation == call.components_generation.load(Ordering::Acquire)
+                {
+                    *slot = Some(prepared);
+                }
+            }
+            Err(e) => {
+                trace!(
+                    error = format!("{e:#}"),
+                    "failed to prebuild warm ephemeral store"
+                );
+            }
+        }
+        call.spare_refill_in_flight.store(false, Ordering::Release);
+    });
 }
 
 /// How an ephemeral linked call transfers its args/results across the store
@@ -352,7 +447,10 @@ async fn new_ephemeral_store(
     component_ids.push(call.active_component_id.clone());
     component_ids.sort();
     component_ids.dedup();
-    resolve_component_volume_mounts_in_map(&call.components, &component_ids).await?;
+    if resolve_component_volume_mounts_in_map(&call.components, &component_ids).await? {
+        call.components_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
 
     // One read-lock scope, no `WorkloadMetadata` clones: cloning metadata would
     // deep-clone its by-value `Linker`, and `pre_instantiate_ref` needs only
@@ -655,15 +753,26 @@ async fn invoke_ephemeral_relocated(
 
 /// Run a plain-value async linked call in a short-lived store that is dropped
 /// (reclaiming its core-instance slots) as soon as the call returns.
+///
+/// When a warm spare is available (see [`EphemeralLinkedCall::spare_store`])
+/// the store build and callee instantiation are skipped; either way, a
+/// background refill is kicked off so the next call finds a fresh spare.
 async fn invoke_ephemeral_plain(
     params: &[Val],
     results: &mut [Val],
     inv: &LinkedExportInvocation,
-    ephemeral_call: &EphemeralLinkedCall,
+    ephemeral_call: &Arc<EphemeralLinkedCall>,
 ) -> wasmtime::Result<()> {
-    let mut store = new_ephemeral_store(ephemeral_call)
-        .await
-        .map_err(|e| wasmtime::format_err!("{e:#}"))?;
+    let (mut store, ready_instance) = match take_spare(ephemeral_call).await {
+        Some((store, instance)) => (store, Some(instance)),
+        None => (
+            new_ephemeral_store(ephemeral_call)
+                .await
+                .map_err(|e| wasmtime::format_err!("{e:#}"))?,
+            None,
+        ),
+    };
+    spawn_spare_refill(ephemeral_call, inv.pre.clone());
 
     let params_buf = params.to_vec();
     let mut results_buf = vec![Val::Bool(false); results.len()];
@@ -680,7 +789,10 @@ async fn invoke_ephemeral_plain(
     );
 
     let mut task = AbortOnDrop(tokio::task::spawn(async move {
-        let instance = callee_pre.instantiate_async(&mut store).await?;
+        let instance = match ready_instance {
+            Some(instance) => instance,
+            None => callee_pre.instantiate_async(&mut store).await?,
+        };
         store
             .run_concurrent(async move |accessor| {
                 let func = accessor.with(|mut access| -> wasmtime::Result<_> {
