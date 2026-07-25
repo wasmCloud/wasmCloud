@@ -239,58 +239,27 @@ impl Host {
         let component = Component::new(engine, component_bytes)
             .map_err(anyhow::Error::from)
             .context("failed to parse component for interface extraction")?;
-        let ty = component.component_type();
+        let world = crate::engine::component_world(&component);
 
         let mut interfaces = HashSet::new();
 
-        let parse_interface = |name: &str| -> Option<WitInterface> {
-            // Parse names like "wasi:http/incoming-handler@0.2.0"
-            let (namespace_package, interface_version) = name.rsplit_once('/')?;
-            let (namespace, package) = namespace_package.split_once(':')?;
-
-            // Extract interface name and optional version
-            let (interface, version) = if let Some((iface, ver)) = interface_version.split_once('@')
-            {
-                let parsed_version = ver.parse().ok();
-                (iface.to_string(), parsed_version)
-            } else {
-                (interface_version.to_string(), None)
-            };
-
-            Some(WitInterface {
-                namespace: namespace.to_string(),
-                package: package.to_string(),
-                interfaces: HashSet::from([interface]),
-                version,
-                config: HashMap::new(),
+        // Keep only what some plugin can serve. The `implements` label stays off
+        // the result: a host-interface entry's `name` is authored by the
+        // platform to select a backend, not copied from the component's own
+        // routing label. The external-id *is* carried through — it names the
+        // platform resource the component asked for, which is what lets a
+        // caller provision or bind one entry per distinct resource.
+        for interface in world.imports.iter().chain(world.exports.iter()) {
+            let candidate = WitInterface {
                 name: None,
-            })
-        };
-
-        let mut filter_plugins = |interface: &WitInterface| {
-            let mut found = false;
-            for (_, plugin) in self.plugins.iter() {
-                if plugin.world().includes(interface) {
-                    found = true;
-                    break;
-                }
-            }
-            if found {
-                interfaces.insert(interface.clone());
-            }
-        };
-
-        // Extract imports (filter out standard WASI interfaces)
-        for (import_name, _item) in ty.imports(engine) {
-            if let Some(interface) = parse_interface(import_name) {
-                filter_plugins(&interface);
-            }
-        }
-
-        // Extract exports (these are what the component provides to plugins)
-        for (export_name, _item) in ty.exports(engine) {
-            if let Some(interface) = parse_interface(export_name) {
-                filter_plugins(&interface);
+                ..interface.clone()
+            };
+            if self
+                .plugins
+                .iter()
+                .any(|(_, plugin)| plugin.world().includes(&candidate))
+            {
+                interfaces.insert(candidate);
             }
         }
 
@@ -306,6 +275,7 @@ impl Host {
                 version: None,
                 config: HashMap::new(),
                 name: None,
+                external_id: None,
             });
         }
 

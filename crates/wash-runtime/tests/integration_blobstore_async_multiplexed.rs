@@ -40,6 +40,7 @@ fn nats_blob_iface(name: &str, url: &str) -> WitInterface {
             ("url".to_string(), url.to_string()),
         ]),
         name: Some(name.to_string()),
+        external_id: None,
     }
 }
 
@@ -64,8 +65,9 @@ async fn async_multiplexed_blobstore_routes_to_nats() -> Result<()> {
 
     // --- build the routing registry from the named host interface ---
     let plugin = MultiplexedAsyncBlobstore::new().with_provider(Arc::new(NatsBlobProvider));
+    let ifaces = [nats_blob_iface("nats-blob", &nats_url)];
     let registry = plugin
-        .build_registry(&[nats_blob_iface("nats-blob", &nats_url)])
+        .build_registry(&ifaces, &ifaces)
         .await
         .context("build registry")?;
     let be = registry.get("nats-blob").expect("nats-blob routed").clone();

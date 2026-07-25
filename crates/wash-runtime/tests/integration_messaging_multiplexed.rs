@@ -40,6 +40,7 @@ fn msg_iface(name: &str, url: &str) -> WitInterface {
             ("url".to_string(), url.to_string()),
         ]),
         name: Some(name.to_string()),
+        external_id: None,
     }
 }
 
@@ -108,7 +109,7 @@ async fn multiplexed_messaging_routes_each_import_to_its_cluster() -> Result<()>
 
     let plugin = MultiplexedMessaging::new().with_provider(Arc::new(NatsMsgProvider));
     let interfaces = HashSet::from([msg_iface("team-a", &url_a), msg_iface("team-b", &url_b)]);
-    let registry = plugin.build_registry(&interfaces).await?;
+    let registry = plugin.build_registry(&interfaces, &interfaces).await?;
     let team_a = registry.get("team-a").expect("team-a routed").clone();
     let team_b = registry.get("team-b").expect("team-b routed").clone();
 

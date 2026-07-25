@@ -139,16 +139,44 @@ pub struct WitInterface {
     /// of the same namespace:package exist. Used as the routing key in
     /// multiplexing plugins (the `identifier` in store::open, etc.).
     pub name: Option<String>,
+    /// Component-model `external-id`: the platform's own spelling of what should
+    /// satisfy this interface. It exists because import names have a restricted
+    /// syntax, so it stands in for the name when resolving (see
+    /// [`WitInterface::resolution_key`]).
+    ///
+    /// It is not unique: several imports may name one resource. The value is
+    /// opaque; the runtime never parses it.
+    #[serde(
+        rename = "external-id",
+        alias = "external_id",
+        alias = "externalId",
+        default
+    )]
+    pub external_id: Option<String>,
 }
 
 impl WitInterface {
+    /// The key this interface is resolved by: its `external_id` when it declares
+    /// one, otherwise its `name`. Neither means unkeyed: the package's default
+    /// route.
+    pub fn resolution_key(&self) -> Option<&str> {
+        self.external_id.as_deref().or(self.name.as_deref())
+    }
+
     /// Returns the instance name of this WitInterface, aka the namespace:package@version
     /// identifier without the interfaces or config. When a name is present, it is
     /// included as namespace:package/name@version.
     pub fn instance(&self) -> String {
-        let base = match &self.name {
-            Some(name) => format!("{}:{}/{name}", self.namespace, self.package),
-            None => format!("{}:{}", self.namespace, self.package),
+        // Identity is name-first: names are strongly unique on a component, so
+        // two labeled imports stay distinct even when they name one resource.
+        // Only a plain import is identified by its external-id. `:` cannot
+        // appear in a component-model `label`, so the key spaces never collide.
+        let base = match (&self.name, &self.external_id) {
+            (Some(name), _) => format!("{}:{}/{name}", self.namespace, self.package),
+            (None, Some(external_id)) => {
+                format!("{}:{}/:{external_id}", self.namespace, self.package)
+            }
+            (None, None) => format!("{}:{}", self.namespace, self.package),
         };
         if let Some(v) = &self.version {
             format!("{base}@{v}")
@@ -159,6 +187,9 @@ impl WitInterface {
 
     /// Merges another WitInterface into this one, returning a boolean
     /// indicating whether the merge was successful (aka if the [`WitInterface::instance`]s matched).
+    ///
+    /// An instance carries the resolution key, so a merge implies both already
+    /// name the same resource.
     pub fn merge(&mut self, other: &WitInterface) -> bool {
         if self.instance() != other.instance() {
             return false;
@@ -242,6 +273,9 @@ impl Display for WitInterface {
         if let Some(v) = &self.version {
             write!(f, "@{v}")?;
         }
+        if let Some(external_id) = &self.external_id {
+            write!(f, " @external-id({external_id:?})")?;
+        }
         Ok(())
     }
 }
@@ -251,6 +285,7 @@ impl std::hash::Hash for WitInterface {
         self.namespace.hash(state);
         self.package.hash(state);
         self.name.hash(state);
+        self.external_id.hash(state);
         // HashSet and HashMap have non-deterministic iteration order,
         // so we XOR individual hashes to produce an order-independent result.
         let mut interfaces_hash = 0u64;
@@ -307,6 +342,7 @@ impl From<&str> for WitInterface {
             version,
             config: HashMap::new(),
             name: None,
+            external_id: None,
         }
     }
 }
@@ -331,6 +367,7 @@ mod tests {
             version: None,
             config: HashMap::new(),
             name: None,
+            external_id: None,
         }
     }
 
@@ -347,6 +384,7 @@ mod tests {
             version: Some(semver::Version::parse(version).unwrap()),
             config: HashMap::new(),
             name: None,
+            external_id: None,
         }
     }
 
@@ -895,5 +933,151 @@ mod tests {
         let prepared =
             create_interface_with_version("wasmcloud", "postgres", &["prepared"], "0.1.1");
         assert!(!world.includes_bidirectional(&prepared));
+    }
+
+    #[test]
+    fn contains_ignores_external_id() {
+        // Capability matching goes on the contract alone; external-id says which
+        // resource is wanted, not whether a plugin can serve the interface.
+        let mut provider = create_interface("wasi", "keyvalue", &["store", "atomics"]);
+        provider.external_id = Some("user-db-prod".to_string());
+
+        let mut asks_for_other = create_interface("wasi", "keyvalue", &["store"]);
+        asks_for_other.external_id = Some("catalog-db-prod".to_string());
+        assert!(provider.contains(&asks_for_other));
+
+        let anonymous = create_interface("wasi", "keyvalue", &["store"]);
+        assert!(provider.contains(&anonymous));
+    }
+
+    #[test]
+    fn two_labels_naming_one_resource_stay_distinct_imports() {
+        // Names identify imports; the external-id only resolves them. Two
+        // labeled imports of one resource are still two imports, each needing
+        // its own linker entry — collapsing them would orphan one label.
+        let mut users = create_interface("wasi", "keyvalue", &["store"]);
+        users.name = Some("users".to_string());
+        users.external_id = Some("db".to_string());
+        let mut catalog = create_interface("wasi", "keyvalue", &["store"]);
+        catalog.name = Some("catalog".to_string());
+        catalog.external_id = Some("db".to_string());
+
+        assert_ne!(users.instance(), catalog.instance());
+        assert!(!users.merge(&catalog));
+    }
+
+    #[test]
+    fn a_label_cannot_collide_with_another_imports_external_id() {
+        // An implements label and an external-id come from different
+        // vocabularies; one that happens to spell the other must not merge two
+        // unrelated imports into a single binding.
+        let mut labeled = create_interface("wasi", "keyvalue", &["store"]);
+        labeled.name = Some("userdb".to_string());
+
+        let mut resource = create_interface("wasi", "keyvalue", &["atomics"]);
+        resource.name = Some("other".to_string());
+        resource.external_id = Some("userdb".to_string());
+
+        assert_ne!(labeled.instance(), resource.instance());
+        assert!(!labeled.merge(&resource));
+        assert!(!labeled.interfaces.contains("atomics"));
+    }
+
+    #[test]
+    fn external_id_participates_in_the_instance_key() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let plain = create_interface("wasi", "keyvalue", &["store"]);
+        let mut named = plain.clone();
+        named.external_id = Some("user-db-prod".to_string());
+
+        // It is the key the interface resolves by, so it separates instances.
+        assert_ne!(plain.instance(), named.instance());
+        assert_eq!(named.instance(), "wasi:keyvalue/:user-db-prod");
+
+        let hash = |i: &WitInterface| {
+            let mut h = DefaultHasher::new();
+            i.hash(&mut h);
+            h.finish()
+        };
+        assert_ne!(hash(&plain), hash(&named));
+        assert_eq!(HashSet::from([plain, named]).len(), 2);
+    }
+
+    #[test]
+    fn differing_external_ids_are_different_instances() {
+        // One package, two interfaces, two resources: legal, and they must stay
+        // separate rather than collide.
+        let mut names_a = create_interface("wasi", "keyvalue", &["store"]);
+        names_a.external_id = Some("db-a".to_string());
+        let mut names_b = create_interface("wasi", "keyvalue", &["atomics"]);
+        names_b.external_id = Some("db-b".to_string());
+
+        assert_ne!(names_a.instance(), names_b.instance());
+        assert!(!names_a.merge(&names_b));
+        assert!(!names_a.interfaces.contains("atomics"));
+    }
+
+    #[test]
+    fn one_resource_reached_through_two_interfaces_merges() {
+        // The same resource named by two interfaces of one package: one
+        // instance, both interfaces.
+        let mut store = create_interface("wasi", "keyvalue", &["store"]);
+        store.external_id = Some("db".to_string());
+        let mut atomics = create_interface("wasi", "keyvalue", &["atomics"]);
+        atomics.external_id = Some("db".to_string());
+
+        assert_eq!(store.instance(), atomics.instance());
+        assert!(store.merge(&atomics));
+        assert!(store.interfaces.contains("store"));
+        assert!(store.interfaces.contains("atomics"));
+    }
+
+    #[test]
+    fn the_resolution_key_is_the_external_id_then_the_name() {
+        let mut iface = create_interface("wasi", "keyvalue", &["store"]);
+        assert_eq!(iface.resolution_key(), None);
+
+        iface.name = Some("users".to_string());
+        assert_eq!(iface.resolution_key(), Some("users"));
+
+        // An external-id stands in for the name.
+        iface.external_id = Some("user-db-prod".to_string());
+        assert_eq!(iface.resolution_key(), Some("user-db-prod"));
+    }
+
+    #[test]
+    fn external_id_deserializes_from_the_kebab_case_config_key() {
+        // `.wash/config.yaml` and the CRD spell it differently; both parse.
+        let kebab: WitInterface = serde_yaml_ng::from_str(
+            "namespace: wasi\npackage: keyvalue\ninterfaces: [store]\nconfig: {}\nexternal-id: user-db-prod:region-a\n",
+        )
+        .unwrap();
+        assert_eq!(kebab.external_id.as_deref(), Some("user-db-prod:region-a"));
+
+        let camel: WitInterface = serde_yaml_ng::from_str(
+            "namespace: wasi\npackage: keyvalue\ninterfaces: [store]\nconfig: {}\nexternalId: user-db-prod:region-a\n",
+        )
+        .unwrap();
+        assert_eq!(camel.external_id, kebab.external_id);
+
+        // Omitting it is not an error — every binding written before the
+        // attribute existed still parses.
+        let absent: WitInterface = serde_yaml_ng::from_str(
+            "namespace: wasi\npackage: keyvalue\ninterfaces: [store]\nconfig: {}\n",
+        )
+        .unwrap();
+        assert_eq!(absent.external_id, None);
+    }
+
+    #[test]
+    fn display_shows_the_external_id() {
+        let mut iface = create_interface("wasi", "keyvalue", &["store"]);
+        iface.external_id = Some("user-db-prod:region-a".to_string());
+        assert_eq!(
+            format!("{iface}"),
+            r#"wasi:keyvalue/store @external-id("user-db-prod:region-a")"#
+        );
     }
 }

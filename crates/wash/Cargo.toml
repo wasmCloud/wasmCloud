@@ -74,6 +74,7 @@ wasm-pkg-client = { workspace = true }
 wasm-pkg-core = { workspace = true }
 wash-runtime = { workspace = true, features = ["washlet", "oci", "wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "wasi-otel"] }
 wit-component = { workspace = true }
+wit-parser = { workspace = true }
 
 # `O_NOFOLLOW` for the secret-file-open hardening in `crate::workload`.
 # Unix-only. Windows has no portable equivalent.
@@ -98,7 +99,7 @@ tokio = { version = "1.45.1", default-features = false, features = ["full"] }
 reqwest = { workspace = true, features = ["json"] }
 wash-runtime = { workspace = true, features = ["wasi-keyvalue", "wasi-blobstore"] }
 testcontainers = { workspace = true }
-wat = { workspace = true }
+wat = { workspace = true, features = ["component-model"] }
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/{name}-v{version}/wash-{ target }{ binary-ext }"

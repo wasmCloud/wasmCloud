@@ -160,6 +160,7 @@ fn allowed_hosts_workload(allowed_hosts: Vec<String>) -> WorkloadStartRequest {
                     config
                 },
                 name: None,
+                external_id: None,
             }],
             volumes: vec![],
         },

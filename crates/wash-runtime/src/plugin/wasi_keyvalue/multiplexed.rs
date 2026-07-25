@@ -361,9 +361,10 @@ impl MultiplexedKeyValue {
     /// component from its matched keyvalue host interfaces.
     pub async fn build_registry<'i>(
         &self,
+        imports: impl IntoIterator<Item = &'i WitInterface>,
         interfaces: impl IntoIterator<Item = &'i WitInterface>,
     ) -> anyhow::Result<HashMap<String, KvId>> {
-        self.mux.build_registry(interfaces).await
+        self.mux.build_registry(imports, interfaces).await
     }
 }
 
@@ -395,7 +396,13 @@ impl HostPlugin for MultiplexedKeyValue {
             return Ok(());
         }
 
-        let registry = self.build_registry(interfaces.iter()).await?;
+        // Selection is driven by what the *component* imports: each import's
+        // implements name and external-id pick the entry that serves it, and the
+        // registry is keyed by import name so `resolve` stays a plain lookup.
+        let world = item.world();
+        let registry = self
+            .build_registry(world.imports.iter(), interfaces.iter())
+            .await?;
         // Clone the component (cheap, Arc-backed) so the immutable borrow ends
         // before we take the mutable linker borrow.
         let component = item.component().clone();
@@ -439,6 +446,7 @@ mod tests {
             version: None,
             config,
             name: name.map(String::from),
+            external_id: None,
         }
     }
 
@@ -464,7 +472,10 @@ mod tests {
             kv_iface(Some("team-b"), Some("in-memory")),
         ]);
 
-        let registry = plugin.build_registry(&interfaces).await.unwrap();
+        let registry = plugin
+            .build_registry(&interfaces, &interfaces)
+            .await
+            .unwrap();
         let a = registry.get("team-a").expect("team-a routed").clone();
         let b = registry.get("team-b").expect("team-b routed").clone();
 
@@ -496,13 +507,12 @@ mod tests {
                 ("root".to_string(), dir.to_string_lossy().to_string()),
             ]),
             name: Some("team-fs".to_string()),
+            external_id: None,
         };
 
+        let ifaces = HashSet::from([iface]);
         let plugin = MultiplexedKeyValue::new().with_provider(Arc::new(FilesystemProvider));
-        let registry = plugin
-            .build_registry(&HashSet::from([iface]))
-            .await
-            .unwrap();
+        let registry = plugin.build_registry(&ifaces, &ifaces).await.unwrap();
         let backend = registry.get("team-fs").expect("team-fs routed").clone();
 
         backend.open("bucket").await.unwrap();
@@ -525,7 +535,7 @@ mod tests {
         let plugin = MultiplexedKeyValue::new(); // no providers registered
         let interfaces = HashSet::from([kv_iface(Some("x"), Some("redis"))]);
         let err = plugin
-            .build_registry(&interfaces)
+            .build_registry(&interfaces, &interfaces)
             .await
             .err()
             .expect("expected error for unregistered backend");

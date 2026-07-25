@@ -56,6 +56,7 @@ fn kv_store_iface(name: &str) -> WitInterface {
         version: Some(semver::Version::parse("0.1.0").unwrap()),
         config: HashMap::from([("backend".to_string(), "in-memory".to_string())]),
         name: Some(name.to_string()),
+        external_id: None,
     }
 }
 

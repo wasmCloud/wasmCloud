@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::plugin::multiplex::BackendProvider;
+use crate::plugin::multiplex::{BackendProvider, EXTERNAL_ID_CONFIG_KEY, sanitize_external_id};
 use crate::plugin::wasi_keyvalue::fs_store::{FsKvError, FsKvStore};
 
 use super::{KeyResponse, KvBackend, KvId, LIST_KEYS_BATCH_SIZE, StoreError};
@@ -117,6 +117,10 @@ impl KvBackend for FilesystemBackend {
 /// Provider for [`FilesystemBackend`], selected by `config.backend =
 /// "filesystem"`. Requires `config.root` (the directory under which buckets
 /// live).
+///
+/// A bound import's `external-id` becomes a directory under `root`, so two
+/// imports naming different platform resources never alias on disk even when a
+/// single binding serves both.
 #[derive(Default)]
 pub struct FilesystemProvider;
 
@@ -130,6 +134,13 @@ impl BackendProvider<KvId> for FilesystemProvider {
         let root = config.get("root").ok_or_else(|| {
             anyhow::anyhow!("filesystem keyvalue backend requires a 'root' config")
         })?;
-        Ok(Arc::new(FilesystemBackend::new(root)))
+        let root = match config.get(EXTERNAL_ID_CONFIG_KEY) {
+            Some(external_id) => std::path::Path::new(root)
+                .join(sanitize_external_id(external_id))
+                .to_string_lossy()
+                .into_owned(),
+            None => root.clone(),
+        };
+        Ok(Arc::new(FilesystemBackend::new(&root)))
     }
 }

@@ -58,6 +58,7 @@ fn named_store(name: &str) -> WitInterface {
         version: Some(semver::Version::parse(KV_VERSION).unwrap()),
         config,
         name: Some(name.to_string()),
+        external_id: None,
     }
 }
 

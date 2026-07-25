@@ -44,6 +44,7 @@ use crate::FixtureKind;
 const FIXTURES: &[(&str, FixtureKind)] = &[
     ("messaging-echo", FixtureKind::P2),
     ("keyvalue-implements", FixtureKind::P2),
+    ("keyvalue-external-id", FixtureKind::P2),
     ("http-handler-p2", FixtureKind::P2),
     // Host component plugin fixtures (P3 async): kv-plugin serves acme:kv/store
     // from its own supervised store; kv-plugin-caller imports it over HTTP.

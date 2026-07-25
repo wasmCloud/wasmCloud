@@ -106,6 +106,7 @@ async fn setup() -> Result<TestHarness> {
                         config
                     },
                     name: None,
+                    external_id: None,
                 },
                 WitInterface {
                     namespace: "wasi".to_string(),
@@ -126,6 +127,7 @@ async fn setup() -> Result<TestHarness> {
                         config
                     },
                     name: None,
+                    external_id: None,
                 },
             ],
             volumes: vec![],

@@ -883,6 +883,7 @@ pub fn example_config() -> Config {
                 version: Some(semver::Version::new(0, 2, 0)),
                 config: HashMap::new(),
                 name: None,
+                external_id: None,
             }],
             data_nats_url: Some("nats://127.0.0.1:4222".to_string()),
             wasi_keyvalue_redis_url: Some("redis://127.0.0.1:6379".to_string()),

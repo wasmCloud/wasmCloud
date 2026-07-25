@@ -3,7 +3,9 @@ use tracing::instrument;
 
 use crate::{
     cli::{CliCommand, CliContext, CommandOutput},
-    inspect::{decode_component, get_component_wit},
+    inspect::{
+        component_external_ids, decode_component, get_component_wit, host_interfaces_scaffold,
+    },
 };
 use anyhow::Context;
 use std::path::Path;
@@ -45,6 +47,12 @@ impl CliCommand for InspectCommand {
             .await
             .context("failed to decode component")?;
 
+        // The printed WIT already shows `@external-id(..)`; listing the ids
+        // separately means tooling that provisions or binds those resources
+        // doesn't have to parse WIT text to find them.
+        let external_ids = component_external_ids(&component);
+        let host_interfaces = host_interfaces_scaffold(&component);
+
         // Print the component WIT
         let wit = get_component_wit(component)
             .await
@@ -56,6 +64,8 @@ impl CliCommand for InspectCommand {
                 "message": "Component inspected successfully.",
                 "success": true,
                 "wit": wit,
+                "external_ids": external_ids,
+                "host_interfaces_scaffold": host_interfaces,
             })),
         ))
     }

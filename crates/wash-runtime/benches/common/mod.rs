@@ -83,6 +83,7 @@ pub fn http_host_interfaces(host: &str) -> Vec<WitInterface> {
         version: Some(semver::Version::parse("0.2.2").expect("valid version")),
         config,
         name: None,
+        external_id: None,
     }]
 }
 

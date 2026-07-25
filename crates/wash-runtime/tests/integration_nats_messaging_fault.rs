@@ -240,6 +240,7 @@ async fn setup(latency: Duration) -> Result<TestHarness> {
                 version: Some(semver::Version::new(0, 2, 0)),
                 config: subscription_config,
                 name: None,
+                external_id: None,
             }],
             volumes: vec![],
         },

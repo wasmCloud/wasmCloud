@@ -58,6 +58,7 @@ fn kv_interface(name: Option<&str>, backend: Option<&str>) -> WitInterface {
         version: Some(semver::Version::parse(KV_VERSION).unwrap()),
         config,
         name: name.map(String::from),
+        external_id: None,
     }
 }
 

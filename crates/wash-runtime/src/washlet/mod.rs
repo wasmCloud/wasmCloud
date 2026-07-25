@@ -576,6 +576,7 @@ impl From<types::v2::WitInterface> for crate::wit::WitInterface {
             } else {
                 Some(wi.name)
             },
+            external_id: wi.external_id.filter(|id| !id.is_empty()),
         }
     }
 }
@@ -686,6 +687,7 @@ impl From<crate::wit::WitInterface> for types::v2::WitInterface {
             interfaces: wi.interfaces.into_iter().collect(),
             config: wi.config,
             name: wi.name.unwrap_or_default(),
+            external_id: wi.external_id,
         }
     }
 }

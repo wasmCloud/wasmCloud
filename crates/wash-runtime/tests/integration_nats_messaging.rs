@@ -156,6 +156,7 @@ fn messaging_handler_workload(
                     SUBSCRIPTION_SUBJECT.to_string(),
                 )]),
                 name: None,
+                external_id: None,
             }],
             volumes: vec![],
         },

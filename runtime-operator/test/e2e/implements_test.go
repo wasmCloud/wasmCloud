@@ -60,60 +60,14 @@ var _ = Describe("Implements Named Host Interfaces", Ordered, func() {
 		}
 		componentImage = registryRef("keyvalue-implements")
 
-		// Scale a hostgroup pod up and wait for a Host CR so workload placement
-		// is independent of spec ordering (see messaging_test.go for the
-		// rationale on why pod-Ready alone isn't enough).
-		By("ensuring at least one hostgroup pod is running")
-		cmd := exec.Command("kubectl", "scale", "deployment/hostgroup-default",
-			"--replicas=1", "-n", namespace)
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to scale hostgroup")
-
-		cmd = exec.Command("kubectl", "rollout", "status",
-			"-n", namespace, "deployment/hostgroup-default", "--timeout=2m")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "hostgroup rollout did not complete")
-
-		By("waiting for a Host CR to be registered")
-		Eventually(func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "hosts.runtime.wasmcloud.dev",
-				"-n", namespace, "-o", "jsonpath={.items}")
-			output, err := utils.Run(cmd)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(output).NotTo(Equal("[]"), "no Host CR registered yet")
-		}).WithTimeout(2 * time.Minute).Should(Succeed())
+		ensureDefaultHostgroupReady()
 	})
 
 	AfterEach(func() {
 		if !CurrentSpecReport().Failed() {
 			return
 		}
-		dump := func(label string, args ...string) {
-			out, err := utils.Run(exec.Command("kubectl", args...))
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "=== %s ===\n%s\n", label, out)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "=== %s (FAILED: %s) ===\n", label, err)
-			}
-		}
-		// Reaching Ready requires the host to pull the component, decode its
-		// `(implements ..)` imports, and bind team-a/team-b — so the hostgroup
-		// pod logs + pod state are the most direct evidence of where it broke
-		// (image pull, decode, or plugin bind). The WorkloadDeployment/Workload
-		// status conditions show whether placement vs sync vs health failed.
-		dump("Pods", "get", "pods", "-n", namespace, "-o", "wide")
-		dump("Events", "get", "events", "-n", namespace,
-			"--sort-by=.lastTimestamp")
-		dump("Hostgroup logs", "logs", "-n", namespace,
-			"-l", "wasmcloud.com/name=hostgroup", "--tail=600", "--prefix=true")
-		dump("WorkloadDeployment", "get", "workloaddeployment", workloadName,
-			"-n", namespace, "-o", "yaml")
-		dump("WorkloadReplicaSets", "get", "workloadreplicasets.runtime.wasmcloud.dev",
-			"-n", namespace, "-o", "yaml")
-		dump("Workload CRs", "get", "workloads.runtime.wasmcloud.dev",
-			"-n", namespace, "-o", "yaml")
-		dump("Operator logs", "logs", "-n", namespace,
-			"-l", "wasmcloud.com/name=runtime-operator", "--tail=200")
+		dumpWorkloadDiagnostics(workloadName)
 	})
 
 	AfterAll(func() {

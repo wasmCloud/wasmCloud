@@ -44,6 +44,7 @@ fn pg_iface(name: &str, url: &str) -> WitInterface {
         version: None,
         config: HashMap::from([("url".to_string(), url.to_string())]),
         name: Some(name.to_string()),
+        external_id: None,
     }
 }
 
@@ -86,7 +87,7 @@ async fn postgres_implements_enforces_per_team_credentials() -> Result<()> {
         pg_iface("team-b", &team_b_url),
     ]);
     let registry = WasmcloudPostgres::multiplexer()
-        .build_registry(&interfaces)
+        .build_registry(&interfaces, &interfaces)
         .await?;
     let admin = registry.get("admin").expect("admin routed");
     let team_a = registry.get("team-a").expect("team-a routed");

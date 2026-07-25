@@ -91,6 +91,7 @@ const P2_FIXTURES: &[&str] = &[
     "http-allowed-hosts",
     "keyvalue-counter",
     "keyvalue-implements",
+    "keyvalue-external-id",
     "postgres-implements",
 ];
 

@@ -96,6 +96,7 @@ async fn test_http_webgpu_integration() -> Result<()> {
                         config
                     },
                     name: None,
+                    external_id: None,
                 },
                 WitInterface {
                     namespace: "wasi".to_string(),
@@ -104,6 +105,7 @@ async fn test_http_webgpu_integration() -> Result<()> {
                     version: Some(semver::Version::parse("0.3.0-rc.2").unwrap()),
                     config: HashMap::new(),
                     name: None,
+                    external_id: None,
                 },
             ],
             volumes: vec![],

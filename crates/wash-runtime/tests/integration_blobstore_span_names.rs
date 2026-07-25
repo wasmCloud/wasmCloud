@@ -108,6 +108,7 @@ async fn wasi_blobstore_handlers_emit_namespaced_spans() -> Result<()> {
                         config
                     },
                     name: None,
+                    external_id: None,
                 },
                 WitInterface {
                     namespace: "wasi".to_string(),
@@ -124,6 +125,7 @@ async fn wasi_blobstore_handlers_emit_namespaced_spans() -> Result<()> {
                     ),
                     config: HashMap::new(),
                     name: None,
+                    external_id: None,
                 },
             ],
             volumes: vec![],

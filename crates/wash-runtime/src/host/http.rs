@@ -2575,6 +2575,7 @@ mod tests {
             version: Some(semver::Version::parse("0.2.2").unwrap()),
             config,
             name: None,
+            external_id: None,
         }
     }
 
@@ -2615,6 +2616,7 @@ mod tests {
             version: None,
             config: HashMap::new(),
             name: None,
+            external_id: None,
         };
         assert!(http_ingress_hostnames(&[kv]).is_empty());
     }

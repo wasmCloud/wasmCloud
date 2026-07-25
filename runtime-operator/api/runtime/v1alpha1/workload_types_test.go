@@ -225,3 +225,104 @@ func TestMaxVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsureHostInterface_DifferentExternalID_KeepsSeparate(t *testing.T) {
+	spec := &WorkloadSpec{}
+
+	// Two bindings for the same interface, told apart only by the platform
+	// resource each names. Neither carries a Name: with external-ids the
+	// operator binds by resource, not by the component's own import label.
+	spec.EnsureHostInterface(HostInterface{
+		ExternalID: "user-db-prod:region-a",
+		Namespace:  "wasi",
+		Package:    "keyvalue",
+		Interfaces: []string{"store"},
+		ConfigLayer: ConfigLayer{
+			Config: map[string]string{"backend": "redis"},
+		},
+	})
+	spec.EnsureHostInterface(HostInterface{
+		ExternalID: "catalog-db-prod:region-a",
+		Namespace:  "wasi",
+		Package:    "keyvalue",
+		Interfaces: []string{"store"},
+		ConfigLayer: ConfigLayer{
+			Config: map[string]string{"backend": "nats"},
+		},
+	})
+
+	if len(spec.HostInterfaces) != 2 {
+		t.Fatalf("expected 2 host interfaces, got %d", len(spec.HostInterfaces))
+	}
+	if spec.HostInterfaces[0].ExternalID != "user-db-prod:region-a" {
+		t.Errorf("unexpected first externalId %q", spec.HostInterfaces[0].ExternalID)
+	}
+	if spec.HostInterfaces[1].ExternalID != "catalog-db-prod:region-a" {
+		t.Errorf("unexpected second externalId %q", spec.HostInterfaces[1].ExternalID)
+	}
+}
+
+func TestEnsureHostInterface_SameExternalID_Merges(t *testing.T) {
+	spec := &WorkloadSpec{}
+
+	spec.EnsureHostInterface(HostInterface{
+		ExternalID: "user-db-prod:region-a",
+		Namespace:  "wasi",
+		Package:    "keyvalue",
+		Interfaces: []string{"store"},
+		ConfigLayer: ConfigLayer{
+			Config: map[string]string{"backend": "redis"},
+		},
+	})
+	spec.EnsureHostInterface(HostInterface{
+		ExternalID: "user-db-prod:region-a",
+		Namespace:  "wasi",
+		Package:    "keyvalue",
+		Interfaces: []string{"atomics"},
+		ConfigLayer: ConfigLayer{
+			Config: map[string]string{"url": "redis://example:6379"},
+		},
+	})
+
+	if len(spec.HostInterfaces) != 1 {
+		t.Fatalf("expected the two entries to merge, got %d", len(spec.HostInterfaces))
+	}
+	iface := spec.HostInterfaces[0]
+	if !iface.HasInterface("store") || !iface.HasInterface("atomics") {
+		t.Errorf("expected both interfaces after merge, got %v", iface.Interfaces)
+	}
+	if iface.Config["backend"] != "redis" || iface.Config["url"] != "redis://example:6379" {
+		t.Errorf("expected merged config, got %v", iface.Config)
+	}
+}
+
+func TestEnsureHostInterface_ExternalIDDoesNotMergeWithTheDefault(t *testing.T) {
+	spec := &WorkloadSpec{}
+
+	// The unkeyed entry is the default route; a resource-keyed entry is a
+	// different binding and must not absorb it.
+	spec.EnsureHostInterface(HostInterface{
+		Namespace:  "wasi",
+		Package:    "keyvalue",
+		Interfaces: []string{"store"},
+		ConfigLayer: ConfigLayer{
+			Config: map[string]string{"backend": "in-memory"},
+		},
+	})
+	spec.EnsureHostInterface(HostInterface{
+		ExternalID: "user-db-prod:region-a",
+		Namespace:  "wasi",
+		Package:    "keyvalue",
+		Interfaces: []string{"store"},
+		ConfigLayer: ConfigLayer{
+			Config: map[string]string{"backend": "redis"},
+		},
+	})
+
+	if len(spec.HostInterfaces) != 2 {
+		t.Fatalf("expected 2 host interfaces, got %d", len(spec.HostInterfaces))
+	}
+	if spec.HostInterfaces[0].ExternalID != "" {
+		t.Errorf("the default route should stay unkeyed, got %q", spec.HostInterfaces[0].ExternalID)
+	}
+}

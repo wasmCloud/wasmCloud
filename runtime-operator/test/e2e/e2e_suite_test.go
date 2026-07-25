@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -251,6 +252,61 @@ var _ = BeforeSuite(func() {
 // registryImageTag is the tag the `e2e-images` xtask pushes every fixture
 // under. Kept in sync with TAG in xtask/src/e2e_images.rs.
 const registryImageTag = "e2e"
+
+// ensureDefaultHostgroupReady scales the default hostgroup to one replica and
+// waits for it to register a Host CR.
+//
+// Specs that place a workload need a host to place it on, and pod-Ready alone
+// is not enough — the Host CR appears only once the host has registered itself
+// (see messaging_test.go). Waiting here keeps placement independent of the
+// order specs happen to run in.
+func ensureDefaultHostgroupReady() {
+	By("ensuring at least one hostgroup pod is running")
+	cmd := exec.Command("kubectl", "scale", "deployment/hostgroup-default",
+		"--replicas=1", "-n", namespace)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to scale hostgroup")
+
+	cmd = exec.Command("kubectl", "rollout", "status",
+		"-n", namespace, "deployment/hostgroup-default", "--timeout=2m")
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "hostgroup rollout did not complete")
+
+	By("waiting for a Host CR to be registered")
+	Eventually(func(g Gomega) {
+		cmd := exec.Command("kubectl", "get", "hosts.runtime.wasmcloud.dev",
+			"-n", namespace, "-o", "jsonpath={.items}")
+		output, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(output).NotTo(Equal("[]"), "no Host CR registered yet")
+	}).WithTimeout(2 * time.Minute).Should(Succeed())
+}
+
+// dumpWorkloadDiagnostics prints the state a failed placement spec needs to be
+// diagnosed: whether the image pulled, whether the host bound the component,
+// and which of placement/sync/health the status conditions blame.
+func dumpWorkloadDiagnostics(workloadName string) {
+	dump := func(label string, args ...string) {
+		out, err := utils.Run(exec.Command("kubectl", args...))
+		if err == nil {
+			_, _ = fmt.Fprintf(GinkgoWriter, "=== %s ===\n%s\n", label, out)
+		} else {
+			_, _ = fmt.Fprintf(GinkgoWriter, "=== %s (FAILED: %s) ===\n", label, err)
+		}
+	}
+	dump("Pods", "get", "pods", "-n", namespace, "-o", "wide")
+	dump("Events", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
+	dump("Hostgroup logs", "logs", "-n", namespace,
+		"-l", "wasmcloud.com/name=hostgroup", "--tail=600", "--prefix=true")
+	dump("WorkloadDeployment", "get", "workloaddeployment", workloadName,
+		"-n", namespace, "-o", "yaml")
+	dump("WorkloadReplicaSets", "get", "workloadreplicasets.runtime.wasmcloud.dev",
+		"-n", namespace, "-o", "yaml")
+	dump("Workload CRs", "get", "workloads.runtime.wasmcloud.dev",
+		"-n", namespace, "-o", "yaml")
+	dump("Operator logs", "logs", "-n", namespace,
+		"-l", "wasmcloud.com/name=runtime-operator", "--tail=200")
+}
 
 // registryRef returns the in-cluster pull ref for a fixture that
 // `make e2e-images` built and pushed. The insecure hostgroups resolve it over
