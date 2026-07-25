@@ -119,6 +119,7 @@ const P3_FIXTURES: &[&str] = &[
     "svc-http-proxy",
     "svc-tcp-echo",
     "http-loopback-gateway",
+    "svc-no-run",
     "msg-counter",
     "bridge-backend",
     "bridge-service",
