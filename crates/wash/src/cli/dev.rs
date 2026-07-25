@@ -419,6 +419,10 @@ struct LoadedComponent {
     bytes: Bytes,
     interfaces: HashSet<WitInterface>,
     workload: ResolvedWorkload,
+    /// Warm-instance limits from `dev.components[].poolSize` /
+    /// `maxInvocations`. `-1` where the config left them unset.
+    pool_size: i32,
+    max_invocations: i32,
 }
 
 /// Thin wrapper around [`build_workload`]: extracts dev-component
@@ -465,6 +469,8 @@ async fn create_workload(
             bytes: Bytes::from(comp_bytes),
             interfaces,
             workload,
+            pool_size: dev_component.pool_size.unwrap_or(-1),
+            max_invocations: dev_component.max_invocations.unwrap_or(-1),
         });
     }
 
@@ -597,8 +603,8 @@ fn build_workload(
             bytes: sidecar.bytes,
             digest: None,
             local_resources: local_resources_for(&sidecar.workload),
-            pool_size: -1,
-            max_invocations: -1,
+            pool_size: sidecar.pool_size,
+            max_invocations: sidecar.max_invocations,
         });
     }
 
@@ -760,6 +766,8 @@ mod tests {
             bytes: fake_bytes(name),
             interfaces: HashSet::new(),
             workload,
+            pool_size: -1,
+            max_invocations: -1,
         }
     }
 
@@ -812,6 +820,60 @@ mod tests {
             &sidecar.local_resources.allowed_hosts[..],
             &["https://api.example.com".parse().unwrap()]
         );
+    }
+
+    /// `poolSize` / `maxInvocations` on a `dev.components` entry must reach the
+    /// workload component; the runtime reads them to decide whether to keep
+    /// instances warm. A sidecar that sets neither stays at `-1` (unset), which
+    /// the runtime reads as "no pooling".
+    #[test]
+    fn build_workload_carries_warm_instance_limits() {
+        let resolved = ResolvedWorkload::default();
+        let dev_cfg = DevConfig {
+            components: vec![
+                dev_component_named("pooled"),
+                dev_component_named("unpooled"),
+            ],
+            ..Default::default()
+        };
+        let mut pooled = loaded_sidecar("pooled", resolved.clone());
+        pooled.pool_size = 4;
+        pooled.max_invocations = 100;
+        let sidecars = vec![pooled, loaded_sidecar("unpooled", resolved.clone())];
+
+        let workload = build_workload(
+            &dev_cfg,
+            fake_bytes("dev"),
+            HashSet::new(),
+            sidecars,
+            None,
+            None,
+            &resolved,
+        );
+
+        let pooled = find_component(&workload, "pooled").unwrap();
+        assert_eq!(pooled.pool_size, 4);
+        assert_eq!(pooled.max_invocations, 100);
+
+        let unpooled = find_component(&workload, "unpooled").unwrap();
+        assert_eq!(unpooled.pool_size, -1);
+        assert_eq!(unpooled.max_invocations, -1);
+    }
+
+    /// The config keys are camelCase on the wire and optional, so a component
+    /// entry that omits them round-trips as "unset" rather than zero.
+    #[test]
+    fn dev_component_warm_instance_limits_deserialize() {
+        let with: DevComponent =
+            serde_yaml_ng::from_str("name: pooled\nfile: pooled.wasm\npoolSize: 8\nmaxInvocations: 50")
+                .unwrap();
+        assert_eq!(with.pool_size, Some(8));
+        assert_eq!(with.max_invocations, Some(50));
+
+        let without: DevComponent =
+            serde_yaml_ng::from_str("name: plain\nfile: plain.wasm").unwrap();
+        assert_eq!(without.pool_size, None);
+        assert_eq!(without.max_invocations, None);
     }
 
     #[test]
@@ -995,6 +1057,8 @@ mod tests {
             bytes: fake_bytes("sidecar"),
             interfaces: HashSet::from([iface("wasi", "config")]),
             workload: ResolvedWorkload::default(),
+            pool_size: -1,
+            max_invocations: -1,
         }];
 
         let workload = build_workload(
