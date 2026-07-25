@@ -69,6 +69,14 @@ pub struct WorkloadMetadata {
     pub(crate) loopback: Arc<std::sync::Mutex<loopback::Network>>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
+    /// Subset of [`Self::linked_components`] that must be eagerly instantiated
+    /// into any store where this component runs: exporters reachable from this
+    /// component through at least one link that can take the shared-store call
+    /// path (a sync function, or an async signature carrying non-relocatable
+    /// handles). Ephemeral-only exporters are excluded — every ephemeral call
+    /// builds its own store, so an in-store instance would never be looked up
+    /// (`exporter_instances` is read only by the shared-store invokers).
+    store_linked_components: HashSet<Arc<str>>,
 }
 
 impl WorkloadMetadata {
@@ -291,6 +299,7 @@ impl WorkloadService {
                 plugins: None,
                 loopback,
                 linked_components: Default::default(),
+                store_linked_components: Default::default(),
             },
             handle: None,
             max_restarts,
@@ -380,6 +389,7 @@ impl WorkloadComponent {
                 plugins: None,
                 loopback,
                 linked_components: Default::default(),
+                store_linked_components: Default::default(),
             },
             name: component_name.into(),
             // TODO: Implement pooling and instance limits
@@ -1034,6 +1044,9 @@ impl ResolvedWorkload {
         );
 
         let mut resolved_links: HashMap<Arc<str>, HashSet<Arc<str>>> = HashMap::new();
+        // Closure over shared-store edges only: which components need an eager
+        // in-store instance wherever the keyed component runs.
+        let mut resolved_store_links: HashMap<Arc<str>, HashSet<Arc<str>>> = HashMap::new();
 
         for component_id in sorted_component_ids {
             // In order to have mutable access to both the workload component and components that need
@@ -1053,22 +1066,30 @@ impl ResolvedWorkload {
                 .resolve_component_imports(&component, linker, interface_map)
                 .await
             {
-                Ok(direct_links) => {
-                    let linked_components = expand_link_closure(&direct_links, &resolved_links);
-                    workload_component.linked_components = linked_components;
+                Ok((direct_links, direct_shared_links)) => {
+                    workload_component.linked_components =
+                        expand_link_closure(&direct_links, &resolved_links);
+                    // A shared-store exporter runs inside this component's
+                    // store, so its own shared-store deps must be there too;
+                    // ephemeral-only exporters bring their deps into the
+                    // per-call store instead.
+                    workload_component.store_linked_components =
+                        expand_link_closure(&direct_shared_links, &resolved_store_links);
                     Ok(())
                 }
                 Err(err) => Err(err),
             };
 
             let linked_components = workload_component.linked_components.clone();
+            let store_linked_components = workload_component.store_linked_components.clone();
             let workload_component_id = workload_component.metadata.id.clone();
 
             self.components
                 .write()
                 .await
                 .insert(workload_component.metadata.id.clone(), workload_component);
-            resolved_links.insert(workload_component_id, linked_components);
+            resolved_links.insert(workload_component_id.clone(), linked_components);
+            resolved_store_links.insert(workload_component_id, store_linked_components);
             // Propagate any errors encountered during import resolution
             res?;
         }
@@ -1081,9 +1102,11 @@ impl ResolvedWorkload {
                 .resolve_component_imports(&component, linker, interface_map)
                 .await
             {
-                Ok(direct_links) => {
-                    let linked_components = expand_link_closure(&direct_links, &resolved_links);
-                    service.metadata.linked_components = linked_components;
+                Ok((direct_links, direct_shared_links)) => {
+                    service.metadata.linked_components =
+                        expand_link_closure(&direct_links, &resolved_links);
+                    service.metadata.store_linked_components =
+                        expand_link_closure(&direct_shared_links, &resolved_store_links);
                     Ok(())
                 }
                 Err(err) => Err(err),
@@ -1098,13 +1121,17 @@ impl ResolvedWorkload {
         Ok(())
     }
 
+    /// Returns the set of directly linked exporter ids, plus the subset of
+    /// those reached through at least one link that can take the shared-store
+    /// call path (and therefore needs an eager in-store instance).
     async fn resolve_component_imports(
         &self,
         component: &wasmtime::component::Component,
         linker: &mut Linker<SharedCtx>,
         interface_map: &HashMap<String, Arc<str>>,
-    ) -> anyhow::Result<HashSet<Arc<str>>> {
+    ) -> anyhow::Result<(HashSet<Arc<str>>, HashSet<Arc<str>>)> {
         let mut linked_components = HashSet::new();
+        let mut shared_store_links = HashSet::new();
         let ty = component.component_type();
         let imports: Vec<_> = ty.imports(component.engine()).collect();
         // The cross-store stream bridge engages only for a p3-service workload:
@@ -1127,6 +1154,7 @@ impl ResolvedWorkload {
                         instance_idx,
                         plugin_component_id,
                         nested_linked_component_ids,
+                        nested_store_instance_ids,
                         plugin_engine,
                     ) = {
                         let Some(exporter_component) = interface_map.get(import_name).cloned()
@@ -1141,7 +1169,7 @@ impl ResolvedWorkload {
                             );
                             continue;
                         };
-                        let nested_linked_component_ids = {
+                        let (nested_linked_component_ids, nested_store_instance_ids) = {
                             let Some(exporter_workload_component) =
                                 all_components.get(&exporter_component)
                             else {
@@ -1149,12 +1177,20 @@ impl ResolvedWorkload {
                                     "exporting component '{exporter_component}' for import '{import_name}' not found"
                                 );
                             };
-                            exporter_workload_component
-                                .metadata
-                                .linked_components
-                                .iter()
-                                .cloned()
-                                .collect::<Vec<_>>()
+                            (
+                                exporter_workload_component
+                                    .metadata
+                                    .linked_components
+                                    .iter()
+                                    .cloned()
+                                    .collect::<Vec<_>>(),
+                                exporter_workload_component
+                                    .metadata
+                                    .store_linked_components
+                                    .iter()
+                                    .cloned()
+                                    .collect::<Vec<_>>(),
+                            )
                         };
                         let Some(plugin_component) = all_components.get_mut(&exporter_component)
                         else {
@@ -1177,6 +1213,7 @@ impl ResolvedWorkload {
                             idx,
                             plugin_component_id,
                             nested_linked_component_ids,
+                            nested_store_instance_ids,
                             plugin_engine,
                         )
                     };
@@ -1252,6 +1289,8 @@ impl ResolvedWorkload {
                                         components: self.components.clone(),
                                         active_component_id: plugin_component_id.clone(),
                                         linked_component_ids: nested_linked_component_ids.clone(),
+                                        store_instance_component_ids: nested_store_instance_ids
+                                            .clone(),
                                         #[cfg(feature = "wasi-tls")]
                                         tls_provider: self.tls_provider.clone(),
                                         mode,
@@ -1271,6 +1310,9 @@ impl ResolvedWorkload {
                                 };
 
                                 linked_components.insert(inv.plugin_component_id.clone());
+                                if inv.ephemeral_call.is_none() {
+                                    shared_store_links.insert(inv.plugin_component_id.clone());
+                                }
 
                                 let export_name = inv.export_name.clone();
                                 if export_is_async {
@@ -1385,7 +1427,7 @@ impl ResolvedWorkload {
             }
         }
 
-        Ok(linked_components)
+        Ok((linked_components, shared_store_links))
     }
 
     /// Gets the unique identifier of the workload
@@ -1436,13 +1478,18 @@ impl ResolvedWorkload {
             let metadata = &component.metadata;
             let active_template = self.component_ctx_template(metadata);
             let mut linked_templates = Vec::with_capacity(metadata.linked_components.len());
-            let mut linked_instances = Vec::with_capacity(metadata.linked_components.len());
+            let mut linked_instances = Vec::with_capacity(metadata.store_linked_components.len());
             for linked_id in &metadata.linked_components {
                 let linked = components.get(linked_id).with_context(|| {
                     format!("linked component '{linked_id}' not found in workload")
                 })?;
                 linked_templates.push(self.component_ctx_template(&linked.metadata));
-                linked_instances.push((linked_id.clone(), linked.pre_instantiate_ref()?));
+                // Only shared-store-reachable exporters get an eager instance;
+                // ephemeral-only exporters are instantiated per call in their
+                // own store, so an instance here would never be looked up.
+                if metadata.store_linked_components.contains(linked_id) {
+                    linked_instances.push((linked_id.clone(), linked.pre_instantiate_ref()?));
+                }
             }
             (
                 metadata.engine().clone(),
@@ -1511,12 +1558,16 @@ impl ResolvedWorkload {
             .iter()
             .map(|metadata| self.component_ctx_template(metadata))
             .collect::<Vec<_>>();
-        let mut linked_instances = Vec::with_capacity(linked_component_ids.len());
+        let mut linked_instances = Vec::with_capacity(metadata.store_linked_components.len());
         for linked_component_id in &linked_component_ids {
-            linked_instances.push((
-                linked_component_id.clone(),
-                self.instantiate_pre(linked_component_id.as_ref()).await?,
-            ));
+            // Same rule as `new_store`: eager instances only for exporters
+            // reachable over a shared-store edge.
+            if metadata.store_linked_components.contains(linked_component_id) {
+                linked_instances.push((
+                    linked_component_id.clone(),
+                    self.instantiate_pre(linked_component_id.as_ref()).await?,
+                ));
+            }
         }
 
         Ok(ServiceStoreRecipe {

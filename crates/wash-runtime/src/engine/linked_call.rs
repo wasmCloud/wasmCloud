@@ -139,7 +139,13 @@ pub(crate) struct EphemeralLinkedCall {
     pub(crate) http_handler: Arc<dyn crate::host::http::HostHandler>,
     pub(crate) components: Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>>,
     pub(crate) active_component_id: Arc<str>,
+    /// All linked components of the callee: their ctx templates (and volume
+    /// mounts) are built into the ephemeral store.
     pub(crate) linked_component_ids: Vec<Arc<str>>,
+    /// Subset of `linked_component_ids` reachable from the callee over a
+    /// shared-store edge — the only ones that need an eager instance in the
+    /// ephemeral store (see `WorkloadMetadata::store_linked_components`).
+    pub(crate) store_instance_component_ids: Vec<Arc<str>>,
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
     /// How this call moves its args/results across the store boundary.
@@ -373,20 +379,24 @@ async fn new_ephemeral_store(
                 .metadata,
         );
         let mut linked = Vec::with_capacity(call.linked_component_ids.len());
-        let mut linked_instances = Vec::with_capacity(call.linked_component_ids.len());
+        let mut linked_instances = Vec::with_capacity(call.store_instance_component_ids.len());
         for component_id in &call.linked_component_ids {
             let component = components
                 .get(component_id)
                 .with_context(|| format!("linked component '{component_id}' not found"))?;
             linked.push(template_of(&component.metadata));
-            linked_instances.push((
-                component_id.clone(),
-                component.pre_instantiate_ref().map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to pre-instantiate linked components for ephemeral call: {e}"
-                    )
-                })?,
-            ));
+            // Eager instances only for shared-store-reachable exporters; the
+            // callee's ephemeral-only deps get their own store per call.
+            if call.store_instance_component_ids.contains(component_id) {
+                linked_instances.push((
+                    component_id.clone(),
+                    component.pre_instantiate_ref().map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to pre-instantiate linked components for ephemeral call: {e}"
+                        )
+                    })?,
+                ));
+            }
         }
         (active, linked, linked_instances)
     };
