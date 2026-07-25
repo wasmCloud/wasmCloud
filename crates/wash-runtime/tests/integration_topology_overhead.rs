@@ -7,9 +7,11 @@
 //! held to a trivial constant in every case so the difference is the topology:
 //!
 //!  * **component** — one component exporting `wasi:http/handler`, no service.
-//!    The runtime builds a store and instantiates it per request.
+//!    A store is built and instantiated per request unless `pool_size` says
+//!    otherwise; measured both ways.
 //!  * **service** — one service exporting `wasi:http/handler`. Instantiated
-//!    once; every request is a concurrent task on that instance.
+//!    once; every request is a concurrent task on that *one* instance, which
+//!    is also its ceiling.
 //!  * **service + component** — a service that calls a linked component per
 //!    request (the template's shape), measured with the callee cold (a store
 //!    per call, the default) and warm (`pool_size`).
@@ -58,7 +60,8 @@ fn resources() -> LocalResources {
 }
 
 /// A workload with a single component serving HTTP — no service at all.
-fn component_only(host: &str) -> WorkloadStartRequest {
+/// `warm` is its `pool_size`.
+fn component_only(host: &str, warm: i32) -> WorkloadStartRequest {
     WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
@@ -71,7 +74,7 @@ fn component_only(host: &str) -> WorkloadStartRequest {
                 digest: None,
                 bytes: bytes::Bytes::from_static(HTTP_HANDLER_P3_WASM),
                 local_resources: resources(),
-                pool_size: 0,
+                pool_size: warm,
                 max_invocations: 0,
             }],
             host_interfaces: http_only_host_interfaces(host),
@@ -255,7 +258,18 @@ async fn sweep(
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "measurement; run with --ignored"]
 async fn bench_topology_overhead() -> Result<()> {
-    let component = sweep("component only (store + instantiate per request)", "topo-c", component_only("topo-c")).await?;
+    let component = sweep(
+        "component only, cold (store + instantiate per request)",
+        "topo-c",
+        component_only("topo-c", 0),
+    )
+    .await?;
+    let component_warm = sweep(
+        "component only, warm (pool_size 4)",
+        "topo-cw",
+        component_only("topo-cw", 4),
+    )
+    .await?;
     let service = sweep("service only (one long-lived instance)", "topo-s", service_only("topo-s")).await?;
     let cold = sweep(
         "service + linked component, callee cold (store per call)",
@@ -272,16 +286,17 @@ async fn bench_topology_overhead() -> Result<()> {
 
     println!("\n=== relative throughput (higher is better; service-only = 1.00) ===");
     println!(
-        "{:>5}  {:>12}  {:>12}  {:>12}  {:>12}",
-        "conc", "component", "service", "svc+comp", "svc+warm"
+        "{:>5}  {:>10}  {:>10}  {:>10}  {:>10}  {:>10}",
+        "conc", "comp", "comp-warm", "service", "svc+comp", "svc+warm"
     );
     for (i, &c) in LEVELS.iter().enumerate() {
         let base = service.get(i).copied().unwrap_or(f64::NAN);
         let rel = |v: Option<&f64>| v.copied().unwrap_or(f64::NAN) / base;
         println!(
-            "{:>5}  {:>12.2}  {:>12.2}  {:>12.2}  {:>12.2}",
+            "{:>5}  {:>10.2}  {:>10.2}  {:>10.2}  {:>10.2}  {:>10.2}",
             c,
             rel(component.get(i)),
+            rel(component_warm.get(i)),
             1.0,
             rel(cold.get(i)),
             rel(warm.get(i)),

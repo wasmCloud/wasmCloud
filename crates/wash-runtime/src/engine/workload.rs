@@ -22,7 +22,7 @@ use crate::engine::ctx::SharedTlsProvider;
 use crate::{
     engine::{
         ctx::SharedCtx,
-        instance_pool::InstancePool,
+        instance_pool::{self, InstancePool},
         linked_call::{
             ComponentCtxTemplate, EphemeralCallMode, EphemeralLinkedCall, LinkedExportInvocation,
             func_is_bridge_safe, func_is_ephemeral_safe, invoke_linked_async_export,
@@ -1464,6 +1464,25 @@ impl ResolvedWorkload {
             false,
         )
         .await
+    }
+
+    /// The pool a request store for `component_id` may be parked in, or `None`
+    /// when it must be built and dropped per request.
+    ///
+    /// The component's linked components are instantiated into the same store
+    /// by [`Self::new_store`] and live exactly as long as it does, so they have
+    /// to have opted in too — see [`instance_pool::poolable`].
+    pub(crate) async fn instance_pool_for(
+        &self,
+        component_id: &str,
+    ) -> Option<Arc<InstancePool>> {
+        let components = self.components.read().await;
+        let component = components.get(component_id)?;
+        instance_pool::poolable(
+            &components,
+            component_id,
+            &component.metadata.linked_components,
+        )
     }
 
     /// Creates a new wasmtime Store for multiple components from the given workload metadata.

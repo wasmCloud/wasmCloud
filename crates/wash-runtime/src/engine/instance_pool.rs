@@ -37,11 +37,49 @@
 //!    that call's work. A guest that spawns background work and relies on it
 //!    being torn down with the call should not be pooled.
 
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use wasmtime::component::Instance;
 
 use crate::engine::ctx::SharedCtx;
+use crate::engine::workload::WorkloadComponent;
+
+/// The pool that `component_id`'s store may be parked in, or `None` when it
+/// must not be parked at all.
+///
+/// A store holds more than the one component: whatever that component is
+/// linked to is instantiated alongside it and lives exactly as long as the
+/// store does. Parking the store therefore keeps *every* instance in it warm,
+/// so every one of those components has to have opted in. Otherwise a
+/// component that left `pool_size` at zero — saying its state is ephemeral —
+/// would quietly acquire state that outlives a call, just because something
+/// else in the workload imports it.
+pub(crate) fn poolable(
+    components: &HashMap<Arc<str>, WorkloadComponent>,
+    component_id: &str,
+    linked: &HashSet<Arc<str>>,
+) -> Option<Arc<InstancePool>> {
+    let pool = Arc::clone(&components.get(component_id)?.instances);
+    if !pool.enabled() {
+        return None;
+    }
+    for linked_id in linked {
+        let linked_enabled = components
+            .get(linked_id)
+            .is_some_and(|c| c.instances.enabled());
+        if !linked_enabled {
+            tracing::debug!(
+                component_id,
+                linked_id = linked_id.as_ref(),
+                "not keeping instances warm: a linked component has not opted into pooling, \
+                 and it shares the store's lifetime"
+            );
+            return None;
+        }
+    }
+    Some(pool)
+}
 
 /// A store that has been instantiated and is parked between calls.
 pub(crate) struct WarmInstance {

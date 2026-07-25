@@ -17,7 +17,7 @@
 //! assemble the store (pre-instantiating the linked components). See
 //! [`EphemeralLinkedCall`] for how the ephemeral path is captured at link time.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -34,7 +34,7 @@ use wasmtime_wasi::WasiCtxBuilder;
 #[cfg(feature = "wasi-tls")]
 use crate::engine::ctx::SharedTlsProvider;
 use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx, StoreActiveCtxGuard};
-use crate::engine::instance_pool::{InstancePool, WarmInstance};
+use crate::engine::instance_pool::{self, InstancePool, WarmInstance};
 use crate::engine::store::relocate::{self, Relocated, bridgeable_element_type};
 use crate::engine::store::stream_pump::Done;
 use crate::engine::value::{carries_cross_store_handle, lift_results, lower_params};
@@ -341,15 +341,16 @@ pub(crate) async fn new_store_from_templates(
 }
 
 /// The warm-instance pool of the component this call targets, or `None` when
-/// that component has not opted into pooling.
+/// this store must not be parked — see [`instance_pool::poolable`], which also
+/// accounts for the linked components instantiated into the same store.
 ///
 /// Read from the component map per call rather than captured at link time, so
 /// a component whose entry is replaced does not keep serving from a pool that
 /// belongs to the old entry.
 async fn callee_instance_pool(call: &EphemeralLinkedCall) -> Option<Arc<InstancePool>> {
     let components = call.components.read().await;
-    let pool = Arc::clone(&components.get(&call.active_component_id)?.instances);
-    pool.enabled().then_some(pool)
+    let linked: HashSet<Arc<str>> = call.linked_component_ids.iter().cloned().collect();
+    instance_pool::poolable(&components, &call.active_component_id, &linked)
 }
 
 async fn new_ephemeral_store(
