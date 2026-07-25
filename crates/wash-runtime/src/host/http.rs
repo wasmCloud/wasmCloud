@@ -22,7 +22,7 @@ use std::{
     collections::{BTreeSet, HashMap},
     net::SocketAddr,
     path::Path,
-    sync::{Arc, atomic::AtomicUsize},
+    sync::Arc,
     time::Duration,
 };
 
@@ -113,32 +113,6 @@ pub(crate) fn http_ingress_hostnames(interfaces: &[crate::wit::WitInterface]) ->
         );
     }
     hosts
-}
-
-/// Normalize a hostname for routing-table keys: DNS names are
-/// case-insensitive (RFC 9110 §7.2, RFC 4343) and clients include the port in
-/// `Host` whenever they connect to a nonstandard port (`Host: bench:8080`).
-/// Registration stores normalized keys and lookup normalizes the incoming
-/// header, so `BENCH`, `bench:8080`, and `bench` all route to the same
-/// workload. An IPv6 literal keeps its brackets (`[::1]:8080` -> `[::1]`).
-/// (Ported from the perf/land normalization fix, 19d741a39.)
-fn normalize_host(raw: &str) -> String {
-    let host = raw.trim();
-    let without_port = if let Some(bracket_end) = host.rfind(']') {
-        // IPv6 literal: anything after the closing bracket is a port
-        &host[..=bracket_end]
-    } else if let Some(colon) = host.rfind(':') {
-        // Only strip a well-formed numeric port; leave anything else intact
-        // so a malformed header fails lookup instead of aliasing a real host.
-        if !host[colon + 1..].is_empty() && host[colon + 1..].bytes().all(|b| b.is_ascii_digit()) {
-            &host[..colon]
-        } else {
-            host
-        }
-    } else {
-        host
-    };
-    without_port.to_ascii_lowercase()
 }
 
 /// Why a request could not be routed to a workload.
@@ -244,150 +218,8 @@ pub trait Router: Send + Sync + 'static {
     ) -> Result<String, RouteError>;
 }
 
-/// How [`DynamicRouter`] picks among the replicas bound to one hostname.
-///
-/// BENCH PROTOTYPE (uncommitted): selectable via `WASH_ROUTING_POLICY` so the
-/// strategies can be A/B benchmarked through an unmodified `wash host`. The
-/// eventual feature plumbs this per workload instead of process-wide.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RoutingPolicy {
-    /// Uniform random pick via a per-thread PRNG (lock-free, no cross-core
-    /// coordination). The default.
-    #[default]
-    Random,
-    /// Strict rotation via a shared atomic cursor: over any window of N
-    /// consecutive requests each of the N replicas is visited exactly once,
-    /// at the cost of bouncing the cursor's cache line across cores.
-    RoundRobin,
-    /// Strict rotation with the cursor behind a `Mutex` — the naive locked
-    /// baseline, included only so the E2E benches have a lower bound.
-    RoundRobinMutex,
-    /// Session affinity: requests carrying the same affinity key always land
-    /// on the same replica, via rendezvous (highest-random-weight) hashing —
-    /// no shared state, lock-free, and a replica's removal only remaps the
-    /// keys that were pinned to it. The key is built from the sources in
-    /// [`StickyKeySpec`] (default: the first `X-Forwarded-For` entry, which
-    /// the gateway stamps); requests with no key fall back to `Random`.
-    Sticky,
-}
-
-/// One source contributing to the sticky affinity key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StickySource {
-    /// The originating client IP: first entry of `X-Forwarded-For`.
-    ClientIp,
-    /// An arbitrary request header, matched case-insensitively.
-    Header(String),
-}
-
-/// How [`RoutingPolicy::Sticky`] derives its affinity key: an ordered list of
-/// sources whose *present* values are concatenated into one composite key.
-///
-/// Composite (rather than first-match-wins) hashing is the hotspot mitigation:
-/// thousands of users behind one NAT/CDN egress share an `X-Forwarded-For`, so
-/// hashing IP alone pins them all to a single replica. Adding a
-/// higher-cardinality source (`header:x-session-id`) spreads them by session
-/// while keeping IP-only clients on plain IP affinity. All-absent -> `None`,
-/// and selection falls back to random.
-///
-/// BENCH PROTOTYPE: configured via `WASH_STICKY_KEY`, a comma-separated list
-/// of `client-ip` | `header:<name>` (default `client-ip`). The real feature
-/// carries the same spec as a `sticky-key` interface-config entry beside
-/// `routing-policy`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StickyKeySpec(Vec<StickySource>);
-
-impl Default for StickyKeySpec {
-    fn default() -> Self {
-        Self(vec![StickySource::ClientIp])
-    }
-}
-
-impl StickyKeySpec {
-    fn from_env() -> Self {
-        let Ok(raw) = std::env::var("WASH_STICKY_KEY") else {
-            return Self::default();
-        };
-        let sources: Vec<StickySource> = raw
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .filter_map(|s| match s {
-                "client-ip" => Some(StickySource::ClientIp),
-                _ => match s.strip_prefix("header:") {
-                    Some(name) if !name.is_empty() => {
-                        Some(StickySource::Header(name.to_ascii_lowercase()))
-                    }
-                    _ => {
-                        warn!(source = s, "unrecognized WASH_STICKY_KEY source; ignoring");
-                        None
-                    }
-                },
-            })
-            .collect();
-        if sources.is_empty() {
-            Self::default()
-        } else {
-            Self(sources)
-        }
-    }
-
-    /// Build the composite affinity key for `req`: the values of every present
-    /// source joined with a separator that cannot occur in header values, so
-    /// distinct source combinations never collide. `None` when no source is
-    /// present.
-    fn affinity_key<B>(&self, req: &hyper::Request<B>) -> Option<String> {
-        let mut parts: Vec<&str> = Vec::with_capacity(self.0.len());
-        for source in &self.0 {
-            let value = match source {
-                StickySource::ClientIp => req
-                    .headers()
-                    .get("x-forwarded-for")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.split(',').next())
-                    .map(str::trim),
-                StickySource::Header(name) => req
-                    .headers()
-                    .get(name.as_str())
-                    .and_then(|v| v.to_str().ok())
-                    .map(str::trim),
-            };
-            if let Some(v) = value
-                && !v.is_empty()
-            {
-                parts.push(v);
-            }
-        }
-        if parts.is_empty() {
-            None
-        } else {
-            Some(parts.join("\u{1f}"))
-        }
-    }
-}
-
-impl RoutingPolicy {
-    /// Read the process-wide policy from `WASH_ROUTING_POLICY`
-    /// (`random` | `round-robin`), defaulting to [`RoutingPolicy::Random`]
-    /// when unset or unrecognized.
-    fn from_env() -> Self {
-        match std::env::var("WASH_ROUTING_POLICY").as_deref() {
-            Ok("round-robin") | Ok("roundrobin") => Self::RoundRobin,
-            Ok("round-robin-mutex") => Self::RoundRobinMutex,
-            Ok("sticky") => Self::Sticky,
-            Ok("random") | Err(_) => Self::Random,
-            Ok(other) => {
-                warn!(
-                    policy = other,
-                    "unrecognized WASH_ROUTING_POLICY; using random"
-                );
-                Self::Random
-            }
-        }
-    }
-}
-
 /// Router that routes requests by 'Host' header, configured via WitInterface config
+#[derive(Default)]
 pub struct DynamicRouter {
     /// Routing tables behind a single [`ArcSwap`] so the per-request read in
     /// [`Self::select_workload`] is lock-free — a concurrent register/unbind can
@@ -395,25 +227,6 @@ pub struct DynamicRouter {
     /// via `rcu`; they happen on workload start/stop (rare relative to requests),
     /// so cloning the tables is cheap next to the hot read path.
     routes: ArcSwap<Routes>,
-    /// Replica-selection policy (see [`RoutingPolicy`]).
-    policy: RoutingPolicy,
-    /// Round-robin cursor; only strided when `policy` is
-    /// [`RoutingPolicy::RoundRobin`]. Relaxed ordering suffices: each request
-    /// only needs a distinct-enough counter value, not a total order.
-    rr: AtomicUsize,
-    /// Locked cursor for [`RoutingPolicy::RoundRobinMutex`] (bench baseline).
-    rr_mutex: std::sync::Mutex<usize>,
-    /// How [`RoutingPolicy::Sticky`] derives its affinity key.
-    sticky_key: StickyKeySpec,
-}
-
-impl Default for DynamicRouter {
-    fn default() -> Self {
-        Self {
-            sticky_key: StickyKeySpec::from_env(),
-            ..Self::with_policy(RoutingPolicy::from_env())
-        }
-    }
 }
 
 /// The `DynamicRouter` routing tables, swapped atomically as one unit so a
@@ -430,40 +243,18 @@ struct Routes {
 }
 
 impl DynamicRouter {
-    /// Construct a router with an explicit replica-selection policy.
-    pub fn with_policy(policy: RoutingPolicy) -> Self {
-        Self {
-            routes: ArcSwap::default(),
-            policy,
-            rr: AtomicUsize::new(0),
-            rr_mutex: std::sync::Mutex::new(0),
-            sticky_key: StickyKeySpec::default(),
-        }
-    }
-
-    /// Construct a sticky router with an explicit affinity-key spec.
-    pub fn with_sticky_key(spec: StickyKeySpec) -> Self {
-        Self {
-            sticky_key: spec,
-            ..Self::with_policy(RoutingPolicy::Sticky)
-        }
-    }
-
     /// Register `workload_id` under every hostname in `hosts`, updating both the
     /// forward (host -> replicas) and reverse (workload -> hosts) maps so
     /// [`Router::on_workload_unbind`] can later remove every entry cleanly.
     /// Idempotent: re-registering the same workload (e.g. a service restart)
     /// leaves the tables unchanged.
     fn register_hostnames(&self, workload_id: &str, hosts: &[String]) {
-        // Keys are stored normalized (lowercase, portless) so lookup matches
-        // whatever case/port form the client sends. See `normalize_host`.
-        let hosts: Vec<String> = hosts.iter().map(|h| normalize_host(h)).collect();
         self.routes.rcu(|cur| {
             let mut routes = (**cur).clone();
             routes
                 .workload_to_host
-                .insert(workload_id.to_string(), hosts.clone());
-            for host in &hosts {
+                .insert(workload_id.to_string(), hosts.to_vec());
+            for host in hosts {
                 routes
                     .host_to_workload
                     .entry(host.clone())
@@ -481,7 +272,7 @@ impl DynamicRouter {
     /// evenly in aggregate. Split out from [`Router::route_incoming_request`] so
     /// the selection logic is unit-testable without constructing a
     /// [`hyper::body::Incoming`].
-    fn select_workload(&self, host: &str, affinity: Option<&str>) -> Result<String, RouteError> {
+    fn select_workload(&self, host: &str) -> Result<String, RouteError> {
         // Lock-free read of a routing-table snapshot.
         let routes = self.routes.load();
         let Some(workload_set) = routes.host_to_workload.get(host) else {
@@ -492,47 +283,11 @@ impl DynamicRouter {
         if workload_set.is_empty() {
             return Err(RouteError::NoWorkloadForHost(host.to_string()));
         }
-        let selected = match (self.policy, affinity) {
-            // Rendezvous (highest-random-weight) hashing: every (key, replica)
-            // pair gets a pseudo-random weight and the key goes to the replica
-            // with the highest one. Stateless and lock-free; removing a replica
-            // only remaps the keys that were pinned to it.
-            (RoutingPolicy::Sticky, Some(key)) => {
-                use std::hash::{Hash, Hasher};
-                let mut kh = std::collections::hash_map::DefaultHasher::new();
-                key.hash(&mut kh);
-                let kh = kh.finish();
-                workload_set.iter().max_by_key(|id| {
-                    let mut rh = std::collections::hash_map::DefaultHasher::new();
-                    id.hash(&mut rh);
-                    (kh ^ rh.finish()).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                })
-            }
-            // Sticky without an affinity key degrades to random.
-            (RoutingPolicy::Random | RoutingPolicy::Sticky, _) => workload_set
-                .iter()
-                .nth(fastrand::usize(..workload_set.len())),
-            (RoutingPolicy::RoundRobin, _) => {
-                let idx =
-                    self.rr.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % workload_set.len();
-                workload_set.iter().nth(idx)
-            }
-            (RoutingPolicy::RoundRobinMutex, _) => {
-                let mut cursor = match self.rr_mutex.lock() {
-                    Ok(guard) => guard,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
-                let idx = *cursor % workload_set.len();
-                *cursor = cursor.wrapping_add(1);
-                drop(cursor);
-                workload_set.iter().nth(idx)
-            }
-        };
-        let workload_id =
-            selected.ok_or_else(|| RouteError::NoWorkloadForHost(host.to_string()))?;
-        // BENCH PROTOTYPE: lets the E2E fairness pass tally per-replica routing
-        // by grepping debug logs; free when the debug level is disabled.
-        debug!(workload = %workload_id, "routed request to replica");
+        let idx = fastrand::usize(..workload_set.len());
+        let workload_id = workload_set
+            .iter()
+            .nth(idx)
+            .ok_or_else(|| RouteError::NoWorkloadForHost(host.to_string()))?;
         Ok(workload_id.clone())
     }
 }
@@ -646,15 +401,10 @@ impl Router for DynamicRouter {
             .and_then(|h| h.to_str().ok())
             .or_else(|| req.uri().authority().map(|a| a.as_str()))
             .ok_or(RouteError::MissingHost)?;
-        // Affinity key for `Sticky`, built per the configured [`StickyKeySpec`]
-        // (default: first `X-Forwarded-For` entry, which the gateway stamps).
-        let affinity = (self.policy == RoutingPolicy::Sticky)
-            .then(|| self.sticky_key.affinity_key(req))
-            .flatten();
         // `select_workload` does a lock-free `ArcSwap` load and an in-memory
         // lookup, so it runs inline on the async worker — no `block_in_place`
         // needed (and routing works on any runtime flavor).
-        self.select_workload(&normalize_host(workload_host), affinity.as_deref())
+        self.select_workload(workload_host)
     }
 }
 
@@ -2893,7 +2643,7 @@ mod tests {
         let mut counts: std::collections::BTreeMap<String, usize> =
             std::collections::BTreeMap::new();
         for _ in 0..DRAWS {
-            let id = router.select_workload("svc.local", None).unwrap();
+            let id = router.select_workload("svc.local").unwrap();
             *counts.entry(id).or_default() += 1;
         }
 
@@ -2911,148 +2661,6 @@ mod tests {
         }
     }
 
-    /// The `RoundRobin` policy (bench prototype) is a strict rotation: over any
-    /// window of N consecutive single-threaded draws, each of the N replicas is
-    /// selected exactly once, in stable (BTreeSet) order.
-    #[tokio::test]
-    async fn dynamic_router_round_robin_policy_rotates_exactly() {
-        let router = DynamicRouter::with_policy(RoutingPolicy::RoundRobin);
-        let replicas = ["r0", "r1", "r2", "r3"];
-        for id in replicas {
-            router
-                .on_service_http_resolved(id, &["svc.local".to_string()])
-                .await
-                .unwrap();
-        }
-
-        for cycle in 0..3 {
-            let picked: Vec<String> = (0..replicas.len())
-                .map(|_| router.select_workload("svc.local", None).unwrap())
-                .collect();
-            assert_eq!(
-                picked,
-                replicas.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                "cycle {cycle} should visit every replica exactly once, in order"
-            );
-        }
-    }
-
-    /// The `Sticky` policy (bench prototype) pins an affinity key to one
-    /// replica: the same key always selects the same replica, distinct keys
-    /// spread across replicas (rendezvous hashing), and a request without a
-    /// key falls back to random spread.
-    #[tokio::test]
-    async fn dynamic_router_sticky_policy_pins_and_spreads() {
-        let router = DynamicRouter::with_policy(RoutingPolicy::Sticky);
-        let replicas = ["r0", "r1", "r2", "r3"];
-        for id in replicas {
-            router
-                .on_service_http_resolved(id, &["svc.local".to_string()])
-                .await
-                .unwrap();
-        }
-
-        // Same key -> same replica, every time.
-        let pinned = router
-            .select_workload("svc.local", Some("10.0.0.1"))
-            .unwrap();
-        for _ in 0..100 {
-            assert_eq!(
-                router
-                    .select_workload("svc.local", Some("10.0.0.1"))
-                    .unwrap(),
-                pinned,
-                "sticky selection must be deterministic per key"
-            );
-        }
-
-        // Distinct keys spread: with 1000 keys over 4 replicas, every replica
-        // serves some keys and none dominates (hashing is uniform enough that
-        // these loose bounds cannot flake).
-        let mut counts: std::collections::BTreeMap<String, usize> =
-            std::collections::BTreeMap::new();
-        for i in 0..1000 {
-            let key = format!("10.0.{}.{}", i / 250, i % 250);
-            let id = router.select_workload("svc.local", Some(&key)).unwrap();
-            *counts.entry(id).or_default() += 1;
-        }
-        assert_eq!(
-            counts.len(),
-            replicas.len(),
-            "every replica should serve keys: {counts:?}"
-        );
-        for (id, hits) in &counts {
-            assert!(
-                *hits < 500,
-                "replica {id} serves {hits}/1000 keys — hash badly skewed"
-            );
-        }
-
-        // No key -> random fallback still spreads.
-        let mut fallback: std::collections::BTreeSet<String> = Default::default();
-        for _ in 0..200 {
-            fallback.insert(router.select_workload("svc.local", None).unwrap());
-        }
-        assert!(
-            fallback.len() > 1,
-            "keyless sticky must fall back to spreading"
-        );
-    }
-
-    /// The composite [`StickyKeySpec`] is the hotspot mitigation: clients
-    /// sharing one `X-Forwarded-For` (NAT/CDN egress) but carrying distinct
-    /// session headers must spread across replicas instead of all pinning to
-    /// the IP's replica — while staying deterministic per (ip, session) pair.
-    #[tokio::test]
-    async fn dynamic_router_sticky_composite_key_spreads_shared_ip() {
-        let spec = StickyKeySpec(vec![
-            StickySource::ClientIp,
-            StickySource::Header("x-session-id".to_string()),
-        ]);
-
-        // Key building from a real request: both sources, one source, none.
-        let req = hyper::Request::builder()
-            .header("x-forwarded-for", "198.51.100.7, 10.0.0.2")
-            .header("x-session-id", "alice")
-            .body(())
-            .unwrap();
-        assert_eq!(
-            spec.affinity_key(&req).as_deref(),
-            Some("198.51.100.7\u{1f}alice")
-        );
-        let ip_only = hyper::Request::builder()
-            .header("x-forwarded-for", "198.51.100.7")
-            .body(())
-            .unwrap();
-        assert_eq!(spec.affinity_key(&ip_only).as_deref(), Some("198.51.100.7"));
-        let keyless = hyper::Request::builder().body(()).unwrap();
-        assert_eq!(spec.affinity_key(&keyless), None);
-
-        // Distinct sessions behind one shared IP spread across replicas.
-        let router = DynamicRouter::with_sticky_key(spec);
-        for id in ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7"] {
-            router
-                .on_service_http_resolved(id, &["svc.local".to_string()])
-                .await
-                .unwrap();
-        }
-        let mut hit: std::collections::BTreeSet<String> = Default::default();
-        for session in 0..64 {
-            let key = format!("198.51.100.7\u{1f}session-{session}");
-            let picked = router.select_workload("svc.local", Some(&key)).unwrap();
-            // Deterministic per composite key.
-            assert_eq!(
-                router.select_workload("svc.local", Some(&key)).unwrap(),
-                picked
-            );
-            hit.insert(picked);
-        }
-        assert!(
-            hit.len() >= 4,
-            "64 sessions behind one IP should spread over many of 8 replicas, got {hit:?}"
-        );
-    }
-
     /// A service-only workload (defect #1) reaches routing through
     /// `on_service_http_resolved`, not `on_workload_resolved`. The router must
     /// register its hostnames so requests resolve. Previously this was a no-op
@@ -3062,7 +2670,7 @@ mod tests {
         let router = DynamicRouter::default();
         assert!(
             matches!(
-                router.select_workload("svc.local", None),
+                router.select_workload("svc.local"),
                 Err(RouteError::NoWorkloadForHost(_))
             ),
             "host should not resolve before the service is registered"
@@ -3076,11 +2684,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(router.select_workload("svc.local", None).unwrap(), "svc-1");
-        assert_eq!(
-            router.select_workload("svc.internal", None).unwrap(),
-            "svc-1"
-        );
+        assert_eq!(router.select_workload("svc.local").unwrap(), "svc-1");
+        assert_eq!(router.select_workload("svc.internal").unwrap(), "svc-1");
     }
 
     /// A service resolving with no valid hostnames (e.g. under a host-agnostic
@@ -3090,7 +2695,7 @@ mod tests {
         let router = DynamicRouter::default();
         router.on_service_http_resolved("svc-1", &[]).await.unwrap();
         assert!(matches!(
-            router.select_workload("anything.local", None),
+            router.select_workload("anything.local"),
             Err(RouteError::NoWorkloadForHost(_))
         ));
     }
@@ -3113,7 +2718,7 @@ mod tests {
 
         for _ in 0..4 {
             assert_eq!(
-                router.select_workload("svc.local", None).unwrap(),
+                router.select_workload("svc.local").unwrap(),
                 "r1",
                 "only the surviving replica should be selected after unbind"
             );
@@ -3136,15 +2741,12 @@ mod tests {
             .on_service_http_resolved("svc-1", &["svc.local".to_string()], tx)
             .await
             .unwrap();
-        assert_eq!(
-            server.router.select_workload("svc.local", None).unwrap(),
-            "svc-1"
-        );
+        assert_eq!(server.router.select_workload("svc.local").unwrap(), "svc-1");
 
         server.on_service_http_unbind("svc-1").await.unwrap();
         assert!(
             matches!(
-                server.router.select_workload("svc.local", None),
+                server.router.select_workload("svc.local"),
                 Err(RouteError::NoWorkloadForHost(_))
             ),
             "hostname must stop routing once the service unbinds"
