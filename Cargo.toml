@@ -46,6 +46,9 @@ uninlined_format_args = 'deny'
 unnecessary_box_returns = 'deny'
 
 [workspace.dependencies]
+# Blocks fork: real AWS S3 backend for wasi:blobstore (no S3 provider ships upstream).
+aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rustls", "rt-tokio", "sso"] }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
 anyhow = { version = "1.0.98", default-features = false }
 arc-swap = { version = "1.7", default-features = false }
 async-nats = { version = "0.49.1", default-features = false, features = ["aws-lc-rs", "jetstream", "kv", "object-store", "service"] }

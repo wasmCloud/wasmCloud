@@ -43,6 +43,8 @@ maintenance = { status = "actively-developed" }
 [dependencies]
 anyhow = { workspace = true }
 async-nats = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-s3 = { workspace = true }
 bon = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }

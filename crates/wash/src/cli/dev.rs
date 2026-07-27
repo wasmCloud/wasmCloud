@@ -116,10 +116,19 @@ impl CliCommand for DevCommand {
         }
 
         // Per-plugin settings override the in-memory default. The order of precedence is:
-        // use a filesystem backend if there is a path override,
-        // otherwise it uses NATS if `data_nats_url` is set, otherwise it falls back to
-        // the in-memory plugin.
-        if let Some(blobstore_path) = &dev_config.wasi_blobstore_path {
+        // use a real AWS S3 backend if BLOCKS_S3_BLOBSTORE_BUCKET is set, otherwise a
+        // filesystem backend if there is a path override, otherwise NATS if
+        // `data_nats_url` is set, otherwise it falls back to the in-memory plugin.
+        if let Ok(bucket) = std::env::var("BLOCKS_S3_BLOBSTORE_BUCKET") {
+            let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+                .load()
+                .await;
+            let s3_client = aws_sdk_s3::Client::new(&aws_config);
+            host_builder = host_builder.with_plugin(Arc::new(plugin::wasi_blobstore::S3Blobstore::new(
+                s3_client, bucket.clone(),
+            )))?;
+            debug!(bucket = %bucket, "WASI Blobstore plugin registered with real AWS S3 backend");
+        } else if let Some(blobstore_path) = &dev_config.wasi_blobstore_path {
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_blobstore::FilesystemBlobstore::new(blobstore_path.clone()),
             ))?;
