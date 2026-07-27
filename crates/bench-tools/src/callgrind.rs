@@ -165,3 +165,16 @@ pub fn read_ir(path: &Path) -> Result<Option<u64>> {
 pub fn dir_from_target(target_dir: &Path) -> PathBuf {
     target_dir.join("gungraun")
 }
+
+/// Whether `bench` is an instruction-count bench rather than a wall-clock one.
+///
+/// Every gungraun-harness bench target is named `gungraun*` (`gungraun`,
+/// `gungraun_plugin`, ...) and writes to `$CARGO_TARGET_DIR/gungraun/` instead
+/// of `criterion/`. Matching the prefix rather than a fixed set means a new
+/// gungraun bench is classified correctly the moment it is added — an exact
+/// match silently routes it down the criterion path, where it finds no output
+/// and reports nothing. `scripts/bench/run-bench.sh` and `compare-bench.sh`
+/// key off the same prefix.
+pub fn is_instruction_bench(bench: &str) -> bool {
+    bench.starts_with("gungraun")
+}

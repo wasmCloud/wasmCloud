@@ -40,6 +40,7 @@ on:
           - gungraun
           - wasmtime_baseline
           - wasmtime_serve
+          - gungraun_plugin
       ref_a:
         description: baseline ref (branch, tag, sha, or #PR)
         type: string
