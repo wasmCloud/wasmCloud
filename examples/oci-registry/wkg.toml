@@ -1,0 +1,5 @@
+# `wasmcloud:secrets` is defined in-repo; resolve it from that source (rather
+# than a registry) so the example tracks the exact interface the host provides.
+# Every other dependency still resolves from the registries pinned in `wkg.lock`.
+[overrides]
+"wasmcloud:secrets" = { path = "../../wit/secrets/wit" }
