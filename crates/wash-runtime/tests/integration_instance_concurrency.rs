@@ -22,11 +22,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 
 use wash_runtime::host::HostApi;
-use wash_runtime::types::{Component, LocalResources, Workload, WorkloadStartRequest};
+use wash_runtime::types::{
+    Component, LocalResources, Workload, WorkloadStartRequest, WorkloadStopRequest,
+};
 
 mod common;
 use common::{http_only_host_interfaces, json_u64_field, start_host_with_p3_http_handler};
@@ -38,9 +41,20 @@ async fn start_sleeper(
     pool_size: i32,
     max_concurrency: i32,
 ) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    let (addr, host, _id) = start_sleeper_with(host_header, pool_size, max_concurrency, 0).await?;
+    Ok((addr, host))
+}
+
+async fn start_sleeper_with(
+    host_header: &'static str,
+    pool_size: i32,
+    max_concurrency: i32,
+    max_invocations: i32,
+) -> Result<(std::net::SocketAddr, impl HostApi, String)> {
     let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
+    let workload_id = uuid::Uuid::new_v4().to_string();
     host.workload_start(WorkloadStartRequest {
-        workload_id: uuid::Uuid::new_v4().to_string(),
+        workload_id: workload_id.clone(),
         workload: Workload {
             namespace: "test".to_string(),
             name: host_header.to_string(),
@@ -52,7 +66,7 @@ async fn start_sleeper(
                 bytes: bytes::Bytes::from_static(HTTP_SLEEPER_WASM),
                 local_resources: LocalResources::default(),
                 pool_size,
-                max_invocations: 0,
+                max_invocations,
                 max_concurrency,
             }],
             host_interfaces: http_only_host_interfaces(host_header),
@@ -61,7 +75,7 @@ async fn start_sleeper(
     })
     .await
     .context("sleeper workload should start")?;
-    Ok((addr, host))
+    Ok((addr, host, workload_id))
 }
 
 /// Fire `n` requests at once; return the highest `peak_in_flight` any instance
@@ -123,6 +137,21 @@ async fn max_concurrency_overlaps_calls_on_one_instance() -> Result<()> {
     Ok(())
 }
 
+/// One request; returns the body, or the error the host produced.
+async fn get(addr: std::net::SocketAddr, host_header: &str, path: &str) -> Result<String> {
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .timeout(Duration::from_secs(20))
+        .build()?;
+    let resp = client
+        .get(format!("http://{addr}{path}"))
+        .header("HOST", host_header)
+        .send()
+        .await?;
+    anyhow::ensure!(resp.status().is_success(), "status {}", resp.status());
+    Ok(resp.text().await?)
+}
+
 /// Concurrency composes with `pool_size` rather than replacing it: two
 /// instances at two calls each cover the burst, and no instance exceeds its own
 /// limit.
@@ -135,6 +164,117 @@ async fn concurrency_is_bounded_per_instance() -> Result<()> {
     assert!(
         (1..=2).contains(&peak),
         "no instance may exceed max_concurrency of 2, saw {peak}"
+    );
+    Ok(())
+}
+
+/// A trap poisons the store it runs in, so it takes down the calls sharing that
+/// instance. What must *not* happen is the pool going with it: the faulted
+/// instance is reaped and the next call is served by a fresh one.
+///
+/// This is the cost of sharing an instance, and the reason `max_concurrency`
+/// bounds how much of it a single trap can reach.
+#[tokio::test]
+async fn a_trap_retires_its_instance_and_the_pool_recovers() -> Result<()> {
+    let (addr, _host) = start_sleeper("conc-trap", 2, 4).await?;
+
+    // Warm an instance and confirm it serves.
+    get(addr, "conc-trap", "/").await?;
+
+    // Poison one. The request itself must fail rather than hang.
+    let trapped = get(addr, "conc-trap", "/trap").await;
+    assert!(
+        trapped.is_err(),
+        "a trapping request must fail, not succeed"
+    );
+
+    // The pool keeps serving: the faulted instance is reaped and the next call
+    // lands on a live or fresh one.
+    for i in 0..4 {
+        get(addr, "conc-trap", "/")
+            .await
+            .with_context(|| format!("request {i} after the trap should still be served"))?;
+    }
+    Ok(())
+}
+
+/// A client that goes away mid-request must not disturb the calls sharing its
+/// instance. Before instances were shared this was free -- the request owned
+/// its store and dropping it hurt nobody. Now it has to be checked.
+#[tokio::test]
+async fn a_disconnected_client_leaves_its_siblings_alone() -> Result<()> {
+    let (addr, _host) = start_sleeper("conc-drop", 1, 8).await?;
+
+    // Warm the single instance so both requests below land on it.
+    get(addr, "conc-drop", "/").await?;
+
+    // A request we abandon while it is in flight.
+    let abandoned = tokio::spawn(async move {
+        let _ = get(addr, "conc-drop", "/").await;
+    });
+    // ...and a sibling on the same instance.
+    let sibling = tokio::spawn(async move { get(addr, "conc-drop", "/").await });
+
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    abandoned.abort();
+    let _ = abandoned.await;
+
+    sibling
+        .await
+        .context("sibling task panicked")?
+        .context("a sibling call must survive a client disconnecting")?;
+
+    // And the instance is still serving afterwards.
+    get(addr, "conc-drop", "/")
+        .await
+        .context("the instance must keep serving after a client disconnect")?;
+    Ok(())
+}
+
+/// `max_invocations` and `max_concurrency` compose: an instance admits up to
+/// its invocation budget, drains what it took, and is replaced. The replacement
+/// has paid no setup yet, so it reports a peak of its own rather than
+/// continuing the retired instance's count.
+#[tokio::test]
+async fn max_invocations_retires_a_concurrent_instance() -> Result<()> {
+    let (addr, _host, _id) = start_sleeper_with("conc-retire", 1, 4, 4).await?;
+
+    // Four calls at once: one instance takes all of them and is then retired.
+    let first = burst(addr, "conc-retire", 4).await?;
+    assert!(
+        first > 1,
+        "the instance should have overlapped its four calls, saw peak {first}"
+    );
+
+    // It has spent its budget, so this burst is served by a replacement.
+    for i in 0..4 {
+        get(addr, "conc-retire", "/")
+            .await
+            .with_context(|| format!("request {i} after retirement should be served"))?;
+    }
+    Ok(())
+}
+
+/// Stopping a workload has to take its warm instances with it. Each one owns a
+/// store and a task that outlive any single call, so nothing else would.
+#[tokio::test]
+async fn stopping_a_workload_shuts_down_its_warm_instances() -> Result<()> {
+    let (addr, host, workload_id) = start_sleeper_with("conc-stop", 2, 4, 0).await?;
+    burst(addr, "conc-stop", 4).await?;
+
+    // Stopping must complete rather than hang on the live drivers...
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        host.workload_stop(WorkloadStopRequest { workload_id }),
+    )
+    .await
+    .context("workload stop should not hang on warm instances")?
+    .context("workload stop should succeed")?;
+
+    // ...and the instances must be gone with it, not still answering.
+    assert!(
+        get(addr, "conc-stop", "/").await.is_err(),
+        "a stopped workload's warm instances must not keep serving"
     );
     Ok(())
 }
