@@ -16,6 +16,10 @@
 //! Each reply carries the peak number of calls this instance had in flight at
 //! once. That is the timing-independent signal: an instance serving one call at
 //! a time reports `1` however hard it is driven.
+//!
+//! `/trap` traps instead of replying, so a test can poison an instance's store
+//! on purpose and check what that costs: the calls sharing that instance, and
+//! nothing else.
 
 mod bindings;
 
@@ -37,7 +41,11 @@ static PEAK_IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
 struct Component;
 
 impl HttpGuest for Component {
-    async fn handle(_request: Request) -> Result<Response, ErrorCode> {
+    async fn handle(request: Request) -> Result<Response, ErrorCode> {
+        let trap = request
+            .get_path_with_query()
+            .is_some_and(|p| p.starts_with("/trap"));
+
         let now = IN_FLIGHT.fetch_add(1, Ordering::SeqCst) + 1;
         PEAK_IN_FLIGHT.fetch_max(now, Ordering::SeqCst);
 
@@ -51,6 +59,10 @@ impl HttpGuest for Component {
         // instance runs while this call is parked here — which is the whole
         // point of the exercise.
         monotonic_clock::wait_for(PER_CALL_NANOS).await;
+
+        // Trap after the yield, so anything sharing this instance is already
+        // in flight and goes down with the store.
+        assert!(!trap, "requested trap");
 
         IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
         let peak = PEAK_IN_FLIGHT.load(Ordering::SeqCst);
