@@ -156,18 +156,17 @@ async fn http_call_counts(
             "request {i} returned {}",
             response.status()
         );
-        counts.push(common::json_u64_field(&response.text().await?, "http_calls"));
+        counts.push(common::json_u64_field(
+            &response.text().await?,
+            "http_calls",
+        ));
     }
     Ok(counts)
 }
 
 /// Issue `n` sequential `GET /calls` requests, returning each body parsed as
 /// the callee instance's call count.
-async fn call_counts(
-    addr: std::net::SocketAddr,
-    host_header: &str,
-    n: usize,
-) -> Result<Vec<u32>> {
+async fn call_counts(addr: std::net::SocketAddr, host_header: &str, n: usize) -> Result<Vec<u32>> {
     let client = reqwest::Client::new();
     let mut counts = Vec::with_capacity(n);
     for i in 0..n {

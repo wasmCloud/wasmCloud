@@ -34,7 +34,7 @@ use wasmtime_wasi::WasiCtxBuilder;
 #[cfg(feature = "wasi-tls")]
 use crate::engine::ctx::SharedTlsProvider;
 use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx, StoreActiveCtxGuard};
-use crate::engine::instance_pool::{self, InstancePool, WarmInstance};
+use crate::engine::instance_pool::{self, ComponentInstance, InstancePool};
 use crate::engine::store::relocate::{self, Relocated, bridgeable_element_type};
 use crate::engine::store::stream_pump::Done;
 use crate::engine::value::{carries_cross_store_handle, lift_results, lower_params};
@@ -692,7 +692,7 @@ async fn invoke_ephemeral_plain(
                 .await
                 .map_err(|e| wasmtime::format_err!("{e:#}"))?;
             let instance = inv.pre.instantiate_async(&mut store).await?;
-            WarmInstance {
+            ComponentInstance {
                 store,
                 instance,
                 invocations: 0,
@@ -717,7 +717,7 @@ async fn invoke_ephemeral_plain(
     // caller cancelled mid-call (the `AbortOnDrop`) drops the store with the
     // task instead of returning a half-finished instance to the pool.
     let mut task = AbortOnDrop(tokio::task::spawn(async move {
-        let WarmInstance {
+        let ComponentInstance {
             mut store,
             instance,
             invocations,
@@ -746,7 +746,7 @@ async fn invoke_ephemeral_plain(
             .map_err(|e| wasmtime::format_err!("{e:#}"))
             .and_then(|inner| inner);
         (
-            WarmInstance {
+            ComponentInstance {
                 store,
                 instance,
                 invocations,

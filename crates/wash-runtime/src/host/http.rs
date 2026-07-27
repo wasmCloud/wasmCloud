@@ -1627,13 +1627,15 @@ async fn invoke_component_handler(
         // Reuse a warm instance when the component has opted in, otherwise
         // build and instantiate a store for this request alone. A burst past
         // `pool_size` is served cold rather than queued.
-        let pool = workload_handle.instance_pool_for(component_id).await;
+        let pool = workload_handle
+            .instance_pool_for_component(component_id)
+            .await;
         let warm = match pool.as_ref().and_then(|pool| pool.checkout()) {
             Some(warm) => warm,
             None => {
                 let mut store = workload_handle.new_store(component_id).await?;
                 let instance = instance_pre.instantiate_async(&mut store).await?;
-                crate::engine::instance_pool::WarmInstance {
+                crate::engine::instance_pool::ComponentInstance {
                     store,
                     instance,
                     invocations: 0,

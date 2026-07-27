@@ -1,18 +1,19 @@
-//! Warm-instance pooling for ephemeral linked calls.
+//! Instance pooling.
 //!
-//! By default a plain-value linked call runs in a store that is built,
-//! instantiated, invoked and dropped per call (see
-//! [`crate::engine::linked_call`]). That keeps component state ephemeral —
-//! the contract a `Component` is defined by — but it also means the guest
-//! rebuilds everything it caches in linear memory on every call: connection
-//! pools, lazily-built runtimes, parsed configuration.
+//! By default a call runs in a store that is built, instantiated, invoked and
+//! dropped per call, on the linked-call path (see
+//! [`crate::engine::linked_call`]) and on HTTP dispatch alike. That keeps
+//! component state ephemeral, which is the contract a `Component` is defined
+//! by, but it also means the guest rebuilds everything it caches in linear
+//! memory on every call: connection pools, lazily-built runtimes, parsed
+//! configuration.
 //!
-//! A component that sets `pool_size > 0` opts out of that: after a call
-//! returns cleanly its store is parked here and the next call to the same
-//! component reuses it, skipping the context build, the [`wasmtime::Store`]
-//! allocation and the instantiation. Guest state then survives across calls,
-//! which is the entire point — but it is also why pooling is opt-in rather
-//! than the default.
+//! A component whose [`InstancePolicy`] is [`InstancePolicy::Warm`] opts out
+//! of that: after a call returns cleanly its store is parked here and the next
+//! call to the same component reuses it, skipping the context build, the
+//! [`wasmtime::Store`] allocation and the instantiation. Guest state then
+//! survives across calls, which is the entire point — but it is also why
+//! pooling is opt-in rather than the default.
 //!
 //! Two rules bound how long any single instance lives:
 //!
@@ -38,12 +39,14 @@
 //!    being torn down with the call should not be pooled.
 
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use wasmtime::component::Instance;
 
 use crate::engine::ctx::SharedCtx;
 use crate::engine::workload::WorkloadComponent;
+use crate::types::Component;
 
 /// The pool that `component_id`'s store may be parked in, or `None` when it
 /// must not be parked at all.
@@ -81,49 +84,97 @@ pub(crate) fn poolable(
     Some(pool)
 }
 
-/// A store that has been instantiated and is parked between calls.
-pub(crate) struct WarmInstance {
+/// An instantiated component in its own store: what a call runs on, and what
+/// the pool parks between calls when the component keeps instances warm.
+pub(crate) struct ComponentInstance {
     pub(crate) store: wasmtime::Store<SharedCtx>,
     pub(crate) instance: Instance,
     /// Calls this instance has already served, counted against
-    /// [`InstancePool::max_invocations`].
+    /// [`InstancePolicy::Warm::max_invocations`].
     pub(crate) invocations: usize,
+}
+
+/// What a component asked for by way of instance reuse.
+///
+/// `Component.pool_size` and `Component.max_invocations` arrive as `sint32`
+/// and carry two sentinels between them — negative for "the sender did not
+/// configure this" and zero for "no limit" — so they are decoded into this
+/// once, at the edge, rather than being re-interpreted at each use.
+/// Non-exhaustive in both directions on purpose: the limits a component can
+/// state are expected to grow (how many calls one warm instance may serve at
+/// once is next), and neither adding a variant nor adding a field to one
+/// should be a breaking change. Build one with [`InstancePolicy::from_component`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InstancePolicy {
+    /// No instance outlives the call it served. The default, and what keeps a
+    /// component's state ephemeral.
+    Ephemeral,
+    /// Park up to `pool_size` instances between calls, retiring each once it
+    /// has served `max_invocations` of them.
+    #[non_exhaustive]
+    Warm {
+        pool_size: NonZeroUsize,
+        /// `None` when an instance may serve calls indefinitely.
+        max_invocations: Option<NonZeroUsize>,
+    },
+}
+
+impl InstancePolicy {
+    /// Read the policy a component declared.
+    ///
+    /// Takes the whole component rather than its limits so that a limit added
+    /// to [`Component`] later reaches this without changing the signature.
+    pub fn from_component(component: &Component) -> Self {
+        Self::from_limits(component.pool_size, component.max_invocations)
+    }
+
+    /// Decode the wire pair. Anything that does not name a positive pool size,
+    /// whether unset (`-1`), zero or negative, means instances are not kept.
+    pub(crate) fn from_limits(pool_size: i32, max_invocations: i32) -> Self {
+        match usize::try_from(pool_size).ok().and_then(NonZeroUsize::new) {
+            Some(pool_size) => Self::Warm {
+                pool_size,
+                max_invocations: usize::try_from(max_invocations)
+                    .ok()
+                    .and_then(NonZeroUsize::new),
+            },
+            None => Self::Ephemeral,
+        }
+    }
+
+    /// Whether this component keeps instances warm at all.
+    pub fn keeps_instances_warm(&self) -> bool {
+        matches!(self, Self::Warm { .. })
+    }
 }
 
 /// The warm instances of one component, shared by every clone of its
 /// [`crate::engine::workload::WorkloadComponent`] and therefore by every
 /// importer that calls into it.
 pub(crate) struct InstancePool {
-    idle: Mutex<Vec<WarmInstance>>,
-    /// How many warm instances to park. Zero disables pooling: every call
-    /// builds and drops its own store.
-    pool_size: usize,
-    /// Calls an instance serves before it is retired. Zero means unlimited.
-    max_invocations: usize,
+    idle: Mutex<Vec<ComponentInstance>>,
+    policy: InstancePolicy,
 }
 
 impl InstancePool {
-    /// Build a pool from a component's configured limits. Both fields are
-    /// `sint32` on the wire and are `-1` when unset, so anything below zero
-    /// reads as "not configured".
-    pub(crate) fn new(pool_size: i32, max_invocations: i32) -> Self {
+    pub(crate) fn new(policy: InstancePolicy) -> Self {
         Self {
             idle: Mutex::new(Vec::new()),
-            pool_size: pool_size.max(0) as usize,
-            max_invocations: max_invocations.max(0) as usize,
+            policy,
         }
     }
 
     /// Whether this component keeps instances warm at all.
     pub(crate) fn enabled(&self) -> bool {
-        self.pool_size > 0
+        self.policy.keeps_instances_warm()
     }
 
     /// Take a warm instance if one is parked. Returns `None` when pooling is
     /// disabled or every warm instance is already in use — the caller then
     /// builds a fresh store, so a burst past `pool_size` is served rather
     /// than queued.
-    pub(crate) fn checkout(&self) -> Option<WarmInstance> {
+    pub(crate) fn checkout(&self) -> Option<ComponentInstance> {
         if !self.enabled() {
             return None;
         }
@@ -133,31 +184,35 @@ impl InstancePool {
     /// Park an instance that has just served a call cleanly, unless it has
     /// reached `max_invocations` or the warm set is already full. Anything
     /// not parked is dropped here.
-    pub(crate) fn release(&self, mut warm: WarmInstance) {
-        warm.invocations += 1;
-        if !self.enabled() {
+    pub(crate) fn release(&self, mut instance: ComponentInstance) {
+        instance.invocations += 1;
+        let InstancePolicy::Warm {
+            pool_size,
+            max_invocations,
+        } = self.policy
+        else {
+            return;
+        };
+        if max_invocations.is_some_and(|limit| instance.invocations >= limit.get()) {
+            trace_retire("reached max_invocations", instance.invocations);
             return;
         }
-        if self.max_invocations > 0 && warm.invocations >= self.max_invocations {
-            trace_retire("reached max_invocations", warm.invocations);
-            return;
-        }
-        // Drop the guard before the `WarmInstance` it rejected: dropping a
-        // store tears down the guest's resources and should not hold the pool
-        // shut while it runs.
+        // Drop the guard before the instance it rejected: dropping a store
+        // tears down the guest's resources and should not hold the pool shut
+        // while it runs.
         let rejected = {
             let Ok(mut idle) = self.idle.lock() else {
                 return;
             };
-            if idle.len() < self.pool_size {
-                idle.push(warm);
+            if idle.len() < pool_size.get() {
+                idle.push(instance);
                 None
             } else {
-                Some(warm)
+                Some(instance)
             }
         };
-        if let Some(warm) = rejected {
-            trace_retire("warm set full", warm.invocations);
+        if let Some(instance) = rejected {
+            trace_retire("warm set full", instance.invocations);
         }
     }
 
@@ -184,25 +239,58 @@ fn trace_retire(reason: &str, invocations: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::InstancePool;
+    use super::{InstancePolicy, InstancePool, NonZeroUsize};
+
+    /// Zero, and the `-1` that `wash dev` and the operator send for "not
+    /// configured", both mean instances are not kept.
+    #[test]
+    fn absent_or_zero_pool_size_is_ephemeral() {
+        for pool_size in [0, -1, i32::MIN] {
+            assert_eq!(
+                InstancePolicy::from_limits(pool_size, 0),
+                InstancePolicy::Ephemeral,
+                "pool_size {pool_size} should not keep instances"
+            );
+        }
+    }
+
+    /// A positive pool size keeps instances; zero or unset `max_invocations`
+    /// means an instance may serve calls indefinitely.
+    #[test]
+    fn positive_pool_size_is_warm() {
+        assert_eq!(
+            InstancePolicy::from_limits(4, 0),
+            InstancePolicy::Warm {
+                pool_size: NonZeroUsize::new(4).unwrap(),
+                max_invocations: None,
+            }
+        );
+        assert_eq!(
+            InstancePolicy::from_limits(4, -1),
+            InstancePolicy::Warm {
+                pool_size: NonZeroUsize::new(4).unwrap(),
+                max_invocations: None,
+            }
+        );
+        assert_eq!(
+            InstancePolicy::from_limits(2, 50),
+            InstancePolicy::Warm {
+                pool_size: NonZeroUsize::new(2).unwrap(),
+                max_invocations: NonZeroUsize::new(50),
+            }
+        );
+    }
 
     #[test]
-    fn disabled_by_default() {
-        let pool = InstancePool::new(0, 0);
+    fn disabled_pool_never_checks_out() {
+        let pool = InstancePool::new(InstancePolicy::Ephemeral);
         assert!(!pool.enabled());
         assert!(pool.checkout().is_none());
     }
 
     #[test]
-    fn unset_limits_read_as_disabled() {
-        // `wash dev` and the operator send -1 for "not configured".
-        let pool = InstancePool::new(-1, -1);
-        assert!(!pool.enabled());
-    }
-
-    #[test]
     fn enabled_pool_starts_empty() {
-        let pool = InstancePool::new(4, 0);
+        let pool = InstancePool::new(InstancePolicy::from_limits(4, 0));
         assert!(pool.enabled());
         assert_eq!(pool.idle_len(), 0);
         // Nothing parked yet, so a checkout still falls back to a cold store.
