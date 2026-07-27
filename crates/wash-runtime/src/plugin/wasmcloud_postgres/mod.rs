@@ -574,6 +574,10 @@ impl HostPlugin for WasmcloudPostgres {
         // linker borrow — named-import linking needs both.
         #[cfg(feature = "wasm_component_model_implements")]
         let component = component_handle.component().clone();
+        // Binding selection is driven by the component's own imports, so read
+        // the world while the immutable borrow is still available.
+        #[cfg(feature = "wasm_component_model_implements")]
+        let world = component_handle.world();
         let linker = component_handle.linker();
 
         // Sync `0.1.1-draft` (wasip2).
@@ -582,7 +586,10 @@ impl HostPlugin for WasmcloudPostgres {
             // to its own credentialed connection; an unnamed one keeps the
             // per-component-database behavior (one shared bouncer URL, database
             // chosen by config).
-            let unnamed = pg_sync.iter().find(|i| i.name.is_none()).copied();
+            let unnamed = pg_sync
+                .iter()
+                .find(|i| i.resolution_key().is_none())
+                .copied();
 
             // `types` carries no functions and is shared by query/prepared; link
             // the instance once regardless of named/unnamed routing.
@@ -616,7 +623,9 @@ impl HostPlugin for WasmcloudPostgres {
 
             #[cfg(feature = "wasm_component_model_implements")]
             if pg_sync.iter().any(|i| i.name.is_some()) {
-                let registry = self.build_named_pools(pg_sync.iter().copied()).await?;
+                let registry = self
+                    .build_named_pools(world.imports.iter(), pg_sync.iter().copied())
+                    .await?;
                 tracing::debug!(
                     imports = ?registry.keys().collect::<Vec<_>>(),
                     "Binding postgres plugin to component (per-credential named imports)"
@@ -650,7 +659,11 @@ impl HostPlugin for WasmcloudPostgres {
 
             // An unnamed import is the default, per-component-database path; a
             // `(implements ..)` import is a named one routed to its own pool.
-            if let Some(i) = pg_async.iter().find(|i| i.name.is_none()).copied() {
+            if let Some(i) = pg_async
+                .iter()
+                .find(|i| i.resolution_key().is_none())
+                .copied()
+            {
                 let Some(database) = i.config.get("database").cloned() else {
                     bail!("wasmcloud:postgres requires a 'database' config parameter")
                 };
@@ -668,7 +681,9 @@ impl HostPlugin for WasmcloudPostgres {
 
             #[cfg(feature = "wasm_component_model_implements")]
             if pg_async.iter().any(|i| i.name.is_some()) {
-                let registry = self.build_named_pools(pg_async.iter().copied()).await?;
+                let registry = self
+                    .build_named_pools(world.imports.iter(), pg_async.iter().copied())
+                    .await?;
                 tracing::debug!(
                     imports = ?registry.keys().collect::<Vec<_>>(),
                     "Binding async postgres plugin to component (per-credential named imports)"

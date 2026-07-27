@@ -33,7 +33,7 @@ inputs:
   wasm-component-ld-version:
     description: "Version of standalone wasm-component-ld to install"
     required: false
-    default: "0.5.24"
+    default: "0.5.27"
 
 runs:
   using: "composite"
@@ -123,10 +123,13 @@ runs:
       uses: wasmcloud/setup-wash-action@47756fa211cc82f392c57e39504f43ef46fc0b3e # v2.1.0
 
     # The wasm32-wasip2 linker. The toolchain bundles one, but it lags the
-    # standalone crate and is too old to decode the component-model
-    # `(implements ..)` imports that wit-bindgen now emits — linking such a
-    # component fails with "decoding custom section ... invalid leading byte".
-    # Drop once a Rust release bundles wasm-component-ld >= 0.5.23.
+    # standalone crate and is too old to decode the component-model attributes
+    # wit-bindgen now emits — `(implements ..)` imports, and the `external-id`
+    # name option that needs the wasm-tools 0.254 the fixtures' wit-bindgen 0.60
+    # is built on. Linking such a component fails with "decoding custom section
+    # ... invalid leading byte". Keep this at or above whatever wasm-tools the
+    # fixtures' wit-bindgen uses, and drop it once a Rust release bundles one
+    # that new.
     - name: Install cargo-binstall
       uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
       env:

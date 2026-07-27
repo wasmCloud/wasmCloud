@@ -385,9 +385,10 @@ impl MultiplexedAsyncKeyValue {
     /// component from its matched keyvalue host interfaces.
     pub async fn build_registry<'i>(
         &self,
+        imports: impl IntoIterator<Item = &'i WitInterface>,
         interfaces: impl IntoIterator<Item = &'i WitInterface>,
     ) -> anyhow::Result<std::collections::HashMap<String, KvId>> {
-        self.mux.build_registry(interfaces).await
+        self.mux.build_registry(imports, interfaces).await
     }
 }
 
@@ -419,16 +420,27 @@ impl HostPlugin for MultiplexedAsyncKeyValue {
             return Ok(());
         }
 
-        let registry = self.build_registry(interfaces.iter()).await?;
+        // Selection is driven by what the *component* imports: each import's
+        // implements name and external-id pick the entry that serves it, and the
+        // registry is keyed by import name so `resolve` stays a plain lookup.
+        let world = item.world();
+        let registry = self
+            .build_registry(world.imports.iter(), interfaces.iter())
+            .await?;
 
         // Does the component import keyvalue with an `(implements ..)` label, or
         // plainly (unlabeled), or both? Bind only the matching `store` binding so a
         // plain-only component doesn't also get the labeled instance (and vice
         // versa) — `types`/`atomics`/`cas`/`batch` are bound standalone regardless.
-        let has_labeled = interfaces
+        // Asked of the component's own imports, not of the host interfaces: a
+        // binding may be keyed by external-id alone and so carry no name, which
+        // says nothing about whether the import it serves is labeled.
+        let has_labeled = world
+            .imports
             .iter()
             .any(|i| i.namespace == "wasmcloud" && i.package == "keyvalue" && i.name.is_some());
-        let has_plain = interfaces
+        let has_plain = world
+            .imports
             .iter()
             .any(|i| i.namespace == "wasmcloud" && i.package == "keyvalue" && i.name.is_none());
 
@@ -499,6 +511,7 @@ mod tests {
                 "in-memory".to_string(),
             )]),
             name: Some(name.to_string()),
+            external_id: None,
         }
     }
 
@@ -526,7 +539,10 @@ mod tests {
         let plugin = MultiplexedAsyncKeyValue::new().with_provider(Arc::new(InMemoryProvider));
         let interfaces = HashSet::from([kv_iface("team-a"), kv_iface("team-b")]);
 
-        let registry = plugin.build_registry(&interfaces).await.unwrap();
+        let registry = plugin
+            .build_registry(&interfaces, &interfaces)
+            .await
+            .unwrap();
         let a = registry.get("team-a").expect("team-a routed").clone();
         let b = registry.get("team-b").expect("team-b routed").clone();
 
@@ -544,8 +560,9 @@ mod tests {
         iface
             .config
             .insert("backend".to_string(), "redis".to_string());
+        let ifaces = HashSet::from([iface]);
         let err = plugin
-            .build_registry(&HashSet::from([iface]))
+            .build_registry(&ifaces, &ifaces)
             .await
             .err()
             .expect("expected error for unregistered backend");

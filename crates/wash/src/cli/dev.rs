@@ -641,10 +641,15 @@ fn build_workload_host_interfaces(
             if interface.namespace == "wasi" && interface.package == "config" {
                 any_imports_wasi_config = true;
             }
-            if !base
-                .iter()
-                .any(|i| i.namespace == interface.namespace && i.package == interface.package)
-            {
+            // Two imports of one package that name different platform resources
+            // are two bindings, not one: keying the dedup on the external-id as
+            // well as the package is what keeps `wash dev` from collapsing them
+            // onto a single backend.
+            if !base.iter().any(|i| {
+                i.namespace == interface.namespace
+                    && i.package == interface.package
+                    && i.external_id == interface.external_id
+            }) {
                 base.push(interface.clone());
             }
         }
@@ -671,6 +676,7 @@ fn build_workload_host_interfaces(
                     version: None,
                     config: workload_config.clone(),
                     name: None,
+                    external_id: None,
                 });
             }
         }
@@ -722,6 +728,7 @@ mod tests {
             version: None,
             config: HashMap::new(),
             name: None,
+            external_id: None,
         }
     }
 

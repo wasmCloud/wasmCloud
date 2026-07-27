@@ -1,0 +1,17 @@
+package wasmcloud:keyvalue-external-id;
+
+// Imports wasi:keyvalue/store twice under distinct labels, each additionally
+// naming the platform resource it expects via the component-model `external-id`
+// attribute. The labels (`users`, `catalog`) are the component's own words for
+// its dependencies; the external-ids are the platform's names for the same two
+// resources, so a binding can be authored against them without ever knowing
+// what this component calls them.
+world keyvalue-external-id {
+    @external-id("user-db-prod:region-a")
+    import users: wasi:keyvalue/store@0.2.0-draft;
+
+    @external-id("catalog-db-prod:region-a")
+    import catalog: wasi:keyvalue/store@0.2.0-draft;
+
+    export wasi:http/incoming-handler@0.2.2;
+}

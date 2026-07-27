@@ -239,6 +239,7 @@ fn messaging_handler_interface() -> WitInterface {
         version: Some(semver::Version::new(0, 2, 0)),
         config: HashMap::new(),
         name: None,
+        external_id: None,
     }
 }
 

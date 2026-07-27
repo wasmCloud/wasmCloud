@@ -48,6 +48,7 @@ pub fn http_incoming_handler_interface(host_header: &str, aliases: Option<&str>)
         version: Some(semver::Version::parse("0.2.2").unwrap()),
         config,
         name: None,
+        external_id: None,
     }
 }
 
@@ -65,6 +66,7 @@ fn wasi_blobstore_interface() -> WitInterface {
         version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
         config: HashMap::new(),
         name: None,
+        external_id: None,
     }
 }
 
@@ -78,6 +80,7 @@ fn wasi_keyvalue_interface() -> WitInterface {
         version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
         config: HashMap::new(),
         name: None,
+        external_id: None,
     }
 }
 
@@ -89,6 +92,7 @@ fn wasi_logging_interface() -> WitInterface {
         version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
         config: HashMap::new(),
         name: None,
+        external_id: None,
     }
 }
 
@@ -100,6 +104,7 @@ fn wasi_config_interface() -> WitInterface {
         version: Some(semver::Version::parse("0.2.0-rc.1").unwrap()),
         config: HashMap::new(),
         name: None,
+        external_id: None,
     }
 }
 
@@ -141,6 +146,7 @@ pub fn acme_kv_interface() -> WitInterface {
         version: Some(semver::Version::parse("0.1.0").unwrap()),
         config: HashMap::new(),
         name: None,
+        external_id: None,
     }
 }
 

@@ -63,13 +63,15 @@ fn named_pg(name: &str, url: &str) -> WitInterface {
         version: Some(semver::Version::parse(PG_VERSION).unwrap()),
         config: HashMap::from([("url".to_string(), url.to_string())]),
         name: Some(name.to_string()),
+        external_id: None,
     }
 }
 
 /// Build a single connection pool from one URL (used for admin DB setup).
 async fn connect(url: &str) -> Result<PgId> {
+    let ifaces = HashSet::from([named_pg("admin", url)]);
     let registry = WasmcloudPostgres::multiplexer()
-        .build_registry(&HashSet::from([named_pg("admin", url)]))
+        .build_registry(&ifaces, &ifaces)
         .await?;
     registry.get("admin").cloned().context("admin routed")
 }

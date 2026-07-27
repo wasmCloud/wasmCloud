@@ -217,6 +217,63 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
             .any(|(name, _)| name.starts_with("wasi:http") && name.contains("@0.3"))
 }
 
+/// Extract a component's [`WitWorld`] from wasmtime type reflection.
+///
+/// Each import/export instance yields one [`WitInterface`] carrying its contract
+/// (the `(implements ..)` value, or the item name), its name when labeled, and
+/// its `external-id`. Items sharing an instance key merge, so a package spread
+/// across several imports lands as one interface.
+pub fn component_world(component: &Component) -> crate::wit::WitWorld {
+    use std::collections::hash_map::Entry;
+    use wasmtime::component::types::{ComponentExtern, ComponentItem};
+
+    fn collect<'a>(
+        items: impl Iterator<Item = (&'a str, ComponentExtern<'a>)>,
+        direction: &'static str,
+    ) -> std::collections::HashSet<crate::wit::WitInterface> {
+        let mut merged: std::collections::HashMap<String, crate::wit::WitInterface> =
+            std::collections::HashMap::new();
+        for (item_name, item) in items {
+            if !matches!(item.ty, ComponentItem::ComponentInstance(_)) {
+                tracing::debug!(
+                    item_name,
+                    direction,
+                    "world item is not an instance, skipping"
+                );
+                continue;
+            }
+            // An `(implements <id>)` item carries its interface identity in the
+            // annotation and its label in the name; a plain item uses the name.
+            let mut interface = match item.implements {
+                Some(implements_id) => {
+                    let mut interface = crate::wit::WitInterface::from(implements_id);
+                    interface.name = Some(item_name.to_string());
+                    interface
+                }
+                None => crate::wit::WitInterface::from(item_name),
+            };
+            interface.external_id = item.external_id.map(str::to_string);
+
+            match merged.entry(interface.instance()) {
+                Entry::Occupied(mut existing) => {
+                    existing.get_mut().merge(&interface);
+                }
+                Entry::Vacant(slot) => {
+                    slot.insert(interface);
+                }
+            }
+        }
+        merged.into_values().collect()
+    }
+
+    let engine = component.engine();
+    let ty = component.component_type();
+    crate::wit::WitWorld {
+        imports: collect(ty.imports(engine), "import"),
+        exports: collect(ty.exports(engine), "export"),
+    }
+}
+
 pub mod ctx;
 mod linked_call;
 pub(crate) mod store;
@@ -620,7 +677,9 @@ pub enum WasmProposal {
     ComponentModelAsync,
     /// Component model `(implements ..)` named imports, letting a component
     /// import the same interface multiple times under distinct names so host
-    /// plugins can route each independently. Enables
+    /// plugins can route each independently, and the `(external-id ..)`
+    /// attribute that names the platform resource behind such an import — both
+    /// ride the same wasmparser `cm-implements` gate. Enables
     /// `wasm_component_model_implements`. Requires the backported wasmtime
     /// support, so it is only available with the `wasm_component_model_implements`
     /// crate feature.
@@ -908,9 +967,10 @@ impl EngineBuilder {
         // Accept components that import an interface multiple times via the
         // component-model `(implements ..)` annotation, so host plugins can
         // route each named import (e.g. two `wasi:keyvalue/store` imports
-        // backed by redis vs NATS) independently. Only available with the
-        // backported wasmtime support behind the
-        // `wasm_component_model_implements` feature.
+        // backed by redis vs NATS) independently. The same flag admits the
+        // `(external-id ..)` attribute naming the platform resource behind an
+        // import or export. Only available with the backported wasmtime support
+        // behind the `wasm_component_model_implements` feature.
         #[cfg(feature = "wasm_component_model_implements")]
         self.proposals
             .insert(WasmProposal::WasmComponentModelImplements);

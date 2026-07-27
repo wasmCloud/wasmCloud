@@ -42,6 +42,7 @@ pub fn async_pg_interface(database: &str) -> WitInterface {
         version: Some(semver::Version::parse("0.2.0").unwrap()),
         config: HashMap::from([("database".to_string(), database.to_string())]),
         name: None,
+        external_id: None,
     }
 }
 

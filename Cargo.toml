@@ -77,7 +77,9 @@ kube-derive = { version = "1", default-features = false }
 notify = { version = "8.0.0", default-features = false, features = ["macos_fsevent"] }
 moka = { version = "0.12", default-features = false }
 oci-client = { version = "0.17.0", default-features = false, features = ["rustls-tls"] }
-oci-wasm = { version = "0.5.0", default-features = false, features = ["rustls-tls"] }
+# 0.6 decodes with wasm-tools 0.253; older releases reject the `external-id`
+# name option when building an image's WebAssembly config.
+oci-wasm = { version = "0.6.0", default-features = false, features = ["rustls-tls"] }
 opentelemetry = { version = "0.31", default-features = false }
 opentelemetry-appender-tracing = { version = "0.31", default-features = false }
 opentelemetry-otlp = { version = "0.31", default-features = false }
@@ -123,14 +125,16 @@ wasm-pkg-core = { version = "0.16.0-rc.1", default-features = false }
 wasm-metadata = { version = "0.253.0", default-features = false, features = ["oci"] }
 wasmcloud = { path = "crates/wasmcloud", default-features = false }
 # wasmtime 47 ships the resource-implements feature (bytecodealliance/wasmtime#13666)
-# in the stock release, so the workspace tracks crates.io directly — no git pin or
-# fork backport is needed anymore.
-wasmtime = { version = "47.0.1", default-features = false }
-wasmtime-wasi = { version = "47.0.1", default-features = false }
-wasmtime-wasi-io = { version = "47.0.1", default-features = false }
-wasmtime-wasi-http = { version = "47.0.1", default-features = false }
-wasmtime-wasi-tls = { version = "47.0.1", default-features = false }
+# in the stock release. The `external-id` attribute it pairs with needs wasm-tools
+# 0.253 and bytecodealliance/wasmtime#13874, which land in 48 — see the
+# `[patch.crates-io]` block at the bottom for the 47 backport we build against.
+wasmtime = { version = "47.0.2", default-features = false }
+wasmtime-wasi = { version = "47.0.2", default-features = false }
+wasmtime-wasi-io = { version = "47.0.2", default-features = false }
+wasmtime-wasi-http = { version = "47.0.2", default-features = false }
+wasmtime-wasi-tls = { version = "47.0.2", default-features = false }
 wit-component = { version = "0.253.0", default-features = false }
+wit-parser = { version = "0.253.0", default-features = false }
 wash-runtime = { path = "crates/wash-runtime", default-features = false }
 wat = { version = "1.253.0", default-features = false }
 
@@ -152,6 +156,32 @@ cap-net-ext = "3.4.4"
 cap-std = "3.4.4"
 io-lifetimes = { version = "2.0.3", default-features = false }
 rustix = "1.0.3"
+
+# Redirect every crates.io wasmtime crate — including the ones reached only
+# through `wasi-webgpu-wasmtime` and `wiggle` — to a 47 backport carrying the
+# component-model `external-id` attribute: wasm-tools 0.253
+# (bytecodealliance/wasmtime#13834) plus the reflection plumbing that surfaces it
+# on `ComponentExtern` (bytecodealliance/wasmtime#13874). Both are on `main` and
+# ship in wasmtime 48; wasmtime does not backport features to release branches,
+# so `release-47-external-id` on the fork is `release-47.0.0` + those two
+# cherry-picks. Without it wasmparser 0.252 rejects any component carrying an
+# external-id outright ("invalid leading byte 0x02 for name option").
+#
+# Patching, rather than depending on the git source directly, is what reaches
+# the transitive `wasmtime`/`wasmtime-environ` requirements of crates.io crates;
+# a plain git dependency would leave those on 47.0.2 from the registry and put
+# two incompatible wasmtimes in the graph.
+#
+# Retire this block (and the fork branch) once the workspace moves to wasmtime
+# 48, where both land in the stock release.
+[patch.crates-io]
+wasmtime = { git = "https://github.com/ricochet/wasmtime", branch = "release-47-external-id" }
+wasmtime-environ = { git = "https://github.com/ricochet/wasmtime", branch = "release-47-external-id" }
+wasmtime-wasi = { git = "https://github.com/ricochet/wasmtime", branch = "release-47-external-id" }
+wasmtime-wasi-io = { git = "https://github.com/ricochet/wasmtime", branch = "release-47-external-id" }
+wasmtime-wasi-http = { git = "https://github.com/ricochet/wasmtime", branch = "release-47-external-id" }
+wasmtime-wasi-tls = { git = "https://github.com/ricochet/wasmtime", branch = "release-47-external-id" }
+wiggle = { git = "https://github.com/ricochet/wasmtime", branch = "release-47-external-id" }
 
 [workspace.metadata.cargo-machete]
 ignored = [

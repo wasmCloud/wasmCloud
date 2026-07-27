@@ -32,6 +32,156 @@ use crate::wit::WitInterface;
 /// `redis`, `nats`, `filesystem`). Shared by every multiplexed builtin.
 pub const BACKEND_CONFIG_KEY: &str = "backend";
 
+/// `config` key carrying a bound import's `external-id` to the backend, which
+/// may read it as the name of the resource to address (the filesystem backends
+/// root storage under it; postgres uses it as the database) or ignore it. Only
+/// ever filled in — a binding that sets this key keeps its own value.
+pub const EXTERNAL_ID_CONFIG_KEY: &str = "external-id";
+
+/// The interface a backend is built from: the selected entry plus the bound
+/// import's external-id, as both a field and a config key.
+fn effective_interface(entry: &WitInterface, import: &WitInterface) -> WitInterface {
+    let mut effective = entry.clone();
+    let Some(external_id) = import.external_id.clone() else {
+        return effective;
+    };
+    effective
+        .config
+        .entry(EXTERNAL_ID_CONFIG_KEY.to_string())
+        .or_insert_with(|| external_id.clone());
+    effective.external_id = Some(external_id);
+    effective
+}
+
+/// Which key a binding matched on. Ordered: a name pin outranks the resource
+/// the artifact names, which outranks the default route.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum MatchKind {
+    Default,
+    ExternalId,
+    Name,
+}
+
+/// Select the host-interface entry that serves one component `import`, highest
+/// rank first:
+///
+/// 1. an entry whose `name` is the import's implements name — an operator
+///    override, which wins;
+/// 2. an entry whose `external_id` is the resource the import names;
+/// 3. the unkeyed entry — the package's default route.
+///
+/// An entry declaring both keys is a pin narrowed to one resource. Two entries
+/// matching at the same rank are duplicates and an error.
+fn select_binding_index(
+    entries: &[&WitInterface],
+    import: &WitInterface,
+) -> anyhow::Result<Option<usize>> {
+    /// The rank at which `entry` claims `import`, or `None` if it does not.
+    fn rank(entry: &WitInterface, import: &WitInterface) -> Option<MatchKind> {
+        match (&entry.name, &entry.external_id) {
+            (None, None) => Some(MatchKind::Default),
+            (name, external_id) => {
+                if name.is_some() && name.as_deref() != import.name.as_deref() {
+                    return None;
+                }
+                if external_id.is_some() && external_id.as_deref() != import.external_id.as_deref()
+                {
+                    return None;
+                }
+                match name {
+                    Some(_) => Some(MatchKind::Name),
+                    None => Some(MatchKind::ExternalId),
+                }
+            }
+        }
+    }
+
+    let mut best: Option<(MatchKind, usize)> = None;
+    // Only a rival at the *winning* rank matters; counting losing ranks would
+    // make the outcome depend on entry order.
+    let mut rival: Option<usize> = None;
+
+    for (index, entry) in entries.iter().enumerate() {
+        let Some(kind) = rank(entry, import) else {
+            continue;
+        };
+        match best {
+            Some((best_kind, _)) if best_kind > kind => {}
+            Some((best_kind, _)) if best_kind == kind => rival = Some(index),
+            _ => {
+                best = Some((kind, index));
+                rival = None;
+            }
+        }
+    }
+
+    match (best, rival) {
+        (Some((kind, first)), Some(second)) => anyhow::bail!(
+            "duplicate {} for {}: {} and {} are indistinguishable",
+            match kind {
+                MatchKind::Name => "name bindings",
+                MatchKind::ExternalId => "external-id bindings",
+                MatchKind::Default => "default bindings",
+            },
+            describe_import(import),
+            entries
+                .get(first)
+                .map_or_else(String::new, |e| describe_entry(e)),
+            entries
+                .get(second)
+                .map_or_else(String::new, |e| describe_entry(e)),
+        ),
+        (best, _) => Ok(best.map(|(_, index)| index)),
+    }
+}
+
+/// Reduce an external-id to a safe path segment: everything outside
+/// `[A-Za-z0-9._-]` becomes `_`. Lossy and not reversible — external-ids are
+/// free-form, so a backend needing a constrained name has to constrain it.
+pub fn sanitize_external_id(external_id: &str) -> String {
+    external_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Render an import for an error message: interface, implements name, external-id.
+fn describe_import(import: &WitInterface) -> String {
+    let mut described = format!(
+        "{}:{} import {:?}",
+        import.namespace,
+        import.package,
+        import.name.as_deref().unwrap_or("<unlabeled>")
+    );
+    if let Some(external_id) = &import.external_id {
+        described.push_str(&format!(" with external-id {external_id:?}"));
+    }
+    let mut interfaces: Vec<&str> = import.interfaces.iter().map(String::as_str).collect();
+    interfaces.sort_unstable();
+    if !interfaces.is_empty() {
+        described.push_str(&format!(" ({})", interfaces.join(",")));
+    }
+    described
+}
+
+/// Render a host-interface entry by whichever keys it selects on.
+fn describe_entry(entry: &WitInterface) -> String {
+    match (&entry.name, &entry.external_id) {
+        (Some(name), Some(external_id)) => {
+            format!("the binding named {name:?} with external-id {external_id:?}")
+        }
+        (Some(name), None) => format!("the binding named {name:?}"),
+        (None, Some(external_id)) => format!("the binding for external-id {external_id:?}"),
+        (None, None) => "the default binding".to_string(),
+    }
+}
+
 /// Default ceiling on pooled (cached) connections, *per backend type* per
 /// multiplexer — so e.g. redis and NATS are capped independently (a multiplexer
 /// can hold up to this many of each). Counts distinct backend endpoints kept
@@ -254,25 +404,45 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
         Ok(backend)
     }
 
-    /// Build the routing registry (host-interface name -> backend) from a
-    /// component's matched host interfaces. Unnamed interfaces are keyed by the
-    /// empty string and act as the default route. Interfaces for other
-    /// packages are ignored.
+    /// Whether `iface` belongs to the `namespace:package` this multiplexer serves.
+    fn owns(&self, iface: &WitInterface) -> bool {
+        iface.namespace == self.namespace && iface.package == self.package
+    }
+
+    /// Select the host-interface entry that serves one component `import`; see
+    /// [`select_binding_index`] for the precedence chain.
+    pub fn select_entry<'i>(
+        &self,
+        entries: &[&'i WitInterface],
+        import: &WitInterface,
+    ) -> anyhow::Result<Option<&'i WitInterface>> {
+        let index = select_binding_index(entries, import)?;
+        Ok(index.and_then(|index| entries.get(index).copied()))
+    }
+
+    /// Build the routing registry for one component: select an entry per import
+    /// of this `namespace:package` and key the backend by the *import* name, so
+    /// [`resolve`](Self::resolve) stays a plain lookup. An unlabeled import is
+    /// keyed by the empty string.
+    ///
+    /// The import's external-id reaches the chosen backend via
+    /// [`EXTERNAL_ID_CONFIG_KEY`].
     pub async fn build_registry<'i>(
         &self,
-        interfaces: impl IntoIterator<Item = &'i WitInterface>,
+        imports: impl IntoIterator<Item = &'i WitInterface>,
+        entries: impl IntoIterator<Item = &'i WitInterface>,
     ) -> anyhow::Result<HashMap<String, Id>> {
-        self.build_registry_with(interfaces, |_, backend| backend)
+        self.build_registry_with(imports, entries, |_, backend| backend)
             .await
     }
 
     /// Like [`build_registry`](Self::build_registry), but applies `decorate` to
-    /// each freshly-instantiated backend before inserting it.
-    /// This keeps the namespace/package filtering and name-keying in one
-    /// place so builtins that need post-processing don't reimplement the loop.
+    /// each freshly-instantiated backend, passing the effective interface it was
+    /// built from.
     pub async fn build_registry_with<'i, F>(
         &self,
-        interfaces: impl IntoIterator<Item = &'i WitInterface>,
+        imports: impl IntoIterator<Item = &'i WitInterface>,
+        entries: impl IntoIterator<Item = &'i WitInterface>,
         mut decorate: F,
     ) -> anyhow::Result<HashMap<String, Id>>
     where
@@ -280,15 +450,51 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
     {
         // Collect up front so no input iterator is held across the `await`s
         // below (keeps the returned future `Send`).
-        let interfaces: Vec<&WitInterface> = interfaces.into_iter().collect();
+        let entries: Vec<&WitInterface> = entries.into_iter().filter(|i| self.owns(i)).collect();
+        let imports: Vec<&WitInterface> = imports.into_iter().filter(|i| self.owns(i)).collect();
+
         let mut registry = HashMap::new();
-        for iface in interfaces {
-            if iface.namespace != self.namespace || iface.package != self.package {
+        // Imports on the same binding *and* resource share one backend, or
+        // imports sharing a default route would get isolated state from
+        // providers that build fresh (in-memory).
+        let mut by_resource: HashMap<(usize, Option<&str>), Id> = HashMap::new();
+        for import in imports {
+            // No `.context(..)`: these reach a workload's status message,
+            // which renders only the outermost layer.
+            let selected = select_binding_index(&entries, import)?;
+            let index = match selected {
+                Some(index) => index,
+                // A bare import asks for nothing in particular, so a
+                // standalone plugin's default instance may be serving it.
+                None if import.name.is_none() && import.external_id.is_none() => continue,
+                // A label or external-id is an explicit request; leaving it
+                // unserved would route its traffic somewhere it never asked for.
+                None => anyhow::bail!("no binding for {}", describe_import(import)),
+            };
+            let Some(entry) = entries.get(index).copied() else {
                 continue;
-            }
-            let backend = self.instantiate(iface).await?;
-            let backend = decorate(iface, backend);
-            registry.insert(iface.name.clone().unwrap_or_default(), backend);
+            };
+
+            let resource = (index, import.external_id.as_deref());
+            let backend = match by_resource.get(&resource) {
+                Some(existing) => existing.clone(),
+                None => {
+                    let effective = effective_interface(entry, import);
+                    let backend = self.instantiate(&effective).await?;
+                    let backend = decorate(&effective, backend);
+                    by_resource.insert(resource, backend.clone());
+                    backend
+                }
+            };
+
+            tracing::debug!(
+                interface = %format_args!("{}:{}", self.namespace, self.package),
+                import = import.name.as_deref().unwrap_or("<unlabeled>"),
+                external_id = import.external_id.as_deref().unwrap_or("-"),
+                bound_to = %describe_entry(entry),
+                "bound import"
+            );
+            registry.insert(import.name.clone().unwrap_or_default(), backend);
         }
         Ok(registry)
     }
@@ -509,6 +715,7 @@ mod tests {
                 ("url".to_string(), url.to_string()),
             ]),
             name: None,
+            external_id: None,
         }
     }
 
@@ -658,5 +865,258 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(60)).await;
         let _b = mux.instantiate(&url_iface("redis://b")).await.unwrap();
         assert_eq!(mux.pool_len().await, 1, "idle 'a' should have been reaped");
+    }
+
+    /// A binding keyed by `name`, `external-id`, both, or neither.
+    fn entry(name: Option<&str>, external_id: Option<&str>) -> WitInterface {
+        WitInterface {
+            name: name.map(str::to_string),
+            external_id: external_id.map(str::to_string),
+            ..iface("test", "url")
+        }
+    }
+
+    /// A component import with an optional implements label and external-id.
+    fn import(name: Option<&str>, external_id: Option<&str>) -> WitInterface {
+        entry(name, external_id)
+    }
+
+    #[test]
+    fn select_entry_matches_by_name_by_external_id_or_by_default() {
+        let mux: Multiplexer<Arc<usize>> = Multiplexer::new("wasi", "keyvalue", "test");
+
+        let by_name = entry(Some("users"), None);
+        let by_id = entry(None, Some("user-db-prod:region-a"));
+        let default = entry(None, None);
+
+        // A name-keyed binding serves the import carrying that implements name.
+        let entries = [&by_name, &default];
+        let selected = mux
+            .select_entry(&entries, &import(Some("users"), None))
+            .unwrap();
+        assert_eq!(selected, Some(&by_name));
+
+        // An external-id-keyed binding serves any import declaring that id,
+        // whatever the component happens to call it.
+        let entries = [&by_id, &default];
+        let selected = mux
+            .select_entry(
+                &entries,
+                &import(Some("whatever"), Some("user-db-prod:region-a")),
+            )
+            .unwrap();
+        assert_eq!(selected, Some(&by_id));
+
+        // Neither key matches, so the unkeyed default takes it.
+        let entries = [&by_name, &by_id, &default];
+        let selected = mux
+            .select_entry(&entries, &import(Some("catalog"), Some("other")))
+            .unwrap();
+        assert_eq!(selected, Some(&default));
+
+        // ... and with no default there is nothing to fall back to.
+        let entries = [&by_name, &by_id];
+        let selected = mux
+            .select_entry(&entries, &import(Some("catalog"), Some("other")))
+            .unwrap();
+        assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn a_binding_declaring_both_keys_is_a_narrowed_pin() {
+        let mux: Multiplexer<Arc<usize>> = Multiplexer::new("wasi", "keyvalue", "test");
+        let both = entry(Some("users"), Some("user-db-prod:region-a"));
+        let entries = [&both];
+
+        assert_eq!(
+            mux.select_entry(
+                &entries,
+                &import(Some("users"), Some("user-db-prod:region-a"))
+            )
+            .unwrap(),
+            Some(&both)
+        );
+        // Right label, different resource — the pin does not apply, and there is
+        // no default to fall back to.
+        assert_eq!(
+            mux.select_entry(&entries, &import(Some("users"), Some("user-db-staging")))
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            mux.select_entry(
+                &entries,
+                &import(Some("accounts"), Some("user-db-prod:region-a"))
+            )
+            .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn an_operator_name_pin_outranks_the_resource_the_artifact_names() {
+        let mux: Multiplexer<Arc<usize>> = Multiplexer::new("wasi", "keyvalue", "test");
+        let by_name = entry(Some("users"), None);
+        let by_id = entry(None, Some("user-db-prod:region-a"));
+        let default = entry(None, None);
+        let entries = [&by_name, &by_id, &default];
+
+        // The import names a resource, so that is what it resolves by — but a
+        // binding written against its label is the operator saying otherwise,
+        // and deploy-time configuration outranks what the binary declares.
+        assert_eq!(
+            mux.select_entry(
+                &entries,
+                &import(Some("users"), Some("user-db-prod:region-a"))
+            )
+            .unwrap(),
+            Some(&by_name)
+        );
+
+        // With no pin for this import, the resource it names decides.
+        assert_eq!(
+            mux.select_entry(
+                &entries,
+                &import(Some("accounts"), Some("user-db-prod:region-a"))
+            )
+            .unwrap(),
+            Some(&by_id)
+        );
+    }
+
+    #[test]
+    fn duplicates_below_the_winning_rank_do_not_depend_on_order() {
+        let mux: Multiplexer<Arc<usize>> = Multiplexer::new("wasi", "keyvalue", "test");
+        let pin = entry(Some("users"), None);
+        let dup_a = entry(None, Some("db"));
+        let dup_b = entry(None, Some("db"));
+        let asked = import(Some("users"), Some("db"));
+
+        // The name pin wins either way; the duplicate beneath it is not what
+        // resolves this import, so neither ordering may error.
+        let pin_first = [&pin, &dup_a, &dup_b];
+        let pin_last = [&dup_a, &dup_b, &pin];
+        assert_eq!(
+            mux.select_entry(&pin_first, &asked).unwrap(),
+            Some(&pin),
+            "pin first"
+        );
+        assert_eq!(
+            mux.select_entry(&pin_last, &asked).unwrap(),
+            Some(&pin),
+            "pin last"
+        );
+    }
+
+    #[test]
+    fn two_bindings_at_the_same_rank_are_duplicates() {
+        let mux: Multiplexer<Arc<usize>> = Multiplexer::new("wasi", "keyvalue", "test");
+        let a = entry(None, Some("user-db-prod:region-a"));
+        let b = entry(None, Some("user-db-prod:region-a"));
+        let entries = [&a, &b];
+
+        // Nothing distinguishes these, so there is no winner to pick.
+        let err = mux
+            .select_entry(
+                &entries,
+                &import(Some("users"), Some("user-db-prod:region-a")),
+            )
+            .expect_err("two bindings for one resource are indistinguishable");
+        assert!(err.to_string().contains("duplicate"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn build_registry_keys_backends_by_import_name() {
+        let provider = CountingProvider::new(false);
+        let mux = Multiplexer::new("wasi", "keyvalue", "test").with_provider(provider.clone());
+
+        // The component names its dependencies `users` and `catalog`; the
+        // platform binds them by resource, never having heard those labels.
+        let imports = [
+            import(Some("users"), Some("user-db-prod")),
+            import(Some("catalog"), Some("catalog-db-prod")),
+        ];
+        let entries = [
+            entry(None, Some("user-db-prod")),
+            entry(None, Some("catalog-db-prod")),
+        ];
+
+        let registry = mux.build_registry(&imports, &entries).await.unwrap();
+        assert_eq!(registry.len(), 2);
+        assert!(registry.contains_key("users"));
+        assert!(registry.contains_key("catalog"));
+        // `resolve` is then a plain lookup on the import name.
+        assert!(mux.resolve(&registry, "users").is_ok());
+        assert!(mux.resolve(&registry, "unknown").is_err());
+    }
+
+    #[tokio::test]
+    async fn build_registry_reports_the_unbound_resource_by_name() {
+        let mux = Multiplexer::new("wasi", "keyvalue", "test")
+            .with_provider(CountingProvider::new(false));
+        let imports = [import(Some("users"), Some("user-db-prod:region-a"))];
+
+        let err = mux
+            .build_registry(&imports, &[])
+            .await
+            .expect_err("an import with no binding and no default cannot resolve");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("user-db-prod:region-a"),
+            "the error should name the platform resource: {msg}"
+        );
+        assert!(msg.contains("users"), "and the import: {msg}");
+    }
+
+    #[tokio::test]
+    async fn build_registry_passes_the_external_id_to_the_backend_but_config_wins() {
+        // A recording provider so the test can see the config each backend was
+        // built from.
+        struct Recorder(std::sync::Mutex<Vec<HashMap<String, String>>>);
+        #[async_trait::async_trait]
+        impl BackendProvider<Arc<usize>> for Recorder {
+            fn backend_type(&self) -> &'static str {
+                "test"
+            }
+            async fn instantiate(
+                &self,
+                config: &HashMap<String, String>,
+            ) -> anyhow::Result<Arc<usize>> {
+                let mut seen = self.0.lock().unwrap_or_else(|e| e.into_inner());
+                seen.push(config.clone());
+                Ok(Arc::new(seen.len()))
+            }
+        }
+
+        let recorder = Arc::new(Recorder(std::sync::Mutex::new(Vec::new())));
+        let mux = Multiplexer::new("wasi", "keyvalue", "test").with_provider(recorder.clone());
+
+        // One import whose resource the binding leaves open, and one where the
+        // binding pins it explicitly.
+        let open = entry(None, Some("open-resource"));
+        let mut pinned = entry(None, Some("pinned-resource"));
+        pinned.config.insert(
+            EXTERNAL_ID_CONFIG_KEY.to_string(),
+            "operator-choice".to_string(),
+        );
+
+        mux.build_registry(&[import(Some("a"), Some("open-resource"))], &[open])
+            .await
+            .unwrap();
+        mux.build_registry(&[import(Some("b"), Some("pinned-resource"))], &[pinned])
+            .await
+            .unwrap();
+
+        let seen = recorder.0.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(
+            seen.first().and_then(|c| c.get(EXTERNAL_ID_CONFIG_KEY)),
+            Some(&"open-resource".to_string()),
+            "the import's external-id should reach the backend"
+        );
+        assert_eq!(
+            seen.get(1).and_then(|c| c.get(EXTERNAL_ID_CONFIG_KEY)),
+            Some(&"operator-choice".to_string()),
+            "deploy-time config outranks what the artifact declares"
+        );
     }
 }

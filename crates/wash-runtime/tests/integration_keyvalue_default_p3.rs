@@ -50,6 +50,7 @@ fn default_kv_iface() -> WitInterface {
         version: Some(semver::Version::parse("0.1.0").unwrap()),
         config: HashMap::new(),
         name: None,
+        external_id: None,
     }
 }
 

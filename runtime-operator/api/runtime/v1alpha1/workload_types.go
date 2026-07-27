@@ -157,6 +157,21 @@ type HostInterface struct {
 	// +kubebuilder:validation:MaxLength=64
 	Name string `json:"name,omitempty"`
 
+	// ExternalID binds imports that name this platform resource via the
+	// component-model `external-id` attribute. An import resolves by its
+	// external-id when it declares one and by its Name otherwise, so a binding
+	// written against ExternalID serves every component referencing that
+	// resource without per-component label coordination.
+	//
+	// External-ids are free-form and carry no uniqueness requirement — several
+	// imports, on different interfaces or packages, may name one resource. A
+	// binding written against Name outranks one written against ExternalID, so
+	// an operator can still pin a particular import. Declaring both narrows the
+	// pin to an import matching each.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=255
+	ExternalID string `json:"externalId,omitempty"`
+
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MaxLength=128
 	Namespace string `json:"namespace"`
@@ -234,16 +249,17 @@ type WorkloadSpec struct {
 	// Two routing invariants are enforced at admission, complementing the
 	// host-side checks:
 	//   1. No two entries may be exact duplicates (same namespace, package,
-	//      name, and version).
-	//   2. At most one entry of a given namespace:package may be unnamed — the
-	//      unnamed entry is the default route and cannot be shared. Declare
-	//      distinct `name`s to route multiple imports of the same package to
-	//      different backends. Semver-incompatible versions of the same package
-	//      may coexist (they are distinct interfaces).
+	//      name, externalId, and version).
+	//   2. At most one entry of a given namespace:package may declare no key at
+	//      all — neither `name` nor `externalId`. That entry is the default
+	//      route and cannot be shared. Declare a `name` or an `externalId` to
+	//      route multiple imports of the same package to different backends.
+	//      Semver-incompatible versions of the same package may coexist (they
+	//      are distinct interfaces).
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=64
-	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y.__namespace__ == x.__namespace__ && y.__package__ == x.__package__ && (has(y.name) ? y.name : '') == (has(x.name) ? x.name : '') && (has(y.version) ? y.version : '') == (has(x.version) ? x.version : '')))",message="hostInterfaces must not contain duplicate entries with the same namespace, package, name, and version"
-	// +kubebuilder:validation:XValidation:rule="self.all(x, (has(x.name) && x.name != '') || self.filter(y, y.__namespace__ == x.__namespace__ && y.__package__ == x.__package__ && !(has(y.name) && y.name != '')).size() == 1)",message="at most one unnamed hostInterface is allowed per namespace:package; set a unique name to disambiguate multiple imports of the same package"
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y.__namespace__ == x.__namespace__ && y.__package__ == x.__package__ && (has(y.name) ? y.name : '') == (has(x.name) ? x.name : '') && (has(y.externalId) ? y.externalId : '') == (has(x.externalId) ? x.externalId : '') && (has(y.version) ? y.version : '') == (has(x.version) ? x.version : '')))",message="hostInterfaces must not contain duplicate entries with the same namespace, package, name, externalId, and version"
+	// +kubebuilder:validation:XValidation:rule="self.all(x, (has(x.name) && x.name != '') || (has(x.externalId) && x.externalId != '') || self.filter(y, y.__namespace__ == x.__namespace__ && y.__package__ == x.__package__ && !(has(y.name) && y.name != '') && !(has(y.externalId) && y.externalId != '')).size() == 1)",message="at most one hostInterface per namespace:package may declare neither name nor externalId; that entry is the default route and cannot be shared"
 	HostInterfaces []HostInterface `json:"hostInterfaces,omitempty"`
 	// +kubebuilder:validation:Optional
 	Service *WorkloadService `json:"service,omitempty"`
@@ -263,11 +279,12 @@ func (s *WorkloadSpec) EnsureHostInterface(iface HostInterface) {
 		// canonical-version rules (and wit-parser's merge-imports-by-semver),
 		// only compatible versions collapse: e.g. 0.2.1 and 0.2.6 (canonical
 		// "0.2") merge keeping the higher, while 0.2 and 0.3 stay distinct.
-		// Name is part of the identity, so differently-named interfaces of the
-		// same package never merge.
+		// Name and ExternalID are both part of the identity, so interfaces that
+		// differ in either never merge — they select different backends.
 		if existing.Namespace == iface.Namespace &&
 			existing.Package == iface.Package &&
 			existing.Name == iface.Name &&
+			existing.ExternalID == iface.ExternalID &&
 			canonVersion(existing.Version) == canonVersion(iface.Version) {
 			existing.EnsureInterfaces(iface.Interfaces...)
 			if iface.Config != nil && existing.Config == nil {

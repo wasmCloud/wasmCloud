@@ -123,9 +123,10 @@ impl MultiplexedMessaging {
     /// component's matched messaging host interfaces.
     pub async fn build_registry<'i>(
         &self,
+        imports: impl IntoIterator<Item = &'i WitInterface>,
         interfaces: impl IntoIterator<Item = &'i WitInterface>,
     ) -> anyhow::Result<HashMap<String, MsgId>> {
-        self.mux.build_registry(interfaces).await
+        self.mux.build_registry(imports, interfaces).await
     }
 }
 
@@ -157,7 +158,13 @@ impl HostPlugin for MultiplexedMessaging {
             return Ok(());
         }
 
-        let registry = self.build_registry(interfaces.iter()).await?;
+        // Selection is driven by what the *component* imports: each import's
+        // implements name and external-id pick the entry that serves it, and the
+        // registry is keyed by import name so `resolve` stays a plain lookup.
+        let world = item.world();
+        let registry = self
+            .build_registry(world.imports.iter(), interfaces.iter())
+            .await?;
         let component = item.component().clone();
         let linker = item.linker();
 
@@ -193,6 +200,7 @@ mod tests {
             version: None,
             config,
             name: name.map(String::from),
+            external_id: None,
         }
     }
 
@@ -214,7 +222,10 @@ mod tests {
             msg_iface(Some("cluster-b"), Some("in-memory")),
         ]);
 
-        let registry = plugin.build_registry(&interfaces).await.unwrap();
+        let registry = plugin
+            .build_registry(&interfaces, &interfaces)
+            .await
+            .unwrap();
         let a = registry.get("cluster-a").expect("a routed").clone();
         let b = registry.get("cluster-b").expect("b routed").clone();
 
@@ -232,7 +243,7 @@ mod tests {
         let plugin = MultiplexedMessaging::new(); // no providers
         let interfaces = HashSet::from([msg_iface(Some("x"), Some("nats"))]);
         let err = plugin
-            .build_registry(&interfaces)
+            .build_registry(&interfaces, &interfaces)
             .await
             .err()
             .expect("expected error for unregistered backend");

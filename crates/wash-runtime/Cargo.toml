@@ -155,6 +155,7 @@ tonic-prost-build = { workspace = true, default-features = true }
 pbjson-build = { workspace = true, default-features = true }
 
 [dev-dependencies]
+serde_yaml_ng = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

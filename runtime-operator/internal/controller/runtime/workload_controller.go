@@ -302,14 +302,18 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 		if err != nil {
 			return fmt.Errorf("materializing host interface config for %s/%s: %w", hi.Namespace, hi.Package, err)
 		}
-		witWorld.HostInterfaces = append(witWorld.HostInterfaces, &runtimev2.WitInterface{
+		witIface := &runtimev2.WitInterface{
 			Namespace:  hi.Namespace,
 			Package:    hi.Package,
 			Version:    hi.Version,
 			Interfaces: hi.Interfaces,
 			Config:     hiConfig,
 			Name:       hi.Name,
-		})
+		}
+		if hi.ExternalID != "" {
+			witIface.ExternalId = &hi.ExternalID
+		}
+		witWorld.HostInterfaces = append(witWorld.HostInterfaces, witIface)
 	}
 
 	for _, c := range workload.Spec.Components {

@@ -40,6 +40,7 @@ fn kv_iface(name: &str, backend: &str, url: &str) -> WitInterface {
             ("url".to_string(), url.to_string()),
         ]),
         name: Some(name.to_string()),
+        external_id: None,
     }
 }
 
@@ -87,7 +88,7 @@ async fn multiplexed_routes_to_redis_and_nats() -> Result<()> {
         kv_iface("redis-kv", "redis", &redis_url),
         kv_iface("nats-kv", "nats", &nats_url),
     ]);
-    let registry = plugin.build_registry(&interfaces).await?;
+    let registry = plugin.build_registry(&interfaces, &interfaces).await?;
     let redis_be = registry.get("redis-kv").expect("redis-kv routed").clone();
     let nats_be = registry.get("nats-kv").expect("nats-kv routed").clone();
 

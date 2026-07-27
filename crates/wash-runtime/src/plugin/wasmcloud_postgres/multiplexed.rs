@@ -21,7 +21,7 @@ use tokio::sync::RwLock;
 use url::Url;
 
 use crate::engine::ctx::ActiveCtx;
-use crate::plugin::multiplex::{BackendProvider, Multiplexer};
+use crate::plugin::multiplex::{BackendProvider, EXTERNAL_ID_CONFIG_KEY, Multiplexer};
 use crate::wit::WitInterface;
 
 use super::{
@@ -52,10 +52,18 @@ pub struct PgId {
 /// Build a deadpool connection pool from a full postgres URL (credentials +
 /// database). Unlike the legacy bouncer config, the URL here is complete: the
 /// named interface owns its role and target database.
-fn build_pool_from_url(url: &str) -> anyhow::Result<Pool> {
+fn build_pool_from_url(url: &str, database: Option<&str>) -> anyhow::Result<Pool> {
     let parsed = Url::parse(url).context("failed to parse postgres URL")?;
-    let pg_config: tokio_postgres::Config =
+    let mut pg_config: tokio_postgres::Config =
         url.parse().context("failed to parse postgres config")?;
+    // A URL that names no database leaves the server unqualified; a bound
+    // import's external-id then supplies the database name, which is how a
+    // single credentialed server binding serves several logical databases.
+    if pg_config.get_dbname().is_none_or(str::is_empty)
+        && let Some(database) = database
+    {
+        pg_config.dbname(database);
+    }
     let pool_size = extract_pool_size(&parsed);
     let mgr_config = ManagerConfig {
         recycling_method: RecyclingMethod::Fast,
@@ -198,8 +206,14 @@ impl BackendProvider<PgId> for PostgresProvider {
         POSTGRES_BACKEND
     }
 
+    /// Pools are shared per (server URL, database), so two imports naming
+    /// different databases on one server never share a connection pool.
     fn pool_key(&self, config: &HashMap<String, String>) -> Option<String> {
-        config.get("url").cloned()
+        let url = config.get("url")?;
+        match config.get(EXTERNAL_ID_CONFIG_KEY) {
+            Some(external_id) => Some(format!("{url}\u{0}{external_id}")),
+            None => Some(url.clone()),
+        }
     }
 
     async fn instantiate(&self, config: &HashMap<String, String>) -> anyhow::Result<PgId> {
@@ -207,7 +221,7 @@ impl BackendProvider<PgId> for PostgresProvider {
             anyhow::anyhow!("named wasmcloud:postgres interface requires a 'url' config")
         })?;
         Ok(PgId {
-            pool: build_pool_from_url(url)?,
+            pool: build_pool_from_url(url, config.get(EXTERNAL_ID_CONFIG_KEY).map(String::as_str))?,
         })
     }
 }
@@ -231,20 +245,25 @@ impl WasmcloudPostgres {
             .with_provider(Arc::new(PostgresProvider))
     }
 
-    /// Build the per-import connection registry (interface name -> [`PgId`]) for
-    /// the named `wasmcloud:postgres` host interfaces, through the shared
+    /// Build the per-import connection registry (import name -> [`PgId`]) for
+    /// the component's labeled `wasmcloud:postgres` imports, through the shared
     /// multiplexer so identical URLs reuse one pool.
     pub async fn build_named_pools<'i>(
         &self,
+        imports: impl IntoIterator<Item = &'i WitInterface>,
         interfaces: impl IntoIterator<Item = &'i WitInterface>,
     ) -> anyhow::Result<HashMap<String, PgId>> {
-        // Only named interfaces are multiplexed; an unnamed one keeps the legacy
-        // per-component-database path, so filter it out before building.
-        let named: Vec<&WitInterface> = interfaces
+        // Only labeled imports are multiplexed; a plain one keeps the legacy
+        // per-component-database path. The entries are filtered to match: the
+        // unkeyed default belongs to that legacy path, so it must not become the
+        // fallback for a labeled import.
+        let imports: Vec<&WitInterface> =
+            imports.into_iter().filter(|i| i.name.is_some()).collect();
+        let entries: Vec<&WitInterface> = interfaces
             .into_iter()
-            .filter(|i| i.name.is_some())
+            .filter(|i| i.name.is_some() || i.external_id.is_some())
             .collect();
-        self.mux.build_registry(named).await
+        self.mux.build_registry(imports, entries).await
     }
 }
 

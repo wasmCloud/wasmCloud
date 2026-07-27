@@ -65,6 +65,7 @@ fn wasi_kv_iface(name: Option<&str>) -> WitInterface {
         version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
         config,
         name: name.map(String::from),
+        external_id: None,
     }
 }
 
@@ -77,6 +78,7 @@ fn wasmcloud_kv_store(name: &str) -> WitInterface {
         version: Some(semver::Version::parse("0.1.0").unwrap()),
         config: HashMap::from([("backend".to_string(), "in-memory".to_string())]),
         name: Some(name.to_string()),
+        external_id: None,
     }
 }
 

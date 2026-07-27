@@ -277,6 +277,7 @@ fn inter_component_host_interfaces(host_header: &str) -> Vec<WitInterface> {
                 config
             },
             name: None,
+            external_id: None,
         },
         WitInterface {
             namespace: "wasi".to_string(),
@@ -285,6 +286,7 @@ fn inter_component_host_interfaces(host_header: &str) -> Vec<WitInterface> {
             version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
             config: HashMap::new(),
             name: None,
+            external_id: None,
         },
     ]
 }

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use crate::plugin::lock_root;
-use crate::plugin::multiplex::BackendProvider;
+use crate::plugin::multiplex::{BackendProvider, EXTERNAL_ID_CONFIG_KEY, sanitize_external_id};
 
 use super::{
     BlobBackend, BlobBackendError, BlobId, BlobResult, ContainerInfo, ObjectInfo, clamp_range,
@@ -256,10 +256,17 @@ impl BackendProvider<BlobId> for FilesystemProvider {
         "filesystem"
     }
 
+    /// A bound import's `external-id` becomes a directory under `root`, so
+    /// containers named by two imports addressing different platform resources
+    /// never alias on disk even when one binding serves both.
     async fn instantiate(&self, config: &HashMap<String, String>) -> anyhow::Result<BlobId> {
         let root = config.get("root").ok_or_else(|| {
             anyhow::anyhow!("filesystem blobstore backend requires a 'root' config")
         })?;
+        let root = match config.get(EXTERNAL_ID_CONFIG_KEY) {
+            Some(external_id) => Path::new(root).join(sanitize_external_id(external_id)),
+            None => PathBuf::from(root),
+        };
         Ok(Arc::new(FilesystemBackend::new(root)))
     }
 }

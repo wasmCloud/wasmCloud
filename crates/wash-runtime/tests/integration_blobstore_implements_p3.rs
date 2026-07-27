@@ -60,6 +60,7 @@ fn nats_blob_iface(name: &str, iface: &str, url: &str) -> WitInterface {
             ("url".to_string(), url.to_string()),
         ]),
         name: Some(name.to_string()),
+        external_id: None,
     }
 }
 

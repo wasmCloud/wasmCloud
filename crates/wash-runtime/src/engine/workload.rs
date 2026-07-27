@@ -179,74 +179,10 @@ impl WorkloadMetadata {
         crate::engine::targets_wasip3(&self.component)
     }
 
-    /// Computes and returns the [`WitWorld`] of this component.
+    /// Computes and returns the [`WitWorld`] of this component, including the
+    /// `implements` label and `external-id` attribute on each world item.
     pub fn world(&self) -> WitWorld {
-        let mut imports = HashMap::new();
-        let mut exports = HashMap::new();
-
-        // Iterate over imports, merging interfaces when namespace:package@version matches
-        for (import_name, import_item) in self
-            .component
-            .component_type()
-            .imports(self.component.engine())
-        {
-            if let ComponentItem::ComponentInstance(_) = &import_item.ty {
-                // An `(implements <id>)` import carries the real interface
-                // identity in its `implements` annotation; the import name is
-                // the multiplex label (e.g. `team-a`). Build the interface from
-                // the annotation and record the label as the routing `name` so
-                // it lines up with a named host interface. A plain import uses
-                // its name as the identity directly.
-                let interface = match import_item.implements {
-                    Some(implements_id) => {
-                        let mut iface = WitInterface::from(implements_id);
-                        iface.name = Some(import_name.to_string());
-                        iface
-                    }
-                    None => WitInterface::from(import_name),
-                };
-                let k = interface.instance();
-                imports
-                    .entry(k)
-                    .and_modify(|existing: &mut WitInterface| {
-                        existing.merge(&interface);
-                    })
-                    .or_insert(interface);
-            } else {
-                debug!(
-                    import_name,
-                    "imported item is not a component instance, skipping"
-                );
-            }
-        }
-
-        // Iterate over exports, merging interfaces when namespace:package@version matches
-        for (export_name, export_item) in self
-            .component
-            .component_type()
-            .exports(self.component.engine())
-        {
-            if let ComponentItem::ComponentInstance(_) = export_item.ty {
-                let interface = WitInterface::from(export_name);
-                let k = interface.instance();
-                exports
-                    .entry(k)
-                    .and_modify(|existing: &mut WitInterface| {
-                        existing.merge(&interface);
-                    })
-                    .or_insert(interface);
-            } else {
-                debug!(
-                    export_name,
-                    "exported item is not a component instance, skipping"
-                );
-            }
-        }
-
-        WitWorld {
-            imports: imports.into_values().collect(),
-            exports: exports.into_values().collect(),
-        }
+        crate::engine::component_world(&self.component)
     }
 }
 
@@ -1567,15 +1503,14 @@ impl ResolvedWorkload {
                     );
 
                     // Get the interfaces this plugin was bound to by checking the component's imports
-                    let world = component.world();
                     let plugin_world = plugin.world();
 
                     // Find the intersection of what the component imports and what the plugin provides
-                    let bound_interfaces = world
+                    let bound_interfaces = component
+                        .world()
                         .imports
-                        .iter()
+                        .into_iter()
                         .filter(|import| plugin_world.imports.contains(import))
-                        .cloned()
                         .collect::<std::collections::HashSet<_>>();
 
                     if let Err(e) = plugin
@@ -1835,9 +1770,11 @@ impl UnresolvedWorkload {
                 for wit_interface in required_interfaces.iter() {
                     // Check if plugin supports this interface
                     if plugin_interfaces.includes_bidirectional(wit_interface) {
-                        // an `(implements ..)` named interface is served only
-                        // by a plugin that supports named instances.
-                        let defer_to_other = if wit_interface.name.is_some() {
+                        // An interface that keys a specific instance — by name
+                        // or by external-id — is served only by a plugin that
+                        // supports named instances; the unkeyed default route
+                        // goes to the standalone one.
+                        let defer_to_other = if wit_interface.resolution_key().is_some() {
                             !p.supports_named_instances()
                                 && other_plugin_serves(plugins, plugin_id, wit_interface, true)
                         } else {
@@ -1868,11 +1805,11 @@ impl UnresolvedWorkload {
                 // are matched to this plugin, the plugin must support named instances
                 let mut ns_pkg_named: HashMap<(&str, &str), Vec<&str>> = HashMap::new();
                 for iface in &plugin_matched_interfaces {
-                    if let Some(name) = &iface.name {
+                    if let Some(key) = iface.resolution_key() {
                         ns_pkg_named
                             .entry((iface.namespace.as_str(), iface.package.as_str()))
                             .or_default()
-                            .push(name.as_str());
+                            .push(key);
                     }
                 }
                 for ((ns, pkg), mut names) in ns_pkg_named {
@@ -3225,6 +3162,7 @@ mod tests {
             version: Some(semver::Version::parse("0.2.0").unwrap()),
             config: std::collections::HashMap::new(),
             name: None,
+            external_id: None,
         };
 
         let messaging_consumer = WitInterface {
@@ -3236,6 +3174,7 @@ mod tests {
             version: Some(semver::Version::parse("0.2.0").unwrap()),
             config: std::collections::HashMap::new(),
             name: None,
+            external_id: None,
         };
 
         let logging = WitInterface {
@@ -3245,6 +3184,7 @@ mod tests {
             version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
             config: std::collections::HashMap::new(),
             name: None,
+            external_id: None,
         };
 
         let messaging_plugin = Arc::new(MockPlugin::new(
@@ -3288,6 +3228,7 @@ mod tests {
                     version: Some(semver::Version::parse("0.2.0").unwrap()),
                     config: std::collections::HashMap::new(),
                     name: None,
+                    external_id: None,
                 },
                 logging,
             ],
@@ -3320,6 +3261,7 @@ mod tests {
             version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
             config: std::collections::HashMap::new(),
             name: None,
+            external_id: None,
         };
 
         let plugin = Arc::new(MockPlugin::new(
@@ -3365,6 +3307,7 @@ mod tests {
             version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
             config: std::collections::HashMap::new(),
             name: name.map(String::from),
+            external_id: None,
         }
     }
 
@@ -3522,6 +3465,7 @@ mod tests {
             version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
             config: std::collections::HashMap::new(),
             name: None,
+            external_id: None,
         };
 
         let plugin = Arc::new(MockPlugin::new(
