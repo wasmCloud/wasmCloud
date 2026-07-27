@@ -10,6 +10,13 @@ world oci-registry {
   // Random bytes for upload-session identifiers.
   import wasi:random/random@0.3.0;
 
+  // Basic-auth credentials, served by a host component plugin (the secrets
+  // backend). Consumed through the async `wasmcloud:secrets@2.0.0` interface —
+  // a host component plugin serves capability calls across its store boundary,
+  // which is inherently async.
+  import wasmcloud:secrets/store@2.0.0;
+  import wasmcloud:secrets/reveal@2.0.0;
+
   // HTTP entrypoint (wasip3 async handler).
   export wasi:http/handler@0.3.0;
 }

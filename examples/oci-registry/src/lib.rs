@@ -36,6 +36,7 @@ mod bindings {
     });
 }
 
+mod auth;
 mod blobs;
 mod http;
 mod keys;
@@ -88,6 +89,13 @@ async fn dispatch(request: Request) -> Result<Response, String> {
     let query = query.to_string();
 
     let headers = request.get_headers();
+
+    // Authenticate before anything else — including the `/v2/` version probe,
+    // which is where an OCI client discovers the registry requires credentials.
+    if let Some(challenge) = auth::require_basic(&headers).await {
+        return Ok(challenge);
+    }
+
     let content_type = header_str(&headers, "content-type");
     let content_range = header_str(&headers, "content-range");
 
