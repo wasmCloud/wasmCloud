@@ -36,18 +36,24 @@ impl hyper::body::Body for ChannelBody {
     }
 }
 
-/// Handles one inbound HTTP request on the shared service instance.
+/// Handles one inbound HTTP request on a shared instance: the workload's
+/// service, or one warm instance of a pooled component (see
+/// [`crate::engine::instance_driver`]).
 ///
 /// A handler `Err(error-code)` is an ordinary application outcome: this request
 /// gets a 500 and the instance keeps serving. A guest *trap* is answered the
 /// same way here, but it also faults the store, so the driver's
 /// `run_concurrent` returns an error and the service supervisor restarts (and
 /// re-registers) a fresh instance. See `test_trigger_service_http_restarts_on_fault`.
-pub(super) struct HttpTask {
-    pub(super) service: Arc<Service>,
-    pub(super) req: hyper::Request<hyper::body::Incoming>,
-    pub(super) resp_tx:
+pub(crate) struct HttpTask {
+    pub(crate) service: Arc<Service>,
+    pub(crate) req: hyper::Request<hyper::body::Incoming>,
+    pub(crate) resp_tx:
         tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
+    /// Holds this call's slot on a pooled instance for as long as the task
+    /// lives, so the slot is freed however the call ends. `None` for a
+    /// service, whose instance is not shared with a pool.
+    pub(crate) in_flight: Option<crate::engine::instance_driver::InFlightGuard>,
 }
 
 impl AccessorTask<SharedCtx> for HttpTask {
@@ -56,7 +62,10 @@ impl AccessorTask<SharedCtx> for HttpTask {
             service,
             req,
             resp_tx,
+            in_flight,
         } = self;
+        // Freed when this task ends, whichever way it ends.
+        let _in_flight = in_flight;
 
         let (parts, body) = req.into_parts();
         let body = body

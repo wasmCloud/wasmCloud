@@ -68,6 +68,15 @@ pub struct Component {
     pub local_resources: LocalResources,
     pub pool_size: i32,
     pub max_invocations: i32,
+    /// How many calls one warm instance may serve at the same time.
+    ///
+    /// Unset or below `1` means one, which is what a component gets without
+    /// asking: a warm instance serves a single call at a time, exactly as an
+    /// unpooled one does. Raising it lets an instance overlap calls while it is
+    /// awaiting I/O, and is only safe for a guest that yields rather than
+    /// blocks — a guest driving its own executor with `block_on` must stay at
+    /// one.
+    pub max_concurrency: i32,
 }
 
 /// Resource limits and configuration for a component or service.

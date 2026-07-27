@@ -58,6 +58,7 @@ async fn test_cron_service_integration() -> Result<()> {
                 bytes: bytes::Bytes::from_static(CRON_COMPONENT_WASM),
                 local_resources: Default::default(),
                 max_invocations: 1,
+                max_concurrency: 1,
                 pool_size: 0,
             }],
             host_interfaces: vec![],

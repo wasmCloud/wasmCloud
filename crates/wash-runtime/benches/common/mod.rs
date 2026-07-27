@@ -160,6 +160,7 @@ pub async fn start_backend_host(flavor: Flavor) -> anyhow::Result<BenchHost> {
             // instance-reuse path; ignored by the non-reuse path).
             pool_size: 0,
             max_invocations: 0,
+            max_concurrency: 1,
         }],
         host_interfaces: http_host_interfaces(host),
         volumes: vec![],
