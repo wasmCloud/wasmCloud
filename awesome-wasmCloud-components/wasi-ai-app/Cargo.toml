@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+package.edition = "2024"
+package.authors = ["The wasmCloud Team"]
+members = ["web", "transcriber" , "summarizer"]
+
+[patch.crates-io]
+#candle-core = { path = "/home/b/me/rust/ai/candle/candle-core", default-features = false }
+candle-core = { git = "https://github.com/bharattech/candle", branch = "candle-core-enable-simd128-on-wasm32-wasip2", package = "candle-core" }
+oxiwhisper = { git = "https://github.com/bharattech/oxiwhisper", branch = "feature/patch-for-simd128-wasm32-wasip2" }
+
+[workspace.dependencies]
+wit-bindgen = { version = "*", features = ["async-spawn", "inter-task-wakeup"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

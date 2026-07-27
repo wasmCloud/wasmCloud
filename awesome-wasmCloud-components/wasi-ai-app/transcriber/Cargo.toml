@@ -1,0 +1,17 @@
+[package]
+name = "transcriber"
+edition.workspace = true
+version = "0.0.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true, features = ["async-spawn", "inter-task-wakeup"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+#oxiwhisper = { version = "0.1.0" }
+#oxiwhisper = { path = "/home/b/me/WebAssembly/wasmCloud/oxiwhisper", default-features = false }
+oxiwhisper = { git = "https://github.com/bharattech/oxiwhisper", branch = "feature/patch-for-simd128-wasm32-wasip2", default-features = false }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

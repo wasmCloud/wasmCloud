@@ -1,0 +1,2 @@
+[target.wasm32-wasip2]
+rustflags = ["-C", "target-feature=+simd128"]

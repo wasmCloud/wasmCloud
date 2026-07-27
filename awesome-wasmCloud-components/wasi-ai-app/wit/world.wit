@@ -1,0 +1,21 @@
+package wasmcloud:wasi3-ai-app@0.1.0;
+
+interface producer {
+    /// Mirror of the producer interface. The signature must match the
+    /// producer backend exactly so the dynamic linker wires the import of
+    /// `wasmcloud:wasip3-cc-demo-stream/producer` to the producer's export.
+    produce: async func() -> stream<u8>;
+}
+
+interface summarizer {
+    summarize: async func(payload: string) -> stream<u8>;
+}
+
+world web {
+    import wasi:http/types@0.3.0;
+    import wasi:clocks/types@0.3.0;
+    import wasi:random/random@0.3.0;
+    import producer;
+    import summarizer;
+    export wasi:http/handler@0.3.0;
+}

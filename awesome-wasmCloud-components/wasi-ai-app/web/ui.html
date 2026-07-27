@@ -1,0 +1,1231 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Async WASI 3.0 · wasmCloud</title>
+        
+        <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            body {
+                font-family:
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                    Oxygen, Ubuntu, Cantarell, sans-serif;
+                background: linear-gradient(
+                    135deg,
+                    #0a0a0a 0%,
+                    #1a0f2e 50%,
+                    #0a0a0a 100%
+                );
+                min-height: 100vh;
+                padding: 2rem;
+                color: #1a1a1a;
+            }
+            #atText summary, #outputText summary {
+                background: #FCFCFC;
+                padding-left: 10px;
+                color: #918a8a;
+            }
+            #atText, #outputText {
+                padding: 0;
+                border: 0;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+                color: #1a1a1a;
+                font-size: 1.05rem;
+                overflow-y: scroll;
+                width: 100%;
+                line-height: 1.5;
+                margin-bottom: 0;
+                max-height: 200px;
+            }
+            .show {
+                display: block;
+            }
+            .hide{
+                height: 0;min-height: unset !important;
+            }
+            #outputText strong {
+              width: 100%;
+              display: block;
+              padding-bottom: 5px;
+              display: list-item;
+                list-style-type: disc;
+                margin-left: 20px;
+            }
+            #outputText h1 {
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+              color: #1a1a1a;
+              font-size: 1.05rem;
+              line-height: 1.5;
+              font-weight: normal;
+              text-shadow: unset;
+            }
+            .sub-text {
+                color: #00c389;
+            }
+            .container {
+                max-width: 650px;
+                margin: 0 auto;
+            }
+            .header {
+                text-align: center;
+                margin-bottom: 2rem;
+                display: flex;
+                justify-content: space-between;
+                color: white;
+            }
+            h1 {
+                color: white;
+                font-size: 2.5rem;
+                margin-bottom: 1rem;
+                text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+            }
+            .powered-by {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 0.5rem;
+                color: rgba(255, 255, 255, 0.9);
+                font-size: 0.9rem;
+            }
+            .wasmcloud-logo {
+                height: 24px;
+                width: auto;
+                vertical-align: middle;
+            }
+
+            .card {
+                background: white;
+                border-radius: 12px;
+                padding: 1.5rem 2rem 0rem 2rem;
+                margin-bottom: 2rem;
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            }
+            label {
+                display: block;
+                margin-bottom: 6px;
+                font-weight: 500;
+                color: #444;
+            }
+            select,
+            textarea {
+                width: 100%;
+                padding: 10px;
+                border: 1px solid #ccc;
+                border-radius: 6px;
+                font-size: 14px;
+                margin-bottom: 16px;
+            }
+            select:focus,
+            textarea:focus {
+                outline: none;
+                border-color: #685bc7;
+                box-shadow: 0 0 0 3px rgba(104, 91, 199, 0.15);
+            }
+            textarea {
+                min-height: 120px;
+                resize: vertical;
+            }
+            button {
+                background: #685bc7;
+                color: white;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: 600;
+                cursor: pointer;
+            }
+            button:hover {
+                background: #574aae;
+            }
+            button:disabled {
+                background: #999;
+                cursor: not-allowed;
+            }
+            #result {
+                margin-top: 24px;
+                padding: 16px;
+                background: #f8f7ff;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                white-space: pre-wrap;
+                word-break: break-word;
+                font-family:
+                    "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+                display: none;
+            }
+            #result.error {
+                border-color: #cc0000;
+                background: #fff5f5;
+                color: #cc0000;
+            }
+            #result.success {
+                border-color: #685bc7;
+                background: #f8f7ff;
+            }
+
+            h2 {
+                color: #1a1a1a;
+                font-size: 1.05rem;
+                margin-bottom: 1.25rem;
+                border-bottom: 2px solid #685bc7;
+                padding-bottom: 0.4rem;
+            }
+            .arch {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 0.35rem;
+            }
+            .arch-node {
+                background: #f8f7ff;
+                border: 1px solid #685bc7;
+                border-radius: 8px;
+                padding: 0.55rem 1rem;
+                font-family:
+                    "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+                font-size: 0.85rem;
+                font-weight: 600;
+                color: #4c1d95;
+                text-align: center;
+            }
+            .arch-node.broker {
+                width: 100%;
+            }
+            .arch-muted {
+                color: #8b7fd8;
+                font-weight: 400;
+            }
+            .arch-arrow {
+                color: #685bc7;
+                line-height: 1.1;
+                font-size: 0.9rem;
+            }
+            .arch-label {
+                font-size: 0.72rem;
+                color: #777;
+                font-family:
+                    "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+            }
+            .arch-branches {
+                display: flex;
+                gap: 1.5rem;
+                width: 100%;
+                justify-content: center;
+                flex-wrap: wrap;
+            }
+            .arch-branch {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 0.25rem;
+            }
+            .arch-note {
+                margin-top: 1.25rem;
+                color: #666;
+                font-size: 0.8rem;
+                line-height: 1.5;
+            }
+            .arch-note code {
+                background: #f8f7ff;
+                color: #4c1d95;
+                padding: 1px 5px;
+                border-radius: 4px;
+                font-family:
+                    "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+                font-size: 0.9em;
+            }
+
+            .footer {
+                text-align: center;
+                padding: 1.5rem;
+                color: rgba(255, 255, 255, 0.8);
+                font-size: 0.85rem;
+            }
+            .footer a {
+                color: white;
+                text-decoration: none;
+                font-weight: 600;
+            }
+            .footer a:hover {
+                text-decoration: underline;
+            }
+            .display {
+                display: none;
+            }
+
+            .stp-05,
+            .stp-05 *,
+            .stp-05 *::before,
+            .stp-05 *::after {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+            .stp-05 ::selection {
+                background: #685bc7;
+                color: #fff;
+            }
+            .stp-05 {
+                /* Base colors – match main app */
+                --primary: #685bc7; /* primary purple */
+                --secondary: #00c389; /* secondary green */
+                --light-purple: #8b7fd8; /* for subtle accents */
+                --dark: #1a1a1a; /* main text on light bg */
+                --muted: #666;
+                --border: #ddd;
+                --white: #ffffff;
+                --card-bg: #ffffff;
+
+                font-family:
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                    Oxygen, Ubuntu, Cantarell, sans-serif;
+                /* No background – inherits from body */
+                min-height: auto; /* remove full‑page height */
+                display: block;
+                padding: 0; /* rely on container padding */
+            }
+            .stp-05__wrap {
+                max-width: 650px; /* match .container */
+                width: 100%;
+                margin: 0 auto;
+            }
+            .stp-05__label {
+                font-size: 10px;
+                letter-spacing: 0.16em;
+                text-transform: uppercase;
+                color: var(--secondary);
+                font-weight: 700;
+                text-align: center;
+                margin-bottom: 12px;
+            }
+            .stp-05__title {
+                font-size: 16px;
+                font-weight: 800;
+                color: #1a1a1a; /* dark text */
+                text-align: center;
+                letter-spacing: -0.02em;
+                margin-bottom: 40px;
+            }
+            /* stepper */
+            .stp-05__stepper {
+                display: flex;
+                align-items: flex-start;
+                gap: 0;
+                margin-bottom: 48px;
+            }
+            .stp-05__item {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 12px;
+                position: relative;
+            }
+            /* connector */
+            .stp-05__item:not(:last-child)::after {
+                content: "";
+                position: absolute;
+                top: 32px;
+                left: calc(50% + 32px);
+                width: calc(100% - 64px);
+                height: 2px;
+                background: var(--border);
+                transition: background 0.5s ease;
+            }
+            .stp-05__item.done::after {
+                background: linear-gradient(
+                    90deg,
+                    var(--primary),
+                    var(--secondary)
+                );
+                animation: stp-05-flash 0.4s ease;
+            }
+            @keyframes stp-05-flash {
+                0% {
+                    opacity: 0;
+                }
+                100% {
+                    opacity: 1;
+                }
+            }
+            /* icon bubble */
+            .stp-05__bubble {
+                width: 48px;
+                height: 48px;
+                border-radius: 4px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 26px;
+                background: #f0f0f0; /* light grey background */
+                border: 2px solid #ccc;
+                transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+                position: relative;
+                overflow: hidden;
+            }
+            .stp-05__bubble::before {
+                content: "";
+                position: absolute;
+                inset: 0;
+                background: linear-gradient(
+                    135deg,
+                    rgba(104, 91, 199, 0.05),
+                    transparent
+                );
+                opacity: 0;
+                transition: opacity 0.3s;
+            }
+            .stp-05__item.done .stp-05__bubble {
+                background: linear-gradient(
+                    135deg,
+                    rgba(104, 91, 199, 0.15),
+                    rgba(0, 195, 137, 0.1)
+                );
+                border-color: var(--primary);
+                box-shadow:
+                    0 0 24px rgba(104, 91, 199, 0.25),
+                    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            }
+            .stp-05__item.done .stp-05__bubble::before {
+                opacity: 1;
+            }
+            .stp-05__item.active .stp-05__bubble {
+                background: linear-gradient(
+                    135deg,
+                    rgba(104, 91, 199, 0.12),
+                    rgba(0, 195, 137, 0.08)
+                );
+                border-color: var(--secondary);
+                box-shadow:
+                    0 0 0 6px rgba(104, 91, 199, 0.08),
+                    0 0 32px rgba(104, 91, 199, 0.2);
+                animation: stp-05-bob 2.5s ease-in-out infinite;
+            }
+            @keyframes stp-05-bob {
+                0%,
+                100% {
+                    transform: translateY(0);
+                }
+                50% {
+                    transform: translateY(-4px);
+                }
+            }
+            /* checkmark overlay */
+            .stp-05__check {
+                position: absolute;
+                inset: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 22px;
+                /*background: linear-gradient(135deg, var(--primary), var(--secondary));*/
+                background-color: var(--primary);
+                border-radius: 0;
+                opacity: 0;
+                transform: scale(0.5);
+                transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+            }
+            .stp-05__item.done .stp-05__check {
+                opacity: 1;
+                transform: scale(1);
+            }
+
+            /* checkmark overlay */
+            .stp-05__process {
+                position: absolute;
+                inset: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 22px;
+                background-image: url(https://emoji.slack-edge.com/TSHTN0XE3/party-wasmcloud/bbf68211c8c40bec.gif);
+                background-color: white;
+                border-radius: 0;
+                opacity: 0;
+                transform: scale(0.5);
+                transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+                background-size: 90%;
+                background-repeat: no-repeat;
+                background-position: center;
+            }
+            .stp-05__item.active .stp-05__process {
+                opacity: 1;
+                transform: scale(1);
+            }
+
+            .stp-05__name {
+                font-size: 12px;
+                font-weight: 600;
+                color: #999;
+                text-align: center;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+                transition: color 0.3s;
+            }
+            .stp-05__item.done .stp-05__name {
+                color: var(--primary);
+            }
+            .stp-05__item.active .stp-05__name {
+                color: var(--dark);
+            }
+            .stp-05__sub {
+                font-size: 11px;
+                color: #bbb;
+                text-align: center;
+                transition: color 0.3s;
+            }
+            .stp-05__item.active .stp-05__sub {
+                color: var(--muted);
+            }
+            .stp-05__item.done .stp-05__sub {
+                color: var(--muted);
+            }
+            /* content panel – now a white card */
+            .stp-05__panel {
+                background: var(--card-bg);
+                border: 1px solid var(--border);
+                border-radius: 12px; /* match .card */
+                padding: 28px 32px;
+                min-height: 200px;
+                position: relative;
+                overflow: hidden;
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+            }
+            .stp-05__panel::before {
+                content: "";
+                position: absolute;
+                top: -60px;
+                right: -60px;
+                width: 180px;
+                height: 180px;
+                border-radius: 50%;
+                background: radial-gradient(
+                    circle,
+                    rgba(104, 91, 199, 0.04),
+                    transparent
+                );
+            }
+            .stp-05__panel-inner {
+                display: none;
+            }
+            .stp-05__panel-inner.active {
+                display: block;
+                animation: stp-05-in 0.35s ease;
+            }
+            @keyframes stp-05-in {
+                from {
+                    opacity: 0;
+                    transform: translateX(10px);
+                }
+                to {
+                    opacity: 1;
+                    transform: none;
+                }
+            }
+            .stp-05__panel-title {
+                font-size: 18px;
+                font-weight: 700;
+                color: var(--dark);
+                margin-bottom: 8px;
+            }
+            .stp-05__panel-desc {
+                font-size: 14px;
+                color: var(--muted);
+                line-height: 1.7;
+                margin-bottom: 20px;
+            }
+            .stp-05__tags {
+                display: flex;
+                gap: 8px;
+                flex-wrap: wrap;
+                margin-bottom: 20px;
+            }
+            .stp-05__tag {
+                padding: 4px 12px;
+                border-radius: 999px;
+                font-size: 11px;
+                font-weight: 600;
+                background: rgba(104, 91, 199, 0.08);
+                border: 1px solid rgba(104, 91, 199, 0.2);
+                color: var(--primary);
+            }
+            .stp-05__nav {
+                display: flex;
+                justify-content: space-between;
+                margin-top: 24px;
+            }
+            .stp-05__btn {
+                padding: 10px 24px;
+                border-radius: 6px; /* match button radius */
+                border: none;
+                font-size: 13px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s;
+            }
+            .stp-05__btn--prev {
+                background: #eee;
+                color: var(--muted);
+            }
+            .stp-05__btn--prev:hover {
+                background: #ddd;
+                color: var(--dark);
+            }
+            .stp-05__btn--next {
+                background: var(--primary);
+                color: #fff;
+                box-shadow: 0 4px 16px rgba(104, 91, 199, 0.3);
+            }
+            .stp-05__btn--next:hover {
+                background: #574aae; /* match hover */
+                transform: translateY(-1px);
+                box-shadow: 0 8px 24px rgba(104, 91, 199, 0.4);
+            }
+            /* progress ring */
+            .stp-05__progress {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 12px;
+                margin-bottom: 20px;
+            }
+            .stp-05__ring {
+                width: 52px;
+                height: 52px;
+            }
+            .stp-05__ring circle {
+                fill: none;
+                stroke-width: 4;
+                stroke-linecap: round;
+            }
+            .stp-05__ring .bg {
+                stroke: #eee;
+            }
+            .stp-05__ring .fg {
+                stroke: var(--primary);
+                stroke-dasharray: 126;
+                stroke-dashoffset: 126;
+                transform: rotate(-90deg);
+                transform-origin: center;
+                transition: stroke-dashoffset 0.5s ease;
+            }
+            .stp-05__pct {
+                font-size: 13px;
+                font-weight: 700;
+                color: var(--primary);
+            }
+            .stp-05__pct-label {
+                font-size: 12px;
+                color: var(--muted);
+            }
+            @media (prefers-reduced-motion: reduce) {
+                .stp-05__item.active .stp-05__bubble {
+                    animation: none;
+                }
+                .stp-05__item.done::after,
+                .stp-05__panel-inner.active {
+                    animation: none;
+                }
+            }
+            .wfdiv {
+                padding: 0;
+            }
+
+            .placeholder {
+             margin: 0 auto;
+             max-width: 100%;
+             min-height: 3px;
+             background-color: #eee;
+            }
+            
+            @keyframes placeHolderShimmer{
+                0%{
+                    background-position: -468px 0
+                }
+                100%{
+                    background-position: 468px 0
+                }
+            }
+            
+            .animated-background {
+                animation-duration: 1.25s;
+                animation-fill-mode: forwards;
+                animation-iteration-count: infinite;
+                animation-name: placeHolderShimmer;
+                animation-timing-function: linear;
+                background: darkgray;
+                background: linear-gradient(to right, #eeeeee 10%, #dddddd 18%, #eeeeee 33%);
+                background-size: 800px 104px;
+                height: 3px;
+                position: relative;
+            }
+            .logo {
+                cursor: pointer;
+                text-decoration: none;
+                color: white;
+            }
+            .phtext {
+                padding: 10px 0;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h3><a href="/" class="logo">Wasi 3.0 AI Workflow App</a></h3>
+                <div class="powered-by">
+                    Built with
+                    <img
+                        src="https://cdn.prod.website-files.com/68e941b736876afc9468db2b/68e941b736876afc9468dcda_Wasmcloud.Logo-Hrztl_Color.png"
+                        alt="CNCF wasmCloud"
+                        class="wasmcloud-logo"
+                    />
+                </div>
+            </div>
+            <div id="result" ></div>
+            <div class="card">
+                
+                <h2>Generate transcription for the Audio file</h2>
+                <p>
+                    Audio file as Input:
+                    <span class="sub-text">output.wav</span> | Size:
+                    <span class="sub-text">141.3 MB</span>
+                </p>
+                <p>&nbsp;</p>
+                <p>
+                    AI Model to generate transcription:
+                    <span class="sub-text"
+                        ><a
+                            href="https://huggingface.co/ggerganov/whisper.cpp/blob/main/ggml-tiny.bin"
+                            target="_blank"
+                            >ggml-tiny.bin</a
+                        ></span
+                    >
+                    | Size:
+                    <span class="sub-text">77.7 MB</span>
+                </p>
+                <p>&nbsp;</p>
+                <p id="atTextTitle" class="sub-text"></p>
+                <div id="atph" class="phtext"></div>
+                <form id="taskForm">
+                    <textarea id="atText" name="atText" class="hide" placeholder="" readonly></textarea>
+                </form>
+                
+                <button
+                    type="button"
+                    id="startBtn"
+                    style="visibility: hidden; height: 0"
+                >
+                    Start
+                </button>
+                
+            </div>
+
+            <div class="card">
+                <h2>Summarize transcription</h2>
+                <p>
+                    Audio file transcription as Input:
+                    <span class="sub-text">Text</span>
+                </p>
+                <p>&nbsp;</p>
+                <p>
+                    AI Model to Summarize transcription:
+                    <span class="sub-text"
+                        ><a
+                            href="https://huggingface.co/Qwen/Qwen3-0.6B-GGUF"
+                            target="_blank"
+                            >Qwen3-0.6B-Q4_K_M.gguf</a
+                        ></span
+                    >
+                    | Size:
+                    <span class="sub-text">396.7 MB</span>
+                </p>
+                <p>&nbsp;</p>
+                <p id="outputTextTitle" class="sub-text"></p>
+                <div id="outputph" class="phtext"></div>
+                <div id="outputText"></div>
+                <button
+                    type="submit"
+                     form="taskForm"
+                    id="summarizeBtn"
+                    style="visibility: hidden; height: 0"
+                >
+                    Summarize
+                </button>
+            </div>
+
+            <div class="card wfdiv">
+                <div class="stp-05">
+                    <div class="stp-05__wrap">
+                        <div class="stp-05__label">&nbsp;</div>
+                        <div class="stp-05__title">WasmCloud Workflow</div>
+
+                        <div class="stp-05__stepper" id="stp-05-stepper">
+                            <div class="stp-05__item is-done" data-i="1">
+                                <div class="stp-05__bubble">
+                                    🚀
+                                    <div class="stp-05__check">✓</div>
+                                </div>
+                                <span class="stp-05__name">Start</span>
+                                <span class="stp-05__sub">Workflow</span>
+                            </div>
+                            <div class="stp-05__item is-done" data-i="2">
+                                <div class="stp-05__bubble">
+                                    🎧
+                                    <div class="stp-05__check">✓</div>
+                                    <div class="stp-05__process">&nbsp;</div>
+                                </div>
+                                <span class="stp-05__name">Audio</span>
+                                <span class="stp-05__sub">Transcribing</span>
+                            </div>
+                            <div class="stp-05__item active" data-i="3">
+                                <div class="stp-05__bubble">
+                                    📝
+                                    <div class="stp-05__check">✓</div>
+                                    <div class="stp-05__process">&nbsp;</div>
+                                </div>
+                                <span class="stp-05__name">Text</span>
+                                <span class="stp-05__sub">Summarizing</span>
+                            </div>
+                            <div class="stp-05__item" data-i="4">
+                                <div class="stp-05__bubble">
+                                    🏁
+                                    <div class="stp-05__check">✓</div>
+                                </div>
+                                <span class="stp-05__name">Done</span>
+                                <span class="stp-05__sub">Workflow</span>
+                            </div>
+                        </div>
+
+                        <div class="stp-05__panel">
+                            <div class="stp-05__panel-inner" data-panel="1">
+                                <div class="stp-05__panel-title">
+                                    Start the AI Workflow
+                                </div>
+                                <div class="stp-05__panel-desc">
+                                    Start the AI workflow to generate content
+                                    using the Wasi 3.0 and WasmCloud RUST SDKs.
+                                </div>
+                                <div class="stp-05__tags">
+                                    <span class="stp-05__tag">AI</span>
+                                    <span class="stp-05__tag">Wasi 3.0</span>
+                                    <span class="stp-05__tag">WasmCloud</span>
+                                </div>
+                            </div>
+                            <div class="stp-05__panel-inner" data-panel="2">
+                                <div class="stp-05__panel-title">Audio</div>
+                                <div class="stp-05__panel-desc">
+                                    Generating the audio transcription
+                                </div>
+                                <div class="stp-05__tags">
+                                    <span class="stp-05__tag"
+                                        >Audio File: output.wav</span
+                                    >
+                                    <span class="stp-05__tag"
+                                        >AI Model: ggml-tiny.bin</span
+                                    >
+                                    <span class="stp-05__tag">WasmCloud</span>
+                                </div>
+                            </div>
+                            <div
+                                class="stp-05__panel-inner active"
+                                data-panel="3"
+                            >
+                                <div class="stp-05__panel-title">Text</div>
+                                <div class="stp-05__panel-desc">
+                                    Summarizing transcription
+                                </div>
+                                <div class="stp-05__tags">
+                                    <span class="stp-05__tag"
+                                        >Candle Rust SDK</span
+                                    >
+                                    <span class="stp-05__tag"
+                                        >AI Model: Qwen3-0.6B-Q4_K_M.gguf</span
+                                    >
+                                    <span class="stp-05__tag">WasmCloud</span>
+                                </div>
+                                <div
+                                    class="stp-05__progress"
+                                    style="display: none"
+                                >
+                                    <svg
+                                        class="stp-05__ring"
+                                        viewBox="0 0 44 44"
+                                    >
+                                        <circle
+                                            class="bg"
+                                            cx="22"
+                                            cy="22"
+                                            r="20"
+                                        />
+                                        <circle
+                                            class="fg"
+                                            id="stp-05-ring"
+                                            cx="22"
+                                            cy="22"
+                                            r="20"
+                                        />
+                                    </svg>
+                                    <div>
+                                        <div
+                                            class="stp-05__pct"
+                                            id="stp-05-pct"
+                                        >
+                                            40%
+                                        </div>
+                                        <div class="stp-05__pct-label">
+                                            Overall Progress
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="stp-05__panel-inner" data-panel="4">
+                                <div class="stp-05__panel-title">Done</div>
+                                <div class="stp-05__panel-desc">
+                                    The AI Workflow execution complete
+                                    successfully!
+                                </div>
+                                <div class="stp-05__tags">
+                                    <span class="stp-05__tag">AI</span>
+                                    <span class="stp-05__tag">Wasi 3.0</span>
+                                    <span class="stp-05__tag">Rust</span>
+                                    <span class="stp-05__tag">WasmCloud</span>
+                                </div>
+                            </div>
+
+                            <div class="stp-05__nav">
+                                <button
+                                    type="button"
+                                    id="runBtn"
+                                    class="stp-05__btn stp-05__btn--next"
+                                >
+                                    Run
+                                </button>
+                            </div>
+
+                            <div class="stp-05__nav" style="display: none;">
+                          <button class="stp-05__btn stp-05__btn--prev" id="stp-05-prev" >← Previous</button>
+                          <button class="stp-05__btn stp-05__btn--next" id="stp-05-next" >Continue →</button>
+                      </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="footer">
+                Built with
+                <a href="https://wasmcloud.com" target="_blank" rel="noopener"
+                    >wasmCloud</a
+                >, a CNCF Incubating project
+            </div>
+        </div>
+
+        <script>
+            const form = document.getElementById('taskForm');
+            const nextBtn = document.getElementById("stp-05-next");
+            const atText = document.getElementById("atText");
+            const atTextTitle = document.getElementById("atTextTitle");
+            const resultDiv = document.getElementById('result');
+            const outputText = document.getElementById("outputText");
+
+            const placeholderElement = `<div class="content-wrapper">
+              <div class="placeholder">
+                <div class="animated-background"></div>
+              </div>
+            </div>`;
+
+            function mdtohtml(text) {
+              const md = window.markdownit();
+              const html = md.render(text);
+              return html;
+            }
+
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                console.log("Starting...");
+                outputTextTitle.innerText = `Summary: `;
+                outputph.innerHTML = placeholderElement;
+
+                const payload = atText.value;
+    
+                if (!payload.trim()) {
+                    showResult('Payload is required', true);
+                    return;
+                }
+                
+                try {
+
+                  const body = { payload };
+  
+                  const response = await fetch('/summarize', {
+                      method: 'POST',
+                      headers: {
+                          'Content-Type': 'application/json'
+                      },
+                      body: JSON.stringify(body)
+                  });
+                    
+                    // Headers are available immediately
+                    console.log("Status:", response.status);
+                    console.log("Headers:", response.headers);
+
+                    // Get the body as a ReadableStream
+                    const reader = response.body.getReader();
+
+                    // Read chunks as they arrive
+                    const decoder = new TextDecoder();
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        // `value` is a Uint8Array chunk
+                        const chunkText = decoder.decode(value, {
+                            stream: true,
+                        });
+                        
+                        outputText.append(chunkText);
+
+                        console.log(chunkText);
+                        // Process chunk immediately (e.g., update UI)
+                    }
+                    console.log("Stream finished", response);
+                    
+                    if (response.ok) {
+                      
+                        showResult(`Complete`, false);
+                        nextBtn.click();
+                        outputph.innerHTML = "";
+                        
+                        let o_txt = outputText.innerText;
+                        o_txt = o_txt.split('</think>')[1];
+                        o_txt = mdtohtml(o_txt);
+                        //o_txt = o_txt.replace(/<think>.*?<\/think>/g, '').trim();
+                        
+                        outputText.innerHTML = 
+                          `<details name="summary" open>
+                            <summary>&nbsp;</summary>
+                            <p>${o_txt}</p>
+                              </details>`;
+                        
+                        addCopyButton('outputText');
+                    } else {
+                        showResult(`Error ${response.status}: ${text}`, true);
+                    }
+                    
+                } catch (err) {
+                    console.log("Stream finished error:", err);
+                    showResult(`Request failed: ${err.message}`, true);
+                } finally {
+                    runBtn.disabled = false;
+                    runBtn.textContent = "Run";
+                }
+            });
+
+            const runBtn = document.getElementById("runBtn");
+
+            runBtn.addEventListener("click", async (e) => {
+                console.log("Running...");
+                runBtn.disabled = true;
+                runBtn.textContent = "Running...";
+
+                nextBtn.click();
+                
+                console.log("Starting...");
+                
+                resultDiv.style.display = 'none';
+                
+                atTextTitle.innerText = `Transcription: `;
+                atph.innerHTML = placeholderElement;
+                
+                try {
+                    const response = await fetch("/start", {
+                        method: "GET",
+                    });
+                    
+                    // Headers are available immediately
+                    console.log("Status:", response.status);
+                    console.log("Headers:", response.headers);
+
+                    // Get the body as a ReadableStream
+                    const reader = response.body.getReader();
+                    
+                    // Read chunks as they arrive
+                    const decoder = new TextDecoder();
+                    atText.classList.remove("hide");
+                    
+                    while (true) {
+                        
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        // `value` is a Uint8Array chunk
+                        const chunkText = decoder.decode(value, {
+                            stream: true,
+                        });
+                        
+                        atText.append(chunkText);
+                        
+                        console.log(chunkText);
+                    }
+                    console.log("Stream finished", response);
+
+                    if (response.ok) {
+                        showResult(`Complete`, false);
+                        summarizeBtn.click();
+                        nextBtn.click();
+                        atph.innerHTML = "";
+                        addCopyButton('atText');
+                    } else {
+                        showResult(`Error ${response.status}: ${response}`, true);
+                    }
+                } catch (err) {
+                    console.log("Stream finished error:", err);
+                    showResult(`Request failed: ${err.message}`, true);
+                } 
+                
+            });
+            
+            (function () {
+                let cur = 1;
+                const items = document.querySelectorAll(".stp-05__item");
+                const panels = document.querySelectorAll(
+                    ".stp-05__panel-inner",
+                );
+                const ring = document.getElementById("stp-05-ring");
+                const pct = document.getElementById("stp-05-pct");
+                const total = 4;
+
+                function update() {
+                    items.forEach((item, i) => {
+                        item.classList.remove("done", "active", "is-done");
+                        if (i + 1 < cur) item.classList.add("done");
+                        else if (i + 1 === cur) item.classList.add("active");
+                    });
+                    panels.forEach((p) => {
+                        p.classList.remove("active");
+                        if (parseInt(p.dataset.panel) === cur)
+                            p.classList.add("active");
+                    });
+                    const p = (((cur - 1) / (total - 1)) * 100).toFixed(0);
+                    const offset = 126 - (126 * (cur - 1)) / (total - 1);
+                    ring.style.strokeDashoffset = offset;
+                    pct.textContent = p + "%";
+
+                    if (document.getElementById("stp-05-prev") != null) {
+                        document.getElementById("stp-05-prev").disabled =
+                            cur <= 1;
+                    }
+
+                    if (document.getElementById("stp-05-next") != null) {
+                        document.getElementById("stp-05-next").textContent =
+                            cur === total ? "Launch 🚀" : "Continue →";
+                    }
+                }
+
+                if (document.getElementById("stp-05-prev") != null) {
+                    document
+                        .getElementById("stp-05-prev")
+                        .addEventListener("click", () => {
+                            cur = Math.max(1, cur - 1);
+                            update();
+                        });
+                }
+                if (document.getElementById("stp-05-next") != null) {
+                    document
+                        .getElementById("stp-05-next")
+                        .addEventListener("click", () => {
+                            cur = Math.min(total, cur + 1);
+                            update();
+                        });
+                }
+                update();
+            })();
+
+            function showResult(message, isError) {
+                resultDiv.textContent = message;
+                resultDiv.className = isError ? 'error' : 'success';
+                //resultDiv.style.display = 'block';
+            }
+
+            function addCopyButton(containerId) {
+                const container = document.getElementById(containerId);
+                if (!container) return;
+            
+                // 1. Create the copy button
+                const cpButton = document.createElement('button');
+                cpButton.type = "button";
+                cpButton.id = `${containerId}_cp`
+                cpButton.textContent = '📋 Copy';
+                cpButton.style.cssText = `
+                    display: inline-block;
+                    margin-top: -40px;
+                    padding: 6px 16px;
+                    background: #f0f0f0;
+                    border: 1px solid #ccc;
+                    border-radius: 6px;
+                    cursor: pointer;
+                    font-size: 14px;
+                    font-family: system-ui, sans-serif;
+                    transition: background 0.2s;
+                    float: right;
+                    color: rgb(104, 91, 199);
+                `;
+            
+                // Hover effect
+                cpButton.addEventListener('mouseenter', () => {
+                    cpButton.style.background = '#e0e0e0';
+                });
+                cpButton.addEventListener('mouseleave', () => {
+                    if (cpButton.textContent !== '✅ Copied!') {
+                        cpButton.style.background = '#f0f0f0';
+                    }
+                });
+            
+                // 2. Click handler – copies the text
+                cpButton.addEventListener('click', async (e) => {
+                  //e.preventDefault();
+                    // Get ONLY the visible text (no HTML tags)
+                    const textToCopy = container.innerHTML.trim();
+                    
+                    try {
+                        // Modern async Clipboard API
+                        await navigator.clipboard.writeText(textToCopy);
+                        
+                        // Feedback
+                        cpButton.textContent = '✅ Copied!';
+                        cpButton.style.background = '#d4edda';
+                        setTimeout(() => {
+                            cpButton.textContent = '📋 Copy';
+                            cpButton.style.background = '#f0f0f0';
+                        }, 2000);
+                    } catch (err) {
+                        // Fallback for very old browsers (rare)
+                        console.warn('Clipboard API failed, using fallback.', err);
+                        const range = document.createRange();
+                        range.selectNode(container);
+                        window.getSelection().removeAllRanges();
+                        window.getSelection().addRange(range);
+                        document.execCommand('copy');
+                        window.getSelection().removeAllRanges();
+                        
+                        cpButton.textContent = '✅ Copied!';
+                        setTimeout(() => {
+                            cpButton.textContent = '📋 Copy';
+                        }, 2000);
+                    }
+                });
+            
+                // 3. Insert the button after the container
+                container.parentNode.insertBefore(cpButton, container.previousSibling);
+            }
+        </script>
+    </body>
+</html>

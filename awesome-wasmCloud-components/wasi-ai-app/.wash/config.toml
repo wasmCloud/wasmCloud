@@ -1,0 +1,27 @@
+version = "2.5.0"
+
+[build]
+command = "cargo build --target wasm32-wasip2 --release"
+component_path = "target/wasm32-wasip2/release/web.wasm"
+
+# Outbound HTTP is gated by the host runtime. Hosts listed here are
+# allowed; add new hosts before targeting them.
+[workload]
+allowedHosts = [
+  "0.0.0.0", "localhost", "127.0.0.1"
+]
+
+[dev]
+address = "0.0.0.0:8000"
+
+[[dev.components]]
+name = "transcriber"
+file = "target/wasm32-wasip2/release/transcriber.wasm"
+
+[[dev.components]]
+name = "summarizer"
+file = "target/wasm32-wasip2/release/summarizer.wasm"
+
+[[dev.volumes]]
+host_path = "./testdata"
+guest_path = "/data"

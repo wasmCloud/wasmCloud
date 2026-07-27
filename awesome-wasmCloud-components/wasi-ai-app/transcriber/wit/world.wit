@@ -1,0 +1,18 @@
+package wasmcloud:wasi3-ai-app@0.1.0;
+
+interface producer {
+    /// Transcribe a stream of segement of 30 seconds bytes, emitted one per tick. Returned as a
+    /// `stream<u8>` so the handle can be passed to another component through
+    /// the dynamic linker; the pacing lets a reader on the far side observe
+    /// the stream arriving incrementally rather than all at once.
+    produce: async func() -> stream<u8>;
+}
+
+world transcriber {
+    import wasi:http/types@0.3.0;
+    import wasi:cli/types@0.3.0;
+    import wasi:clocks/types@0.3.0;
+    import wasi:random/random@0.3.0;
+    
+    export producer;
+}

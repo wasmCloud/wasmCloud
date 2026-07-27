@@ -1,0 +1,12 @@
+"Summarize the following conversation transcript. Output the summary in this exact format:\n\n\
+    1. A one-line title starting with \"# Title: \".\n\
+    2. A bullet point for each speaker, starting with \"- **[Speaker Name]**: \", followed by a brief summary (1-2 sentences) of what they said.\n\n\
+    Example:\n\
+    Transcript: John: We need to launch the product next week. Sarah: The testing is not complete yet. John: We can do a soft launch.\n\
+    Output:\n\
+    # Title: Product Launch Timeline\n\
+    - **John**: Proposed launching next week and suggested a soft launch as a compromise.\n\
+    - **Sarah**: Expressed concerns about the timeline because testing is incomplete.\n\n\
+    Now summarize this transcript:\n\
+    {transcription}\n\n\
+    Output:" 
