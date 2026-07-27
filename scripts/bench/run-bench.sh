@@ -4,9 +4,9 @@
 # archive it next to the bench data.
 #
 # Two harness types share this script:
-#   - criterion benches (http_invoke, wasmtime_baseline, wasmtime_serve)
-#     write to $CARGO_TARGET_DIR/criterion/.
-#   - gungraun benches (gungraun) write to $CARGO_TARGET_DIR/gungraun/
+#   - criterion benches (http_invoke, service_http, wasmtime_baseline,
+#     wasmtime_serve) write to $CARGO_TARGET_DIR/criterion/.
+#   - gungraun benches (gungraun, gungraun_plugin) write to $CARGO_TARGET_DIR/gungraun/
 #     and are pinned to the isolated CPU (set by hetzner-postinstall.sh
 #     via isolcpus=) so that scheduler interference doesn't leak into
 #     instruction counts. valgrind serializes threads, so single-core
@@ -82,7 +82,7 @@ fi
 # multi-threaded (tokio + hyper) and would lose throughput under taskset,
 # so they run unpinned across the non-isolated cores.
 prefix=()
-if [ "$bench" = "gungraun" ]; then
+if [[ "$bench" == gungraun* ]]; then
   if [ -x "$(command -v taskset)" ]; then
     prefix=(taskset -c "$isolated_cpu")
     echo "pinning $bench to CPU $isolated_cpu via taskset" | tee -a "$log"
@@ -91,7 +91,18 @@ if [ "$bench" = "gungraun" ]; then
   fi
 fi
 
-"${prefix[@]}" cargo bench -p wash-runtime --bench "$bench" 2>&1 \
+# Benches that need a non-default feature to compile to anything but a
+# stub. Kept here rather than in the workflow so a local `run-bench.sh
+# gungraun_plugin` behaves identically to CI.
+features=()
+case "$bench" in
+  gungraun_plugin)
+    features=(--features host-component-plugins)
+    echo "enabling features: ${features[*]}" | tee -a "$log"
+    ;;
+esac
+
+"${prefix[@]}" cargo bench -p wash-runtime "${features[@]}" --bench "$bench" 2>&1 \
   | tee -a "$log"
 
 echo "WASMCLOUD_BENCH_LOG=${log}" >> "${GITHUB_OUTPUT:-/dev/null}"
