@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use crate::engine::instance_pool::{InstancePool, WarmInstance};
+use crate::engine::instance_pool::{ComponentInstance, InstancePool};
 use crate::observability::FuelConsumptionMeter;
 use http_body_util::BodyExt;
 use tracing::Instrument;
@@ -19,7 +19,7 @@ use wasmtime_wasi_http::p3::bindings::Service;
 use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
 
 /// Body type used on the P3 outgoing path (also used as the return-body type
-/// for [`handle_component_request_p3`]).
+/// for `handle_component_request_p3`).
 pub type P3Body = http_body_util::combinators::UnsyncBoxBody<bytes::Bytes, ErrorCode>;
 
 /// Future returned to the guest to communicate request-side processing errors.
@@ -72,7 +72,7 @@ impl hyper::body::Body for ChannelBody {
 /// applies backpressure to the guest rather than buffering the whole body in
 /// memory.
 pub(crate) async fn handle_component_request_p3(
-    warm: WarmInstance,
+    warm: ComponentInstance,
     pool: Option<Arc<InstancePool>>,
     req: hyper::Request<hyper::body::Incoming>,
     fuel_meter: FuelConsumptionMeter,
@@ -105,7 +105,7 @@ pub(crate) async fn handle_component_request_p3(
     // task is aborted rather than detached to run unbounded.
     let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
         async move {
-            let WarmInstance {
+            let ComponentInstance {
                 mut store,
                 instance,
                 invocations,
@@ -228,7 +228,7 @@ pub(crate) async fn handle_component_request_p3(
             match run {
                 Ok(Ok(())) => {
                     if let Some(pool) = pool {
-                        pool.release(WarmInstance {
+                        pool.release(ComponentInstance {
                             store,
                             instance,
                             invocations,

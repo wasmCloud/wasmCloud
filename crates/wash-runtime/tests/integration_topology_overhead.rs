@@ -221,11 +221,7 @@ async fn load(
 }
 
 /// Sweep one topology on its own host, returning req/s per concurrency level.
-async fn sweep(
-    label: &str,
-    host: &'static str,
-    request: WorkloadStartRequest,
-) -> Result<Vec<f64>> {
+async fn sweep(label: &str, host: &'static str, request: WorkloadStartRequest) -> Result<Vec<f64>> {
     let (addr, host_api) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
     host_api.workload_start(request).await?;
     let client = reqwest::Client::builder()
@@ -270,7 +266,12 @@ async fn bench_topology_overhead() -> Result<()> {
         component_only("topo-cw", 4),
     )
     .await?;
-    let service = sweep("service only (one long-lived instance)", "topo-s", service_only("topo-s")).await?;
+    let service = sweep(
+        "service only (one long-lived instance)",
+        "topo-s",
+        service_only("topo-s"),
+    )
+    .await?;
     let cold = sweep(
         "service + linked component, callee cold (store per call)",
         "topo-sc",

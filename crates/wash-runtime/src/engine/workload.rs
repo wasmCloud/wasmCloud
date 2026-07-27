@@ -22,7 +22,7 @@ use crate::engine::ctx::SharedTlsProvider;
 use crate::{
     engine::{
         ctx::SharedCtx,
-        instance_pool::{self, InstancePool},
+        instance_pool::{self, InstancePolicy, InstancePool},
         linked_call::{
             ComponentCtxTemplate, EphemeralCallMode, EphemeralLinkedCall, LinkedExportInvocation,
             func_is_bridge_safe, func_is_ephemeral_safe, invoke_linked_async_export,
@@ -355,10 +355,10 @@ impl WorkloadComponent {
     /// Create a new [`WorkloadComponent`] with the given workload ID,
     /// wasmtime [`Component`], [`Linker`], volume mounts, and instance limits.
     ///
-    /// `pool_size` and `max_invocations` are the component's warm-instance
-    /// limits; both are `-1` when unset. `pool_size` of zero (or unset) keeps
-    /// the default behavior of a fresh store per linked call — see
-    /// [`InstancePool`] for what opting in changes.
+    /// `instances` is what the component asked for by way of instance reuse.
+    /// [`InstancePolicy::Ephemeral`] keeps the default behavior of a fresh
+    /// store per call; [`InstancePolicy::Warm`] parks instances between calls
+    /// so guest state survives them.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         workload_id: impl Into<Arc<str>>,
@@ -370,8 +370,7 @@ impl WorkloadComponent {
         volume_mounts: Vec<(PathBuf, VolumeMount)>,
         local_resources: LocalResources,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
-        pool_size: i32,
-        max_invocations: i32,
+        instances: InstancePolicy,
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
@@ -389,7 +388,7 @@ impl WorkloadComponent {
                 linked_components: Default::default(),
             },
             name: component_name.into(),
-            instances: Arc::new(InstancePool::new(pool_size, max_invocations)),
+            instances: Arc::new(InstancePool::new(instances)),
         }
     }
 
@@ -463,7 +462,7 @@ impl std::fmt::Debug for WorkloadComponent {
             .field("id", &self.metadata.id.as_ref())
             .field("workload_id", &self.metadata.workload_id.as_ref())
             .field("volume_mounts", &self.metadata.volume_mounts)
-            .field("warm_instances", &self.instances.enabled())
+            .field("has_warm_instances", &self.instances.enabled())
             .finish()
     }
 }
@@ -1472,7 +1471,7 @@ impl ResolvedWorkload {
     /// The component's linked components are instantiated into the same store
     /// by [`Self::new_store`] and live exactly as long as it does, so they have
     /// to have opted in too — see [`instance_pool::poolable`].
-    pub(crate) async fn instance_pool_for(
+    pub(crate) async fn instance_pool_for_component(
         &self,
         component_id: &str,
     ) -> Option<Arc<InstancePool>> {
@@ -2562,8 +2561,7 @@ mod tests {
             Vec::new(),
             local_resources,
             Arc::default(),
-            0,
-            0,
+            InstancePolicy::Ephemeral,
         )
     }
 
@@ -2625,8 +2623,7 @@ mod tests {
             Vec::new(),
             local_resources,
             Arc::default(),
-            0,
-            0,
+            InstancePolicy::Ephemeral,
         )
     }
 
@@ -2718,8 +2715,7 @@ mod tests {
                 Vec::new(),
                 LocalResources::default(),
                 Arc::default(),
-                0,
-                0,
+                InstancePolicy::Ephemeral,
             )
         };
         for (plugin, iface) in cases {
@@ -2979,8 +2975,7 @@ mod tests {
             Vec::new(),
             LocalResources::default(),
             Arc::default(),
-            0,
-            0,
+            InstancePolicy::Ephemeral,
         );
 
         let mut http_interface = WitInterface::from("wasi:http/handler");

@@ -358,8 +358,8 @@ pub struct DevComponent {
     /// and component state is ephemeral. Setting it lets an instance be reused
     /// by the next call, so whatever the guest caches in memory — a connection
     /// pool, a lazily built runtime — survives instead of being rebuilt per
-    /// call. Bursts past this many concurrent calls are still served, from
-    /// fresh instances.
+    /// call. Work past what the warm instances can take is still served, from
+    /// fresh ones.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pool_size: Option<i32>,
     /// How many calls a warm instance serves before it is retired and the next
