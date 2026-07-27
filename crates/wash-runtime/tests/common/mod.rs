@@ -168,6 +168,36 @@ pub fn kv_plugin_caller_host_interfaces_with_config(
     ]
 }
 
+/// The `wasmcloud:secrets` capability (store + reveal), provided by the
+/// `secrets-host` host component plugin.
+#[cfg(feature = "host-component-plugins")]
+pub fn secrets_interface(config: HashMap<String, String>) -> WitInterface {
+    WitInterface {
+        namespace: "wasmcloud".to_string(),
+        package: "secrets".to_string(),
+        interfaces: ["store".to_string(), "reveal".to_string()]
+            .into_iter()
+            .collect(),
+        version: Some(semver::Version::parse("2.0.0").unwrap()),
+        config,
+        name: None,
+    }
+}
+
+/// Interfaces for the `secrets-caller` workload: HTTP ingress plus the imported
+/// `wasmcloud:secrets` capability, carrying the credentials as interface config —
+/// which the secrets plugin captures in its `on-workload-bind`.
+#[cfg(feature = "host-component-plugins")]
+pub fn secrets_caller_host_interfaces_with_config(
+    host_header: &str,
+    config: HashMap<String, String>,
+) -> Vec<WitInterface> {
+    vec![
+        http_incoming_handler_interface(host_header, None),
+        secrets_interface(config),
+    ]
+}
+
 /// Interfaces for P3 HTTP + blobstore components.
 pub fn http_blobstore_host_interfaces(host_header: &str) -> Vec<WitInterface> {
     vec![
