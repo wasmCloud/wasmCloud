@@ -45,9 +45,8 @@ use std::sync::{Arc, Mutex};
 use wasmtime::component::Instance;
 
 use crate::engine::ctx::SharedCtx;
-use crate::engine::instance_driver::InstanceDriver;
+use crate::engine::instance_driver::{InstanceDriver, InstanceJob};
 use crate::engine::workload::WorkloadComponent;
-use crate::host::http::ServiceHttpJob;
 use crate::types::Component;
 
 /// The pool that `component_id`'s store may be parked in, or `None` when it
@@ -86,27 +85,24 @@ pub(crate) fn poolable(
     Some(pool)
 }
 
-/// What [`InstancePool::offer_http`] did with a call.
+/// What [`InstancePool::offer`] did with a call.
 pub(crate) enum Dispatch {
     /// A warm instance took it.
     Sent,
     /// Every warm instance is busy but the pool is under `pool_size`: build a
-    /// store and hand both to [`InstancePool::install_http`].
-    NeedsInstance(ServiceHttpJob),
+    /// store and hand both to [`InstancePool::install`].
+    NeedsInstance(InstanceJob),
     /// Every warm instance is busy and the pool is full. Serve it from a store
     /// of its own — which is what an unpooled component pays for every call,
     /// so pooling never adds latency it did not save.
-    Saturated(ServiceHttpJob),
+    Saturated(InstanceJob),
 }
 
-/// An instantiated component in its own store: what a call runs on, and what
-/// the pool parks between calls when the component keeps instances warm.
+/// An instantiated component in a store built for one call: what a call that
+/// no warm instance could take runs on, and is dropped with.
 pub(crate) struct ComponentInstance {
     pub(crate) store: wasmtime::Store<SharedCtx>,
     pub(crate) instance: Instance,
-    /// Calls this instance has already served, counted against
-    /// [`InstancePolicy::Warm::max_invocations`].
-    pub(crate) invocations: usize,
 }
 
 /// What a component asked for by way of instance reuse.
@@ -179,12 +175,9 @@ impl InstancePolicy {
 /// [`crate::engine::workload::WorkloadComponent`] and therefore by every
 /// importer that calls into it.
 pub(crate) struct InstancePool {
-    /// Warm instances parked between calls, each serving one call at a time.
-    /// Used by the linked-call path.
-    idle: Mutex<Vec<ComponentInstance>>,
-    /// Warm instances that keep their own store and serve calls concurrently
-    /// (see [`crate::engine::instance_driver`]). Used by HTTP dispatch, which
-    /// is where a guest awaiting I/O would otherwise hold an instance idle.
+    /// The component's warm instances. Each keeps its own store and serves
+    /// calls concurrently (see [`crate::engine::instance_driver`]), whether
+    /// they arrive over HTTP or from another component in the workload.
     drivers: Mutex<Vec<Arc<InstanceDriver>>>,
     policy: InstancePolicy,
 }
@@ -192,7 +185,6 @@ pub(crate) struct InstancePool {
 impl InstancePool {
     pub(crate) fn new(policy: InstancePolicy) -> Self {
         Self {
-            idle: Mutex::new(Vec::new()),
             drivers: Mutex::new(Vec::new()),
             policy,
         }
@@ -214,14 +206,14 @@ impl InstancePool {
         }
     }
 
-    /// Offer an HTTP call to the warm instances.
+    /// Offer a call to the warm instances.
     ///
     /// Picks the least-busy live one. Building a store is async and this runs
     /// under the pool's lock, so when the pool has room it hands the job back
     /// as [`Dispatch::NeedsInstance`] rather than creating one itself — that
     /// keeps a request that a warm instance can already serve from paying for
     /// a store it will not use.
-    pub(crate) fn offer_http(&self, job: ServiceHttpJob) -> Dispatch {
+    pub(crate) fn offer(&self, job: InstanceJob) -> Dispatch {
         let Some((pool_size, _, _)) = self.limits() else {
             return Dispatch::Saturated(job);
         };
@@ -242,7 +234,7 @@ impl InstancePool {
         for driver in &candidates {
             match driver.try_send(job) {
                 Ok(()) => return Dispatch::Sent,
-                Err(returned) => job = *returned,
+                Err(returned) => job = returned,
             }
         }
 
@@ -256,23 +248,23 @@ impl InstancePool {
     /// Add an instance built for a [`Dispatch::NeedsInstance`] and give it the
     /// call. Racing callers can both be told to build one; the loser's is
     /// dropped and its call offered to the winner's instead.
-    pub(crate) fn install_http(
+    pub(crate) fn install(
         &self,
         store: wasmtime::Store<SharedCtx>,
         pre: wasmtime::component::InstancePre<SharedCtx>,
-        job: ServiceHttpJob,
-    ) -> Result<(), Box<ServiceHttpJob>> {
+        job: InstanceJob,
+    ) -> Result<(), InstanceJob> {
         let Some((pool_size, max_invocations, max_concurrency)) = self.limits() else {
-            return Err(Box::new(job));
+            return Err(job);
         };
         let Ok(mut drivers) = self.drivers.lock() else {
-            return Err(Box::new(job));
+            return Err(job);
         };
         if drivers.len() >= pool_size {
             drop(drivers);
-            return match self.offer_http(job) {
+            return match self.offer(job) {
                 Dispatch::Sent => Ok(()),
-                Dispatch::NeedsInstance(job) | Dispatch::Saturated(job) => Err(Box::new(job)),
+                Dispatch::NeedsInstance(job) | Dispatch::Saturated(job) => Err(job),
             };
         }
         let driver = Arc::new(InstanceDriver::spawn(
@@ -291,79 +283,19 @@ impl InstancePool {
         self.policy.keeps_instances_warm()
     }
 
-    /// Take a warm instance if one is parked. Returns `None` when pooling is
-    /// disabled or every warm instance is already in use — the caller then
-    /// builds a fresh store, so a burst past `pool_size` is served rather
-    /// than queued.
-    pub(crate) fn checkout(&self) -> Option<ComponentInstance> {
-        if !self.enabled() {
-            return None;
-        }
-        self.idle.lock().ok()?.pop()
-    }
-
-    /// Park an instance that has just served a call cleanly, unless it has
-    /// reached `max_invocations` or the warm set is already full. Anything
-    /// not parked is dropped here.
-    pub(crate) fn release(&self, mut instance: ComponentInstance) {
-        instance.invocations += 1;
-        let InstancePolicy::Warm {
-            pool_size,
-            max_invocations,
-            ..
-        } = self.policy
-        else {
-            return;
-        };
-        if max_invocations.is_some_and(|limit| instance.invocations >= limit.get()) {
-            trace_retire("reached max_invocations", instance.invocations);
-            return;
-        }
-        // Drop the guard before the instance it rejected: dropping a store
-        // tears down the guest's resources and should not hold the pool shut
-        // while it runs.
-        let rejected = {
-            let Ok(mut idle) = self.idle.lock() else {
-                return;
-            };
-            if idle.len() < pool_size.get() {
-                idle.push(instance);
-                None
-            } else {
-                Some(instance)
-            }
-        };
-        if let Some(instance) = rejected {
-            trace_retire("warm set full", instance.invocations);
-        }
-    }
-
     /// Drop every warm instance, e.g. when the component is being shut down.
     /// Dropping a driver's handle closes its channel, which ends its store's
     /// run loop once the calls it already took have finished.
     pub(crate) fn clear(&self) {
-        if let Ok(mut idle) = self.idle.lock() {
-            drop(std::mem::take(&mut *idle));
-        }
         if let Ok(mut drivers) = self.drivers.lock() {
             drop(std::mem::take(&mut *drivers));
         }
     }
-
-    /// How many instances are parked right now. Test/observability only.
-    #[cfg(test)]
-    pub(crate) fn idle_len(&self) -> usize {
-        self.idle.lock().map(|idle| idle.len()).unwrap_or(0)
-    }
-}
-
-fn trace_retire(reason: &str, invocations: usize) {
-    tracing::trace!(reason, invocations, "retiring warm instance");
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{InstancePolicy, InstancePool, NonZeroUsize};
+    use super::{InstancePolicy, NonZeroUsize};
 
     /// Zero, and the `-1` that `wash dev` and the operator send for "not
     /// configured", both mean instances are not kept.
@@ -406,21 +338,5 @@ mod tests {
                 max_concurrency: NonZeroUsize::MIN,
             }
         );
-    }
-
-    #[test]
-    fn disabled_pool_never_checks_out() {
-        let pool = InstancePool::new(InstancePolicy::Ephemeral);
-        assert!(!pool.enabled());
-        assert!(pool.checkout().is_none());
-    }
-
-    #[test]
-    fn enabled_pool_starts_empty() {
-        let pool = InstancePool::new(InstancePolicy::from_limits(4, 0, 0));
-        assert!(pool.enabled());
-        assert_eq!(pool.idle_len(), 0);
-        // Nothing parked yet, so a checkout still falls back to a cold store.
-        assert!(pool.checkout().is_none());
     }
 }
