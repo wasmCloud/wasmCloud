@@ -105,7 +105,6 @@ pub(crate) async fn handle_component_request_p3(
             let ComponentInstance {
                 mut store,
                 instance,
-                invocations,
             } = warm;
             // A binding view over the instance, rebuilt per request. Cheap
             // (export lookups); the expensive part -- the store and the
@@ -220,7 +219,6 @@ pub(crate) async fn handle_component_request_p3(
             // instances warm is served by a driver instead (see
             // `engine::instance_driver`), and only reaches here when every warm
             // instance was busy.
-            let _ = (instance, invocations);
             match run {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => tracing::error!(err = ?e, "P3 response streaming failed"),

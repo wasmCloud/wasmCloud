@@ -1716,17 +1716,18 @@ async fn invoke_component_handler(
         // when every warm instance is full and the pool is at `pool_size` does
         // the request fall through to a store of its own.
         let req = if let Some(pool) = pool.as_ref() {
+            use crate::engine::instance_driver::InstanceJob;
             use crate::engine::instance_pool::Dispatch;
             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-            let outcome = match pool.offer_http((req, resp_tx)) {
+            let outcome = match pool.offer(InstanceJob::Http(Box::new((req, resp_tx)))) {
                 Dispatch::Sent => Ok(()),
                 // The pool has room. Build the store out here, where awaiting
                 // is allowed, and hand it over.
                 Dispatch::NeedsInstance(job) => {
                     let store = workload_handle.new_store(component_id).await?;
-                    pool.install_http(store, instance_pre.clone(), job)
+                    pool.install(store, instance_pre.clone(), job)
                 }
-                Dispatch::Saturated(job) => Err(Box::new(job)),
+                Dispatch::Saturated(job) => Err(job),
             };
             match outcome {
                 Ok(()) => {
@@ -1735,9 +1736,9 @@ async fn invoke_component_handler(
                         .map_err(|_| anyhow::anyhow!("pooled instance dropped the request"))?;
                 }
                 // Every warm instance was busy; serve it cold below.
-                Err(returned) => {
-                    let (req, _resp_tx) = *returned;
-                    req
+                Err(InstanceJob::Http(job)) => job.0,
+                Err(InstanceJob::Linked(_)) => {
+                    unreachable!("an HTTP job cannot come back as a linked one")
                 }
             }
         } else {
@@ -1746,11 +1747,7 @@ async fn invoke_component_handler(
 
         let mut store = workload_handle.new_store(component_id).await?;
         let instance = instance_pre.instantiate_async(&mut store).await?;
-        let cold = crate::engine::instance_pool::ComponentInstance {
-            store,
-            instance,
-            invocations: 0,
-        };
+        let cold = crate::engine::instance_pool::ComponentInstance { store, instance };
         let resp = crate::host::http_p3::handle_component_request_p3(cold, req, fuel_meter).await?;
         let (parts, body) = resp.into_parts();
         let body = HyperOutgoingBody::new(

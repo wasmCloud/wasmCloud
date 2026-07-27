@@ -35,6 +35,9 @@ mod common;
 use common::{http_only_host_interfaces, json_u64_field, start_host_with_p3_http_handler};
 
 const HTTP_SLEEPER_WASM: &[u8] = include_bytes!("wasm/http_sleeper.wasm");
+/// A component that calls a linked one per request, and the callee it calls.
+const EPHEMERAL_CALLER_P3_WASM: &[u8] = include_bytes!("wasm/ephemeral_caller_p3.wasm");
+const EPHEMERAL_CALLEE_P3_WASM: &[u8] = include_bytes!("wasm/ephemeral_callee_p3.wasm");
 
 async fn start_sleeper(
     host_header: &'static str,
@@ -275,6 +278,69 @@ async fn stopping_a_workload_shuts_down_its_warm_instances() -> Result<()> {
     assert!(
         get(addr, "conc-stop", "/").await.is_err(),
         "a stopped workload's warm instances must not keep serving"
+    );
+    Ok(())
+}
+
+/// A component reached over a *linked call* rather than HTTP shares the same
+/// warm instances, so `max_concurrency` reaches it too. Without that, the knob
+/// would be silently inert for a component another component calls — which is
+/// how the template reaches its backends.
+///
+/// The callee counts calls in its own linear memory, so a climbing count is
+/// one instance serving them all.
+#[tokio::test]
+async fn linked_calls_share_the_warm_instances() -> Result<()> {
+    let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
+    host.workload_start(WorkloadStartRequest {
+        workload_id: uuid::Uuid::new_v4().to_string(),
+        workload: Workload {
+            namespace: "test".to_string(),
+            name: "linked-conc".to_string(),
+            annotations: HashMap::new(),
+            service: None,
+            components: vec![
+                Component {
+                    name: "caller".to_string(),
+                    digest: None,
+                    bytes: bytes::Bytes::from_static(EPHEMERAL_CALLER_P3_WASM),
+                    local_resources: LocalResources::default(),
+                    pool_size: 2,
+                    max_invocations: 0,
+                    max_concurrency: 4,
+                },
+                Component {
+                    name: "callee".to_string(),
+                    digest: None,
+                    bytes: bytes::Bytes::from_static(EPHEMERAL_CALLEE_P3_WASM),
+                    local_resources: LocalResources::default(),
+                    pool_size: 1,
+                    max_invocations: 0,
+                    max_concurrency: 4,
+                },
+            ],
+            host_interfaces: http_only_host_interfaces("linked-conc"),
+            volumes: vec![],
+        },
+    })
+    .await
+    .context("linked concurrency workload should start")?;
+
+    // `/calls` returns the callee instance's own call count.
+    let mut counts = Vec::new();
+    for _ in 0..5 {
+        counts.push(
+            get(addr, "linked-conc", "/calls")
+                .await?
+                .trim()
+                .parse::<u64>()?,
+        );
+    }
+
+    assert_eq!(
+        counts,
+        vec![1, 2, 3, 4, 5],
+        "linked calls must be served by the one warm callee instance, not a store each"
     );
     Ok(())
 }
