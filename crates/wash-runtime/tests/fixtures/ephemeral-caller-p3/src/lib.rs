@@ -10,6 +10,7 @@ mod bindings {
         generate_all,
         async: [
             "import:wasmcloud:ephemeral-test/compute@0.1.0#run",
+            "import:wasmcloud:ephemeral-test/compute@0.1.0#calls",
             "export:wasi:http/handler@0.3.0#handle",
         ],
     });
@@ -22,10 +23,17 @@ use bindings::wasmcloud::ephemeral_test::compute;
 struct Component;
 
 impl Handler for Component {
-    async fn handle(_request: Request) -> Result<Response, ErrorCode> {
+    async fn handle(request: Request) -> Result<Response, ErrorCode> {
         // Plain-value async cross-component call -> ephemeral-store path.
+        // `/calls` reports how many calls the callee instance has served, so a
+        // caller can tell a reused instance from a fresh one; anything else is
         // run(21) = 21 * 2 + 1 = 43.
-        let result = compute::run(21).await;
+        let path = request.get_path_with_query().unwrap_or_default();
+        let result = if path.starts_with("/calls") {
+            compute::calls().await
+        } else {
+            compute::run(21).await
+        };
 
         let headers = Fields::new();
         let (mut tx, rx) = bindings::wit_stream::new::<u8>();

@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["service", "users", "todos"]
+package.edition = "2021"
+package.version = "0.1.0"
+package.authors = ["The wasmCloud Team"]
+
+[workspace.dependencies]
+anyhow = "1.0"
+serde_json = "1.0"
+futures = { version = "0.3", default-features = false, features = ["alloc", "async-await"] }
+wit-bindgen = "0.59.0"
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "macros"] }
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio", "macros"] }
+
+[profile.release]
+lto = true
+opt-level = "s"
+strip = true
