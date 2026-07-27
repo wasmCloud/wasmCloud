@@ -380,6 +380,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-sleeper"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
 name = "http-webgpu"
 version = "0.1.0"
 dependencies = [

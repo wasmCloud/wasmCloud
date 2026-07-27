@@ -474,6 +474,7 @@ async fn workload_start(
                 local_resources,
                 pool_size: component.pool_size,
                 max_invocations: component.max_invocations,
+                max_concurrency: 1,
             })
         }
         (

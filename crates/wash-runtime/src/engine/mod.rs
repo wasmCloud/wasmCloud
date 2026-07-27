@@ -218,6 +218,7 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
 }
 
 pub mod ctx;
+pub(crate) mod instance_driver;
 pub(crate) mod instance_pool;
 pub use instance_pool::InstancePolicy;
 mod linked_call;

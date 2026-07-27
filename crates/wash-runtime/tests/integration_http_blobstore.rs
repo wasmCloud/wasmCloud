@@ -81,6 +81,7 @@ async fn test_http_blobstore_integration() -> Result<()> {
                 },
                 pool_size: 1,
                 max_invocations: 100,
+                max_concurrency: 1,
             }],
             host_interfaces: vec![
                 WitInterface {

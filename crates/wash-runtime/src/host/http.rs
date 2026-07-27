@@ -1707,26 +1707,51 @@ async fn invoke_component_handler(
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
     if crate::engine::targets_wasip3_http(instance_pre.component()) {
-        // Reuse a warm instance when the component has opted in, otherwise
-        // build and instantiate a store for this request alone. A burst past
-        // `pool_size` is served cold rather than queued.
         let pool = workload_handle
             .instance_pool_for_component(component_id)
             .await;
-        let warm = match pool.as_ref().and_then(|pool| pool.checkout()) {
-            Some(warm) => warm,
-            None => {
-                let mut store = workload_handle.new_store(component_id).await?;
-                let instance = instance_pre.instantiate_async(&mut store).await?;
-                crate::engine::instance_pool::ComponentInstance {
-                    store,
-                    instance,
-                    invocations: 0,
+
+        // A component that keeps instances warm serves this on one of them,
+        // alongside whatever else that instance already has in flight. Only
+        // when every warm instance is full and the pool is at `pool_size` does
+        // the request fall through to a store of its own.
+        let req = if let Some(pool) = pool.as_ref() {
+            use crate::engine::instance_pool::Dispatch;
+            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+            let outcome = match pool.offer_http((req, resp_tx)) {
+                Dispatch::Sent => Ok(()),
+                // The pool has room. Build the store out here, where awaiting
+                // is allowed, and hand it over.
+                Dispatch::NeedsInstance(job) => {
+                    let store = workload_handle.new_store(component_id).await?;
+                    pool.install_http(store, instance_pre.clone(), job)
+                }
+                Dispatch::Saturated(job) => Err(Box::new(job)),
+            };
+            match outcome {
+                Ok(()) => {
+                    return resp_rx
+                        .await
+                        .map_err(|_| anyhow::anyhow!("pooled instance dropped the request"))?;
+                }
+                // Every warm instance was busy; serve it cold below.
+                Err(returned) => {
+                    let (req, _resp_tx) = *returned;
+                    req
                 }
             }
+        } else {
+            req
         };
-        let resp =
-            crate::host::http_p3::handle_component_request_p3(warm, pool, req, fuel_meter).await?;
+
+        let mut store = workload_handle.new_store(component_id).await?;
+        let instance = instance_pre.instantiate_async(&mut store).await?;
+        let cold = crate::engine::instance_pool::ComponentInstance {
+            store,
+            instance,
+            invocations: 0,
+        };
+        let resp = crate::host::http_p3::handle_component_request_p3(cold, req, fuel_meter).await?;
         let (parts, body) = resp.into_parts();
         let body = HyperOutgoingBody::new(
             body.map_err(|e| {

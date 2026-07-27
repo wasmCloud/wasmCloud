@@ -57,7 +57,7 @@ pub(crate) use capability::decode_bind_reply;
 
 #[cfg(feature = "host-component-plugins")]
 use capability::{admit_and_spawn_call, drain_plugin_resources, flush_pending_resource_drops};
-use http::HttpTask;
+pub(crate) use http::HttpTask;
 use messaging::{HANDLE_MESSAGE, MESSAGING_HANDLER, MessagingTask};
 
 /// A host-invoked handler export the TriggerService serves, carrying the receiver end
@@ -211,6 +211,7 @@ impl PreparedIngress {
                         service: Arc::clone(service),
                         req,
                         resp_tx,
+                        in_flight: None,
                     }) {
                         tracing::error!(err = %e, "failed to spawn HTTP invocation task");
                     }

@@ -49,6 +49,7 @@ fn echo_workload(host: &str) -> WorkloadStartRequest {
                 local_resources: LocalResources::default(),
                 pool_size: 1,
                 max_invocations: 1000,
+                max_concurrency: 1,
             }],
             host_interfaces: http_only_host_interfaces(host),
             volumes: vec![],

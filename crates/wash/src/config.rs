@@ -379,6 +379,19 @@ pub struct DevComponent {
     /// alongside `poolSize`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_invocations: Option<i32>,
+    /// How many calls one warm instance may serve at the same time.
+    ///
+    /// Unset means one, which is what a component gets without asking: an
+    /// instance serves a single call at a time. Raising it lets an instance
+    /// overlap calls while it is awaiting I/O, which is where a pool of
+    /// instances would otherwise sit idle.
+    ///
+    /// Only safe for a guest that yields rather than blocks. A guest driving
+    /// its own executor — anything calling `block_on` — must stay at one, or a
+    /// second concurrent call will try to enter that executor from inside
+    /// itself. Only meaningful alongside `poolSize`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrency: Option<i32>,
 }
 
 impl DevComponent {
@@ -399,6 +412,7 @@ impl DevComponent {
             allowed_ip_name_lookups: None,
             pool_size: None,
             max_invocations: None,
+            max_concurrency: None,
         }
     }
 }
