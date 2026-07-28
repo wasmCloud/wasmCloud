@@ -42,14 +42,16 @@ fn bridge_workload(host: &str) -> WorkloadStartRequest {
             }),
             // The backend is a stateless component linked to the service by its
             // `wasmcloud:bridge/ops` export; the host instantiates it fresh per
-            // call in its own store.
+            // call in its own store. `pool_size: 0` is what asks for that —
+            // keeping instances warm would carry the backend's counter across
+            // calls, which `test_bridge_backend_is_stateless` asserts against.
             components: vec![Component {
                 name: "bridge-backend".to_string(),
                 digest: None,
                 bytes: bytes::Bytes::from_static(BRIDGE_BACKEND_WASM),
                 local_resources: LocalResources::default(),
-                pool_size: 1,
-                max_invocations: 1000,
+                pool_size: 0,
+                max_invocations: 0,
             }],
             host_interfaces: http_only_host_interfaces(host),
             volumes: vec![],

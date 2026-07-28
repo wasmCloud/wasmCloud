@@ -352,6 +352,21 @@ pub struct DevComponent {
     /// workload list applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_hosts: Option<Vec<AllowedHost>>,
+    /// How many instances of this component to keep warm between calls.
+    ///
+    /// Unset (or `0`) keeps the default: every call runs in a fresh instance
+    /// and component state is ephemeral. Setting it lets an instance be reused
+    /// by the next call, so whatever the guest caches in memory — a connection
+    /// pool, a lazily built runtime — survives instead of being rebuilt per
+    /// call. Work past what the warm instances can take is still served, from
+    /// fresh ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool_size: Option<i32>,
+    /// How many calls a warm instance serves before it is retired and the next
+    /// call starts cold. Unset (or `0`) means no limit. Only meaningful
+    /// alongside `poolSize`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_invocations: Option<i32>,
 }
 
 impl DevComponent {
@@ -363,6 +378,8 @@ impl DevComponent {
             environment: None,
             config: HashMap::new(),
             allowed_hosts: None,
+            pool_size: None,
+            max_invocations: None,
         }
     }
 }

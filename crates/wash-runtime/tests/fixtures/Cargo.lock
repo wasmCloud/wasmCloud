@@ -762,6 +762,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "svc-no-run"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
 name = "svc-tcp-echo"
 version = "0.0.0"
 dependencies = [

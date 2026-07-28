@@ -17,7 +17,7 @@
 //! assemble the store (pre-instantiating the linked components). See
 //! [`EphemeralLinkedCall`] for how the ephemeral path is captured at link time.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -34,6 +34,7 @@ use wasmtime_wasi::WasiCtxBuilder;
 #[cfg(feature = "wasi-tls")]
 use crate::engine::ctx::SharedTlsProvider;
 use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx, StoreActiveCtxGuard};
+use crate::engine::instance_pool::{self, ComponentInstance, InstancePool};
 use crate::engine::store::relocate::{self, Relocated, bridgeable_element_type};
 use crate::engine::store::stream_pump::Done;
 use crate::engine::value::{carries_cross_store_handle, lift_results, lower_params};
@@ -337,6 +338,19 @@ pub(crate) async fn new_store_from_templates(
     }
 
     Ok(store)
+}
+
+/// The warm-instance pool of the component this call targets, or `None` when
+/// this store must not be parked — see [`instance_pool::poolable`], which also
+/// accounts for the linked components instantiated into the same store.
+///
+/// Read from the component map per call rather than captured at link time, so
+/// a component whose entry is replaced does not keep serving from a pool that
+/// belongs to the old entry.
+async fn callee_instance_pool(call: &EphemeralLinkedCall) -> Option<Arc<InstancePool>> {
+    let components = call.components.read().await;
+    let linked: HashSet<Arc<str>> = call.linked_component_ids.iter().cloned().collect();
+    instance_pool::poolable(&components, &call.active_component_id, &linked)
 }
 
 async fn new_ephemeral_store(
@@ -643,23 +657,53 @@ async fn invoke_ephemeral_relocated(
     Ok(())
 }
 
-/// Run a plain-value async linked call in a short-lived store that is dropped
-/// (reclaiming its core-instance slots) as soon as the call returns.
+/// Run a plain-value async linked call.
+///
+/// The store is short-lived by default: built, invoked, and dropped per call
+/// so its core-instance slots are reclaimed immediately. A component that has
+/// opted into warm instances (`pool_size > 0`) instead reuses one parked by an
+/// earlier call and, if the call returns cleanly, parks it again — skipping
+/// the context build, the store allocation and the instantiation, and letting
+/// the guest keep whatever it cached in linear memory. See
+/// [`InstancePool`] for the rules that bound how long an instance lives.
 async fn invoke_ephemeral_plain(
     params: &[Val],
     results: &mut [Val],
     inv: &LinkedExportInvocation,
     ephemeral_call: &EphemeralLinkedCall,
 ) -> wasmtime::Result<()> {
-    let mut store = new_ephemeral_store(ephemeral_call)
-        .await
-        .map_err(|e| wasmtime::format_err!("{e:#}"))?;
+    let pool = callee_instance_pool(ephemeral_call).await;
+
+    // A warm instance if one is parked, otherwise a cold store. A burst past
+    // `pool_size` is served cold rather than queued, so pooling never adds
+    // latency it did not save.
+    let warm = match pool.as_ref().and_then(|pool| pool.checkout()) {
+        Some(warm) => {
+            trace!(
+                name = %inv.import_name,
+                fn_name = %inv.export_name,
+                invocations = warm.invocations,
+                "reusing warm instance for ephemeral dynamic export"
+            );
+            warm
+        }
+        None => {
+            let mut store = new_ephemeral_store(ephemeral_call)
+                .await
+                .map_err(|e| wasmtime::format_err!("{e:#}"))?;
+            let instance = inv.pre.instantiate_async(&mut store).await?;
+            ComponentInstance {
+                store,
+                instance,
+                invocations: 0,
+            }
+        }
+    };
 
     let params_buf = params.to_vec();
     let mut results_buf = vec![Val::Bool(false); results.len()];
     let call_import_name = inv.import_name.clone();
     let call_export_name = inv.export_name.clone();
-    let callee_pre = inv.pre.clone();
     let func_idx = inv.func_idx;
 
     trace!(
@@ -669,9 +713,16 @@ async fn invoke_ephemeral_plain(
         "invoking ephemeral dynamic export"
     );
 
+    // The store travels into the task and back out with the result, so a
+    // caller cancelled mid-call (the `AbortOnDrop`) drops the store with the
+    // task instead of returning a half-finished instance to the pool.
     let mut task = AbortOnDrop(tokio::task::spawn(async move {
-        let instance = callee_pre.instantiate_async(&mut store).await?;
-        store
+        let ComponentInstance {
+            mut store,
+            instance,
+            invocations,
+        } = warm;
+        let outcome = store
             .run_concurrent(async move |accessor| {
                 let func = accessor.with(|mut access| -> wasmtime::Result<_> {
                     instance.get_func(&mut access, func_idx).with_context(|| {
@@ -692,12 +743,40 @@ async fn invoke_ephemeral_plain(
                 Ok::<Vec<Val>, wasmtime::Error>(results_buf)
             })
             .await
-            .map_err(|e| wasmtime::format_err!("{e:#}"))?
+            .map_err(|e| wasmtime::format_err!("{e:#}"))
+            .and_then(|inner| inner);
+        (
+            ComponentInstance {
+                store,
+                instance,
+                invocations,
+            },
+            outcome,
+        )
     }));
-    let call_result = (&mut task.0)
+    let (warm, outcome) = (&mut task.0)
         .await
-        .map_err(|e| wasmtime::format_err!("ephemeral linked call task failed: {e}"));
-    let call_result = call_result??;
+        .map_err(|e| wasmtime::format_err!("ephemeral linked call task failed: {e}"))?;
+
+    // Park only after a clean return. A trap, a timeout or a host error may
+    // have left the guest mid-operation, so those retire the instance — the
+    // next call then starts from a cold store. Anything not parked is dropped
+    // here rather than at the end of the call, so an unpooled component still
+    // reclaims its core-instance slots the moment the call returns.
+    let call_result = match (outcome, pool) {
+        (Ok(vals), Some(pool)) => {
+            pool.release(warm);
+            vals
+        }
+        (Ok(vals), None) => {
+            drop(warm);
+            vals
+        }
+        (Err(e), _) => {
+            drop(warm);
+            return Err(e);
+        }
+    };
 
     for (i, v) in call_result.into_iter().enumerate() {
         *results.get_mut(i).context("result index out of bounds")? = v;

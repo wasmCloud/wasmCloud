@@ -1623,12 +1623,27 @@ async fn invoke_component_handler(
     req: hyper::Request<hyper::body::Incoming>,
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
-    let store = workload_handle.new_store(component_id).await?;
-
     if crate::engine::targets_wasip3_http(instance_pre.component()) {
+        // Reuse a warm instance when the component has opted in, otherwise
+        // build and instantiate a store for this request alone. A burst past
+        // `pool_size` is served cold rather than queued.
+        let pool = workload_handle
+            .instance_pool_for_component(component_id)
+            .await;
+        let warm = match pool.as_ref().and_then(|pool| pool.checkout()) {
+            Some(warm) => warm,
+            None => {
+                let mut store = workload_handle.new_store(component_id).await?;
+                let instance = instance_pre.instantiate_async(&mut store).await?;
+                crate::engine::instance_pool::ComponentInstance {
+                    store,
+                    instance,
+                    invocations: 0,
+                }
+            }
+        };
         let resp =
-            crate::host::http_p3::handle_component_request_p3(store, instance_pre, req, fuel_meter)
-                .await?;
+            crate::host::http_p3::handle_component_request_p3(warm, pool, req, fuel_meter).await?;
         let (parts, body) = resp.into_parts();
         let body = HyperOutgoingBody::new(
             body.map_err(|e| {
@@ -1641,6 +1656,10 @@ async fn invoke_component_handler(
         return Ok(hyper::Response::from_parts(parts, body));
     }
 
+    // The p2 path still builds and instantiates per request: its store is
+    // owned by a detached task that outlives the response head, so recovering
+    // it for reuse needs a restructure the p3 path did not.
+    let store = workload_handle.new_store(component_id).await?;
     handle_component_request(store, instance_pre, req, fuel_meter).await
 }
 

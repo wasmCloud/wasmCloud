@@ -218,6 +218,8 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
 }
 
 pub mod ctx;
+pub(crate) mod instance_pool;
+pub use instance_pool::InstancePolicy;
 mod linked_call;
 pub(crate) mod store;
 mod value;
@@ -513,6 +515,9 @@ impl Engine {
         validated_volumes: &std::collections::HashMap<String, PathBuf>,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
     ) -> anyhow::Result<WorkloadComponent> {
+        // Read before the component's fields are moved out below.
+        let instances = InstancePolicy::from_component(&component);
+
         // Create a wasmtime component from the bytes
         let wasmtime_component = self
             .load_component_bytes(component.bytes, component.digest)
@@ -557,9 +562,7 @@ impl Engine {
             component_volume_mounts,
             component.local_resources,
             loopback,
-            // TODO: implement pooling and instance limits
-            // component.pool_size,
-            // component.max_invocations,
+            instances,
         ))
     }
 

@@ -9,17 +9,17 @@
 //! outgoing-request egress policy itself lives on the unified
 //! [`crate::host::http::OutgoingHandler`] trait via its `send_request_p3` method.
 
-use crate::engine::ctx::SharedCtx;
+use std::sync::Arc;
+
+use crate::engine::instance_pool::{ComponentInstance, InstancePool};
 use crate::observability::FuelConsumptionMeter;
 use http_body_util::BodyExt;
 use tracing::Instrument;
-use wasmtime::Store;
-use wasmtime::component::InstancePre;
-use wasmtime_wasi_http::p3::bindings::ServicePre;
+use wasmtime_wasi_http::p3::bindings::Service;
 use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
 
 /// Body type used on the P3 outgoing path (also used as the return-body type
-/// for [`handle_component_request_p3`]).
+/// for `handle_component_request_p3`).
 pub type P3Body = http_body_util::combinators::UnsyncBoxBody<bytes::Bytes, ErrorCode>;
 
 /// Future returned to the guest to communicate request-side processing errors.
@@ -71,16 +71,13 @@ impl hyper::body::Body for ChannelBody {
 /// guest stays alive until the body has been fully drained, and a slow client
 /// applies backpressure to the guest rather than buffering the whole body in
 /// memory.
-pub async fn handle_component_request_p3(
-    mut store: Store<SharedCtx>,
-    pre: InstancePre<SharedCtx>,
+pub(crate) async fn handle_component_request_p3(
+    warm: ComponentInstance,
+    pool: Option<Arc<InstancePool>>,
     req: hyper::Request<hyper::body::Incoming>,
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<hyper::Response<P3Body>> {
     let _ = &fuel_meter; // fuel metering integration deferred to match P2's observe() pattern
-
-    let service_pre = ServicePre::new(pre)
-        .map_err(|e| anyhow::anyhow!(e).context("failed to create P3 ServicePre"))?;
 
     // Convert the hyper request body — map error type since hyper::Error doesn't impl Into<ErrorCode>
     let (parts, body) = req.into_parts();
@@ -108,11 +105,19 @@ pub async fn handle_component_request_p3(
     // task is aborted rather than detached to run unbounded.
     let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
         async move {
-            let service = match service_pre.instantiate_async(&mut store).await {
+            let ComponentInstance {
+                mut store,
+                instance,
+                invocations,
+            } = warm;
+            // A binding view over the instance, rebuilt per request. Cheap
+            // (export lookups); the expensive part -- the store and the
+            // instantiation -- is what a warm instance carries over.
+            let service = match Service::new(&mut store, &instance) {
                 Ok(service) => service,
                 Err(e) => {
                     let _ = parts_tx.send(Err(
-                        anyhow::anyhow!(e).context("failed to instantiate P3 service")
+                        anyhow::anyhow!(e).context("failed to bind P3 service exports")
                     ));
                     return;
                 }
@@ -214,8 +219,22 @@ pub async fn handle_component_request_p3(
                     handler_result
                 })
                 .await;
+            // Park the instance only after a clean run, and only once the
+            // response body has been fully forwarded -- `run_concurrent` does
+            // not resolve until then, so reaching here means the guest is done
+            // with this request. A client that disconnects mid-body aborts
+            // this task instead, dropping the store with it, so a
+            // half-finished instance is never parked.
             match run {
-                Ok(Ok(())) => {}
+                Ok(Ok(())) => {
+                    if let Some(pool) = pool {
+                        pool.release(ComponentInstance {
+                            store,
+                            instance,
+                            invocations,
+                        });
+                    }
+                }
                 Ok(Err(e)) => tracing::error!(err = ?e, "P3 response streaming failed"),
                 Err(e) => tracing::error!(err = ?e, "P3 run_concurrent failed"),
             }

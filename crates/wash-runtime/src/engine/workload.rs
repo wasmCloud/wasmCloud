@@ -22,6 +22,7 @@ use crate::engine::ctx::SharedTlsProvider;
 use crate::{
     engine::{
         ctx::SharedCtx,
+        instance_pool::{self, InstancePolicy, InstancePool},
         linked_call::{
             ComponentCtxTemplate, EphemeralCallMode, EphemeralLinkedCall, LinkedExportInvocation,
             func_is_bridge_safe, func_is_ephemeral_safe, invoke_linked_async_export,
@@ -345,15 +346,19 @@ pub struct WorkloadComponent {
     name: Arc<str>,
     /// The [`WorkloadMetadata`] for this component
     pub(crate) metadata: WorkloadMetadata,
-    /// The number of warm instances to keep for this component
-    pool_size: usize,
-    /// The maximum number of concurrent invocations allowed for this component
-    max_invocations: usize,
+    /// Instances kept warm between ephemeral linked calls. Shared by every
+    /// clone of this component, so all importers draw on the one warm set.
+    pub(crate) instances: Arc<InstancePool>,
 }
 
 impl WorkloadComponent {
     /// Create a new [`WorkloadComponent`] with the given workload ID,
     /// wasmtime [`Component`], [`Linker`], volume mounts, and instance limits.
+    ///
+    /// `instances` is what the component asked for by way of instance reuse.
+    /// [`InstancePolicy::Ephemeral`] keeps the default behavior of a fresh
+    /// store per call; [`InstancePolicy::Warm`] parks instances between calls
+    /// so guest state survives them.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         workload_id: impl Into<Arc<str>>,
@@ -365,6 +370,7 @@ impl WorkloadComponent {
         volume_mounts: Vec<(PathBuf, VolumeMount)>,
         local_resources: LocalResources,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
+        instances: InstancePolicy,
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
@@ -382,9 +388,7 @@ impl WorkloadComponent {
                 linked_components: Default::default(),
             },
             name: component_name.into(),
-            // TODO: Implement pooling and instance limits
-            pool_size: 0,
-            max_invocations: 0,
+            instances: Arc::new(InstancePool::new(instances)),
         }
     }
 
@@ -458,8 +462,7 @@ impl std::fmt::Debug for WorkloadComponent {
             .field("id", &self.metadata.id.as_ref())
             .field("workload_id", &self.metadata.workload_id.as_ref())
             .field("volume_mounts", &self.metadata.volume_mounts)
-            .field("pool_size", &self.pool_size)
-            .field("max_invocations", &self.max_invocations)
+            .field("has_warm_instances", &self.instances.enabled())
             .finish()
     }
 }
@@ -1462,6 +1465,25 @@ impl ResolvedWorkload {
         .await
     }
 
+    /// The pool a request store for `component_id` may be parked in, or `None`
+    /// when it must be built and dropped per request.
+    ///
+    /// The component's linked components are instantiated into the same store
+    /// by [`Self::new_store`] and live exactly as long as it does, so they have
+    /// to have opted in too — see [`instance_pool::poolable`].
+    pub(crate) async fn instance_pool_for_component(
+        &self,
+        component_id: &str,
+    ) -> Option<Arc<InstancePool>> {
+        let components = self.components.read().await;
+        let component = components.get(component_id)?;
+        instance_pool::poolable(
+            &components,
+            component_id,
+            &component.metadata.linked_components,
+        )
+    }
+
     /// Creates a new wasmtime Store for multiple components from the given workload metadata.
     async fn new_store_from_metadata(
         &self,
@@ -1557,6 +1579,12 @@ impl ResolvedWorkload {
         );
 
         for component in self.components.read().await.values() {
+            // Warm instances hold guest resources (sockets, open files) for as
+            // long as they stay parked, so release them with the rest of the
+            // workload's teardown. Calls still in flight own their own stores
+            // and are unaffected.
+            component.instances.clear();
+
             if let Some(plugins) = component.plugins() {
                 for (plugin_id, plugin) in plugins.iter() {
                     trace!(
@@ -2533,6 +2561,7 @@ mod tests {
             Vec::new(),
             local_resources,
             Arc::default(),
+            InstancePolicy::Ephemeral,
         )
     }
 
@@ -2594,6 +2623,7 @@ mod tests {
             Vec::new(),
             local_resources,
             Arc::default(),
+            InstancePolicy::Ephemeral,
         )
     }
 
@@ -2685,6 +2715,7 @@ mod tests {
                 Vec::new(),
                 LocalResources::default(),
                 Arc::default(),
+                InstancePolicy::Ephemeral,
             )
         };
         for (plugin, iface) in cases {
@@ -2944,6 +2975,7 @@ mod tests {
             Vec::new(),
             LocalResources::default(),
             Arc::default(),
+            InstancePolicy::Ephemeral,
         );
 
         let mut http_interface = WitInterface::from("wasi:http/handler");
