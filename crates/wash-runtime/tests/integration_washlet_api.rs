@@ -324,11 +324,18 @@ async fn pull_failure_does_not_consume_workload_id() -> Result<()> {
 
     let failed = harness.start(&request).await?;
     assert_eq!(failed.workload_state(), v2::WorkloadState::Error);
-    assert!(
-        failed.message.contains("failed to pull component image"),
-        "unexpected failure message: {}",
-        failed.message
-    );
+    // The operator surfaces this message verbatim, so it has to say which
+    // component wanted which image, not just that some pull failed.
+    for expected in [
+        "failed to pull image for component 'unpullable'",
+        "127.0.0.1:1/nope:latest",
+    ] {
+        assert!(
+            failed.message.contains(expected),
+            "failure message should contain {expected:?}, got: {}",
+            failed.message
+        );
+    }
 
     // The failed pull never reached the host, so the ID is still free.
     assert_eq!(
