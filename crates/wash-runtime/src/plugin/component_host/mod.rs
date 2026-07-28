@@ -73,8 +73,8 @@ use crate::host::trigger_service::{
     CapabilityCall, CapabilityFunc, CapabilityJob, Ingress, LifecycleReplay, TriggerService,
     decode_bind_reply,
 };
-use crate::oci::{self, OciConfig};
-use crate::plugin::component_plugin_spec::{ComponentPluginSpec, PluginSource};
+use crate::oci::OciConfig;
+use crate::plugin::component_plugin_spec::ComponentPluginSpec;
 use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
 
@@ -348,44 +348,14 @@ pub async fn load_component_plugin(
     engine: &Engine,
     oci_config: OciConfig,
 ) -> anyhow::Result<Arc<ComponentHostPlugin>> {
-    let (bytes, digest) = match &spec.source {
-        PluginSource::Oci { image, pull_policy } => {
-            oci::pull_component(image, oci_config, pull_policy.clone())
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to pull host component plugin '{}' from {image}",
-                        spec.id
-                    )
-                })?
-        }
-        PluginSource::File(path) => {
-            anyhow::ensure!(
-                spec.expected_digest.is_none(),
-                "host component plugin '{}': digest pinning applies only to `image=` sources",
-                spec.id
-            );
-            let bytes = tokio::fs::read(path).await.with_context(|| {
-                format!(
-                    "failed to read host component plugin '{}' from {}",
-                    spec.id,
-                    path.display()
-                )
-            })?;
-            (bytes, String::new())
-        }
-    };
-
-    if let Some(expected) = &spec.expected_digest {
-        anyhow::ensure!(
-            &digest == expected,
-            "host component plugin '{}' digest mismatch: pulled {digest}, expected {expected}",
-            spec.id
-        );
-    }
+    let loaded = spec
+        .source
+        .load_pinned(oci_config, spec.expected_digest.as_deref())
+        .await
+        .with_context(|| format!("loading host component plugin '{}'", spec.id))?;
 
     let id = intern_plugin_id(&spec.id);
-    let mut plugin = ComponentHostPlugin::new(id, &bytes, engine.clone())
+    let mut plugin = ComponentHostPlugin::new(id, &loaded.bytes, engine.clone())
         .with_context(|| format!("failed to build host component plugin '{}'", spec.id))?;
     if let Some(max_restarts) = spec.max_restarts {
         plugin = plugin.with_max_restarts(max_restarts);

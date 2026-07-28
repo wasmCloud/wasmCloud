@@ -1,47 +1,43 @@
 use clap::Args;
 use tracing::instrument;
+use wash_runtime::component_source::ComponentSource;
 
 use crate::{
-    cli::{CliCommand, CliContext, CommandOutput},
+    cli::{CliCommand, CliContext, CommandOutput, oci::RegistryArgs},
     inspect::{decode_component, get_component_wit},
 };
-use anyhow::Context;
+use anyhow::{Context, ensure};
 use std::path::Path;
 
 #[derive(Args, Debug, Clone)]
 pub struct InspectCommand {
-    /// Inspect a component at a given path.
-    #[arg(value_name = "COMPONENT_PATH")]
+    /// Inspect a component, given either a local path or an OCI reference.
+    #[arg(value_name = "COMPONENT_REFERENCE")]
     pub component_reference: String,
+    /// Registry settings, used only when the reference is an OCI image.
+    #[command(flatten)]
+    pub registry: RegistryArgs,
 }
 
 impl CliCommand for InspectCommand {
     #[instrument(level = "debug", skip_all, name = "inspect")]
-    async fn handle(&self, _ctx: &CliContext) -> anyhow::Result<CommandOutput> {
-        // Handle the optional component reference - default to current directory if not provided
+    async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
         let component_reference = &self.component_reference;
 
-        let path = Path::new(&component_reference);
+        // A directory is the one input the shared source resolution cannot make
+        // sense of: it exists, so it is classified as a file, and reading it
+        // fails with an OS error that does not say what to do instead.
+        let path = Path::new(component_reference);
+        ensure!(
+            !path.is_dir(),
+            "Directory '{component_reference}' specified. Please provide a file path or OCI reference."
+        );
 
-        let bytes = if path.exists() {
-            if path.is_file() {
-                tokio::fs::read(&component_reference)
-                    .await
-                    .context("failed to read component file")?
-            } else if path.is_dir() {
-                anyhow::bail!(
-                    "Directory '{component_reference}' specified. Please provide a file path."
-                );
-            } else {
-                anyhow::bail!(
-                    "Path '{component_reference}' exists but is neither a file nor directory"
-                );
-            }
-        } else {
-            anyhow::bail!("Path '{component_reference}' does not exist locally");
-        };
+        let loaded = ComponentSource::from_reference(component_reference)
+            .load(self.registry.oci_config(ctx))
+            .await?;
 
-        let component = decode_component(bytes.as_slice())
+        let component = decode_component(loaded.bytes.as_ref())
             .await
             .context("failed to decode component")?;
 

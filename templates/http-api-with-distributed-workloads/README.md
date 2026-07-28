@@ -128,6 +128,20 @@ dev:
         reverse.prefix: "🔁 "
 ```
 
+A component that you are not editing can come from a registry instead of the
+build directory. Give it an `image` in place of `file`, optionally with a
+`pullPolicy` of `always`, `ifNotPresent` (the default) or `never`:
+
+```yaml
+dev:
+  components:
+    - name: task-leet
+      image: ghcr.io/acme/task-leet:1.0.0
+      pullPolicy: ifNotPresent
+      config:
+        subscriptions: tasks.leet
+```
+
 Two kinds of per-component config are at work:
 
 - **`subscriptions`** is read by the messaging backend (in-memory for

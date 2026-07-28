@@ -22,9 +22,10 @@
 //! - [`wasi_logging`] - Structured logging (`wasi:logging`)
 //! - [`wasi_otel`] - OpenTelemetry tracing, metrics, and logs (`wasi:otel/*`)
 
+use std::collections::HashMap;
 use std::future::Future;
-use std::path::PathBuf;
-use std::{collections::HashMap, path::Path};
+#[cfg(any(feature = "wasi-blobstore", feature = "wasi-keyvalue"))]
+use std::path::{Path, PathBuf};
 
 use crate::engine::workload::WorkloadItem;
 use crate::{
@@ -53,16 +54,20 @@ pub mod wasi_otel;
 pub mod wasmcloud_messaging;
 
 /// Host capabilities provided by a WebAssembly component running in its own
-/// supervised store (rather than by a Rust plugin running in-store).
-#[cfg(feature = "host-component-plugins")]
+/// supervised store (rather than by a Rust plugin running in-store). Needs
+/// `oci` for the loader that fetches a plugin's wasm.
+#[cfg(all(feature = "host-component-plugins", feature = "oci"))]
 pub mod component_host;
 
-/// Declarative spec for a host component plugin (id + wasm source). Always
-/// compiled so front-ends can accept a plugin declaration and fail clearly when
-/// built without the `host-component-plugins` feature; the loader that consumes
-/// it lives in [`component_host`].
+/// Declarative spec for a host component plugin (id + wasm source). Compiled
+/// whenever the sources it can name are reachable, independent of
+/// `host-component-plugins`, so front-ends can accept a plugin declaration and
+/// fail clearly when built without that feature; the loader that consumes it
+/// lives in [`component_host`].
+#[cfg(feature = "oci")]
 pub mod component_plugin_spec;
-pub use component_plugin_spec::{ComponentPluginSpec, PluginSource};
+#[cfg(feature = "oci")]
+pub use component_plugin_spec::ComponentPluginSpec;
 
 /// Shared `(implements ..)` multiplexing core
 #[cfg(feature = "wasm_component_model_implements")]
@@ -431,6 +436,10 @@ impl<T, Y> WorkloadTracker<T, Y> {
 }
 
 /// Locks an untrusted path to be within the given root directory.
+///
+/// Only the filesystem-backed plugins hand it untrusted names, so it compiles
+/// with them.
+#[cfg(any(feature = "wasi-blobstore", feature = "wasi-keyvalue"))]
 pub(crate) fn lock_root(root: impl AsRef<Path>, untrusted: &str) -> Result<PathBuf, &'static str> {
     let path = Path::new(untrusted);
 
