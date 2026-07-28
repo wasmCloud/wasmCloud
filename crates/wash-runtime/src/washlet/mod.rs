@@ -628,42 +628,45 @@ impl TryFrom<types::v2::LocalResources> for crate::types::LocalResources {
     type Error = anyhow::Error;
 
     fn try_from(lr: types::v2::LocalResources) -> Result<Self, Self::Error> {
-        // Parse `allowed_hosts` eagerly: every entry must be a recognized
-        // form (`*`, `*.foo`, `host[:port]`, or `scheme://…`). A bad entry
-        // fails the conversion so the workload start surfaces a clear error
-        // rather than silently widening egress. All parse failures are
-        // collected and joined into one error so a workload with several
-        // bad entries doesn't make the user fix them one-by-one.
-        let mut parsed: Vec<crate::host::allowed_hosts::AllowedHost> =
-            Vec::with_capacity(lr.allowed_hosts.len());
-        let mut errors: Vec<String> = Vec::new();
-        for s in &lr.allowed_hosts {
-            // Per-entry messages are formatted as `'<entry>': <parse error>`
-            // (no leading "invalid allowed_hosts" — that's the outer
-            // wrapper's job). The final message renders as one heading line
-            // plus a bullet per bad entry so multi-error output is scannable
-            // in a terminal.
-            match s.parse::<crate::host::allowed_hosts::AllowedHost>() {
-                Ok(entry) => parsed.push(entry),
-                Err(e) => errors.push(format!("'{s}': {e:#}")),
-            }
-        }
-        if !errors.is_empty() {
-            return Err(anyhow!(
-                "invalid allowed_hosts:\n  - {}",
-                errors.join("\n  - ")
-            ));
-        }
-        let allowed_hosts: Arc<[_]> = parsed.into();
         Ok(crate::types::LocalResources {
             memory_limit_mb: lr.memory_limit_mb,
             cpu_limit: lr.cpu_limit,
             config: lr.config,
             volume_mounts: lr.volume_mounts.into_iter().map(Into::into).collect(),
-            allowed_hosts,
+            allowed_hosts: parse_policy_entries(&lr.allowed_hosts, "allowed_hosts")?,
             environment: lr.environment,
+            allow_ip_name_lookup: parse_policy_entries(
+                &lr.allow_ip_name_lookup,
+                "allow_ip_name_lookup",
+            )?,
         })
     }
+}
+
+/// Parses each entry of a policy list arriving from the wire, reporting
+/// every bad entry at once.
+///
+/// A malformed entry fails the conversion so the workload start surfaces a
+/// clear error rather than silently widening what the component may reach.
+/// Failures are collected and joined into one message, rendered as a
+/// heading line plus a bullet per bad entry, so a workload with several bad
+/// entries doesn't have to be fixed one at a time.
+fn parse_policy_entries<T>(entries: &[String], field: &str) -> anyhow::Result<Arc<[T]>>
+where
+    T: std::str::FromStr<Err = anyhow::Error>,
+{
+    let mut parsed: Vec<T> = Vec::with_capacity(entries.len());
+    let mut errors: Vec<String> = Vec::new();
+    for entry in entries {
+        match entry.parse::<T>() {
+            Ok(value) => parsed.push(value),
+            Err(e) => errors.push(format!("'{entry}': {e:#}")),
+        }
+    }
+    if !errors.is_empty() {
+        return Err(anyhow!("invalid {field}:\n  - {}", errors.join("\n  - ")));
+    }
+    Ok(parsed.into())
 }
 
 impl From<crate::types::HostHeartbeat> for types::v2::HostHeartbeat {
@@ -774,6 +777,7 @@ mod tests {
 
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
+    use crate::host::allowed_names::AllowedName;
 
     #[test]
     fn try_from_v2_local_resources_parses_allowed_hosts() {
@@ -791,8 +795,15 @@ mod tests {
                 "api.example.com:8443".to_string(),
                 "https://api.example.com".to_string(),
             ],
+            allow_ip_name_lookup: vec!["*.example.com".to_string(), "127.0.0.1".to_string()],
         };
         let lr = crate::types::LocalResources::try_from(proto).expect("conversion should succeed");
+        assert_eq!(lr.allow_ip_name_lookup.len(), 2);
+        assert!(matches!(
+            lr.allow_ip_name_lookup[0],
+            AllowedName::SuffixWildcard { .. }
+        ));
+        assert!(matches!(lr.allow_ip_name_lookup[1], AllowedName::Ip(_)));
         assert_eq!(lr.allowed_hosts.len(), 4);
         assert!(matches!(lr.allowed_hosts[0], AllowedHost::Any));
         assert!(matches!(
@@ -817,6 +828,7 @@ mod tests {
             environment: Default::default(),
             volume_mounts: vec![],
             allowed_hosts: vec!["*com".to_string()],
+            allow_ip_name_lookup: vec![],
         };
         let err = crate::types::LocalResources::try_from(proto)
             .expect_err("conversion should reject ambiguous wildcard");
@@ -844,6 +856,7 @@ mod tests {
                 "https://api.example.com/v1".to_string(), // has path
                 "example.com:notaport".to_string(),       // bad port
             ],
+            allow_ip_name_lookup: vec![],
         };
         let err = crate::types::LocalResources::try_from(proto)
             .expect_err("conversion should reject all bad entries");

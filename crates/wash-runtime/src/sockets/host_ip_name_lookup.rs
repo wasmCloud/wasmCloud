@@ -35,7 +35,7 @@ impl Host for WasiSocketsCtxView<'_> {
 
         let host = parse_host(&name).map_err(super::network::socket_error_from_util)?;
 
-        if !network.allow_ip_name_lookup {
+        if !crate::host::allowed_names::check_allowed_names(&network.allowed_names, &host) {
             return Err(ErrorCode::PermanentResolverFailure.into());
         }
 

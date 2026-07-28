@@ -343,6 +343,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-ip-name-lookup"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
+name = "http-ip-name-lookup-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
 name = "http-loopback-gateway"
 version = "0.0.0"
 dependencies = [
