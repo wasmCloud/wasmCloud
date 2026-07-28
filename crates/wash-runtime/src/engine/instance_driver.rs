@@ -84,6 +84,13 @@ pub(crate) struct PoolSlot {
 impl PoolSlot {
     /// Stop this instance admitting: it drains what it took, is reaped, and
     /// its store's teardown ends any guest work still running on it.
+    ///
+    /// TODO: retirement is a stand-in for cancelling the one bad call. The
+    /// host cannot cancel a guest `call_concurrent` subtask
+    /// (bytecodealliance/wasmtime#11833), so ending a wedged call's work means
+    /// condemning the whole instance and every warm state it held. Once that
+    /// API exists, a timed-out call should cancel just its own task and leave
+    /// the instance serving.
     pub(crate) fn retire_instance(&self) {
         self.retired.store(true, Ordering::SeqCst);
     }

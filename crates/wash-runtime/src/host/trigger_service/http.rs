@@ -171,6 +171,12 @@ impl AccessorTask<SharedCtx> for HttpTask {
             // stalled work. A service has no such remedy — its singleton
             // instance keeps serving, with the stalled task still on it — so
             // the timeout only bounds how long the client waits.
+            //
+            // TODO: both arms want per-task cancellation
+            // (bytecodealliance/wasmtime#11833). With it, a pooled instance
+            // would cancel the one bad call instead of being condemned, and a
+            // service would shed its stalled task instead of carrying it for
+            // the rest of its life.
             Err(_) => match &pool_slot {
                 Some(slot) => {
                     slot.retire_instance();
