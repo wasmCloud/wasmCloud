@@ -389,6 +389,23 @@ fn image_pull_secret_to_oci_config(
     oci_config
 }
 
+/// The instance limits a component declared on the wire, carried through
+/// verbatim so the runtime decodes them once (see
+/// [`crate::engine::InstancePolicy`]).
+///
+/// A named seam rather than three field reads inline: `max_concurrency` was
+/// added to `types::Component` before it existed on the wire, and this
+/// conversion silently pinned it to 1 — the knob was unreachable from a
+/// deployed workload while looking wired everywhere else. Extracting it makes
+/// the wire path testable without an image pull.
+fn instance_limits(component: &types::v2::Component) -> (i32, i32, i32) {
+    (
+        component.pool_size,
+        component.max_invocations,
+        component.max_concurrency,
+    )
+}
+
 #[instrument(level = "debug", skip_all)]
 async fn host_heartbeat(host: &impl HostApi) -> anyhow::Result<types::v2::HostHeartbeat> {
     let hb = host.heartbeat().await?;
@@ -467,14 +484,15 @@ async fn workload_start(
                 },
                 None => crate::types::LocalResources::default(),
             };
+            let (pool_size, max_invocations, max_concurrency) = instance_limits(component);
             pulled_components.push(crate::types::Component {
                 name: component.name.clone(),
                 bytes: loaded.bytes,
                 digest: loaded.digest,
                 local_resources,
-                pool_size: component.pool_size,
-                max_invocations: component.max_invocations,
-                max_concurrency: 1,
+                pool_size,
+                max_invocations,
+                max_concurrency,
             })
         }
         (
@@ -793,6 +811,39 @@ mod tests {
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
     use crate::host::allowed_ip_name::AllowedIpName;
+
+    /// Every instance limit a component declares on the wire has to reach the
+    /// runtime. `max_concurrency` once did not: it existed on
+    /// `types::Component` and in `wash dev` config, but not in the proto, and
+    /// this conversion pinned it to 1 — so a workload deployed through the
+    /// operator could never enable it, while every in-process test and
+    /// benchmark constructed `types::Component` directly and saw it work.
+    #[test]
+    fn wire_limits_reach_the_runtime() {
+        let component = types::v2::Component {
+            pool_size: 4,
+            max_invocations: 100,
+            max_concurrency: 8,
+            ..Default::default()
+        };
+
+        assert_eq!(instance_limits(&component), (4, 100, 8));
+
+        // And the runtime reads that triple as the policy it names.
+        assert_eq!(
+            crate::engine::InstancePolicy::from_component(&crate::types::Component {
+                pool_size: 4,
+                max_invocations: 100,
+                max_concurrency: 8,
+                ..Default::default()
+            }),
+            crate::engine::InstancePolicy::Warm {
+                pool_size: std::num::NonZeroUsize::new(4).unwrap(),
+                max_invocations: std::num::NonZeroUsize::new(100),
+                max_concurrency: std::num::NonZeroUsize::new(8).unwrap(),
+            }
+        );
+    }
 
     #[test]
     fn try_from_v2_local_resources_parses_allowed_hosts() {
