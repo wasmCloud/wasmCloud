@@ -1,8 +1,12 @@
 //! Host component plugin with a deliberately-malformed
-//! `wasmcloud:host/workload-lifecycle` export (its `on-workload-bind` takes a
-//! bare string instead of the `workload-info` record). Used only to assert that
-//! `ComponentHostPlugin::new` rejects the mismatched signature at registration;
-//! the hooks are never invoked.
+//! `wasmcloud:host/workload-lifecycle` export: its `on-workload-bind` takes a
+//! bare string instead of the `workload-info` record and returns `u32` instead
+//! of `result<_, string>`. Both mismatches are declared in this fixture's own
+//! copy of the interface (`host-bad/workload-lifecycle.wit`) rather than the
+//! canonical one, so the Rust signatures below are the ones wit-bindgen
+//! generates from that wrong WIT — nothing is being coerced into the real
+//! shape. Used only to assert that `ComponentHostPlugin::new` rejects the
+//! mismatched signature at registration; the hooks are never invoked.
 
 mod bindings {
     #![allow(unsafe_code)]

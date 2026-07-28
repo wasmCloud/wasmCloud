@@ -1,7 +1,7 @@
 //! This module is primarily concerned with converting an [`UnresolvedWorkload`] into a [`ResolvedWorkload`] by
 //! resolving all components and their dependencies.
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     ops::{Deref, DerefMut},
     path::PathBuf,
     sync::Arc,
@@ -526,7 +526,7 @@ pub struct ResolvedWorkload {
     namespace: Arc<str>,
     /// All components in the workload. This is behind a `RwLock` to support mutable
     /// access to the component linkers.
-    components: Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>>,
+    components: Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
     /// The HTTP handler for outgoing HTTP requests
     http_handler: Arc<dyn crate::host::http::HostHandler>,
     /// An optional service component that runs once to completion or for the duration of the workload
@@ -887,7 +887,7 @@ impl ResolvedWorkload {
         }
     }
 
-    pub fn components(&self) -> Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>> {
+    pub fn components(&self) -> Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>> {
         self.components.clone()
     }
 
@@ -1713,7 +1713,7 @@ pub struct UnresolvedWorkload {
     /// The [`WorkloadService`] associated with this workload, if any
     service: Option<WorkloadService>,
     /// All [`WorkloadComponent`]s in the workload
-    components: HashMap<Arc<str>, WorkloadComponent>,
+    components: BTreeMap<Arc<str>, WorkloadComponent>,
     /// Component IDs in manifest order. Used to pick the first in the manifest
     /// whenever the host can dispatch an export to only one component
     component_order: Vec<Arc<str>>,
@@ -2276,12 +2276,10 @@ impl UnresolvedWorkload {
         self.service.as_ref().map(|s| Arc::from(s.id()))
     }
 
-    /// Ids of this workload's components, sorted (deterministic despite the
-    /// backing map). Excludes the service — see [`Self::service_id`].
+    /// Ids of this workload's components, in sorted order. Excludes the
+    /// service — see [`Self::service_id`].
     pub fn component_ids(&self) -> Vec<Arc<str>> {
-        let mut components: Vec<Arc<str>> = self.components.keys().cloned().collect();
-        components.sort();
-        components
+        self.components.keys().cloned().collect()
     }
 
     /// Retrieves the interface configuration for a given WIT interface, if it exists.

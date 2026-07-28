@@ -232,8 +232,8 @@ impl Guest for Component {
                 binding
                     .config
                     .iter()
-                    .find(|entry| entry.key == key)
-                    .map(|entry| entry.value.clone())
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| v.clone())
             })
         })
     }
@@ -260,17 +260,17 @@ impl LifecycleGuest for Component {
         //    the deferred rollback unbind.
         let mut slow_bind_ms: u64 = 0;
         for binding in &workload.interfaces {
-            for entry in &binding.config {
-                match entry.key.as_str() {
-                    "reject" => return Err(entry.value.clone()),
+            for (key, value) in &binding.config {
+                match key.as_str() {
+                    "reject" => return Err(value.clone()),
                     "trap-on-bind" => panic!("kv-plugin trap-on-bind: deliberate bind trap"),
                     "trap-after-epoch-secs" => {
-                        let threshold: i64 = entry.value.parse().unwrap_or(0);
+                        let threshold: i64 = value.parse().unwrap_or(0);
                         if system_clock::now().seconds >= threshold {
                             panic!("kv-plugin trap-after-epoch-secs: deliberate poison replay");
                         }
                     }
-                    "slow-bind-ms" => slow_bind_ms = entry.value.parse().unwrap_or(0),
+                    "slow-bind-ms" => slow_bind_ms = value.parse().unwrap_or(0),
                     _ => {}
                 }
             }
@@ -346,7 +346,7 @@ fn render_binding(binding: &InterfaceBinding) -> String {
         let config = binding
             .config
             .iter()
-            .map(|entry| format!("{}={}", entry.key, entry.value))
+            .map(|(key, value)| format!("{key}={value}"))
             .collect::<Vec<_>>()
             .join("&");
         s.push('?');
