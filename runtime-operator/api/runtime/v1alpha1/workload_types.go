@@ -137,16 +137,25 @@ type WorkloadComponent struct {
 	ImagePullSecret *corev1.LocalObjectReference `json:"imagePullSecret,omitempty"`
 	// +kubebuilder:validation:Optional
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+	// PoolSize is how many instances of this component are kept warm between
+	// calls. Unset means none are: every call gets a fresh instance, and the
+	// component's state stays ephemeral.
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=0
 	PoolSize int32 `json:"poolSize,omitempty"`
+	// MaxInvocations retires a warm instance once it has served this many
+	// calls, and a fresh one takes its place. Unset means an instance serves
+	// calls indefinitely. Only meaningful alongside PoolSize.
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=0
 	MaxInvocations int32 `json:"maxInvocations,omitempty"`
 	// MaxConcurrency is how many calls one warm instance may serve at the same
-	// time. Unset or below 1 means one, which is what a component gets without
-	// asking. Raising it lets an instance overlap calls while it awaits I/O,
-	// and is only safe for a guest that yields rather than blocks. Only
-	// meaningful alongside PoolSize.
+	// time. Unset means one, which is what a component gets without asking.
+	// Raising it lets an instance overlap calls while it awaits I/O, and is
+	// only safe for a guest that yields rather than blocks. Only meaningful
+	// alongside PoolSize.
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=0
 	MaxConcurrency int32 `json:"maxConcurrency,omitempty"`
 	// +kubebuilder:validation:Optional
 	LocalResources *LocalResources `json:"localResources,omitempty"`

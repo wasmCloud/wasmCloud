@@ -379,8 +379,13 @@ type Component struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Image          string                 `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"`
 	LocalResources *LocalResources        `protobuf:"bytes,2,opt,name=local_resources,json=localResources,proto3" json:"local_resources,omitempty"`
-	PoolSize       int32                  `protobuf:"zigzag32,3,opt,name=pool_size,json=poolSize,proto3" json:"pool_size,omitempty"`
-	MaxInvocations int32                  `protobuf:"zigzag32,4,opt,name=max_invocations,json=maxInvocations,proto3" json:"max_invocations,omitempty"`
+	// The instance limits below are signed because they mirror the Kubernetes
+	// CRD fields a workload sets them through (WorkloadComponent in the
+	// runtime-operator), and the Kubernetes API convention is signed integers.
+	// Nothing reads a negative one as a distinct value: zero and negative alike
+	// mean "not configured", decoded in one place on the receiving side.
+	PoolSize       int32 `protobuf:"zigzag32,3,opt,name=pool_size,json=poolSize,proto3" json:"pool_size,omitempty"`
+	MaxInvocations int32 `protobuf:"zigzag32,4,opt,name=max_invocations,json=maxInvocations,proto3" json:"max_invocations,omitempty"`
 	// Optional credentials for pulling the image from a private registry
 	ImagePullSecret *ImagePullSecret `protobuf:"bytes,5,opt,name=image_pull_secret,json=imagePullSecret,proto3" json:"image_pull_secret,omitempty"`
 	Name            string           `protobuf:"bytes,6,opt,name=name,proto3" json:"name,omitempty"`

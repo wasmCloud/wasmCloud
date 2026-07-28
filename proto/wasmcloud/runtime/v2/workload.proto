@@ -87,6 +87,11 @@ message WitWorld {
 message Component {
   string image = 1;
   LocalResources local_resources = 2;
+  // The instance limits below are signed because they mirror the Kubernetes
+  // CRD fields a workload sets them through (WorkloadComponent in the
+  // runtime-operator), and the Kubernetes API convention is signed integers.
+  // Nothing reads a negative one as a distinct value: zero and negative alike
+  // mean "not configured", decoded in one place on the receiving side.
   sint32 pool_size = 3;
   sint32 max_invocations = 4;
   // Optional credentials for pulling the image from a private registry

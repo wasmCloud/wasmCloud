@@ -1721,11 +1721,17 @@ async fn invoke_component_handler(
             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
             let outcome = match pool.offer(InstanceJob::Http(Box::new((req, resp_tx)))) {
                 Dispatch::Sent => Ok(()),
-                // The pool has room. Build the store out here, where awaiting
-                // is allowed, and hand it over.
+                // The pool has room. Build and instantiate the store out here,
+                // where awaiting is allowed and where a component that fails
+                // to instantiate reports that failure to this request rather
+                // than only to the log.
                 Dispatch::NeedsInstance(job) => {
-                    let store = workload_handle.new_store(component_id).await?;
-                    pool.install(store, instance_pre.clone(), job)
+                    let mut store = workload_handle.new_store(component_id).await?;
+                    let instance = instance_pre.instantiate_async(&mut store).await?;
+                    pool.install(
+                        crate::engine::instance_pool::ComponentInstance { store, instance },
+                        job,
+                    )
                 }
                 Dispatch::Saturated(job) => Err(job),
             };
@@ -1737,8 +1743,11 @@ async fn invoke_component_handler(
                 }
                 // Every warm instance was busy; serve it cold below.
                 Err(InstanceJob::Http(job)) => job.0,
+                // A job comes back as the variant it went in as, so this is
+                // unreachable — but not worth a panic on a request path.
                 Err(InstanceJob::Linked(_)) => {
-                    unreachable!("an HTTP job cannot come back as a linked one")
+                    debug_assert!(false, "an HTTP job cannot come back as a linked one");
+                    anyhow::bail!("instance pool returned a linked job for an HTTP request");
                 }
             }
         } else {

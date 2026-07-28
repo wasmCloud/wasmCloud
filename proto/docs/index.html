@@ -743,7 +743,11 @@ This information is used by the Runtime Operator to monitor the health of the Wa
                   <td>pool_size</td>
                   <td><a href="#sint32">sint32</a></td>
                   <td></td>
-                  <td><p> </p></td>
+                  <td><p>The instance limits below are signed because they mirror the Kubernetes
+CRD fields a workload sets them through (WorkloadComponent in the
+runtime-operator), and the Kubernetes API convention is signed integers.
+Nothing reads a negative one as a distinct value: zero and negative alike
+mean &#34;not configured&#34;, decoded in one place on the receiving side. </p></td>
                 </tr>
               
                 <tr>

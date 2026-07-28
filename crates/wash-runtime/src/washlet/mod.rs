@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::component_source::ComponentSource;
+use crate::component_source::{ComponentSource, LoadedComponent};
 use crate::host::{Host, HostApi, HostConfig};
 use crate::oci::{self, OciConfig};
 use crate::plugin::HostPlugin;
@@ -389,21 +389,28 @@ fn image_pull_secret_to_oci_config(
     oci_config
 }
 
-/// The instance limits a component declared on the wire, carried through
-/// verbatim so the runtime decodes them once (see
-/// [`crate::engine::InstancePolicy`]).
+/// Build the runtime's component from the one on the wire, once its image has
+/// been pulled and its resources parsed.
 ///
-/// A named seam rather than three field reads inline: `max_concurrency` was
-/// added to `types::Component` before it existed on the wire, and this
-/// conversion silently pinned it to 1 — the knob was unreachable from a
-/// deployed workload while looking wired everywhere else. Extracting it makes
-/// the wire path testable without an image pull.
-fn instance_limits(component: &types::v2::Component) -> (i32, i32, i32) {
-    (
-        component.pool_size,
-        component.max_invocations,
-        component.max_concurrency,
-    )
+/// Every field the wire carries has to land here: one dropped in this
+/// conversion is unreachable from a deployed workload while looking wired
+/// everywhere else. Split out from the pull loop so that stays true under test
+/// without an image pull. The instance limits travel verbatim — the runtime
+/// decodes them once, in [`crate::engine::InstancePolicy`].
+fn component_from_wire(
+    wire: &types::v2::Component,
+    loaded: LoadedComponent,
+    local_resources: crate::types::LocalResources,
+) -> crate::types::Component {
+    crate::types::Component {
+        name: wire.name.clone(),
+        bytes: loaded.bytes,
+        digest: loaded.digest,
+        local_resources,
+        pool_size: wire.pool_size,
+        max_invocations: wire.max_invocations,
+        max_concurrency: wire.max_concurrency,
+    }
 }
 
 #[instrument(level = "debug", skip_all)]
@@ -484,16 +491,7 @@ async fn workload_start(
                 },
                 None => crate::types::LocalResources::default(),
             };
-            let (pool_size, max_invocations, max_concurrency) = instance_limits(component);
-            pulled_components.push(crate::types::Component {
-                name: component.name.clone(),
-                bytes: loaded.bytes,
-                digest: loaded.digest,
-                local_resources,
-                pool_size,
-                max_invocations,
-                max_concurrency,
-            })
+            pulled_components.push(component_from_wire(component, loaded, local_resources))
         }
         (
             pulled_components,
@@ -813,30 +811,37 @@ mod tests {
     use crate::host::allowed_ip_name::AllowedIpName;
 
     /// Every instance limit a component declares on the wire has to reach the
-    /// runtime. `max_concurrency` once did not: it existed on
-    /// `types::Component` and in `wash dev` config, but not in the proto, and
-    /// this conversion pinned it to 1 — so a workload deployed through the
-    /// operator could never enable it, while every in-process test and
-    /// benchmark constructed `types::Component` directly and saw it work.
+    /// runtime. An in-process test builds `types::Component` directly and so
+    /// never crosses this conversion, which is where a limit that exists on
+    /// both sides can go missing — leaving the knob unreachable from a
+    /// workload deployed through the operator.
     #[test]
     fn wire_limits_reach_the_runtime() {
-        let component = types::v2::Component {
+        let wire = types::v2::Component {
+            name: "pooled".to_string(),
             pool_size: 4,
             max_invocations: 100,
             max_concurrency: 8,
             ..Default::default()
         };
 
-        assert_eq!(instance_limits(&component), (4, 100, 8));
+        let component = component_from_wire(
+            &wire,
+            LoadedComponent {
+                bytes: b"\0asm".as_slice().into(),
+                digest: Some("sha256:abc".to_string()),
+            },
+            crate::types::LocalResources::default(),
+        );
+        assert_eq!(component.name, "pooled");
+        assert_eq!(component.digest.as_deref(), Some("sha256:abc"));
+        assert_eq!(component.pool_size, 4);
+        assert_eq!(component.max_invocations, 100);
+        assert_eq!(component.max_concurrency, 8);
 
-        // And the runtime reads that triple as the policy it names.
+        // And the runtime reads those limits as the policy they name.
         assert_eq!(
-            crate::engine::InstancePolicy::from_component(&crate::types::Component {
-                pool_size: 4,
-                max_invocations: 100,
-                max_concurrency: 8,
-                ..Default::default()
-            }),
+            crate::engine::InstancePolicy::from_component(&component),
             crate::engine::InstancePolicy::Warm {
                 pool_size: std::num::NonZeroUsize::new(4).unwrap(),
                 max_invocations: std::num::NonZeroUsize::new(100),
