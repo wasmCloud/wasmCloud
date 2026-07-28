@@ -984,6 +984,19 @@ impl HostBuilder {
         Ok(self)
     }
 
+    /// Registers the multiplexed plugin set from
+    /// [`crate::plugin::multiplexed_plugins`], which is what makes
+    /// `(implements ..)` named imports resolvable. Without it, every
+    /// registered plugin reports `supports_named_instances() == false` and a
+    /// workload needing named multiplexing fails to bind.
+    #[cfg(feature = "wasm_component_model_implements")]
+    pub fn with_multiplexed_plugins(mut self) -> anyhow::Result<Self> {
+        for plugin in crate::plugin::multiplexed_plugins() {
+            self = self.with_plugin(plugin)?;
+        }
+        Ok(self)
+    }
+
     pub fn with_meters(mut self, meters: Meters) -> Self {
         self.meters = meters;
         self

@@ -76,6 +76,14 @@ impl ClusterHostBuilder {
         Ok(self)
     }
 
+    /// Registers the multiplexed plugin set. See
+    /// [`crate::host::HostBuilder::with_multiplexed_plugins`].
+    #[cfg(feature = "wasm_component_model_implements")]
+    pub fn with_multiplexed_plugins(mut self) -> anyhow::Result<Self> {
+        self.host_builder = self.host_builder.with_multiplexed_plugins()?;
+        Ok(self)
+    }
+
     pub fn with_artifact_cleaner(mut self, frequency: Duration, max_age: Duration) -> Self {
         self.cleanup_interval = Some(frequency);
         self.cleanup_age = Some(max_age);

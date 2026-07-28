@@ -267,37 +267,7 @@ impl CliCommand for HostCommand {
 
         #[cfg(feature = "wasm_component_model_implements")]
         {
-            cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
-                plugin::wasi_keyvalue::MultiplexedKeyValue::new()
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::InMemoryProvider))
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::RedisProvider))
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::NatsProvider))
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::FilesystemProvider)),
-            ))?;
-            cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
-                plugin::wasmcloud_messaging::MultiplexedMessaging::new()
-                    .with_provider(Arc::new(plugin::wasmcloud_messaging::InMemoryMsgProvider))
-                    .with_provider(Arc::new(plugin::wasmcloud_messaging::NatsMsgProvider)),
-            ))?;
-            cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
-                plugin::wasi_blobstore::MultiplexedBlobstore::new()
-                    .with_provider(Arc::new(plugin::wasi_blobstore::InMemoryProvider))
-                    .with_provider(Arc::new(plugin::wasi_blobstore::FilesystemProvider))
-                    .with_provider(Arc::new(plugin::wasi_blobstore::NatsBlobProvider)),
-            ))?;
-            cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
-                plugin::wasi_blobstore::MultiplexedAsyncBlobstore::new()
-                    .with_provider(Arc::new(plugin::wasi_blobstore::InMemoryProvider))
-                    .with_provider(Arc::new(plugin::wasi_blobstore::FilesystemProvider))
-                    .with_provider(Arc::new(plugin::wasi_blobstore::NatsBlobProvider)),
-            ))?;
-            cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
-                plugin::wasi_keyvalue::MultiplexedAsyncKeyValue::new()
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::InMemoryProvider))
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::RedisProvider))
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::NatsProvider))
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::FilesystemProvider)),
-            ))?;
+            cluster_host_builder = cluster_host_builder.with_multiplexed_plugins()?;
         }
 
         if let Some(postgres_url) = &self.postgres_url {
