@@ -774,6 +774,19 @@ This information is used by the Runtime Operator to monitor the health of the Wa
                   <td><p> </p></td>
                 </tr>
               
+                <tr>
+                  <td>max_concurrency</td>
+                  <td><a href="#sint32">sint32</a></td>
+                  <td></td>
+                  <td><p>How many calls one warm instance may serve at the same time.
+
+Unset or below 1 means one, which is what a component gets without
+asking: an instance serves a single call at a time. Raising it lets an
+instance overlap calls while it awaits I/O, and is only safe for a guest
+that yields rather than blocks -- a guest driving its own executor with a
+blocking call must stay at one. Only meaningful alongside pool_size. </p></td>
+                </tr>
+              
             </tbody>
           </table>
 

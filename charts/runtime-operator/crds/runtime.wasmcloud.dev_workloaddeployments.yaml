@@ -283,6 +283,9 @@ spec:
                                     type: object
                                   type: array
                               type: object
+                            maxConcurrency:
+                              format: int32
+                              type: integer
                             maxInvocations:
                               format: int32
                               type: integer
