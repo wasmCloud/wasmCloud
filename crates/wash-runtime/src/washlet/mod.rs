@@ -409,18 +409,24 @@ async fn workload_start(
                 image: component.image.clone(),
                 pull_policy: component.image_pull_policy().into(),
             };
-            let loaded = match source.load(oci_config).await {
-                Ok(loaded) => loaded,
-                Err(e) => {
-                    return Ok(types::v2::WorkloadStartResponse {
-                        workload_status: Some(types::v2::WorkloadStatus {
-                            workload_id: workload_id.clone(),
-                            workload_state: types::v2::WorkloadState::Error.into(),
-                            message: format!("{e:#}"),
-                        }),
-                    });
-                }
-            };
+            // `load` already names the reference it failed on; this says which
+            // of the workload's components asked for it, so a multi-component
+            // start reports something the operator can act on.
+            let loaded =
+                match source.load(oci_config).await.with_context(|| {
+                    format!("failed to pull image for component '{}'", component.name)
+                }) {
+                    Ok(loaded) => loaded,
+                    Err(e) => {
+                        return Ok(types::v2::WorkloadStartResponse {
+                            workload_status: Some(types::v2::WorkloadStatus {
+                                workload_id: workload_id.clone(),
+                                workload_state: types::v2::WorkloadState::Error.into(),
+                                message: format!("{e:#}"),
+                            }),
+                        });
+                    }
+                };
             let local_resources = match component.local_resources.clone() {
                 Some(lr) => match crate::types::LocalResources::try_from(lr) {
                     Ok(lr) => lr,
@@ -466,7 +472,13 @@ async fn workload_start(
             image: service.image.clone(),
             pull_policy: service.image_pull_policy().into(),
         };
-        let loaded = match source.load(oci_config).await {
+        // Distinguishes a service pull failure from a component one; both
+        // otherwise report the same reference and cause.
+        let loaded = match source
+            .load(oci_config)
+            .await
+            .context("failed to pull image for the workload service")
+        {
             Ok(loaded) => loaded,
             Err(e) => {
                 return Ok(types::v2::WorkloadStartResponse {
