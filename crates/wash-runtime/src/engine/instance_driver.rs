@@ -27,7 +27,10 @@
 //!    waits; a guest driving its own executor (anything calling `block_on`)
 //!    would have a second call try to enter that executor from inside itself.
 //!  * `max_invocations` stops the driver admitting once it has served that
-//!    many, after which it drains and its store drops.
+//!    many, after which it drains and its store drops. A call that times out
+//!    or fails in the host mid-call retires the instance the same way: the
+//!    guest work cannot be cancelled from the host, so draining and dropping
+//!    the store is what ends it.
 //!
 //! The cost of sharing an instance is that a guest trap takes the whole store
 //! with it, so every call in flight on that instance fails rather than just
@@ -74,6 +77,9 @@ pub(crate) enum InstanceJob {
 struct LinkedTask {
     instance: Instance,
     job: Box<LinkedJob>,
+    /// Set to retire this task's instance when the call ends in a way that
+    /// leaves guest state indeterminate.
+    retired: Arc<AtomicBool>,
     /// Frees this call's slot when the task ends, however it ends.
     _in_flight: InFlightGuard,
 }
@@ -112,10 +118,23 @@ impl AccessorTask<SharedCtx> for LinkedTask {
         .await
         {
             Ok(Ok(())) => Ok(results),
-            Ok(Err(e)) => Err(e),
-            Err(e) => Err(wasmtime::format_err!(
-                "function call timed out after {call_timeout:?}: {e}"
-            )),
+            // A host error mid-call leaves the guest in an indeterminate
+            // state; a trap will also fault the whole driver, but retiring
+            // here covers the errors that do not.
+            Ok(Err(e)) => {
+                self.retired.store(true, Ordering::SeqCst);
+                Err(e)
+            }
+            // A guest subtask cannot be cancelled from the host, so the timed
+            // out work is still running on this store. Retiring the instance
+            // is what ends it: the driver stops admitting, drains, is reaped,
+            // and the store's teardown takes the stalled work with it.
+            Err(e) => {
+                self.retired.store(true, Ordering::SeqCst);
+                Err(wasmtime::format_err!(
+                    "function call timed out after {call_timeout:?}: {e}"
+                ))
+            }
         };
         // The caller may have gone; its call still ran to completion, because
         // a guest subtask cannot be cancelled from the host.
@@ -141,9 +160,11 @@ pub(crate) struct InstanceDriver {
     in_flight: Arc<AtomicUsize>,
     /// Calls admitted so far, against `max_invocations`.
     admitted: AtomicUsize,
-    /// Set once this instance has admitted its last call; it then drains and
-    /// the pool reaps it.
-    retired: AtomicBool,
+    /// Set once this instance must take no more calls — its invocation budget
+    /// is spent, or a call ended leaving guest state indeterminate. It then
+    /// drains and the pool reaps it. Shared with the instance's tasks so a
+    /// call can retire the instance it ran on.
+    retired: Arc<AtomicBool>,
     max_concurrency: usize,
     max_invocations: Option<usize>,
 }
@@ -160,6 +181,8 @@ impl InstanceDriver {
     ) -> Self {
         let (tx, mut rx) =
             tokio::sync::mpsc::channel::<(InstanceJob, InFlightGuard)>(max_concurrency.max(1));
+        let retired = Arc::new(AtomicBool::new(false));
+        let task_retired = Arc::clone(&retired);
 
         tokio::spawn(async move {
             let instance = match pre.instantiate_async(&mut store).await {
@@ -197,6 +220,7 @@ impl InstanceDriver {
                             InstanceJob::Linked(job) => accessor.spawn(LinkedTask {
                                 instance,
                                 job,
+                                retired: Arc::clone(&task_retired),
                                 _in_flight: guard,
                             }),
                         };
@@ -218,7 +242,7 @@ impl InstanceDriver {
             tx,
             in_flight: Arc::new(AtomicUsize::new(0)),
             admitted: AtomicUsize::new(0),
-            retired: AtomicBool::new(false),
+            retired,
             max_concurrency,
             max_invocations,
         }
@@ -259,15 +283,57 @@ impl InstanceDriver {
         }
         let guard = InFlightGuard(Arc::clone(&self.in_flight));
 
-        // Count the call against this instance's budget. The instance stops
-        // admitting at the limit and drains what it already took, rather than
-        // being dropped mid-call the way a checked-out store could be.
-        if let Some(limit) = self.max_invocations
-            && self.admitted.fetch_add(1, Ordering::SeqCst) + 1 >= limit
-        {
-            self.retired.store(true, Ordering::SeqCst);
+        // Count the call against this instance's budget. Admission past the
+        // limit is refused, not just noted: racing callers can all get here
+        // before any of them marks the instance retired, and `fetch_update`
+        // is what keeps the budget exact under that race. The instance then
+        // drains what it admitted rather than being dropped mid-call the way
+        // a checked-out store could be.
+        if let Some(limit) = self.max_invocations {
+            match self
+                .admitted
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                    (n < limit).then_some(n + 1)
+                }) {
+                Ok(previous) => {
+                    if previous + 1 >= limit {
+                        self.retired.store(true, Ordering::SeqCst);
+                    }
+                }
+                // Budget already spent by racing admissions. Dropping the
+                // guard frees the slot this call claimed.
+                Err(_) => {
+                    self.retired.store(true, Ordering::SeqCst);
+                    return None;
+                }
+            }
         }
         Some(guard)
+    }
+
+    /// A driver with no store behind it, for exercising admission alone. The
+    /// receiver stands in for the run loop: kept alive so the channel is open,
+    /// never drained.
+    #[cfg(test)]
+    fn stub(
+        max_concurrency: usize,
+        max_invocations: Option<usize>,
+    ) -> (
+        Self,
+        tokio::sync::mpsc::Receiver<(InstanceJob, InFlightGuard)>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::channel(max_concurrency.max(1));
+        (
+            Self {
+                tx,
+                in_flight: Arc::new(AtomicUsize::new(0)),
+                admitted: AtomicUsize::new(0),
+                retired: Arc::new(AtomicBool::new(false)),
+                max_concurrency,
+                max_invocations,
+            },
+            rx,
+        )
     }
 
     /// Hand a call to this instance. Returns the job again if the instance
@@ -283,5 +349,89 @@ impl InstanceDriver {
             tokio::sync::mpsc::error::TrySendError::Full((job, _))
             | tokio::sync::mpsc::error::TrySendError::Closed((job, _)) => job,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The invocation budget is exact: once `max_invocations` calls have been
+    /// admitted the instance refuses more — even though the refused caller had
+    /// already claimed (and must release) a concurrency slot — and stays
+    /// refused after every in-flight call completes.
+    #[test]
+    fn invocation_budget_is_exact() {
+        let (driver, _rx) = InstanceDriver::stub(8, Some(2));
+
+        let first = driver.try_admit().expect("first call is within budget");
+        let second = driver.try_admit().expect("second call spends the budget");
+        assert!(driver.is_retired(), "spending the budget retires");
+        assert!(
+            driver.try_admit().is_none(),
+            "a third admission must be refused, not merely noted"
+        );
+        assert_eq!(
+            driver.in_flight(),
+            2,
+            "the refused admission must have released its claimed slot"
+        );
+
+        drop(first);
+        drop(second);
+        assert!(
+            driver.try_admit().is_none(),
+            "a drained retired instance still admits nothing"
+        );
+    }
+
+    /// The budget refuses over-admission even when callers race: `fetch_update`
+    /// consumes the budget atomically, so exactly `max_invocations` admissions
+    /// can ever succeed no matter how the threads interleave. (The sequential
+    /// test above cannot distinguish this from bumping a counter after the
+    /// fact; this one can.)
+    #[test]
+    fn invocation_budget_holds_under_racing_admissions() {
+        let (driver, _rx) = InstanceDriver::stub(64, Some(16));
+        let driver = Arc::new(driver);
+
+        let admitted: usize = std::thread::scope(|scope| {
+            (0..8)
+                .map(|_| {
+                    let driver = Arc::clone(&driver);
+                    scope.spawn(move || {
+                        // Hold the guards so slots stay claimed: the budget,
+                        // not the concurrency cap, must be what refuses.
+                        let mut guards = Vec::new();
+                        while let Some(guard) = driver.try_admit() {
+                            guards.push(guard);
+                        }
+                        guards.len()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|handle| handle.join().expect("admission thread panicked"))
+                .sum()
+        });
+
+        assert_eq!(admitted, 16, "the budget must be exact under contention");
+    }
+
+    /// `max_concurrency` caps in-flight calls, and a completed call frees its
+    /// slot for the next.
+    #[test]
+    fn concurrency_slots_are_reclaimed() {
+        let (driver, _rx) = InstanceDriver::stub(2, None);
+
+        let a = driver.try_admit().expect("first slot");
+        let _b = driver.try_admit().expect("second slot");
+        assert!(driver.try_admit().is_none(), "at capacity");
+
+        drop(a);
+        assert!(
+            driver.try_admit().is_some(),
+            "a finished call's slot serves the next"
+        );
     }
 }
