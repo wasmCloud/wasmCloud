@@ -47,6 +47,11 @@ use wash_runtime::{
 const HTTP_IP_NAME_LOOKUP_WASM: &[u8] = include_bytes!("wasm/http_ip_name_lookup.wasm");
 const HTTP_IP_NAME_LOOKUP_P3_WASM: &[u8] = include_bytes!("wasm/http_ip_name_lookup_p3.wasm");
 
+const PREVIEWS: &[(&[u8], &str)] = &[
+    (HTTP_IP_NAME_LOOKUP_WASM, "p2"),
+    (HTTP_IP_NAME_LOOKUP_P3_WASM, "p3"),
+];
+
 /// How many calls a warm instance serves before it is retired. Kept below
 /// [`REQUESTS`] so every test crosses a retirement boundary.
 const MAX_INVOCATIONS: i32 = 2;
@@ -59,7 +64,7 @@ fn resolve_workload(
     host_header: &str,
     allow_ip_name_lookup: &[&str],
 ) -> WorkloadStartRequest {
-    let parsed: Vec<wash_runtime::host::allowed_names::AllowedName> = allow_ip_name_lookup
+    let parsed: Vec<wash_runtime::host::allowed_ip_name::AllowedIpName> = allow_ip_name_lookup
         .iter()
         .map(|s| s.parse().expect("test gave an invalid allowed-name entry"))
         .collect();
@@ -124,55 +129,30 @@ async fn assert_repeated(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_p2_lookup_denied_when_no_policy_declared() -> Result<()> {
-    let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
-    let req = resolve_workload(HTTP_IP_NAME_LOOKUP_WASM, "p2-lookup-deny", &[]);
-    host.workload_start(req).await?;
+async fn test_lookup_denied_when_no_policy_declared_on_p2_and_p3() -> Result<()> {
+    for (wasm, preview) in PREVIEWS {
+        let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
+        let host_header = format!("{preview}-lookup-deny");
+        let req = resolve_workload(wasm, &host_header, &[]);
+        host.workload_start(req).await?;
 
-    assert_repeated(
-        addr,
-        "p2-lookup-deny",
-        "/127.0.0.1",
-        403,
-        "denied by policy",
-    )
-    .await
+        assert_repeated(addr, &host_header, "/127.0.0.1", 403, "denied by policy").await?;
+    }
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_p2_lookup_allowed_by_star() -> Result<()> {
-    let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
-    let req = resolve_workload(HTTP_IP_NAME_LOOKUP_WASM, "p2-lookup-star", &["*"]);
-    host.workload_start(req).await?;
+async fn test_lookup_allowed_by_star_on_p2_and_p3() -> Result<()> {
+    for (wasm, preview) in PREVIEWS {
+        let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
+        let host_header = format!("{preview}-lookup-star");
+        let req = resolve_workload(wasm, &host_header, &["*"]);
+        host.workload_start(req).await?;
 
-    assert_repeated(addr, "p2-lookup-star", "/127.0.0.1", 200, "1 addresses").await?;
-    assert_repeated(addr, "p2-lookup-star", "/localhost", 200, "addresses").await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_p3_lookup_denied_when_no_policy_declared() -> Result<()> {
-    let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
-    let req = resolve_workload(HTTP_IP_NAME_LOOKUP_P3_WASM, "p3-lookup-deny", &[]);
-    host.workload_start(req).await?;
-
-    assert_repeated(
-        addr,
-        "p3-lookup-deny",
-        "/127.0.0.1",
-        403,
-        "denied by policy",
-    )
-    .await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_p3_lookup_allowed_by_star() -> Result<()> {
-    let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
-    let req = resolve_workload(HTTP_IP_NAME_LOOKUP_P3_WASM, "p3-lookup-star", &["*"]);
-    host.workload_start(req).await?;
-
-    assert_repeated(addr, "p3-lookup-star", "/127.0.0.1", 200, "1 addresses").await?;
-    assert_repeated(addr, "p3-lookup-star", "/localhost", 200, "addresses").await
+        assert_repeated(addr, &host_header, "/127.0.0.1", 200, "1 addresses").await?;
+        assert_repeated(addr, &host_header, "/localhost", 200, "addresses").await?;
+    }
+    Ok(())
 }
 
 /// A policy naming one address admits that address and refuses every other

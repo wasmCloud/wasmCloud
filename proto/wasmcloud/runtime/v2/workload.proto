@@ -115,7 +115,7 @@ message LocalResources {
   // (resolve-addresses). Accepts "*" for any name, a wildcard such as
   // "*.wasmcloud.io", an exact name, or a literal IP address.
   // Empty or absent denies every lookup with permanent-resolver-failure.
-  repeated string allow_ip_name_lookup = 7;
+  repeated string allowed_ip_name_lookups = 7;
 }
 
 message Volume {

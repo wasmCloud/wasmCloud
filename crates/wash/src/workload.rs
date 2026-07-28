@@ -32,7 +32,7 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use tracing::{trace, warn};
 use wash_runtime::host::allowed_hosts::AllowedHost;
-use wash_runtime::host::allowed_names::AllowedName;
+use wash_runtime::host::allowed_ip_name::AllowedIpName;
 
 use crate::config::{Config, ConfigSource, DevComponent, EnvironmentLayer, SecretSource};
 
@@ -53,7 +53,7 @@ pub struct ResolvedWorkload {
     /// Names the component may resolve through
     /// `wasi:sockets/ip-name-lookup`. Empty denies every lookup, which is
     /// what an omitted `allowIpNameLookup` resolves to.
-    pub allow_ip_name_lookup: Vec<AllowedName>,
+    pub allow_ip_name_lookup: Vec<AllowedIpName>,
 }
 
 /// Resolves the workload section of a [`Config`], pulling in named entries
@@ -1009,7 +1009,7 @@ mod tests {
         let resolved =
             resolve_component_workload(&base, &component, &Config::default(), project.path(), None)
                 .unwrap();
-        assert_eq!(resolved.allow_ip_name_lookup, vec![AllowedName::Any]);
+        assert_eq!(resolved.allow_ip_name_lookup, vec![AllowedIpName::Any]);
 
         // A narrower list replaces the workload's, rather than adding to it.
         let component = DevComponent {
