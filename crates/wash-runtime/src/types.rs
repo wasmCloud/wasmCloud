@@ -18,7 +18,7 @@ use bytes::Bytes;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::host::allowed_hosts::AllowedHost;
-use crate::host::allowed_names::AllowedName;
+use crate::host::allowed_ip_name::AllowedIpName;
 use crate::wit::WitInterface;
 
 /// Represents a deployable workload containing one or more WebAssembly components.
@@ -102,11 +102,11 @@ pub struct LocalResources {
     /// `wasi:sockets/ip-name-lookup` (`resolve-addresses`).
     /// **Empty = deny every lookup**, reported to the guest as
     /// `permanent-resolver-failure`. See
-    /// [`crate::host::allowed_names`] for the accepted entry forms; pass
-    /// an explicit `[AllowedName::Any]` to resolve any name. Strings from
+    /// [`crate::host::allowed_ip_name`] for the accepted entry forms; pass
+    /// an explicit `[AllowedIpName::Any]` to resolve any name. Strings from
     /// the wire (proto / wash YAML) are parsed at conversion time, so the
     /// resolve path matches against the typed enum directly.
-    pub allow_ip_name_lookup: Arc<[AllowedName]>,
+    pub allow_ip_name_lookup: Arc<[AllowedIpName]>,
 }
 
 impl Default for LocalResources {

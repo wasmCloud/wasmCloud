@@ -10,7 +10,7 @@ impl instance_network::Host for WasiSocketsCtxView<'_> {
     fn instance_network(&mut self) -> wasmtime::Result<Resource<UpstreamNetwork>> {
         let network = Network {
             socket_addr_check: self.ctx.socket_addr_check.clone(),
-            allowed_names: Arc::clone(&self.ctx.allowed_names),
+            allowed_ip_names: Arc::clone(&self.ctx.allowed_ip_names),
         };
         let network = self.table.push(network)?;
         Ok(Resource::new_own(network.rep()))

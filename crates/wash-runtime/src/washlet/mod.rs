@@ -636,7 +636,7 @@ impl TryFrom<types::v2::LocalResources> for crate::types::LocalResources {
             allowed_hosts: parse_policy_entries(&lr.allowed_hosts, "allowed_hosts")?,
             environment: lr.environment,
             allow_ip_name_lookup: parse_policy_entries(
-                &lr.allow_ip_name_lookup,
+                &lr.allowed_ip_name_lookups,
                 "allow_ip_name_lookup",
             )?,
         })
@@ -777,7 +777,7 @@ mod tests {
 
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
-    use crate::host::allowed_names::AllowedName;
+    use crate::host::allowed_ip_name::AllowedIpName;
 
     #[test]
     fn try_from_v2_local_resources_parses_allowed_hosts() {
@@ -795,15 +795,15 @@ mod tests {
                 "api.example.com:8443".to_string(),
                 "https://api.example.com".to_string(),
             ],
-            allow_ip_name_lookup: vec!["*.example.com".to_string(), "127.0.0.1".to_string()],
+            allowed_ip_name_lookups: vec!["*.example.com".to_string(), "127.0.0.1".to_string()],
         };
         let lr = crate::types::LocalResources::try_from(proto).expect("conversion should succeed");
         assert_eq!(lr.allow_ip_name_lookup.len(), 2);
         assert!(matches!(
             lr.allow_ip_name_lookup[0],
-            AllowedName::SuffixWildcard { .. }
+            AllowedIpName::SuffixWildcard { .. }
         ));
-        assert!(matches!(lr.allow_ip_name_lookup[1], AllowedName::Ip(_)));
+        assert!(matches!(lr.allow_ip_name_lookup[1], AllowedIpName::Ip(_)));
         assert_eq!(lr.allowed_hosts.len(), 4);
         assert!(matches!(lr.allowed_hosts[0], AllowedHost::Any));
         assert!(matches!(
@@ -828,7 +828,7 @@ mod tests {
             environment: Default::default(),
             volume_mounts: vec![],
             allowed_hosts: vec!["*com".to_string()],
-            allow_ip_name_lookup: vec![],
+            allowed_ip_name_lookups: vec![],
         };
         let err = crate::types::LocalResources::try_from(proto)
             .expect_err("conversion should reject ambiguous wildcard");
@@ -856,7 +856,7 @@ mod tests {
                 "https://api.example.com/v1".to_string(), // has path
                 "example.com:notaport".to_string(),       // bad port
             ],
-            allow_ip_name_lookup: vec![],
+            allowed_ip_name_lookups: vec![],
         };
         let err = crate::types::LocalResources::try_from(proto)
             .expect_err("conversion should reject all bad entries");

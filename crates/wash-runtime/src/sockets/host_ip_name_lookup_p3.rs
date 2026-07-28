@@ -20,7 +20,10 @@ impl<U> HostWithStore<U> for WasiSockets {
             return Ok(Err(ErrorCode::InvalidArgument));
         };
         let allowed = store.with(|mut view| {
-            crate::host::allowed_names::check_allowed_names(&view.get().ctx.allowed_names, &host)
+            crate::host::allowed_ip_name::check_allowed_ip_name(
+                &view.get().ctx.allowed_ip_names,
+                &host,
+            )
         });
         if !allowed {
             return Ok(Err(ErrorCode::PermanentResolverFailure));

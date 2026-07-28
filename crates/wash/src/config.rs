@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use wash_runtime::component_source::ComponentSource;
 use wash_runtime::host::allowed_hosts::AllowedHost;
-use wash_runtime::host::allowed_names::AllowedName;
+use wash_runtime::host::allowed_ip_name::AllowedIpName;
 use wash_runtime::oci::OciPullPolicy;
 use wash_runtime::wit::WitInterface;
 
@@ -241,7 +241,7 @@ pub struct WorkloadConfig {
     pub allowed_hosts: Vec<AllowedHost>,
     /// Names components may resolve through
     /// `wasi:sockets/ip-name-lookup` (`resolve-addresses`). Each entry
-    /// parses into a typed [`AllowedName`]; YAML/JSON callers write plain
+    /// parses into a typed [`AllowedIpName`]; YAML/JSON callers write plain
     /// strings such as `"*"`, `"*.example.com"`, `"example.com"`, or a
     /// literal IP address.
     ///
@@ -250,7 +250,7 @@ pub struct WorkloadConfig {
     /// declared none.
     #[serde(default)]
     #[builder(default)]
-    pub allow_ip_name_lookup: Vec<AllowedName>,
+    pub allow_ip_name_lookup: Vec<AllowedIpName>,
 }
 
 /// One layer of environment variables.
@@ -428,7 +428,7 @@ pub struct DevComponent {
     /// `workload.allowIpNameLookup` for this component (an explicit `[]`
     /// denies every lookup); when omitted the workload list applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allow_ip_name_lookup: Option<Vec<AllowedName>>,
+    pub allow_ip_name_lookup: Option<Vec<AllowedIpName>>,
     /// How many instances of this component to keep warm between calls.
     ///
     /// Unset (or `0`) keeps the default: every call runs in a fresh instance
