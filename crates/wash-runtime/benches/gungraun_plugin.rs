@@ -75,7 +75,7 @@ use wash_runtime::{
     engine::workload::{UnresolvedWorkload, WorkloadComponent},
     host::{
         Host, HostApi, HostBuilder,
-        http::{DynamicRouter, HttpServer},
+        http::{DynamicRouter, Ingress},
     },
     plugin::component_host::ComponentHostPlugin,
     plugin::{HostPlugin, WitInterfaces},
@@ -257,15 +257,15 @@ fn setup_bare_host(call: Call) -> Warm {
     let rt = Runtime::new().expect("tokio runtime");
     let (host, addr, client) = rt.block_on(async {
         let engine = Engine::builder().build().expect("engine");
-        let http_server = HttpServer::new(DynamicRouter::default(), "127.0.0.1:0".parse().unwrap())
+        let ingress = Ingress::new(DynamicRouter::default(), "127.0.0.1:0".parse().unwrap())
             .await
             .unwrap();
-        let addr = http_server.addr();
+        let addr = ingress.addr();
         let plugin = ComponentHostPlugin::new(PLUGIN_ID, KV_PLUGIN_WASM, engine.clone())
             .expect("failed to build host component plugin");
         let host = HostBuilder::new()
             .with_engine(engine)
-            .with_http_handler(Arc::new(http_server))
+            .with_http_handler(Arc::new(ingress))
             .with_plugin(Arc::new(plugin))
             .unwrap()
             .build()

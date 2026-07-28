@@ -41,7 +41,7 @@ use tokio::runtime::Runtime;
 use wash_runtime::{
     host::{
         HostApi, HostBuilder,
-        http::{DevRouter, HttpServer},
+        http::{DevRouter, Ingress},
     },
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
 };
@@ -56,12 +56,12 @@ struct WarmHost {
 }
 
 async fn start_warm_host(flavor: Flavor) -> anyhow::Result<WarmHost> {
-    let http_server = HttpServer::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
-    let addr = http_server.addr();
+    let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let addr = ingress.addr();
 
     let host = HostBuilder::new()
         .with_engine(engine())
-        .with_http_handler(Arc::new(http_server))
+        .with_http_handler(Arc::new(ingress))
         .build()?;
 
     let host = host.start().await?;

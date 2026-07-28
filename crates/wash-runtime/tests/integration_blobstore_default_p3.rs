@@ -28,7 +28,7 @@ use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        http::{DevRouter, HttpServer},
+        http::{DevRouter, Ingress},
     },
     plugin::wasi_blobstore::{InMemoryProvider, MultiplexedAsyncBlobstore},
     types::{Component, LocalResources, Workload, WorkloadStartRequest, WorkloadState},
@@ -64,11 +64,11 @@ fn default_blob_iface() -> WitInterface {
 async fn p3_guest_plain_blobstore_uses_default_backend() -> Result<()> {
     // --- host with the async multiplexed blobstore plugin + in-memory provider ---
     let engine = Engine::builder().build()?;
-    let http_server = HttpServer::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
-    let addr = http_server.addr();
+    let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let addr = ingress.addr();
     let host = HostBuilder::new()
         .with_engine(engine)
-        .with_http_handler(Arc::new(http_server))
+        .with_http_handler(Arc::new(ingress))
         .with_plugin(Arc::new(
             MultiplexedAsyncBlobstore::new().with_provider(Arc::new(InMemoryProvider)),
         ))?

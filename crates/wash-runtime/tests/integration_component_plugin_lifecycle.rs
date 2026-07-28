@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 use wash_runtime::engine::Engine;
 use wash_runtime::engine::workload::{UnresolvedWorkload, WorkloadComponent};
-use wash_runtime::host::http::{DevRouter, DynamicRouter, HttpServer};
+use wash_runtime::host::http::{DevRouter, DynamicRouter, Ingress};
 use wash_runtime::host::{HostApi, HostBuilder};
 use wash_runtime::plugin::component_host::ComponentHostPlugin;
 use wash_runtime::plugin::{HostPlugin, WitInterfaces};
@@ -865,8 +865,8 @@ async fn start_host_keeping_plugin_router(
     router: impl wash_runtime::host::http::Router,
 ) -> Result<(std::net::SocketAddr, impl HostApi, Arc<ComponentHostPlugin>)> {
     let engine = Engine::builder().build()?;
-    let http_server = HttpServer::new(router, addr.parse()?).await?;
-    let bound_addr = http_server.addr();
+    let ingress = Ingress::new(router, addr.parse()?).await?;
+    let bound_addr = ingress.addr();
     let plugin = Arc::new(ComponentHostPlugin::new(
         PLUGIN_ID,
         KV_PLUGIN_WASM,
@@ -874,7 +874,7 @@ async fn start_host_keeping_plugin_router(
     )?);
     let host = HostBuilder::new()
         .with_engine(engine)
-        .with_http_handler(Arc::new(http_server))
+        .with_http_handler(Arc::new(ingress))
         .with_plugin(Arc::clone(&plugin) as Arc<dyn HostPlugin>)?
         .build()?;
     let host = host.start().await.context("failed to start host")?;
@@ -889,13 +889,13 @@ async fn start_host_with_lifecycle_timeout(
     timeout: Duration,
 ) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let engine = Engine::builder().build()?;
-    let http_server = HttpServer::new(DynamicRouter::default(), addr.parse()?).await?;
-    let bound_addr = http_server.addr();
+    let ingress = Ingress::new(DynamicRouter::default(), addr.parse()?).await?;
+    let bound_addr = ingress.addr();
     let plugin = ComponentHostPlugin::new(PLUGIN_ID, KV_PLUGIN_WASM, engine.clone())?
         .with_lifecycle_call_timeout(timeout);
     let host = HostBuilder::new()
         .with_engine(engine)
-        .with_http_handler(Arc::new(http_server))
+        .with_http_handler(Arc::new(ingress))
         .with_plugin(Arc::new(plugin) as Arc<dyn HostPlugin>)?
         .build()?;
     let host = host.start().await.context("failed to start host")?;

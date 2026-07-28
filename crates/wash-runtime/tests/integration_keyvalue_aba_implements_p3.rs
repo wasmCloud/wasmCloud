@@ -33,7 +33,7 @@ use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        http::{DevRouter, HttpServer},
+        http::{DevRouter, Ingress},
     },
     plugin::wasi_keyvalue::{InMemoryProvider, MultiplexedAsyncKeyValue},
     types::{Component, LocalResources, Workload, WorkloadStartRequest, WorkloadState},
@@ -62,11 +62,11 @@ fn kv_store_iface(name: &str) -> WitInterface {
 #[tokio::test]
 async fn p3_guest_cas_swap_detects_aba() -> Result<()> {
     let engine = Engine::builder().build()?;
-    let http_server = HttpServer::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
-    let addr = http_server.addr();
+    let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let addr = ingress.addr();
     let host = HostBuilder::new()
         .with_engine(engine)
-        .with_http_handler(Arc::new(http_server))
+        .with_http_handler(Arc::new(ingress))
         .with_plugin(Arc::new(
             MultiplexedAsyncKeyValue::new().with_provider(Arc::new(InMemoryProvider)),
         ))?

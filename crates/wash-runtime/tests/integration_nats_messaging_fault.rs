@@ -36,7 +36,7 @@ use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        http::{DevRouter, HttpServer},
+        http::{DevRouter, Ingress},
     },
     plugin::wasmcloud_messaging::NatsMessaging,
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
@@ -195,12 +195,12 @@ async fn setup(latency: Duration) -> Result<TestHarness> {
     );
 
     let engine = Engine::builder().build()?;
-    let http_plugin = HttpServer::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
     let messaging_plugin = NatsMessaging::new(plugin_client);
 
     let host = HostBuilder::new()
         .with_engine(engine)
-        .with_http_handler(Arc::new(http_plugin))
+        .with_http_handler(Arc::new(ingress))
         .with_plugin(Arc::new(messaging_plugin))?
         .build()?;
     let host = host.start().await.context("Failed to start host")?;

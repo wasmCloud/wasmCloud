@@ -200,22 +200,22 @@ impl CliCommand for DevCommand {
             if let Some(ca) = dev_config.tls_ca_path.as_deref() {
                 tls = tls.with_ca(ca);
             }
-            let http_server = wash_runtime::host::http::HttpServer::new_with_tls(
+            let ingress = wash_runtime::host::http::Ingress::new_with_tls(
                 http_handler,
                 http_addr.parse()?,
                 tls,
             )
             .await?;
 
-            host_builder = host_builder.with_http_handler(Arc::new(http_server));
+            host_builder = host_builder.with_http_handler(Arc::new(ingress));
 
             debug!("TLS configured - server will use HTTPS");
             "https"
         } else {
             debug!("No TLS configuration provided - server will use HTTP");
-            let http_server =
-                wash_runtime::host::http::HttpServer::new(http_handler, http_addr.parse()?).await?;
-            host_builder = host_builder.with_http_handler(Arc::new(http_server));
+            let ingress =
+                wash_runtime::host::http::Ingress::new(http_handler, http_addr.parse()?).await?;
+            host_builder = host_builder.with_http_handler(Arc::new(ingress));
             "http"
         };
 

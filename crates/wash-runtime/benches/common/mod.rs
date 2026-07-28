@@ -10,7 +10,7 @@ use wash_runtime::{
     engine::Engine,
     host::{
         Host, HostApi, HostBuilder,
-        http::{DevRouter, HttpServer},
+        http::{DevRouter, Ingress},
     },
     types::{
         Component, LocalResources, Service, Workload, WorkloadStartRequest, WorkloadState,
@@ -112,12 +112,12 @@ impl BenchHost {
 pub async fn start_host_and_workload(
     req_for: impl FnOnce(&str) -> Workload,
 ) -> anyhow::Result<BenchHost> {
-    let http_server = HttpServer::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
-    let addr = http_server.addr();
+    let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let addr = ingress.addr();
 
     let host = HostBuilder::new()
         .with_engine(engine())
-        .with_http_handler(Arc::new(http_server))
+        .with_http_handler(Arc::new(ingress))
         .build()?;
     let host = host.start().await?;
 

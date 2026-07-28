@@ -23,7 +23,7 @@ use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        http::{DevRouter, HttpServer},
+        http::{DevRouter, Ingress},
     },
     plugin::wasi_webgpu::{WebGpu, WebGpuBackend},
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
@@ -44,13 +44,13 @@ async fn test_http_webgpu_integration() -> Result<()> {
     let engine = Engine::builder().build()?;
 
     // Create HTTP server plugin on a dynamically allocated port
-    let http_plugin = HttpServer::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
-    let addr = http_plugin.addr();
+    let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let addr = ingress.addr();
 
     // Build host with plugins following the existing pattern from lib.rs test
     let host = HostBuilder::new()
         .with_engine(engine.clone())
-        .with_http_handler(Arc::new(http_plugin))
+        .with_http_handler(Arc::new(ingress))
         .with_plugin(Arc::new(WebGpu::new(WebGpuBackend::Noop)))?
         .build()?;
 

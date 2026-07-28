@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use wash_runtime::{
     engine::Engine,
     host::{HostBuilder, HostApi,
-      http::{HttpServer, DynamicRouter},
+      http::{Ingress, DynamicRouter},
   },
     plugin::{
         wasi_config::DynamicConfig,
@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Configure plugins
     let http_router = DynamicRouter::default();
-    let http_handler = HttpServer::new(http_router, "127.0.0.1:8080".parse()?).await?;
+    let ingress = Ingress::new(http_router, "127.0.0.1:8080".parse()?).await?;
     let wasi_config_plugin = DynamicConfig::default();
 
     // Build and start the host
@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
         .with_engine(engine)
         // if a handler is not provided, a 'deny all' implementation
         // will be used for outgoing http requests
-        .with_http_handler(Arc::new(http_handler))
+        .with_http_handler(Arc::new(ingress))
         .with_plugin(Arc::new(wasi_config_plugin))?
         .build()?;
 
