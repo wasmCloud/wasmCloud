@@ -72,8 +72,8 @@ impl LifecycleGuest for Component {
         // operator sourced from `secretFrom`.
         let mut config = BTreeMap::new();
         for binding in &workload.interfaces {
-            for entry in &binding.config {
-                config.insert(entry.key.clone(), entry.value.clone());
+            for (key, value) in &binding.config {
+                config.insert(key.clone(), value.clone());
             }
         }
         BINDS.lock().unwrap().insert(workload.id, config);
