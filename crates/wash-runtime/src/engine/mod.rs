@@ -262,6 +262,34 @@ impl std::fmt::Debug for CacheValue {
     }
 }
 
+/// A cached compile failure, shared by every caller that raced for the same key.
+///
+/// `moka` hands a failed `try_get_with` back as `Arc<anyhow::Error>`, and an
+/// `Arc` is not `Into<anyhow::Error>` — so `anyhow!(arc)` takes the *adhoc*
+/// branch and builds a fresh error whose whole content is the `Arc`'s `Display`.
+/// `anyhow::Error`'s `Display` prints only its outermost context, so every cause
+/// under it is dropped: a component that fails to compile reports
+/// "failed to compile component from bytes" and never the wasmtime diagnostic
+/// saying *why*, which is the only part worth reading.
+///
+/// Wrapping instead of reformatting keeps the chain walkable — `source()` steps
+/// straight into the original error, since `anyhow::Error` derefs to
+/// `dyn StdError`.
+#[derive(Debug)]
+struct SharedError(Arc<anyhow::Error>);
+
+impl std::fmt::Display for SharedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&*self.0, f)
+    }
+}
+
+impl std::error::Error for SharedError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
+
 impl Engine {
     /// Creates a new [`EngineBuilder`] for configuring an engine.
     ///
@@ -496,7 +524,7 @@ impl Engine {
                             .map(CacheValue)
                     })
                     .map_err(|e: Arc<anyhow::Error>| {
-                        anyhow::anyhow!(e).context("compilation cache error")
+                        anyhow::Error::new(SharedError(e)).context("compilation cache error")
                     })
                     .map(|v| v.0)
             }
@@ -1140,5 +1168,33 @@ mod tests {
             Ok(WasmProposal::ComponentModelAsync)
         );
         assert!("nonsense".parse::<WasmProposal>().is_err());
+    }
+
+    // A compile failure that goes through the cache reports everything the
+    // uncached path reports. `try_get_with` returns its error as
+    // `Arc<anyhow::Error>`, which is easy to collapse into its outermost message
+    // alone — leaving logs that say a component failed to compile and never why.
+    #[test]
+    fn cached_compile_failure_keeps_the_cause_chain() {
+        let engine = Engine::builder().build().expect("engine should build");
+        let garbage = b"definitely not a wasm component";
+
+        // `Component` is not `Debug`, so `expect_err` is unavailable here.
+        let Err(uncached) = engine.load_component_bytes(garbage, None::<&str>) else {
+            panic!("garbage bytes should not compile");
+        };
+        let Err(cached) = engine.load_component_bytes(garbage, Some("sha256:not-a-real-digest"))
+        else {
+            panic!("garbage bytes should not compile");
+        };
+
+        let kept: Vec<String> = cached.chain().map(|c| c.to_string()).collect();
+        for cause in uncached.chain() {
+            let cause = cause.to_string();
+            assert!(
+                kept.contains(&cause),
+                "cached path dropped {cause:?}; it kept only {kept:?}"
+            );
+        }
     }
 }
