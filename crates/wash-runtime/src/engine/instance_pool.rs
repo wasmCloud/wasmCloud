@@ -38,7 +38,7 @@
 //!    that call's work. A guest that spawns background work and relies on it
 //!    being torn down with the call should not be pooled.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
@@ -59,7 +59,7 @@ use crate::types::Component;
 /// would quietly acquire state that outlives a call, just because something
 /// else in the workload imports it.
 pub(crate) fn poolable(
-    components: &HashMap<Arc<str>, WorkloadComponent>,
+    components: &BTreeMap<Arc<str>, WorkloadComponent>,
     component_id: &str,
     linked: &HashSet<Arc<str>>,
 ) -> Option<Arc<InstancePool>> {

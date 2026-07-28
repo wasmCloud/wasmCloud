@@ -17,7 +17,7 @@
 //! assemble the store (pre-instantiating the linked components). See
 //! [`EphemeralLinkedCall`] for how the ephemeral path is captured at link time.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -138,7 +138,7 @@ pub(crate) fn component_ctx_template_from_metadata_with_tls(
 pub(crate) struct EphemeralLinkedCall {
     pub(crate) engine: wasmtime::Engine,
     pub(crate) http_handler: Arc<dyn crate::host::http::HostHandler>,
-    pub(crate) components: Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>>,
+    pub(crate) components: Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
     pub(crate) active_component_id: Arc<str>,
     pub(crate) linked_component_ids: Vec<Arc<str>>,
     #[cfg(feature = "wasi-tls")]

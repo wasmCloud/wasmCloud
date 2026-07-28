@@ -36,12 +36,6 @@ interface workload-lifecycle {
     /// `identity.get-component-id`.
     type component-id = string;
 
-    /// One key/value configuration entry from the workload manifest.
-    record config-entry {
-        key: string,
-        value: string,
-    }
-
     /// Semantic version of an interface instance (e.g. `0.2.0-draft`).
     record version {
         major: u64,
@@ -78,8 +72,9 @@ interface workload-lifecycle {
         /// an identity — it carries no uniqueness requirement, and a binding may
         /// declare either name, both, or neither.
         external-id: option<string>,
-        /// Interface-level configuration from the workload manifest.
-        config: list<config-entry>,
+        /// Interface-level configuration from the workload manifest, as
+        /// key/value pairs sorted by key.
+        config: list<tuple<string, string>>,
     }
 
     /// Identity and configuration of a workload binding to this plugin.
