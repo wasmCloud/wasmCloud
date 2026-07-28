@@ -5,6 +5,10 @@ interface compute {
     /// fixture exactly so the dynamic linker wires the import of
     /// `wasmcloud:ephemeral-test/compute` to the callee's export.
     run: async func(n: u32) -> u32;
+
+    /// Calls the callee instance behind this import has served. See the callee
+    /// fixture's copy for what the number means.
+    calls: async func() -> u32;
 }
 
 world ephemeral-caller {

@@ -2,7 +2,6 @@ package e2e
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -36,23 +35,30 @@ import (
 // api/runtime/v1alpha1/workload_types_test.go, and envtest (`make test`)
 // validates the CEL rules against a live apiserver.
 //
-// To run this spec, set IMPLEMENTS_E2E_IMAGE to an OCI ref the cluster can pull
-// for a component that exports wasi:http/incoming-handler and imports
-// wasi:keyvalue/store twice under the labels `team-a` and `team-b` (build from
-// crates/wash-runtime/tests/fixtures/keyvalue-implements). Excluded from
-// `make test` (which skips ./test/e2e); runs in the dedicated `make test-e2e`
-// job, which sets IMPLEMENTS_E2E_IMAGE, and skips when that's unset.
+// The component under test is the keyvalue-implements fixture
+// (crates/wash-runtime/tests/fixtures/keyvalue-implements): it exports
+// wasi:http/incoming-handler and imports wasi:keyvalue/store twice under the
+// labels `team-a` and `team-b`. Like every e2e fixture it is built and served
+// from the in-cluster registry (make e2e-images), so this spec runs only when
+// that flow is enabled (the all-features leg — also the only host with
+// `(implements ..)` support) and self-skips otherwise. Excluded from `make test`
+// (which skips ./test/e2e); runs in the dedicated `make test-e2e` job.
 var _ = Describe("Implements Named Host Interfaces", Ordered, func() {
 	const workloadName = "keyvalue-implements"
 
 	var componentImage string
 
 	BeforeAll(func() {
-		componentImage = os.Getenv("IMPLEMENTS_E2E_IMAGE")
-		if componentImage == "" {
-			Skip("IMPLEMENTS_E2E_IMAGE not set; skipping implements e2e " +
-				"(see runtime-operator/test/e2e/implements_test.go for setup)")
+		// The keyvalue-implements fixture is built and served from the in-cluster
+		// registry (make e2e-images), like every other e2e fixture. But unlike the
+		// others it needs a feature-enabled host to RUN (`(implements ..)`
+		// multiplexing), so it runs only when the registry flow is on AND the
+		// fixture host is an all-features build — i.e. the all-features leg.
+		if !inClusterRegistry || !defaultHostAllFeatures {
+			Skip("skipping implements e2e (needs the in-cluster registry and an " +
+				"all-features fixture host)")
 		}
+		componentImage = registryRef("keyvalue-implements")
 
 		// Scale a hostgroup pod up and wait for a Host CR so workload placement
 		// is independent of spec ordering (see messaging_test.go for the
@@ -133,6 +139,10 @@ spec:
   replicas: 1
   template:
     spec:
+      # Pin to the insecure default hostgroup; the registry hostgroup stays on
+      # HTTPS and can't pull this fixture from the in-cluster (plain-HTTP) registry.
+      hostSelector:
+        hostgroup: default
       hostInterfaces:
         - namespace: wasi
           package: http

@@ -71,6 +71,26 @@ pub struct SharedCtx {
     /// Store-owned linked-component instances, keyed by component id.
     /// Dropping the store reclaims the instances without external cleanup.
     pub exporter_instances: HashMap<Arc<str>, Instance>,
+    /// Present only on a *host component plugin* store: the registry of real
+    /// resources it has handed out across the bridge. Its presence also marks
+    /// this store as the plugin (real) side when relocating `resource` handles —
+    /// a caller store leaves it `None` and holds opaque proxies instead. See
+    /// [`crate::engine::store::resource_bridge`].
+    pub resource_registry: Option<crate::engine::store::resource_bridge::ResourceRegistry>,
+}
+
+/// The identity of whoever is invoking a host component plugin, used to
+/// partition state per caller.
+///
+/// `component_id` is `None` when there is no component behind the call: a
+/// `wasmcloud:host/workload-lifecycle` hook is delivered by the host about a
+/// whole workload, not on behalf of any one of its items. Encoding that as a
+/// real id — an empty string, say — would make the host invent a component that
+/// does not exist, and would collide with a genuinely unresolvable caller.
+#[derive(Clone, Debug)]
+pub struct CallerIdentity {
+    pub workload_id: Arc<str>,
+    pub component_id: Option<Arc<str>>,
 }
 
 impl SharedCtx {
@@ -80,7 +100,15 @@ impl SharedCtx {
             table: ResourceTable::new(),
             contexts: Default::default(),
             exporter_instances: Default::default(),
+            resource_registry: None,
         }
+    }
+
+    /// Marks this store as a host-component-plugin store, enabling it to keep
+    /// real resources alive as it hands proxies across the bridge.
+    pub fn with_resource_registry(mut self) -> Self {
+        self.resource_registry = Some(Default::default());
+        self
     }
 
     pub fn set_active_ctx(&mut self, id: &Arc<str>) -> wasmtime::Result<()> {
@@ -250,6 +278,21 @@ impl Ctx {
     pub fn get_plugin<T: HostPlugin + 'static>(&self, plugin_id: &str) -> Arc<T> {
         self.try_get_plugin::<T>(plugin_id)
             .expect("plugin not found")
+    }
+
+    /// Get a reference to a plugin by its string ID and downcast to the expected type
+    ///
+    /// Unlike [`Ctx::get_plugin`], this borrows the plugin from `self` instead of
+    /// cloning the `Arc`, allowing callers to return references tied to `&self`.
+    ///
+    /// **Panics** if the plugin is not found or does not match the expected type.
+    #[allow(clippy::expect_used)] // Infallible accessor by contract, mirrors `get_plugin`
+    pub fn get_plugin_ref<T: HostPlugin + 'static>(&self, plugin_id: &str) -> &T {
+        self.plugins
+            .get(plugin_id)
+            .expect("plugin not found")
+            .downcast_ref::<T>()
+            .expect("failed to downcast plugin to expected type")
     }
 
     /// Get a plugin by its string ID and downcast to the expected type, if it exists

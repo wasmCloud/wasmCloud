@@ -7,7 +7,7 @@
 //! mounts once and cache them on its [`WorkloadMetadata`], so request-path
 //! store creation never re-canonicalizes.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -75,7 +75,7 @@ pub(crate) async fn resolve_volume_mounts(
 /// mounts are then written back under a single write lock. Components whose
 /// mounts are already resolved are skipped, so this is cheap to call repeatedly.
 pub(crate) async fn resolve_component_volume_mounts_in_map(
-    components: &Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>>,
+    components: &Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
     component_ids: &[Arc<str>],
 ) -> anyhow::Result<()> {
     let pending = {

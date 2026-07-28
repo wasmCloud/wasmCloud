@@ -19,14 +19,17 @@
 //! ```
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     net::SocketAddr,
     path::Path,
     sync::Arc,
     time::Duration,
 };
 
+use arc_swap::ArcSwap;
+
 use crate::host::allowed_hosts::AllowedHost;
+use crate::host::trigger_service::{BrokerMessage, MessagingJob};
 use crate::{engine::ctx::SharedCtx, observability::Meters};
 use crate::{engine::workload::ResolvedWorkload, observability::FuelConsumptionMeter};
 use anyhow::{Context, ensure};
@@ -41,7 +44,7 @@ use opentelemetry_semantic_conventions::attribute::{
     HTTP_REQUEST_METHOD, HTTP_RESPONSE_BODY_SIZE, HTTP_RESPONSE_STATUS_CODE, OTEL_STATUS_CODE,
     RPC_GRPC_STATUS_CODE, SERVER_ADDRESS, SERVER_PORT, URL_FULL, URL_PATH,
 };
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 use tracing::{Instrument, debug, error, info, instrument, warn};
 use wasmtime::Store;
@@ -75,6 +78,41 @@ fn is_valid_hostname(host: &str) -> bool {
                 && !label.starts_with('-')
                 && !label.ends_with('-')
         })
+}
+
+/// Collect the ingress hostnames a workload's HTTP handler serves on: the
+/// `host` config plus any comma-separated `host-aliases`, keeping only entries
+/// that are valid RFC 1123 hostnames.
+///
+/// Unlike [`DynamicRouter::on_workload_resolved`], which fails a component
+/// workload that declares no valid host, this is lenient: it returns whatever
+/// valid hostnames exist (possibly none). Service workloads call it from their
+/// startup path, where a missing host must not abort the service. It simply
+/// won't be reachable via a hostname router (matching how the host-agnostic
+/// `DevRouter` ignores hostnames entirely).
+pub(crate) fn http_ingress_hostnames(interfaces: &[crate::wit::WitInterface]) -> Vec<String> {
+    let Some(http_iface) = interfaces
+        .iter()
+        .find(|iface| iface.is_incoming_http_handler())
+    else {
+        return Vec::new();
+    };
+
+    let mut hosts = Vec::new();
+    if let Some(primary) = http_iface.config.get("host")
+        && is_valid_hostname(primary)
+    {
+        hosts.push(primary.clone());
+    }
+    if let Some(aliases) = http_iface.config.get("host-aliases") {
+        hosts.extend(
+            aliases
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty() && is_valid_hostname(s)),
+        );
+    }
+    hosts
 }
 
 /// Why a request could not be routed to a workload.
@@ -137,6 +175,19 @@ pub trait Router: Send + Sync + 'static {
     /// Unregister a workload that is being stopped
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()>;
 
+    /// Register a workload whose long-lived service handles HTTP ingress (the
+    /// service exports `wasi:http/handler`). `hostnames` are the ingress
+    /// hostnames the service serves on (see [`http_ingress_hostnames`]); a
+    /// hostname-keyed router registers the workload under each so requests
+    /// resolve to it. Default: no-op.
+    async fn on_service_http_resolved(
+        &self,
+        _workload_id: &str,
+        _hostnames: &[String],
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// Determine if the outgoing request is allowed
     fn allow_outgoing_request(
         &self,
@@ -170,10 +221,75 @@ pub trait Router: Send + Sync + 'static {
 /// Router that routes requests by 'Host' header, configured via WitInterface config
 #[derive(Default)]
 pub struct DynamicRouter {
-    host_to_workload: tokio::sync::RwLock<HashMap<String, HashSet<String>>>,
-    /// Maps workload_id -> all hostnames (primary + aliases) registered for it.
-    /// Used by on_workload_unbind to remove all entries cleanly.
-    workload_to_host: tokio::sync::RwLock<HashMap<String, Vec<String>>>,
+    /// Routing tables behind a single [`ArcSwap`] so the per-request read in
+    /// [`Self::select_workload`] is lock-free — a concurrent register/unbind can
+    /// never make a request wait or 503. Register and unbind are copy-on-write
+    /// via `rcu`; they happen on workload start/stop (rare relative to requests),
+    /// so cloning the tables is cheap next to the hot read path.
+    routes: ArcSwap<Routes>,
+}
+
+/// The `DynamicRouter` routing tables, swapped atomically as one unit so a
+/// reader never sees the forward and reverse maps disagree.
+#[derive(Default, Clone)]
+struct Routes {
+    /// Maps a hostname to every workload replica bound to it. A `BTreeSet` keeps
+    /// membership ordered and deterministic; a request picks one replica at
+    /// random (see [`DynamicRouter::select_workload`]).
+    host_to_workload: HashMap<String, BTreeSet<String>>,
+    /// Maps workload_id -> all hostnames (primary + aliases) registered for it,
+    /// so `on_workload_unbind` can remove all entries cleanly.
+    workload_to_host: HashMap<String, Vec<String>>,
+}
+
+impl DynamicRouter {
+    /// Register `workload_id` under every hostname in `hosts`, updating both the
+    /// forward (host -> replicas) and reverse (workload -> hosts) maps so
+    /// [`Router::on_workload_unbind`] can later remove every entry cleanly.
+    /// Idempotent: re-registering the same workload (e.g. a service restart)
+    /// leaves the tables unchanged.
+    fn register_hostnames(&self, workload_id: &str, hosts: &[String]) {
+        self.routes.rcu(|cur| {
+            let mut routes = (**cur).clone();
+            routes
+                .workload_to_host
+                .insert(workload_id.to_string(), hosts.to_vec());
+            for host in hosts {
+                routes
+                    .host_to_workload
+                    .entry(host.clone())
+                    .or_default()
+                    .insert(workload_id.to_string());
+            }
+            routes
+        });
+    }
+
+    /// Pick one replica bound to `host` at random so requests fan out across
+    /// every replica instead of pinning to one. A per-thread PRNG
+    /// ([`fastrand`]) avoids the cross-core cache-line contention a shared
+    /// atomic cursor would incur under concurrent load, and spreads load just as
+    /// evenly in aggregate. Split out from [`Router::route_incoming_request`] so
+    /// the selection logic is unit-testable without constructing a
+    /// [`hyper::body::Incoming`].
+    fn select_workload(&self, host: &str) -> Result<String, RouteError> {
+        // Lock-free read of a routing-table snapshot.
+        let routes = self.routes.load();
+        let Some(workload_set) = routes.host_to_workload.get(host) else {
+            return Err(RouteError::NoWorkloadForHost(host.to_string()));
+        };
+        // An entry can exist but be empty; treat that as "no workload bound"
+        // (same 404) and, importantly, keep the range below non-empty.
+        if workload_set.is_empty() {
+            return Err(RouteError::NoWorkloadForHost(host.to_string()));
+        }
+        let idx = fastrand::usize(..workload_set.len());
+        let workload_id = workload_set
+            .iter()
+            .nth(idx)
+            .ok_or_else(|| RouteError::NoWorkloadForHost(host.to_string()))?;
+        Ok(workload_id.clone())
+    }
 }
 
 /// Implementation of Router that maps Host headers to workload IDs
@@ -220,40 +336,46 @@ impl Router for DynamicRouter {
             );
         }
 
-        let workload_id = resolved_handle.id().to_string();
-
-        {
-            let mut lock = self.workload_to_host.write().await;
-            lock.insert(workload_id.clone(), all_hosts.clone());
-        }
-
-        {
-            let mut lock = self.host_to_workload.write().await;
-            for host in &all_hosts {
-                let entry = lock.entry(host.clone()).or_insert_with(HashSet::new);
-                entry.insert(workload_id.clone());
-            }
-        }
+        self.register_hostnames(resolved_handle.id(), &all_hosts);
 
         Ok(())
     }
 
+    async fn on_service_http_resolved(
+        &self,
+        workload_id: &str,
+        hostnames: &[String],
+    ) -> anyhow::Result<()> {
+        // A service-only workload (a p3 trigger service serving HTTP) reaches
+        // routing here rather than through `on_workload_resolved`. Register its
+        // hostnames exactly like a component workload so requests resolve to it.
+        if hostnames.is_empty() {
+            // debug, not warn: a service restart re-resolves, so a misconfigured one would spam.
+            debug!(
+                workload_id,
+                "service has no valid ingress hostnames; not routable by the hostname router"
+            );
+            return Ok(());
+        }
+        self.register_hostnames(workload_id, hostnames);
+        Ok(())
+    }
+
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
-        let hostnames = {
-            let mut wth_lock = self.workload_to_host.write().await;
-            wth_lock.remove(workload_id)
-        };
-        if let Some(hostnames) = hostnames {
-            let mut htw_lock = self.host_to_workload.write().await;
-            for hostname in &hostnames {
-                if let Some(workload_set) = htw_lock.get_mut(hostname) {
-                    workload_set.remove(workload_id);
-                    if workload_set.is_empty() {
-                        htw_lock.remove(hostname);
+        self.routes.rcu(|cur| {
+            let mut routes = (**cur).clone();
+            if let Some(hostnames) = routes.workload_to_host.remove(workload_id) {
+                for hostname in &hostnames {
+                    if let Some(workload_set) = routes.host_to_workload.get_mut(hostname) {
+                        workload_set.remove(workload_id);
+                        if workload_set.is_empty() {
+                            routes.host_to_workload.remove(hostname);
+                        }
                     }
                 }
             }
-        }
+            routes
+        });
         Ok(())
     }
 
@@ -267,35 +389,22 @@ impl Router for DynamicRouter {
         check_allowed_hosts(request, allowed_hosts)
     }
 
-    /// Pick a workload ID based on the incoming request
+    /// Pick a workload ID based on the incoming request, spreading load at
+    /// random across every replica bound to the request's `Host`.
     fn route_incoming_request(
         &self,
         req: &hyper::Request<hyper::body::Incoming>,
     ) -> Result<String, RouteError> {
-        tokio::task::block_in_place(move || {
-            let lock = self
-                .host_to_workload
-                .try_read()
-                .map_err(|_| RouteError::Unavailable)?;
-            let workload_host = req
-                .headers()
-                .get(hyper::header::HOST)
-                .and_then(|h| h.to_str().ok())
-                .or_else(|| req.uri().authority().map(|a| a.as_str()))
-                .ok_or(RouteError::MissingHost)?;
-            let Some(workload_set) = lock.get(workload_host) else {
-                return Err(RouteError::NoWorkloadForHost(workload_host.to_string()));
-            };
-
-            // Entry exists but is empty so treat it as "no workload bound" from the
-            // caller's perspective; same 404 status
-            let workload_id = workload_set
-                .iter()
-                .next()
-                .ok_or_else(|| RouteError::NoWorkloadForHost(workload_host.to_string()))?;
-
-            Ok(workload_id.clone())
-        })
+        let workload_host = req
+            .headers()
+            .get(hyper::header::HOST)
+            .and_then(|h| h.to_str().ok())
+            .or_else(|| req.uri().authority().map(|a| a.as_str()))
+            .ok_or(RouteError::MissingHost)?;
+        // `select_workload` does a lock-free `ArcSwap` load and an in-memory
+        // lookup, so it runs inline on the async worker — no `block_in_place`
+        // needed (and routing works on any runtime flavor).
+        self.select_workload(workload_host)
     }
 }
 
@@ -409,6 +518,22 @@ impl Router for DevRouter {
         Ok(())
     }
 
+    async fn on_service_http_resolved(
+        &self,
+        workload_id: &str,
+        _hostnames: &[String],
+    ) -> anyhow::Result<()> {
+        // A service-handled workload routes the same way as a component one:
+        // DevRouter sends all requests to the most-recently resolved workload,
+        // so it ignores hostnames.
+        let mut lock = self
+            .last_workload_id
+            .write()
+            .map_err(|e| anyhow::anyhow!("DevRouter write lock poisoned: {e}"))?;
+        lock.replace(workload_id.to_string());
+        Ok(())
+    }
+
     fn allow_outgoing_request(
         &self,
         _workload_id: &str,
@@ -462,6 +587,55 @@ pub trait HostHandler: Send + Sync + 'static {
     ) -> anyhow::Result<()>;
     /// Unregister a workload
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()>;
+
+    /// Register a long-lived service instance that serves HTTP ingress: inbound
+    /// requests for `workload_id` are delivered over `sender` instead of
+    /// instantiating a component per request. `hostnames` are the ingress
+    /// hostnames the service serves on, forwarded to the router so a
+    /// hostname-keyed router can resolve requests to this workload. Default:
+    /// no-op (the workload keeps the per-request path).
+    async fn on_service_http_resolved(
+        &self,
+        _workload_id: &str,
+        _hostnames: &[String],
+        _sender: tokio::sync::mpsc::Sender<ServiceHttpJob>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    /// Unregister a service HTTP instance. Default: no-op.
+    async fn on_service_http_unbind(&self, _workload_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Register a long-lived trigger service instance that handles inbound messages:
+    /// messages for `workload_id` are delivered over `sender` instead of
+    /// instantiating a component per message. Default: no-op.
+    async fn on_trigger_service_messaging_resolved(
+        &self,
+        _workload_id: &str,
+        _sender: tokio::sync::mpsc::Sender<MessagingJob>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    /// Unregister a trigger service messaging instance. Default: no-op.
+    async fn on_trigger_service_messaging_unbind(&self, _workload_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+    /// Deliver a message to a workload's registered messaging trigger service, returning
+    /// the handler's `result<_, string>`. Default: no messaging support.
+    async fn deliver_trigger_service_message(
+        &self,
+        _workload_id: &str,
+        _msg: BrokerMessage,
+    ) -> anyhow::Result<Result<(), String>> {
+        anyhow::bail!("this host does not support trigger service messaging delivery")
+    }
+    /// Whether a long-lived trigger service is registered to handle messages for
+    /// `workload_id` (so a host ingress can deliver to it instead of
+    /// instantiating per message). Default: false.
+    async fn has_trigger_service_messaging(&self, _workload_id: &str) -> bool {
+        false
+    }
 
     /// Handle an outgoing HTTP request from a workload
     fn outgoing_request(
@@ -574,6 +748,21 @@ impl HostHandler for NullServer {
 pub type WorkloadHandles =
     Arc<RwLock<HashMap<String, (ResolvedWorkload, InstancePre<SharedCtx>, String)>>>;
 
+/// An inbound HTTP request routed to a long-lived service instance, paired with
+/// a oneshot for its response.
+pub type ServiceHttpJob = (
+    hyper::Request<hyper::body::Incoming>,
+    tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
+);
+
+/// A map from workload id to the channel of its HTTP-serving service instance.
+/// Empty unless a workload's service opts into HTTP ingress (a p3 feature).
+pub type ServiceHandlers = Arc<RwLock<HashMap<String, tokio::sync::mpsc::Sender<ServiceHttpJob>>>>;
+
+/// A map from workload id to the channel of a trigger service's messaging handler
+/// instance. Empty unless a workload's service exports a messaging handler.
+pub type MessagingHandlers = Arc<RwLock<HashMap<String, tokio::sync::mpsc::Sender<MessagingJob>>>>;
+
 /// HTTP server plugin that handles incoming HTTP requests for WebAssembly components.
 ///
 /// This plugin implements the `wasi:http/incoming-handler` interface and routes
@@ -594,6 +783,10 @@ pub struct HttpServer<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
     outgoing_handler: O,
     addr: SocketAddr,
     workload_handles: WorkloadHandles,
+    /// Workloads whose long-lived service serves HTTP ingress directly.
+    service_handlers: ServiceHandlers,
+    /// Workloads whose long-lived trigger service serves messaging ingress directly.
+    messaging_handlers: MessagingHandlers,
     shutdown_tx: Arc<RwLock<Option<mpsc::Sender<()>>>>,
     tls_acceptor: Option<TlsAcceptor>,
     listener: Arc<tokio::sync::Mutex<Option<TcpListener>>>,
@@ -713,6 +906,8 @@ impl<T: Router, O: OutgoingHandler> HttpServerBuilder<T, O> {
             outgoing_handler: self.outgoing_handler,
             addr,
             workload_handles: Arc::default(),
+            service_handlers: Arc::default(),
+            messaging_handlers: Arc::default(),
             shutdown_tx: Arc::new(RwLock::new(None)),
             tls_acceptor,
             listener: Arc::new(tokio::sync::Mutex::new(Some(listener))),
@@ -756,6 +951,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
         let shutdown_tx_clone = self.shutdown_tx.clone();
         let workload_handles = self.workload_handles.clone();
+        let service_handlers = self.service_handlers.clone();
         let tls_acceptor = self.tls_acceptor.clone();
 
         // Store the shutdown sender
@@ -782,6 +978,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
                 listener,
                 handler,
                 workload_handles,
+                service_handlers,
                 &mut shutdown_rx,
                 tls_acceptor,
                 fuel_meter,
@@ -837,8 +1034,93 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
         self.router.on_workload_unbind(workload_id).await?;
 
         self.workload_handles.write().await.remove(workload_id);
+        self.service_handlers.write().await.remove(workload_id);
+        self.messaging_handlers.write().await.remove(workload_id);
 
         Ok(())
+    }
+
+    async fn on_service_http_resolved(
+        &self,
+        workload_id: &str,
+        hostnames: &[String],
+        sender: tokio::sync::mpsc::Sender<ServiceHttpJob>,
+    ) -> anyhow::Result<()> {
+        self.router
+            .on_service_http_resolved(workload_id, hostnames)
+            .await?;
+        // A re-resolve without an intervening unbind is expected: the trigger
+        // service supervisor re-registers a fresh sender on every restart (see
+        // `execute_trigger_service`) to swap in the new incarnation. Overwriting
+        // is correct there — the replaced mapping belonged to the faulted
+        // incarnation whose receiver is already dropped, so nothing live is
+        // orphaned. Stop is the only path that unbinds.
+        self.service_handlers
+            .write()
+            .await
+            .insert(workload_id.to_string(), sender);
+        Ok(())
+    }
+
+    async fn on_service_http_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
+        // Drop the router registration too, so a stopped service replica leaves
+        // the hostname's replica set and stops being selected.
+        self.router.on_workload_unbind(workload_id).await?;
+        self.service_handlers.write().await.remove(workload_id);
+        Ok(())
+    }
+
+    async fn on_trigger_service_messaging_resolved(
+        &self,
+        workload_id: &str,
+        sender: tokio::sync::mpsc::Sender<MessagingJob>,
+    ) -> anyhow::Result<()> {
+        // As with the HTTP handler: a re-resolve without unbind is the expected
+        // restart path (the supervisor swaps in the new incarnation's sender),
+        // and the replaced mapping belonged to a faulted incarnation whose
+        // receiver is already gone. Stop is the only path that unbinds.
+        self.messaging_handlers
+            .write()
+            .await
+            .insert(workload_id.to_string(), sender);
+        Ok(())
+    }
+
+    async fn on_trigger_service_messaging_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
+        self.messaging_handlers.write().await.remove(workload_id);
+        Ok(())
+    }
+
+    async fn deliver_trigger_service_message(
+        &self,
+        workload_id: &str,
+        msg: BrokerMessage,
+    ) -> anyhow::Result<Result<(), String>> {
+        let sender = self
+            .messaging_handlers
+            .read()
+            .await
+            .get(workload_id)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no messaging trigger service registered for workload {workload_id}"
+                )
+            })?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        sender
+            .send((msg, tx))
+            .await
+            .map_err(|_| anyhow::anyhow!("trigger service messaging instance is not running"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("trigger service dropped the message response"))
+    }
+
+    async fn has_trigger_service_messaging(&self, workload_id: &str) -> bool {
+        self.messaging_handlers
+            .read()
+            .await
+            .contains_key(workload_id)
     }
 
     fn outgoing_request(
@@ -912,11 +1194,25 @@ impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
     }
 }
 
+/// Configure a freshly accepted connection before it is served.
+///
+/// Disables Nagle's algorithm. Responses are written as a head segment followed
+/// by body frames streamed from the guest (see [`crate::host::http_p3`]); with
+/// Nagle on, the small body segment is held until the client ACKs the head, and
+/// the client's delayed ACK adds a ~40ms stall to every request (write-write-read
+/// deadlock). `wasmtime serve` sets `TCP_NODELAY` for the same reason.
+fn prepare_accepted_conn(stream: &TcpStream) {
+    if let Err(e) = stream.set_nodelay(true) {
+        warn!(err = ?e, "failed to set TCP_NODELAY on accepted connection");
+    }
+}
+
 /// HTTP server implementation that routes to workload components
 async fn run_http_server<T: Router>(
     listener: TcpListener,
     handler: Arc<T>,
     workload_handles: WorkloadHandles,
+    service_handlers: ServiceHandlers,
     shutdown_rx: &mut mpsc::Receiver<()>,
     tls_acceptor: Option<TlsAcceptor>,
     fuel_meter: FuelConsumptionMeter,
@@ -934,13 +1230,17 @@ async fn run_http_server<T: Router>(
                     Ok((client, client_addr)) => {
                         debug!(addr = ?client_addr, "new HTTP client connection");
 
+                        prepare_accepted_conn(&client);
+
                         let handles_clone = workload_handles.clone();
+                        let service_handlers_clone = service_handlers.clone();
                         let tls_acceptor_clone = tls_acceptor.clone();
                         let handler_clone = handler.clone();
                         let fuel_meter = fuel_meter.clone();
                         tokio::spawn(async move {
                             let service = hyper::service::service_fn(move |req| {
                                 let handles = handles_clone.clone();
+                                let service_handlers = service_handlers_clone.clone();
                                 let handler = handler_clone.clone();
                                 let fuel_meter = fuel_meter.clone();
                                 async move {
@@ -948,7 +1248,7 @@ async fn run_http_server<T: Router>(
                                     let remote_context =
                                         opentelemetry::global::get_text_map_propagator(|propagator| propagator.extract(&extractor));
 
-                                    handle_http_request(handler, req, handles, fuel_meter).with_context(remote_context).await
+                                    handle_http_request(handler, req, handles, service_handlers, fuel_meter).with_context(remote_context).await
                                 }
                             });
 
@@ -1040,6 +1340,7 @@ async fn handle_http_request<T: Router>(
     handler: Arc<T>,
     req: hyper::Request<hyper::body::Incoming>,
     workload_handles: WorkloadHandles,
+    service_handlers: ServiceHandlers,
     fuel_meter: FuelConsumptionMeter,
 ) -> Result<hyper::Response<HyperOutgoingBody>, hyper::Error> {
     let method = req.method().clone();
@@ -1067,6 +1368,31 @@ async fn handle_http_request<T: Router>(
         host = %workload_id,
         "HTTP request received"
     );
+
+    // If this workload's long-lived service serves HTTP, deliver the request to
+    // it (preserving its in-memory state) instead of the per-request path.
+    let service_sender = service_handlers.read().await.get(&workload_id).cloned();
+    if let Some(sender) = service_sender {
+        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+        let response = if sender.send((req, resp_tx)).await.is_err() {
+            error!(host = %workload_id, "service HTTP instance is not running");
+            error_response(503)
+        } else {
+            match resp_rx.await {
+                Ok(Ok(resp)) => resp,
+                Ok(Err(e)) => {
+                    error!(err = ?e, "service HTTP handler failed");
+                    error_response(500)
+                }
+                Err(_) => {
+                    error!("service HTTP instance dropped the response");
+                    error_response(500)
+                }
+            }
+        };
+        record_response_status(&response);
+        return Ok(response);
+    }
 
     // NOTE(lxf): Separate HTTP / GRPC handling
 
@@ -1297,12 +1623,27 @@ async fn invoke_component_handler(
     req: hyper::Request<hyper::body::Incoming>,
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
-    let store = workload_handle.new_store(component_id).await?;
-
     if crate::engine::targets_wasip3_http(instance_pre.component()) {
+        // Reuse a warm instance when the component has opted in, otherwise
+        // build and instantiate a store for this request alone. A burst past
+        // `pool_size` is served cold rather than queued.
+        let pool = workload_handle
+            .instance_pool_for_component(component_id)
+            .await;
+        let warm = match pool.as_ref().and_then(|pool| pool.checkout()) {
+            Some(warm) => warm,
+            None => {
+                let mut store = workload_handle.new_store(component_id).await?;
+                let instance = instance_pre.instantiate_async(&mut store).await?;
+                crate::engine::instance_pool::ComponentInstance {
+                    store,
+                    instance,
+                    invocations: 0,
+                }
+            }
+        };
         let resp =
-            crate::host::http_p3::handle_component_request_p3(store, instance_pre, req, fuel_meter)
-                .await?;
+            crate::host::http_p3::handle_component_request_p3(warm, pool, req, fuel_meter).await?;
         let (parts, body) = resp.into_parts();
         let body = HyperOutgoingBody::new(
             body.map_err(|e| {
@@ -1315,6 +1656,10 @@ async fn invoke_component_handler(
         return Ok(hyper::Response::from_parts(parts, body));
     }
 
+    // The p2 path still builds and instantiates per request: its store is
+    // owned by a detached task that outlives the response head, so recovering
+    // it for reuse needs a restructure the p3 path did not.
+    let store = workload_handle.new_store(component_id).await?;
     handle_component_request(store, instance_pre, req, fuel_meter).await
 }
 
@@ -1876,6 +2221,29 @@ mod tests {
             .unwrap()
     }
 
+    /// Guards the P3 streaming regression fix: `run_http_server` must disable
+    /// Nagle on accepted sockets. A streamed head-then-body response otherwise
+    /// stalls ~40ms per request on the client's delayed ACK. The precondition
+    /// asserts the socket starts with Nagle on, so this proves the helper
+    /// actually flips it rather than reading a coincidental default.
+    #[tokio::test]
+    async fn accepted_connections_disable_nagle() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _client = TcpStream::connect(addr).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+
+        assert!(
+            !server.nodelay().unwrap(),
+            "precondition: a freshly accepted socket should start with Nagle enabled"
+        );
+        prepare_accepted_conn(&server);
+        assert!(
+            server.nodelay().unwrap(),
+            "run_http_server must set TCP_NODELAY on accepted connections"
+        );
+    }
+
     // --- check_allowed_hosts tests ---
 
     fn hosts(entries: &[&str]) -> Vec<AllowedHost> {
@@ -2205,6 +2573,202 @@ mod tests {
         assert!(
             result.is_err(),
             "NullServer P3 outgoing request should return an error"
+        );
+    }
+
+    /// A `wasi:http/incoming-handler` interface carrying `host` and, optionally,
+    /// a comma-separated `host-aliases` config — mirrors what the wash config
+    /// layer injects.
+    fn http_iface(host: Option<&str>, aliases: Option<&str>) -> crate::wit::WitInterface {
+        let mut config = HashMap::new();
+        if let Some(host) = host {
+            config.insert("host".to_string(), host.to_string());
+        }
+        if let Some(aliases) = aliases {
+            config.insert("host-aliases".to_string(), aliases.to_string());
+        }
+        crate::wit::WitInterface {
+            namespace: "wasi".to_string(),
+            package: "http".to_string(),
+            interfaces: ["incoming-handler".to_string()].into_iter().collect(),
+            version: Some(semver::Version::parse("0.2.2").unwrap()),
+            config,
+            name: None,
+        }
+    }
+
+    #[test]
+    fn http_ingress_hostnames_collects_primary_and_valid_aliases() {
+        let ifaces = vec![http_iface(Some("primary.local"), Some("a.local, b.local"))];
+        assert_eq!(
+            http_ingress_hostnames(&ifaces),
+            vec![
+                "primary.local".to_string(),
+                "a.local".to_string(),
+                "b.local".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn http_ingress_hostnames_filters_invalid_and_empty_entries() {
+        // Underscores are not valid RFC 1123 hostname chars, and leading/trailing
+        // hyphens are rejected: the bad primary is dropped and only the valid
+        // aliases survive.
+        let ifaces = vec![http_iface(
+            Some("bad_host"),
+            Some("ok.local,,-nope-,also_bad,fine.local"),
+        )];
+        assert_eq!(
+            http_ingress_hostnames(&ifaces),
+            vec!["ok.local".to_string(), "fine.local".to_string()],
+        );
+    }
+
+    #[test]
+    fn http_ingress_hostnames_empty_without_http_interface() {
+        let kv = crate::wit::WitInterface {
+            namespace: "wasi".to_string(),
+            package: "keyvalue".to_string(),
+            interfaces: ["store".to_string()].into_iter().collect(),
+            version: None,
+            config: HashMap::new(),
+            name: None,
+        };
+        assert!(http_ingress_hostnames(&[kv]).is_empty());
+    }
+
+    /// Regression guard for the "N replicas serve like one" defect: with several
+    /// workloads bound to one hostname, `route_incoming_request` used to pin
+    /// every request to a single arbitrary replica (`HashSet::iter().next()`).
+    /// Random selection must instead spread load across all of them.
+    ///
+    /// Selection is a per-thread PRNG, so this asserts a distribution rather than
+    /// exact counts. The band around the expected share is ~18σ wide for uniform
+    /// selection over these draws, so it cannot flake, yet the old pin-to-one
+    /// behavior (one replica takes everything, the rest zero) fails it outright.
+    #[tokio::test]
+    async fn dynamic_router_spreads_load_across_replicas() {
+        let router = DynamicRouter::default();
+        let replicas = ["r0", "r1", "r2", "r3"];
+        for id in replicas {
+            router
+                .on_service_http_resolved(id, &["svc.local".to_string()])
+                .await
+                .unwrap();
+        }
+
+        const DRAWS: usize = 4_000;
+        let mut counts: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for _ in 0..DRAWS {
+            let id = router.select_workload("svc.local").unwrap();
+            *counts.entry(id).or_default() += 1;
+        }
+
+        assert_eq!(
+            counts.len(),
+            replicas.len(),
+            "every replica should receive traffic, got {counts:?}"
+        );
+        let expected = DRAWS / replicas.len();
+        for (id, hits) in counts {
+            assert!(
+                hits > expected / 2 && hits < expected * 2,
+                "replica {id} got {hits}, far from the expected ~{expected} — uneven spread"
+            );
+        }
+    }
+
+    /// A service-only workload (defect #1) reaches routing through
+    /// `on_service_http_resolved`, not `on_workload_resolved`. The router must
+    /// register its hostnames so requests resolve. Previously this was a no-op
+    /// and every hostname 404'd.
+    #[tokio::test]
+    async fn dynamic_router_registers_service_http_hostnames() {
+        let router = DynamicRouter::default();
+        assert!(
+            matches!(
+                router.select_workload("svc.local"),
+                Err(RouteError::NoWorkloadForHost(_))
+            ),
+            "host should not resolve before the service is registered"
+        );
+
+        router
+            .on_service_http_resolved(
+                "svc-1",
+                &["svc.local".to_string(), "svc.internal".to_string()],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(router.select_workload("svc.local").unwrap(), "svc-1");
+        assert_eq!(router.select_workload("svc.internal").unwrap(), "svc-1");
+    }
+
+    /// A service resolving with no valid hostnames (e.g. under a host-agnostic
+    /// deployment) must not register anything or error.
+    #[tokio::test]
+    async fn dynamic_router_service_http_empty_hostnames_is_noop() {
+        let router = DynamicRouter::default();
+        router.on_service_http_resolved("svc-1", &[]).await.unwrap();
+        assert!(matches!(
+            router.select_workload("anything.local"),
+            Err(RouteError::NoWorkloadForHost(_))
+        ));
+    }
+
+    /// Unbinding one replica drops it from the rotation; the hostname keeps
+    /// routing to whoever remains.
+    #[tokio::test]
+    async fn dynamic_router_unbind_removes_replica_from_rotation() {
+        let router = DynamicRouter::default();
+        router
+            .on_service_http_resolved("r0", &["svc.local".to_string()])
+            .await
+            .unwrap();
+        router
+            .on_service_http_resolved("r1", &["svc.local".to_string()])
+            .await
+            .unwrap();
+
+        router.on_workload_unbind("r0").await.unwrap();
+
+        for _ in 0..4 {
+            assert_eq!(
+                router.select_workload("svc.local").unwrap(),
+                "r1",
+                "only the surviving replica should be selected after unbind"
+            );
+        }
+    }
+
+    /// Stopping a service-only workload calls `on_service_http_unbind` but not
+    /// `on_workload_unbind`. That hook must still drop the router registration,
+    /// otherwise a stopped replica lingers in the hostname's replica set and
+    /// requests routed onto it 404.
+    #[tokio::test]
+    async fn service_http_unbind_removes_router_registration() {
+        let server = HttpServer::builder(DynamicRouter::default(), "127.0.0.1:0".parse().unwrap())
+            .build()
+            .await
+            .unwrap();
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        server
+            .on_service_http_resolved("svc-1", &["svc.local".to_string()], tx)
+            .await
+            .unwrap();
+        assert_eq!(server.router.select_workload("svc.local").unwrap(), "svc-1");
+
+        server.on_service_http_unbind("svc-1").await.unwrap();
+        assert!(
+            matches!(
+                server.router.select_workload("svc.local"),
+                Err(RouteError::NoWorkloadForHost(_))
+            ),
+            "hostname must stop routing once the service unbinds"
         );
     }
 }

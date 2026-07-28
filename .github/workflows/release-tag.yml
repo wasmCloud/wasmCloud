@@ -85,7 +85,7 @@ jobs:
       artifact-metadata: write
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # workflow_run / workflow_dispatch without a sha → main HEAD.
           # workflow_dispatch with sha → that exact release commit (recovery).
@@ -207,14 +207,14 @@ jobs:
           echo "all canary builds green on ${MERGE_SHA} — safe to promote"
 
       - name: Login to ghcr.io
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Promote canary container images to release tag
         id: promote
@@ -431,7 +431,7 @@ jobs:
         # shell equivalent has to re-implement idempotent re-run handling,
         # glob fail-on-empty, and prerelease detection — ~25 lines of bash
         # on a release-critical step.
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           name: ${{ steps.ver.outputs.tag }}
           tag_name: ${{ steps.ver.outputs.tag }}

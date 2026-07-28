@@ -36,7 +36,7 @@ use wash_runtime::{
 };
 
 mod common;
-use common::{http_only_host_interfaces, start_host_with_p3};
+use common::{http_only_host_interfaces, start_host_with_p3_http_handler};
 
 const RES_CALLER_P3_WASM: &[u8] = include_bytes!("wasm/res_caller_p3.wasm");
 const RES_PRODUCER_P3_WASM: &[u8] = include_bytes!("wasm/res_producer_p3.wasm");
@@ -55,7 +55,7 @@ fn component(name: &str, bytes: &'static [u8]) -> Component {
 
 #[tokio::test]
 async fn test_p3_resource_handle_crosses_linker() -> Result<()> {
-    let (addr, host) = start_host_with_p3("127.0.0.1:0").await?;
+    let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
 
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),

@@ -7,8 +7,9 @@ mod convert;
 pub use convert::otel_span_context_to_wit;
 use convert::{
     convert_span_kind, convert_status, convert_wasi_log_record, extract_counter_values,
-    extract_gauge_values, extract_span_attributes, extract_span_events, summarize_resource_metrics,
-    summarize_span_data, wit_span_context_to_otel,
+    extract_gauge_values, extract_span_attributes, extract_span_events, extract_span_links,
+    summarize_resource_metrics, summarize_span_data, wasi_span_parent_context,
+    wit_span_context_to_otel,
 };
 
 use anyhow::bail;
@@ -419,25 +420,30 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
 
                 let tracer = provider.tracer(plugin.config.service_name.clone());
 
-                // Build a span with the data from WASI
-                // Note: The SDK generates its own span/trace IDs. The WASI span context is logged
-                // for correlation purposes but the SDK span will have different IDs.
-                let _wasi_span_context = wit_span_context_to_otel(&span_data.span_context);
+                // Build a span with the data from WASI, preserving the guest's own
+                // trace/span IDs and parent linkage instead of letting the SDK mint
+                // fresh IDs and fall back to whatever host span is ambient.
+                let wasi_span_context = wit_span_context_to_otel(&span_data.span_context);
+                let parent_cx = wasi_span_parent_context(&span_data);
                 let span_kind = convert_span_kind(span_data.span_kind);
                 let status = convert_status(&span_data.status);
                 let attributes = extract_span_attributes(&span_data);
                 let events = extract_span_events(&span_data);
+                let links = extract_span_links(&span_data);
 
                 // Create a span builder with the WASI span data
                 let mut builder = SpanBuilder::from_name(span_data.name.clone())
+                    .with_trace_id(wasi_span_context.trace_id())
+                    .with_span_id(wasi_span_context.span_id())
                     .with_kind(span_kind)
-                    .with_attributes(attributes);
+                    .with_attributes(attributes)
+                    .with_links(links);
 
                 // Set start time
                 builder = builder.with_start_time(summary.start_time);
 
-                // Start the span
-                let mut span = tracer.build(builder);
+                // Start the span, parented according to the guest's own nesting
+                let mut span = tracer.build_with_context(builder, &parent_cx);
 
                 // Add events to the span
                 for (event_name, _event_time, event_attrs) in events {

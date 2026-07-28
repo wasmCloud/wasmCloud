@@ -49,6 +49,8 @@ The component proxies a `GET https://httpbin.org/get` and returns the upstream J
 
 Change the `UPSTREAM_URL` constant in [src/lib.rs](src/lib.rs) to point at any HTTPS endpoint. Outgoing TLS is provided by the host runtime and no additional crates are required in the component.
 
+When you change the upstream, also add its host to `workload.allowedHosts` in [.wash/config.yaml](.wash/config.yaml). Outbound HTTP is gated by the host runtime; hosts listed there are allowed. The default template ships with `httpbin.org` to match the built-in demo target.
+
 ## Build Wasm binary
 
 ```shell

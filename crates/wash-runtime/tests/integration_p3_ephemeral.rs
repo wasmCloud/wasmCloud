@@ -31,7 +31,7 @@ use wash_runtime::{
 };
 
 mod common;
-use common::{http_only_host_interfaces, start_host_with_p3};
+use common::{http_only_host_interfaces, start_host_with_p3_http_handler};
 
 const EPHEMERAL_CALLER_P3_WASM: &[u8] = include_bytes!("wasm/ephemeral_caller_p3.wasm");
 const EPHEMERAL_CALLEE_P3_WASM: &[u8] = include_bytes!("wasm/ephemeral_callee_p3.wasm");
@@ -42,7 +42,7 @@ async fn test_p3_plain_value_async_call_uses_ephemeral_store() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
 
-    let (addr, host) = start_host_with_p3("127.0.0.1:0").await?;
+    let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
 
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),

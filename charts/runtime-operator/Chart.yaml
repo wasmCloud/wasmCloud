@@ -17,10 +17,10 @@ type: application
 # every release, so the two always match. Don't bump it in feature PRs — chart
 # changes ride out with the next release. (ct does not enforce a per-PR bump;
 # see .github/ct.yaml.)
-version: 2.5.2
+version: 2.5.3
 
 # The version of the application being deployed (the operator image tag default).
 # This tracks the release-train tag rather than this file: at release time
 # `helm-publish` overrides it with the pushed `vX.Y.Z` tag. The value here is the
 # local/dev default used by `helm template` and canary builds.
-appVersion: "2.5.2"
+appVersion: "2.5.3"

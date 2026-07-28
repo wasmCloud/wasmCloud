@@ -128,12 +128,32 @@ dev:
         reverse.prefix: "🔁 "
 ```
 
+A component that you are not editing can come from a registry instead of the
+build directory. Give it an `image` in place of `file`, optionally with a
+`pullPolicy` of `always`, `ifNotPresent` (the default) or `never`:
+
+```yaml
+dev:
+  components:
+    - name: task-leet
+      image: ghcr.io/acme/task-leet:1.0.0
+      pullPolicy: ifNotPresent
+      config:
+        subscriptions: tasks.leet
+```
+
 Two kinds of per-component config are at work:
 
 - **`subscriptions`** is read by the messaging backend (in-memory for
   `wash dev`, or NATS) to decide which subjects each worker receives. This is
   what makes `tasks.leet` route to task-leet and `tasks.reverse` to
   task-reverse rather than both workers competing for every message.
+- **`consumer_group`** controls NATS delivery across replicas. When omitted,
+  the runtime derives a stable group from the workload namespace, workload
+  name, and component name, so one replica handles each message. Set a custom
+  non-empty value to share a group explicitly, or set it to `broadcast` when
+  every replica must receive every message. Component-local configuration
+  overrides the value on the workload's messaging host interface.
 - **`leet.*` / `reverse.*`** are read by the worker itself via
   `wasi:config/store` (see `task-leet/src/lib.rs`, `task-reverse/src/lib.rs`).
   `leet.mode` toggles whether `l`/`t` are also substituted; `reverse.mode`
@@ -223,7 +243,11 @@ spec:
 The `hostInterfaces` block declares which built-in capabilities the workload
 needs. No separate HTTP server or NATS messaging component is required; both are
 provided by the runtime. `subscriptions` is comma-separated NATS subject
-patterns; e.g. `tasks.>` matches any subject starting with `tasks.`.
+patterns; e.g. `tasks.>` matches any subject starting with `tasks.`. 
+
+Replicas join a per-component consumer group by default. 
+Add `consumer_group: broadcast` to a component's `localResources.config` when
+each replica should receive its own copy (i.e. N components, N copies delivered).
 
 For Kubernetes deployment, see the
 [runtime-operator documentation](https://github.com/wasmCloud/wasmCloud/tree/main/runtime-operator).

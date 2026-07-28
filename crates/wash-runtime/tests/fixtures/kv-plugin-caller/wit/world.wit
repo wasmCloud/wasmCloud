@@ -1,0 +1,12 @@
+package acme:kvcaller@0.1.0;
+
+/// Workload component: HTTP ingress that, per request, exercises the imported
+/// `acme:kv/store` capability — which the host satisfies with a host component
+/// plugin running in its own store. Not a service (no `cli/run`); each request
+/// runs under `run_concurrent`, which is what lets its async capability import
+/// hop across the store boundary.
+world caller {
+    import wasi:http/types@0.3.0;
+    import acme:kv/store@0.1.0;
+    export wasi:http/handler@0.3.0;
+}

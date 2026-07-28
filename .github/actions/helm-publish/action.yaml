@@ -41,14 +41,14 @@ runs:
           version: ${{ inputs.helm-version }}
 
       - name: Login to ${{ inputs.registry }}
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ inputs.registry }}
           username: ${{ inputs.registry-username }}
           password: ${{ inputs.registry-password }}
 
       - name: Update dependencies with Helmfile
-        uses: helmfile/helmfile-action@54b1d14bdfb9ae815b1f4ef213273a9025b6bdee # v2.4.6
+        uses: helmfile/helmfile-action@1f44bcb43e5fb17ecb2685d8b6081ec5f6aa5fcf # v2.4.7
         with:
           helmfile-args: deps
           helmfile-version: ${{ inputs.helmfile-version }}

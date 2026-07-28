@@ -247,7 +247,7 @@ impl types::Host for WasiSocketsCtxView<'_> {
     }
 }
 
-impl<T> HostTcpSocketWithStore<T> for WasiSockets {
+impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
     async fn connect(
         store: &Accessor<T, Self>,
         socket: Resource<UpstreamTcpSocket>,
@@ -293,11 +293,30 @@ impl<T> HostTcpSocketWithStore<T> for WasiSockets {
         })
     }
 
-    fn listen(
+    async fn listen(
         mut store: Access<'_, T, Self>,
         socket: Resource<UpstreamTcpSocket>,
     ) -> SocketResult<StreamReader<Resource<UpstreamTcpSocket>>> {
         let getter = store.getter();
+
+        // A socket that has not been explicitly bound implicitly binds to an
+        // ephemeral port during `listen`. Run the host's `socket_addr_check`
+        // against that implicit bind address first — the same check `bind`
+        // performs — so `listen` cannot be used to bind to an address the
+        // network policy would otherwise deny. (bytecodealliance/wasmtime#13677)
+        let implicit_addr = {
+            let view = store.get();
+            let socket_ref = get_socket_mut(view.table, &socket)?;
+            socket_ref
+                .needs_implicit_bind()
+                .then(|| crate::sockets::util::implicit_bind_addr(socket_ref.address_family()))
+        };
+        if let Some(addr) = implicit_addr {
+            let check = store.get().ctx.socket_addr_check.clone();
+            if !check(addr, SocketAddrUse::TcpBind).await {
+                return Err(types::ErrorCode::AccessDenied.into());
+            }
+        }
 
         // Scope: do the listen and extract info
         enum ListenKind {

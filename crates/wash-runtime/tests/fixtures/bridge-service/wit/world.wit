@@ -1,0 +1,10 @@
+package wasmcloud:bridgesvc@0.1.0;
+
+/// Long-lived p3 service: HTTP ingress router (http/handler) + co-driven
+/// cli/run, calling the stateless backend across the host bridge.
+world service {
+    import wasi:clocks/monotonic-clock@0.3.0;
+    import wasmcloud:bridge/ops@0.1.0;
+    export wasi:cli/run@0.3.0;
+    export wasi:http/handler@0.3.0;
+}

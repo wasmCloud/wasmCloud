@@ -1,0 +1,47 @@
+package wasmcloud:bridge@0.1.0;
+
+/// Contract linking the bridge-service (importer) to the bridge-backend
+/// (exporter) across the two-store boundary. Covers the relocation cases the
+/// cross-store bridge must handle: handle-free primitives (the fast path),
+/// process-global state (to prove statelessness), and typed streams in both
+/// directions plus a nested-in-variant case.
+interface ops {
+    /// Handle-free async call — exercises `func_new_concurrent` linking and the
+    /// no-handle relocation fast path.
+    add: async func(a: u64, b: u64) -> u64;
+
+    /// Increments a process-global counter and returns the new value. Because a
+    /// fresh ephemeral instance handles every call, this always returns 1 —
+    /// proving backends are stateless while the service is long-lived.
+    bump: async func() -> u64;
+
+    /// Busy-spins for `iterations` without yielding, monopolizing this instance's
+    /// store executor. With the two-store split this runs in the backend's own
+    /// ephemeral store and cannot stall the long-lived service; if the backend
+    /// shared the service's store it would freeze the service's HTTP ingress and
+    /// cli/run. Returns an opaque accumulator (prevents the spin being optimized
+    /// away).
+    block: async func(iterations: u64) -> u64;
+
+    /// `stream<u8>` service -> component.
+    consume: async func(data: stream<u8>) -> u64;
+
+    /// `stream<u8>` component -> service (result direction); the ephemeral store
+    /// must outlive the call until the returned stream drains.
+    produce: async func(count: u64) -> stream<u8>;
+
+    /// `stream<u32>` (non-`u8` element type) -> exercises `stream_factory` dispatch.
+    sum: async func(data: stream<u32>) -> u64;
+
+    /// A `stream<u8>` nested inside a variant payload.
+    variant chunked {
+        none,
+        data(stream<u8>),
+    }
+    relay: async func(m: chunked) -> u64;
+
+    /// `future<u64>` component -> service: the backend returns a future that
+    /// resolves to a value, exercising the one-shot future pump (result
+    /// direction — the ephemeral store must outlive the call until it resolves).
+    delayed: async func(value: u64) -> future<u64>;
+}

@@ -72,7 +72,16 @@ test: manifests generate fmt vet envtest ## Run tests.
 test-e2e: ## Run the e2e tests. Expected an isolated environment using Kind.
 	@command -v kind >/dev/null 2>&1 || { echo "kind is required"; exit 1; }
 	@kind get clusters | grep -q "$${KIND_CLUSTER_NAME:-kind}" || { echo "Kind cluster not found"; exit 1; }
-	go test ./test/e2e/ -v -ginkgo.v -timeout=30m
+	go test ./test/e2e/ -v -ginkgo.v -timeout=40m
+
+.PHONY: e2e-images
+e2e-images: ## Build the e2e fixtures, deploy the in-cluster oci-registry, and push the fixtures into it.
+	# Runs after `helm install` (which brings up the registry + default
+	# hostgroups) and before the specs. The e2e suite invokes this from
+	# BeforeSuite; it can also be run standalone against an installed cluster.
+	# The implementation is the `e2e-images` xtask (repo root); this target is a
+	# convenience wrapper. Configured via env (E2E_IMAGES_MODE, E2E_FIXTURES_DIR).
+	cargo xtask e2e-images
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter

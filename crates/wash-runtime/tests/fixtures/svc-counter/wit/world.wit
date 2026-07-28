@@ -1,0 +1,12 @@
+package wasmcloud:test-p3@0.1.0;
+
+/// A p3 service that exports BOTH cli/run (a tick loop) and http/handler (a
+/// counter). Exercises the host's service co-driver: one instance runs cli/run
+/// concurrently with serving HTTP, sharing in-memory state.
+world svc-counter {
+    import wasi:http/types@0.3.0;
+    import wasi:clocks/types@0.3.0;
+    import wasi:clocks/monotonic-clock@0.3.0;
+    export wasi:cli/run@0.3.0;
+    export wasi:http/handler@0.3.0;
+}

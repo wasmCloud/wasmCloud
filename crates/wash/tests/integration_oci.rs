@@ -10,7 +10,7 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage};
 use tokio::time::timeout;
 use wash::cli::CliContext;
-use wash::cli::oci::{PullCommand, PushCommand};
+use wash::cli::oci::{PullCommand, PushCommand, RegistryArgs};
 
 /// Start a local OCI registry container (distribution/distribution) on a random host port.
 async fn start_registry() -> Result<(ContainerAsync<GenericImage>, u16)> {
@@ -60,9 +60,10 @@ async fn oci_push_pull_round_trip() -> Result<()> {
     let push_cmd = PushCommand {
         reference: reference.clone(),
         component_path: push_path,
-        insecure: true,
-        user: None,
-        password: None,
+        registry: RegistryArgs {
+            insecure: true,
+            ..Default::default()
+        },
     };
     let push_result = timeout(Duration::from_secs(30), push_cmd.handle(&ctx))
         .await
@@ -86,9 +87,10 @@ async fn oci_push_pull_round_trip() -> Result<()> {
     let pull_cmd = PullCommand {
         reference: reference.clone(),
         component_path: pull_path.clone(),
-        insecure: true,
-        user: None,
-        password: None,
+        registry: RegistryArgs {
+            insecure: true,
+            ..Default::default()
+        },
     };
     let pull_result = timeout(Duration::from_secs(30), pull_cmd.handle(&ctx))
         .await

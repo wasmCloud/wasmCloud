@@ -55,7 +55,7 @@ use wasmtime::component::Component;
 use crate::engine::workload::ResolvedWorkload;
 use crate::engine::{Engine, uses_wasi_http};
 use crate::observability::Meters;
-use crate::plugin::HostPlugin;
+use crate::plugin::{HostPlugin, WorkloadFailure, WorkloadFailureSink};
 use crate::types::*;
 use crate::wit::{WitInterface, WitWorld};
 
@@ -65,6 +65,9 @@ use sysinfo::SystemMonitor;
 pub mod allowed_hosts;
 pub mod http;
 pub mod http_p3;
+#[cfg(feature = "host-component-plugins")]
+pub(crate) mod job_registry;
+pub mod trigger_service;
 
 /// The API for interacting with a wasmcloud host.
 ///
@@ -327,9 +330,19 @@ impl Host {
             .await
             .context("failed to start HTTP handler")?;
 
-        // Start all plugins, any errors means the host fails to start.
+        // A plugin can fail a workload out of band (a host component plugin
+        // evicting one whose lifecycle bind crash-loops). Give each plugin a
+        // sink to report that on, drained by a background task that transitions
+        // the workload to a failed state.
+        let (failure_tx, failure_rx) = tokio::sync::mpsc::unbounded_channel();
+        let failure_sink = WorkloadFailureSink::new(failure_tx);
+
+        // Start all plugins, any errors means the host fails to start. The
+        // failure sink is injected before `start` so a plugin that evicts a
+        // workload immediately still has somewhere to report it.
         for (id, plugin) in &self.plugins {
             plugin.inject_meters(&self.meters).await;
+            plugin.set_workload_failure_sink(failure_sink.clone());
 
             if let Err(e) = plugin.start().await {
                 tracing::error!(id = id, err = ?e, "failed to start plugin");
@@ -337,14 +350,56 @@ impl Host {
             }
         }
 
-        Ok(Arc::new(self))
+        let host = Arc::new(self);
+        // Weak, not strong: the sinks handed to the plugins live inside
+        // `host.plugins`, so the channel stays open for as long as the host
+        // does. A strong handle here would therefore be a cycle — the drain
+        // would keep the host alive, and the host would keep the drain's
+        // channel open — leaking the host, its engine, and every compiled
+        // component. `Host::stop` cannot break it either: it stops the plugins
+        // but never drops them.
+        tokio::spawn(consume_workload_failures(Arc::downgrade(&host), failure_rx));
+        Ok(host)
+    }
+
+    /// Transition a running workload to a failed state on a plugin's report
+    /// (e.g. an evicted crash-looping bind): swap it to `Error`, so its status
+    /// reports failed, and tear down its resources like a stop would. A workload
+    /// that is already gone or not running is left as-is.
+    async fn fail_workload(&self, workload_id: &str, reason: String) {
+        let resolved = {
+            let mut workloads = self.workloads.write().await;
+            match workloads.get_mut(workload_id) {
+                Some(slot) => {
+                    let previous = std::mem::replace(slot, HostWorkload::Error(reason.clone()));
+                    match previous {
+                        HostWorkload::Running(rw) => Some(*rw),
+                        // Not running (starting/stopping/already error): leave the
+                        // Error we just wrote, nothing to tear down.
+                        _ => None,
+                    }
+                }
+                None => None,
+            }
+        };
+        if let Some(resolved) = resolved {
+            resolved.stop_service();
+            if let Err(e) = resolved.unbind_all_plugins().await {
+                warn!(workload_id, error = ?e, "error unbinding plugins while failing workload");
+            }
+        }
+        warn!(
+            workload_id,
+            reason, "workload failed by a plugin; marked as errored"
+        );
     }
 
     /// Stop the host and shut down all plugins.
     ///
-    /// Attempts to gracefully stop all plugins with a 3-second timeout
-    /// for each. Errors are logged but don't prevent other plugins from
-    /// being stopped.
+    /// Attempts to gracefully stop all plugins, allowing each the
+    /// `WASH_PLUGIN_STOP_TIMEOUT_SECS` budget plus a one-second grace.
+    /// Errors are logged but don't prevent other plugins from being
+    /// stopped.
     ///
     /// # Returns
     /// Ok if the shutdown process completes (even with plugin errors).
@@ -354,15 +409,29 @@ impl Host {
             .await
             .context("failed to stop HTTP handler")?;
 
-        // Stop all plugins, log errors but continue stopping others
+        // Stop all plugins, log errors but continue stopping others. The cap
+        // must outlast the plugin-stop budget: a host component plugin's
+        // `stop()` waits the full budget for its supervisor and only then
+        // aborts it, and if the outer timeout fired first it would drop that
+        // future — and the supervisor's JoinHandle with it — detaching a
+        // wedged task instead of aborting it. The one-second grace covers the
+        // abort-and-return tail past the inner wait; that tail must stay
+        // synchronous (or bounded well under the grace) for the guarantee to
+        // hold, so keep awaits out of the post-timeout path in
+        // `ComponentHostPlugin::stop`.
+        let stop_timeout = crate::timeouts::plugin_stop() + std::time::Duration::from_secs(1);
         for (id, plugin) in &self.plugins {
             let stop_fut = plugin.stop();
-            match tokio::time::timeout(std::time::Duration::from_secs(3), stop_fut).await {
+            match tokio::time::timeout(stop_timeout, stop_fut).await {
                 Ok(Err(e)) => {
                     tracing::error!(id = id, err = ?e, "failed to stop plugin");
                 }
                 Err(_) => {
-                    tracing::error!(id = id, "plugin stop timed out after 3 seconds");
+                    tracing::error!(
+                        id = id,
+                        timeout_secs = stop_timeout.as_secs(),
+                        "plugin stop timed out"
+                    );
                 }
                 _ => {}
             }
@@ -483,6 +552,7 @@ impl Host {
             "wasi:filesystem/preopens,types@0.2.0".into(),
             "wasi:random/insecure-seed,insecure,random@0.2.0".into(),
             "wasi:sockets/instance-network,ip-name-lookup,network,tcp-create-socket,tcp,udp-create-socket,udp@0.2.0".into(),
+            "wasi:http/types,handler@0.3.0".into(),
             #[cfg(feature = "wasi-tls")]
             "wasi:tls/client,types@0.3.0-draft".into(),
         ]);
@@ -637,11 +707,25 @@ impl HostApi for Host {
         &self,
         request: WorkloadStartRequest,
     ) -> anyhow::Result<WorkloadStartResponse> {
-        // Store the workload with initial state
-        self.workloads
-            .write()
-            .await
-            .insert(request.workload_id.clone(), HostWorkload::Starting);
+        // Reserve the workload ID while holding the write lock so concurrent
+        // starts cannot both observe it as available. An ID remains reserved
+        // in every lifecycle state until workload_stop removes it.
+        {
+            let mut workloads = self.workloads.write().await;
+            if workloads.contains_key(&request.workload_id) {
+                return Ok(WorkloadStartResponse {
+                    workload_status: WorkloadStatus {
+                        workload_id: request.workload_id.clone(),
+                        workload_state: WorkloadState::Error,
+                        message: format!(
+                            "Workload ID [{}] already exists (the exising workload must be stopped to reuse the ID)",
+                            request.workload_id
+                        ),
+                    },
+                });
+            }
+            workloads.insert(request.workload_id.clone(), HostWorkload::Starting);
+        }
 
         let workload_id = request.workload_id.clone();
         let resolved_workload = self.workload_start_inner(request).await;
@@ -796,6 +880,29 @@ impl std::fmt::Debug for Host {
     }
 }
 
+/// Drain plugin-reported workload failures for the lifetime of the host,
+/// transitioning each reported workload to a failed state. Ends when the host
+/// is dropped, or when the last [`WorkloadFailureSink`] is (a host with no
+/// plugin that keeps one).
+///
+/// The host is held weakly and upgraded per report so this task never keeps it
+/// alive — see the spawn site in [`Host::start`].
+async fn consume_workload_failures(
+    host: std::sync::Weak<Host>,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<WorkloadFailure>,
+) {
+    while let Some(WorkloadFailure {
+        workload_id,
+        reason,
+    }) = rx.recv().await
+    {
+        let Some(host) = host.upgrade() else {
+            break;
+        };
+        host.fail_workload(&workload_id, reason).await;
+    }
+}
+
 /// Config for the [`Host`]
 #[derive(Clone, Debug)]
 pub struct HostConfig {
@@ -874,6 +981,19 @@ impl HostBuilder {
         }
 
         self.plugins.insert(plugin_id, plugin);
+        Ok(self)
+    }
+
+    /// Registers the multiplexed plugin set from
+    /// [`crate::plugin::multiplexed_plugins`], which is what makes
+    /// `(implements ..)` named imports resolvable. Without it, every
+    /// registered plugin reports `supports_named_instances() == false` and a
+    /// workload needing named multiplexing fails to bind.
+    #[cfg(feature = "wasm_component_model_implements")]
+    pub fn with_multiplexed_plugins(mut self) -> anyhow::Result<Self> {
+        for plugin in crate::plugin::multiplexed_plugins() {
+            self = self.with_plugin(plugin)?;
+        }
         Ok(self)
     }
 
@@ -1009,6 +1129,142 @@ impl HostBuilder {
 mod tests {
     use super::*;
     use crate::types::Component;
+
+    fn empty_workload_start_request(workload_id: &str) -> WorkloadStartRequest {
+        WorkloadStartRequest {
+            workload_id: workload_id.to_string(),
+            workload: Workload {
+                namespace: "wasmcloud".to_string(),
+                name: "empty".to_string(),
+                annotations: Default::default(),
+                service: None,
+                components: vec![],
+                host_interfaces: vec![],
+                volumes: vec![],
+            },
+        }
+    }
+
+    /// `Host::stop`'s per-plugin timeout must outlast the plugin-stop budget.
+    /// A host component plugin's `stop()` waits the full budget for its
+    /// supervisor and only then runs its abort-and-cleanup tail; if the outer
+    /// timeout fired first it would drop that future mid-wait, detaching the
+    /// supervisor's JoinHandle instead of aborting it. The mock below mirrors
+    /// that shape: sleep the budget, then record that the tail ran.
+    #[tokio::test(start_paused = true)]
+    async fn test_stop_outlasts_plugin_stop_budget() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct SlowStopPlugin {
+            cleanup_ran: Arc<AtomicBool>,
+        }
+
+        #[async_trait::async_trait]
+        impl HostPlugin for SlowStopPlugin {
+            fn id(&self) -> &'static str {
+                "slow-stop"
+            }
+
+            fn world(&self) -> WitWorld {
+                WitWorld::default()
+            }
+
+            async fn stop(&self) -> anyhow::Result<()> {
+                tokio::time::sleep(crate::timeouts::plugin_stop()).await;
+                self.cleanup_ran.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+
+        let cleanup_ran = Arc::new(AtomicBool::new(false));
+        let host = Host::builder()
+            .with_plugin(Arc::new(SlowStopPlugin {
+                cleanup_ran: Arc::clone(&cleanup_ran),
+            }))
+            .expect("failed to register plugin")
+            .build()
+            .expect("failed to build host");
+
+        Arc::new(host).stop().await.expect("failed to stop host");
+
+        assert!(
+            cleanup_ran.load(Ordering::SeqCst),
+            "plugin stop's post-budget cleanup must run before Host::stop gives up on it"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_workload_start_rejects_existing_id() {
+        let host = Host::builder().build().expect("failed to build host");
+        let request = empty_workload_start_request("duplicate");
+
+        let first = host
+            .workload_start(request.clone())
+            .await
+            .expect("first start should return a response");
+        assert_eq!(first.workload_status.workload_state, WorkloadState::Running);
+
+        let duplicate = host
+            .workload_start(request)
+            .await
+            .expect("duplicate start should return a response");
+        assert_eq!(
+            duplicate.workload_status.workload_state,
+            WorkloadState::Error
+        );
+        assert!(
+            duplicate
+                .workload_status
+                .message
+                .contains("Workload ID [duplicate] already exists"),
+            "unexpected rejection message: {}",
+            duplicate.workload_status.message
+        );
+
+        let workloads = host.workloads.read().await;
+        assert_eq!(workloads.len(), 1);
+        assert!(matches!(
+            workloads.get("duplicate"),
+            Some(HostWorkload::Running(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_workload_starts_reserve_id_atomically() {
+        let host = Host::builder().build().expect("failed to build host");
+        let request = empty_workload_start_request("concurrent-duplicate");
+
+        let (first, second) = tokio::join!(
+            host.workload_start(request.clone()),
+            host.workload_start(request)
+        );
+        let states = [
+            first
+                .expect("first start should return a response")
+                .workload_status
+                .workload_state,
+            second
+                .expect("second start should return a response")
+                .workload_status
+                .workload_state,
+        ];
+
+        assert_eq!(
+            states
+                .iter()
+                .filter(|state| **state == WorkloadState::Running)
+                .count(),
+            1
+        );
+        assert_eq!(
+            states
+                .iter()
+                .filter(|state| **state == WorkloadState::Error)
+                .count(),
+            1
+        );
+        assert_eq!(host.workloads.read().await.len(), 1);
+    }
 
     #[tokio::test]
     async fn test_workload_start_failed() {

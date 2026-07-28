@@ -92,10 +92,21 @@ func (a *WorkloadReconciler) deregisterWorkload(ctx context.Context, workload *r
 
 func workloadHostname(workload *runtimev1alpha1.Workload) string {
 	for _, iface := range workload.Spec.HostInterfaces {
-		if iface.Namespace == "wasi" && iface.Package == "http" && slices.Contains(iface.Interfaces, "incoming-handler") {
-			if h, ok := iface.Config["host"]; ok {
-				return h
-			}
+		if iface.Namespace != "wasi" || iface.Package != "http" {
+			continue
+		}
+		// A component's HTTP entrypoint is advertised as either the p2
+		// `incoming-handler` or the p3 `handler` interface; the host serves both
+		// (wash-runtime's is_incoming_http_handler accepts either), so the gateway
+		// must register a route for either. Without the p3 case, a workload that
+		// exports only wasi:http/handler@0.3.0 reaches Ready but has no gateway
+		// route and every request to it 503s.
+		if !slices.Contains(iface.Interfaces, "incoming-handler") &&
+			!slices.Contains(iface.Interfaces, "handler") {
+			continue
+		}
+		if h, ok := iface.Config["host"]; ok {
+			return h
 		}
 	}
 	return ""

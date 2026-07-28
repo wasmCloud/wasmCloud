@@ -1,0 +1,4 @@
+[overrides]
+# Resolve `wasmcloud:host` to the local, deliberately-malformed copy rather than
+# the canonical in-repo WIT, so this fixture exports a bad lifecycle signature.
+"wasmcloud:host" = { path = "host-bad" }

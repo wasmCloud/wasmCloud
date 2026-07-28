@@ -1,8 +1,8 @@
 //! Integration tests for `DynamicRouter` — routes incoming requests to
 //! workloads by Host header (with optional comma-separated aliases).
 //!
-//! `DynamicRouter::route_incoming_request` uses `tokio::task::block_in_place`
-//! with `try_read`, so all tests run on the multi-thread runtime. Per-request
+//! These tests drive a live HTTP server and fan out concurrent requests
+//! against it, so they run on the multi-thread runtime. Per-request
 //! `timeout(...)` on individual HTTP calls guards against hangs.
 //!
 //! Covers:

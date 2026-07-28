@@ -218,7 +218,10 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
 }
 
 pub mod ctx;
+pub(crate) mod instance_pool;
+pub use instance_pool::InstancePolicy;
 mod linked_call;
+pub(crate) mod store;
 mod value;
 mod volumes;
 pub mod workload;
@@ -256,6 +259,34 @@ pub struct CacheValue(Component);
 impl std::fmt::Debug for CacheValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CacheValue").finish()
+    }
+}
+
+/// A cached compile failure, shared by every caller that raced for the same key.
+///
+/// `moka` hands a failed `try_get_with` back as `Arc<anyhow::Error>`, and an
+/// `Arc` is not `Into<anyhow::Error>` — so `anyhow!(arc)` takes the *adhoc*
+/// branch and builds a fresh error whose whole content is the `Arc`'s `Display`.
+/// `anyhow::Error`'s `Display` prints only its outermost context, so every cause
+/// under it is dropped: a component that fails to compile reports
+/// "failed to compile component from bytes" and never the wasmtime diagnostic
+/// saying *why*, which is the only part worth reading.
+///
+/// Wrapping instead of reformatting keeps the chain walkable — `source()` steps
+/// straight into the original error, since `anyhow::Error` derefs to
+/// `dyn StdError`.
+#[derive(Debug)]
+struct SharedError(Arc<anyhow::Error>);
+
+impl std::fmt::Display for SharedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&*self.0, f)
+    }
+}
+
+impl std::error::Error for SharedError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
     }
 }
 
@@ -493,7 +524,7 @@ impl Engine {
                             .map(CacheValue)
                     })
                     .map_err(|e: Arc<anyhow::Error>| {
-                        anyhow::anyhow!(e).context("compilation cache error")
+                        anyhow::Error::new(SharedError(e)).context("compilation cache error")
                     })
                     .map(|v| v.0)
             }
@@ -512,6 +543,9 @@ impl Engine {
         validated_volumes: &std::collections::HashMap<String, PathBuf>,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
     ) -> anyhow::Result<WorkloadComponent> {
+        // Read before the component's fields are moved out below.
+        let instances = InstancePolicy::from_component(&component);
+
         // Create a wasmtime component from the bytes
         let wasmtime_component = self
             .load_component_bytes(component.bytes, component.digest)
@@ -556,10 +590,39 @@ impl Engine {
             component_volume_mounts,
             component.local_resources,
             loopback,
-            // TODO: implement pooling and instance limits
-            // component.pool_size,
-            // component.max_invocations,
+            instances,
         ))
+    }
+
+    /// Compile a host component plugin and build a linker with WASI (and
+    /// `wasi:http` if the component uses it) added.
+    ///
+    /// Unlike a workload component, a host component plugin is host-scoped: it is
+    /// instantiated once at host start into its own long-lived store. The caller
+    /// may install additional shims on the returned [`Linker`] (e.g. to route a
+    /// plugin's own capability imports back to itself) before calling
+    /// [`Linker::instantiate_pre`]; the [`Component`] is returned alongside for
+    /// exported- and imported-type introspection.
+    pub fn prepare_host_component(
+        &self,
+        bytes: &[u8],
+    ) -> anyhow::Result<(Component, Linker<SharedCtx>)> {
+        let component = Component::new(&self.inner, bytes)
+            .map_err(anyhow::Error::from)
+            .context("failed to compile host component plugin")?;
+
+        let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
+        add_wasi_to_linker(&mut linker).context("failed to add WASI to plugin linker")?;
+        if uses_wasi_http(&component) {
+            wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
+                .map_err(anyhow::Error::from)
+                .context("failed to add wasi:http/types to plugin linker")?;
+            wasmtime_wasi_http::p3::add_to_linker(&mut linker).map_err(|e| {
+                anyhow::anyhow!(e).context("failed to add wasi:http p3 to plugin linker")
+            })?;
+        }
+
+        Ok((component, linker))
     }
 }
 
@@ -594,12 +657,14 @@ pub enum WasmProposal {
     /// crate feature.
     #[cfg(feature = "wasm_component_model_implements")]
     WasmComponentModelImplements,
-    /// Garbage collection. Enables `wasm_function_references` (a prerequisite)
-    /// and `wasm_gc`.
+    /// Garbage collection (with its `wasm_function_references` prerequisite).
+    /// Enabled by default in wasmtime >= 47; accepted for compatibility.
     Gc,
-    /// Exception handling. Enables `wasm_exceptions`.
+    /// Exception handling. Enabled by default in wasmtime >= 47; accepted for
+    /// compatibility.
     ExceptionHandling,
-    /// 128-bit wide arithmetic. Enables `wasm_wide_arithmetic`.
+    /// 128-bit wide arithmetic. Enabled by default in wasmtime >= 47; accepted
+    /// for compatibility.
     WideArithmetic,
     /// Shared-memory threads. Enables `wasm_threads`.
     Threads,
@@ -618,17 +683,16 @@ impl WasmProposal {
             WasmProposal::WasmComponentModelImplements => {
                 cfg.wasm_component_model_implements(true);
             }
-            WasmProposal::Gc => {
-                // GC builds on the function-references proposal.
-                cfg.wasm_function_references(true);
-                cfg.wasm_gc(true);
-            }
-            WasmProposal::ExceptionHandling => {
-                cfg.wasm_exceptions(true);
-            }
-            WasmProposal::WideArithmetic => {
-                cfg.wasm_wide_arithmetic(true);
-            }
+            // GC (with its `wasm_function_references` prerequisite), exception
+            // handling, and wide arithmetic are all enabled by default in
+            // wasmtime >= 47, so opting into them needs no config change. The
+            // variants stay accepted for CLI/config compatibility.
+            WasmProposal::Gc | WasmProposal::ExceptionHandling | WasmProposal::WideArithmetic => {}
+            // Threads and tail calls are also on by default in wasmtime >= 47,
+            // but only conditionally — `wasm_threads` follows the `threads`
+            // crate feature and `wasm_tail_call` is off under the Winch compiler
+            // — so these set their flag explicitly to stay correct regardless of
+            // build or config.
             WasmProposal::Threads => {
                 cfg.wasm_threads(true);
             }
@@ -916,6 +980,16 @@ pub fn exports_wasi_http(component: &Component) -> bool {
         .any(|(export, _item)| export.starts_with("wasi:http"))
 }
 
+/// Whether a component exports the `wasmcloud:messaging/handler` interface (the
+/// inbound message handler the host invokes).
+pub fn exports_messaging_handler(component: &Component) -> bool {
+    let ty: wasmtime::component::types::Component = component.component_type();
+    let engine = component.engine();
+
+    ty.exports(engine)
+        .any(|(export, _item)| export.starts_with("wasmcloud:messaging/handler"))
+}
+
 pub fn imports_wasi_http(component: &Component) -> bool {
     let ty: wasmtime::component::types::Component = component.component_type();
     let engine = component.engine();
@@ -1094,5 +1168,33 @@ mod tests {
             Ok(WasmProposal::ComponentModelAsync)
         );
         assert!("nonsense".parse::<WasmProposal>().is_err());
+    }
+
+    // A compile failure that goes through the cache reports everything the
+    // uncached path reports. `try_get_with` returns its error as
+    // `Arc<anyhow::Error>`, which is easy to collapse into its outermost message
+    // alone — leaving logs that say a component failed to compile and never why.
+    #[test]
+    fn cached_compile_failure_keeps_the_cause_chain() {
+        let engine = Engine::builder().build().expect("engine should build");
+        let garbage = b"definitely not a wasm component";
+
+        // `Component` is not `Debug`, so `expect_err` is unavailable here.
+        let Err(uncached) = engine.load_component_bytes(garbage, None::<&str>) else {
+            panic!("garbage bytes should not compile");
+        };
+        let Err(cached) = engine.load_component_bytes(garbage, Some("sha256:not-a-real-digest"))
+        else {
+            panic!("garbage bytes should not compile");
+        };
+
+        let kept: Vec<String> = cached.chain().map(|c| c.to_string()).collect();
+        for cause in uncached.chain() {
+            let cause = cause.to_string();
+            assert!(
+                kept.contains(&cause),
+                "cached path dropped {cause:?}; it kept only {kept:?}"
+            );
+        }
     }
 }

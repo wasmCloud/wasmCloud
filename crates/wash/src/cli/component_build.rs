@@ -1,12 +1,17 @@
 //! CLI command for building components
 
-use std::{path::PathBuf, process::Stdio, vec};
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+    vec,
+};
 
 use anyhow::{Context as _, anyhow, bail};
 use clap::Args;
 use serde::Serialize;
 use tokio::process::Command;
 use tracing::{debug, error, info, instrument, trace};
+use wasi_preview1_component_adapter_provider::WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER;
 
 use crate::wit::WitConfig;
 use crate::{
@@ -322,7 +327,10 @@ impl ComponentBuilder {
         let component_path = component_path.canonicalize().unwrap_or(component_path);
 
         match std::fs::exists(&component_path) {
-            Ok(true) => Ok(component_path),
+            Ok(true) => {
+                wrap_p1_core_module_if_needed(&component_path)?;
+                Ok(component_path)
+            }
             Ok(false) => {
                 anyhow::bail!(
                     "build command completed successfully but component not found at expected path: {}",
@@ -349,5 +357,66 @@ impl ComponentBuilder {
     async fn run_post_build_hook(&self) -> anyhow::Result<()> {
         trace!("running post-build hook (placeholder)");
         Ok(())
+    }
+}
+
+/// If a build produced a `wasm32-wasip1` core module rather than a component,
+/// wrap it with the WASI reactor adapter to produce a component. P3 (and any
+/// other wasip1) build emits a core module; a wasip2 build emits a component
+/// directly and is left untouched. The adapter is pinned by
+/// `wasi-preview1-component-adapter-provider` to the workspace's wasmtime
+/// version, so its ABI stays in lockstep.
+fn wrap_p1_core_module_if_needed(path: &Path) -> anyhow::Result<()> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("failed to read build output {}", path.display()))?;
+    if !is_core_wasm_module(&bytes) {
+        return Ok(());
+    }
+    let component = wit_component::ComponentEncoder::default()
+        .validate(true)
+        .module(&bytes)
+        .context("failed to load the core module for adapter wrapping")?
+        .adapter(
+            "wasi_snapshot_preview1",
+            WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
+        )
+        .context("failed to set the WASI reactor adapter")?
+        .encode()
+        .context("failed to wrap the core module with the WASI reactor adapter")?;
+    std::fs::write(path, component)
+        .with_context(|| format!("failed to write component to {}", path.display()))?;
+    debug!(path = %path.display(), "wrapped wasip1 core module with the WASI reactor adapter");
+    Ok(())
+}
+
+/// Distinguish a core module from a component by the 8-byte wasm header: both
+/// start with `\0asm`, but the version field's high half carries the layer —
+/// `00 00` for a core module, `01 00` for a component.
+fn is_core_wasm_module(bytes: &[u8]) -> bool {
+    // `\0asm` magic, then a version whose high half is the layer: `00 00` (bytes
+    // 6..8) is a core module, `01 00` a component.
+    matches!(
+        bytes.get(..8),
+        Some(&[0x00, 0x61, 0x73, 0x6d, _, _, 0x00, 0x00])
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_core_wasm_module;
+
+    #[test]
+    fn distinguishes_core_module_from_component() {
+        // `\0asm` + version 1, layer 0 → core module
+        assert!(is_core_wasm_module(&[
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00
+        ]));
+        // `\0asm` + component-model layer (01 00) → component, left untouched
+        assert!(!is_core_wasm_module(&[
+            0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00
+        ]));
+        // not a wasm binary / too short
+        assert!(!is_core_wasm_module(b"not wasm"));
+        assert!(!is_core_wasm_module(&[0x00, 0x61, 0x73, 0x6d]));
     }
 }

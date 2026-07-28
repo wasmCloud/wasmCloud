@@ -1,0 +1,2 @@
+[overrides]
+"wasi:logging" = { path = "../p2-wit-deps/wasi-logging-0.1.0-draft" }

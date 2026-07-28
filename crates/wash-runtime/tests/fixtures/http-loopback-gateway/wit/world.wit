@@ -1,0 +1,12 @@
+package wasmcloud:test-p3@0.1.0;
+
+/// A p3 HTTP component that proxies each request over the workload's
+/// virtualized loopback: it connects to 127.0.0.1:9099 (the `svc-tcp-echo`
+/// service), sends a fixed payload, and returns the echoed reply as the HTTP
+/// response body.
+world http-loopback-gateway {
+    import wasi:http/types@0.3.0;
+    import wasi:sockets/types@0.3.0;
+
+    export wasi:http/handler@0.3.0;
+}

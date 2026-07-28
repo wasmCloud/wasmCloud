@@ -41,10 +41,10 @@ jobs:
       relevant: ${{ steps.filter.outputs.relevant }}
       workflow: ${{ steps.filter.outputs.workflow }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         id: filter
         with:
           filters: |
@@ -53,6 +53,7 @@ jobs:
               - 'crates/**'
               - 'src/**'
               - 'tests/**'
+              - 'wit/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
@@ -80,14 +81,14 @@ jobs:
           - windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Free disk space
         if: ${{ matrix.os == 'ubuntu-latest' }}
         uses: ./.github/actions/free-disk-space
       - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "^1.26.0"
           cache: false
@@ -100,15 +101,12 @@ jobs:
         with:
           version: "1.247.0"
       - name: Setup protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: "29.x"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        uses: ./.github/actions/setup-protoc
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
       # Compile the wash-runtime wasm test fixtures. The test/bench targets
-      # `include_bytes!` these, so they must exist before `cargo test`/`cargo
-      # bench` below. Targets wasm32-wasip2/wasip1 come from setup-rust.
+      # `include_bytes!` these, so they must exist before the `cargo test`
+      # steps below. Targets wasm32-wasip2/wasip1 come from setup-rust.
       - name: Build test fixtures
         run: cargo xtask build-fixtures
       - name: Build
@@ -122,7 +120,8 @@ jobs:
         env:
           RUST_BACKTRACE: "1"
         run: |
-          cargo test -p wash-runtime --features wasi-tls,wasm_component_model_implements
+          cargo test -p wash-runtime --features wasi-tls,wasm_component_model_implements,host-component-plugins
+          cargo test -p wash --lib --features host-component-plugins
       # Docker/registry-backed `#[ignore]` integration tests, Linux only: the
       # macOS/Windows hosted runners have no Docker daemon (and macOS can't get
       # one — no nested virtualization). `-- --ignored` runs ONLY the ignored
@@ -134,12 +133,20 @@ jobs:
         env:
           RUST_BACKTRACE: "1"
         run: |
-          cargo test -p wash-runtime --features wasm_component_model_implements,wasi-tls -- --ignored
+          cargo test -p wash-runtime --features wasm_component_model_implements,wasi-tls,host-component-plugins -- --ignored
           cargo test -p wash --test integration_oci -- --ignored
+      # Bitrot guard: the benches must still compile. Built via `cargo test
+      # --benches` rather than `cargo bench --no-run` because the `bench`
+      # profile inherits `release`, which shares no artifacts with the dev/test
+      # builds above and so rebuilds the whole tree (wasmtime included) just to
+      # compile-check four targets; the test profile reuses them. wash-runtime
+      # gates no code on `debug_assertions`, so both profiles compile the same
+      # source. Optimized bench builds happen only in bench.yml (manual
+      # dispatch), so an opt-level-only break surfaces there, not here.
       - name: Build benchmarks
         if: matrix.os == 'ubuntu-latest'
         run: |
-          cargo bench -p wash-runtime --no-run
+          cargo test -p wash-runtime --benches --no-run
 
   lint:
     needs:
@@ -151,23 +158,20 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
       - name: Setup protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: "29.x"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        uses: ./.github/actions/setup-protoc
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
         with:
           rust-toolchain: nightly
           rust-components: rustfmt
       - name: Install cargo-machete
-        uses: taiki-e/install-action@bffeee26d4db9be238a4ea78d8826604ebcb594d # v2.82.5
+        uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
         env:
           # Authenticate the action's GitHub API calls so they aren't throttled
           # by the 60/hr anonymous per-IP limit shared across hosted runners.
@@ -179,7 +183,7 @@ jobs:
           cargo +nightly fmt -- --check
       - name: Lint
         run: |
-          cargo clippy --workspace --features wasm_component_model_implements,wasi-tls
+          cargo clippy --workspace --features wasm_component_model_implements,wasi-tls,host-component-plugins
       - name: Lint anyhow context message casing
         run: |
           # anyhow `.context()` / `.with_context()` strings are error messages,
@@ -199,13 +203,16 @@ jobs:
         run: |
           cargo machete
 
-  # Build the wash runtime image per-arch with the buildx GHA cache, push
-  # each arch by digest, and export a docker tarball per arch. The operator
-  # e2e gate loads the amd64 tarball, so the bytes exercised in e2e are the
-  # same bytes canary-publish later assembles into the multi-arch manifest
-  # list (`canary`, `sha-<full-sha>`, and via release-tag.yml the released
-  # `vX.Y.Z`). arm64 builds on every PR too so Dockerfile regressions are
-  # caught before merge.
+  # Build the shipped wash runtime image (DEFAULT features) on arm64 — the
+  # primary arch for the e2e gate and one leg of the canary multi-arch
+  # manifest. Exports a docker tarball the operator-e2e `release` leg loads
+  # (so the bytes exercised in e2e are the bytes we ship) and, on main, pushes
+  # the arm64 image to GHCR by digest for canary-publish to assemble into the
+  # multi-arch list (`canary`, `sha-<full-sha>`, and via release-tag.yml the
+  # released `vX.Y.Z`). The matching amd64 leg builds in `wash-image-amd64`
+  # (main only); the ALL-FEATURES coverage build runs in parallel in
+  # `wash-image-all-features` so the e2e gate waits on the slower of the two
+  # arm64 builds, not their sum.
   wash-image:
     needs:
       - changes
@@ -213,66 +220,59 @@ jobs:
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-latest
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Login to ghcr.io
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       # Split into two single-output builds: dual `type=image`+`type=docker`
       # on one call confuses `digest` output (last write to
       # `containerimage.digest` wins → docker-tarball envelope, not
       # registry). The second call hits the cache the first wrote.
-      - name: Build wash runtime image (tarball for operator-e2e)
-        id: build_tar
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+      # RELEASE image — DEFAULT features only: exactly what we ship. The
+      # operator-e2e `release` leg loads this tarball, so we test the bytes we
+      # release. build_push below reuses this build's cache (same features), so
+      # the pushed canary is byte-identical to what that e2e leg exercised.
+      - name: Build wash runtime image — release / default features (tarball for operator-e2e)
+        id: build_tar_release
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          outputs: type=docker,dest=/tmp/wash-image.tar,name=localhost/wasmcloud-wash:e2e
-          # Build the e2e host with `(implements ..)` multiplexing enabled so the
-          # implements spec's named keyvalue imports resolve.
-          build-args: |
-            CARGO_FEATURES=wasm_component_model_implements
-          # head_ref on PRs (the source branch, shared across re-pushes
-          # and across PRs from the same branch); falls back to ref_name
-          # on main pushes ("main"). Always falls back to the main scope
-          # for cold-cache reads on first push.
+          outputs: type=docker,dest=/tmp/wash-image-release.tar,name=localhost/wasmcloud-wash:e2e
+          # No `build-args`: the Dockerfile's `CARGO_FEATURES=""` default applies
+          # (a plain `cargo build`, default features).
+          # head_ref on PRs (the source branch, shared across re-pushes and
+          # across PRs from the same branch); falls back to ref_name on main
+          # ("main"), then the main scope for cold-cache reads on first push.
           cache-from: |
-            type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
-            type=gha,scope=wash-${{ matrix.arch }}-main
-          cache-to: type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }},mode=max
+            type=gha,scope=wash-release-arm64-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-release-arm64-main
+          cache-to: type=gha,scope=wash-release-arm64-${{ github.head_ref || github.ref_name }},mode=max
       - name: Push wash runtime image to GHCR by digest (main only)
         # PRs lack org-package write access; only push on main so
         # canary-publish can assemble the manifest after all gates pass.
-        # No `cache-to` here — the first build already wrote it.
+        # Ships DEFAULT features only — byte-identical to the RELEASE tarball
+        # above (whose cache this reuses), so the pushed canary is the exact
+        # bytes the operator-e2e `release` leg tested. No `cache-to` — the
+        # release build already wrote it.
         if: github.event_name != 'pull_request'
         id: build_push
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           outputs: type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
-          # Enable wasm_component_model_implements on the wasm host image for canary builds
-          build-args: |
-            CARGO_FEATURES=wasm_component_model_implements
           cache-from: |
-            type=gha,scope=wash-${{ matrix.arch }}-${{ github.head_ref || github.ref_name }}
-            type=gha,scope=wash-${{ matrix.arch }}-main
+            type=gha,scope=wash-release-arm64-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-release-arm64-main
       - name: Export digest
         if: github.event_name != 'pull_request'
         env:
@@ -289,15 +289,159 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: wash-image-digest-${{ matrix.arch }}
+          name: wash-image-digest-arm64
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
-      - name: Upload image tarball
+      - name: Upload release image tarball
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: wash-image-tarball-${{ matrix.arch }}
-          path: /tmp/wash-image.tar
+          name: wash-image-tarball-release-arm64
+          path: /tmp/wash-image-release.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  # ALL-FEATURES coverage image on arm64 — every optional host feature on
+  # (`(implements ..)` multiplexing AND host component plugins). NOT shipped:
+  # the operator-e2e `all-features` leg loads this tarball to exercise those
+  # features on a host built with them (a released host can't run them). Runs
+  # in parallel with `wash-image` (a separate job, not a second step) so the
+  # e2e gate waits on max(release, all-features), not their sum. Never pushed,
+  # so no digest.
+  wash-image-all-features:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'))
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build wash runtime image — all features (tarball for operator-e2e)
+        id: build_tar_all_features
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          outputs: type=docker,dest=/tmp/wash-image-all-features.tar,name=localhost/wasmcloud-wash:e2e
+          build-args: |
+            CARGO_FEATURES=wasm_component_model_implements,host-component-plugins
+          cache-from: |
+            type=gha,scope=wash-all-features-arm64-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-all-features-arm64-main
+          cache-to: type=gha,scope=wash-all-features-arm64-${{ github.head_ref || github.ref_name }},mode=max
+      - name: Upload all-features image tarball
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wash-image-tarball-all-features-arm64
+          path: /tmp/wash-image-all-features.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  # Build the shipped wash runtime image (DEFAULT features) on amd64 and push
+  # it to GHCR by digest — the other leg of the canary multi-arch manifest.
+  # Main only: the e2e gate runs on arm64 (see `wash-image`), so amd64 is not
+  # on any PR's critical path. The Dockerfile is arch-agnostic (a plain
+  # `cargo build`), so a successful arm64 build on the PR is strong evidence
+  # amd64 builds too; we don't spend a PR runner on the slower amd64 build.
+  # No tarball upload — no consumer runs on amd64.
+  wash-image-amd64:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main')
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Login to ghcr.io
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      # Single build+push: no tarball is exported on amd64 (nothing loads it),
+      # so unlike the arm64 leg this needs only one call. Ships DEFAULT
+      # features — the same build the arm64 leg ships, differing only by arch.
+      - name: Push wash runtime image to GHCR by digest
+        id: build_push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          outputs: type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
+          cache-from: |
+            type=gha,scope=wash-release-amd64-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-release-amd64-main
+          cache-to: type=gha,scope=wash-release-amd64-${{ github.head_ref || github.ref_name }},mode=max
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build_push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          if [[ -z "$DIGEST" ]]; then
+            echo "no digest on build step output" >&2
+            exit 1
+          fi
+          touch "/tmp/digests/${DIGEST#sha256:}"
+      - name: Upload digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wash-image-digest-amd64
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Build ONLY the e2e fixture components (not the whole `check` matrix) plus the
+  # in-repo wash, and upload them. The runtime-operator-e2e all-features leg then
+  # pushes them into the in-cluster registry without a Rust build on that leg.
+  #
+  # Runs on arm64 because the staged `wash` binary is executed (not just its
+  # wasm outputs consumed) by runtime-operator-e2e to push fixtures — and that
+  # job now runs on arm64. A native-amd64 wash here would exec-format-error
+  # there. The fixture components themselves are wasm32-wasip2 (arch-neutral).
+  #
+  # TODO(wash release): the in-repo wash is built here (and uploaded for the push
+  # side) only because the released wash can't build fixtures from their local
+  # wkg.toml refs. Once it can, use setup-wash-action instead and drop the protoc
+  # step below (needed only to compile wash, not the fixtures).
+  e2e-fixtures:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/free-disk-space
+      - name: Setup protoc
+        uses: ./.github/actions/setup-protoc
+      - uses: ./.github/actions/setup-rust
+      - name: Build e2e fixture components + wash
+        working-directory: runtime-operator
+        run: make e2e-images
+        env:
+          E2E_IMAGES_MODE: build
+          E2E_FIXTURES_DIR: ${{ runner.temp }}/e2e-fixtures
+      - name: Upload e2e fixture components + wash
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-fixtures
+          path: ${{ runner.temp }}/e2e-fixtures
           if-no-files-found: error
           retention-days: 1
 
@@ -310,28 +454,84 @@ jobs:
   runtime-operator-e2e:
     needs:
       - wash-image
-    # `wash-image` runs via `if: always() && ...` to bypass the skipped
+      - wash-image-all-features
+      - e2e-fixtures
+    # Runs on arm64 and loads the arm64 tarballs `wash-image` /
+    # `wash-image-all-features` built — so it no longer waits on the slower
+    # amd64 build, which now runs off this critical path in `wash-image-amd64`
+    # (main only). The two arm64 build jobs run in parallel, so this starts
+    # when the slower of them finishes.
+    #
+    # The upstreams run via `if: always() && ...` to bypass the skipped
     # `changes` job on main pushes. Without an explicit `if:` here, GHA
     # propagates the skipped state of that indirect upstream through and
-    # marks this job skipped even though `wash-image` itself succeeded.
-    # Result: canary-publish never fires on main. Explicit gate on
-    # wash-image's actual result is the documented workaround.
-    if: always() && needs.wash-image.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # marks this job skipped even though the builds themselves succeeded.
+    # Result: canary-publish never fires on main. Explicit gate on the
+    # upstreams' actual results is the documented workaround.
+    if: always() && needs.wash-image.result == 'success' && needs.wash-image-all-features.result == 'success' && needs.e2e-fixtures.result == 'success'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
     permissions:
       contents: read
+    # Run the suite twice. Both legs stand up an in-cluster oci-registry on a
+    # pinned all-features `registry` hostgroup and serve every fixture from it;
+    # the legs differ only in the image the DEFAULT (fixture) hostgroup runs:
+    #   release      — the shipped DEFAULT-features build. Validates that the
+    #                  shipped host pulls the fixtures from the registry (insecure
+    #                  HTTP) and runs them. `implements` self-skips (it needs a
+    #                  feature host); http + messaging run.
+    #   all-features — every optional host feature on; runs the full set incl.
+    #                  `implements`. Not shipped — a coverage build.
+    # default_tag/registry_tag select the per-hostgroup images (loaded below); the
+    # registry host is always all-features (it needs the async wasmcloud:blobstore
+    # plugin).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: release
+            default_tag: release
+            registry_tag: all-features
+          - variant: all-features
+            default_tag: all-features
+            registry_tag: all-features
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-go
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      # The fixture components + the in-repo wash were built by the e2e-fixtures
+      # job; download them so `make e2e-images` (push mode) just deploys the
+      # registry and pushes — no Rust build on this leg. Both legs push fixtures.
+      - name: Download e2e fixture components + wash
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: wash-image-tarball-amd64
+          name: e2e-fixtures
+          path: ${{ runner.temp }}/e2e-fixtures
+      # The registry host is always all-features; load it as :all-features on both
+      # legs. The tarballs internally tag localhost/wasmcloud-wash:e2e, so retag.
+      - name: Download all-features host image
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wash-image-tarball-all-features-arm64
           path: /tmp
-      - name: Load wash runtime image
-        run: docker load -i /tmp/wash-image.tar
+      - name: Load all-features host image
+        run: |
+          docker load -i /tmp/wash-image-all-features.tar
+          docker tag localhost/wasmcloud-wash:e2e localhost/wasmcloud-wash:all-features
+      # The release leg's fixture host is the shipped build; load it as :release
+      # alongside the all-features registry host so one cluster runs both.
+      - name: Download release host image
+        if: matrix.variant == 'release'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wash-image-tarball-release-arm64
+          path: /tmp
+      - name: Load release host image
+        if: matrix.variant == 'release'
+        run: |
+          docker load -i /tmp/wash-image-release.tar
+          docker tag localhost/wasmcloud-wash:e2e localhost/wasmcloud-wash:release
       - name: Build runtime-operator image
         working-directory: runtime-operator
         run: make docker-build IMG=localhost/runtime-operator:e2e
@@ -339,7 +539,7 @@ jobs:
         with:
           cluster_name: wasmcloud-e2e
           config: deploy/kind/kind-config.yaml
-      - name: Run runtime-operator e2e against locally-built wash
+      - name: Run runtime-operator e2e (${{ matrix.variant }}) against locally-built wash
         working-directory: runtime-operator
         run: make test-e2e
         env:
@@ -348,10 +548,16 @@ jobs:
           SKIP_IMAGE_BUILD: "true"
           BUILD_RUNTIME_IMAGE: "true"
           SKIP_RUNTIME_BUILD: "true"
-          # Exercise the messaging spec — this is the regression test for
-          # #5074 and is the whole reason the gate exists.
-          MESSAGING_E2E_IMAGE: ghcr.io/wasmcloud/components/messaging-echo-rust:0.1.0
-          IMPLEMENTS_E2E_IMAGE: ghcr.io/wasmcloud/components/keyvalue-implements:0.1.0
+          # Both legs run the in-cluster registry. The default (fixture) hostgroup
+          # runs default_tag; the registry hostgroup runs registry_tag (always
+          # all-features). implements self-skips when they differ (release leg).
+          E2E_IN_CLUSTER_REGISTRY: "true"
+          E2E_RUNTIME_IMAGE_TAG: ${{ matrix.default_tag }}
+          E2E_REGISTRY_HOST_IMAGE_TAG: ${{ matrix.registry_tag }}
+          # Reuse the components + wash the e2e-fixtures job built (downloaded
+          # above): `make e2e-images` pushes them rather than rebuilding.
+          E2E_IMAGES_MODE: push
+          E2E_FIXTURES_DIR: ${{ runner.temp }}/e2e-fixtures
           PROMETHEUS_INSTALL_SKIP: "true"
           CERT_MANAGER_INSTALL_SKIP: "true"
           KIND_CLUSTER_NAME: wasmcloud-e2e
@@ -376,6 +582,9 @@ jobs:
       - check
       - lint
       - wash-image
+      - wash-image-all-features
+      - wash-image-amd64
+      - e2e-fixtures
       - runtime-operator-e2e
       - canary-publish
       - canary-binaries
@@ -406,37 +615,39 @@ jobs:
           fi
 
   # Tag promotion: only push `canary` once check, lint, and the
-  # runtime-operator e2e have all passed against this commit. Assembles
-  # the multi-arch manifest list from the per-arch digests that
-  # wash-image already pushed (amd64 was also exercised by the e2e gate).
+  # runtime-operator e2e have all passed against this commit. Assembles the
+  # multi-arch manifest list from the per-arch digests that `wash-image`
+  # (arm64, also exercised by the e2e gate) and `wash-image-amd64` pushed.
   # The `sha-<full-sha>` tag is what release-tag.yml pins to when it
   # promotes this canary digest as the immutable vX.Y.Z release tag —
   # `canary` itself moves on every subsequent main push, so we cannot
   # rely on it.
   canary-publish:
     # Gate canary on the things that actually exercise the published bytes:
-    # `wash-image` is what gets pushed by digest, and `runtime-operator-e2e`
-    # loads that exact image into kind and runs the suite. `check`/`lint`
-    # are workspace-level signals that have no bearing on the image we're
-    # promoting, so they intentionally aren't gates here. `always()` is
-    # required to break the chained-skip propagation from the path-filter
-    # `changes` job (skipped on main) which would otherwise mark this job
-    # skipped before evaluating the explicit gate.
+    # the per-arch `wash-image*` jobs are what get pushed by digest, and
+    # `runtime-operator-e2e` loads the arm64 image into kind and runs the
+    # suite. `check`/`lint` are workspace-level signals that have no bearing
+    # on the image we're promoting, so they intentionally aren't gates here.
+    # `always()` is required to break the chained-skip propagation from the
+    # path-filter `changes` job (skipped on main) which would otherwise mark
+    # this job skipped before evaluating the explicit gate.
     if: |
       always() &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/main' &&
       needs.wash-image.result == 'success' &&
+      needs.wash-image-amd64.result == 'success' &&
       needs.runtime-operator-e2e.result == 'success'
     needs:
       - runtime-operator-e2e
       - wash-image
+      - wash-image-amd64
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Download digests
@@ -446,16 +657,16 @@ jobs:
           pattern: wash-image-digest-*
           merge-multiple: true
       - name: Login to ghcr.io
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/wasmcloud/wash
           tags: |
@@ -572,7 +783,7 @@ jobs:
             bin: wash.exe
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -585,10 +796,7 @@ jobs:
           rust-targets: "${{ matrix.target }}"
 
       - name: Setup protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: "29.x"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        uses: ./.github/actions/setup-protoc
 
       - name: Set SOURCE_DATE_EPOCH from commit timestamp
         # Pin embedded timestamps in the binary to the merge commit's author
@@ -605,7 +813,10 @@ jobs:
           # aggressively than cargo's default of 3.
           CARGO_NET_RETRY: "10"
         run: |
-          ${{ matrix.buildCommand }} --release --target ${{ matrix.buildTarget || matrix.target }} -p wash --features wasm_component_model_implements
+          # Release binaries ship with default features only — no
+          # `(implements ..)` multiplexing (it is exercised in the e2e host
+          # image, not shipped in a release build).
+          ${{ matrix.buildCommand }} --release --target ${{ matrix.buildTarget || matrix.target }} -p wash
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} ${{ matrix.artifact }}
 
       - name: Create Windows zip archive

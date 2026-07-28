@@ -263,11 +263,15 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         container: Resource<ContainerData>,
     ) -> wasmtime::Result<Result<ContainerMetadata, ContainerError>> {
         let container_data = self.table.get(&container)?;
+        let name = container_data.name.clone();
+        let root = container_data.root.clone();
 
-        Ok(Ok(ContainerMetadata {
-            name: container_data.name.clone(),
-            created_at: 0,
-        }))
+        let created_at = tokio::fs::metadata(&root)
+            .await
+            .map(|metadata| created_at_secs(&metadata))
+            .unwrap_or(0);
+
+        Ok(Ok(ContainerMetadata { name, created_at }))
     }
 
     #[instrument(name = "wasi.blobstore.get_data", skip(self, container))]
@@ -414,7 +418,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         Ok(Ok(ObjectMetadata {
             name,
             container: container_data.name.clone(),
-            created_at: 0,
+            created_at: created_at_secs(&metadata),
             size: metadata.len(),
         }))
     }
@@ -812,4 +816,17 @@ fn list_files_recursively(path: impl AsRef<Path>, files: &mut Vec<PathBuf>) -> a
         }
     }
     Ok(())
+}
+
+/// Best-effort creation time (seconds since the Unix epoch) for a filesystem
+/// entry. Falls back to the last-modified time on platforms or filesystems that
+/// don't record a creation time, and to `0` when neither is available.
+fn created_at_secs(metadata: &std::fs::Metadata) -> u64 {
+    metadata
+        .created()
+        .or_else(|_| metadata.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
 }

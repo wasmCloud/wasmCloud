@@ -1,0 +1,2 @@
+[overrides]
+"wasmcloud:messaging" = { path = "../p2-wit-deps/wasmcloud-messaging-0.2.0" }

@@ -13,8 +13,3 @@ publish = false
 anyhow = { workspace = true, default-features = true }
 # Workspace clap is default-features=false; xtask needs std on top.
 clap = { workspace = true, features = ["std"] }
-wit-component = { workspace = true }
-# Pins the WASI reactor adapter in lockstep with our wasmtime version
-# (used to componentize P3 core modules). Keep the major in sync with
-# the `wasmtime`/`wit-component` versions in the workspace manifest.
-wasi-preview1-component-adapter-provider = "45"

@@ -22,13 +22,14 @@
 //! - [`wasi_logging`] - Structured logging (`wasi:logging`)
 //! - [`wasi_otel`] - OpenTelemetry tracing, metrics, and logs (`wasi:otel/*`)
 
+use std::collections::HashMap;
 use std::future::Future;
-use std::path::PathBuf;
-use std::{collections::HashMap, path::Path};
+#[cfg(any(feature = "wasi-blobstore", feature = "wasi-keyvalue"))]
+use std::path::{Path, PathBuf};
 
 use crate::engine::workload::WorkloadItem;
 use crate::{
-    engine::workload::{ResolvedWorkload, UnresolvedWorkload, WorkloadComponent},
+    engine::workload::{ResolvedWorkload, UnresolvedWorkload, WorkloadMetadata},
     wit::WitWorld,
 };
 
@@ -51,6 +52,22 @@ pub mod wasmcloud_postgres;
 pub mod wasi_otel;
 
 pub mod wasmcloud_messaging;
+
+/// Host capabilities provided by a WebAssembly component running in its own
+/// supervised store (rather than by a Rust plugin running in-store). Needs
+/// `oci` for the loader that fetches a plugin's wasm.
+#[cfg(all(feature = "host-component-plugins", feature = "oci"))]
+pub mod component_host;
+
+/// Declarative spec for a host component plugin (id + wasm source). Compiled
+/// whenever the sources it can name are reachable, independent of
+/// `host-component-plugins`, so front-ends can accept a plugin declaration and
+/// fail clearly when built without that feature; the loader that consumes it
+/// lives in [`component_host`].
+#[cfg(feature = "oci")]
+pub mod component_plugin_spec;
+#[cfg(feature = "oci")]
+pub use component_plugin_spec::ComponentPluginSpec;
 
 /// Shared `(implements ..)` multiplexing core
 #[cfg(feature = "wasm_component_model_implements")]
@@ -97,6 +114,41 @@ impl<'a> WitInterfaces<'a> {
     /// Returns `true` if the given namespace, package, and set of interfaces are contained within this collection of [`crate::wit::WitInterface`]s.
     pub fn contains(&self, namespace: &str, package: &str, interfaces: &[&str]) -> bool {
         self.get(namespace, package, interfaces).is_some()
+    }
+}
+
+/// A workload a plugin has failed out of band (after it was already running),
+/// delivered to the host so it can transition the workload to a failed state.
+/// Used when a host component plugin evicts a workload whose `on-workload-bind`
+/// crash-loops the shared store.
+pub struct WorkloadFailure {
+    /// The workload to fail.
+    pub workload_id: String,
+    /// Human-readable cause, surfaced in the workload's status message.
+    pub reason: String,
+}
+
+/// A cheap, cloneable handle a plugin uses to report a [`WorkloadFailure`] to
+/// the host. The host injects one into each plugin at start
+/// ([`HostPlugin::set_workload_failure_sink`]) and drains it on a background
+/// task, transitioning each reported workload to a failed state.
+#[derive(Clone)]
+pub struct WorkloadFailureSink(tokio::sync::mpsc::UnboundedSender<WorkloadFailure>);
+
+impl WorkloadFailureSink {
+    /// Wrap the sender end of the host's workload-failure channel.
+    pub fn new(tx: tokio::sync::mpsc::UnboundedSender<WorkloadFailure>) -> Self {
+        Self(tx)
+    }
+
+    /// Report that `workload_id` has failed for `reason`. Non-blocking and
+    /// infallible from the caller's view: if the host has torn down the
+    /// receiver, the report is dropped (the host is stopping anyway).
+    pub fn report(&self, workload_id: impl Into<String>, reason: impl Into<String>) {
+        let _ = self.0.send(WorkloadFailure {
+            workload_id: workload_id.into(),
+            reason: reason.into(),
+        });
     }
 }
 
@@ -150,6 +202,14 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// # Arguments
     /// * `meters` - A `Meters` object containing the metrics to inject.
     async fn inject_meters(&self, _meters: &crate::observability::Meters) {}
+
+    /// Inject a sink the plugin can use to report that a workload it manages has
+    /// failed out of band — after it was already running — so the host
+    /// transitions it to a failed state. Called once during host start, before
+    /// [`HostPlugin::start`]. The default ignores it; a plugin only needs to
+    /// override this if it can fail a workload asynchronously (e.g. a host
+    /// component plugin evicting a workload whose lifecycle bind crash-loops).
+    fn set_workload_failure_sink(&self, _sink: WorkloadFailureSink) {}
 
     /// Called when the plugin is started during host initialization.
     ///
@@ -339,9 +399,12 @@ impl<T, Y> WorkloadTracker<T, Y> {
         }
     }
 
-    pub fn add_component(&mut self, workload_component: &WorkloadComponent, data: Y) {
-        let component_id = workload_component.id();
-        let workload_id = workload_component.workload_id();
+    /// Track an item (a component or a long-lived service) by its metadata. Both
+    /// `WorkloadComponent` and `WorkloadService` deref to `WorkloadMetadata`, so
+    /// existing `&WorkloadComponent` callers coerce unchanged.
+    pub fn add_component(&mut self, metadata: &WorkloadMetadata, data: Y) {
+        let component_id = metadata.id();
+        let workload_id = metadata.workload_id();
         let item = self
             .workloads
             .entry(workload_id.to_string())
@@ -373,6 +436,10 @@ impl<T, Y> WorkloadTracker<T, Y> {
 }
 
 /// Locks an untrusted path to be within the given root directory.
+///
+/// Only the filesystem-backed plugins hand it untrusted names, so it compiles
+/// with them.
+#[cfg(any(feature = "wasi-blobstore", feature = "wasi-keyvalue"))]
 pub(crate) fn lock_root(root: impl AsRef<Path>, untrusted: &str) -> Result<PathBuf, &'static str> {
     let path = Path::new(untrusted);
 
@@ -391,4 +458,70 @@ pub(crate) fn lock_root(root: impl AsRef<Path>, untrusted: &str) -> Result<PathB
     }
 
     Ok(root.as_ref().join(path))
+}
+
+/// The multiplexed plugin set a host registers to serve `(implements ..)`
+/// named imports.
+///
+/// Every single-backend plugin leaves [`HostPlugin::supports_named_instances`]
+/// at its default of `false`, so a workload declaring two entries of one
+/// namespace:package under distinct names fails to bind unless a multiplexed
+/// plugin is registered alongside. That makes this list load-bearing rather
+/// than optional, and it was previously written out by hand in every embedder:
+/// `wash host`, `wash dev`, and downstream hosts each kept their own copy.
+/// The copies drift — a downstream host lost `(implements ..)` support
+/// entirely for three weeks after a refactor rebuilt its registration list and
+/// omitted the block, with nothing at compile time to notice. One list here
+/// means adding a multiplexed plugin reaches every embedder at once.
+///
+/// Postgres is deliberately absent: whether it registers at all, and whether
+/// as `multiplex_only`, depends on the host's own configuration.
+#[cfg(feature = "wasm_component_model_implements")]
+pub fn multiplexed_plugins() -> Vec<std::sync::Arc<dyn HostPlugin>> {
+    #[allow(unused_mut)]
+    let mut plugins: Vec<std::sync::Arc<dyn HostPlugin>> = Vec::new();
+    #[allow(unused_imports)]
+    use std::sync::Arc;
+
+    #[cfg(feature = "wasi-keyvalue")]
+    {
+        plugins.push(Arc::new(
+            wasi_keyvalue::MultiplexedKeyValue::new()
+                .with_provider(Arc::new(wasi_keyvalue::InMemoryProvider))
+                .with_provider(Arc::new(wasi_keyvalue::RedisProvider))
+                .with_provider(Arc::new(wasi_keyvalue::NatsProvider))
+                .with_provider(Arc::new(wasi_keyvalue::FilesystemProvider)),
+        ));
+        plugins.push(Arc::new(
+            wasi_keyvalue::MultiplexedAsyncKeyValue::new()
+                .with_provider(Arc::new(wasi_keyvalue::InMemoryProvider))
+                .with_provider(Arc::new(wasi_keyvalue::RedisProvider))
+                .with_provider(Arc::new(wasi_keyvalue::NatsProvider))
+                .with_provider(Arc::new(wasi_keyvalue::FilesystemProvider)),
+        ));
+    }
+
+    #[cfg(feature = "wasi-blobstore")]
+    {
+        plugins.push(Arc::new(
+            wasi_blobstore::MultiplexedBlobstore::new()
+                .with_provider(Arc::new(wasi_blobstore::InMemoryProvider))
+                .with_provider(Arc::new(wasi_blobstore::FilesystemProvider))
+                .with_provider(Arc::new(wasi_blobstore::NatsBlobProvider)),
+        ));
+        plugins.push(Arc::new(
+            wasi_blobstore::MultiplexedAsyncBlobstore::new()
+                .with_provider(Arc::new(wasi_blobstore::InMemoryProvider))
+                .with_provider(Arc::new(wasi_blobstore::FilesystemProvider))
+                .with_provider(Arc::new(wasi_blobstore::NatsBlobProvider)),
+        ));
+    }
+
+    plugins.push(Arc::new(
+        wasmcloud_messaging::MultiplexedMessaging::new()
+            .with_provider(Arc::new(wasmcloud_messaging::InMemoryMsgProvider))
+            .with_provider(Arc::new(wasmcloud_messaging::NatsMsgProvider)),
+    ));
+
+    plugins
 }

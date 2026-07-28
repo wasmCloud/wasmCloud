@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::component_source::ComponentSource;
 use crate::host::{Host, HostApi, HostConfig};
 use crate::oci::{self, OciConfig};
 use crate::plugin::HostPlugin;
@@ -73,6 +74,14 @@ impl ClusterHostBuilder {
 
     pub fn with_plugin<T: HostPlugin>(mut self, plugin: Arc<T>) -> anyhow::Result<Self> {
         self.host_builder = self.host_builder.with_plugin(plugin)?;
+        Ok(self)
+    }
+
+    /// Registers the multiplexed plugin set. See
+    /// [`crate::host::HostBuilder::with_multiplexed_plugins`].
+    #[cfg(feature = "wasm_component_model_implements")]
+    pub fn with_multiplexed_plugins(mut self) -> anyhow::Result<Self> {
+        self.host_builder = self.host_builder.with_multiplexed_plugins()?;
         Ok(self)
     }
 
@@ -404,27 +413,28 @@ async fn workload_start(
         let mut pulled_components = Vec::with_capacity(wit_world.components.len());
         for component in &wit_world.components {
             let oci_config = image_pull_secret_to_oci_config(config, &component.image_pull_secret);
-            let (bytes, digest) = match oci::pull_component(
-                &component.image,
-                oci_config,
-                component.image_pull_policy().into(),
-            )
-            .await
-            {
-                Ok(res) => res,
-                Err(e) => {
-                    return Ok(types::v2::WorkloadStartResponse {
-                        workload_status: Some(types::v2::WorkloadStatus {
-                            workload_id: workload_id.clone(),
-                            workload_state: types::v2::WorkloadState::Error.into(),
-                            message: format!(
-                                "failed to pull component image {}: {}",
-                                component.image, e
-                            ),
-                        }),
-                    });
-                }
+            let source = ComponentSource::Oci {
+                image: component.image.clone(),
+                pull_policy: component.image_pull_policy().into(),
             };
+            // `load` already names the reference it failed on; this says which
+            // of the workload's components asked for it, so a multi-component
+            // start reports something the operator can act on.
+            let loaded =
+                match source.load(oci_config).await.with_context(|| {
+                    format!("failed to pull image for component '{}'", component.name)
+                }) {
+                    Ok(loaded) => loaded,
+                    Err(e) => {
+                        return Ok(types::v2::WorkloadStartResponse {
+                            workload_status: Some(types::v2::WorkloadStatus {
+                                workload_id: workload_id.clone(),
+                                workload_state: types::v2::WorkloadState::Error.into(),
+                                message: format!("{e:#}"),
+                            }),
+                        });
+                    }
+                };
             let local_resources = match component.local_resources.clone() {
                 Some(lr) => match crate::types::LocalResources::try_from(lr) {
                     Ok(lr) => lr,
@@ -445,8 +455,8 @@ async fn workload_start(
             };
             pulled_components.push(crate::types::Component {
                 name: component.name.clone(),
-                bytes: bytes.into(),
-                digest: Some(digest),
+                bytes: loaded.bytes,
+                digest: loaded.digest,
                 local_resources,
                 pool_size: component.pool_size,
                 max_invocations: component.max_invocations,
@@ -466,20 +476,24 @@ async fn workload_start(
 
     let service = if let Some(service) = service {
         let oci_config = image_pull_secret_to_oci_config(config, &service.image_pull_secret);
-        let (bytes, digest) = match oci::pull_component(
-            &service.image,
-            oci_config,
-            service.image_pull_policy().into(),
-        )
-        .await
+        let source = ComponentSource::Oci {
+            image: service.image.clone(),
+            pull_policy: service.image_pull_policy().into(),
+        };
+        // Distinguishes a service pull failure from a component one; both
+        // otherwise report the same reference and cause.
+        let loaded = match source
+            .load(oci_config)
+            .await
+            .context("failed to pull image for the workload service")
         {
-            Ok(res) => res,
+            Ok(loaded) => loaded,
             Err(e) => {
                 return Ok(types::v2::WorkloadStartResponse {
                     workload_status: Some(types::v2::WorkloadStatus {
                         workload_id: workload_id.clone(),
                         workload_state: types::v2::WorkloadState::Error.into(),
-                        message: format!("failed to pull service image {}: {}", service.image, e),
+                        message: format!("{e:#}"),
                     }),
                 });
             }
@@ -500,8 +514,8 @@ async fn workload_start(
             None => crate::types::LocalResources::default(),
         };
         Some(crate::types::Service {
-            bytes: bytes.into(),
-            digest: Some(digest),
+            bytes: loaded.bytes,
+            digest: loaded.digest,
             local_resources,
             max_restarts: service.max_restarts,
         })

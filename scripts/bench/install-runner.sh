@@ -4,7 +4,7 @@
 #
 #   sudo WASMCLOUD_BENCH_RUNNER_TOKEN=<TOKEN> bash scripts/bench/install-runner.sh \
 #     [--repo  wasmCloud/wasmCloud] \
-#     [--version 2.334.0]
+#     [--version 2.335.1]
 #
 # The registration token is one-shot. Get one from:
 #   GitHub Repo > Settings > Actions > Runners > New self-hosted runner
@@ -30,7 +30,7 @@
 set -euo pipefail
 
 REPO="wasmCloud/wasmCloud"
-RUNNER_VERSION="2.334.0"
+RUNNER_VERSION="2.335.1"
 # Default to the actual hostname of the box (set by installimage). Override with
 # --name if needed. No hardcoded value here — the box's identity isn't in the repo.
 RUNNER_NAME="$(hostname)"
@@ -42,7 +42,7 @@ TARGET_DIR="/var/lib/bench/target"
 # SHA256 of actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz, copied from
 # https://github.com/actions/runner/releases/tag/v${RUNNER_VERSION}. Bump
 # both `RUNNER_VERSION` and this constant together.
-RUNNER_SHA256="048024cd2c848eb6f14d5646d56c13a4def2ae7ee3ad12122bee960c56f3d271"
+RUNNER_SHA256="4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf"
 
 usage() {
   sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
@@ -104,39 +104,36 @@ fi
 # when stable is already the default; downloads + sets it otherwise.
 sudo -u bench -H bash -c '. $HOME/.cargo/env && rustup default stable && rustup --version'
 
-step "install gungraun-runner for the bench user"
-# Required by the gungraun bench. Version must equal the gungraun crate
-# version pinned in crates/wash-runtime/Cargo.toml — gungraun enforces
-# equality at run time, so they're derived from a single source of truth
-# (the Cargo.toml dep) rather than re-pinned here. `provision.yml` does
-# the same derivation, so a `cargo update gungraun` bump propagates to
-# both install paths without a separate edit.
-#
-# Version check uses `cargo install --list` rather than
-# `gungraun-runner --version`: the runner inspects the nearest Cargo.toml
-# at every invocation and bails with "No version information found for
-# gungraun" when it's run from the wasmCloud workspace root (the gungraun
-# dep lives in crates/wash-runtime/Cargo.toml as a dev-dependency, not in
-# [workspace.dependencies]). The install-time check below is
-# cwd-independent, so it works whether the operator runs the script from
-# /opt/wasmcloud, /tmp, or anywhere else.
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cargo_toml="$script_dir/../../crates/wash-runtime/Cargo.toml"
-gungraun_version=$(awk -F'"' '/^gungraun = "/ { print $2; exit }' "$cargo_toml")
-if [ -z "$gungraun_version" ]; then
-  echo "could not extract gungraun version from $cargo_toml" >&2
-  echo "expected a line like: gungraun = \"X.Y.Z\"" >&2
-  exit 1
-fi
-echo "installing gungraun-runner v${gungraun_version} (from $cargo_toml)"
-sudo --preserve-env=GUNGRAUN_VERSION -u bench -H \
-  env GUNGRAUN_VERSION="$gungraun_version" bash -c '
-  set -euo pipefail
-  . $HOME/.cargo/env
-  if ! cargo install --list | grep -qx "gungraun-runner v${GUNGRAUN_VERSION}:"; then
-    cargo install gungraun-runner --version "${GUNGRAUN_VERSION}"
+step "wire the bench user up to the shared bench tools"
+# gungraun-runner and wasm-component-ld are installed once, to /usr/local/bin,
+# by scripts/bench/ansible/provision.yml (which runs first, as root, and owns
+# their version pins). Both this CI runner (the `bench` user) and manual root
+# benches in /opt/wasmcloud share that single copy — one install, one source of
+# truth per version. We only wire the bench user up to them here.
+for tool in gungraun-runner wasm-component-ld; do
+  if [ ! -x "/usr/local/bin/${tool}" ]; then
+    echo "/usr/local/bin/${tool} is missing." >&2
+    echo "Run 'ansible-playbook provision.yml' first — it installs the shared" >&2
+    echo "bench tools this runner depends on (see scripts/bench/README.md §setup)." >&2
+    exit 1
   fi
-  cargo install --list | grep "^gungraun-runner "
+done
+# gungraun-runner is found on PATH (/usr/local/bin is on the default PATH), so
+# the presence check above is all it needs. wasm-component-ld, though, is the
+# wasip2 componentization linker, and rustc resolves that via cargo config, not
+# PATH — so point the bench user's config at the shared binary. (Needed because
+# rust-toolchain.toml pins Rust 1.96.0, whose bundled wasm-component-ld 0.5.22
+# can't decode the component-type section wit-bindgen >=0.58 emits for the
+# fixtures' component-model `implements` feature: "invalid leading byte (0x2)
+# for import name".) Append the table only if absent, so a re-run — or a config
+# written by hand — does not create a duplicate table and break the TOML.
+sudo -u bench -H bash -c '
+  set -euo pipefail
+  cfg="$HOME/.cargo/config.toml"
+  if [ ! -f "$cfg" ] || ! grep -q "^\[target\.wasm32-wasip2\]" "$cfg"; then
+    printf "\n[target.wasm32-wasip2]\nlinker = \"/usr/local/bin/wasm-component-ld\"\n" >> "$cfg"
+  fi
+  echo "bench user wasip2 linker → /usr/local/bin/wasm-component-ld"
 '
 
 step "download + verify + extract actions-runner v${RUNNER_VERSION}"

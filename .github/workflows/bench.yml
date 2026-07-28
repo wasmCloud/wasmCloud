@@ -9,9 +9,11 @@ on:
         default: http_invoke
         options:
           - http_invoke
+          - service_http
           - gungraun
           - wasmtime_baseline
           - wasmtime_serve
+          - gungraun_plugin
       ref:
         description: git ref to bench (branch, tag, or sha; default = the workflow ref)
         type: string
@@ -61,7 +63,7 @@ jobs:
       # published`. wasmtime_* are reference baselines for wasmtime itself
       # and don't shift with our changes — run them on demand via
       # workflow_dispatch when wasmtime is upgraded.
-      RELEASE_BENCHES: '["http_invoke","gungraun"]'
+      RELEASE_BENCHES: '["http_invoke","service_http","gungraun"]'
     steps:
       - id: set
         env:
@@ -78,6 +80,10 @@ jobs:
           else
             echo "benches=[\"${INPUT_BENCH}\"]" >> "$GITHUB_OUTPUT"
             ref="${INPUT_REF:-${DEFAULT_REF}}"
+            # Normalize to the short name (main, v2.5.2) so it matches
+            # GITHUB_REF_NAME's style and, when it's a tag, passes the
+            # releases view's strict-semver ref filter.
+            ref="${ref#refs/heads/}"; ref="${ref#refs/tags/}"
             echo "ref=${ref}" >> "$GITHUB_OUTPUT"
           fi
 
@@ -101,9 +107,16 @@ jobs:
       # actions/checkout's clean step doesn't blow it away every run.
       CARGO_TARGET_DIR: /var/lib/bench/target
       CARGO_INCREMENTAL: "0"
+      # The ref recorded on each data row — bench-tools/meta.rs reads this as
+      # the single source of truth for what was benched. It's the resolved,
+      # normalized matrix ref (the tag for `release`, the checked-out ref for a
+      # dispatch). meta.rs deliberately ignores GITHUB_REF_NAME, which is the
+      # *dispatch* ref (e.g. `main` even when the `ref` input is v2.5.2) and
+      # would hide tag runs from the semver-filtered releases view.
+      WASMCLOUD_BENCH_REF: ${{ needs.matrix.outputs.ref }}
     steps:
       - name: checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.matrix.outputs.ref }}
           fetch-depth: 0
@@ -149,7 +162,7 @@ jobs:
           if-no-files-found: error
 
       - name: configure aws credentials
-        uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
+        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6.2.2
         with:
           role-to-assume: ${{ secrets.WASMCLOUD_BENCH_AWS_ROLE_ARN }}
           aws-region: ${{ secrets.WASMCLOUD_BENCH_S3_REGION }}

@@ -8,11 +8,7 @@ repository = "https://github.com/wasmCloud/wasmCloud"
 authors = ["The wasmCloud Team"]
 categories = ["wasm"]
 readme = "README.md"
-# Not published to crates.io: the optional `wasi-webgpu` feature pulls in
-# git-only deps (`wasi-graphics-context-wasmtime`, `wasi-webgpu-wasmtime`
-# from wasi-gfx/wasi-gfx-runtime) that have no crates.io release, and
-# cargo's publish manifest check rejects deps without a version
-# requirement. Revisit once those crates are on crates.io or vendored.
+# Not published to crates.io: this is an internal runtime crate.
 publish = false
 # Allowlist preserved for the eventual re-enable of publishing. Cargo
 # always includes Cargo.toml, Cargo.lock, Cargo.toml.orig, and
@@ -47,7 +43,11 @@ wasi-blobstore = []
 wasi-keyvalue = []
 # Component-model `(implements ..)` / `named_imports` multiplexing
 wasm_component_model_implements = []
-wasi-webgpu = ["dep:wasi-webgpu-wasmtime", "dep:wasi-graphics-context-wasmtime"]
+# Host component plugins: a component providing a host capability from its own
+# long-lived, supervised store, serving cross-store capability calls.
+# See `plugin::component_host` for the adapter and how it wires up.
+host-component-plugins = []
+wasi-webgpu = ["dep:wasi-webgpu-wasmtime"]
 wasmcloud-postgres = [
     "dep:tokio-postgres", "dep:tokio-postgres-rustls",
     "dep:deadpool-postgres", "dep:postgres-types",
@@ -59,11 +59,13 @@ wasi-tls = ["dep:wasmtime-wasi-tls"]
 
 [dependencies]
 anyhow = { workspace = true }
+arc-swap = { workspace = true }
 async-nats = { workspace = true, features = ["aws-lc-rs"] }
 async-trait = { workspace = true }
 bon = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
+fastrand = { workspace = true }
 futures = { workspace = true }
 hostname = { workspace = true }
 http = { workspace = true }
@@ -142,8 +144,7 @@ webpki-roots = { workspace = true }
 # fails to build on Windows and s390x, so the deps are gated to match the
 # `#[cfg]` on `plugin::wasi_webgpu`.
 [target.'cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))'.dependencies]
-wasi-graphics-context-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "301716b5591bc6e08eca852b936fc8a17dea5379", optional = true }
-wasi-webgpu-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "301716b5591bc6e08eca852b936fc8a17dea5379", optional = true }
+wasi-webgpu-wasmtime = { version = "0.2", optional = true }
 
 # Proto codegen only. Wasm fixtures are built by `cargo xtask
 # build-fixtures` (see /xtask), which owns wit-component and the WASI
@@ -185,6 +186,10 @@ name = "http_invoke"
 harness = false
 
 [[bench]]
+name = "service_http"
+harness = false
+
+[[bench]]
 name = "gungraun"
 harness = false
 
@@ -194,5 +199,11 @@ harness = false
 
 [[bench]]
 name = "wasmtime_serve"
+harness = false
+
+# Requires `--features host-component-plugins`, plus valgrind and a
+# version-matched gungraun-runner on PATH.
+[[bench]]
+name = "gungraun_plugin"
 harness = false
 

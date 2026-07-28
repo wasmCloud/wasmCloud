@@ -1,0 +1,7 @@
+package wasmcloud:test-webgpu@0.1.0;
+
+world http-webgpu {
+    import wasi:webgpu/webgpu@0.3.0-rc.2;
+
+    export wasi:http/handler@0.3.0;
+}

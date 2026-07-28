@@ -245,9 +245,14 @@ async fn setup(latency: Duration) -> Result<TestHarness> {
         },
     };
 
-    host.workload_start(req)
+    host.workload_start(req.clone())
         .await
         .context("workload_start did not return Ok — host failed to bind/resolve under fault")?;
+    let mut replica = req;
+    replica.workload_id = uuid::Uuid::new_v4().to_string();
+    host.workload_start(replica)
+        .await
+        .context("replica workload_start did not return Ok under fault")?;
 
     Ok(TestHarness {
         proxy,
@@ -308,7 +313,7 @@ async fn subscription_registers_under_upstream_latency() -> Result<()> {
 /// client toward NATS before `workload_start` returned. Independent of any
 /// timing or NATS server state — looks at the bytes the proxy captured.
 ///
-/// NATS protocol subscribe message format: `SUB <subject> <sid>\r\n`.
+/// NATS protocol subscribe message format: `SUB <subject> [queue] <sid>\r\n`.
 #[tokio::test]
 #[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn sub_protocol_message_sent_before_resolve_returns() -> Result<()> {
@@ -339,6 +344,34 @@ async fn sub_protocol_message_sent_before_resolve_returns() -> Result<()> {
     }
 }
 
+/// Component replicas use a stable queue group by default. Assert this at the
+/// NATS protocol boundary so a regression back to plain `SUB <subject> <sid>`
+/// cannot accidentally preserve the request/reply tests while reintroducing
+/// broadcast delivery to every replica.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn default_subscription_uses_component_consumer_group() -> Result<()> {
+    let harness = setup(Duration::from_millis(0)).await?;
+    let needle =
+        format!("SUB {SUBSCRIPTION_SUBJECT} wasmcloud.test.messaging-fault.messaging-handler.");
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+
+    loop {
+        let bytes = harness.proxy.client_to_server_bytes().await;
+        if bytes.windows(needle.len()).any(|w| w == needle.as_bytes()) {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            let preview = String::from_utf8_lossy(&bytes);
+            anyhow::bail!(
+                "expected a queue subscription beginning with `{needle}` within 2s of workload_start returning. captured bytes ({n}):\n{preview}",
+                n = bytes.len()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 /// Asserts the steady-state behavior: after `workload_start` returns and the
 /// subscriber loop has time to settle, the workload's user-facing subject
 /// (`test.echo`) is still subscribed — no UNSUB has been sent for *its* sid.
@@ -364,10 +397,12 @@ async fn no_unsubscribe_during_steady_state() -> Result<()> {
     let sid = text
         .lines()
         .find_map(|line| line.strip_prefix(&needle))
-        .map(|tail| tail.split_whitespace().next().unwrap_or("").to_string())
+        // Queue subscriptions include the group before the sid, while plain
+        // subscriptions contain only the sid. The sid is always last.
+        .map(|tail| tail.split_whitespace().next_back().unwrap_or("").to_string())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "no `SUB {SUBSCRIPTION_SUBJECT} <sid>` line in captured bytes; can't verify \
+                "no `SUB {SUBSCRIPTION_SUBJECT} [queue] <sid>` line in captured bytes; can't verify \
              the workload's subscription is still active. captured:\n{text}"
             )
         })?;

@@ -22,6 +22,6 @@ spec:
         - name: messaging-echo
           # Component exports wasmcloud:messaging/handler@0.2.0 and replies to
           # incoming messages by publishing the body back to msg.reply_to. The
-          # fixture under crates/wash-runtime/tests/fixtures/messaging-handler
+          # fixture under crates/wash-runtime/tests/fixtures/messaging-echo
           # is the source.
           image: ghcr.io/wasmcloud/components/messaging-echo-rust:0.1.0

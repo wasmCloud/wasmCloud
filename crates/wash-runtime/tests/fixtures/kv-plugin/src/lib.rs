@@ -1,0 +1,375 @@
+//! Host component plugin exporting the bespoke, handle-free `acme:kv/store`
+//! capability, backed by a process-global in-memory map.
+//!
+//! Unlike the ephemeral `bridge-backend` (a fresh instance per call), this
+//! component is instantiated ONCE into a long-lived, host-scoped store and
+//! serves every workload that imports `acme:kv/store`. Because the instance
+//! persists, its `STORE` survives across calls — the property the host
+//! component singleton exists to provide.
+
+mod bindings {
+    #![allow(unsafe_code)]
+    wit_bindgen::generate!({ world: "kv-plugin", generate_all });
+}
+
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use bindings::exports::acme::kv::store::{Bucket, Guest, GuestBucket};
+use bindings::exports::wasmcloud::host::workload_lifecycle::{
+    Guest as LifecycleGuest, InterfaceBinding, Version, WorkloadInfo,
+};
+use bindings::wasi::clocks::monotonic_clock;
+use bindings::wasi::clocks::system_clock;
+use bindings::wasmcloud::host::cancel;
+use wit_bindgen::{FutureReader, StreamReader, StreamResult};
+
+/// Number of `bucket` resources dropped, incremented by `Bucket`'s destructor —
+/// lets a test prove a caller's proxy drop frees the real resource here.
+static DROPPED_BUCKETS: AtomicU64 = AtomicU64::new(0);
+
+/// A guest-owned key-value partition behind the exported `bucket` resource.
+struct BucketState {
+    data: Mutex<BTreeMap<String, Vec<u8>>>,
+}
+
+impl Drop for BucketState {
+    fn drop(&mut self) {
+        DROPPED_BUCKETS.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl GuestBucket for BucketState {
+    async fn get(&self, key: String) -> Option<Vec<u8>> {
+        self.data.lock().unwrap().get(&key).cloned()
+    }
+
+    async fn set(&self, key: String, value: Vec<u8>) {
+        self.data.lock().unwrap().insert(key, value);
+    }
+}
+
+/// Persistent store state. Held only within synchronous blocks (never across an
+/// `.await`), so a plain `Mutex` is sufficient even though concurrent capability
+/// calls interleave cooperatively on this one instance.
+static STORE: Mutex<BTreeMap<String, Vec<u8>>> = Mutex::new(BTreeMap::new());
+
+/// Per-caller partitions: caller workload id -> that caller's own map. Proves
+/// per-caller state isolation on the shared singleton.
+static PARTITIONS: Mutex<BTreeMap<String, BTreeMap<String, Vec<u8>>>> =
+    Mutex::new(BTreeMap::new());
+
+/// Per-workload binds captured by `on-workload-bind`, keyed by workload id.
+/// The eager-provision pattern: bind stores the workload's manifest config
+/// here; capability calls correlate back via the identity import; unbind
+/// reclaims the entry.
+static BINDS: Mutex<BTreeMap<String, WorkloadInfo>> = Mutex::new(BTreeMap::new());
+
+/// Lifecycle events observed by this incarnation, oldest first — resets with
+/// the store on a supervised restart, which is what lets a test distinguish a
+/// replayed bind from surviving state.
+static LIFECYCLE_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// `begin` name -> the host job id it registered, so `cancel-job` can look it up.
+static BEGUN: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
+
+/// `begin` name -> ticks completed, so a test can observe how far a cancelled
+/// `begin` got without depending on the (aborted) caller's own response.
+static PROGRESS: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
+
+struct Component;
+
+impl Guest for Component {
+    async fn set(key: String, value: Vec<u8>) {
+        STORE.lock().unwrap().insert(key, value);
+    }
+
+    async fn get(key: String) -> Option<Vec<u8>> {
+        STORE.lock().unwrap().get(&key).cloned()
+    }
+
+    async fn delete(key: String) {
+        STORE.lock().unwrap().remove(&key);
+    }
+
+    async fn pset(key: String, value: Vec<u8>) {
+        // Partition by the calling workload; `get-workload-id` is a sync host
+        // import that is exact under concurrency (resolved from this call's task).
+        let caller = bindings::wasmcloud::host::identity::get_workload_id();
+        PARTITIONS
+            .lock()
+            .unwrap()
+            .entry(caller)
+            .or_default()
+            .insert(key, value);
+    }
+
+    async fn pget(key: String) -> Option<Vec<u8>> {
+        let caller = bindings::wasmcloud::host::identity::get_workload_id();
+        PARTITIONS
+            .lock()
+            .unwrap()
+            .get(&caller)
+            .and_then(|partition| partition.get(&key).cloned())
+    }
+
+    async fn whoami() -> String {
+        let workload = bindings::wasmcloud::host::identity::get_workload_id();
+        let component = bindings::wasmcloud::host::identity::get_component_id();
+        format!("{workload}|{component}")
+    }
+
+    async fn slow(millis: u64) -> u64 {
+        // Await a timer so this task YIELDS the store's cooperative executor.
+        // A concurrent fast call spawned as its own task can therefore run to
+        // completion before this one returns.
+        monotonic_clock::wait_for(millis.saturating_mul(1_000_000)).await;
+        millis
+    }
+
+    async fn total(mut data: StreamReader<u8>) -> u64 {
+        let mut total: u64 = 0;
+        loop {
+            let (result, chunk) = data.read(Vec::with_capacity(4096)).await;
+            total += chunk.len() as u64;
+            if matches!(result, StreamResult::Dropped) {
+                break;
+            }
+        }
+        total
+    }
+
+    async fn emit(count: u64) -> StreamReader<u8> {
+        let (mut tx, rx) = bindings::wit_stream::new();
+        wit_bindgen::spawn_local(async move {
+            let chunk = vec![b'k'; 256];
+            let mut written: u64 = 0;
+            while written < count {
+                let n = ((count - written) as usize).min(chunk.len());
+                tx.write_all(chunk[..n].to_vec()).await;
+                written += n as u64;
+            }
+            drop(tx);
+        });
+        rx
+    }
+
+    async fn eventually(value: u64) -> FutureReader<u64> {
+        let (tx, rx) = bindings::wit_future::new(|| 0u64);
+        wit_bindgen::spawn_local(async move {
+            let _ = tx.write(value).await;
+        });
+        rx
+    }
+
+    async fn recurse(n: u64) -> u64 {
+        if n == 0 {
+            0
+        } else {
+            // Call our OWN capability through the self-import, re-entering the
+            // plugin store across the bridge. Each hop deepens the call chain;
+            // a large `n` trips the host's depth guard, which traps this call.
+            1 + bindings::acme::kv::store::recurse(n - 1).await
+        }
+    }
+
+    async fn boom() {
+        panic!("kv-plugin boom: deliberate guest trap for the poisoning negative test");
+    }
+
+    type Bucket = BucketState;
+
+    async fn open(_name: String) -> Bucket {
+        Bucket::new(BucketState {
+            data: Mutex::new(BTreeMap::new()),
+        })
+    }
+
+    async fn dropped_buckets() -> u64 {
+        DROPPED_BUCKETS.load(Ordering::SeqCst)
+    }
+
+    async fn begin(name: String, ticks: u64, tick_ms: u64) -> u64 {
+        // Register this invocation's host job so another caller can cancel it by
+        // name, then run a long loop that cooperatively checks for cancellation
+        // each tick and returns early if asked. `progress`/the return value report
+        // how far it got — the full `ticks` if it ran to completion, fewer if
+        // cancelled.
+        let job = cancel::current_job();
+        BEGUN.lock().unwrap().insert(name.clone(), job);
+        PROGRESS.lock().unwrap().insert(name.clone(), 0);
+        let mut done = 0u64;
+        while done < ticks {
+            monotonic_clock::wait_for(tick_ms.saturating_mul(1_000_000)).await;
+            if cancel::is_cancelled() {
+                break;
+            }
+            done += 1;
+            PROGRESS.lock().unwrap().insert(name.clone(), done);
+        }
+        done
+    }
+
+    async fn cancel_job(name: String) -> bool {
+        let job = BEGUN.lock().unwrap().get(&name).copied();
+        match job {
+            Some(job) => cancel::request_cancel(job),
+            None => false,
+        }
+    }
+
+    async fn progress(name: String) -> u64 {
+        PROGRESS.lock().unwrap().get(&name).copied().unwrap_or(0)
+    }
+
+    async fn bound_config(key: String) -> Option<String> {
+        // Correlate the call back to bind-time state via the identity import —
+        // same key the host used to deliver `on-workload-bind`.
+        let caller = bindings::wasmcloud::host::identity::get_workload_id();
+        BINDS.lock().unwrap().get(&caller).and_then(|info| {
+            info.interfaces.iter().find_map(|binding| {
+                binding
+                    .config
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| v.clone())
+            })
+        })
+    }
+
+    async fn bind_info(workload: String) -> Option<String> {
+        BINDS.lock().unwrap().get(&workload).map(render_info)
+    }
+
+    async fn lifecycle_log() -> Vec<String> {
+        LIFECYCLE_LOG.lock().unwrap().clone()
+    }
+}
+
+impl LifecycleGuest for Component {
+    async fn on_workload_bind(workload: WorkloadInfo) -> Result<(), String> {
+        // Test knobs read from the matched interface config:
+        //  - `reject`: fail the bind with the given message.
+        //  - `trap-on-bind`: panic every time (an always-poison bind).
+        //  - `trap-after-epoch-secs`: panic once wall-clock passes the given
+        //    unix second, so the bind succeeds on deploy but traps on any
+        //    replay after the threshold — a deterministic poison replay.
+        //  - `slow-bind-ms`: sleep this long BEFORE provisioning, so the hook
+        //    overruns a short host timeout and still completes later — exercises
+        //    the deferred rollback unbind.
+        let mut slow_bind_ms: u64 = 0;
+        for binding in &workload.interfaces {
+            for (key, value) in &binding.config {
+                match key.as_str() {
+                    "reject" => return Err(value.clone()),
+                    "trap-on-bind" => panic!("kv-plugin trap-on-bind: deliberate bind trap"),
+                    "trap-after-epoch-secs" => {
+                        let threshold: i64 = value.parse().unwrap_or(0);
+                        if system_clock::now().seconds >= threshold {
+                            panic!("kv-plugin trap-after-epoch-secs: deliberate poison replay");
+                        }
+                    }
+                    "slow-bind-ms" => slow_bind_ms = value.parse().unwrap_or(0),
+                    _ => {}
+                }
+            }
+        }
+        if slow_bind_ms > 0 {
+            monotonic_clock::wait_for(slow_bind_ms.saturating_mul(1_000_000)).await;
+        }
+        record_hook_identity("bind", &workload.id);
+        LIFECYCLE_LOG
+            .lock()
+            .unwrap()
+            .push(format!("bind:{}", workload.id));
+        BINDS.lock().unwrap().insert(workload.id.clone(), workload);
+        Ok(())
+    }
+
+    async fn on_workload_unbind(id: String) {
+        record_hook_identity("unbind", &id);
+        LIFECYCLE_LOG.lock().unwrap().push(format!("unbind:{id}"));
+        BINDS.lock().unwrap().remove(&id);
+    }
+}
+
+/// Ambient identity inside a lifecycle hook must be the workload the hook
+/// concerns, with an empty component id. A mismatch poisons the lifecycle log,
+/// so every exact-log test assertion enforces the contract for free.
+fn record_hook_identity(hook: &str, expected_workload: &str) {
+    let workload = bindings::wasmcloud::host::identity::get_workload_id();
+    let component = bindings::wasmcloud::host::identity::get_component_id();
+    if workload != expected_workload || !component.is_empty() {
+        LIFECYCLE_LOG
+            .lock()
+            .unwrap()
+            .push(format!("{hook}-ident-mismatch:{workload}|{component}"));
+    }
+}
+
+/// Render every typed field of a captured bind into one line a test can
+/// assert on: `id=..;name=..;ns=..;components=a+b;ifaces=ns:pkg/i@ver#label?k=v`.
+fn render_info(info: &WorkloadInfo) -> String {
+    let ifaces = info
+        .interfaces
+        .iter()
+        .map(render_binding)
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "id={};name={};ns={};service={};components={};ifaces={ifaces}",
+        info.id,
+        info.name,
+        info.namespace,
+        info.service.as_deref().unwrap_or("-"),
+        info.components.join("+"),
+    )
+}
+
+fn render_binding(binding: &InterfaceBinding) -> String {
+    let mut s = format!(
+        "{}:{}/{}",
+        binding.namespace,
+        binding.package,
+        binding.interfaces.join(",")
+    );
+    if let Some(version) = &binding.version {
+        s.push('@');
+        s.push_str(&render_version(version));
+    }
+    if let Some(name) = &binding.name {
+        s.push('#');
+        s.push_str(name);
+    }
+    if !binding.config.is_empty() {
+        let config = binding
+            .config
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join("&");
+        s.push('?');
+        s.push_str(&config);
+    }
+    s
+}
+
+fn render_version(version: &Version) -> String {
+    let mut s = format!("{}.{}.{}", version.major, version.minor, version.patch);
+    if let Some(pre) = &version.pre {
+        s.push('-');
+        s.push_str(pre);
+    }
+    if let Some(build) = &version.build {
+        s.push('+');
+        s.push_str(build);
+    }
+    s
+}
+
+mod export {
+    #![allow(unsafe_code)]
+    use super::{bindings, Component};
+    bindings::export!(Component with_types_in bindings);
+}

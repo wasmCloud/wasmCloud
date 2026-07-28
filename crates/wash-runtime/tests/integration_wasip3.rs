@@ -17,7 +17,7 @@ use wash_runtime::{
 };
 
 mod common;
-use common::{http_counter_host_interfaces, start_host_with_p3};
+use common::{http_counter_host_interfaces, start_host_with_p3_http_handler};
 
 const HTTP_COUNTER_WASM: &[u8] = include_bytes!("wasm/http_counter.wasm");
 
@@ -117,7 +117,7 @@ fn test_targets_wasip3_ignores_non_wasi() {
 
 #[tokio::test]
 async fn test_p2_http_component_works_with_p3_enabled() -> Result<()> {
-    let (addr, host) = start_host_with_p3("127.0.0.1:0").await?;
+    let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
 
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
@@ -180,7 +180,7 @@ async fn test_p2_http_component_works_with_p3_enabled() -> Result<()> {
 
 #[tokio::test]
 async fn test_p2_concurrent_requests_with_p3_enabled() -> Result<()> {
-    let (addr, host) = start_host_with_p3("127.0.0.1:0").await?;
+    let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
 
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),

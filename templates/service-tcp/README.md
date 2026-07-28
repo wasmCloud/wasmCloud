@@ -116,7 +116,7 @@ The `.wash/config.yaml` file tells `wash dev` how to build and run this project:
 
 - **`build.command`** — Builds the entire workspace for `wasm32-wasip2`
 - **`build.component_path`** — Points to the HTTP API component (the primary request handler)
-- **`dev.service_file`** — Points to the TCP service, which `wash dev` starts as a long-running background process alongside the HTTP handler
+- **`dev.service_file`** — Points to the TCP service, which `wash dev` starts as a long-running background process alongside the HTTP handler. To run a published service instead of a locally built one, replace it with `dev.service_image` (plus an optional `dev.service_pull_policy`)
 
 The runtime treats these two workloads differently:
 

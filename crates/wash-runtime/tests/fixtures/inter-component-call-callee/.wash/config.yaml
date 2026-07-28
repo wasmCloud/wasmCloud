@@ -1,0 +1,5 @@
+build:
+  # `wash build` runs `wit fetch` (resolving the wkg.toml local refs), then this
+  # command; a wasm32-wasip2 core module is wrapped into a component afterward.
+  command: cargo build --target wasm32-wasip2 --release
+  component_path: ../target/wasm32-wasip2/release/inter_component_call_callee.wasm

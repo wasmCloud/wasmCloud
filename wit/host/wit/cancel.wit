@@ -1,0 +1,24 @@
+package wasmcloud:host@0.1.0;
+
+/// Host-provided so a component plugin can cooperatively cancel one of its own
+/// in-flight invocations. Job ids are host-minted and opaque. `request-cancel`
+/// marks a job; the running guest observes the mark and unwinds itself, without
+/// disturbing the store's other tenants.
+interface cancel {
+    /// An opaque, host-minted identifier for one in-flight invocation.
+    type job-id = u64;
+
+    /// The id of the invocation the caller is currently running under, or `0` if
+    /// none. A guest stashes this so another caller can later cancel it.
+    current-job: func() -> job-id;
+
+    /// Ask the invocation with `job` to cancel; returns whether the request was
+    /// accepted (not whether it has stopped). Accepted only for a caller in the
+    /// same workload as the job's owner. The target observes the request (via
+    /// `is-cancelled`, or a dropped stream reader) and unwinds itself.
+    request-cancel: func(job: job-id) -> bool;
+
+    /// Whether the invocation the caller is currently running under has been
+    /// asked to cancel. A long-running guest polls this and returns early.
+    is-cancelled: func() -> bool;
+}
