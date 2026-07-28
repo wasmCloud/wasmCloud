@@ -459,3 +459,69 @@ pub(crate) fn lock_root(root: impl AsRef<Path>, untrusted: &str) -> Result<PathB
 
     Ok(root.as_ref().join(path))
 }
+
+/// The multiplexed plugin set a host registers to serve `(implements ..)`
+/// named imports.
+///
+/// Every single-backend plugin leaves [`HostPlugin::supports_named_instances`]
+/// at its default of `false`, so a workload declaring two entries of one
+/// namespace:package under distinct names fails to bind unless a multiplexed
+/// plugin is registered alongside. That makes this list load-bearing rather
+/// than optional, and it was previously written out by hand in every embedder:
+/// `wash host`, `wash dev`, and downstream hosts each kept their own copy.
+/// The copies drift — a downstream host lost `(implements ..)` support
+/// entirely for three weeks after a refactor rebuilt its registration list and
+/// omitted the block, with nothing at compile time to notice. One list here
+/// means adding a multiplexed plugin reaches every embedder at once.
+///
+/// Postgres is deliberately absent: whether it registers at all, and whether
+/// as `multiplex_only`, depends on the host's own configuration.
+#[cfg(feature = "wasm_component_model_implements")]
+pub fn multiplexed_plugins() -> Vec<std::sync::Arc<dyn HostPlugin>> {
+    #[allow(unused_mut)]
+    let mut plugins: Vec<std::sync::Arc<dyn HostPlugin>> = Vec::new();
+    #[allow(unused_imports)]
+    use std::sync::Arc;
+
+    #[cfg(feature = "wasi-keyvalue")]
+    {
+        plugins.push(Arc::new(
+            wasi_keyvalue::MultiplexedKeyValue::new()
+                .with_provider(Arc::new(wasi_keyvalue::InMemoryProvider))
+                .with_provider(Arc::new(wasi_keyvalue::RedisProvider))
+                .with_provider(Arc::new(wasi_keyvalue::NatsProvider))
+                .with_provider(Arc::new(wasi_keyvalue::FilesystemProvider)),
+        ));
+        plugins.push(Arc::new(
+            wasi_keyvalue::MultiplexedAsyncKeyValue::new()
+                .with_provider(Arc::new(wasi_keyvalue::InMemoryProvider))
+                .with_provider(Arc::new(wasi_keyvalue::RedisProvider))
+                .with_provider(Arc::new(wasi_keyvalue::NatsProvider))
+                .with_provider(Arc::new(wasi_keyvalue::FilesystemProvider)),
+        ));
+    }
+
+    #[cfg(feature = "wasi-blobstore")]
+    {
+        plugins.push(Arc::new(
+            wasi_blobstore::MultiplexedBlobstore::new()
+                .with_provider(Arc::new(wasi_blobstore::InMemoryProvider))
+                .with_provider(Arc::new(wasi_blobstore::FilesystemProvider))
+                .with_provider(Arc::new(wasi_blobstore::NatsBlobProvider)),
+        ));
+        plugins.push(Arc::new(
+            wasi_blobstore::MultiplexedAsyncBlobstore::new()
+                .with_provider(Arc::new(wasi_blobstore::InMemoryProvider))
+                .with_provider(Arc::new(wasi_blobstore::FilesystemProvider))
+                .with_provider(Arc::new(wasi_blobstore::NatsBlobProvider)),
+        ));
+    }
+
+    plugins.push(Arc::new(
+        wasmcloud_messaging::MultiplexedMessaging::new()
+            .with_provider(Arc::new(wasmcloud_messaging::InMemoryMsgProvider))
+            .with_provider(Arc::new(wasmcloud_messaging::NatsMsgProvider)),
+    ));
+
+    plugins
+}
