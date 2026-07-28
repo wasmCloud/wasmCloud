@@ -3,6 +3,7 @@
 use super::WasiSocketsCtxView;
 use crate::sockets::WasiSockets;
 use crate::sockets::util::{from_ipv4_addr, from_ipv6_addr, parse_host};
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use wasmtime::component::Accessor;
 use wasmtime_wasi::p3::bindings::sockets::ip_name_lookup::{Host, HostWithStore};
@@ -44,6 +45,12 @@ async fn resolve(host: url::Host) -> Result<Vec<types::IpAddress>, ErrorCode> {
         url::Host::Ipv4(addr) => Ok(vec![types::IpAddress::Ipv4(from_ipv4_addr(addr))]),
         url::Host::Ipv6(addr) => Ok(vec![types::IpAddress::Ipv6(from_ipv6_addr(addr))]),
         url::Host::Domain(domain) => {
+            if domain.ends_with(".localhost") && domain != "localhost" {
+                return Ok(vec![
+                    types::IpAddress::Ipv4(from_ipv4_addr(Ipv4Addr::LOCALHOST)),
+                    types::IpAddress::Ipv6(from_ipv6_addr(Ipv6Addr::LOCALHOST)),
+                ]);
+            }
             // Only names are resolved here, not ports, so force the port to 0.
             let addrs = tokio::net::lookup_host((domain.as_str(), 0))
                 .await
