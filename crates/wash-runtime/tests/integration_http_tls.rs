@@ -1,7 +1,7 @@
 //! Integration test for TLS-enabled HTTP server
 //!
 //! Verifies that HTTPS requests are correctly handled when the HTTP server
-//! is configured with TLS via `HttpServer::new_with_tls()`.
+//! is configured with TLS via `Ingress::new_with_tls()`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

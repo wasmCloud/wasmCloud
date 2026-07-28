@@ -34,7 +34,7 @@ use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        http::{DevRouter, HttpServer},
+        http::{DevRouter, Ingress},
     },
     plugin::wasi_blobstore::{MultiplexedAsyncBlobstore, NatsBlobProvider},
     types::{Component, LocalResources, Workload, WorkloadStartRequest, WorkloadState},
@@ -79,11 +79,11 @@ async fn p3_guest_streams_blobstore_through_nats() -> Result<()> {
 
     // --- host with the async multiplexed blobstore plugin + NATS provider ---
     let engine = Engine::builder().build()?;
-    let http_server = HttpServer::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
-    let addr = http_server.addr();
+    let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let addr = ingress.addr();
     let host = HostBuilder::new()
         .with_engine(engine)
-        .with_http_handler(Arc::new(http_server))
+        .with_http_handler(Arc::new(ingress))
         .with_plugin(Arc::new(
             MultiplexedAsyncBlobstore::new().with_provider(Arc::new(NatsBlobProvider)),
         ))?

@@ -37,6 +37,12 @@ impl hyper::body::Body for ChannelBody {
 }
 
 /// Handles one inbound HTTP request on the shared service instance.
+///
+/// A handler `Err(error-code)` is an ordinary application outcome: this request
+/// gets a 500 and the instance keeps serving. A guest *trap* is answered the
+/// same way here, but it also faults the store, so the driver's
+/// `run_concurrent` returns an error and the service supervisor restarts (and
+/// re-registers) a fresh instance. See `test_trigger_service_http_restarts_on_fault`.
 pub(super) struct HttpTask {
     pub(super) service: Arc<Service>,
     pub(super) req: hyper::Request<hyper::body::Incoming>,

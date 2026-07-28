@@ -39,7 +39,7 @@ use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        http::{DynamicRouter, HttpServer, OutgoingHandler},
+        http::{DynamicRouter, Ingress, OutgoingHandler},
     },
     plugin::{wasi_config::DynamicConfig, wasi_logging::TracingLogger},
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
@@ -106,14 +106,14 @@ impl OutgoingHandler for FakeOutgoingHandler {
 
 async fn start_host(addr: &str) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let engine = Engine::builder().build()?;
-    let http_server = HttpServer::builder(DynamicRouter::default(), addr.parse()?)
+    let ingress = Ingress::builder(DynamicRouter::default(), addr.parse()?)
         .outgoing_handler(FakeOutgoingHandler)
         .build()
         .await?;
-    let bound_addr = http_server.addr();
+    let bound_addr = ingress.addr();
     let host = HostBuilder::new()
         .with_engine(engine)
-        .with_http_handler(Arc::new(http_server))
+        .with_http_handler(Arc::new(ingress))
         .with_plugin(Arc::new(TracingLogger::default()))?
         .with_plugin(Arc::new(DynamicConfig::default()))?
         .build()?;
