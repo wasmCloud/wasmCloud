@@ -33,7 +33,7 @@ mod bindings {
 use bindings::wasi::keyvalue::store::{Error as StoreError, KeyResponse};
 
 // Collect one `list-keys` page from `keys`, skipping the first `cursor_skip` keys.
-// This will read up to `LIST_KEYS_BATCH_SIZE` + 1 keys from the steam. That way the 
+// This will read up to `LIST_KEYS_BATCH_SIZE` + 1 keys from the stream. That way the
 // caller will know if there are more keys to read.
 async fn collect_key_page<S, E>(keys: S, cursor_skip: u64) -> Result<KeyResponse, String>
 where
@@ -50,7 +50,7 @@ where
 
     while let Some(key) = stream.next().await {
         // Unwrap the item before deciding whether it is skipped. This prevents
-        // an error being counted toward the skip budget, which would silently swallow 
+        // an error being counted toward the skip budget, which would silently swallow
         // the error and start the page one key early.
         let key = key.map_err(|e| e.to_string())?;
 
