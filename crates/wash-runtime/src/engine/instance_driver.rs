@@ -72,16 +72,29 @@ pub(crate) enum InstanceJob {
     Linked(Box<LinkedJob>),
 }
 
+/// A pooled call's tether to its instance: holds the call's in-flight slot for
+/// as long as the task lives, and can retire the instance when the call ends
+/// in a way that leaves guest state indeterminate.
+pub(crate) struct PoolSlot {
+    retired: Arc<AtomicBool>,
+    /// Frees this call's slot when the slot is dropped, however the task ends.
+    _in_flight: InFlightGuard,
+}
+
+impl PoolSlot {
+    /// Stop this instance admitting: it drains what it took, is reaped, and
+    /// its store's teardown ends any guest work still running on it.
+    pub(crate) fn retire_instance(&self) {
+        self.retired.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Serves one linked call on a shared instance. Uses `call_concurrent`, so
 /// calls interleave rather than taking the store in turn.
 struct LinkedTask {
     instance: Instance,
     job: Box<LinkedJob>,
-    /// Set to retire this task's instance when the call ends in a way that
-    /// leaves guest state indeterminate.
-    retired: Arc<AtomicBool>,
-    /// Frees this call's slot when the task ends, however it ends.
-    _in_flight: InFlightGuard,
+    slot: PoolSlot,
 }
 
 impl AccessorTask<SharedCtx> for LinkedTask {
@@ -122,7 +135,7 @@ impl AccessorTask<SharedCtx> for LinkedTask {
             // state; a trap will also fault the whole driver, but retiring
             // here covers the errors that do not.
             Ok(Err(e)) => {
-                self.retired.store(true, Ordering::SeqCst);
+                self.slot.retire_instance();
                 Err(e)
             }
             // A guest subtask cannot be cancelled from the host, so the timed
@@ -130,7 +143,7 @@ impl AccessorTask<SharedCtx> for LinkedTask {
             // is what ends it: the driver stops admitting, drains, is reaped,
             // and the store's teardown takes the stalled work with it.
             Err(e) => {
-                self.retired.store(true, Ordering::SeqCst);
+                self.slot.retire_instance();
                 Err(wasmtime::format_err!(
                     "function call timed out after {call_timeout:?}: {e}"
                 ))
@@ -214,14 +227,19 @@ impl InstanceDriver {
                                     service,
                                     req,
                                     resp_tx,
-                                    in_flight: Some(guard),
+                                    pool_slot: Some(PoolSlot {
+                                        retired: Arc::clone(&task_retired),
+                                        _in_flight: guard,
+                                    }),
                                 })
                             }
                             InstanceJob::Linked(job) => accessor.spawn(LinkedTask {
                                 instance,
                                 job,
-                                retired: Arc::clone(&task_retired),
-                                _in_flight: guard,
+                                slot: PoolSlot {
+                                    retired: Arc::clone(&task_retired),
+                                    _in_flight: guard,
+                                },
                             }),
                         };
                         if let Err(e) = spawned {

@@ -50,10 +50,10 @@ pub(crate) struct HttpTask {
     pub(crate) req: hyper::Request<hyper::body::Incoming>,
     pub(crate) resp_tx:
         tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
-    /// Holds this call's slot on a pooled instance for as long as the task
-    /// lives, so the slot is freed however the call ends. `None` for a
-    /// service, whose instance is not shared with a pool.
-    pub(crate) in_flight: Option<crate::engine::instance_driver::InFlightGuard>,
+    /// This call's tether to a pooled instance: holds its in-flight slot and
+    /// can retire the instance. `None` for a service, whose singleton instance
+    /// is not the pool's to retire.
+    pub(crate) pool_slot: Option<crate::engine::instance_driver::PoolSlot>,
 }
 
 impl AccessorTask<SharedCtx> for HttpTask {
@@ -62,10 +62,8 @@ impl AccessorTask<SharedCtx> for HttpTask {
             service,
             req,
             resp_tx,
-            in_flight,
+            pool_slot,
         } = self;
-        // Freed when this task ends, whichever way it ends.
-        let _in_flight = in_flight;
 
         let (parts, body) = req.into_parts();
         let body = body
@@ -167,7 +165,21 @@ impl AccessorTask<SharedCtx> for HttpTask {
                     tracing::error!(err = ?e, "service HTTP response streaming failed");
                 }
             }
-            Err(_) => tracing::error!("service HTTP response timed out"),
+            // The guest work behind the timed-out exchange cannot be cancelled
+            // from the host. On a pooled instance the remedy is retirement:
+            // stop admitting, drain, and let the store's teardown end the
+            // stalled work. A service has no such remedy — its singleton
+            // instance keeps serving, with the stalled task still on it — so
+            // the timeout only bounds how long the client waits.
+            Err(_) => match &pool_slot {
+                Some(slot) => {
+                    slot.retire_instance();
+                    tracing::error!(
+                        "HTTP call timed out; retiring its pooled instance to end the stalled work"
+                    );
+                }
+                None => tracing::error!("service HTTP response timed out"),
+            },
         }
         Ok(())
     }

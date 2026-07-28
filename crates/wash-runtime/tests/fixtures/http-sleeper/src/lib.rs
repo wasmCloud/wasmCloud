@@ -19,7 +19,13 @@
 //!
 //! `/trap` traps instead of replying, so a test can poison an instance's store
 //! on purpose and check what that costs: the calls sharing that instance, and
-//! nothing else.
+//! nothing else. `/wedge` parks for an hour before producing the response
+//! head — a guest wedged awaiting I/O that will never arrive — so a test can
+//! check what the host's per-call timeout does about it.
+//!
+//! Each reply also carries `served`, this instance's own request count. That
+//! is how a test tells a *retired* instance from a merely recovered slot: a
+//! replacement instance starts its count over at one.
 
 mod bindings;
 
@@ -37,14 +43,23 @@ const PER_CALL_NANOS: u64 = 5_000_000; // 5ms
 static SETUP_DONE: AtomicBool = AtomicBool::new(false);
 static IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
 static PEAK_IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
+/// Requests this instance has begun serving, `/wedge` included.
+static SERVED: AtomicU64 = AtomicU64::new(0);
 
 struct Component;
 
 impl HttpGuest for Component {
     async fn handle(request: Request) -> Result<Response, ErrorCode> {
-        let trap = request
-            .get_path_with_query()
-            .is_some_and(|p| p.starts_with("/trap"));
+        let path = request.get_path_with_query().unwrap_or_default();
+        let trap = path.starts_with("/trap");
+
+        let served = SERVED.fetch_add(1, Ordering::SeqCst) + 1;
+
+        // Wedged: the response head never comes. What bounds the caller's wait
+        // (and this instance's fate) is the host's per-call timeout alone.
+        if path.starts_with("/wedge") {
+            monotonic_clock::wait_for(3_600_000_000_000).await; // one hour
+        }
 
         let now = IN_FLIGHT.fetch_add(1, Ordering::SeqCst) + 1;
         PEAK_IN_FLIGHT.fetch_max(now, Ordering::SeqCst);
@@ -66,7 +81,7 @@ impl HttpGuest for Component {
 
         IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
         let peak = PEAK_IN_FLIGHT.load(Ordering::SeqCst);
-        let body = format!("{{\"peak_in_flight\":{peak}}}");
+        let body = format!("{{\"peak_in_flight\":{peak},\"served\":{served}}}");
         Ok(make_response(200, body.into_bytes()))
     }
 }
