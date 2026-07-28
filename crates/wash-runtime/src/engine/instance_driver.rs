@@ -32,6 +32,11 @@
 //!    guest work cannot be cancelled from the host, so draining and dropping
 //!    the store is what ends it.
 //!
+//! A retired instance ends its own run loop as soon as its last call finishes,
+//! rather than waiting for the pool to notice. That matters for the timed-out
+//! call: dropping the store is what ends the guest work it left running, so it
+//! must not wait on traffic that may never come.
+//!
 //! The cost of sharing an instance is that a guest trap takes the whole store
 //! with it, so every call in flight on that instance fails rather than just
 //! one. That is bounded by `max_concurrency`, and by `1/pool_size` of the pool.
@@ -39,13 +44,12 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use wasmtime::component::{
-    Accessor, AccessorTask, ComponentExportIndex, Instance, InstancePre, Val,
-};
+use wasmtime::component::{Accessor, AccessorTask, ComponentExportIndex, Instance, Val};
 use wasmtime::error::Context as _;
 use wasmtime_wasi_http::p3::bindings::Service;
 
 use crate::engine::ctx::SharedCtx;
+use crate::engine::instance_pool::ComponentInstance;
 use crate::host::http::ServiceHttpJob;
 use crate::host::trigger_service::HttpTask;
 
@@ -72,18 +76,45 @@ pub(crate) enum InstanceJob {
     Linked(Box<LinkedJob>),
 }
 
+/// What an instance's driver handle and the calls running on it share: how many
+/// calls are in flight, whether the instance still admits any, and the signal
+/// that ends its run loop once a retired instance has drained.
+struct DriverState {
+    in_flight: AtomicUsize,
+    /// Set once this instance must take no more calls — its invocation budget
+    /// is spent, or a call ended leaving guest state indeterminate.
+    retired: AtomicBool,
+    /// Signalled when a retired instance's last call finishes, so its run loop
+    /// stops there and then. Dropping the store is what ends guest work a
+    /// timed-out call left running, and waiting for the pool's next offer
+    /// would leave that running for as long as traffic stayed away.
+    drained: tokio::sync::Notify,
+}
+
+impl DriverState {
+    /// Stop admitting, and end the run loop if there is nothing left to drain.
+    fn retire(&self) {
+        self.retired.store(true, Ordering::SeqCst);
+        // The last call may already have finished, in which case no guard is
+        // left to signal on the way out.
+        if self.in_flight.load(Ordering::SeqCst) == 0 {
+            self.drained.notify_one();
+        }
+    }
+}
+
 /// A pooled call's tether to its instance: holds the call's in-flight slot for
 /// as long as the task lives, and can retire the instance when the call ends
 /// in a way that leaves guest state indeterminate.
 pub(crate) struct PoolSlot {
-    retired: Arc<AtomicBool>,
+    state: Arc<DriverState>,
     /// Frees this call's slot when the slot is dropped, however the task ends.
     _in_flight: InFlightGuard,
 }
 
 impl PoolSlot {
-    /// Stop this instance admitting: it drains what it took, is reaped, and
-    /// its store's teardown ends any guest work still running on it.
+    /// Stop this instance admitting: it drains what it took, ends its run loop,
+    /// and its store's teardown ends any guest work still running on it.
     ///
     /// TODO: retirement is a stand-in for cancelling the one bad call. The
     /// host cannot cancel a guest `call_concurrent` subtask
@@ -92,7 +123,7 @@ impl PoolSlot {
     /// API exists, a timed-out call should cancel just its own task and leave
     /// the instance serving.
     pub(crate) fn retire_instance(&self) {
-        self.retired.store(true, Ordering::SeqCst);
+        self.state.retire();
     }
 }
 
@@ -142,14 +173,27 @@ impl AccessorTask<SharedCtx> for LinkedTask {
             // state; a trap will also fault the whole driver, but retiring
             // here covers the errors that do not.
             Ok(Err(e)) => {
+                tracing::warn!(
+                    err = ?e,
+                    %import_name,
+                    %export_name,
+                    "pooled call failed in the host; retiring the instance"
+                );
                 self.slot.retire_instance();
                 Err(e)
             }
             // A guest subtask cannot be cancelled from the host, so the timed
             // out work is still running on this store. Retiring the instance
-            // is what ends it: the driver stops admitting, drains, is reaped,
-            // and the store's teardown takes the stalled work with it.
+            // is what ends it: the driver stops admitting, drains, ends its
+            // run loop, and the store's teardown takes the stalled work with
+            // it.
             Err(e) => {
+                tracing::warn!(
+                    %import_name,
+                    %export_name,
+                    timeout = ?call_timeout,
+                    "pooled call timed out; retiring the instance to end the stalled guest work"
+                );
                 self.slot.retire_instance();
                 Err(wasmtime::format_err!(
                     "function call timed out after {call_timeout:?}: {e}"
@@ -166,68 +210,92 @@ impl AccessorTask<SharedCtx> for LinkedTask {
 /// Releases an instance's in-flight slot when the call it admitted ends,
 /// however it ends. Held by the task, so a cancelled or trapped call frees its
 /// slot just as a completed one does.
-pub(crate) struct InFlightGuard(Arc<AtomicUsize>);
+pub(crate) struct InFlightGuard(Arc<DriverState>);
 
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        // `fetch_sub` returns the previous count, so `1` means this was the
+        // last call in flight. A retired instance is finished at that point.
+        if self.0.in_flight.fetch_sub(1, Ordering::SeqCst) == 1
+            && self.0.retired.load(Ordering::SeqCst)
+        {
+            self.0.drained.notify_one();
+        }
     }
 }
 
 /// One warm instance, plus the channel its calls arrive on.
 pub(crate) struct InstanceDriver {
     tx: tokio::sync::mpsc::Sender<(InstanceJob, InFlightGuard)>,
-    in_flight: Arc<AtomicUsize>,
+    state: Arc<DriverState>,
     /// Calls admitted so far, against `max_invocations`.
     admitted: AtomicUsize,
-    /// Set once this instance must take no more calls — its invocation budget
-    /// is spent, or a call ended leaving guest state indeterminate. It then
-    /// drains and the pool reaps it. Shared with the instance's tasks so a
-    /// call can retire the instance it ran on.
-    retired: Arc<AtomicBool>,
     max_concurrency: usize,
     max_invocations: Option<usize>,
+    /// Whether this instance exports `wasi:http/handler`. A component reached
+    /// only by linked calls does not, which is not an error — but it cannot be
+    /// given HTTP work either.
+    serves_http: bool,
 }
 
 impl InstanceDriver {
-    /// Build a store's driver and start it. The returned handle is live
-    /// immediately; the driver instantiates on its own task, and a call sent
-    /// before that finishes simply waits in the channel.
+    /// Build an instantiated store's driver and start it. The caller
+    /// instantiates, so a component that fails to do so reports that failure
+    /// where it can still be returned to whoever asked for the call.
     pub(crate) fn spawn(
-        mut store: wasmtime::Store<SharedCtx>,
-        pre: InstancePre<SharedCtx>,
+        instance: ComponentInstance,
         max_concurrency: usize,
         max_invocations: Option<usize>,
     ) -> Self {
+        let ComponentInstance {
+            mut store,
+            instance,
+        } = instance;
         let (tx, mut rx) =
             tokio::sync::mpsc::channel::<(InstanceJob, InFlightGuard)>(max_concurrency.max(1));
-        let retired = Arc::new(AtomicBool::new(false));
-        let task_retired = Arc::clone(&retired);
+        let state = Arc::new(DriverState {
+            in_flight: AtomicUsize::new(0),
+            retired: AtomicBool::new(false),
+            drained: tokio::sync::Notify::new(),
+        });
+        let task_state = Arc::clone(&state);
+
+        // Built before the run loop so admission knows whether this instance
+        // can take HTTP at all, rather than accepting a request it could only
+        // drop.
+        let service = Service::new(&mut store, &instance).ok().map(Arc::new);
+        let serves_http = service.is_some();
 
         tokio::spawn(async move {
-            let instance = match pre.instantiate_async(&mut store).await {
-                Ok(instance) => instance,
-                Err(e) => {
-                    tracing::error!(err = ?e, "failed to instantiate pooled instance");
-                    return;
-                }
-            };
-            // Only a component serving HTTP has this export; one reached only
-            // by linked calls does not, and that is not an error.
-            let service = Service::new(&mut store, &instance).ok().map(Arc::new);
-
             // One `run_concurrent` for the life of the instance. Each call is
             // spawned onto it, so calls overlap instead of taking the store in
             // turn. It returns when the channel closes (the pool dropped the
-            // handle) or the guest traps.
+            // handle), when a retired instance has drained, or when the guest
+            // traps.
             let outcome = store
                 .run_concurrent(async |accessor| {
-                    while let Some((job, guard)) = rx.recv().await {
+                    loop {
+                        let (job, guard) = tokio::select! {
+                            received = rx.recv() => match received {
+                                Some(received) => received,
+                                None => break,
+                            },
+                            // Retired and drained: stopping here drops the
+                            // store, which is what ends guest work a
+                            // timed-out call left running.
+                            _ = task_state.drained.notified() => break,
+                        };
                         let spawned = match job {
                             InstanceJob::Http(job) => {
                                 let (req, resp_tx) = *job;
                                 let Some(service) = service.as_ref().map(Arc::clone) else {
-                                    tracing::error!("pooled instance is missing wasi:http/handler");
+                                    // Admission declines HTTP for an instance
+                                    // without the export, so this is not
+                                    // normally reachable; answer the request
+                                    // rather than dropping it if it ever is.
+                                    let _ = resp_tx.send(Err(anyhow::anyhow!(
+                                        "pooled instance does not export wasi:http/handler"
+                                    )));
                                     continue;
                                 };
                                 accessor.spawn(HttpTask {
@@ -235,7 +303,7 @@ impl InstanceDriver {
                                     req,
                                     resp_tx,
                                     pool_slot: Some(PoolSlot {
-                                        retired: Arc::clone(&task_retired),
+                                        state: Arc::clone(&task_state),
                                         _in_flight: guard,
                                     }),
                                 })
@@ -244,7 +312,7 @@ impl InstanceDriver {
                                 instance,
                                 job,
                                 slot: PoolSlot {
-                                    retired: Arc::clone(&task_retired),
+                                    state: Arc::clone(&task_state),
                                     _in_flight: guard,
                                 },
                             }),
@@ -265,26 +333,27 @@ impl InstanceDriver {
 
         Self {
             tx,
-            in_flight: Arc::new(AtomicUsize::new(0)),
+            state,
             admitted: AtomicUsize::new(0),
-            retired,
             max_concurrency,
             max_invocations,
+            serves_http,
         }
     }
 
     /// Calls in flight on this instance right now.
     pub(crate) fn in_flight(&self) -> usize {
-        self.in_flight.load(Ordering::SeqCst)
+        self.state.in_flight.load(Ordering::SeqCst)
     }
 
     /// Whether this instance has served its last call and is only draining.
     pub(crate) fn is_retired(&self) -> bool {
-        self.retired.load(Ordering::SeqCst)
+        self.state.retired.load(Ordering::SeqCst)
     }
 
-    /// Whether the driver's task has gone (the guest trapped, or it failed to
-    /// instantiate), in which case the handle is dead and should be reaped.
+    /// Whether the driver's task has gone (the guest trapped, or the instance
+    /// retired and drained), in which case the handle is dead and should be
+    /// reaped.
     pub(crate) fn is_gone(&self) -> bool {
         self.tx.is_closed()
     }
@@ -298,6 +367,7 @@ impl InstanceDriver {
             return None;
         }
         let claimed = self
+            .state
             .in_flight
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                 (n < self.max_concurrency).then_some(n + 1)
@@ -306,7 +376,7 @@ impl InstanceDriver {
         if !claimed {
             return None;
         }
-        let guard = InFlightGuard(Arc::clone(&self.in_flight));
+        let guard = InFlightGuard(Arc::clone(&self.state));
 
         // Count the call against this instance's budget. Admission past the
         // limit is refused, not just noted: racing callers can all get here
@@ -322,13 +392,13 @@ impl InstanceDriver {
                 }) {
                 Ok(previous) => {
                     if previous + 1 >= limit {
-                        self.retired.store(true, Ordering::SeqCst);
+                        self.state.retire();
                     }
                 }
                 // Budget already spent by racing admissions. Dropping the
                 // guard frees the slot this call claimed.
                 Err(_) => {
-                    self.retired.store(true, Ordering::SeqCst);
+                    self.state.retire();
                     return None;
                 }
             }
@@ -351,11 +421,15 @@ impl InstanceDriver {
         (
             Self {
                 tx,
-                in_flight: Arc::new(AtomicUsize::new(0)),
+                state: Arc::new(DriverState {
+                    in_flight: AtomicUsize::new(0),
+                    retired: AtomicBool::new(false),
+                    drained: tokio::sync::Notify::new(),
+                }),
                 admitted: AtomicUsize::new(0),
-                retired: Arc::new(AtomicBool::new(false)),
                 max_concurrency,
                 max_invocations,
+                serves_http: true,
             },
             rx,
         )
@@ -365,6 +439,12 @@ impl InstanceDriver {
     /// could not take it, so the caller can try elsewhere. Boxed because the
     /// refusal carries the whole request back.
     pub(crate) fn try_send(&self, job: InstanceJob) -> Result<(), InstanceJob> {
+        // An instance without the HTTP export can only fail such a call.
+        // Declining it sends the request to a store of its own, where the
+        // binding is built per request and its error reaches the client.
+        if !self.serves_http && matches!(job, InstanceJob::Http(_)) {
+            return Err(job);
+        }
         let Some(guard) = self.try_admit() else {
             return Err(job);
         };
@@ -458,5 +538,45 @@ mod tests {
             driver.try_admit().is_some(),
             "a finished call's slot serves the next"
         );
+    }
+
+    /// A retired instance ends its run loop as soon as its last call finishes,
+    /// not whenever the pool next happens to look at it. Dropping the store is
+    /// what ends guest work a timed-out call left running, so it cannot wait
+    /// on traffic that may never arrive.
+    #[tokio::test]
+    async fn a_retired_instance_signals_its_run_loop_once_drained() {
+        let (driver, _rx) = InstanceDriver::stub(4, Some(1));
+        let guard = driver.try_admit().expect("first call is within budget");
+        assert!(driver.is_retired(), "spending the budget retires");
+
+        let state = Arc::clone(&driver.state);
+        let poll = std::time::Duration::from_millis(50);
+        assert!(
+            tokio::time::timeout(poll, state.drained.notified())
+                .await
+                .is_err(),
+            "a retired instance with a call still running has not drained"
+        );
+
+        drop(guard);
+        tokio::time::timeout(poll, state.drained.notified())
+            .await
+            .expect("the last call finishing must end the run loop");
+    }
+
+    /// Retiring an instance that is already idle still ends its run loop:
+    /// there is no in-flight guard left to signal on the way out.
+    #[tokio::test]
+    async fn retiring_an_idle_instance_signals_its_run_loop() {
+        let (driver, _rx) = InstanceDriver::stub(4, None);
+        driver.state.retire();
+
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            driver.state.drained.notified(),
+        )
+        .await
+        .expect("an idle instance is drained the moment it retires");
     }
 }

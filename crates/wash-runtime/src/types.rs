@@ -66,6 +66,11 @@ pub struct Component {
     pub bytes: Bytes,
     pub digest: Option<String>,
     pub local_resources: LocalResources,
+    /// The instance limits, exactly as the wire carried them. Signed because
+    /// they mirror the Kubernetes CRD fields a workload sets them through, and
+    /// unset is spelled as a non-positive value there. Nothing reads them
+    /// directly: [`crate::engine::InstancePolicy::from_component`] decodes all
+    /// three into named, non-zero limits once.
     pub pool_size: i32,
     pub max_invocations: i32,
     /// How many calls one warm instance may serve at the same time.
