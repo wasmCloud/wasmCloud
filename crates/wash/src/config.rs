@@ -14,7 +14,9 @@ use figment::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::info;
+use wash_runtime::component_source::ComponentSource;
 use wash_runtime::host::allowed_hosts::AllowedHost;
+use wash_runtime::oci::OciPullPolicy;
 use wash_runtime::wit::WitInterface;
 
 use crate::{
@@ -327,6 +329,61 @@ pub struct DevVolume {
     pub guest_path: PathBuf,
 }
 
+/// Where a config block's wasm component comes from: exactly one of `file` or
+/// `image`, plus a pull policy that only an image can honor.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentSourceConfig {
+    /// Local wasm file path. Mutually exclusive with `image`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<PathBuf>,
+    /// OCI image reference. Mutually exclusive with `file`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// Pull policy for `image` sources: `always`, `ifNotPresent`, or `never`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_policy: Option<String>,
+}
+
+impl ComponentSourceConfig {
+    /// A local file source.
+    pub fn file(path: impl Into<PathBuf>) -> Self {
+        Self {
+            file: Some(path.into()),
+            ..Default::default()
+        }
+    }
+
+    /// An OCI image source, pulled under the default policy.
+    pub fn image(image: impl Into<String>) -> Self {
+        Self {
+            image: Some(image.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Resolve to a runtime [`ComponentSource`].
+    ///
+    /// `name` names the config block and leads every error. Pass something the
+    /// user can find in their `config.yaml`, e.g. `"dev.components['sidecar']"`.
+    pub fn to_source(&self, name: &str) -> Result<ComponentSource> {
+        let pull_policy = match &self.pull_policy {
+            Some(policy) => Some(
+                policy
+                    .parse::<OciPullPolicy>()
+                    .with_context(|| name.to_string())?,
+            ),
+            None => None,
+        };
+        ComponentSource::from_image_or_file(
+            self.image.clone(),
+            self.file.clone(),
+            pull_policy,
+            name,
+        )
+    }
+}
+
 /// A component loaded alongside the main dev component.
 ///
 /// `environment` / `config` / `allowedHosts` override the workload-level
@@ -337,8 +394,9 @@ pub struct DevVolume {
 pub struct DevComponent {
     /// Name of the component
     pub name: String,
-    /// Path to the component file
-    pub file: PathBuf,
+    /// Where the component's wasm comes from: a local `file` or an `image`.
+    #[serde(flatten)]
+    pub source: ComponentSourceConfig,
     /// Environment variables (wasi:cli/env), merged over
     /// `workload.environment`. This component wins on key conflicts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -370,11 +428,17 @@ pub struct DevComponent {
 }
 
 impl DevComponent {
-    /// Creates a component entry with no per-component overrides.
+    /// Creates a file-backed component entry with no per-component overrides.
     pub fn new(name: impl Into<String>, file: impl Into<PathBuf>) -> Self {
+        Self::from_source(name, ComponentSourceConfig::file(file))
+    }
+
+    /// Creates a component entry from any source with no per-component
+    /// overrides.
+    pub fn from_source(name: impl Into<String>, source: ComponentSourceConfig) -> Self {
         Self {
             name: name.into(),
-            file: file.into(),
+            source,
             environment: None,
             config: HashMap::new(),
             allowed_hosts: None,
@@ -394,15 +458,9 @@ impl DevComponent {
 pub struct HostPluginConfig {
     /// Host-unique plugin id.
     pub id: String,
-    /// Local wasm file path. Mutually exclusive with `image`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file: Option<PathBuf>,
-    /// OCI image reference. Mutually exclusive with `file`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image: Option<String>,
-    /// Pull policy for `image` sources: `always`, `ifNotPresent`, or `never`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pull_policy: Option<String>,
+    /// Where the plugin's wasm comes from: a local `file` or an `image`.
+    #[serde(flatten)]
+    pub source: ComponentSourceConfig,
     /// Supervised driver restarts before the plugin is declared dead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_restarts: Option<u32>,
@@ -412,57 +470,19 @@ pub struct HostPluginConfig {
 }
 
 impl HostPluginConfig {
-    /// Convert to a runtime [`wash_runtime::plugin::ComponentPluginSpec`],
-    /// validating that exactly one source is set and that `pullPolicy`/
-    /// `expectedDigest` are used only with an `image` source.
+    /// Convert to a runtime [`wash_runtime::plugin::ComponentPluginSpec`].
+    ///
+    /// `expectedDigest` on a file source is caught by the loader when it finds
+    /// no digest to check against, so this only has to validate what it can see
+    /// without fetching.
     pub fn to_spec(&self) -> Result<wash_runtime::plugin::ComponentPluginSpec> {
-        use wash_runtime::plugin::{ComponentPluginSpec, PluginSource};
-
         if self.id.is_empty() {
             bail!("dev.host_plugins entry is missing a non-empty `id`");
         }
-        let source = match (&self.file, &self.image) {
-            (Some(file), None) => {
-                if self.pull_policy.is_some() {
-                    bail!(
-                        "dev.host_plugins '{}': pullPolicy applies only to image sources",
-                        self.id
-                    );
-                }
-                if self.expected_digest.is_some() {
-                    bail!(
-                        "dev.host_plugins '{}': expectedDigest applies only to image sources",
-                        self.id
-                    );
-                }
-                PluginSource::File(file.clone())
-            }
-            (None, Some(image)) => {
-                let pull_policy = match &self.pull_policy {
-                    Some(p) => p
-                        .parse::<wash_runtime::oci::OciPullPolicy>()
-                        .with_context(|| format!("dev.host_plugins '{}'", self.id))?,
-                    None => wash_runtime::oci::OciPullPolicy::IfNotPresent,
-                };
-                PluginSource::Oci {
-                    image: image.clone(),
-                    pull_policy,
-                }
-            }
-            (Some(_), Some(_)) => {
-                bail!(
-                    "dev.host_plugins '{}' sets both `file` and `image`; use exactly one",
-                    self.id
-                )
-            }
-            (None, None) => bail!(
-                "dev.host_plugins '{}' needs a `file` or `image` source",
-                self.id
-            ),
-        };
-        Ok(ComponentPluginSpec {
+        let what = format!("dev.host_plugins '{}'", self.id);
+        Ok(wash_runtime::plugin::ComponentPluginSpec {
             id: self.id.clone(),
-            source,
+            source: self.source.to_source(&what)?,
             max_restarts: self.max_restarts,
             expected_digest: self.expected_digest.clone(),
         })
@@ -489,9 +509,23 @@ pub struct DevConfig {
     /// Whether the component under development should be treated as a service
     #[serde(default)]
     pub service: bool,
-    /// Optional path to a wasm component to be used as a service
+    /// Optional path to a wasm component to be used as a service. Mutually
+    /// exclusive with `service_image`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_file: Option<PathBuf>,
+    /// Optional OCI image for the component to be used as a service. Mutually
+    /// exclusive with `service_file`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_image: Option<String>,
+    /// Pull policy for `service_image`: `always`, `ifNotPresent`, or `never`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_pull_policy: Option<String>,
+
+    /// Reach registries over HTTP instead of HTTPS. Applies to every image a
+    /// dev session pulls components, the service, and host plugins.
+    /// Mirrors `wash host --allow-insecure-registries`.
+    #[serde(default)]
+    pub allow_insecure_registries: bool,
 
     /// Additional components to load alongside the main component
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -577,6 +611,24 @@ pub struct DevConfig {
 }
 
 impl DevConfig {
+    /// Where the separately-configured service component comes from, or `None`
+    /// when none is configured.
+    ///
+    /// `dev.service = true` makes the component under development the service,
+    /// and then this is ignored. See `wash dev`'s workload assembly.
+    pub fn service_source(&self) -> Result<Option<ComponentSource>> {
+        if self.service_file.is_none() && self.service_image.is_none() {
+            return Ok(None);
+        }
+        ComponentSourceConfig {
+            file: self.service_file.clone(),
+            image: self.service_image.clone(),
+            pull_policy: self.service_pull_policy.clone(),
+        }
+        .to_source("dev.service_file/service_image")
+        .map(Some)
+    }
+
     pub fn validate(&self) -> Result<()> {
         let mut errors: Vec<String> = Vec::new();
 
@@ -643,9 +695,22 @@ impl DevConfig {
             if comp.name.trim().is_empty() {
                 errors.push("dev.components contains an entry with empty name".to_string());
             }
-            if comp.file.as_os_str().is_empty() {
-                errors.push(format!("dev.components['{}'].file is empty", comp.name));
+            if let Err(err) = comp
+                .source
+                .to_source(&format!("dev.components['{}']", comp.name))
+            {
+                errors.push(format!("{err:#}"));
             }
+        }
+
+        for plugin in &self.host_plugins {
+            if let Err(err) = plugin.to_spec() {
+                errors.push(format!("{err:#}"));
+            }
+        }
+
+        if let Err(err) = self.service_source() {
+            errors.push(format!("{err:#}"));
         }
 
         if errors.is_empty() {
@@ -1222,16 +1287,111 @@ workload:
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
-        assert!(err.contains("file is empty"));
+        assert!(err.contains("`file` source is empty"), "{err}");
     }
 
     #[test]
     fn dev_component_valid_is_ok() {
         let cfg = DevConfig {
-            components: vec![DevComponent::new("sidecar", "sidecar.wasm")],
+            components: vec![
+                DevComponent::new("sidecar", "sidecar.wasm"),
+                DevComponent::from_source(
+                    "pulled",
+                    ComponentSourceConfig::image("ghcr.io/acme/sidecar:1"),
+                ),
+            ],
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn dev_component_ambiguous_source_is_err() {
+        // Both sources, then neither, then a pull policy on a file.
+        for source in [
+            ComponentSourceConfig {
+                file: Some("sidecar.wasm".into()),
+                image: Some("ghcr.io/acme/sidecar:1".into()),
+                pull_policy: None,
+            },
+            ComponentSourceConfig::default(),
+            ComponentSourceConfig {
+                file: Some("sidecar.wasm".into()),
+                image: None,
+                pull_policy: Some("always".into()),
+            },
+            ComponentSourceConfig {
+                file: None,
+                image: Some("ghcr.io/acme/sidecar:1".into()),
+                pull_policy: Some("sometimes".into()),
+            },
+        ] {
+            let cfg = DevConfig {
+                components: vec![DevComponent::from_source("sidecar", source)],
+                ..Default::default()
+            };
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(err.contains("dev.components['sidecar']"), "{err}");
+        }
+    }
+
+    #[test]
+    fn dev_component_image_source_parses_from_yaml() {
+        // `image` / `pullPolicy` are flattened alongside `file`, so a sidecar
+        // names its wasm exactly the way a host plugin does.
+        let yaml = r#"
+dev:
+  components:
+    - name: sidecar
+      image: ghcr.io/acme/sidecar:1.0.0
+      pullPolicy: always
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let dev = config.dev();
+        let source = dev.components[0].source.to_source("sidecar").unwrap();
+        assert_eq!(
+            source,
+            ComponentSource::Oci {
+                image: "ghcr.io/acme/sidecar:1.0.0".into(),
+                pull_policy: OciPullPolicy::Always,
+            }
+        );
+    }
+
+    #[test]
+    fn dev_service_takes_a_file_or_an_image_but_not_both() {
+        let none = DevConfig::default();
+        assert!(none.service_source().unwrap().is_none());
+
+        let file = DevConfig {
+            service_file: Some("service.wasm".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            file.service_source().unwrap(),
+            Some(ComponentSource::File("service.wasm".into()))
+        );
+
+        let image = DevConfig {
+            service_image: Some("ghcr.io/acme/svc:1".into()),
+            service_pull_policy: Some("always".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            image.service_source().unwrap(),
+            Some(ComponentSource::Oci {
+                image: "ghcr.io/acme/svc:1".into(),
+                pull_policy: OciPullPolicy::Always,
+            })
+        );
+
+        let both = DevConfig {
+            service_file: Some("service.wasm".into()),
+            service_image: Some("ghcr.io/acme/svc:1".into()),
+            ..Default::default()
+        };
+        assert!(both.service_source().is_err());
+        assert!(both.validate().is_err());
     }
 
     #[test]
@@ -1277,7 +1437,6 @@ dev:
 
     #[test]
     fn dev_host_plugins_parse_from_yaml_and_convert_to_spec() {
-        use wash_runtime::plugin::PluginSource;
         // The `dev.host_plugins` key follows DevConfig's snake_case; each entry's
         // fields follow the camelCase used by other nested dev structs.
         let yaml = r#"
@@ -1298,12 +1457,15 @@ dev:
         assert_eq!(kv.id, "acme-kv");
         assert_eq!(
             kv.source,
-            PluginSource::File("./build/kv_plugin.wasm".into())
+            ComponentSource::File("./build/kv_plugin.wasm".into())
         );
         assert_eq!(kv.max_restarts, Some(3));
 
         let widgets = dev.host_plugins[1].to_spec().unwrap();
-        assert!(matches!(widgets.source, PluginSource::Oci { .. }));
+        assert_eq!(
+            widgets.source,
+            ComponentSource::image("ghcr.io/acme/widgets:1.2.0")
+        );
     }
 
     #[test]
@@ -1311,8 +1473,11 @@ dev:
         // Both sources set.
         let both = HostPluginConfig {
             id: "x".into(),
-            file: Some("a.wasm".into()),
-            image: Some("ghcr.io/x:1".into()),
+            source: ComponentSourceConfig {
+                file: Some("a.wasm".into()),
+                image: Some("ghcr.io/x:1".into()),
+                pull_policy: None,
+            },
             ..Default::default()
         };
         assert!(both.to_spec().is_err());
@@ -1327,15 +1492,18 @@ dev:
         // pullPolicy with a file source.
         let pull_on_file = HostPluginConfig {
             id: "x".into(),
-            file: Some("a.wasm".into()),
-            pull_policy: Some("always".into()),
+            source: ComponentSourceConfig {
+                file: Some("a.wasm".into()),
+                image: None,
+                pull_policy: Some("always".into()),
+            },
             ..Default::default()
         };
         assert!(pull_on_file.to_spec().is_err());
 
         // Empty id.
         let empty_id = HostPluginConfig {
-            file: Some("a.wasm".into()),
+            source: ComponentSourceConfig::file("a.wasm"),
             ..Default::default()
         };
         assert!(empty_id.to_spec().is_err());

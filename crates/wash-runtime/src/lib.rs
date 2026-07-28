@@ -10,6 +10,9 @@ pub mod types;
 pub mod wit;
 
 #[cfg(feature = "oci")]
+pub mod component_source;
+
+#[cfg(feature = "oci")]
 pub mod oci;
 
 #[cfg(feature = "washlet")]

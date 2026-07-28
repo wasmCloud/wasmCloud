@@ -5,12 +5,47 @@ use anyhow::Context as _;
 use chrono::Utc;
 use clap::{Args, Parser, Subcommand};
 use tracing::instrument;
-use wash_runtime::oci::{OciConfig, OciPullPolicy, pull_component, push_component};
+use wash_runtime::component_source::ComponentSource;
+use wash_runtime::oci::{OciConfig, OciPullPolicy, push_component};
 use wasm_metadata::Payload;
 
 pub(crate) const OCI_CACHE_DIR: &str = "oci";
 
 use crate::cli::{CliCommand, CliContext, CommandOutput};
+
+/// How to reach a registry, for every command that names an OCI reference.
+#[derive(Args, Debug, Clone, Default)]
+pub struct RegistryArgs {
+    /// Use HTTP or HTTPS protocol
+    #[arg(long = "insecure", default_value_t = false)]
+    pub insecure: bool,
+    /// Username for basic authentication
+    #[arg(short, long)]
+    pub user: Option<String>,
+    /// Password for basic authentication
+    #[arg(short, long)]
+    pub password: Option<String>,
+}
+
+impl RegistryArgs {
+    /// Build the config these flags describe, cached under the shared OCI cache
+    /// so a pull by one command is a cache hit for the next.
+    ///
+    /// Supplying only one half of a credential pair is a no-op rather than an
+    /// error: the ambient docker credential helper may well have the answer.
+    pub fn oci_config(&self, ctx: &CliContext) -> OciConfig {
+        let mut oci_config = OciConfig::new_with_cache(ctx.cache_dir().join(OCI_CACHE_DIR));
+        oci_config.insecure = self.insecure;
+
+        if let (Some(user), Some(password)) = (&self.user, &self.password) {
+            oci_config.credentials = Some((user.clone(), password.clone()));
+        } else if self.user.as_ref().or(self.password.as_ref()).is_some() {
+            tracing::warn!("username or password provided without the other");
+        }
+
+        oci_config
+    }
+}
 
 /// Push or pull Wasm components to/from an OCI registry
 #[derive(Parser, Debug, Clone)]
@@ -53,34 +88,24 @@ pub struct PullCommand {
     /// The path to write the pulled component to
     #[arg(default_value = "component.wasm")]
     pub component_path: PathBuf,
-    /// Use HTTP or HTTPS protocol
-    #[arg(long = "insecure", default_value_t = false)]
-    pub insecure: bool,
-    /// Username for basic authentication
-    #[arg(short, long)]
-    pub user: Option<String>,
-    /// Password for basic authentication
-    #[arg(short, long)]
-    pub password: Option<String>,
+    #[command(flatten)]
+    pub registry: RegistryArgs,
 }
 
 impl PullCommand {
     /// Handle the OCI command
     #[instrument(level = "debug", skip_all, name = "oci")]
     pub async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
-        let mut oci_config = OciConfig::new_with_cache(ctx.cache_dir().join(OCI_CACHE_DIR));
-        oci_config.insecure = self.insecure;
+        let oci_config = self.registry.oci_config(ctx);
 
-        if let Some(ref user) = self.user
-            && let Some(ref password) = self.password
-        {
-            oci_config.credentials = Some((user.clone(), password.clone()));
-        } else if self.user.as_ref().or(self.password.as_ref()).is_some() {
-            tracing::warn!("username or password provided without the other");
+        // `pull` means pull: go to the registry even when the cache already has
+        // this reference.
+        let loaded = ComponentSource::Oci {
+            image: self.reference.clone(),
+            pull_policy: OciPullPolicy::Always,
         }
-
-        let (c, digest) =
-            pull_component(&self.reference, oci_config, OciPullPolicy::Always).await?;
+        .load(oci_config)
+        .await?;
 
         // Resolve component path relative to project directory if not absolute
         let component_path = if self.component_path.is_absolute() {
@@ -90,7 +115,7 @@ impl PullCommand {
         };
 
         // Write the component to the specified output path
-        tokio::fs::write(&component_path, &c)
+        tokio::fs::write(&component_path, &loaded.bytes)
             .await
             .context("failed to write pulled component to output path")?;
 
@@ -99,8 +124,8 @@ impl PullCommand {
             Some(serde_json::json!({
                 "message": "OCI command executed successfully.",
                 "output_path": component_path.to_string_lossy(),
-                "bytes": c.len(),
-                "digest": digest,
+                "bytes": loaded.bytes.len(),
+                "digest": loaded.digest,
                 "success": true,
             })),
         ))
@@ -113,15 +138,8 @@ pub struct PushCommand {
     pub reference: String,
     /// The path to the component to push
     pub component_path: PathBuf,
-    /// Use HTTP or HTTPS protocol
-    #[arg(long = "insecure", default_value_t = false)]
-    pub insecure: bool,
-    /// Username for basic authentication
-    #[arg(short, long)]
-    pub user: Option<String>,
-    /// Password for basic authentication
-    #[arg(short, long)]
-    pub password: Option<String>,
+    #[command(flatten)]
+    pub registry: RegistryArgs,
 }
 
 impl PushCommand {
@@ -188,16 +206,7 @@ impl PushCommand {
             Utc::now().to_rfc3339(),
         );
 
-        let mut oci_config = OciConfig::new_with_cache(ctx.cache_dir().join(OCI_CACHE_DIR));
-        oci_config.insecure = self.insecure;
-
-        if let Some(ref user) = self.user
-            && let Some(ref password) = self.password
-        {
-            oci_config.credentials = Some((user.clone(), password.clone()));
-        } else if self.user.as_ref().or(self.password.as_ref()).is_some() {
-            tracing::warn!("username or password provided without the other");
-        }
+        let oci_config = self.registry.oci_config(ctx);
 
         let digest = push_component(
             &self.reference,

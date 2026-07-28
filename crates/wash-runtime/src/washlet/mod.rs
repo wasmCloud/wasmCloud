@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::component_source::ComponentSource;
 use crate::host::{Host, HostApi, HostConfig};
 use crate::oci::{self, OciConfig};
 use crate::plugin::HostPlugin;
@@ -404,23 +405,18 @@ async fn workload_start(
         let mut pulled_components = Vec::with_capacity(wit_world.components.len());
         for component in &wit_world.components {
             let oci_config = image_pull_secret_to_oci_config(config, &component.image_pull_secret);
-            let (bytes, digest) = match oci::pull_component(
-                &component.image,
-                oci_config,
-                component.image_pull_policy().into(),
-            )
-            .await
-            {
-                Ok(res) => res,
+            let source = ComponentSource::Oci {
+                image: component.image.clone(),
+                pull_policy: component.image_pull_policy().into(),
+            };
+            let loaded = match source.load(oci_config).await {
+                Ok(loaded) => loaded,
                 Err(e) => {
                     return Ok(types::v2::WorkloadStartResponse {
                         workload_status: Some(types::v2::WorkloadStatus {
                             workload_id: workload_id.clone(),
                             workload_state: types::v2::WorkloadState::Error.into(),
-                            message: format!(
-                                "failed to pull component image {}: {}",
-                                component.image, e
-                            ),
+                            message: format!("{e:#}"),
                         }),
                     });
                 }
@@ -445,8 +441,8 @@ async fn workload_start(
             };
             pulled_components.push(crate::types::Component {
                 name: component.name.clone(),
-                bytes: bytes.into(),
-                digest: Some(digest),
+                bytes: loaded.bytes,
+                digest: loaded.digest,
                 local_resources,
                 pool_size: component.pool_size,
                 max_invocations: component.max_invocations,
@@ -466,20 +462,18 @@ async fn workload_start(
 
     let service = if let Some(service) = service {
         let oci_config = image_pull_secret_to_oci_config(config, &service.image_pull_secret);
-        let (bytes, digest) = match oci::pull_component(
-            &service.image,
-            oci_config,
-            service.image_pull_policy().into(),
-        )
-        .await
-        {
-            Ok(res) => res,
+        let source = ComponentSource::Oci {
+            image: service.image.clone(),
+            pull_policy: service.image_pull_policy().into(),
+        };
+        let loaded = match source.load(oci_config).await {
+            Ok(loaded) => loaded,
             Err(e) => {
                 return Ok(types::v2::WorkloadStartResponse {
                     workload_status: Some(types::v2::WorkloadStatus {
                         workload_id: workload_id.clone(),
                         workload_state: types::v2::WorkloadState::Error.into(),
-                        message: format!("failed to pull service image {}: {}", service.image, e),
+                        message: format!("{e:#}"),
                     }),
                 });
             }
@@ -500,8 +494,8 @@ async fn workload_start(
             None => crate::types::LocalResources::default(),
         };
         Some(crate::types::Service {
-            bytes: bytes.into(),
-            digest: Some(digest),
+            bytes: loaded.bytes,
+            digest: loaded.digest,
             local_resources,
             max_restarts: service.max_restarts,
         })
