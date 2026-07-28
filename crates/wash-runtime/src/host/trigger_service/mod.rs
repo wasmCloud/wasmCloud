@@ -211,7 +211,7 @@ impl PreparedIngress {
                         service: Arc::clone(service),
                         req,
                         resp_tx,
-                        in_flight: None,
+                        pool_slot: None,
                     }) {
                         tracing::error!(err = %e, "failed to spawn HTTP invocation task");
                     }
