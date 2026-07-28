@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use wash_runtime::component_source::ComponentSource;
 use wash_runtime::host::allowed_hosts::AllowedHost;
+use wash_runtime::host::allowed_names::AllowedName;
 use wash_runtime::oci::OciPullPolicy;
 use wash_runtime::wit::WitInterface;
 
@@ -238,6 +239,18 @@ pub struct WorkloadConfig {
     /// preserves the explicit-empty intent.
     #[serde(default = "default_allow_all_hosts")]
     pub allowed_hosts: Vec<AllowedHost>,
+    /// Names components may resolve through
+    /// `wasi:sockets/ip-name-lookup` (`resolve-addresses`). Each entry
+    /// parses into a typed [`AllowedName`]; YAML/JSON callers write plain
+    /// strings such as `"*"`, `"*.example.com"`, `"example.com"`, or a
+    /// literal IP address.
+    ///
+    /// An omitted or empty list denies every lookup. Resolution is opt-in:
+    /// nothing substitutes an allow-all policy for a workload that
+    /// declared none.
+    #[serde(default)]
+    #[builder(default)]
+    pub allow_ip_name_lookup: Vec<AllowedName>,
 }
 
 /// One layer of environment variables.
@@ -386,8 +399,8 @@ impl ComponentSourceConfig {
 
 /// A component loaded alongside the main dev component.
 ///
-/// `environment` / `config` / `allowedHosts` override the workload-level
-/// `workload:` block for this component — see
+/// `environment` / `config` / `allowedHosts` / `allowIpNameLookup` override
+/// the workload-level `workload:` block for this component. See
 /// [`crate::workload::resolve_component_workload`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -410,6 +423,12 @@ pub struct DevComponent {
     /// workload list applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_hosts: Option<Vec<AllowedHost>>,
+    /// Names this component may resolve through
+    /// `wasi:sockets/ip-name-lookup`. When set it replaces
+    /// `workload.allowIpNameLookup` for this component (an explicit `[]`
+    /// denies every lookup); when omitted the workload list applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_ip_name_lookup: Option<Vec<AllowedName>>,
     /// How many instances of this component to keep warm between calls.
     ///
     /// Unset (or `0`) keeps the default: every call runs in a fresh instance
@@ -442,6 +461,7 @@ impl DevComponent {
             environment: None,
             config: HashMap::new(),
             allowed_hosts: None,
+            allow_ip_name_lookup: None,
             pool_size: None,
             max_invocations: None,
         }
@@ -1104,6 +1124,8 @@ workload:
     flag: "on"
   allowedHosts:
     - https://api.example.com
+  allowIpNameLookup:
+    - "*.example.com"
 "#;
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         let workload = config.workload.expect("workload should parse");
@@ -1119,6 +1141,10 @@ workload:
         assert_eq!(
             workload.allowed_hosts,
             vec!["https://api.example.com".parse().unwrap()]
+        );
+        assert_eq!(
+            workload.allow_ip_name_lookup,
+            vec!["*.example.com".parse().unwrap()]
         );
     }
 

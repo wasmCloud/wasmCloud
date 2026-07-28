@@ -548,6 +548,7 @@ fn build_workload(
         environment: w.environment.clone(),
         config: w.config.clone(),
         allowed_hosts: w.allowed_hosts.clone().into(),
+        allow_ip_name_lookup: w.allow_ip_name_lookup.clone().into(),
         ..Default::default()
     };
 
@@ -771,6 +772,7 @@ mod tests {
             environment: HashMap::from([("LOG".into(), "debug".into())]),
             config: HashMap::from([("flag".into(), "on".into())]),
             allowed_hosts: vec!["https://api.example.com".parse().unwrap()],
+            allow_ip_name_lookup: vec!["*".parse().unwrap()],
         };
         let dev_cfg = DevConfig {
             components: vec![dev_component_named("sidecar-a")],
@@ -794,6 +796,10 @@ mod tests {
         assert_eq!(
             &dev.local_resources.allowed_hosts[..],
             &["https://api.example.com".parse().unwrap()]
+        );
+        assert_eq!(
+            &dev.local_resources.allow_ip_name_lookup[..],
+            &["*".parse().unwrap()]
         );
 
         let sidecar = find_component(&workload, "sidecar-a").unwrap();
@@ -879,6 +885,7 @@ mod tests {
             ]),
             config: HashMap::from([("flag".into(), "on".into())]),
             allowed_hosts: vec!["https://api.example.com".parse().unwrap()],
+            allow_ip_name_lookup: vec![],
         };
         let dev_cfg = DevConfig {
             components: vec![dev_component_named("sidecar-a")],
