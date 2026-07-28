@@ -46,6 +46,9 @@ pub(crate) const MAX_UDP_DATAGRAM_SIZE: usize = u16::MAX as usize;
 pub struct WasiSocketsCtx {
     pub(crate) socket_addr_check: SocketAddrCheck,
     pub(crate) allowed_network_uses: AllowedNetworkUses,
+    /// Which names this component may resolve through
+    /// `wasi:sockets/ip-name-lookup`. Empty denies every lookup.
+    pub(crate) allowed_names: Arc<[crate::host::allowed_names::AllowedName]>,
     pub(crate) loopback: Arc<std::sync::Mutex<loopback::Network>>,
 }
 
@@ -60,7 +63,6 @@ pub trait WasiSocketsView: Send {
 
 #[derive(Copy, Clone)]
 pub(crate) struct AllowedNetworkUses {
-    pub(crate) ip_name_lookup: bool,
     pub(crate) udp: bool,
     pub(crate) tcp: bool,
 }
@@ -68,7 +70,6 @@ pub(crate) struct AllowedNetworkUses {
 impl Default for AllowedNetworkUses {
     fn default() -> Self {
         Self {
-            ip_name_lookup: false,
             udp: true,
             tcp: true,
         }

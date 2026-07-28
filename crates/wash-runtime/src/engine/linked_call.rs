@@ -250,6 +250,7 @@ async fn build_ctx_from_template(
             })
         }),
         loopback: Arc::clone(&template.loopback),
+        allowed_names: Arc::clone(&template.local_resources.allow_ip_name_lookup),
         ..Default::default()
     };
 

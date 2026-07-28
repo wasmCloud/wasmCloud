@@ -1,5 +1,6 @@
 use super::{SocketAddrCheck, SocketAddrUse};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use wasmtime_wasi::TrappableError;
 use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
 
@@ -54,7 +55,7 @@ pub(crate) fn error_code_from_io(error: std::io::ErrorKind) -> ErrorCode {
 
 pub struct Network {
     pub(crate) socket_addr_check: SocketAddrCheck,
-    pub(crate) allow_ip_name_lookup: bool,
+    pub(crate) allowed_names: Arc<[crate::host::allowed_names::AllowedName]>,
 }
 
 impl Network {

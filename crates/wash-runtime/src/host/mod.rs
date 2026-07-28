@@ -63,6 +63,7 @@ mod sysinfo;
 use sysinfo::SystemMonitor;
 
 pub mod allowed_hosts;
+pub mod allowed_names;
 pub mod http;
 pub mod http_p3;
 #[cfg(feature = "host-component-plugins")]
