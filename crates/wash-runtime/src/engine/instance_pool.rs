@@ -9,22 +9,25 @@
 //! configuration.
 //!
 //! A component whose [`InstancePolicy`] is [`InstancePolicy::Warm`] opts out
-//! of that: after a call returns cleanly its store is parked here and the next
-//! call to the same component reuses it, skipping the context build, the
-//! [`wasmtime::Store`] allocation and the instantiation. Guest state then
-//! survives across calls, which is the entire point — but it is also why
-//! pooling is opt-in rather than the default.
+//! of that: up to `pool_size` instances are kept, each owned by a long-lived
+//! driver ([`crate::engine::instance_driver`]) that serves calls — inbound
+//! HTTP and calls from other components alike — as concurrent tasks on its
+//! instance, up to `max_concurrency` at a time. Guest state then survives
+//! across calls, which is the entire point — but it is also why pooling is
+//! opt-in rather than the default.
 //!
-//! Two rules bound how long any single instance lives:
+//! What bounds an instance's life:
 //!
-//!  * `max_invocations` retires an instance after it has served that many
-//!    calls (zero means no limit), so guest state cannot accumulate forever
-//!    and a workload still exercises the cold path it will hit in production.
-//!  * An instance is parked **only** after a call that returned cleanly. A
-//!    trap, a timeout, a host error, or a caller that was cancelled mid-call
-//!    all retire the store instead, because a guest interrupted partway
-//!    through a call may hold locks, half-written buffers or a protocol peer
-//!    in an indeterminate state.
+//!  * `max_invocations` retires it after it has admitted that many calls
+//!    (zero means no limit): it stops admitting, drains what it took, and is
+//!    reaped, so guest state cannot accumulate forever. Until the drain
+//!    finishes the instance still occupies its place in the pool, so a burst
+//!    arriving mid-drain is served from one-shot stores.
+//!  * A guest trap poisons the store, faulting the driver and every call in
+//!    flight on that instance; the pool reaps it and the next call starts a
+//!    fresh one. A call that times out or fails in the host mid-call retires
+//!    the instance the same way — the guest work cannot be cancelled from the
+//!    host, so draining and dropping the store is what ends it.
 //!
 //! Two further consequences of an instance outliving a call, both of which a
 //! component opts into along with the pooling:
@@ -34,9 +37,9 @@
 //!    that can get.
 //!  * A task the guest spawned but did not await lives on the store's
 //!    concurrent state. Dropping the store per call used to discard it; a
-//!    parked store carries it to the next call, where it resumes alongside
-//!    that call's work. A guest that spawns background work and relies on it
-//!    being torn down with the call should not be pooled.
+//!    warm instance carries it forward, where it resumes alongside later
+//!    calls. A guest that spawns background work and relies on it being torn
+//!    down with the call should not be pooled.
 
 use std::collections::{BTreeMap, HashSet};
 use std::num::NonZeroUsize;
@@ -49,13 +52,13 @@ use crate::engine::instance_driver::{InstanceDriver, InstanceJob};
 use crate::engine::workload::WorkloadComponent;
 use crate::types::Component;
 
-/// The pool that `component_id`'s store may be parked in, or `None` when it
-/// must not be parked at all.
+/// The pool that may keep `component_id`'s instances warm, or `None` when
+/// every call must get a store of its own.
 ///
 /// A store holds more than the one component: whatever that component is
 /// linked to is instantiated alongside it and lives exactly as long as the
-/// store does. Parking the store therefore keeps *every* instance in it warm,
-/// so every one of those components has to have opted in. Otherwise a
+/// store does. Keeping the store warm therefore keeps *every* instance in it
+/// warm, so every one of those components has to have opted in. Otherwise a
 /// component that left `pool_size` at zero — saying its state is ephemeral —
 /// would quietly acquire state that outlives a call, just because something
 /// else in the workload imports it.
