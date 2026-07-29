@@ -65,7 +65,7 @@ use std::str::FromStr;
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize, de, ser};
 
-/// A parsed entry from the `allowIpNameLookup` allowlist.
+/// A parsed entry from the `allowedIpNameLookups` allowlist.
 ///
 /// See the [module-level docs](self) for accepted string forms and
 /// matching semantics. Parsed via [`FromStr`]; rendered back to its wire

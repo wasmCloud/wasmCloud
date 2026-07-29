@@ -1,4 +1,4 @@
-//! Integration tests for the per-workload `allow_ip_name_lookup` policy on
+//! Integration tests for the per-workload `allowed_ip_name_lookups` policy on
 //! `wasi:sockets/ip-name-lookup` (`resolve-addresses`).
 //!
 //! Uses the http-ip-name-lookup (wasip2) and http-ip-name-lookup-p3 (wasip3)
@@ -62,9 +62,9 @@ const REQUESTS: usize = 6;
 fn resolve_workload(
     wasm: &'static [u8],
     host_header: &str,
-    allow_ip_name_lookup: &[&str],
+    allowed_ip_name_lookups: &[&str],
 ) -> WorkloadStartRequest {
-    let parsed: Vec<wash_runtime::host::allowed_ip_name::AllowedIpName> = allow_ip_name_lookup
+    let parsed: Vec<wash_runtime::host::allowed_ip_name::AllowedIpName> = allowed_ip_name_lookups
         .iter()
         .map(|s| s.parse().expect("test gave an invalid allowed-name entry"))
         .collect();
@@ -80,7 +80,7 @@ fn resolve_workload(
                 digest: None,
                 bytes: bytes::Bytes::from_static(wasm),
                 local_resources: LocalResources {
-                    allow_ip_name_lookup: parsed.into(),
+                    allowed_ip_name_lookups: parsed.into(),
                     ..Default::default()
                 },
                 pool_size: 1,

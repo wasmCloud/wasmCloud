@@ -22,7 +22,7 @@ impl<U> HostWithStore<U> for WasiSockets {
         };
         let allowed = store.with(|mut view| {
             crate::host::allowed_ip_name::check_allowed_ip_name(
-                &view.get().ctx.allowed_ip_names,
+                &view.get().ctx.allowed_ip_name_lookups,
                 &host,
             )
         });

@@ -106,7 +106,7 @@ pub struct LocalResources {
     /// an explicit `[AllowedIpName::Any]` to resolve any name. Strings from
     /// the wire (proto / wash YAML) are parsed at conversion time, so the
     /// resolve path matches against the typed enum directly.
-    pub allow_ip_name_lookup: Arc<[AllowedIpName]>,
+    pub allowed_ip_name_lookups: Arc<[AllowedIpName]>,
 }
 
 impl Default for LocalResources {
@@ -118,7 +118,7 @@ impl Default for LocalResources {
             environment: HashMap::new(),
             volume_mounts: Vec::new(),
             allowed_hosts: Default::default(),
-            allow_ip_name_lookup: Default::default(),
+            allowed_ip_name_lookups: Default::default(),
         }
     }
 }

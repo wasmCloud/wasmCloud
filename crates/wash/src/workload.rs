@@ -52,8 +52,8 @@ pub struct ResolvedWorkload {
     pub allowed_hosts: Vec<AllowedHost>,
     /// Names the component may resolve through
     /// `wasi:sockets/ip-name-lookup`. Empty denies every lookup, which is
-    /// what an omitted `allowIpNameLookup` resolves to.
-    pub allow_ip_name_lookup: Vec<AllowedIpName>,
+    /// what an omitted `allowedIpNameLookups` resolves to.
+    pub allowed_ip_name_lookups: Vec<AllowedIpName>,
 }
 
 /// Resolves the workload section of a [`Config`], pulling in named entries
@@ -97,7 +97,7 @@ pub fn resolve_workload(
         environment,
         config: workload.config.clone(),
         allowed_hosts: workload.allowed_hosts.clone(),
-        allow_ip_name_lookup: workload.allow_ip_name_lookup.clone(),
+        allowed_ip_name_lookups: workload.allowed_ip_name_lookups.clone(),
     })
 }
 
@@ -107,7 +107,7 @@ pub fn resolve_workload(
 /// `environment` / `config` merge over the workload's, component wins on
 /// key conflicts. `allowedHosts`, when set, replaces the workload list
 /// (an explicit `[]` denies all egress); when omitted the workload list
-/// applies. `allowIpNameLookup`, when set, likewise replaces the workload
+/// applies. `allowedIpNameLookups`, when set, likewise replaces the workload
 /// list (an explicit `[]` denies every lookup).
 ///
 /// # Errors
@@ -142,16 +142,16 @@ pub fn resolve_component_workload(
         .clone()
         .unwrap_or_else(|| base.allowed_hosts.clone());
 
-    let allow_ip_name_lookup = component
-        .allow_ip_name_lookup
+    let allowed_ip_name_lookups = component
+        .allowed_ip_name_lookups
         .clone()
-        .unwrap_or_else(|| base.allow_ip_name_lookup.clone());
+        .unwrap_or_else(|| base.allowed_ip_name_lookups.clone());
 
     Ok(ResolvedWorkload {
         environment,
         config: merged_config,
         allowed_hosts,
-        allow_ip_name_lookup,
+        allowed_ip_name_lookups,
     })
 }
 
@@ -868,7 +868,7 @@ mod tests {
             }),
             config: HashMap::from([("WORKLOAD_CFG".into(), "cfg_value".into())]),
             allowed_hosts: vec!["https://api.example.com".parse().unwrap()],
-            allow_ip_name_lookup: vec![],
+            allowed_ip_name_lookups: vec![],
         };
 
         let configs = BTreeMap::from([(
@@ -936,7 +936,7 @@ mod tests {
                 ("base_only".into(), "1".into()),
             ]),
             allowed_hosts: vec![AllowedHost::Any],
-            allow_ip_name_lookup: vec![],
+            allowed_ip_name_lookups: vec![],
         };
         let component = DevComponent {
             environment: Some(EnvironmentLayer {
@@ -997,9 +997,9 @@ mod tests {
     }
 
     #[test]
-    fn component_allow_ip_name_lookup_replaces_workload_setting() {
+    fn component_allowed_ip_name_lookups_replaces_workload_setting() {
         let base = ResolvedWorkload {
-            allow_ip_name_lookup: vec!["*".parse().unwrap()],
+            allowed_ip_name_lookups: vec!["*".parse().unwrap()],
             ..Default::default()
         };
         let project = TempDir::new().unwrap();
@@ -1009,35 +1009,35 @@ mod tests {
         let resolved =
             resolve_component_workload(&base, &component, &Config::default(), project.path(), None)
                 .unwrap();
-        assert_eq!(resolved.allow_ip_name_lookup, vec![AllowedIpName::Any]);
+        assert_eq!(resolved.allowed_ip_name_lookups, vec![AllowedIpName::Any]);
 
         // A narrower list replaces the workload's, rather than adding to it.
         let component = DevComponent {
-            allow_ip_name_lookup: Some(vec!["*.internal".parse().unwrap()]),
+            allowed_ip_name_lookups: Some(vec!["*.internal".parse().unwrap()]),
             ..DevComponent::new("narrowed", "narrowed.wasm")
         };
         let resolved =
             resolve_component_workload(&base, &component, &Config::default(), project.path(), None)
                 .unwrap();
         assert_eq!(
-            resolved.allow_ip_name_lookup,
+            resolved.allowed_ip_name_lookups,
             vec!["*.internal".parse().unwrap()]
         );
 
         // An explicit empty list denies every lookup for this component even
         // though the workload resolves anything.
         let component = DevComponent {
-            allow_ip_name_lookup: Some(vec![]),
+            allowed_ip_name_lookups: Some(vec![]),
             ..DevComponent::new("sealed", "sealed.wasm")
         };
         let resolved =
             resolve_component_workload(&base, &component, &Config::default(), project.path(), None)
                 .unwrap();
-        assert!(resolved.allow_ip_name_lookup.is_empty());
+        assert!(resolved.allowed_ip_name_lookups.is_empty());
 
         // A component grant applies even when the workload declared none.
         let component = DevComponent {
-            allow_ip_name_lookup: Some(vec!["example.com".parse().unwrap()]),
+            allowed_ip_name_lookups: Some(vec!["example.com".parse().unwrap()]),
             ..DevComponent::new("granted", "granted.wasm")
         };
         let resolved = resolve_component_workload(
@@ -1049,7 +1049,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            resolved.allow_ip_name_lookup,
+            resolved.allowed_ip_name_lookups,
             vec!["example.com".parse().unwrap()]
         );
     }

@@ -245,7 +245,7 @@ pub fn default_counter_resources() -> LocalResources {
         environment: HashMap::new(),
         volume_mounts: vec![],
         allowed_hosts: vec!["example.com".parse().unwrap()].into(),
-        allow_ip_name_lookup: Default::default(),
+        allowed_ip_name_lookups: Default::default(),
     }
 }
 

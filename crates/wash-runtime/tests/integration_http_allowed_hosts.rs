@@ -145,7 +145,7 @@ fn allowed_hosts_workload(allowed_hosts: Vec<String>) -> WorkloadStartRequest {
                     environment: HashMap::new(),
                     volume_mounts: vec![],
                     allowed_hosts: parsed.into(),
-                    allow_ip_name_lookup: Default::default(),
+                    allowed_ip_name_lookups: Default::default(),
                 },
                 pool_size: 1,
                 max_invocations: 100,
