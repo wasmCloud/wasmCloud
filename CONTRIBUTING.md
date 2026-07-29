@@ -44,6 +44,28 @@ cargo test --lib
 cargo test --bin wash
 ```
 
+The Rust Kubernetes host smoke test is ignored by default because it builds a
+host image and creates a complete kind cluster, and generally takes a long time
+to run.
+
+The smoke test requires:
+
+* A `docker`-compatible daemon
+* `helm`
+* `kubectl`
+
+During the test we download the pinned kind/Kubernetes and chart images to create and use
+a temporary kubeconfig in a `testcontainers`-managed, DinD `kind` cluster.
+
+To run the smoke test:
+
+```bash
+# (optional) if the host image is already built with tag 'localhost/wasmcloud-wash:rust-k8s-e2e', you can skip that build
+# export TEST_WASH_INT_K8S_SKIP_HOST_IMAGE_BUILD=true
+
+cargo test -p wash --test k8s_host_serves_http_workload -- --include-ignored --nocapture
+```
+
 ## Project Structure
 
 This repository is a workspace. The `wash` CLI lives in `crates/wash` and the core Wasm runtime it depends on lives in `crates/wash-runtime`:

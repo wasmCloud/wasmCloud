@@ -6092,6 +6092,7 @@ dependencies = [
  "toml 0.8.23",
  "tonic-prost-build",
  "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
  "wash-runtime",
