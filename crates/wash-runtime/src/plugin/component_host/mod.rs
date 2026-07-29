@@ -47,7 +47,7 @@
 //! submodule; this module drives it from `ComponentHostPlugin`'s `HostPlugin`
 //! impl.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -68,6 +68,8 @@ use crate::engine::ctx::{CallerIdentity, Ctx, SharedCtx};
 use crate::engine::store::relocate::{self, Relocated};
 use crate::engine::store::resource_bridge::{self, ProxyResource};
 use crate::engine::workload::{UnresolvedWorkload, WorkloadItem};
+use crate::host::allowed_hosts::AllowedHost;
+use crate::host::http::HostHandler;
 use crate::host::job_registry::JobRegistry;
 use crate::host::trigger_service::{
     CapabilityCall, CapabilityFunc, CapabilityJob, Ingress, LifecycleReplay, TriggerService,
@@ -75,7 +77,7 @@ use crate::host::trigger_service::{
 };
 use crate::oci::OciConfig;
 use crate::plugin::component_plugin_spec::ComponentPluginSpec;
-use crate::plugin::{HostPlugin, WitInterfaces};
+use crate::plugin::{HostPlugin, WitInterfaces, wasi_config};
 use crate::wit::{WitInterface, WitWorld};
 
 mod lifecycle;
@@ -173,6 +175,14 @@ struct ComponentHostPluginState {
     /// lifecycle call, written at most once (before start), so a relaxed atomic
     /// is enough.
     lifecycle_timeout_ms: AtomicU64,
+    /// The host's outgoing-HTTP handler, injected via
+    /// [`HostPlugin::set_http_handler`] before `start()`. Each (re)built plugin
+    /// store carries it so the plugin's `wasi:http` imports are served by the
+    /// host's HTTP stack with unrestricted egress (native-plugin parity).
+    /// Absent when the plugin is driven without a host (e.g. tests): `wasi:http`
+    /// calls then trap, as before. Written once before `start()`, read once per
+    /// store build, so a plain mutex is fine.
+    http_handler: Mutex<Option<Arc<dyn HostHandler>>>,
 }
 
 impl ComponentHostPluginState {
@@ -254,6 +264,7 @@ impl ComponentHostPlugin {
             lifecycle_timeout_ms: AtomicU64::new(
                 crate::timeouts::plugin_lifecycle_call().as_millis() as u64,
             ),
+            http_handler: Mutex::new(None),
         });
 
         let (exports, lifecycle, pre) = build_plugin_linker(&engine, id, wasm, &state)?;
@@ -385,6 +396,14 @@ impl HostPlugin for ComponentHostPlugin {
 
     fn set_workload_failure_sink(&self, sink: crate::plugin::WorkloadFailureSink) {
         self.state.failure_sink.store(Some(Arc::new(sink)));
+    }
+
+    fn set_http_handler(&self, handler: Arc<dyn HostHandler>) {
+        *self
+            .state
+            .http_handler
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handler);
     }
 
     async fn start(&self) -> anyhow::Result<()> {
@@ -665,6 +684,10 @@ fn build_plugin_linker(
     InstancePre<SharedCtx>,
 )> {
     let (component, mut linker) = engine.prepare_host_component(wasm)?;
+    if crate::engine::imports_wasi_config(&component) {
+        wasi_config::add_store_to_linker(&mut linker)
+            .with_context(|| format!("failed to add wasi:config to plugin '{id}' linker"))?;
+    }
     let mut lifecycle = None;
     let mut exports = Vec::new();
     for export in introspect_exports(&component)? {
@@ -1062,7 +1085,7 @@ async fn run_supervisor(
 ) {
     let mut restarts = 0u32;
     loop {
-        let store = build_plugin_store(&engine, state.id);
+        let store = build_plugin_store(&engine, &state);
         // A fresh job registry per incarnation, published on `state` so the
         // baked-in identity/cancel imports reach this store's live jobs. Stale
         // jobs from a faulted incarnation die with its store (their guards retire
@@ -1209,11 +1232,32 @@ async fn run_supervisor(
     }
 }
 
-/// Build the plugin's own store with a minimal host-scoped context. The plugin
-/// is not part of any workload; its `workload_id`/`component_id` are just its
-/// own id.
-fn build_plugin_store(engine: &Engine, id: &'static str) -> Store<SharedCtx> {
-    let ctx = Ctx::builder(id, id).build();
+/// Build the plugin's own store with a host-scoped context. The plugin is not
+/// part of any workload; its `workload_id`/`component_id` are just its own id.
+///
+/// A host component plugin is the trust peer of a native plugin, so the
+/// context carries the host authority its imports reach for:
+/// - an environment-backed `wasi:config` view (snapshotted fresh for each
+///   supervised incarnation), and
+/// - when the host injected one, the host's outgoing-HTTP handler with
+///   unrestricted egress — a native plugin connects wherever its operator
+///   config points, and so may a component plugin.
+fn build_plugin_store(engine: &Engine, state: &ComponentHostPluginState) -> Store<SharedCtx> {
+    let id = state.id;
+    let config_view: Arc<dyn HostPlugin + Send + Sync> = Arc::new(wasi_config::env_view(id));
+    let mut builder = Ctx::builder(id, id)
+        .with_plugins(HashMap::from([(wasi_config::WASI_CONFIG_ID, config_view)]));
+    let http_handler = state
+        .http_handler
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if let Some(handler) = http_handler {
+        builder = builder
+            .with_http_handler(handler)
+            .with_allowed_hosts(Arc::from(vec![AllowedHost::Any]));
+    }
+    let ctx = builder.build();
     // The registry marks this as the plugin (real) side of the resource bridge
     // and keeps the resources it hands out across the boundary alive.
     Store::new(engine.inner(), SharedCtx::new(ctx).with_resource_registry())

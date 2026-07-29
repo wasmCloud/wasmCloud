@@ -344,6 +344,7 @@ impl Host {
         for (id, plugin) in &self.plugins {
             plugin.inject_meters(&self.meters).await;
             plugin.set_workload_failure_sink(failure_sink.clone());
+            plugin.set_http_handler(self.http_handler.clone());
 
             if let Err(e) = plugin.start().await {
                 tracing::error!(id = id, err = ?e, "failed to start plugin");

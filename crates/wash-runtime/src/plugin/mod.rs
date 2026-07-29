@@ -211,6 +211,14 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// component plugin evicting a workload whose lifecycle bind crash-loops).
     fn set_workload_failure_sink(&self, _sink: WorkloadFailureSink) {}
 
+    /// Inject the host's outgoing-HTTP handler. Called once during host start,
+    /// before [`HostPlugin::start`]. The default ignores it: a native plugin is
+    /// host code and reaches the network directly. A plugin that runs guest
+    /// code in its own store (a host component plugin) overrides this so the
+    /// store's `wasi:http` imports are satisfied by the host's HTTP stack
+    /// instead of trapping.
+    fn set_http_handler(&self, _handler: std::sync::Arc<dyn crate::host::http::HostHandler>) {}
+
     /// Called when the plugin is started during host initialization.
     ///
     /// This method allows plugins to perform any necessary setup before
