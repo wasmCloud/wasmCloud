@@ -998,6 +998,17 @@ pub fn imports_wasi_http(component: &Component) -> bool {
         .any(|(import, _item)| import.starts_with("wasi:http"))
 }
 
+/// Whether a component imports any `wasi:config` interface. Used to decide
+/// whether a host component plugin's linker needs the `wasi:config/store`
+/// host functions.
+pub fn imports_wasi_config(component: &Component) -> bool {
+    let ty: wasmtime::component::types::Component = component.component_type();
+    let engine = component.engine();
+
+    ty.imports(engine)
+        .any(|(import, _item)| import.starts_with("wasi:config"))
+}
+
 // TL;DR this is likely best for machines that can handle the large virtual memory requirement of the pooling allocator
 // https://github.com/bytecodealliance/wasmtime/blob/b943666650696f1eb7ff8b217762b58d5ef5779d/src/commands/serve.rs#L641-L656
 fn is_pooling_allocator_supported() -> anyhow::Result<bool> {
