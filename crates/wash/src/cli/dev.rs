@@ -634,11 +634,27 @@ fn build_workload_host_interfaces(
             if interface.namespace == "wasi" && interface.package == "config" {
                 any_imports_wasi_config = true;
             }
-            if !base
-                .iter()
-                .any(|i| i.namespace == interface.namespace && i.package == interface.package)
-            {
-                base.push(interface.clone());
+            // Merge same-package entries (same or unversioned) by unioning
+            // their interface names: a component importing two interfaces of
+            // one package (e.g. `wasmcloud:secrets` `store` + `reveal`)
+            // arrives as one WitInterface per name, and dropping the later
+            // ones would leave part of the import surface unbound.
+            match base.iter_mut().find(|i| {
+                i.namespace == interface.namespace
+                    && i.package == interface.package
+                    && (i.version == interface.version
+                        || i.version.is_none()
+                        || interface.version.is_none())
+            }) {
+                Some(existing) => {
+                    existing
+                        .interfaces
+                        .extend(interface.interfaces.iter().cloned());
+                    if existing.version.is_none() {
+                        existing.version = interface.version.clone();
+                    }
+                }
+                None => base.push(interface.clone()),
             }
         }
     }
