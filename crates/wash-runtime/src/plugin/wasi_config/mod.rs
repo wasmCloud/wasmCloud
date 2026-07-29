@@ -40,7 +40,7 @@ mod bindings {
     });
 }
 
-const WASI_CONFIG_ID: &str = "wasi-config";
+pub(crate) const WASI_CONFIG_ID: &str = "wasi-config";
 
 type ConfigMap = HashMap<Arc<str>, HashMap<String, String>>;
 
@@ -74,6 +74,46 @@ pub struct DynamicConfig {
     /// the builder surface.
     #[builder(skip)]
     config: Arc<RwLock<ConfigMap>>,
+}
+
+/// Link the `wasi:config/store` host functions onto a host component plugin's
+/// linker. The values served come from whatever [`DynamicConfig`] view is
+/// registered on that store's `Ctx` under [`WASI_CONFIG_ID`] — for a plugin
+/// store, the environment-backed view from [`env_view`].
+#[cfg(feature = "host-component-plugins")]
+pub(crate) fn add_store_to_linker(
+    linker: &mut wasmtime::component::Linker<SharedCtx>,
+) -> anyhow::Result<()> {
+    bindings::wasi::config::store::add_to_linker::<_, SharedCtx>(linker, extract_active_ctx)?;
+    Ok(())
+}
+
+/// An environment-backed `wasi:config` view for a host component plugin store,
+/// served under `view_id` (the plugin's id, which is also the plugin store's
+/// `component_id`).
+///
+/// A host component plugin is the trust peer of the native plugins compiled
+/// into the host, which read `std::env` freely — so the view is a snapshot of
+/// the **full host process environment**, taken when the plugin store is built
+/// (fresh on each supervised restart). Each variable is served under its raw
+/// name and, when different, under a kebab-case alias (`ETCD_ENDPOINTS` →
+/// `etcd-endpoints`) so components can use conventional `wasi:config` keys.
+#[cfg(feature = "host-component-plugins")]
+pub(crate) fn env_view(view_id: &str) -> DynamicConfig {
+    let mut view = HashMap::new();
+    for (name, value) in std::env::vars() {
+        let kebab = name.to_ascii_lowercase().replace(['_', '.'], "-");
+        if kebab != name {
+            view.insert(kebab, value.clone());
+        }
+        view.insert(name, value);
+    }
+    let mut config = ConfigMap::new();
+    config.insert(Arc::from(view_id), view);
+    DynamicConfig {
+        copy_environment: false,
+        config: Arc::new(RwLock::new(config)),
+    }
 }
 
 impl<'a> bindings::wasi::config::store::Host for ActiveCtx<'a> {
