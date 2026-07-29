@@ -250,7 +250,7 @@ pub struct WorkloadConfig {
     /// declared none.
     #[serde(default)]
     #[builder(default)]
-    pub allow_ip_name_lookup: Vec<AllowedIpName>,
+    pub allowed_ip_name_lookups: Vec<AllowedIpName>,
 }
 
 /// One layer of environment variables.
@@ -399,7 +399,7 @@ impl ComponentSourceConfig {
 
 /// A component loaded alongside the main dev component.
 ///
-/// `environment` / `config` / `allowedHosts` / `allowIpNameLookup` override
+/// `environment` / `config` / `allowedHosts` / `allowedIpNameLookups` override
 /// the workload-level `workload:` block for this component. See
 /// [`crate::workload::resolve_component_workload`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -425,10 +425,10 @@ pub struct DevComponent {
     pub allowed_hosts: Option<Vec<AllowedHost>>,
     /// Names this component may resolve through
     /// `wasi:sockets/ip-name-lookup`. When set it replaces
-    /// `workload.allowIpNameLookup` for this component (an explicit `[]`
+    /// `workload.allowedIpNameLookups` for this component (an explicit `[]`
     /// denies every lookup); when omitted the workload list applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allow_ip_name_lookup: Option<Vec<AllowedIpName>>,
+    pub allowed_ip_name_lookups: Option<Vec<AllowedIpName>>,
     /// How many instances of this component to keep warm between calls.
     ///
     /// Unset (or `0`) keeps the default: every call runs in a fresh instance
@@ -461,7 +461,7 @@ impl DevComponent {
             environment: None,
             config: HashMap::new(),
             allowed_hosts: None,
-            allow_ip_name_lookup: None,
+            allowed_ip_name_lookups: None,
             pool_size: None,
             max_invocations: None,
         }
@@ -1124,7 +1124,7 @@ workload:
     flag: "on"
   allowedHosts:
     - https://api.example.com
-  allowIpNameLookup:
+  allowedIpNameLookups:
     - "*.example.com"
 "#;
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
@@ -1143,7 +1143,7 @@ workload:
             vec!["https://api.example.com".parse().unwrap()]
         );
         assert_eq!(
-            workload.allow_ip_name_lookup,
+            workload.allowed_ip_name_lookups,
             vec!["*.example.com".parse().unwrap()]
         );
     }

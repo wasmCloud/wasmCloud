@@ -48,7 +48,7 @@ pub struct WasiSocketsCtx {
     pub(crate) allowed_network_uses: AllowedNetworkUses,
     /// Which names this component may resolve through
     /// `wasi:sockets/ip-name-lookup`. Empty denies every lookup.
-    pub(crate) allowed_ip_names: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
+    pub(crate) allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
     pub(crate) loopback: Arc<std::sync::Mutex<loopback::Network>>,
 }
 

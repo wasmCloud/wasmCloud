@@ -635,9 +635,9 @@ impl TryFrom<types::v2::LocalResources> for crate::types::LocalResources {
             volume_mounts: lr.volume_mounts.into_iter().map(Into::into).collect(),
             allowed_hosts: parse_policy_entries(&lr.allowed_hosts, "allowed_hosts")?,
             environment: lr.environment,
-            allow_ip_name_lookup: parse_policy_entries(
+            allowed_ip_name_lookups: parse_policy_entries(
                 &lr.allowed_ip_name_lookups,
-                "allow_ip_name_lookup",
+                "allowed_ip_name_lookups",
             )?,
         })
     }
@@ -798,12 +798,15 @@ mod tests {
             allowed_ip_name_lookups: vec!["*.example.com".to_string(), "127.0.0.1".to_string()],
         };
         let lr = crate::types::LocalResources::try_from(proto).expect("conversion should succeed");
-        assert_eq!(lr.allow_ip_name_lookup.len(), 2);
+        assert_eq!(lr.allowed_ip_name_lookups.len(), 2);
         assert!(matches!(
-            lr.allow_ip_name_lookup[0],
+            lr.allowed_ip_name_lookups[0],
             AllowedIpName::SuffixWildcard { .. }
         ));
-        assert!(matches!(lr.allow_ip_name_lookup[1], AllowedIpName::Ip(_)));
+        assert!(matches!(
+            lr.allowed_ip_name_lookups[1],
+            AllowedIpName::Ip(_)
+        ));
         assert_eq!(lr.allowed_hosts.len(), 4);
         assert!(matches!(lr.allowed_hosts[0], AllowedHost::Any));
         assert!(matches!(

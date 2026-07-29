@@ -338,8 +338,8 @@ func (in *LocalResources) DeepCopyInto(out *LocalResources) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
-	if in.AllowIPNameLookup != nil {
-		in, out := &in.AllowIPNameLookup, &out.AllowIPNameLookup
+	if in.AllowedIPNameLookups != nil {
+		in, out := &in.AllowedIPNameLookups, &out.AllowedIPNameLookups
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}

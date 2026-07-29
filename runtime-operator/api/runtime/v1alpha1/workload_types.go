@@ -98,7 +98,7 @@ type LocalResources struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:items:Pattern=`^\*$|^([A-Za-z][A-Za-z0-9+.-]*://)(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(:[0-9]{1,5})?/?$|^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(:[0-9]{1,5})?$`
 	AllowedHosts []string `json:"allowedHosts,omitempty"`
-	// AllowIPNameLookup is the set of names this component may resolve
+	// AllowedIPNameLookups is the set of names this component may resolve
 	// through wasi:sockets/ip-name-lookup (resolve-addresses).
 	//
 	// Each entry must match one of:
@@ -111,15 +111,15 @@ type LocalResources struct {
 	// query string, or fragment. The wildcard must be "*.<rest>" with a
 	// leading dot; a bare "*foo" is rejected.
 	//
-	// Empty or absent allowIpNameLookup denies every lookup, reported to
+	// Empty or absent allowedIpNameLookups denies every lookup, reported to
 	// the component as permanent-resolver-failure. To resolve any name,
-	// set allowIpNameLookup: ["*"] explicitly. Resolution is granted
+	// set allowedIpNameLookups: ["*"] explicitly. Resolution is granted
 	// separately from allowedHosts, which governs outbound connections
 	// rather than name lookups. Final validation runs in the runtime.
 	// This regex is an admission-time guard, not the source of truth.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:items:Pattern=`^\*$|^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$|^[0-9A-Fa-f:.]+$`
-	AllowIPNameLookup []string `json:"allowIpNameLookup,omitempty"`
+	AllowedIPNameLookups []string `json:"allowedIpNameLookups,omitempty"`
 }
 
 // WorkloadComponent represents a component of a workload.

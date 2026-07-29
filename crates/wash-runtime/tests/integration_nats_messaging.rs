@@ -142,7 +142,7 @@ fn messaging_handler_workload(
                     environment: HashMap::new(),
                     volume_mounts: vec![],
                     allowed_hosts: Default::default(),
-                    allow_ip_name_lookup: Default::default(),
+                    allowed_ip_name_lookups: Default::default(),
                 },
                 pool_size: pool_size.unwrap_or(1),
                 max_invocations: 100,
