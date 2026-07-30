@@ -62,6 +62,21 @@ interface workload-lifecycle {
         /// Instance label when the workload names multiple instances of the
         /// same namespace:package, if any. Component-facing: what the component
         /// calls this import.
+        ///
+        /// Two gaps for a **wasm** host component plugin specifically (a
+        /// Rust built-in plugin doesn't have either): a workload with more
+        /// than one *named* binding on the same namespace:package is
+        /// rejected before bind unless the plugin implements
+        /// `supports_named_instances()` — no wasm plugin can opt into that
+        /// today, so this field only ever arrives as at most one populated
+        /// `name` per namespace:package per workload in practice. And even
+        /// where it is populated, it reaches `on-workload-bind` but is not
+        /// threaded through to the capability call itself — nothing on a
+        /// later `store.get`-style call says which binding it's for, only
+        /// `wasmcloud:host/identity`'s workload/component id. A plugin that
+        /// needs to serve two *unnamed* bindings of the same
+        /// namespace:package differently has no way to disambiguate them at
+        /// all today.
         name: option<string>,
         /// Platform-facing id the binding was declared with, if any — what the
         /// platform's configuration calls the same instance.

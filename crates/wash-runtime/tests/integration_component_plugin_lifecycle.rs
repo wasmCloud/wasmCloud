@@ -26,7 +26,6 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use tokio::time::timeout;
 
 use std::sync::Arc;
 
@@ -44,7 +43,7 @@ use wash_runtime::wit::WitInterface;
 mod common;
 use common::{
     acme_kv_interface, component_workload_request, kv_plugin_caller_host_interfaces_with_config,
-    start_host_with_component_plugin, start_host_with_component_plugin_by_host,
+    req, start_host_with_component_plugin, start_host_with_component_plugin_by_host,
 };
 
 const KV_PLUGIN_WASM: &[u8] = include_bytes!("wasm/kv_plugin.wasm");
@@ -53,28 +52,6 @@ const KV_PLUGIN_SERVICE_WASM: &[u8] = include_bytes!("wasm/kv_plugin_service.was
 const BRIDGE_BACKEND_WASM: &[u8] = include_bytes!("wasm/bridge_backend.wasm");
 const BADLIFECYCLE_WASM: &[u8] = include_bytes!("wasm/badlifecycle.wasm");
 const PLUGIN_ID: &str = "acme-kv-plugin";
-
-/// GET `http://{addr}{path}` with the `HOST` header selecting the workload,
-/// returning the status and body text.
-async fn req(
-    client: &reqwest::Client,
-    addr: &std::net::SocketAddr,
-    host: &str,
-    path: &str,
-) -> Result<(reqwest::StatusCode, String)> {
-    let resp = timeout(
-        Duration::from_secs(15),
-        client
-            .get(format!("http://{addr}{path}"))
-            .header("HOST", host)
-            .send(),
-    )
-    .await
-    .context("request timed out")??;
-    let status = resp.status();
-    let body = resp.text().await?;
-    Ok((status, body))
-}
 
 /// Compilation-cache key for the one component every workload in this file
 /// deploys. `digest` is used for nothing but the engine's compiled-component
@@ -730,7 +707,17 @@ async fn test_lifecycle_bind_reports_workload_service() -> Result<()> {
 #[tokio::test]
 async fn test_reserved_lifecycle_export_not_workload_matchable() -> Result<()> {
     let engine = Engine::builder().build()?;
-    let plugin = ComponentHostPlugin::new(PLUGIN_ID, KV_PLUGIN_WASM, engine)?;
+    let plugin = ComponentHostPlugin::new(
+        PLUGIN_ID,
+        KV_PLUGIN_WASM,
+        engine,
+        &HashMap::new(),
+        &HashMap::new(),
+        Arc::from([]),
+        Arc::from([]),
+        None,
+    )
+    .await?;
     let world = plugin.world();
     assert!(
         world
@@ -757,9 +744,19 @@ async fn test_reserved_lifecycle_export_not_workload_matchable() -> Result<()> {
 #[tokio::test]
 async fn test_malformed_lifecycle_signature_rejected_at_registration() -> Result<()> {
     let engine = Engine::builder().build()?;
-    let err = ComponentHostPlugin::new("badlifecycle-plugin", BADLIFECYCLE_WASM, engine)
-        .map(|_| ())
-        .expect_err("a malformed lifecycle signature must be rejected at construction");
+    let err = ComponentHostPlugin::new(
+        "badlifecycle-plugin",
+        BADLIFECYCLE_WASM,
+        engine,
+        &HashMap::new(),
+        &HashMap::new(),
+        Arc::from([]),
+        Arc::from([]),
+        None,
+    )
+    .await
+    .map(|_| ())
+    .expect_err("a malformed lifecycle signature must be rejected at construction");
     let msg = format!("{err:#}");
     assert!(
         msg.contains("on-workload-bind") && msg.contains("workload-info record"),
@@ -775,7 +772,17 @@ async fn test_malformed_lifecycle_signature_rejected_at_registration() -> Result
 #[tokio::test]
 async fn test_lifecycle_hooks_driven_directly() -> Result<()> {
     let engine = Engine::builder().build()?;
-    let plugin = ComponentHostPlugin::new(PLUGIN_ID, KV_PLUGIN_WASM, engine)?;
+    let plugin = ComponentHostPlugin::new(
+        PLUGIN_ID,
+        KV_PLUGIN_WASM,
+        engine,
+        &HashMap::new(),
+        &HashMap::new(),
+        Arc::from([]),
+        Arc::from([]),
+        None,
+    )
+    .await?;
     plugin.start().await?;
 
     // A bind exercising every optional field of the typed records: an instance
@@ -824,7 +831,17 @@ async fn test_lifecycle_hooks_driven_directly() -> Result<()> {
 #[tokio::test]
 async fn test_lifecycle_bind_fails_when_plugin_not_running() -> Result<()> {
     let engine = Engine::builder().build()?;
-    let plugin = ComponentHostPlugin::new(PLUGIN_ID, KV_PLUGIN_WASM, engine)?;
+    let plugin = ComponentHostPlugin::new(
+        PLUGIN_ID,
+        KV_PLUGIN_WASM,
+        engine,
+        &HashMap::new(),
+        &HashMap::new(),
+        Arc::from([]),
+        Arc::from([]),
+        None,
+    )
+    .await?;
 
     let matched = acme_kv_matched(&[]);
     let err = plugin
@@ -867,11 +884,19 @@ async fn start_host_keeping_plugin_router(
     let engine = Engine::builder().build()?;
     let ingress = Ingress::new(router, addr.parse()?).await?;
     let bound_addr = ingress.addr();
-    let plugin = Arc::new(ComponentHostPlugin::new(
-        PLUGIN_ID,
-        KV_PLUGIN_WASM,
-        engine.clone(),
-    )?);
+    let plugin = Arc::new(
+        ComponentHostPlugin::new(
+            PLUGIN_ID,
+            KV_PLUGIN_WASM,
+            engine.clone(),
+            &HashMap::new(),
+            &HashMap::new(),
+            Arc::from([]),
+            Arc::from([]),
+            None,
+        )
+        .await?,
+    );
     let host = HostBuilder::new()
         .with_engine(engine)
         .with_http_handler(Arc::new(ingress))
@@ -891,8 +916,18 @@ async fn start_host_with_lifecycle_timeout(
     let engine = Engine::builder().build()?;
     let ingress = Ingress::new(DynamicRouter::default(), addr.parse()?).await?;
     let bound_addr = ingress.addr();
-    let plugin = ComponentHostPlugin::new(PLUGIN_ID, KV_PLUGIN_WASM, engine.clone())?
-        .with_lifecycle_call_timeout(timeout);
+    let plugin = ComponentHostPlugin::new(
+        PLUGIN_ID,
+        KV_PLUGIN_WASM,
+        engine.clone(),
+        &HashMap::new(),
+        &HashMap::new(),
+        Arc::from([]),
+        Arc::from([]),
+        None,
+    )
+    .await?
+    .with_lifecycle_call_timeout(timeout);
     let host = HostBuilder::new()
         .with_engine(engine)
         .with_http_handler(Arc::new(ingress))
@@ -1052,7 +1087,17 @@ async fn test_lifecycle_optional_fields_round_trip() -> Result<()> {
 #[tokio::test]
 async fn test_plugin_without_lifecycle_export_is_unaffected() -> Result<()> {
     let engine = Engine::builder().build()?;
-    let plugin = ComponentHostPlugin::new("bridge-backend-plugin", BRIDGE_BACKEND_WASM, engine)?;
+    let plugin = ComponentHostPlugin::new(
+        "bridge-backend-plugin",
+        BRIDGE_BACKEND_WASM,
+        engine,
+        &HashMap::new(),
+        &HashMap::new(),
+        Arc::from([]),
+        Arc::from([]),
+        None,
+    )
+    .await?;
     plugin.start().await?;
 
     let matched: HashSet<WitInterface> = [WitInterface::from("wasmcloud:bridge/ops@0.1.0")]

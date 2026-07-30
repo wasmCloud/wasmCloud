@@ -28,6 +28,7 @@ use wash_runtime::{
     plugin::{
         wasi_blobstore::InMemoryBlobstore, wasi_config::DynamicConfig,
         wasi_keyvalue::InMemoryKeyValue, wasi_logging::TracingLogger,
+        wasmcloud_secrets::WasmcloudSecrets,
     },
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
     wit::WitInterface,
@@ -168,9 +169,8 @@ pub fn kv_plugin_caller_host_interfaces_with_config(
     ]
 }
 
-/// The `wasmcloud:secrets` capability (store + reveal), provided by the
-/// `secrets-host` host component plugin.
-#[cfg(feature = "host-component-plugins")]
+/// The `wasmcloud:secrets` capability (store + reveal), served by the native
+/// `wasmcloud-secrets` plugin.
 pub fn secrets_interface(config: HashMap<String, String>) -> WitInterface {
     WitInterface {
         namespace: "wasmcloud".to_string(),
@@ -187,7 +187,6 @@ pub fn secrets_interface(config: HashMap<String, String>) -> WitInterface {
 /// Interfaces for the `secrets-caller` workload: HTTP ingress plus the imported
 /// `wasmcloud:secrets` capability, carrying the credentials as interface config —
 /// which the secrets plugin captures in its `on-workload-bind`.
-#[cfg(feature = "host-component-plugins")]
 pub fn secrets_caller_host_interfaces_with_config(
     host_header: &str,
     config: HashMap<String, String>,
@@ -258,7 +257,8 @@ fn with_standard_plugins(
         .with_plugin(Arc::new(InMemoryBlobstore::new(None)))?
         .with_plugin(Arc::new(InMemoryKeyValue::new()))?
         .with_plugin(Arc::new(TracingLogger::default()))?
-        .with_plugin(Arc::new(DynamicConfig::default()))
+        .with_plugin(Arc::new(DynamicConfig::default()))?
+        .with_plugin(Arc::new(WasmcloudSecrets::new()))
 }
 
 /// Start a host with a "DevRouter" backed HTTP server and the standard plugin
@@ -355,18 +355,29 @@ async fn start_host_with_component_plugin_router(
     let engine = Engine::builder().build()?;
     let ingress = Ingress::new(router, addr.parse()?).await?;
     let bound_addr = ingress.addr();
-    let mut plugin = ComponentHostPlugin::new(plugin_id, plugin_wasm, engine.clone())
-        .context("failed to build host component plugin")?;
+    let builder = with_standard_plugins(
+        HostBuilder::new()
+            .with_engine(engine.clone())
+            .with_http_handler(Arc::new(ingress)),
+    )?;
+    let native_plugins = builder.native_plugins();
+    let http_handler = builder.http_handler();
+    let mut plugin = ComponentHostPlugin::new(
+        plugin_id,
+        plugin_wasm,
+        engine.clone(),
+        &native_plugins,
+        &HashMap::new(),
+        Arc::from([]),
+        Arc::from([]),
+        http_handler,
+    )
+    .await
+    .context("failed to build host component plugin")?;
     if let Some(max_restarts) = max_restarts {
         plugin = plugin.with_max_restarts(max_restarts);
     }
-    let host = with_standard_plugins(
-        HostBuilder::new()
-            .with_engine(engine)
-            .with_http_handler(Arc::new(ingress)),
-    )?
-    .with_plugin(Arc::new(plugin))?
-    .build()?;
+    let host = builder.with_plugin(Arc::new(plugin))?.build()?;
     let host = host.start().await.context("Failed to start host")?;
     Ok((bound_addr, host))
 }
@@ -498,5 +509,28 @@ pub async fn get_status_and_body(
     .context("request failed")?;
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
+    Ok((status, body))
+}
+
+/// Like `get_status_and_body`, but against an arbitrary `path` instead of
+/// always `/` — for tests whose routing is on the path (e.g. `/get?key=…`),
+/// not just the `HOST` header.
+pub async fn req(
+    client: &reqwest::Client,
+    addr: &std::net::SocketAddr,
+    host: &str,
+    path: &str,
+) -> Result<(reqwest::StatusCode, String)> {
+    let resp = timeout(
+        Duration::from_secs(15),
+        client
+            .get(format!("http://{addr}{path}"))
+            .header("HOST", host)
+            .send(),
+    )
+    .await
+    .context("request timed out")??;
+    let status = resp.status();
+    let body = resp.text().await?;
     Ok((status, body))
 }
