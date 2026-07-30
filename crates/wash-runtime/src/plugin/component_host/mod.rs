@@ -1521,6 +1521,15 @@ fn introspect_interfaces<'a>(
     let mut interfaces = Vec::new();
 
     for (iface_name, iface_item) in items {
+        // A plain import's `iface_name` IS its `namespace:package/interface`
+        // path, so parsing it directly works. A `(implements ..)`-labeled
+        // import's `iface_name` is just the label (e.g. "db-password") — the
+        // component-model type carries the real interface it implements
+        // separately, in `implements`, which is what must be parsed instead,
+        // with the label preserved as `WitInterface.name` (the routing key
+        // multiplexing plugins match on).
+        let implements = iface_item.implements;
+
         let ComponentItem::ComponentInstance(instance_ty) = iface_item.ty else {
             continue;
         };
@@ -1539,9 +1548,17 @@ fn introspect_interfaces<'a>(
             }
         }
 
+        let wit = match implements {
+            Some(target) => {
+                let mut wit = WitInterface::from(target);
+                wit.name = Some(iface_name.to_string());
+                wit
+            }
+            None => WitInterface::from(iface_name),
+        };
         interfaces.push(ExportedInterface {
             name: iface_name.into(),
-            wit: WitInterface::from(iface_name),
+            wit,
             funcs,
             resources,
         });

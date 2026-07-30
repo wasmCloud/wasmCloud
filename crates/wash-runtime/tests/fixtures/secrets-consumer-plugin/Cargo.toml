@@ -1,5 +1,5 @@
 [package]
-name = "secrets-host"
+name = "secrets-consumer-plugin"
 edition = "2021"
 version = "0.0.0"
 
