@@ -77,6 +77,20 @@ impl ClusterHostBuilder {
         Ok(self)
     }
 
+    /// Every native (non-component) plugin registered so far. See
+    /// [`crate::host::HostBuilder::native_plugins`].
+    #[cfg(feature = "host-component-plugins")]
+    pub fn native_plugins(&self) -> std::collections::HashMap<&'static str, Arc<dyn HostPlugin>> {
+        self.host_builder.native_plugins()
+    }
+
+    /// The HTTP handler registered so far, if any. See
+    /// [`crate::host::HostBuilder::http_handler`].
+    #[cfg(feature = "host-component-plugins")]
+    pub fn http_handler(&self) -> Option<Arc<dyn crate::host::http::HostHandler>> {
+        self.host_builder.http_handler()
+    }
+
     /// Registers the multiplexed plugin set. See
     /// [`crate::host::HostBuilder::with_multiplexed_plugins`].
     #[cfg(feature = "wasm_component_model_implements")]

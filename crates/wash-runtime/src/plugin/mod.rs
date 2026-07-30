@@ -21,6 +21,7 @@
 //! - [`wasi_keyvalue`] - Key-value storage (`wasi:keyvalue`)
 //! - [`wasi_logging`] - Structured logging (`wasi:logging`)
 //! - [`wasi_otel`] - OpenTelemetry tracing, metrics, and logs (`wasi:otel/*`)
+//! - [`wasmcloud_secrets`] - Secrets delivery from bind-time config (`wasmcloud:secrets`)
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -52,6 +53,8 @@ pub mod wasmcloud_postgres;
 pub mod wasi_otel;
 
 pub mod wasmcloud_messaging;
+
+pub mod wasmcloud_secrets;
 
 /// Host capabilities provided by a WebAssembly component running in its own
 /// supervised store (rather than by a Rust plugin running in-store). Needs
