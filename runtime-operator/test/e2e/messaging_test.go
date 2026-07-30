@@ -34,34 +34,72 @@ import (
 // Before the fix, the WorkloadDeployment reached Ready=True but no SUB ever
 // landed on NATS, so requests on the configured subject silently timed out.
 //
-// The component under test is the messaging-echo fixture
-// (crates/wash-runtime/tests/fixtures/messaging-echo): it exports
-// wasmcloud:messaging/handler@0.2.0 and replies to incoming messages by
-// publishing the body back on msg.reply_to. Like every e2e fixture it is built
-// and served from the in-cluster registry (make e2e-images) rather than a
-// published image; it runs on any host, so it runs on both wash.yml legs (the
-// release and all-features fixture hosts) and self-skips only where the registry
-// flow is off.
+// The round trip runs once per messaging revision (see messagingRevisions), so
+// the same assertions cover the sync `@0.2.0` surface and the async `@0.3.0`
+// one. Both fixtures echo the request body back on msg.reply_to; they differ in
+// which WIT revision they were built against, and — because `@0.3.0`'s
+// handle-message is an `async func` — in which host delivery path serves them.
+// Like every e2e fixture they are built and served from the in-cluster registry
+// (make e2e-images) rather than published images; they run on any host, so this
+// runs on both wash.yml legs (the release and all-features fixture hosts) and
+// self-skips only where the registry flow is off.
 //
 // On failure, the spec dumps hostgroup pod logs (with RUST_LOG bumped to
 // debug for `wash_runtime`) so the NatsMessaging plugin's instrumentation
 // makes it possible to localize where the resolve path broke.
+
+// messagingRevision is one (fixture, WIT revision) pair to run the round trip
+// against. Each gets its own workload, subject, and client pod so the cases stay
+// independent regardless of Ginkgo's spec ordering.
+type messagingRevision struct {
+	// label distinguishes the specs in Ginkgo output.
+	label string
+	// fixture is the registry image name (see the FIXTURES list in
+	// xtask/src/e2e_images.rs).
+	fixture string
+	// witVersion goes on the WorkloadDeployment's hostInterfaces entry. It is
+	// what selects the host's sync or async messaging surface, so it is the
+	// single meaningful difference between these cases.
+	witVersion string
+	subject    string
+	payload    string
+}
+
+var messagingRevisions = []messagingRevision{
+	{
+		label:      "sync wasmcloud:messaging@0.2.0",
+		fixture:    "messaging-echo",
+		witVersion: "0.2.0",
+		subject:    "test.echo",
+		payload:    "ping-5074",
+	},
+	{
+		// The async surface: handle-message and publish are `async func`s, so
+		// the guest awaits its reply from inside the handler and the host drives
+		// the export through the concurrent ABI.
+		label:      "async wasmcloud:messaging@0.3.0",
+		fixture:    "messaging-echo-p3",
+		witVersion: "0.3.0",
+		subject:    "test.echo.p3",
+		payload:    "ping-async-030",
+	},
+}
+
+// workloadName / podName derive per-revision names from the fixture so the two
+// cases never share a WorkloadDeployment or client pod.
+func (r messagingRevision) workloadName() string { return r.fixture }
+func (r messagingRevision) podName() string      { return "nats-echo-client-" + r.fixture }
+
 var _ = Describe("Messaging Subscription", Ordered, func() {
-	const subscriptionSubject = "test.echo"
-	const workloadName = "messaging-echo"
-
-	var componentImage string
-
 	BeforeAll(func() {
-		// The messaging-echo fixture is built and served from the in-cluster
-		// registry (make e2e-images), like every other e2e fixture, and it runs on
+		// The messaging fixtures are built and served from the in-cluster
+		// registry (make e2e-images), like every other e2e fixture, and they run on
 		// any host — so this spec runs on both wash.yml legs (the release and
-		// all-features fixture hosts both pull it from the registry). It self-skips
+		// all-features fixture hosts both pull them from the registry). It self-skips
 		// only where the registry flow is off (the canary job, plain local runs).
 		if !inClusterRegistry {
 			Skip("in-cluster registry disabled; skipping messaging e2e")
 		}
-		componentImage = registryRef("messaging-echo")
 
 		// Earlier specs (Finalizer) may have scaled the hostgroup to zero;
 		// scale back up and wait for a host to be Ready so this spec is
@@ -127,21 +165,23 @@ var _ = Describe("Messaging Subscription", Ordered, func() {
 		}
 
 		dump("Pods", "get", "pods", "-n", namespace, "-o", "wide")
-		// nats-echo-client logs are the most direct evidence of what the
+		// The client pod logs are the most direct evidence of what the
 		// CLI saw — empty body, "no responders", connection error, etc.
 		// The Gomega failure message also embeds them, but pasting only
 		// part of the output is common, so dump them under their own
 		// header to make sure they always appear in the diagnostic block.
-		dump("nats-echo-client logs", "logs", "nats-echo-client",
-			"-n", namespace)
-		dump("nats-echo-client describe", "describe", "pod", "nats-echo-client",
-			"-n", namespace)
+		// Dumped for every revision: which spec failed is not known here, and
+		// a pod that was never created just reports as missing.
+		for _, rev := range messagingRevisions {
+			dump(rev.podName()+" logs", "logs", rev.podName(), "-n", namespace)
+			dump(rev.podName()+" describe", "describe", "pod", rev.podName(), "-n", namespace)
+			dump("WorkloadDeployment "+rev.workloadName(), "get", "workloaddeployment",
+				rev.workloadName(), "-n", namespace, "-o", "yaml")
+		}
 		dump("Hostgroup logs", "logs", "-n", namespace,
 			"-l", "wasmcloud.com/name=hostgroup", "--tail=600", "--prefix=true")
 		dump("Operator logs", "logs", "-n", namespace,
 			"-l", "wasmcloud.com/name=runtime-operator", "--tail=200")
-		dump("WorkloadDeployment", "get", "workloaddeployment", workloadName,
-			"-n", namespace, "-o", "yaml")
 		dump("Workload CRs", "get", "workloads.runtime.wasmcloud.dev",
 			"-n", namespace, "-o", "yaml")
 		dump("Host CRs", "get", "hosts.runtime.wasmcloud.dev",
@@ -149,20 +189,23 @@ var _ = Describe("Messaging Subscription", Ordered, func() {
 	})
 
 	AfterAll(func() {
-		if componentImage == "" {
+		if !inClusterRegistry {
 			return
 		}
 		// Best-effort cleanup; ignore errors so the suite teardown isn't
 		// derailed by an already-deleted resource.
-		_ = exec.Command("kubectl", "delete", "workloaddeployment", workloadName,
-			"-n", namespace, "--ignore-not-found=true").Run()
-		_ = exec.Command("kubectl", "delete", "pod", "nats-echo-client",
-			"-n", namespace, "--ignore-not-found=true").Run()
+		for _, rev := range messagingRevisions {
+			_ = exec.Command("kubectl", "delete", "workloaddeployment", rev.workloadName(),
+				"-n", namespace, "--ignore-not-found=true").Run()
+			_ = exec.Command("kubectl", "delete", "pod", rev.podName(),
+				"-n", namespace, "--ignore-not-found=true").Run()
+		}
 	})
 
-	It("should register the NATS subscription and round-trip a request", func() {
-		By("applying the messaging WorkloadDeployment")
-		manifest := fmt.Sprintf(`apiVersion: runtime.wasmcloud.dev/v1alpha1
+	for _, rev := range messagingRevisions {
+		It("should register the NATS subscription and round-trip a request ("+rev.label+")", func() {
+			By("applying the messaging WorkloadDeployment")
+			manifest := fmt.Sprintf(`apiVersion: runtime.wasmcloud.dev/v1alpha1
 kind: WorkloadDeployment
 metadata:
   name: %s
@@ -178,50 +221,50 @@ spec:
       hostInterfaces:
         - namespace: wasmcloud
           package: messaging
-          version: "0.2.0"
+          version: "%s"
           interfaces:
             - handler
           config:
             subscriptions: "%s"
       components:
-        - name: messaging-echo
+        - name: %s
           image: %s
-`, workloadName, namespace, subscriptionSubject, componentImage)
+`, rev.workloadName(), namespace, rev.witVersion, rev.subject, rev.fixture, registryRef(rev.fixture))
 
-		cmd := exec.Command("kubectl", "apply", "-f", "-")
-		cmd.Stdin = strings.NewReader(manifest)
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to apply messaging WorkloadDeployment")
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(manifest)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply messaging WorkloadDeployment")
 
-		By("waiting for WorkloadDeployment to become Ready")
-		verifyWorkloadReady := func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "workloaddeployment", workloadName,
-				"-n", namespace,
-				"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}")
-			output, err := utils.Run(cmd)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(output).To(Equal("True"))
-		}
-		Eventually(verifyWorkloadReady).WithTimeout(3 * time.Minute).Should(Succeed())
+			By("waiting for WorkloadDeployment to become Ready")
+			verifyWorkloadReady := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "workloaddeployment", rev.workloadName(),
+					"-n", namespace,
+					"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("True"))
+			}
+			Eventually(verifyWorkloadReady).WithTimeout(3 * time.Minute).Should(Succeed())
 
-		// Note: reaching Ready=True is necessary but not sufficient — the bug
-		// exhibits exactly that state. The next probe is the real assertion.
+			// Note: reaching Ready=True is necessary but not sufficient — the bug
+			// exhibits exactly that state. The next probe is the real assertion.
 
-		By("issuing a NATS request to the subscribed subject from inside the cluster")
-		// Run a one-shot nats-box pod against the in-cluster NATS service. If
-		// the handler subscribed successfully, the component echoes the body
-		// on reply_to and `nats request` prints it. If the bug is present, no
-		// responder exists and nats fails with "no responders".
-		//
-		// The chart enables TLS + mTLS by default (global.tls.enabled=true),
-		// so the pod mounts the cluster-generated data-plane cert secret and
-		// passes the cert / key / CA to the nats CLI. The volume is marked
-		// optional so the spec still runs if someone disables TLS via helm
-		// override; the empty mount makes nats CLI fail with a clear error
-		// rather than a silent verify-skip.
-		const echoPayload = "ping-5074"
-		const podName = "nats-echo-client"
-		podManifest := fmt.Sprintf(`apiVersion: v1
+			By("issuing a NATS request to the subscribed subject from inside the cluster")
+			// Run a one-shot nats-box pod against the in-cluster NATS service. If
+			// the handler subscribed successfully, the component echoes the body
+			// on reply_to and `nats request` prints it. If the bug is present, no
+			// responder exists and nats fails with "no responders".
+			//
+			// The chart enables TLS + mTLS by default (global.tls.enabled=true),
+			// so the pod mounts the cluster-generated data-plane cert secret and
+			// passes the cert / key / CA to the nats CLI. The volume is marked
+			// optional so the spec still runs if someone disables TLS via helm
+			// override; the empty mount makes nats CLI fail with a clear error
+			// rather than a silent verify-skip.
+			echoPayload := rev.payload
+			podName := rev.podName()
+			podManifest := fmt.Sprintf(`apiVersion: v1
 kind: Pod
 metadata:
   name: %s
@@ -250,40 +293,41 @@ spec:
       secret:
         secretName: wasmcloud-data-tls
         optional: true
-`, podName, namespace, subscriptionSubject, echoPayload)
+`, podName, namespace, rev.subject, echoPayload)
 
-		cmd = exec.Command("kubectl", "apply", "-f", "-")
-		cmd.Stdin = strings.NewReader(podManifest)
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to create nats-echo-client pod")
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(podManifest)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create nats-echo-client pod")
 
-		By("waiting for nats-echo-client pod to terminate")
-		verifyTerminated := func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "pod", podName,
-				"-n", namespace,
-				"-o", "jsonpath={.status.phase}")
-			phase, err := utils.Run(cmd)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(phase).To(Or(Equal("Succeeded"), Equal("Failed")),
-				"pod still %s", phase)
-		}
-		Eventually(verifyTerminated).WithTimeout(30 * time.Second).Should(Succeed())
+			By("waiting for nats-echo-client pod to terminate")
+			verifyTerminated := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "pod", podName,
+					"-n", namespace,
+					"-o", "jsonpath={.status.phase}")
+				phase, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(phase).To(Or(Equal("Succeeded"), Equal("Failed")),
+					"pod still %s", phase)
+			}
+			Eventually(verifyTerminated).WithTimeout(30 * time.Second).Should(Succeed())
 
-		By("collecting nats-echo-client logs")
-		cmd = exec.Command("kubectl", "logs", podName, "-n", namespace)
-		output, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to fetch nats-echo-client logs")
+			By("collecting the NATS client pod logs")
+			cmd = exec.Command("kubectl", "logs", podName, "-n", namespace)
+			output, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to fetch NATS client pod logs")
 
-		// Phase=Succeeded is the strongest signal the round trip worked, since
-		// the nats CLI exits non-zero on "no responders" or timeout. We still
-		// assert the payload appears in the reply for an extra sanity check.
-		cmd = exec.Command("kubectl", "get", "pod", podName,
-			"-n", namespace, "-o", "jsonpath={.status.phase}")
-		phase, _ := utils.Run(cmd)
-		Expect(phase).To(Equal("Succeeded"),
-			"nats request did not succeed — handler subscription likely never "+
-				"registered (regression of #5074). pod logs:\n%s", output)
-		Expect(output).To(ContainSubstring(echoPayload),
-			"handler did not echo the request body back; actual reply:\n%s", output)
-	})
+			// Phase=Succeeded is the strongest signal the round trip worked, since
+			// the nats CLI exits non-zero on "no responders" or timeout. We still
+			// assert the payload appears in the reply for an extra sanity check.
+			cmd = exec.Command("kubectl", "get", "pod", podName,
+				"-n", namespace, "-o", "jsonpath={.status.phase}")
+			phase, _ := utils.Run(cmd)
+			Expect(phase).To(Equal("Succeeded"),
+				"nats request did not succeed — handler subscription likely never "+
+					"registered (regression of #5074). pod logs:\n%s", output)
+			Expect(output).To(ContainSubstring(echoPayload),
+				"handler did not echo the request body back; actual reply:\n%s", output)
+		})
+	}
 })

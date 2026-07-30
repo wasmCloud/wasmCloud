@@ -96,6 +96,7 @@ const P2_FIXTURES: &[&str] = &[
 ];
 
 const P3_FIXTURES: &[&str] = &[
+    "messaging-echo-p3",
     "http-handler-p3",
     "http-ip-name-lookup-p3",
     "http-blobstore-p3",
