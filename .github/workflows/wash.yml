@@ -50,6 +50,7 @@ jobs:
           filters: |
             relevant:
               - '.github/workflows/wash.yml'
+              - '.github/tool-versions.env'
               - 'crates/**'
               - 'src/**'
               - 'tests/**'
@@ -96,10 +97,17 @@ jobs:
         uses: acifani/setup-tinygo@dd8a7075d951a7595b2ef2123ed0ab1af0c13e56 # v3.0.0
         with:
           tinygo-version: "0.39.0"
+      - name: Load pinned tool versions
+        # Appends the KEY=VALUE lines from the pins file to $GITHUB_ENV,
+        # skipping comment and blank lines. Subsequent steps then see
+        # e.g. ${{ env.WASM_TOOLS_VERSION }}. `shell: bash` because this
+        # job also runs on windows-latest, where the default shell is pwsh.
+        shell: bash
+        run: grep -vE '^[[:space:]]*(#|$)' .github/tool-versions.env >> "${GITHUB_ENV}"
       - name: Setup wasm-tools
         uses: bytecodealliance/actions/wasm-tools/setup@9152e710e9f7182e4c29ad218e4f335a7b203613 # v1.1.3
         with:
-          version: "1.247.0"
+          version: ${{ env.WASM_TOOLS_VERSION }}
       - name: Setup protoc
         uses: ./.github/actions/setup-protoc
       - name: Setup Rust
