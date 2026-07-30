@@ -44,6 +44,10 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dev: Option<DevConfig>,
 
+    /// `wash host` configuration (default: empty/optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<HostConfig>,
+
     /// Wash new configuration (default: empty/optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new: Option<NewConfig>,
@@ -88,6 +92,7 @@ impl Default for Config {
             build: None,
             new: None,
             dev: None,
+            host: None,
             workload: None,
             config_sources: BTreeMap::new(),
             secret_sources: BTreeMap::new(),
@@ -110,6 +115,11 @@ impl Config {
     /// Get the development configuration, defaulting to [DevConfig::default()] if not set
     pub fn dev(&self) -> DevConfig {
         self.dev.clone().unwrap_or_default()
+    }
+
+    /// Get the `wash host` configuration, defaulting to [HostConfig::default()] if not set
+    pub fn host(&self) -> HostConfig {
+        self.host.clone().unwrap_or_default()
     }
 
     pub fn build(&self) -> BuildConfig {
@@ -296,6 +306,14 @@ pub struct ConfigSource {
     /// project directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<PathBuf>,
+    /// Path to a directory of one-file-per-key entries — the shape a
+    /// Kubernetes ConfigMap/Secret volume mount projects (filename = key,
+    /// file content = value), unlike `file:`'s single `.env`-format blob.
+    /// Entries whose name starts with `.` are skipped (kubelet's own
+    /// `..data`/`..<timestamp>` bookkeeping). Relative paths resolve
+    /// against the project directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<PathBuf>,
     /// Names of environment variables to pull from the developer's shell.
     /// Each name is read at resolve time via [`std::env::var`]; a missing
     /// variable is a hard error.
@@ -327,6 +345,17 @@ pub struct SecretSource {
     /// and must not escape the project directory via `..` or symlink.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<PathBuf>,
+    /// Path to a directory of one-file-per-key entries — the shape a
+    /// Kubernetes Secret volume mount projects (filename = key, file
+    /// content = value). Unlike `file:`, entries here are read by
+    /// following symlinks: a kubelet-projected volume is itself a
+    /// symlink farm (`..data/<key>`, atomically swapped on rotation), a
+    /// different trust boundary than a project-repo `file:` — the
+    /// anti-symlink-race posture that path enforces doesn't apply to a
+    /// kubelet-managed mount. Entries whose name starts with `.` are
+    /// skipped. Relative paths resolve against the project directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<PathBuf>,
     /// Names of environment variables to pull from the developer's shell.
     /// Each name is read at resolve time via [`std::env::var`]; a missing
     /// variable is a hard error.
@@ -487,26 +516,90 @@ pub struct HostPluginConfig {
     /// OCI digest to pin (`image` sources only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_digest: Option<String>,
+    /// This plugin's own bind-time config, delivered to every native
+    /// capability it imports (e.g. `wasmcloud:secrets`) via `on-workload-bind`
+    /// — never written to a file the plugin itself reads. `config`/
+    /// `configFrom`/`secretFrom` merge exactly like `workload.environment`
+    /// (inline → configFrom → secretFrom, last source wins), resolved
+    /// against the same top-level `configs:`/`secrets:` catalogs.
+    #[serde(flatten)]
+    pub environment: EnvironmentLayer,
+    /// Hosts this plugin's own `wasi:http/outgoing-handler` calls may reach.
+    /// Unlike a workload's `allowedHosts`, an omitted list denies every
+    /// outbound host by default — a host component plugin is
+    /// operator-controlled, more privileged than a workload, and gets no
+    /// ergonomic allow-all default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_hosts: Vec<AllowedHost>,
+    /// Names this plugin's own `wasi:sockets/ip-name-lookup` calls may
+    /// resolve. An omitted or empty list denies every lookup.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_ip_name_lookups: Vec<AllowedIpName>,
 }
 
 impl HostPluginConfig {
-    /// Convert to a runtime [`wash_runtime::plugin::ComponentPluginSpec`].
+    /// Convert to a runtime [`wash_runtime::plugin::ComponentPluginSpec`],
+    /// without resolving `configFrom`/`secretFrom` — used where no [`Config`]
+    /// is available. Prefer [`HostPluginConfig::to_spec`] when one is.
     ///
     /// `expectedDigest` on a file source is caught by the loader when it finds
     /// no digest to check against, so this only has to validate what it can see
     /// without fetching.
-    pub fn to_spec(&self) -> Result<wash_runtime::plugin::ComponentPluginSpec> {
+    pub fn to_spec_unresolved(&self) -> Result<wash_runtime::plugin::ComponentPluginSpec> {
         if self.id.is_empty() {
-            bail!("dev.host_plugins entry is missing a non-empty `id`");
+            bail!("host_plugins entry is missing a non-empty `id`");
         }
-        let what = format!("dev.host_plugins '{}'", self.id);
+        let what = format!("host_plugins '{}'", self.id);
         Ok(wash_runtime::plugin::ComponentPluginSpec {
             id: self.id.clone(),
             source: self.source.to_source(&what)?,
             max_restarts: self.max_restarts,
             expected_digest: self.expected_digest.clone(),
+            config: self.environment.config.clone(),
+            allowed_hosts: self.allowed_hosts.clone().into(),
+            allowed_ip_name_lookups: self.allowed_ip_name_lookups.clone().into(),
         })
     }
+
+    /// Convert to a runtime [`wash_runtime::plugin::ComponentPluginSpec`],
+    /// resolving `configFrom`/`secretFrom` against `config`'s top-level
+    /// `configs:`/`secrets:` catalogs the same way a workload's
+    /// `environment.configFrom`/`secretFrom` resolve.
+    ///
+    /// # Errors
+    ///
+    /// Same failure modes as [`crate::workload::resolve_workload`], for this
+    /// plugin's own `configFrom`/`secretFrom` references.
+    pub fn to_spec(
+        &self,
+        config: &Config,
+        project_dir: &Path,
+        repo_root: Option<&Path>,
+    ) -> Result<wash_runtime::plugin::ComponentPluginSpec> {
+        let mut spec = self.to_spec_unresolved()?;
+        let owner = format!("host_plugins '{}'", self.id);
+        spec.config = crate::workload::resolve_environment_layer(
+            Some(&self.environment),
+            &owner,
+            &config.config_sources,
+            &config.secret_sources,
+            project_dir,
+            repo_root,
+        )?;
+        Ok(spec)
+    }
+}
+
+/// `wash host` configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostConfig {
+    /// Host component plugins to load: WebAssembly components that provide
+    /// host capabilities. Requires a wash build with the
+    /// `host-component-plugins` feature. Merges with (does not replace) any
+    /// plugins declared via repeated `--host-plugin` flags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_plugins: Vec<HostPluginConfig>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -724,7 +817,7 @@ impl DevConfig {
         }
 
         for plugin in &self.host_plugins {
-            if let Err(err) = plugin.to_spec() {
+            if let Err(err) = plugin.to_spec_unresolved() {
                 errors.push(format!("{err:#}"));
             }
         }
@@ -994,6 +1087,7 @@ pub fn example_config() -> Config {
             postgres_url: Some("postgres://user:pass@127.0.0.1:5432".to_string()),
             ..Default::default()
         }),
+        host: None,
         new: None,
         wit: Some(WitConfig {
             registries: vec![],
@@ -1479,7 +1573,7 @@ dev:
         let dev = config.dev();
         assert_eq!(dev.host_plugins.len(), 2);
 
-        let kv = dev.host_plugins[0].to_spec().unwrap();
+        let kv = dev.host_plugins[0].to_spec_unresolved().unwrap();
         assert_eq!(kv.id, "acme-kv");
         assert_eq!(
             kv.source,
@@ -1487,11 +1581,83 @@ dev:
         );
         assert_eq!(kv.max_restarts, Some(3));
 
-        let widgets = dev.host_plugins[1].to_spec().unwrap();
+        let widgets = dev.host_plugins[1].to_spec_unresolved().unwrap();
         assert_eq!(
             widgets.source,
             ComponentSource::image("ghcr.io/acme/widgets:1.2.0")
         );
+    }
+
+    #[test]
+    fn host_plugins_parse_from_yaml_and_resolve_config_from_secret_from() {
+        // `host.hostPlugins` mirrors `dev.host_plugins`'s shape but adds
+        // `config`/`configFrom`/`secretFrom` (this plugin's own bind-time
+        // config, resolved the same way `workload.environment` is) and
+        // `allowedHosts`/`allowedIpNameLookups` (Phase C).
+        let yaml = r#"
+configs:
+  etcd-connection-settings:
+    inline:
+      etcd-prefix: /wasmcloud/secrets
+secrets:
+  etcd-client-cert:
+    inline:
+      api-key: s3cr3t-value
+host:
+  hostPlugins:
+    - id: etcd-secrets
+      image: ghcr.io/example/etcd-secrets:1.0.0
+      allowedHosts:
+        - https://etcd.internal:2379
+      allowedIpNameLookups:
+        - etcd.internal
+      config:
+        literal-key: literal-value
+      configFrom:
+        - etcd-connection-settings
+      secretFrom:
+        - etcd-client-cert
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let host = config.host();
+        assert_eq!(host.host_plugins.len(), 1);
+        let hp = &host.host_plugins[0];
+        assert_eq!(hp.id, "etcd-secrets");
+        assert_eq!(hp.allowed_hosts.len(), 1);
+        assert_eq!(hp.allowed_ip_name_lookups.len(), 1);
+
+        let spec = hp
+            .to_spec(&config, Path::new("."), None)
+            .expect("host_plugins entry should resolve");
+        assert_eq!(spec.id, "etcd-secrets");
+        assert_eq!(
+            spec.source,
+            ComponentSource::image("ghcr.io/example/etcd-secrets:1.0.0")
+        );
+        assert_eq!(spec.allowed_hosts.len(), 1);
+        assert_eq!(spec.allowed_ip_name_lookups.len(), 1);
+        // inline < configFrom < secretFrom precedence, all three present.
+        assert_eq!(spec.config.get("literal-key").unwrap(), "literal-value");
+        assert_eq!(
+            spec.config.get("etcd-prefix").unwrap(),
+            "/wasmcloud/secrets"
+        );
+        assert_eq!(spec.config.get("api-key").unwrap(), "s3cr3t-value");
+    }
+
+    #[test]
+    fn host_plugins_unresolved_config_from_reference_is_an_error() {
+        let yaml = r#"
+host:
+  hostPlugins:
+    - id: etcd-secrets
+      image: ghcr.io/example/etcd-secrets:1.0.0
+      configFrom:
+        - missing
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let hp = &config.host().host_plugins[0];
+        assert!(hp.to_spec(&config, Path::new("."), None).is_err());
     }
 
     #[test]
@@ -1506,14 +1672,14 @@ dev:
             },
             ..Default::default()
         };
-        assert!(both.to_spec().is_err());
+        assert!(both.to_spec_unresolved().is_err());
 
         // No source.
         let neither = HostPluginConfig {
             id: "x".into(),
             ..Default::default()
         };
-        assert!(neither.to_spec().is_err());
+        assert!(neither.to_spec_unresolved().is_err());
 
         // pullPolicy with a file source.
         let pull_on_file = HostPluginConfig {
@@ -1525,14 +1691,14 @@ dev:
             },
             ..Default::default()
         };
-        assert!(pull_on_file.to_spec().is_err());
+        assert!(pull_on_file.to_spec_unresolved().is_err());
 
         // Empty id.
         let empty_id = HostPluginConfig {
             source: ComponentSourceConfig::file("a.wasm"),
             ..Default::default()
         };
-        assert!(empty_id.to_spec().is_err());
+        assert!(empty_id.to_spec_unresolved().is_err());
     }
 
     #[test]

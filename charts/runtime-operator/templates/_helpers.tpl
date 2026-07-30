@@ -185,6 +185,46 @@ workloads can use a separate NATS cluster from the control plane if desired.
 {{- end }}
 
 {{/*
+Partitions a host group's hostPlugins[] into file-backed entries (config/
+configFrom/secretFrom/allowedHosts/allowedIpNameLookups set. There is no
+`--host-plugin` CLI-arg equivalent, since a secret must never land on the
+command line) vs plain CLI-only entries, and collects the deduped
+configFrom/secretFrom names referenced across the file-backed set.
+
+Shared by deployment.yaml (which needs both partitions, to render
+`--host-plugin` args for `cli` and mount volumes for `fileBacked`) and
+host-plugin-config.yaml (which needs only `fileBacked`, to render the
+`wash host` config file).
+
+Takes the host group dict directly (e.g. `.` inside
+`range .Values.runtime.hostGroups`). Returns a JSON object
+`{fileBacked, cli, configFromNames, secretFromNames}` and parses the result
+with `fromJson`.
+*/}}
+{{- define "runtime-operator.hostPluginPartition" -}}
+{{- $fileBacked := list }}
+{{- $cli := list }}
+{{- range .hostPlugins }}
+{{- if or .config .configFrom .secretFrom .allowedHosts .allowedIpNameLookups }}
+{{- $fileBacked = append $fileBacked . }}
+{{- else }}
+{{- $cli = append $cli . }}
+{{- end }}
+{{- end }}
+{{- $configFromNames := list }}
+{{- $secretFromNames := list }}
+{{- range $fileBacked }}
+{{- range .configFrom }}
+{{- $configFromNames = append $configFromNames . }}
+{{- end }}
+{{- range .secretFrom }}
+{{- $secretFromNames = append $secretFromNames . }}
+{{- end }}
+{{- end }}
+{{- dict "fileBacked" $fileBacked "cli" $cli "configFromNames" ($configFromNames | uniq) "secretFromNames" ($secretFromNames | uniq) | toJson }}
+{{- end }}
+
+{{/*
 Create the imagePullSecrets section for the chart.
 */}}
 {{- define "runtime-operator.imagePullSecrets" -}}

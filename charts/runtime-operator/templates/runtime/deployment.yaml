@@ -8,6 +8,16 @@
 {{- $imgRegistry := $hi.registry | default $top.Values.runtime.image.registry | default $top.Values.global.image.registry }}
 {{- $imgRepo := $hi.repository | default $top.Values.runtime.image.repository }}
 {{- $imgTag := $hi.tag | default $top.Values.runtime.image.tag | default $top.Chart.AppVersion }}
+{{- /* hostPlugins entries needing a `wash host` config file (--config) —
+       config/configFrom/secretFrom/allowedHosts/allowedIpNameLookups have no
+       `--host-plugin` CLI-arg equivalent (deliberately: a secret must never
+       land on the command line). See host-plugin-config.yaml, which renders
+       the ConfigMap this deployment mounts. */}}
+{{- $partition := include "runtime-operator.hostPluginPartition" . | fromJson }}
+{{- $fileBackedPlugins := $partition.fileBacked }}
+{{- $cliPlugins := $partition.cli }}
+{{- $configFromNames := $partition.configFromNames }}
+{{- $secretFromNames := $partition.secretFromNames }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -63,6 +73,24 @@ spec:
                so they survive a TLS-off install. */}}
         {{- with .volumes }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $fileBackedPlugins }}
+        - name: host-plugin-config
+          configMap:
+            name: hostgroup-{{ .name }}-host-config
+        {{- range $configFromNames }}
+        - name: host-plugin-config-{{ . }}
+          configMap:
+            name: {{ . }}
+        {{- end }}
+        {{- range $secretFromNames }}
+        - name: host-plugin-secret-{{ . }}
+          secret:
+            secretName: {{ . }}
+            # Matches the Kubernetes Secret volume `defaultMode: 0400` posture
+            # `crate::workload`'s own `file:` secret handling documents.
+            defaultMode: 0400
+        {{- end }}
         {{- end }}
       serviceAccountName: {{ include "runtime.serviceAccountName" $top }}
       {{- include "runtime-operator.imagePullSecrets" $top | nindent 6 }}
@@ -133,10 +161,16 @@ spec:
             {{- range .wasmProposals }}
             - "--wasm-proposal={{ . }}"
             {{- end }}
-            {{- /* Host component plugins: one --host-plugin flag per entry, each
-                   rendered into the CLI's `key=value` grammar. */}}
-            {{- range .hostPlugins }}
+            {{- /* Host component plugins with no config/secretFrom/allowedHosts:
+                   one --host-plugin flag per entry, rendered into the CLI's
+                   `key=value` grammar (unchanged). Entries that DO set any of
+                   those render into the mounted config file instead — see
+                   $fileBackedPlugins / --config below. */}}
+            {{- range $cliPlugins }}
             - "--host-plugin=id={{ .id }}{{ if .image }},image={{ .image }}{{ if .pullPolicy }},pull={{ .pullPolicy }}{{ end }}{{ if .digest }},digest={{ .digest }}{{ end }}{{ else if .file }},file={{ .file }}{{ end }}{{ if .maxRestarts }},max-restarts={{ .maxRestarts }}{{ end }}"
+            {{- end }}
+            {{- if $fileBackedPlugins }}
+            - "--user-config=/etc/wasmcloud/host-config/config.yaml"
             {{- end }}
             {{- /* Chart-wide runtime.extraArgs applies to every host group; per-host-group
                    .extraArgs is appended after it. */}}
@@ -170,6 +204,21 @@ spec:
                    mounts user volumes. */}}
             {{- with .volumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- if $fileBackedPlugins }}
+            - name: host-plugin-config
+              mountPath: /etc/wasmcloud/host-config
+              readOnly: true
+            {{- range $configFromNames }}
+            - name: host-plugin-config-{{ . }}
+              mountPath: /etc/wasmcloud/host-plugin-config/{{ . }}
+              readOnly: true
+            {{- end }}
+            {{- range $secretFromNames }}
+            - name: host-plugin-secret-{{ . }}
+              mountPath: /etc/wasmcloud/host-plugin-secrets/{{ . }}
+              readOnly: true
+            {{- end }}
             {{- end }}
           {{- with (.resources | default $top.Values.runtime.resources) }}
           resources:

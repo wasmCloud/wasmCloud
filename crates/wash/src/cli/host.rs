@@ -10,6 +10,7 @@ use wash_runtime::{
 };
 
 use crate::cli::{CliCommand, CliContext, CommandOutput};
+use crate::config::load_config;
 
 #[derive(Debug, Clone, Args)]
 pub struct HostCommand {
@@ -202,6 +203,17 @@ impl CliCommand for HostCommand {
         // crypto provider available. Idempotent; also called by Ingress::new.
         wash_runtime::init_crypto();
 
+        // Picked up the same way `wash dev` reads its own config file: global
+        // config merged with the project-local one, if any. `wash host` has
+        // no CLI-flags-as-config-overrides of its own (unlike `wash dev`'s
+        // literal `Config` override for `wit.skip_fetch`) — this only reads
+        // the `host:` section (currently `hostPlugins[]`), which has no CLI
+        // equivalent to conflict with.
+        let project_dir = ctx.project_dir();
+        let config =
+            load_config::<crate::config::Config>(&ctx.user_config_path(), Some(project_dir), None)
+                .context("failed to load config for wash host")?;
+
         let scheduler_nats_client = wash_runtime::washlet::connect_nats(
             self.scheduler_nats_url.clone(),
             wash_runtime::washlet::NatsConnectionOptions {
@@ -253,6 +265,7 @@ impl CliCommand for HostCommand {
                     .copy_environment(true)
                     .build(),
             ))?
+            .with_plugin(Arc::new(plugin::wasmcloud_secrets::WasmcloudSecrets::new()))?
             .with_plugin(Arc::new(plugin::wasi_logging::TracingLogger::default()))?
             .with_plugin(Arc::new(plugin::wasi_blobstore::NatsBlobstore::new(
                 &data_nats_client,
@@ -347,11 +360,32 @@ impl CliCommand for HostCommand {
                 cache_dir: self.oci_cache_dir.clone(),
                 timeout: Some(self.registry_pull_timeout),
             };
-            for spec in &self.host_plugins {
+            let native_plugins = cluster_host_builder.native_plugins();
+            let http_handler = cluster_host_builder.http_handler();
+
+            // Config-file plugins (`host.hostPlugins`) first, so their
+            // config/secretFrom/allowedHosts are honored; CLI/env
+            // `--host-plugin` entries follow. Together, not one replacing
+            // the other — an operator can declare most plugins in the
+            // config file (where config/secrets/policy fit naturally) and
+            // still add one ad hoc via `--host-plugin` without duplicating
+            // the rest.
+            let mut specs: Vec<wash_runtime::plugin::ComponentPluginSpec> = Vec::new();
+            for hp in &config.host().host_plugins {
+                specs.push(
+                    hp.to_spec(&config, project_dir, Some(project_dir))
+                        .with_context(|| format!("failed to resolve host_plugins '{}'", hp.id))?,
+                );
+            }
+            specs.extend(self.host_plugins.iter().cloned());
+
+            for spec in &specs {
                 let plugin = wash_runtime::plugin::component_host::load_component_plugin(
                     spec,
                     &engine,
                     plugin_oci_config.clone(),
+                    &native_plugins,
+                    http_handler.clone(),
                 )
                 .await
                 .with_context(|| format!("failed to load host component plugin '{}'", spec.id))?;
@@ -361,8 +395,8 @@ impl CliCommand for HostCommand {
         }
         #[cfg(not(feature = "host-component-plugins"))]
         anyhow::ensure!(
-            self.host_plugins.is_empty(),
-            "--host-plugin/WASH_HOST_PLUGINS requires a wash build with the \
+            self.host_plugins.is_empty() && config.host().host_plugins.is_empty(),
+            "--host-plugin/WASH_HOST_PLUGINS/host.hostPlugins requires a wash build with the \
              `host-component-plugins` feature"
         );
 
