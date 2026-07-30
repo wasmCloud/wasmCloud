@@ -1,0 +1,6 @@
+[overrides]
+# `wasmcloud:host` (identity, workload-lifecycle) and `wasmcloud:secrets` are
+# defined in-repo; reference their source directly so the fixture tracks the
+# exact interfaces the host provides.
+"wasmcloud:host" = { path = "../../../../../wit/host/wit" }
+"wasmcloud:secrets" = { path = "../../../../../wit/secrets/wit" }

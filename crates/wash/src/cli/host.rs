@@ -199,7 +199,7 @@ fn host_plugin_registry_credentials(
 impl CliCommand for HostCommand {
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
         // Installed before connect_nats so TLS-enabled NATS clusters have a
-        // crypto provider available. Idempotent; also called by HttpServer::new.
+        // crypto provider available. Idempotent; also called by Ingress::new.
         wash_runtime::init_crypto();
 
         let scheduler_nats_client = wash_runtime::washlet::connect_nats(
@@ -267,37 +267,7 @@ impl CliCommand for HostCommand {
 
         #[cfg(feature = "wasm_component_model_implements")]
         {
-            cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
-                plugin::wasi_keyvalue::MultiplexedKeyValue::new()
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::InMemoryProvider))
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::RedisProvider))
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::NatsProvider))
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::FilesystemProvider)),
-            ))?;
-            cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
-                plugin::wasmcloud_messaging::MultiplexedMessaging::new()
-                    .with_provider(Arc::new(plugin::wasmcloud_messaging::InMemoryMsgProvider))
-                    .with_provider(Arc::new(plugin::wasmcloud_messaging::NatsMsgProvider)),
-            ))?;
-            cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
-                plugin::wasi_blobstore::MultiplexedBlobstore::new()
-                    .with_provider(Arc::new(plugin::wasi_blobstore::InMemoryProvider))
-                    .with_provider(Arc::new(plugin::wasi_blobstore::FilesystemProvider))
-                    .with_provider(Arc::new(plugin::wasi_blobstore::NatsBlobProvider)),
-            ))?;
-            cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
-                plugin::wasi_blobstore::MultiplexedAsyncBlobstore::new()
-                    .with_provider(Arc::new(plugin::wasi_blobstore::InMemoryProvider))
-                    .with_provider(Arc::new(plugin::wasi_blobstore::FilesystemProvider))
-                    .with_provider(Arc::new(plugin::wasi_blobstore::NatsBlobProvider)),
-            ))?;
-            cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
-                plugin::wasi_keyvalue::MultiplexedAsyncKeyValue::new()
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::InMemoryProvider))
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::RedisProvider))
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::NatsProvider))
-                    .with_provider(Arc::new(plugin::wasi_keyvalue::FilesystemProvider)),
-            ))?;
+            cluster_host_builder = cluster_host_builder.with_multiplexed_plugins()?;
         }
 
         if let Some(postgres_url) = &self.postgres_url {
@@ -326,18 +296,18 @@ impl CliCommand for HostCommand {
 
         if let Some(addr) = self.http_addr {
             let http_router = wash_runtime::host::http::DynamicRouter::default();
-            let http_server = if let (Some(cert_path), Some(key_path)) =
+            let ingress = if let (Some(cert_path), Some(key_path)) =
                 (&self.tls_cert_path, &self.tls_key_path)
             {
                 let mut tls = wash_runtime::host::http::TlsConfig::new(cert_path, key_path);
                 if let Some(ca) = self.tls_ca_path.as_deref() {
                     tls = tls.with_ca(ca);
                 }
-                wash_runtime::host::http::HttpServer::new_with_tls(http_router, addr, tls).await?
+                wash_runtime::host::http::Ingress::new_with_tls(http_router, addr, tls).await?
             } else {
-                wash_runtime::host::http::HttpServer::new(http_router, addr).await?
+                wash_runtime::host::http::Ingress::new(http_router, addr).await?
             };
-            cluster_host_builder = cluster_host_builder.with_http_handler(Arc::new(http_server));
+            cluster_host_builder = cluster_host_builder.with_http_handler(Arc::new(ingress));
         }
 
         // Enable otel plugin

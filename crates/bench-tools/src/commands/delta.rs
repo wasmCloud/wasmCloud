@@ -78,9 +78,10 @@ enum Kind {
 
 impl Kind {
     fn for_bench(bench: &str) -> Self {
-        match bench {
-            "gungraun" => Kind::Instructions,
-            _ => Kind::Time,
+        if crate::callgrind::is_instruction_bench(bench) {
+            Kind::Instructions
+        } else {
+            Kind::Time
         }
     }
 

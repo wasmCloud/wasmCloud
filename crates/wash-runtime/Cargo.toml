@@ -201,3 +201,9 @@ harness = false
 name = "wasmtime_serve"
 harness = false
 
+# Requires `--features host-component-plugins`, plus valgrind and a
+# version-matched gungraun-runner on PATH.
+[[bench]]
+name = "gungraun_plugin"
+harness = false
+

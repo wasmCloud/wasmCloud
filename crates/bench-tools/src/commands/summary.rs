@@ -40,7 +40,7 @@ pub fn run(args: Args) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 
-    if args.bench == "gungraun" {
+    if crate::callgrind::is_instruction_bench(&args.bench) {
         return render_gungraun_stub(&mut out, &args.bench, &meta, &target_dir, &run_id);
     }
 

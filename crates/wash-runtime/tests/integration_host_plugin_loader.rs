@@ -8,10 +8,11 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use wash_runtime::component_source::ComponentSource;
 use wash_runtime::engine::Engine;
 use wash_runtime::oci::{OciConfig, OciPullPolicy};
 use wash_runtime::plugin::component_host::load_component_plugin;
-use wash_runtime::plugin::{ComponentPluginSpec, HostPlugin as _, PluginSource};
+use wash_runtime::plugin::{ComponentPluginSpec, HostPlugin as _};
 
 fn kv_plugin_path() -> PathBuf {
     PathBuf::from(concat!(
@@ -25,7 +26,7 @@ async fn loads_component_plugin_from_file() -> Result<()> {
     let engine = Engine::builder().build()?;
     let spec = ComponentPluginSpec::from_plugin_source(
         "acme-kv-plugin",
-        PluginSource::File(kv_plugin_path()),
+        ComponentSource::File(kv_plugin_path()),
     );
 
     let plugin = load_component_plugin(&spec, &engine, OciConfig::default()).await?;
@@ -63,7 +64,7 @@ async fn loads_component_plugin_from_oci() -> Result<()> {
     let engine = Engine::builder().build()?;
     let spec = ComponentPluginSpec::from_plugin_source(
         "acme-kv-plugin",
-        PluginSource::Oci {
+        ComponentSource::Oci {
             image: reference.clone(),
             pull_policy: OciPullPolicy::Always,
         },
@@ -93,7 +94,7 @@ async fn rejects_digest_pin_on_file_source() {
     let engine = Engine::builder().build().unwrap();
     let mut spec = ComponentPluginSpec::from_plugin_source(
         "acme-kv-plugin",
-        PluginSource::File(kv_plugin_path()),
+        ComponentSource::File(kv_plugin_path()),
     );
     spec.expected_digest = Some("sha256:deadbeef".into());
 
@@ -112,7 +113,7 @@ async fn missing_file_errors_with_id_and_context() {
     let engine = Engine::builder().build().unwrap();
     let spec = ComponentPluginSpec::from_plugin_source(
         "ghost",
-        PluginSource::File("/nonexistent/does-not-exist.wasm".into()),
+        ComponentSource::File("/nonexistent/does-not-exist.wasm".into()),
     );
 
     let err = load_component_plugin(&spec, &engine, OciConfig::default())

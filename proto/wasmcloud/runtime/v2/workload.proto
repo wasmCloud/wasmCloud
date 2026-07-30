@@ -111,6 +111,11 @@ message LocalResources {
   // Note this controls socket connections but not DNS lookups.
   // Upon a successful lookup, the host will allow outbound connections to the specified hosts.
   repeated string allowed_hosts = 6;
+  // Names the component may resolve through wasi:sockets/ip-name-lookup
+  // (resolve-addresses). Accepts "*" for any name, a wildcard such as
+  // "*.wasmcloud.io", an exact name, or a literal IP address.
+  // Empty or absent denies every lookup with permanent-resolver-failure.
+  repeated string allowed_ip_name_lookups = 7;
 }
 
 message Volume {

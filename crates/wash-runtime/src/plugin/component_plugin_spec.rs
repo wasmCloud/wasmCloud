@@ -14,19 +14,7 @@ use std::str::FromStr;
 
 use anyhow::{Context as _, anyhow, bail, ensure};
 
-use crate::oci::OciPullPolicy;
-
-/// Where a host component plugin's wasm bytes come from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PluginSource {
-    /// Pulled from an OCI registry by image reference.
-    Oci {
-        image: String,
-        pull_policy: OciPullPolicy,
-    },
-    /// Read from a local file path.
-    File(PathBuf),
-}
+use crate::component_source::ComponentSource;
 
 /// A host component plugin to load: a host-unique id, a source for its wasm, and
 /// optional supervision/integrity settings.
@@ -35,19 +23,19 @@ pub struct ComponentPluginSpec {
     /// Host-unique plugin id. Collides loudly with an existing plugin's id at
     /// registration time (`HostBuilder::with_plugin` dedupes).
     pub id: String,
-    pub source: PluginSource,
+    pub source: ComponentSource,
     /// Supervised driver restarts before the plugin is declared dead. `None`
     /// uses the loader default.
     pub max_restarts: Option<u32>,
     /// Optional OCI digest to pin for supply-chain integrity. Only meaningful
-    /// for [`PluginSource::Oci`]; the loader rejects it on a file source.
+    /// for [`ComponentSource::Oci`]; the loader rejects it on a file source.
     pub expected_digest: Option<String>,
 }
 
 impl ComponentPluginSpec {
     /// Build a spec from an id and source with default supervision/integrity
     /// settings (no restart-cap override, no digest pin).
-    pub fn from_plugin_source(id: impl Into<String>, source: PluginSource) -> Self {
+    pub fn from_plugin_source(id: impl Into<String>, source: ComponentSource) -> Self {
         Self {
             id: id.into(),
             source,
@@ -108,23 +96,8 @@ impl FromStr for ComponentPluginSpec {
         }
 
         let id = id.context("host plugin spec is missing required `id=`")?;
-        let source = match (image, file) {
-            (Some(image), None) => PluginSource::Oci {
-                image,
-                pull_policy: pull.unwrap_or(OciPullPolicy::IfNotPresent),
-            },
-            (None, Some(file)) => {
-                ensure!(
-                    pull.is_none(),
-                    "host plugin '{id}': `pull=` applies only to `image=` sources"
-                );
-                PluginSource::File(file)
-            }
-            (Some(_), Some(_)) => {
-                bail!("host plugin '{id}' sets both `image=` and `file=`; use exactly one")
-            }
-            (None, None) => bail!("host plugin '{id}' needs an `image=` or `file=` source"),
-        };
+        let source =
+            ComponentSource::from_image_or_file(image, file, pull, &format!("host plugin '{id}'"))?;
 
         Ok(Self {
             id,
@@ -138,6 +111,7 @@ impl FromStr for ComponentPluginSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::oci::OciPullPolicy;
 
     #[test]
     fn parses_oci_spec_with_all_fields() {
@@ -148,7 +122,7 @@ mod tests {
         assert_eq!(spec.id, "acme-kv");
         assert_eq!(
             spec.source,
-            PluginSource::Oci {
+            ComponentSource::Oci {
                 image: "ghcr.io/acme/kv:1.0.0".into(),
                 pull_policy: OciPullPolicy::Always,
             }
@@ -160,16 +134,10 @@ mod tests {
     #[test]
     fn parses_file_spec_and_defaults_pull_policy_for_oci() {
         let file: ComponentPluginSpec = "id=kv,file=./kv.wasm".parse().unwrap();
-        assert_eq!(file.source, PluginSource::File("./kv.wasm".into()));
+        assert_eq!(file.source, ComponentSource::File("./kv.wasm".into()));
 
         let oci: ComponentPluginSpec = "id=kv,image=ghcr.io/acme/kv:1".parse().unwrap();
-        assert_eq!(
-            oci.source,
-            PluginSource::Oci {
-                image: "ghcr.io/acme/kv:1".into(),
-                pull_policy: OciPullPolicy::IfNotPresent,
-            }
-        );
+        assert_eq!(oci.source, ComponentSource::image("ghcr.io/acme/kv:1"));
     }
 
     #[test]

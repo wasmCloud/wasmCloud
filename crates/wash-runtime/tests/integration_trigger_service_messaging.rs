@@ -8,6 +8,10 @@
 //! on the SAME long-lived instance the trigger service co-drives — invoked via the
 //! dynamic `call_concurrent` path under `run_concurrent` — rather than a fresh
 //! instance per message.
+//!
+//! The end-to-end tests at the bottom drive the same path through a real
+//! messaging backend rather than the host-side delivery API, once against the
+//! in-memory backend and once against a NATS server in a container.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -16,13 +20,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use testcontainers::{
+    GenericImage,
+    core::{IntoContainerPort, WaitFor},
+    runners::AsyncRunner,
+};
 use tokio::time::timeout;
 
 use wash_runtime::engine::Engine;
-use wash_runtime::host::http::{DevRouter, HostHandler, HttpServer};
+use wash_runtime::host::http::{DevRouter, HostHandler, Ingress};
 use wash_runtime::host::trigger_service::BrokerMessage;
 use wash_runtime::host::{HostApi, HostBuilder};
-use wash_runtime::plugin::wasmcloud_messaging::InMemoryMessaging;
+use wash_runtime::plugin::wasmcloud_messaging::{InMemoryMessaging, NatsMessaging};
 use wash_runtime::plugin::{
     wasi_blobstore::InMemoryBlobstore, wasi_config::DynamicConfig, wasi_keyvalue::InMemoryKeyValue,
     wasi_logging::TracingLogger,
@@ -58,7 +67,7 @@ fn msg_counter_request(workload_id: &str, max_restarts: u64) -> WorkloadStartReq
 }
 
 async fn deliver(
-    http_server: &Arc<HttpServer<DevRouter>>,
+    ingress: &Arc<Ingress<DevRouter>>,
     workload_id: &str,
     subject: &str,
 ) -> Result<Result<(), String>> {
@@ -69,7 +78,7 @@ async fn deliver(
     };
     timeout(
         Duration::from_secs(10),
-        http_server.deliver_trigger_service_message(workload_id, msg),
+        ingress.deliver_trigger_service_message(workload_id, msg),
     )
     .await
     .context("deliver_trigger_service_message timed out")?
@@ -78,7 +87,7 @@ async fn deliver(
 #[tokio::test]
 async fn test_trigger_service_co_drives_messaging_handler() -> Result<()> {
     let workload_id = uuid::Uuid::new_v4().to_string();
-    let (addr, host, http_server) = start_host_with_p3_handler("127.0.0.1:0").await?;
+    let (addr, host, ingress) = start_host_with_p3_handler("127.0.0.1:0").await?;
 
     host.workload_start(msg_counter_request(&workload_id, 0))
         .await
@@ -87,14 +96,14 @@ async fn test_trigger_service_co_drives_messaging_handler() -> Result<()> {
     // Two messages land on the SAME long-lived instance, so the handler's
     // process-global count climbs 1 -> 2 (a fresh instance per message would
     // return 1 both times).
-    let r1 = deliver(&http_server, &workload_id, "first").await?;
+    let r1 = deliver(&ingress, &workload_id, "first").await?;
     assert_eq!(
         r1,
         Err("1:first".to_string()),
         "first message handled on the co-driven instance"
     );
 
-    let r2 = deliver(&http_server, &workload_id, "second").await?;
+    let r2 = deliver(&ingress, &workload_id, "second").await?;
     assert_eq!(
         r2,
         Err("2:second".to_string()),
@@ -135,14 +144,14 @@ async fn test_trigger_service_co_drives_messaging_handler() -> Result<()> {
 #[tokio::test]
 async fn test_trigger_service_stop_drops_messaging_subscription() -> Result<()> {
     let workload_id = uuid::Uuid::new_v4().to_string();
-    let (_addr, host, http_server) = start_host_with_p3_handler("127.0.0.1:0").await?;
+    let (_addr, host, ingress) = start_host_with_p3_handler("127.0.0.1:0").await?;
 
     host.workload_start(msg_counter_request(&workload_id, 0))
         .await
         .context("failed to start msg-counter trigger service workload")?;
 
     // Delivery works while running.
-    let live = deliver(&http_server, &workload_id, "live").await?;
+    let live = deliver(&ingress, &workload_id, "live").await?;
     assert_eq!(
         live,
         Err("1:live".to_string()),
@@ -159,12 +168,10 @@ async fn test_trigger_service_stop_drops_messaging_subscription() -> Result<()> 
     // registration is gone, so delivery fails at lookup rather than reaching a
     // torn-down channel.
     assert!(
-        !http_server
-            .has_trigger_service_messaging(&workload_id)
-            .await,
+        !ingress.has_trigger_service_messaging(&workload_id).await,
         "stop must drop the messaging subscription"
     );
-    let after = deliver(&http_server, &workload_id, "after").await;
+    let after = deliver(&ingress, &workload_id, "after").await;
     assert!(
         after.is_err(),
         "a message published after stop must not be delivered, got {after:?}"
@@ -188,13 +195,13 @@ async fn test_trigger_service_stop_drops_messaging_subscription() -> Result<()> 
 #[tokio::test]
 async fn test_trigger_service_restarts_and_resubscribes_on_fault() -> Result<()> {
     let workload_id = uuid::Uuid::new_v4().to_string();
-    let (_addr, host, http_server) = start_host_with_p3_handler("127.0.0.1:0").await?;
+    let (_addr, host, ingress) = start_host_with_p3_handler("127.0.0.1:0").await?;
     host.workload_start(msg_counter_request(&workload_id, 3))
         .await
         .context("failed to start msg-counter trigger service workload")?;
 
     // Prime the count on the initial instance.
-    let r1 = deliver(&http_server, &workload_id, "first").await?;
+    let r1 = deliver(&ingress, &workload_id, "first").await?;
     assert_eq!(
         r1,
         Err("1:first".to_string()),
@@ -202,7 +209,7 @@ async fn test_trigger_service_restarts_and_resubscribes_on_fault() -> Result<()>
     );
 
     // `boom` traps the handler, faulting the instance; the supervisor restarts it.
-    let _ = deliver(&http_server, &workload_id, "boom").await;
+    let _ = deliver(&ingress, &workload_id, "boom").await;
 
     // After the restart, delivery resumes (re-subscribed) on a fresh instance
     // whose per-instance count starts over at 1. The restart is async, so poll
@@ -212,7 +219,7 @@ async fn test_trigger_service_restarts_and_resubscribes_on_fault() -> Result<()>
     // those rather than mistaking them for a handled message.
     let mut got = None;
     for _ in 0..100 {
-        if let Ok(Err(s)) = deliver(&http_server, &workload_id, "after").await
+        if let Ok(Err(s)) = deliver(&ingress, &workload_id, "after").await
             && s.ends_with(":after")
         {
             got = Some(s);
@@ -230,21 +237,31 @@ async fn test_trigger_service_restarts_and_resubscribes_on_fault() -> Result<()>
 }
 
 /// The `wasmcloud:messaging/handler` host interface, so the messaging plugin
-/// binds to the service (empty config → the service subscribes to everything).
-fn messaging_handler_interface() -> WitInterface {
+/// binds to the service. `subscriptions` names the subjects the service
+/// receives on; the in-memory backend also accepts none, which subscribes it to
+/// everything.
+fn messaging_handler_interface(subscriptions: Option<&str>) -> WitInterface {
+    let mut config = HashMap::new();
+    if let Some(subscriptions) = subscriptions {
+        config.insert("subscriptions".to_string(), subscriptions.to_string());
+    }
     WitInterface {
         namespace: "wasmcloud".to_string(),
         package: "messaging".to_string(),
         interfaces: ["handler".to_string()].into_iter().collect(),
         version: Some(semver::Version::new(0, 2, 0)),
-        config: HashMap::new(),
+        config,
         name: None,
     }
 }
 
-fn msg_counter_e2e_request(workload_id: &str, host: &str) -> WorkloadStartRequest {
+fn msg_counter_e2e_request(
+    workload_id: &str,
+    host: &str,
+    subscriptions: Option<&str>,
+) -> WorkloadStartRequest {
     let mut host_interfaces = http_only_host_interfaces(host);
-    host_interfaces.push(messaging_handler_interface());
+    host_interfaces.push(messaging_handler_interface(subscriptions));
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
@@ -284,19 +301,38 @@ async fn get_count(
     Ok(common::json_u64_field(&body, "count"))
 }
 
+/// Poll [`get_count`] until it reaches `want`, giving up after ~5s. Returns the
+/// last value observed, so a failed expectation reports what the service
+/// actually handled rather than a bare timeout.
+async fn await_count(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    host: &str,
+    want: u64,
+) -> Result<u64> {
+    let mut observed = 0;
+    for _ in 0..100 {
+        observed = get_count(client, addr, host).await?;
+        if observed >= want {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Ok(observed)
+}
+
 /// End-to-end: a message published through the in-memory messaging backend is
 /// delivered to the long-lived trigger service (not a fresh per-message
 /// instance), so the count observed over the service's HTTP handler advances.
 #[tokio::test]
 async fn test_trigger_service_messaging_via_in_memory_backend() -> Result<()> {
     let engine = Engine::builder().build()?;
-    let http_server =
-        Arc::new(HttpServer::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?);
-    let addr = http_server.addr();
+    let ingress = Arc::new(Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?);
+    let addr = ingress.addr();
     let messaging = Arc::new(InMemoryMessaging::new());
     let host = HostBuilder::new()
         .with_engine(engine)
-        .with_http_handler(http_server.clone())
+        .with_http_handler(ingress.clone())
         .with_plugin(Arc::new(InMemoryBlobstore::new(None)))?
         .with_plugin(Arc::new(InMemoryKeyValue::new()))?
         .with_plugin(Arc::new(TracingLogger::default()))?
@@ -307,7 +343,7 @@ async fn test_trigger_service_messaging_via_in_memory_backend() -> Result<()> {
 
     let workload_id = uuid::Uuid::new_v4().to_string();
     let host_header = "msg-e2e";
-    host.workload_start(msg_counter_e2e_request(&workload_id, host_header))
+    host.workload_start(msg_counter_e2e_request(&workload_id, host_header, None))
         .await
         .context("failed to start msg-counter trigger service workload")?;
 
@@ -326,17 +362,104 @@ async fn test_trigger_service_messaging_via_in_memory_backend() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?;
 
     // Delivery + handling is async; poll until the count reflects it.
-    let mut observed = 0;
-    for _ in 0..40 {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        observed = get_count(&client, addr, host_header).await?;
-        if observed >= 1 {
-            break;
-        }
-    }
     assert_eq!(
-        observed, 1,
+        await_count(&client, addr, host_header, 1).await?,
+        1,
         "the published message was handled on the co-driven trigger service instance"
+    );
+
+    Ok(())
+}
+
+/// The same end-to-end path as [`test_trigger_service_messaging_via_in_memory_backend`],
+/// but over a real NATS server: the in-memory backend delivers in-process, so it
+/// cannot catch a break in `NatsMessaging`'s own subscribe/receive loop —
+/// notably that a *service* workload has no per-message instance to
+/// pre-instantiate and must instead be recognized as a registered trigger
+/// service and delivered to its live instance.
+///
+/// Two messages are published: the count climbing 1 → 2 proves both landed on
+/// the SAME long-lived instance the trigger service co-drives.
+///
+/// Requires Docker (NATS); marked `#[ignore]`, run with `cargo test --include-ignored`.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn test_trigger_service_messaging_via_nats_backend() -> Result<()> {
+    // NATS needs an explicit subject to subscribe to, unlike the in-memory
+    // backend, where an empty config subscribes the service to everything.
+    const SUBJECT: &str = "trigger.service.e2e";
+
+    let container = GenericImage::new("nats", "2.12.8-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+        .start()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to start NATS container: {e}"))?;
+    let port = container
+        .get_host_port_ipv4(4222)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to get NATS host port: {e}"))?;
+    let nats_url = format!("nats://127.0.0.1:{port}");
+
+    // The plugin holds its own client, matching how `wash host` wires it up.
+    let plugin_client = Arc::new(
+        async_nats::connect(&nats_url)
+            .await
+            .context("failed to connect the plugin's NATS client")?,
+    );
+    let publisher = async_nats::connect(&nats_url)
+        .await
+        .context("failed to connect the test's NATS client")?;
+
+    let engine = Engine::builder().build()?;
+    let ingress = Arc::new(Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?);
+    let addr = ingress.addr();
+    let host = HostBuilder::new()
+        .with_engine(engine)
+        .with_http_handler(ingress.clone())
+        .with_plugin(Arc::new(InMemoryBlobstore::new(None)))?
+        .with_plugin(Arc::new(InMemoryKeyValue::new()))?
+        .with_plugin(Arc::new(TracingLogger::default()))?
+        .with_plugin(Arc::new(DynamicConfig::default()))?
+        .with_plugin(Arc::new(NatsMessaging::new(plugin_client)))?
+        .build()?;
+    let host = host.start().await.context("failed to start host")?;
+
+    let workload_id = uuid::Uuid::new_v4().to_string();
+    let host_header = "msg-nats-e2e";
+    host.workload_start(msg_counter_e2e_request(
+        &workload_id,
+        host_header,
+        Some(SUBJECT),
+    ))
+    .await
+    .context("failed to start msg-counter trigger service workload")?;
+
+    let client = reqwest::Client::new();
+    assert_eq!(
+        get_count(&client, addr, host_header).await?,
+        0,
+        "no messages handled yet"
+    );
+
+    publisher
+        .publish(SUBJECT, bytes::Bytes::from_static(b"first"))
+        .await
+        .context("failed to publish the first message")?;
+    assert_eq!(
+        await_count(&client, addr, host_header, 1).await?,
+        1,
+        "the message published to NATS reached the co-driven trigger service instance"
+    );
+
+    publisher
+        .publish(SUBJECT, bytes::Bytes::from_static(b"second"))
+        .await
+        .context("failed to publish the second message")?;
+    assert_eq!(
+        await_count(&client, addr, host_header, 2).await?,
+        2,
+        "the second message hit the same long-lived instance (count persists)"
     );
 
     Ok(())

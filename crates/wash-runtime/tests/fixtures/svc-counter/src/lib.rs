@@ -5,6 +5,10 @@
 //! count. Because both run on the same instance sharing the same statics, an
 //! HTTP response observing `cli_ticks > 0` (and growing between requests) proves
 //! the host co-drives the run loop concurrently with serving HTTP.
+//!
+//! A request for `/boom` traps instead of responding, so a test can fault the
+//! shared instance and watch the supervisor restart it. Both counters live in
+//! instance memory, so a fresh incarnation starts them over at zero.
 
 mod bindings;
 
@@ -31,7 +35,13 @@ impl RunGuest for Component {
 }
 
 impl HttpGuest for Component {
-    async fn handle(_request: Request) -> Result<Response, ErrorCode> {
+    async fn handle(request: Request) -> Result<Response, ErrorCode> {
+        // A `/boom` path traps the handler, faulting the co-driven instance —
+        // the restart-behavior test uses this to force a supervised restart.
+        let path = request.get_path_with_query().unwrap_or_default();
+        if path.starts_with("/boom") {
+            panic!("svc-counter boom: deliberate handler trap for the restart test");
+        }
         let http_calls = HTTP_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
         let cli_ticks = CLI_TICKS.load(Ordering::SeqCst);
         let body = format!("{{\"cli_ticks\":{cli_ticks},\"http_calls\":{http_calls}}}");

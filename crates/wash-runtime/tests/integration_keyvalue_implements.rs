@@ -31,7 +31,7 @@ use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        http::{DevRouter, HttpServer},
+        http::{DevRouter, Ingress},
     },
     plugin::wasi_keyvalue::{InMemoryProvider, MultiplexedKeyValue},
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
@@ -64,15 +64,15 @@ fn named_store(name: &str) -> WitInterface {
 #[tokio::test]
 async fn implements_imports_route_to_isolated_backends() -> Result<()> {
     let engine = Engine::builder().build()?;
-    let http_server = HttpServer::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
-    let addr = http_server.addr();
+    let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let addr = ingress.addr();
 
     // One multiplexed plugin serves both labeled imports; each named interface
     // defaults to its own isolated in-memory backend via `InMemoryProvider`.
     let multiplexed = MultiplexedKeyValue::new().with_provider(Arc::new(InMemoryProvider));
     let host = HostBuilder::new()
         .with_engine(engine)
-        .with_http_handler(Arc::new(http_server))
+        .with_http_handler(Arc::new(ingress))
         .with_plugin(Arc::new(multiplexed))?
         .build()?;
     let host = host.start().await.context("failed to start host")?;

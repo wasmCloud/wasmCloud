@@ -1,7 +1,7 @@
 //! Integration test for TLS-enabled HTTP server
 //!
 //! Verifies that HTTPS requests are correctly handled when the HTTP server
-//! is configured with TLS via `HttpServer::new_with_tls()`.
+//! is configured with TLS via `Ingress::new_with_tls()`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -64,6 +64,7 @@ fn http_counter_request(host_header: &str) -> WorkloadStartRequest {
             volume_mounts: vec![],
             // http-counter calls example.com
             allowed_hosts: vec!["example.com".parse().unwrap()].into(),
+            allowed_ip_name_lookups: Default::default(),
         },
         http_counter_host_interfaces(host_header),
     )

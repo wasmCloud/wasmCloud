@@ -4,8 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // TestAllowedHostsPattern exercises the kubebuilder Pattern regex annotated
@@ -71,11 +72,9 @@ func TestAllowedHostsPattern(t *testing.T) {
 }
 
 // loadAllowedHostsPattern reads the generated `workloads` CRD and extracts
-// the Pattern annotation applied to the AllowedHosts items. The kubebuilder
-// generator emits the pattern as a bare YAML scalar on its own line; we
-// match it by anchoring on `^\*$|` which is unique to this regex within
-// the CRD file (other Pattern entries — e.g. HostInterface.Name — start
-// with different alternations).
+// the pattern on LocalResources.AllowedHosts items from the OpenAPI schema.
+// Parsing YAML structurally avoids brittle text matching when the CRD gains
+// additional `pattern:` entries.
 func loadAllowedHostsPattern(t *testing.T) string {
 	t.Helper()
 	here, err := os.Getwd()
@@ -92,13 +91,88 @@ func loadAllowedHostsPattern(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("read CRD %q: %v", crdPath, err)
 	}
-	// `pattern: ^\*$|...` — the YAML scalar is unquoted, so backslashes
-	// in the regex are literal. Capture from `^\*$|` to end-of-line.
-	finder := regexp.MustCompile(`pattern: (\^\\\*\$\|[^\n]+)`)
-	m := finder.FindSubmatch(data)
-	if m == nil {
-		t.Fatalf("could not locate allowedHosts pattern in %s\n"+
+
+	var crd map[string]any
+	if err := yaml.Unmarshal(data, &crd); err != nil {
+		t.Fatalf("parse CRD YAML %q: %v", crdPath, err)
+	}
+
+	pattern, ok := findAllowedHostsPattern(crd)
+	if !ok {
+		t.Fatalf("could not locate allowedHosts.items.pattern in %s\n"+
 			"(did you run `make manifests` after editing workload_types.go?)", crdPath)
 	}
-	return strings.TrimRight(string(m[1]), " \t\r")
+	return pattern
+}
+
+func findAllowedHostsPattern(crd map[string]any) (string, bool) {
+	spec, ok := asMap(crd["spec"])
+	if !ok {
+		return "", false
+	}
+	versions, ok := asSlice(spec["versions"])
+	if !ok {
+		return "", false
+	}
+
+	for _, v := range versions {
+		version, ok := asMap(v)
+		if !ok {
+			continue
+		}
+		schema, ok := asMap(version["schema"])
+		if !ok {
+			continue
+		}
+		openAPIV3Schema, ok := asMap(schema["openAPIV3Schema"])
+		if !ok {
+			continue
+		}
+
+		if pattern, ok := lookupAllowedHostsPattern(openAPIV3Schema); ok {
+			return pattern, true
+		}
+	}
+
+	return "", false
+}
+
+func lookupAllowedHostsPattern(root map[string]any) (string, bool) {
+	path := []string{
+		"properties",
+		"spec",
+		"properties",
+		"components",
+		"items",
+		"properties",
+		"localResources",
+		"properties",
+		"allowedHosts",
+		"items",
+	}
+
+	node := root
+	for _, key := range path {
+		next, ok := asMap(node[key])
+		if !ok {
+			return "", false
+		}
+		node = next
+	}
+
+	pattern, ok := node["pattern"].(string)
+	if !ok || pattern == "" {
+		return "", false
+	}
+	return pattern, true
+}
+
+func asMap(v any) (map[string]any, bool) {
+	m, ok := v.(map[string]any)
+	return m, ok
+}
+
+func asSlice(v any) ([]any, bool) {
+	s, ok := v.([]any)
+	return s, ok
 }

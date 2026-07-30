@@ -136,7 +136,7 @@ The wasmCloud platform has three primary parts, all developed in this repository
 The runtime exposes capabilities through three mechanisms:
 
 - **Built-in via `wasmtime-wasi`** — `wasi:filesystem`, `wasi:clocks`, `wasi:random`, `wasi:io`, `wasi:sockets`, `wasi:cli`.
-- **HTTP handler** (`HttpServer`) — `wasi:http` (client and server).
+- **Ingress** (`Ingress`) — `wasi:http` (client and server).
 - **Host plugins** (`with_plugin()`, feature-flagged in-memory and NATS-backed variants) — `wasi:keyvalue`, `wasi:blobstore`, `wasi:config`, `wasi:logging`, `wasmcloud:messaging`.
 
 Hosts can be extended with additional custom plugins at build time. See [Creating Host Plugins](https://wasmcloud.com/docs/runtime/creating-host-plugins).

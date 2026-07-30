@@ -9,7 +9,7 @@
 #   See resolve_sha below for how each form is resolved.
 #
 # Variance handling (per the design call — see scripts/bench/README.md §9.4):
-#   - gungraun: 1 run per ref (instruction counts are deterministic).
+#   - gungraun* benches: 1 run per ref (instruction counts are deterministic).
 #   - criterion benches: 3 interleaved runs per ref (a₁ b₁ a₂ b₂ a₃ b₃);
 #     median of the three is what the delta is computed from.
 #
@@ -39,7 +39,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # wall-clock benches do. Override via WASMCLOUD_BENCH_COMPARE_ITERS=N for testing.
 if [ -n "${WASMCLOUD_BENCH_COMPARE_ITERS:-}" ]; then
   iters="$WASMCLOUD_BENCH_COMPARE_ITERS"
-elif [ "$bench" = "gungraun" ]; then
+elif [[ "$bench" == gungraun* ]]; then
   iters=1
 else
   iters=3

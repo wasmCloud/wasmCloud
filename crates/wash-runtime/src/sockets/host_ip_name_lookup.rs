@@ -2,6 +2,7 @@ use super::WasiSocketsCtxView;
 use super::network::SocketError;
 use std::mem;
 use std::net::ToSocketAddrs;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::pin::Pin;
 use std::vec;
 use wasmtime::Result;
@@ -35,7 +36,10 @@ impl Host for WasiSocketsCtxView<'_> {
 
         let host = parse_host(&name).map_err(super::network::socket_error_from_util)?;
 
-        if !network.allow_ip_name_lookup {
+        if !crate::host::allowed_ip_name::check_allowed_ip_name(
+            &network.allowed_ip_name_lookups,
+            &host,
+        ) {
             return Err(ErrorCode::PermanentResolverFailure.into());
         }
 
@@ -100,6 +104,12 @@ fn blocking_resolve(host: &url::Host) -> Result<Vec<IpAddress>, SocketError> {
         url::Host::Ipv4(v4addr) => Ok(vec![IpAddress::Ipv4(from_ipv4_addr(*v4addr))]),
         url::Host::Ipv6(v6addr) => Ok(vec![IpAddress::Ipv6(from_ipv6_addr(*v6addr))]),
         url::Host::Domain(domain) => {
+            if domain.ends_with(".localhost") && domain != "localhost" {
+                return Ok(vec![
+                    IpAddress::Ipv4(from_ipv4_addr(Ipv4Addr::LOCALHOST)),
+                    IpAddress::Ipv6(from_ipv6_addr(Ipv6Addr::LOCALHOST)),
+                ]);
+            }
             // For now use the standard library to perform actual resolution through
             // the usage of the `ToSocketAddrs` trait. This is only
             // resolving names, not ports, so force the port to be 0.

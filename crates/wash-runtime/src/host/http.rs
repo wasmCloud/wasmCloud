@@ -763,22 +763,29 @@ pub type ServiceHandlers = Arc<RwLock<HashMap<String, tokio::sync::mpsc::Sender<
 /// instance. Empty unless a workload's service exports a messaging handler.
 pub type MessagingHandlers = Arc<RwLock<HashMap<String, tokio::sync::mpsc::Sender<MessagingJob>>>>;
 
-/// HTTP server plugin that handles incoming HTTP requests for WebAssembly components.
+/// The host's HTTP ingress: it owns the listening socket and routes each
+/// inbound request to a workload by virtual host — either to a per-request
+/// `wasi:http/incoming-handler` instance or, when the workload runs a
+/// long-lived trigger service, to that service's live instance. HTTP and HTTPS
+/// are both supported, with optional mutual TLS.
 ///
-/// This plugin implements the `wasi:http/incoming-handler` interface and routes
-/// HTTP requests to appropriate WebAssembly components based on virtual hosting.
-/// It supports both HTTP and HTTPS connections with optional mutual TLS.
+/// It also holds the registries through which other host-side ingresses reach a
+/// trigger service's live instance: [`deliver_trigger_service_message`] hands a
+/// message received by a messaging plugin to that workload's
+/// `wasmcloud:messaging/handler` on the same instance.
 ///
-/// Use [`HttpServerBuilder`] to construct an instance:
+/// Use [`IngressBuilder`] to construct an instance:
 ///
 /// ```rust,ignore
-/// let server = HttpServer::builder(router, "127.0.0.1:8080".parse()?)
+/// let ingress = Ingress::builder(router, "127.0.0.1:8080".parse()?)
 ///     .outgoing_handler(my_handler)
 ///     .tls(TlsConfig::new(cert_path, key_path))
 ///     .build()
 ///     .await?;
 /// ```
-pub struct HttpServer<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
+///
+/// [`deliver_trigger_service_message`]: HostHandler::deliver_trigger_service_message
+pub struct Ingress<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
     router: Arc<T>,
     outgoing_handler: O,
     addr: SocketAddr,
@@ -793,15 +800,13 @@ pub struct HttpServer<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
     meters: RwLock<Meters>,
 }
 
-impl<T: Router, O: OutgoingHandler> std::fmt::Debug for HttpServer<T, O> {
+impl<T: Router, O: OutgoingHandler> std::fmt::Debug for Ingress<T, O> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HttpServer")
-            .field("addr", &self.addr)
-            .finish()
+        f.debug_struct("Ingress").field("addr", &self.addr).finish()
     }
 }
 
-/// TLS configuration for [`HttpServerBuilder::tls`] / [`HttpServer::new_with_tls`].
+/// TLS configuration for [`IngressBuilder::tls`] / [`Ingress::new_with_tls`].
 #[derive(Debug, Clone)]
 pub struct TlsConfig {
     cert_path: std::path::PathBuf,
@@ -827,10 +832,10 @@ impl TlsConfig {
     }
 }
 
-/// Builder for [`HttpServer`].
+/// Builder for [`Ingress`].
 ///
 /// # Required
-/// - `router` and `addr` — set via [`HttpServer::builder`].
+/// - `router` and `addr` — set via [`Ingress::builder`].
 ///
 /// # Optional
 /// - [`outgoing_handler`](Self::outgoing_handler) — defaults to [`DefaultOutgoingHandler`].
@@ -839,25 +844,25 @@ impl TlsConfig {
 /// # Example
 /// ```rust,ignore
 /// // Minimal — plain HTTP, default outgoing handler
-/// let server = HttpServer::builder(DevRouter::default(), addr)
+/// let ingress = Ingress::builder(DevRouter::default(), addr)
 ///     .build()
 ///     .await?;
 ///
 /// // Full — HTTPS with custom egress
-/// let server = HttpServer::builder(DynamicRouter::default(), addr)
+/// let ingress = Ingress::builder(DynamicRouter::default(), addr)
 ///     .outgoing_handler(custom_handler)
 ///     .tls(TlsConfig::new(cert, key).with_ca(ca))
 ///     .build()
 ///     .await?;
 /// ```
-pub struct HttpServerBuilder<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
+pub struct IngressBuilder<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
     router: T,
     outgoing_handler: O,
     addr: SocketAddr,
     tls: Option<TlsConfig>,
 }
 
-impl<T: Router> HttpServerBuilder<T, DefaultOutgoingHandler> {
+impl<T: Router> IngressBuilder<T, DefaultOutgoingHandler> {
     fn new(router: T, addr: SocketAddr) -> Self {
         Self {
             router,
@@ -868,11 +873,11 @@ impl<T: Router> HttpServerBuilder<T, DefaultOutgoingHandler> {
     }
 }
 
-impl<T: Router, O: OutgoingHandler> HttpServerBuilder<T, O> {
+impl<T: Router, O: OutgoingHandler> IngressBuilder<T, O> {
     /// Set a custom [`OutgoingHandler`], changing the builder's handler type.
     /// The same handler serves both P2 and P3 outgoing requests.
-    pub fn outgoing_handler<O2: OutgoingHandler>(self, handler: O2) -> HttpServerBuilder<T, O2> {
-        HttpServerBuilder {
+    pub fn outgoing_handler<O2: OutgoingHandler>(self, handler: O2) -> IngressBuilder<T, O2> {
+        IngressBuilder {
             router: self.router,
             outgoing_handler: handler,
             addr: self.addr,
@@ -886,8 +891,8 @@ impl<T: Router, O: OutgoingHandler> HttpServerBuilder<T, O> {
         self
     }
 
-    /// Bind to the address and build the [`HttpServer`].
-    pub async fn build(self) -> anyhow::Result<HttpServer<T, O>> {
+    /// Bind to the address and build the [`Ingress`].
+    pub async fn build(self) -> anyhow::Result<Ingress<T, O>> {
         crate::init_crypto();
         let tls_acceptor = match &self.tls {
             Some(tls) => {
@@ -901,7 +906,7 @@ impl<T: Router, O: OutgoingHandler> HttpServerBuilder<T, O> {
         let listener = TcpListener::bind(self.addr).await?;
         let addr = listener.local_addr()?;
 
-        Ok(HttpServer {
+        Ok(Ingress {
             router: Arc::new(self.router),
             outgoing_handler: self.outgoing_handler,
             addr,
@@ -916,24 +921,25 @@ impl<T: Router, O: OutgoingHandler> HttpServerBuilder<T, O> {
     }
 }
 
-impl<T: Router> HttpServer<T, DefaultOutgoingHandler> {
-    /// Returns a new [`HttpServerBuilder`] with the default [`DefaultOutgoingHandler`].
-    pub fn builder(router: T, addr: SocketAddr) -> HttpServerBuilder<T, DefaultOutgoingHandler> {
-        HttpServerBuilder::new(router, addr)
+impl<T: Router> Ingress<T, DefaultOutgoingHandler> {
+    /// Returns a new [`IngressBuilder`] with the default [`DefaultOutgoingHandler`].
+    pub fn builder(router: T, addr: SocketAddr) -> IngressBuilder<T, DefaultOutgoingHandler> {
+        IngressBuilder::new(router, addr)
     }
 
-    /// Creates a new HTTP server bound to `addr` with the default outgoing handler.
+    /// Creates a new ingress listening on `addr` with the default outgoing handler.
     pub async fn new(router: T, addr: SocketAddr) -> anyhow::Result<Self> {
-        HttpServerBuilder::new(router, addr).build().await
+        IngressBuilder::new(router, addr).build().await
     }
 
-    /// Creates a new HTTPS server with TLS and the default outgoing handler.
+    /// Creates a new ingress listening on `addr` over TLS, with the default
+    /// outgoing handler.
     pub async fn new_with_tls(router: T, addr: SocketAddr, tls: TlsConfig) -> anyhow::Result<Self> {
-        HttpServerBuilder::new(router, addr).tls(tls).build().await
+        IngressBuilder::new(router, addr).tls(tls).build().await
     }
 }
 
-impl<T: Router, O: OutgoingHandler> HttpServer<T, O> {
+impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
     /// Returns the actual bound address (useful when binding to port 0).
     pub fn addr(&self) -> SocketAddr {
         self.addr
@@ -941,7 +947,7 @@ impl<T: Router, O: OutgoingHandler> HttpServer<T, O> {
 }
 
 #[async_trait::async_trait]
-impl<T: Router, O: OutgoingHandler> HostHandler for HttpServer<T, O> {
+impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
     async fn inject_meters(&self, meters: &crate::observability::Meters) {
         *self.meters.write().await = meters.clone();
     }
@@ -2412,7 +2418,7 @@ mod tests {
     #[tokio::test]
     async fn custom_outgoing_handler_is_invoked() {
         let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let server = HttpServer::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
+        let server = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
             .outgoing_handler(SpyHandler {
                 called: called.clone(),
             })
@@ -2432,7 +2438,7 @@ mod tests {
     #[tokio::test]
     async fn grpc_requests_bypass_outgoing_handler() {
         let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let server = HttpServer::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
+        let server = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
             .outgoing_handler(SpyHandler {
                 called: called.clone(),
             })
@@ -2750,7 +2756,7 @@ mod tests {
     /// requests routed onto it 404.
     #[tokio::test]
     async fn service_http_unbind_removes_router_registration() {
-        let server = HttpServer::builder(DynamicRouter::default(), "127.0.0.1:0".parse().unwrap())
+        let server = Ingress::builder(DynamicRouter::default(), "127.0.0.1:0".parse().unwrap())
             .build()
             .await
             .unwrap();

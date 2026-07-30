@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::component_source::ComponentSource;
 use crate::host::{Host, HostApi, HostConfig};
 use crate::oci::{self, OciConfig};
 use crate::plugin::HostPlugin;
@@ -73,6 +74,14 @@ impl ClusterHostBuilder {
 
     pub fn with_plugin<T: HostPlugin>(mut self, plugin: Arc<T>) -> anyhow::Result<Self> {
         self.host_builder = self.host_builder.with_plugin(plugin)?;
+        Ok(self)
+    }
+
+    /// Registers the multiplexed plugin set. See
+    /// [`crate::host::HostBuilder::with_multiplexed_plugins`].
+    #[cfg(feature = "wasm_component_model_implements")]
+    pub fn with_multiplexed_plugins(mut self) -> anyhow::Result<Self> {
+        self.host_builder = self.host_builder.with_multiplexed_plugins()?;
         Ok(self)
     }
 
@@ -404,27 +413,28 @@ async fn workload_start(
         let mut pulled_components = Vec::with_capacity(wit_world.components.len());
         for component in &wit_world.components {
             let oci_config = image_pull_secret_to_oci_config(config, &component.image_pull_secret);
-            let (bytes, digest) = match oci::pull_component(
-                &component.image,
-                oci_config,
-                component.image_pull_policy().into(),
-            )
-            .await
-            {
-                Ok(res) => res,
-                Err(e) => {
-                    return Ok(types::v2::WorkloadStartResponse {
-                        workload_status: Some(types::v2::WorkloadStatus {
-                            workload_id: workload_id.clone(),
-                            workload_state: types::v2::WorkloadState::Error.into(),
-                            message: format!(
-                                "failed to pull component image {}: {}",
-                                component.image, e
-                            ),
-                        }),
-                    });
-                }
+            let source = ComponentSource::Oci {
+                image: component.image.clone(),
+                pull_policy: component.image_pull_policy().into(),
             };
+            // `load` already names the reference it failed on; this says which
+            // of the workload's components asked for it, so a multi-component
+            // start reports something the operator can act on.
+            let loaded =
+                match source.load(oci_config).await.with_context(|| {
+                    format!("failed to pull image for component '{}'", component.name)
+                }) {
+                    Ok(loaded) => loaded,
+                    Err(e) => {
+                        return Ok(types::v2::WorkloadStartResponse {
+                            workload_status: Some(types::v2::WorkloadStatus {
+                                workload_id: workload_id.clone(),
+                                workload_state: types::v2::WorkloadState::Error.into(),
+                                message: format!("{e:#}"),
+                            }),
+                        });
+                    }
+                };
             let local_resources = match component.local_resources.clone() {
                 Some(lr) => match crate::types::LocalResources::try_from(lr) {
                     Ok(lr) => lr,
@@ -445,8 +455,8 @@ async fn workload_start(
             };
             pulled_components.push(crate::types::Component {
                 name: component.name.clone(),
-                bytes: bytes.into(),
-                digest: Some(digest),
+                bytes: loaded.bytes,
+                digest: loaded.digest,
                 local_resources,
                 pool_size: component.pool_size,
                 max_invocations: component.max_invocations,
@@ -466,20 +476,24 @@ async fn workload_start(
 
     let service = if let Some(service) = service {
         let oci_config = image_pull_secret_to_oci_config(config, &service.image_pull_secret);
-        let (bytes, digest) = match oci::pull_component(
-            &service.image,
-            oci_config,
-            service.image_pull_policy().into(),
-        )
-        .await
+        let source = ComponentSource::Oci {
+            image: service.image.clone(),
+            pull_policy: service.image_pull_policy().into(),
+        };
+        // Distinguishes a service pull failure from a component one; both
+        // otherwise report the same reference and cause.
+        let loaded = match source
+            .load(oci_config)
+            .await
+            .context("failed to pull image for the workload service")
         {
-            Ok(res) => res,
+            Ok(loaded) => loaded,
             Err(e) => {
                 return Ok(types::v2::WorkloadStartResponse {
                     workload_status: Some(types::v2::WorkloadStatus {
                         workload_id: workload_id.clone(),
                         workload_state: types::v2::WorkloadState::Error.into(),
-                        message: format!("failed to pull service image {}: {}", service.image, e),
+                        message: format!("{e:#}"),
                     }),
                 });
             }
@@ -500,8 +514,8 @@ async fn workload_start(
             None => crate::types::LocalResources::default(),
         };
         Some(crate::types::Service {
-            bytes: bytes.into(),
-            digest: Some(digest),
+            bytes: loaded.bytes,
+            digest: loaded.digest,
             local_resources,
             max_restarts: service.max_restarts,
         })
@@ -614,42 +628,45 @@ impl TryFrom<types::v2::LocalResources> for crate::types::LocalResources {
     type Error = anyhow::Error;
 
     fn try_from(lr: types::v2::LocalResources) -> Result<Self, Self::Error> {
-        // Parse `allowed_hosts` eagerly: every entry must be a recognized
-        // form (`*`, `*.foo`, `host[:port]`, or `scheme://…`). A bad entry
-        // fails the conversion so the workload start surfaces a clear error
-        // rather than silently widening egress. All parse failures are
-        // collected and joined into one error so a workload with several
-        // bad entries doesn't make the user fix them one-by-one.
-        let mut parsed: Vec<crate::host::allowed_hosts::AllowedHost> =
-            Vec::with_capacity(lr.allowed_hosts.len());
-        let mut errors: Vec<String> = Vec::new();
-        for s in &lr.allowed_hosts {
-            // Per-entry messages are formatted as `'<entry>': <parse error>`
-            // (no leading "invalid allowed_hosts" — that's the outer
-            // wrapper's job). The final message renders as one heading line
-            // plus a bullet per bad entry so multi-error output is scannable
-            // in a terminal.
-            match s.parse::<crate::host::allowed_hosts::AllowedHost>() {
-                Ok(entry) => parsed.push(entry),
-                Err(e) => errors.push(format!("'{s}': {e:#}")),
-            }
-        }
-        if !errors.is_empty() {
-            return Err(anyhow!(
-                "invalid allowed_hosts:\n  - {}",
-                errors.join("\n  - ")
-            ));
-        }
-        let allowed_hosts: Arc<[_]> = parsed.into();
         Ok(crate::types::LocalResources {
             memory_limit_mb: lr.memory_limit_mb,
             cpu_limit: lr.cpu_limit,
             config: lr.config,
             volume_mounts: lr.volume_mounts.into_iter().map(Into::into).collect(),
-            allowed_hosts,
+            allowed_hosts: parse_policy_entries(&lr.allowed_hosts, "allowed_hosts")?,
             environment: lr.environment,
+            allowed_ip_name_lookups: parse_policy_entries(
+                &lr.allowed_ip_name_lookups,
+                "allowed_ip_name_lookups",
+            )?,
         })
     }
+}
+
+/// Parses each entry of a policy list arriving from the wire, reporting
+/// every bad entry at once.
+///
+/// A malformed entry fails the conversion so the workload start surfaces a
+/// clear error rather than silently widening what the component may reach.
+/// Failures are collected and joined into one message, rendered as a
+/// heading line plus a bullet per bad entry, so a workload with several bad
+/// entries doesn't have to be fixed one at a time.
+fn parse_policy_entries<T>(entries: &[String], field: &str) -> anyhow::Result<Arc<[T]>>
+where
+    T: std::str::FromStr<Err = anyhow::Error>,
+{
+    let mut parsed: Vec<T> = Vec::with_capacity(entries.len());
+    let mut errors: Vec<String> = Vec::new();
+    for entry in entries {
+        match entry.parse::<T>() {
+            Ok(value) => parsed.push(value),
+            Err(e) => errors.push(format!("'{entry}': {e:#}")),
+        }
+    }
+    if !errors.is_empty() {
+        return Err(anyhow!("invalid {field}:\n  - {}", errors.join("\n  - ")));
+    }
+    Ok(parsed.into())
 }
 
 impl From<crate::types::HostHeartbeat> for types::v2::HostHeartbeat {
@@ -760,6 +777,7 @@ mod tests {
 
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
+    use crate::host::allowed_ip_name::AllowedIpName;
 
     #[test]
     fn try_from_v2_local_resources_parses_allowed_hosts() {
@@ -777,8 +795,18 @@ mod tests {
                 "api.example.com:8443".to_string(),
                 "https://api.example.com".to_string(),
             ],
+            allowed_ip_name_lookups: vec!["*.example.com".to_string(), "127.0.0.1".to_string()],
         };
         let lr = crate::types::LocalResources::try_from(proto).expect("conversion should succeed");
+        assert_eq!(lr.allowed_ip_name_lookups.len(), 2);
+        assert!(matches!(
+            lr.allowed_ip_name_lookups[0],
+            AllowedIpName::SuffixWildcard { .. }
+        ));
+        assert!(matches!(
+            lr.allowed_ip_name_lookups[1],
+            AllowedIpName::Ip(_)
+        ));
         assert_eq!(lr.allowed_hosts.len(), 4);
         assert!(matches!(lr.allowed_hosts[0], AllowedHost::Any));
         assert!(matches!(
@@ -803,6 +831,7 @@ mod tests {
             environment: Default::default(),
             volume_mounts: vec![],
             allowed_hosts: vec!["*com".to_string()],
+            allowed_ip_name_lookups: vec![],
         };
         let err = crate::types::LocalResources::try_from(proto)
             .expect_err("conversion should reject ambiguous wildcard");
@@ -830,6 +859,7 @@ mod tests {
                 "https://api.example.com/v1".to_string(), // has path
                 "example.com:notaport".to_string(),       // bad port
             ],
+            allowed_ip_name_lookups: vec![],
         };
         let err = crate::types::LocalResources::try_from(proto)
             .expect_err("conversion should reject all bad entries");

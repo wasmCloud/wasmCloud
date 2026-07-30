@@ -1,7 +1,7 @@
 //! This module is primarily concerned with converting an [`UnresolvedWorkload`] into a [`ResolvedWorkload`] by
 //! resolving all components and their dependencies.
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     ops::{Deref, DerefMut},
     path::PathBuf,
     sync::Arc,
@@ -526,7 +526,7 @@ pub struct ResolvedWorkload {
     namespace: Arc<str>,
     /// All components in the workload. This is behind a `RwLock` to support mutable
     /// access to the component linkers.
-    components: Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>>,
+    components: Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
     /// The HTTP handler for outgoing HTTP requests
     http_handler: Arc<dyn crate::host::http::HostHandler>,
     /// An optional service component that runs once to completion or for the duration of the workload
@@ -887,7 +887,7 @@ impl ResolvedWorkload {
         }
     }
 
-    pub fn components(&self) -> Arc<RwLock<HashMap<Arc<str>, WorkloadComponent>>> {
+    pub fn components(&self) -> Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>> {
         self.components.clone()
     }
 
@@ -1629,6 +1629,37 @@ impl ResolvedWorkload {
             }
         }
 
+        // The service item records plugin bindings just like a component;
+        // unbind them the same way so a plugin bound only to the service is
+        // not left tracking a stopped workload.
+        if let Some(service) = self.service.as_ref()
+            && let Some(plugins) = service.plugins()
+        {
+            for (plugin_id, plugin) in plugins.iter() {
+                let world = service.world();
+                let plugin_world = plugin.world();
+                let bound_interfaces = world
+                    .imports
+                    .iter()
+                    .filter(|import| plugin_world.imports.contains(import))
+                    .cloned()
+                    .collect::<std::collections::HashSet<_>>();
+
+                if let Err(e) = plugin
+                    .on_workload_unbind(self.id(), WitInterfaces::new(&bound_interfaces))
+                    .await
+                {
+                    warn!(
+                        plugin_id,
+                        service_id = service.id(),
+                        workload_id = self.id.as_ref(),
+                        error = ?e,
+                        "failed to unbind plugin from service, continuing cleanup"
+                    );
+                }
+            }
+        }
+
         // A trigger service registered its HTTP/messaging handlers at start
         // (`execute_trigger_service`); drop those registrations on stop so it no
         // longer receives host-invoked deliveries on a torn-down instance.
@@ -1682,7 +1713,7 @@ pub struct UnresolvedWorkload {
     /// The [`WorkloadService`] associated with this workload, if any
     service: Option<WorkloadService>,
     /// All [`WorkloadComponent`]s in the workload
-    components: HashMap<Arc<str>, WorkloadComponent>,
+    components: BTreeMap<Arc<str>, WorkloadComponent>,
     /// Component IDs in manifest order. Used to pick the first in the manifest
     /// whenever the host can dispatch an export to only one component
     component_order: Vec<Arc<str>>,
@@ -2063,6 +2094,27 @@ impl UnresolvedWorkload {
                     interfaces = ?unmatched,
                     "no plugins found for requested interfaces"
                 );
+                // The same rollback the bind-failure paths perform: without it
+                // every successfully bound plugin keeps tracking a workload
+                // that never deploys.
+                for (bound_plugin, bound_interfaces, _) in
+                    bound_plugins_with_interfaces.iter().rev()
+                {
+                    debug!(
+                        plugin_id = bound_plugin.id(),
+                        "calling on_workload_unbind for cleanup after unmatched interfaces"
+                    );
+                    if let Err(cleanup_err) = bound_plugin
+                        .on_workload_unbind(self.id(), WitInterfaces::new(bound_interfaces))
+                        .await
+                    {
+                        warn!(
+                            plugin_id = bound_plugin.id(),
+                            error = ?cleanup_err,
+                            "failed to cleanup plugin after unmatched interfaces"
+                        );
+                    }
+                }
                 bail!(
                     "workload component {component_id} requested interfaces that are not available on this host: {unmatched:?}",
                 )
@@ -2217,6 +2269,17 @@ impl UnresolvedWorkload {
     /// Gets the namespace of the workload
     pub fn namespace(&self) -> &str {
         &self.namespace
+    }
+
+    /// Id of this workload's service, if it has one.
+    pub fn service_id(&self) -> Option<Arc<str>> {
+        self.service.as_ref().map(|s| Arc::from(s.id()))
+    }
+
+    /// Ids of this workload's components, in sorted order. Excludes the
+    /// service — see [`Self::service_id`].
+    pub fn component_ids(&self) -> Vec<Arc<str>> {
+        self.components.keys().cloned().collect()
     }
 
     /// Retrieves the interface configuration for a given WIT interface, if it exists.

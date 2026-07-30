@@ -898,6 +898,16 @@ Note this controls socket connections but not DNS lookups.
 Upon a successful lookup, the host will allow outbound connections to the specified hosts. </p></td>
                 </tr>
               
+                <tr>
+                  <td>allowed_ip_name_lookups</td>
+                  <td><a href="#string">string</a></td>
+                  <td>repeated</td>
+                  <td><p>Names the component may resolve through wasi:sockets/ip-name-lookup
+(resolve-addresses). Accepts &#34;*&#34; for any name, a wildcard such as
+&#34;*.wasmcloud.io&#34;, an exact name, or a literal IP address.
+Empty or absent denies every lookup with permanent-resolver-failure. </p></td>
+                </tr>
+              
             </tbody>
           </table>
 

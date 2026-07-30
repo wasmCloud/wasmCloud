@@ -89,6 +89,7 @@ const P2_FIXTURES: &[&str] = &[
     "inter-component-call-callee",
     "inter-component-call-middleware",
     "http-allowed-hosts",
+    "http-ip-name-lookup",
     "keyvalue-counter",
     "keyvalue-implements",
     "postgres-implements",
@@ -96,6 +97,7 @@ const P2_FIXTURES: &[&str] = &[
 
 const P3_FIXTURES: &[&str] = &[
     "http-handler-p3",
+    "http-ip-name-lookup-p3",
     "http-blobstore-p3",
     "cli-service-p3",
     "socket-test-p3",
@@ -126,6 +128,10 @@ const P3_FIXTURES: &[&str] = &[
     "http-webgpu",
     "kv-plugin",
     "kv-plugin-caller",
+    "kv-plugin-service",
+    "badlifecycle",
+    "secrets-host",
+    "secrets-caller",
 ];
 
 fn build_fixtures(workspace: &Path) -> Result<()> {

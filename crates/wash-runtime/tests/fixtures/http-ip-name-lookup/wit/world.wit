@@ -1,0 +1,8 @@
+package wasmcloud:http-ip-name-lookup;
+
+world resolver {
+   import wasi:sockets/instance-network@0.2.2;
+   import wasi:sockets/ip-name-lookup@0.2.2;
+
+   export wasi:http/incoming-handler@0.2.2;
+}

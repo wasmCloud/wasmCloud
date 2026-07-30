@@ -1,0 +1,16 @@
+package test:badlc@0.1.0;
+
+/// A capability, so the plugin has something to serve (registration reaches the
+/// lifecycle shape check regardless).
+interface ops {
+    ping: func() -> u32;
+}
+
+/// Host component plugin exporting a real capability plus a deliberately
+/// malformed `wasmcloud:host/workload-lifecycle` — used to assert that
+/// `ComponentHostPlugin::new` rejects a mismatched lifecycle signature at
+/// registration.
+world badlifecycle {
+    export ops;
+    export wasmcloud:host/workload-lifecycle@0.1.0;
+}
