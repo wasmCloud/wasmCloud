@@ -1,57 +1,27 @@
-//! Integration test: `wasmcloud:secrets` served by the `secrets-host` host
-//! component plugin, with credentials delivered per-workload via workload
-//! lifecycle.
+//! Integration test: `wasmcloud:secrets` served by the native
+//! `wasmcloud-secrets` plugin.
 //!
-//! Proves two things end to end, driven over HTTP through the `secrets-caller`
-//! workload:
-//!   - a capability (`store.get`/`reveal`) crosses the host component plugin
-//!     store boundary — the plugin serves it from its own supervised store;
-//!   - the interface config a workload declares (its credentials) reaches the
-//!     plugin via `on-workload-bind` and is served back, correlated to the
-//!     calling workload by the host identity import.
+//! Proves the interface config a workload declares (its credentials) reaches
+//! the plugin via `on-workload-bind` and is served back through
+//! `store.get`/`reveal`, correlated to the calling workload.
 
-#![cfg(feature = "host-component-plugins")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::time::Duration;
 
-use anyhow::{Context, Result};
-use tokio::time::timeout;
+use anyhow::Result;
 
 use wash_runtime::host::HostApi;
-use wash_runtime::types::{LocalResources, WorkloadStopRequest};
+use wash_runtime::types::{LocalResources, WorkloadState, WorkloadStopRequest};
 
 mod common;
 use common::{
-    component_workload_request, secrets_caller_host_interfaces_with_config,
-    start_host_with_component_plugin, start_host_with_component_plugin_by_host,
+    component_workload_request, http_incoming_handler_interface, req,
+    secrets_caller_host_interfaces_with_config, secrets_interface, start_host_with_dev_router,
+    start_host_with_dynamic_router,
 };
 
-const SECRETS_HOST_WASM: &[u8] = include_bytes!("wasm/secrets_host.wasm");
 const SECRETS_CALLER_WASM: &[u8] = include_bytes!("wasm/secrets_caller.wasm");
-const PLUGIN_ID: &str = "wasmcloud-secrets";
-
-/// GET `http://{addr}{path}` with the `HOST` header selecting the workload,
-/// returning the status and body text.
-async fn req(
-    client: &reqwest::Client,
-    addr: &std::net::SocketAddr,
-    host: &str,
-    path: &str,
-) -> Result<(reqwest::StatusCode, String)> {
-    let resp = timeout(
-        Duration::from_secs(15),
-        client
-            .get(format!("http://{addr}{path}"))
-            .header("HOST", host)
-            .send(),
-    )
-    .await
-    .context("request timed out")??;
-    let status = resp.status();
-    let body = resp.text().await?;
-    Ok((status, body))
-}
 
 /// A `secrets-caller` workload addressed by `host`, with `config` set on its
 /// `wasmcloud:secrets` interface entry (the credentials `on-workload-bind`
@@ -73,14 +43,13 @@ fn caller_workload(
     )
 }
 
-/// A workload's `wasmcloud:secrets` import resolves to the host component
-/// plugin; the credentials it declared at deploy time are served back through
+/// A workload's `wasmcloud:secrets` import resolves to the native plugin; the
+/// credentials it declared at deploy time are served back through
 /// `store.get` + `reveal`, and an unknown key reads as `none` (404).
 #[tokio::test]
 async fn test_secret_delivered_and_revealed() -> Result<()> {
     let host = "secrets-basic";
-    let (addr, h) =
-        start_host_with_component_plugin("127.0.0.1:0", PLUGIN_ID, SECRETS_HOST_WASM).await?;
+    let (addr, h) = start_host_with_dev_router("127.0.0.1:0").await?;
     h.workload_start(caller_workload(
         host,
         &[
@@ -113,9 +82,7 @@ async fn test_secret_delivered_and_revealed() -> Result<()> {
 /// Multi-threaded: the by-host router uses `block_in_place`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_secrets_isolated_per_workload() -> Result<()> {
-    let (addr, h) =
-        start_host_with_component_plugin_by_host("127.0.0.1:0", PLUGIN_ID, SECRETS_HOST_WASM)
-            .await?;
+    let (addr, h) = start_host_with_dynamic_router("127.0.0.1:0").await?;
     h.workload_start(caller_workload(
         "secrets-a",
         &[("registry-username", "alice")],
@@ -146,9 +113,7 @@ async fn test_secrets_isolated_per_workload() -> Result<()> {
 /// Multi-threaded: the by-host router uses `block_in_place`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_secret_survives_other_workload_stop() -> Result<()> {
-    let (addr, h) =
-        start_host_with_component_plugin_by_host("127.0.0.1:0", PLUGIN_ID, SECRETS_HOST_WASM)
-            .await?;
+    let (addr, h) = start_host_with_dynamic_router("127.0.0.1:0").await?;
     let stopped = caller_workload("secrets-stop", &[("registry-username", "carol")]);
     let stopped_id = stopped.workload_id.clone();
     h.workload_start(stopped).await?;
@@ -191,6 +156,55 @@ async fn test_secret_survives_other_workload_stop() -> Result<()> {
     assert_eq!(
         stopped_status, 404,
         "a stopped workload is no longer routable"
+    );
+
+    Ok(())
+}
+
+/// A workload that declares the same secret key across two separate
+/// `wasmcloud:secrets` bindings is rejected at bind time: `store.get` takes
+/// only a key, with no way to say which binding it's asking on behalf of, so
+/// the plugin refuses to let one binding's value silently shadow the other's.
+#[tokio::test]
+async fn test_colliding_secret_key_rejects_bind() -> Result<()> {
+    let host = "secrets-collide";
+    let (_addr, h) = start_host_with_dev_router("127.0.0.1:0").await?;
+
+    let config_a = [("registry-username".to_string(), "alice".to_string())]
+        .into_iter()
+        .collect();
+    let config_b = [("registry-username".to_string(), "mallory".to_string())]
+        .into_iter()
+        .collect();
+
+    let request = component_workload_request(
+        "secrets-caller",
+        host,
+        SECRETS_CALLER_WASM,
+        LocalResources::default(),
+        vec![
+            http_incoming_handler_interface(host, None),
+            secrets_interface(config_a),
+            secrets_interface(config_b),
+        ],
+    );
+
+    // A rejected bind doesn't surface as `Err` from `workload_start` — the
+    // call succeeds, but the returned status reports the deploy failure.
+    let response = h.workload_start(request).await?;
+    assert_eq!(
+        response.workload_status.workload_state,
+        WorkloadState::Error,
+        "colliding secret keys across bindings must fail to deploy, got: {:?}",
+        response.workload_status
+    );
+    assert!(
+        response
+            .workload_status
+            .message
+            .contains("set by more than one binding"),
+        "expected the plugin's own collision check to reject the bind, got: {:?}",
+        response.workload_status
     );
 
     Ok(())

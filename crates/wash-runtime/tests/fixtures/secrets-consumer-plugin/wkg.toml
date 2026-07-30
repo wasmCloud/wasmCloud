@@ -1,0 +1,6 @@
+[overrides]
+"wasmcloud:secrets" = { path = "../../../../../wit/secrets/wit" }
+# `wasmcloud:host` is defined and installed by the runtime itself, so its
+# canonical WIT lives in-repo at wit/host/wit/. Reference that source directly
+# so the fixture cannot drift from the shape the host provides.
+"wasmcloud:host" = { path = "../../../../../wit/host/wit" }
