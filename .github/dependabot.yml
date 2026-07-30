@@ -52,7 +52,7 @@ updates:
   - package-ecosystem: "github-actions"
     directories:
       - "/"
-      - "/.github/actions/build-rust-example"
+      - "/.github/actions/build-rust-component"
       - "/.github/actions/helm-publish"
       - "/.github/actions/lint-go"
       - "/.github/actions/no-diff"
