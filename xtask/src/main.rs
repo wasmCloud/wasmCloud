@@ -130,8 +130,11 @@ const P3_FIXTURES: &[&str] = &[
     "kv-plugin-caller",
     "kv-plugin-service",
     "badlifecycle",
-    "secrets-host",
     "secrets-caller",
+    "secrets-consumer-plugin",
+    "secrets-consumer-plugin-caller",
+    "http-egress-plugin",
+    "http-egress-plugin-caller",
 ];
 
 fn build_fixtures(workspace: &Path) -> Result<()> {
