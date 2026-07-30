@@ -985,6 +985,24 @@ impl HostBuilder {
         Ok(self)
     }
 
+    /// Every native (non-component) plugin registered so far — what a host
+    /// component plugin's own capability imports resolve against
+    /// ([`crate::plugin::component_host::load_component_plugin`]). Excludes
+    /// any component plugin already registered, so a loading plugin can never
+    /// import from another component plugin, only from host natives.
+    #[cfg(feature = "host-component-plugins")]
+    pub fn native_plugins(&self) -> HashMap<&'static str, Arc<dyn HostPlugin>> {
+        crate::plugin::component_host::native_only(&self.plugins)
+    }
+
+    /// The HTTP handler registered so far, if any — what a host component
+    /// plugin's own `wasi:http/outgoing-handler` calls are sent through, the
+    /// same handler a workload's outgoing calls use.
+    #[cfg(feature = "host-component-plugins")]
+    pub fn http_handler(&self) -> Option<Arc<dyn crate::host::http::HostHandler>> {
+        self.http_handler.clone()
+    }
+
     /// Registers the multiplexed plugin set from
     /// [`crate::plugin::multiplexed_plugins`], which is what makes
     /// `(implements ..)` named imports resolvable. Without it, every

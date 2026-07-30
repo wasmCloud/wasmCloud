@@ -48,8 +48,12 @@ use crate::wit::WitInterface;
 use super::{CapabilitySender, ComponentHostPluginState, ExportedFunc, ExportedInterface};
 
 /// Interface name of the optional lifecycle export a plugin may provide to
-/// hear about the workloads binding to (and unbinding from) it.
-pub(super) const HOST_LIFECYCLE_INTERFACE: &str = "wasmcloud:host/workload-lifecycle@0.1.0";
+/// hear about the workloads binding to (and unbinding from) it. Bare name,
+/// not a full `namespace:package/name@version` string: `wasmcloud:host`
+/// versions as one package, so matching by name only means a patch bump for
+/// an unrelated addition in the same package can't break a plugin already
+/// built against this export.
+pub(super) const HOST_LIFECYCLE_EXPORT: &str = "workload-lifecycle";
 /// The lifecycle export's bind hook.
 const ON_WORKLOAD_BIND: &str = "on-workload-bind";
 /// The lifecycle export's unbind hook.
