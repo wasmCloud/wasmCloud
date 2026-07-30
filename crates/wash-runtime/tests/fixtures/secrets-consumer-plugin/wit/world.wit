@@ -30,8 +30,8 @@ interface store {
 ///   itself, present in this world, is what the host checks against its
 ///   resolved config, before the plugin is even instantiated.
 world secrets-consumer-plugin {
-    import wasmcloud:secrets/store@2.0.0;
-    import wasmcloud:secrets/reveal@2.0.0;
-    import db-password: wasmcloud:secrets/secret@2.0.0;
+    import wasmcloud:secrets/store@2.1.0;
+    import wasmcloud:secrets/reveal@2.1.0;
+    import db-password: wasmcloud:secrets/secret@2.1.0;
     export store;
 }

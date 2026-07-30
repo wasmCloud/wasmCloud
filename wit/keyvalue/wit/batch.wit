@@ -1,4 +1,4 @@
-package wasmcloud:keyvalue@0.1.0;
+package wasmcloud:keyvalue@0.2.0;
 
 /// A keyvalue interface that provides batch operations.
 ///
