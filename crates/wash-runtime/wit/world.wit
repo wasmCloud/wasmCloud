@@ -9,6 +9,12 @@ world config {
     import wasi:config/store@0.2.0-rc.1;
 }
 
+world secrets {
+    import wasmcloud:secrets/store@2.1.0;
+    import wasmcloud:secrets/reveal@2.1.0;
+    import wasmcloud:secrets/secret@2.1.0;
+}
+
 world logging {
     import wasi:logging/logging@0.1.0-draft;
 }
@@ -44,11 +50,11 @@ world async-blobstore {
 }
 
 world async-keyvalue {
-  import wasmcloud:keyvalue/types@0.1.0;
-  import wasmcloud:keyvalue/store@0.1.0;
-  import wasmcloud:keyvalue/atomics@0.1.0;
-  import wasmcloud:keyvalue/cas@0.1.0;
-  import wasmcloud:keyvalue/batch@0.1.0;
+  import wasmcloud:keyvalue/types@0.2.0;
+  import wasmcloud:keyvalue/store@0.2.0;
+  import wasmcloud:keyvalue/atomics@0.2.0;
+  import wasmcloud:keyvalue/cas@0.2.0;
+  import wasmcloud:keyvalue/batch@0.2.0;
 }
 
 world async-postgres {

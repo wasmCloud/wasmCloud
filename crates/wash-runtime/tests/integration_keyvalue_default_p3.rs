@@ -1,5 +1,5 @@
 #![cfg(feature = "wasm_component_model_implements")]
-//! A **plain** (unlabeled) async `wasmcloud:keyvalue@0.1.0` `store` import, served
+//! A **plain** (unlabeled) async `wasmcloud:keyvalue@0.2.0` `store` import, served
 //! by a default backend through a **real P3 guest** — no `(implements ..)` label.
 //!
 //! The `keyvalue-default-p3` fixture opens a bucket via `wasmcloud:keyvalue/store`
@@ -47,7 +47,7 @@ fn default_kv_iface() -> WitInterface {
         namespace: "wasmcloud".to_string(),
         package: "keyvalue".to_string(),
         interfaces: ["store".to_string()].into_iter().collect(),
-        version: Some(semver::Version::parse("0.1.0").unwrap()),
+        version: Some(semver::Version::parse("0.2.0").unwrap()),
         config: HashMap::new(),
         name: None,
     }

@@ -178,7 +178,7 @@ pub fn secrets_interface(config: HashMap<String, String>) -> WitInterface {
         interfaces: ["store".to_string(), "reveal".to_string()]
             .into_iter()
             .collect(),
-        version: Some(semver::Version::parse("2.0.0").unwrap()),
+        version: Some(semver::Version::parse("2.1.0").unwrap()),
         config,
         name: None,
     }
