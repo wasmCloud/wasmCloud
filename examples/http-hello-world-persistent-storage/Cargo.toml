@@ -40,4 +40,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wstd = "0.6.7"
-wit-bindgen = "0.46.0"
+wit-bindgen = "0.60.0"
